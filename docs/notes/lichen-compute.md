@@ -131,7 +131,20 @@ arm:
   lazy (`Parameterized`) — those are *reported* type errors, not panics.
 - **`Launch`** / **`Call`** — reads `[kernel, arg]`; flattens the argument to an `i64`
   vector (`collect_args`); `run_kernel` assembles and runs; returns the `USize` result. A
-  non-scalar/non-literal argument stays lazy.
+  non-scalar/non-literal argument stays lazy. Every way that can happen records why, under
+  the launch path's own category `compute.kernel_launch` — shared by the two arms because
+  they refuse on the same three facts: an argument element that is not a concrete `Int`
+  (named by its path into the argument, e.g. `argument element 1.1`), an argument that is
+  not a parameter vector at all (named by what it is — a string, a function, an undecided
+  value), and a run that failed.  The last one is checked in `run_kernel` before `wasmi` sees
+  it, because compute holds both numbers — the callee's registered domain flattened by
+  `flat_arity`, and the vector built from the argument — so a wrong-arity call reads
+  `the callee kernel 3 takes 2 arguments, but this call supplied 3`; the other run failures
+  (assembly, the `main` export, a trap) are facts only `wasmi` has and its message is
+  propagated as it stands.  `launch` and `call` differ only in how their argument is
+  checked — `launch` unifies it against the kernel's signature domain, `call` against a
+  fresh cell — so an argument a checker rejects reaches `call` but not `launch`, and the
+  arity check is the only one a `call` ever gets.
 - **`Parallel`** — `compile_parallel_fragment` lowers a single-arg index function
   (`cfg = (n, (buffer…))`, the loop index from `compute.range`) to a
   `(n, index) -> i64` wasm function, one `BufferWriteCall` per output, and
@@ -254,6 +267,14 @@ count is in is `parallel_worker_count`, and the fact that a fan-out happened at 
 `chunk_bounds`/`partition_outputs`, because a parallel result is bit-identical to a
 sequential one and no end-to-end *value* can distinguish a working fan-out from a dead
 code path.
+
+The **refusal** group pins that a `launch`/`call` refusal says which of its three causes it
+was: an argument element that is not a concrete `Int` (by its path), an argument that is not
+a parameter vector (by what it is), and a run that failed (by the callee's expected arity and
+the count actually supplied — both numbers, since this is `call`'s only arity check). All
+three are reached through `compute.call`, whose argument gate is a fresh cell and therefore
+admits the values `launch`'s signature gate rejects — the `Launch` arm's three recordings are
+the same sites, not three more.
 
 ## 8. v1 scope
 

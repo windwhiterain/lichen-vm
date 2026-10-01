@@ -550,6 +550,96 @@ compute.read [out, 2]
 }
 
 #[test]
+fn a_refused_call_argument_element_says_why() {
+    // `call` gates its argument against a *fresh* domain cell, so a tuple whose
+    // element is a string passes the checker and is refused at run time, where
+    // it used to print `parameterized: ?a` and say nothing at all.  The
+    // element is a **nested** one on purpose: a tuple-of-tuples argument has no
+    // other way to be pointed at than a path into it, which is what the
+    // message must name.
+    let messages = fail(
+        r#"
+@{ compute = import "compute.lichen" @}
+k = compute.jit (x => x + 1)
+compute.call k (1, (2, "three"))
+"#,
+    );
+    assert_eq!(
+        messages.len(),
+        1,
+        "one refusal is one diagnostic: {messages:?}"
+    );
+    let message = &messages[0];
+    assert!(
+        message.starts_with("compute.kernel_launch:"),
+        "the refusal carries the launch path's own category: {message:?}"
+    );
+    assert!(
+        message.contains("argument element 1.1")
+            && message.contains("a string")
+            && message.contains("not a concrete Int"),
+        "the refusal must name the element, what it is, and what it had to be: {message:?}"
+    );
+}
+
+#[test]
+fn a_refused_call_argument_shape_says_why() {
+    // The same arm's other refusal: the argument is not a parameter vector at
+    // all.  A bare string type-checks (the domain is a fresh cell) and reached
+    // the run as `parameterized`, so the message has to say what a launch
+    // argument must be and what this one was.
+    let messages = fail(
+        r#"
+@{ compute = import "compute.lichen" @}
+k = compute.jit (x => x + 1)
+compute.call k "hello"
+"#,
+    );
+    assert_eq!(
+        messages.len(),
+        1,
+        "one refusal is one diagnostic: {messages:?}"
+    );
+    let message = &messages[0];
+    assert!(
+        message.contains("must be a concrete Int or a tuple of them")
+            && message.contains("a string"),
+        "the refusal must name the required shape and the value that broke it: {message:?}"
+    );
+}
+
+#[test]
+fn a_refused_call_run_says_why() {
+    // The run itself refusing: `call`'s unchecked arity lets three arguments
+    // reach a two-parameter kernel, so this message is the **only** account of
+    // the mistake — `CallOp` gates the argument against a fresh cell and lets
+    // the count through on purpose.  Compute holds both numbers (the callee's
+    // domain leaves, and the vector built from the argument), so the refusal
+    // has to state them rather than report that the count was wrong.
+    let messages = fail(
+        r#"
+@{ compute = import "compute.lichen" @}
+k = compute.jit (p : <Int, Int> => p(0) + p(1))
+compute.call k (1, 2, 3)
+"#,
+    );
+    assert_eq!(
+        messages.len(),
+        1,
+        "one refusal is one diagnostic: {messages:?}"
+    );
+    let message = &messages[0];
+    assert!(
+        message.contains("takes 2 arguments") && message.contains("supplied 3"),
+        "the refusal must name the callee's arity and the count supplied: {message:?}"
+    );
+    assert!(
+        message.contains("callee kernel"),
+        "the refusal must name the callee it is about: {message:?}"
+    );
+}
+
+#[test]
 fn parallel_multi_output_writes_every_output_in_one_pass() {
     // The index function's codomain is a **tuple of writes**, so one `plrun`
     // produces two output buffers: write `k` of the body is output buffer `k`

@@ -290,6 +290,14 @@ enum KernelInstr {
 /// without parsing a message.
 const JIT_DIAGNOSTIC: &str = "compute.jit";
 const PARALLEL_DIAGNOSTIC: &str = "compute.parallel";
+/// Running an already-compiled kernel: the `Launch` and `Call` arms, which
+/// give a [`KernelId`] an argument and read the result back.  Named for the
+/// **path**, not for either operator tag, because the two refuse on the same
+/// three facts — an argument that is not a parameter vector, a tuple element
+/// that is not a concrete `Int`, and a run that failed — so a consumer
+/// selecting on this category catches a `compute.call` refusal too instead of
+/// needing to know which arm produced it.
+const KERNEL_LAUNCH_DIAGNOSTIC: &str = "compute.kernel_launch";
 
 /// A compiled kernel-callable unit — the JIT's **bytecode** output, not a
 /// module.
@@ -660,7 +668,9 @@ where
                 // for a tuple-domain kernel.  Flatten it to the wasm argument
                 // vector.  Anything else (a non-literal element, e.g. a
                 // computed scalar) stays lazy — the definition pass reports
-                // the unbound result.
+                // the unbound result — and each way that can happen records the
+                // cause it is, because the lazy marker alone tells the user
+                // nothing about the argument they wrote.
                 let mut args: Vec<i64> = Vec::new();
                 match module
                     .node_value(operands[1].node)
@@ -668,15 +678,38 @@ where
                 {
                     Some(LowValue::USize(n)) => args.push(n as i64),
                     Some(LowValue::Array(_)) => {
-                        if !collect_args(module, operands[1].node, &mut args) {
+                        if let Err(reason) = collect_args(module, operands[1].node, &mut args, "") {
+                            module.record_extension_diagnostic(
+                                KERNEL_LAUNCH_DIAGNOSTIC,
+                                None,
+                                reason,
+                            );
                             return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                         }
                     }
-                    _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                    argument => {
+                        module.record_extension_diagnostic(
+                            KERNEL_LAUNCH_DIAGNOSTIC,
+                            None,
+                            format!(
+                                "the argument must be a concrete Int or a tuple of them (the kernel's \
+                                 parameter domain), but this one is {}",
+                                argument_kind(argument.as_ref())
+                            ),
+                        );
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    }
                 };
                 match run_kernel(id, &args) {
                     Ok(result) => <P::Value as From<LowValue>>::from(LowValue::USize(result)),
-                    Err(..) => <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                    Err(err) => {
+                        // Whatever the wasm run said — the assembly, the `main`
+                        // export, or the call itself — is this refusal's own
+                        // cause, so it is recorded as it stands rather than
+                        // replaced by a summary that would name none of them.
+                        module.record_extension_diagnostic(KERNEL_LAUNCH_DIAGNOSTIC, None, err);
+                        <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                    }
                 }
             }
             ComputeOperator::Call => {
@@ -706,15 +739,36 @@ where
                 {
                     Some(LowValue::USize(n)) => args.push(n as i64),
                     Some(LowValue::Array(_)) => {
-                        if !collect_args(module, operands[1].node, &mut args) {
+                        if let Err(reason) = collect_args(module, operands[1].node, &mut args, "") {
+                            module.record_extension_diagnostic(
+                                KERNEL_LAUNCH_DIAGNOSTIC,
+                                None,
+                                reason,
+                            );
                             return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                         }
                     }
-                    _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                    argument => {
+                        module.record_extension_diagnostic(
+                            KERNEL_LAUNCH_DIAGNOSTIC,
+                            None,
+                            format!(
+                                "the argument must be a concrete Int or a tuple of them (the kernel's \
+                                 parameter domain), but this one is {}",
+                                argument_kind(argument.as_ref())
+                            ),
+                        );
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    }
                 };
                 match run_kernel(id, &args) {
                     Ok(result) => <P::Value as From<LowValue>>::from(LowValue::USize(result)),
-                    Err(..) => <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                    Err(err) => {
+                        // As in `Launch`: the run's own message is this
+                        // refusal's cause, so it is recorded as it stands.
+                        module.record_extension_diagnostic(KERNEL_LAUNCH_DIAGNOSTIC, None, err);
+                        <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                    }
                 }
             }
             ComputeOperator::Parallel => {
@@ -2431,9 +2485,21 @@ fn sub_shape<'a>(domain: &'a LowShape, path: &[usize]) -> Option<&'a LowShape> {
 
 /// Flatten a kernel argument value (a scalar `USize` leaf, or a possibly
 /// nested `Array` of them, as a tuple-of-tuples domain needs) into the wasm
-/// argument vector.  Returns `false` if any element is not a scalar `USize`
-/// leaf — the definition pass reports the unbound result.
-fn collect_args<P>(module: &Module<P>, node: AnyNodeId, out: &mut Vec<i64>) -> bool
+/// argument vector.  Returns `Err` naming the first element that is not a
+/// scalar `USize` leaf — the definition pass reports the unbound result, but
+/// only this says *which* element was unusable.
+///
+/// `path` is the offending element's position in the argument: `""` at the
+/// root, then `"1"`, `"1.0"`, …  It is built as the walk descends, because for
+/// a tuple-of-tuples argument a position is the only way to point at the one
+/// element that could not be lowered; an empty `path` is the root, whose
+/// refusal names the argument as a whole.
+fn collect_args<P>(
+    module: &Module<P>,
+    node: AnyNodeId,
+    out: &mut Vec<i64>,
+    path: &str,
+) -> Result<(), String>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
@@ -2445,19 +2511,54 @@ where
     {
         Some(LowValue::USize(n)) => {
             out.push(n as i64);
-            true
+            Ok(())
         }
         Some(LowValue::Array(arr)) => {
             // SAFETY: `arr` is the payload of a value read from a live node of
             // `module`.
-            for item in unsafe { arr.items() } {
-                if !collect_args(module, item.node, out) {
-                    return false;
-                }
+            for (index, item) in unsafe { arr.items() }.into_iter().enumerate() {
+                let element_path = if path.is_empty() {
+                    index.to_string()
+                } else {
+                    format!("{path}.{index}")
+                };
+                collect_args(module, item.node, out, &element_path)?;
             }
-            true
+            Ok(())
         }
-        _ => false,
+        value => {
+            let kind = argument_kind(value.as_ref());
+            // At the root there is no position to name, and the caller has
+            // already established that a tuple argument is an `Array`, so this
+            // arm is the root itself — the whole argument, not one of its
+            // elements.
+            let refusal = if path.is_empty() {
+                format!("the argument is {kind}")
+            } else {
+                format!("argument element {path} is {kind}")
+            };
+            Err(format!(
+                "{refusal}, not a concrete Int, so the kernel's parameters could not be filled"
+            ))
+        }
+    }
+}
+
+/// What a launch argument that is not a kernel parameter vector at all looks
+/// like, in the terms a lichen program is written in: a refusal that names the
+/// runtime variant instead names the value the user wrote.  `USize` and
+/// `Array` are the two shapes a parameter vector may take and are recognised
+/// before this is asked, so the last arm covers a node that carries no value at
+/// all.
+fn argument_kind(value: Option<&LowValue>) -> &'static str {
+    match value {
+        Some(LowValue::Str(_)) => "a string",
+        Some(LowValue::Table(_)) => "a table",
+        Some(LowValue::Function(_)) => "a function",
+        Some(LowValue::None) => "the unit value",
+        Some(LowValue::Void) => "nothing (the empty value of a failed read)",
+        Some(LowValue::Parameterized) => "a value that is not decided yet",
+        _ => "no value",
     }
 }
 
@@ -2661,6 +2762,17 @@ fn cached_module(
 /// `i64` inputs, so a tuple-domain kernel (arity N) launches with N arguments
 /// and a scalar kernel (arity 1) with one.
 ///
+/// **The argument count is checked here, not by `wasmi`.**  Both numbers are
+/// facts compute already holds — the callee's registered domain flattened by
+/// [`flat_arity`], and the vector built from the argument — so the refusal can
+/// state them, where a mismatch left to `wasmi::Func::call` reports only that
+/// the count was wrong.  It is the **only** place the check happens for a
+/// `compute.call`, whose `CallOp` gate deliberately leaves the argument's
+/// shape unconstrained (a fresh domain cell), so this message is the only
+/// account of a wrong-arity call.  A registered fragment's `param_shape` is a
+/// decided scalar or tuple of them ([`kernel_domain`]), which is what makes
+/// [`flat_arity`] an exact parameter count here rather than its filler.
+///
 /// The kernel's **relative launch set** — the kernel itself plus every kernel
 /// it (transitively) cross-calls, discovered by scanning each fragment's
 /// cross-kernel instructions — is assembled into one wasm module (launch-time
@@ -2668,6 +2780,24 @@ fn cached_module(
 /// fetched through [`cached_module`], so a repeat launch of the same kernel
 /// reuses it (`P1-18`).
 fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
+    let expected = {
+        let fragments = kernels().lock().unwrap();
+        let fragment = fragments
+            .get(&id)
+            .ok_or_else(|| format!("kernel {id} is not registered"))?;
+        flat_arity(&fragment.param_shape)
+    };
+    if args.len() != expected {
+        return Err(format!(
+            "the callee kernel {id} takes {expected} {}, but this call supplied {}",
+            if expected == 1 {
+                "argument"
+            } else {
+                "arguments"
+            },
+            args.len()
+        ));
+    }
     let (engine, module) = cached_module(LaunchMode::Kernel, id, || assemble_launch_set(id))?;
     let mut store = wasmi::Store::new(&engine, ());
     let linker = wasmi::Linker::new(&engine);
@@ -2885,11 +3015,12 @@ pub fn parallel_launch_workers() -> usize {
 /// what decides it.
 ///
 /// `count > `[`MAX_PARALLEL_ELEMENTS`] is refused with an `Err` before the
-/// buffers are allocated.  The caller turns a refusal into the lazy
-/// (`Parameterized`) marker — this plugin's channel for every runtime refusal,
-/// since `Module::eval_errors` is a closed enum of structural value facts and
-/// `BudgetExhausted` names the apply/depth budgets; a dedicated message would
-/// be a new cross-crate variant, not a local choice.  **Queueing is not the
+/// buffers are allocated.  The caller records the reason through
+/// [`Module::record_extension_diagnostic`] and returns the lazy
+/// (`Parameterized`) marker, which is this plugin's channel for every runtime
+/// refusal: `Module::eval_errors` is a closed enum of structural value facts,
+/// and its `BudgetExhausted` names the apply/depth budgets — false here, the
+/// program terminated and merely asked for too much.  **Queueing is not the
 /// alternative:** `plrun` is a synchronous, caller-blocking call, so there is
 /// nothing to queue onto — the choice is refuse or run.
 ///
