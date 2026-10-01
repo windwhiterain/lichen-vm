@@ -27,6 +27,15 @@ pub struct Graph {
     /// built the graph, and it is caught by [`Self::push`] rather than left to
     /// index out of bounds at run time.
     values: usize,
+    /// Which values the function this graph was compiled from returns.
+    ///
+    /// [`None`] until [`Self::returning`] says so, and **`None` is not "returns
+    /// nothing"** — it is "nobody has said", which a caller reads as *take
+    /// everything*. The distinction matters because an empty `Vec` is a real
+    /// answer (a function that returns a unit) and silently meaning it by
+    /// forgetting to record would make a forgotten call indistinguishable from a
+    /// deliberate one.
+    returns: Option<Vec<ValueId>>,
 }
 
 impl Graph {
@@ -36,12 +45,51 @@ impl Graph {
             nodes: Vec::new(),
             inputs,
             values: inputs,
+            returns: None,
         }
     }
 
     /// How many values this graph takes as arguments.
     pub fn input_count(&self) -> usize {
         self.inputs
+    }
+
+    /// Record which values the source function returns.
+    ///
+    /// **This is the function's own return, and it is why a runner does not get
+    /// to choose one.** The value a caller ends up with is a decision about what
+    /// the program computes, not about what the last node happened to be — and a
+    /// graph whose tail is dead cannot express its return at all if "the tail" is
+    /// the rule. So the builder records it here, once, from the function it
+    /// compiled.
+    ///
+    /// Recording twice is refused rather than merged: a lowering that answers this
+    /// question twice has two opinions about what its own function returns, and
+    /// the second one quietly winning is a wrong answer wearing a working graph.
+    pub fn returning(&mut self, values: Vec<ValueId>) -> Result<(), crate::GraphRefusal> {
+        use crate::GraphRefusal;
+        if let Some(recorded) = &self.returns {
+            return Err(GraphRefusal::ReturnAlreadyRecorded {
+                recorded: recorded.len(),
+            });
+        }
+        if let Some(bad) = values.iter().copied().find(|value| *value >= self.values) {
+            return Err(GraphRefusal::UnknownValue {
+                node: usize::MAX,
+                value: bad,
+            });
+        }
+        self.returns = Some(values);
+        Ok(())
+    }
+
+    /// What the source function returns, or `None` if nobody recorded it.
+    ///
+    /// A caller reading `None` takes **every** value the graph has. That is the
+    /// same answer a recorded return gives when the function returns all of them,
+    /// so an unrecorded graph is the permissive one rather than a broken one.
+    pub fn returns(&self) -> Option<&[ValueId]> {
+        self.returns.as_deref()
     }
 
     /// Append a node, and name the values it produces.

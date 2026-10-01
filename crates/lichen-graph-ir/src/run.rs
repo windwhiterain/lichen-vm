@@ -73,14 +73,15 @@ impl<'backend> Runner<'backend> {
         self.policy
     }
 
-    /// Run `graph` over `inputs`, and hand back every value the graph produced.
+    /// Run `graph` over `inputs`, and hand back **every value the graph has**.
     ///
-    /// The result is the **tail of the value table** — everything after the
-    /// inputs — and not the last node's outputs, on purpose. What a caller
-    /// returns from the function it compiled into this graph is the *function's*
-    /// business, and the caller is the thing that knows it. A runner that picked
-    /// a node would be making that decision for them, and a graph with a dead
-    /// tail would be unable to express its own return.
+    /// The result is the whole value table, the inputs first and then everything
+    /// the nodes produced, and not the last node's outputs, on purpose. What a
+    /// caller returns from the function it compiled into this graph is the
+    /// *function's* business, and the caller is the thing that knows it:
+    /// [`Graph::returns`] is where that answer is recorded. A runner that picked
+    /// a node would be making that decision for them, and a graph with a dead tail
+    /// would be unable to express its own return at all.
     ///
     /// The inputs are **taken** rather than borrowed, and that is not a
     /// convenience: a `Value` can be a submission, and a submission is consumed
@@ -203,7 +204,7 @@ impl<'backend> Runner<'backend> {
         for value in &mut values {
             value.settle()?;
         }
-        Ok(values.split_off(graph.input_count()))
+        Ok(values)
     }
 }
 

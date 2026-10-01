@@ -179,11 +179,7 @@ fn a_graph_with_a_native_node_beside_its_dispatches_computes_the_same_numbers() 
             expected,
             "{policy:?}: a graph produces what the same fragments produce outside one"
         );
-        for value in &out {
-            if let Ok(BufferSlot::Resident(id)) = value.slot() {
-                context.release(id);
-            }
-        }
+        release_all(&context, &out);
     }
 }
 
@@ -232,6 +228,12 @@ fn a_native_node_reading_a_dispatches_output_waits_for_it_rather_than_guessing()
             1,
         )
         .expect("one output, one declared");
+    // The function this graph stands in for returns the second dispatch, and
+    // says so — which is what lets the test name the answer without counting
+    // through the value table by hand.
+    graph
+        .returning(vec![second])
+        .expect("a value the graph defines");
 
     let out = Runner::new(&context, Policy::Async)
         .run(&graph, vec![Value::host(data.clone())])
@@ -240,7 +242,8 @@ fn a_native_node_reading_a_dispatches_output_waits_for_it_rather_than_guessing()
     let expected: Vec<i64> = (0..count as i64)
         .map(|value| 2 * (10 * (2 * value + 1)) + 1)
         .collect();
-    let id = resident(out.get(second - 1).expect("the second dispatch's value"));
+    let returned = graph.returns().expect("the return was recorded")[0];
+    let id = resident(&out[returned]);
     assert_eq!(
         context
             .fetch(id, count)
@@ -248,9 +251,5 @@ fn a_native_node_reading_a_dispatches_output_waits_for_it_rather_than_guessing()
         expected,
         "the native node's fetch waited, so what it read was what the dispatch wrote"
     );
-    for value in &out {
-        if let Ok(BufferSlot::Resident(id)) = value.slot() {
-            context.release(id);
-        }
-    }
+    release_all(&context, &out);
 }

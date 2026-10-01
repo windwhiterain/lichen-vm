@@ -210,9 +210,10 @@ fn a_graph_of_both_node_kinds_computes_the_same_thing_under_both_policies() {
 
         assert_eq!(
             out.len(),
-            3,
-            "{policy:?}: one value per node, and the runner hands back the whole tail rather \
-             than picking one — what a function returns is the function's business"
+            4,
+            "{policy:?}: the input plus one value per node. The runner hands back every value the \
+             graph has rather than picking one, because what a function returns is the function's \
+             business and it is recorded in the graph, not chosen here"
         );
         assert!(
             out.iter().all(Value::is_ready),
@@ -348,6 +349,98 @@ fn an_output_count_the_body_disagrees_with_is_refused_rather_than_misaligning_th
             node: 0,
             declared: 1,
             claimed: 2
+        }
+    );
+}
+
+/// `mixed_graph` with the source function's return recorded as its **first**
+/// node's output, so the last two nodes are a dead tail.
+///
+/// This is the case the record exists for. "The tail" would answer this graph
+/// with the wrong value, and a runner that picked the last node could not
+/// express this function's return at all.
+fn graph_with_a_dead_tail(count: usize) -> Graph {
+    let mut graph = mixed_graph(count);
+    // Value 0 is the input, so the first node's output is value 1.
+    graph.returning(vec![1]).expect("a value the graph defines");
+    graph
+}
+
+#[test]
+fn a_dead_tail_still_returns_whatever_the_source_function_returned() {
+    let count = 8;
+    let input: Vec<i64> = (0..count as i64).collect();
+    let stub = Stub::new();
+    let graph = graph_with_a_dead_tail(count);
+
+    let out = Runner::new(&stub, Policy::Async)
+        .run(&graph, vec![Value::host(input)])
+        .expect("the graph runs");
+    let returned = graph.returns().expect("the return was recorded");
+
+    assert_eq!(
+        returned,
+        [1],
+        "the recorded return is the first node's output, and the runner did not overrule it"
+    );
+    // The dead tail still ran. A return is a *choice among the graph's values*,
+    // not a truncation of it — which is the whole reason it is recorded rather
+    // than read off the end.
+    assert_eq!(
+        stub.asked(),
+        vec!["submit", "wait", "fetch", "submit", "wait"],
+        "the same schedule as without a dead tail: the tail is not skipped, and the return does \
+         not change what runs"
+    );
+    // The native node read value 1, so the runner brought it home in place and
+    // the returned value is host data — the fetched answer, not an id.
+    let Value::Host(first) = &out[returned[0]] else {
+        panic!("the returned value was read by a native node, so it came home")
+    };
+    assert_eq!(
+        *first,
+        (0..count as i64).map(|x| 2 * x + 1).collect::<Vec<i64>>(),
+        "which is the first node's answer and not the tail's"
+    );
+}
+
+#[test]
+fn a_graph_that_has_not_been_told_its_return_reports_none_rather_than_nothing() {
+    let graph = mixed_graph(4);
+    assert_eq!(
+        graph.returns(),
+        None,
+        "None and an empty list are different answers: None means nobody has said, and a caller \
+         reading it takes every value — while an empty list is a function that returns a unit"
+    );
+}
+
+#[test]
+fn a_return_recorded_twice_is_refused_rather_than_the_second_one_winning() {
+    let mut graph = mixed_graph(4);
+    graph.returning(vec![1, 2]).expect("the first answer");
+    let refusal = graph
+        .returning(vec![3])
+        .expect_err("two opinions about what one function returns");
+    assert_eq!(refusal, GraphRefusal::ReturnAlreadyRecorded { recorded: 2 });
+    assert_eq!(
+        graph.returns(),
+        Some([1, 2].as_slice()),
+        "and the first answer is the one that stands"
+    );
+}
+
+#[test]
+fn a_return_naming_a_value_the_graph_does_not_have_is_refused() {
+    let mut graph = mixed_graph(4);
+    let refusal = graph
+        .returning(vec![99])
+        .expect_err("a value past the end of the table");
+    assert_eq!(
+        refusal,
+        GraphRefusal::UnknownValue {
+            node: usize::MAX,
+            value: 99
         }
     );
 }

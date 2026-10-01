@@ -41,6 +41,13 @@ pub enum GraphRefusal {
     /// the graph is built, and this one is a value table that came from a caller
     /// rather than from [`crate::Graph::push`].
     UnknownValue { node: usize, value: usize },
+    /// The source function's return was recorded twice.
+    ///
+    /// A lowering that answers "what does this function return" twice has two
+    /// opinions, and letting the second one win is a wrong answer that still runs.
+    /// `recorded` is how many values the first call recorded, because the number
+    /// is usually what tells the two opinions apart.
+    ReturnAlreadyRecorded { recorded: usize },
     /// A node's inputs did not resolve to the number of buffers its fragment
     /// declares.
     ///
@@ -122,6 +129,13 @@ impl fmt::Display for GraphRefusal {
             GraphRefusal::UnknownValue { node, value } => write!(
                 f,
                 "node {node} reads value {value}, which the graph does not have."
+            ),
+            GraphRefusal::ReturnAlreadyRecorded { recorded } => write!(
+                f,
+                "this graph's source function already had its return recorded ({recorded} \
+                 value(s)), and it has been recorded a second time. Which values a function \
+                 returns is one answer, so the two cannot be merged — and letting the second \
+                 one win would be a wrong answer that still runs."
             ),
             GraphRefusal::InputArity { node, wanted, got } => write!(
                 f,
