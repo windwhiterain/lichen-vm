@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/lichen-kernel-ir",
+    "crates/lichen-compute-gpu",
     "crates/lichen-span",
     "crates/lichen-utils",
     "crates/lichen-registry",
@@ -47,6 +48,7 @@ edition = "2024"
 # into this workspace (see `exclude` above).
 [workspace.dependencies]
 lichen-kernel-ir = { path = "crates/lichen-kernel-ir" }
+lichen-compute-gpu = { path = "crates/lichen-compute-gpu" }
 lichen-span = { path = "crates/lichen-span" }
 lichen-utils = { path = "crates/lichen-utils" }
 lichen-registry = { path = "crates/lichen-registry" }

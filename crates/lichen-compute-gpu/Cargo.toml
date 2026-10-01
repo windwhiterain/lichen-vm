@@ -1,0 +1,17 @@
+[package]
+name = "lichen-compute-gpu"
+version.workspace = true
+edition.workspace = true
+
+# A second backend for the lowered-kernel IR, and deliberately a crate of its
+# own: it depends on `lichen-kernel-ir` (the IR) and on a GPU runtime, and
+# nothing that merely wants the IR has to take either.  `lichen-compute` — the
+# wasm backend — does not depend on this crate, so a build that never dispatches
+# a kernel to a device never links a GPU loader.
+#
+# This crate is not a workspace dependency of anything else in the workspace.  It
+# is a member so `cargo test --workspace` exercises it, which means the GPU
+# tests need a device; they skip by name when there is none rather than failing.
+[dependencies]
+ash = "0.38.0"
+lichen-kernel-ir.workspace = true
