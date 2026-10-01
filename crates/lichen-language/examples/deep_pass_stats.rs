@@ -42,11 +42,14 @@ fn measure(name: &str, source: &str) {
     };
     let real = stats.visits - stats.cheap_returns;
     let redundancy = real as f64 / stamped.max(1) as f64;
+    let revisit_share = stats.decided_revisits as f64 / stats.visits.max(1) as f64;
     println!(
-        "{name:<22} walks {:>5}  visits {:>8}  cheap {:>7}  nodes {:>7}  stamped {:>7}  real/stamped {:>6.2}  {}",
+        "{name:<22} walks {:>5}  visits {:>8}  cheap {:>7}  revisit {:>7} ({:>5.1}%)  nodes {:>7}  stamped {:>7}  real/stamped {:>6.2}  {}",
         stats.walks,
         stats.visits,
         stats.cheap_returns,
+        stats.decided_revisits,
+        revisit_share * 100.0,
         nodes,
         stamped,
         redundancy,
