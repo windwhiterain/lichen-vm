@@ -958,7 +958,7 @@ bill, and it is the reason item 1 stays first on the list.
 | `35fac3e` | the fixes: a class expanded once, the boundary window, a cloned suffix's spans |
 | `9039f90` | the note records the three costs and their fixes |
 | `64db7c4` | the caller's view (code region, base, imports), the report's frontend artifacts, the registry-owned cell key space, a reuse that moves its spans |
-| `dev` + this | the language server as the first real caller: the compile worker, one registry, the replacing freeze, the import record (§7.6) |
+| `4400d6a` | the language server as the first real caller: the compile worker, one registry, the replacing freeze, the import record (§7.6) |
 
 ### 12.2 The entry points
 
