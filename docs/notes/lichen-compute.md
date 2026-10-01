@@ -207,13 +207,43 @@ the class (`class_computation_node`) to emit the real expression.
 `tests/compute.rs` covers scalar/tuple domains, all the safe ops, conditionals, closure
 constants, cross-kernel calls (bare, sub-expression, and the wrapper form), inline lichen
 functions (nested), and the parallel `parallel`/`plrun`/`pget`/`pcollect` family — as
-`value: type` end-to-end runs. The assertions pin the struct rendering
-(`struct<.native <_>, .sig Int -> Int>`) and the lazily-read codomain resolution
-(`6 : Int`, `12 : Int`).
+`value: type` end-to-end runs. The cross-kernel group pins the multi-arity argument
+mechanisms separately: a concrete tuple argument, a whole-parameter pass-through, a
+sub-tuple pass-through against a nested callee domain, and the same tuple argument through
+the wrapper `launch` (whose argument arrives as a `Parameterized` cell). The assertions pin
+the struct rendering (`struct<.native <_>, .sig Int -> Int>`) and the lazily-read codomain
+resolution (`6 : Int`, `12 : Int`).
 
 ## 8. v1 scope
 
 The kernel-safe subset is scalar arithmetic over a scalar or tuple-of-scalars domain; the
-codomain is a single `i64`. Cross-kernel callees are restricted to a scalar domain
-(arity 1). Beyond that: higher-order kernels, recursion inside the compiled region, and a
-`GlobalExt`-based compute global (the registries are currently process-global).
+codomain is a single `i64`. A cross-kernel callee may have **any** scalar-or-tuple domain:
+its argument is flattened into one `i64` per leaf of that domain, either from a concrete
+tuple value or passed through from the caller's own parameter (see
+[below](#multi-arity-cross-kernel-calls)). Beyond that: higher-order kernels, recursion
+inside the compiled region, and a `GlobalExt`-based compute global (the registries are
+currently process-global).
+
+### Multi-arity cross-kernel calls
+
+The callee's domain is a fact of the **callee's registration**, read from the registry rather
+than from the call site, so the caller pushes `flat_arity(domain)` stack values and the
+assembler's per-arity type section already matches. Two argument shapes cover it:
+
+- **A whole-parameter read passes through** as the parameter's own locals. A domain's leaves
+  are contiguous in the flattened layout (what `flatten_offset` counts), so `r(1)` under a
+  `<Int, <<Int,Int>, Int>>` domain starts at local 1 and supplies the callee's three leaves
+  from locals 1, 2, 3. The read's own sub-shape must flatten to the callee's arity — a
+  shorter read would push the *next* parameter's local as the callee's last argument, so a
+  mismatch is refused by arity rather than trusted.
+- **A concrete tuple value** is emitted element by element, recursively for a nested domain.
+  A scalar element goes through `emit_node`, so a constant, a parameter read, or a
+  cross-kernel call result all keep working inside a tuple argument.
+
+The two **encodings** of the argument are not told apart by shape: a bare kernel apply
+carries the `[value, type]` pair whose element 0 is the argument, while a `launch` argument
+arrives as a bare `Parameterized` cell — and a pair has exactly as many elements as the
+two-element tuple it wraps. So each encoding is *emitted* and the first that produces one
+leaf per domain element is kept. That is not a guess: the leaves must emit anyway, and a pair
+read as a tuple fails on its second element, which is a type cell. Each refusal names its own
+cause (wrong encoding / wrong element count / wrong read arity) and none falls back.

@@ -287,6 +287,81 @@ compute.launch k1 5
 }
 
 #[test]
+fn jit_cross_kernel_tuple_argument() {
+    // A tuple-domain callee: `k0` is `(i64, i64) -> i64`, so the call pushes
+    // one i64 per element of the callee's domain.  The argument here is a
+    // concrete tuple *value*, so its elements are emitted one at a time:
+    //   launch k1 5 = k0(5, 1) = 5 + 1 = 6.
+    // The caller's own `x` is annotated: a bare kernel apply states no
+    // signature, so nothing in the body decides `x` (the wrapper `launch` of
+    // the test below does, through `.sig`).
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+k0 = compute.jit (p : <Int, Int> => p(0) + p(1))
+k1 = compute.jit (x : Int => k0 (x, 1))
+compute.launch k1 5
+"#);
+    assert!(
+        out.starts_with("6:"),
+        "tuple-argument cross-kernel call produced 6, got: {out:?}"
+    );
+}
+
+#[test]
+fn jit_cross_kernel_passes_the_parameter_through() {
+    // The argument is a whole-parameter read, so it is passed through as the
+    // parameter's own locals rather than materialized element by element — the
+    // caller's `q` *is* the callee's `p`:
+    //   launch k1 (9, 4) = k0(9, 4) = 9 - 4 = 5.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+k0 = compute.jit (p : <Int, Int> => p(0) - p(1))
+k1 = compute.jit (q : <Int, Int> => k0 q)
+compute.launch k1 (9, 4)
+"#);
+    assert!(
+        out.starts_with("5:"),
+        "parameter pass-through produced 5, got: {out:?}"
+    );
+}
+
+#[test]
+fn jit_cross_kernel_passes_a_sub_tuple_through() {
+    // A *sub*-tuple read, against a nested callee domain.  The read's leaves
+    // are contiguous in the flattened layout, so `r(1)` starts at local 1 and
+    // the callee's three arguments are locals 1, 2 and 3:
+    //   launch k1 (100, ((9, 4), 5)) = k0((9, 4), 5) = 9 - 4 + 5 = 10.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+k0 = compute.jit (p : <<Int, Int>, Int> => p(0)(0) - p(0)(1) + p(1))
+k1 = compute.jit (r : <Int, <<Int, Int>, Int>> => k0 r(1))
+compute.launch k1 (100, ((9, 4), 5))
+"#);
+    assert!(
+        out.starts_with("10:"),
+        "sub-tuple pass-through produced 10, got: {out:?}"
+    );
+}
+
+#[test]
+fn jit_cross_kernel_tuple_argument_through_the_wrapper() {
+    // Style 3 with a tuple argument: the wrapper's `launch` argument is a bare
+    // `Parameterized` cell — concrete only at run time — so the tuple is
+    // reached through the cell's equality class rather than as an array value:
+    //   launch k1 5 = k0(5, 1) = 6.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+k0 = compute.jit (p : <Int, Int> => p(0) + p(1))
+k1 = compute.jit (x => compute.launch k0 (x, 1))
+compute.launch k1 5
+"#);
+    assert!(
+        out.starts_with("6:"),
+        "wrapper tuple-argument launch produced 6, got: {out:?}"
+    );
+}
+
+#[test]
 fn jit_inline_nested_function() {
     // Nested inline: the deep pass reduces `b x` (which calls `a`) through to
     // the leaf arithmetic, so `b x + 1` → `(x + 1) + 1 + 1`:

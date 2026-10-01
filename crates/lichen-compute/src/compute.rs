@@ -1700,21 +1700,256 @@ where
 {
     let kid = kernel_id_of(module, kernel)
         .ok_or_else(|| "cross-kernel call target is not a kernel value".to_string())?;
-    // v1 restricts the callee domain to a scalar (arity 1): the argument is one
-    // i64 on the stack.
-    let arity = kernels()
-        .lock()
-        .unwrap()
-        .get(&kid)
-        .map(|f| flat_arity(&f.param_shape))
-        .ok_or_else(|| "cross-kernel callee is not a registered kernel".to_string())?;
-    if arity != 1 {
-        return Err("cross-kernel call supports only a scalar-domain callee in v1".into());
+    // The callee's domain is a fact of the *callee's* registration, read here
+    // and released before any emission: emitting can reach a further
+    // cross-kernel call, which locks the same registry again, and the lock is
+    // not reentrant.
+    let shape = {
+        let fragments = kernels().lock().unwrap();
+        fragments
+            .get(&kid)
+            .map(|fragment| fragment.param_shape.clone())
+            .ok_or_else(|| "cross-kernel callee is not a registered kernel".to_string())?
+    };
+    if flat_arity(&shape) == 1 {
+        // A scalar-domain callee takes one i64, and the argument is peeled
+        // once and emitted once — the pre-existing path, kept exactly as it was.
+        // (A *tuple* domain has to resolve its own encoding; see
+        // `emit_callee_args`.)
+        let arg = pair_value_node(module, arg).unwrap_or(arg);
+        emit_node(module, params, arg, body)?;
+    } else {
+        emit_callee_args(module, params, arg, &shape, body)?;
     }
-    let arg = pair_value_node(module, arg).unwrap_or(arg);
-    emit_node(module, params, arg, body)?;
     body.push(KernelInstr::CallKernel(kid));
     Ok(())
+}
+
+/// A cross-kernel call's tuple argument that is neither a whole-parameter read
+/// nor a concrete tuple value, under any encoding.  The flattened layout is
+/// what makes the other cases work, so a wrong one would read a local the
+/// argument does not own.
+const CALLEE_ARGUMENT: &str = "a cross-kernel call's argument must be a concrete tuple value or a \
+whole parameter read; build the argument from its elements (or pass the parameter through)";
+
+/// Emit a cross-kernel call's tuple argument as the callee domain's scalar
+/// leaves, in callee parameter order — the stack values the wasm `call`
+/// consumes.  The caller pushes one `i64` per leaf and the callee's signature
+/// is `(i64) * flat_arity`, so the count is a correctness requirement rather
+/// than a lowering choice.
+///
+/// The argument reaches a call in one of two **encodings**, and they cannot be
+/// told apart by shape: a bare kernel apply carries the `[value, type]` pair
+/// whose element 0 is the argument, while a `launch` argument arrives as a
+/// bare `Parameterized` cell (concrete only at run time) — and a pair has
+/// exactly as many elements as the two-element tuple it wraps.  So each
+/// encoding is *emitted* and the first that produces one leaf per domain
+/// element is kept.  That is not a guess: the leaves have to emit anyway, and a
+/// pair read as a tuple fails here on its second element, which is a type cell.
+fn emit_callee_args<P>(
+    module: &Module<P>,
+    params: &[ParamSlot],
+    arg: NodeId,
+    shape: &LowShape,
+    body: &mut Vec<KernelInstr>,
+) -> Result<(), String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let LowShape::Tuple(items) = shape else {
+        return emit_node(module, params, arg, body);
+    };
+    // A candidate that reads as a tuple but disagrees with the domain is a
+    // cause worth reporting; one that simply is not a tuple only says the
+    // encoding was wrong, which the next candidate may still fix.
+    let mut cause: Option<String> = None;
+    for candidate in callee_arg_encodings(module, arg) {
+        let mut leaves: Vec<KernelInstr> = Vec::new();
+        match emit_tuple_leaves(module, params, candidate, items, &mut leaves) {
+            Ok(()) => {
+                body.extend(leaves);
+                return Ok(());
+            }
+            Err(reason) => {
+                if reason != CALLEE_ARGUMENT {
+                    cause = Some(reason);
+                }
+            }
+        }
+    }
+    Err(cause.unwrap_or_else(|| CALLEE_ARGUMENT.to_string()))
+}
+
+/// The ways one call argument can be encoded, in the order they are tried — the
+/// same peel order the rest of the emitter resolves through: the `[value, type]`
+/// pair, a `value_of` extraction, the value a `Parameterized` class committed
+/// to, then the node itself.
+fn callee_arg_encodings<P>(module: &Module<P>, arg: NodeId) -> Vec<NodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    [
+        pair_value_node(module, arg),
+        value_of_node(module, arg),
+        class_value_node(module, arg),
+        Some(arg),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// Emit the leaves of one tuple value against the domain elements `items`.
+///
+/// Two argument shapes cover it:
+///
+/// - A **whole-parameter read** is passed through as the parameter's own
+///   locals.  A domain's leaves are contiguous in the flattened layout (that is
+///   what [`flatten_offset`] counts), so a sub-tuple read has a base local and
+///   its leaves follow it.  The read's own sub-shape must flatten to exactly
+///   the arity `items` flattens to — a read that is *shorter* would push the
+///   next parameter's local as if it were the callee's last argument, so a
+///   mismatch is refused by arity rather than trusted.
+/// - Anything else must be a **concrete tuple value** of exactly `items.len()`
+///   elements, each emitted against its own element shape (recursively, for a
+///   nested domain).  A scalar element goes through [`emit_node`], so a
+///   constant, a parameter read, a call result, and a `Parameterized` cell
+///   resolved through its class all keep working inside a tuple argument.
+fn emit_tuple_leaves<P>(
+    module: &Module<P>,
+    params: &[ParamSlot],
+    node: NodeId,
+    items: &[LowShape],
+    out: &mut Vec<KernelInstr>,
+) -> Result<(), String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let arity: usize = items.iter().map(flat_arity).sum();
+    if let Some((base, read)) = param_pass_through(module, params, node) {
+        if flat_arity(&read) == arity {
+            for offset in 0..arity {
+                out.push(KernelInstr::LocalGet((base + offset) as u32));
+            }
+            return Ok(());
+        }
+        // A parameter read whose own shape is not the callee's domain: taking
+        // its locals anyway would read past the read into the next parameter's,
+        // so it is named rather than padded or truncated.
+        return Err(format!(
+            "cross-kernel call passes a {}-element parameter read to a domain of {arity} \
+scalar(s)",
+            flat_arity(&read)
+        ));
+    }
+    let elements = tuple_elements(module, node).ok_or(CALLEE_ARGUMENT)?;
+    if elements.len() != items.len() {
+        return Err(format!(
+            "cross-kernel call passes {} element(s) to a {}-element tuple domain",
+            elements.len(),
+            items.len()
+        ));
+    }
+    for (element, element_shape) in elements.iter().zip(items) {
+        match element_shape {
+            LowShape::Tuple(nested) => emit_tuple_leaves(module, params, *element, nested, out)?,
+            _ => emit_node(module, params, *element, out)?,
+        }
+    }
+    Ok(())
+}
+
+/// The wasm local a whole-parameter read of `node` starts at, with the domain
+/// sub-shape that read covers — the base a multi-arity cross-kernel argument
+/// is passed through from.  `None` when `node` is not a parameter read.
+///
+/// Both read forms count: the `Index` chain [`param_path`] recognises, and the
+/// bare value cell a reduced call's argument unification leaves behind (the
+/// same read with the empty path, as `emit_node` also accepts).
+fn param_pass_through<P>(
+    module: &Module<P>,
+    params: &[ParamSlot],
+    node: NodeId,
+) -> Option<(usize, LowShape)>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    for slot in params {
+        let path = match param_path(module, slot.pair, node) {
+            Some(path) => path,
+            None if module.node_operation(node).is_none()
+                && equality_rep(module, node) == equality_rep(module, slot.value) =>
+            {
+                Vec::new()
+            }
+            None => continue,
+        };
+        let Some(read) = sub_shape(&slot.shape, &path) else {
+            continue;
+        };
+        let Some(base) = flatten_offset(&slot.shape, &path).ok() else {
+            continue;
+        };
+        return Some((slot.base + base, read.clone()));
+    }
+    None
+}
+
+/// The elements of a concrete tuple value, as dynamic node ids.
+///
+/// Three ways a tuple argument reaches its array: it is the array value
+/// itself, it is a `value_of` extraction over one, or it is a
+/// `Parameterized` cell whose class is committed to the tuple that defines it
+/// (a `launch` argument, which is only concrete at run time).  The third
+/// resolves through the class's *value* members, because a materialized tuple
+/// is a value node and so states no operation for the emitter to trace.
+fn tuple_elements<P>(module: &Module<P>, node: NodeId) -> Option<Vec<NodeId>>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let candidates = [
+        value_of_node(module, node),
+        class_value_node(module, node),
+        Some(node),
+    ];
+    for candidate in candidates.into_iter().flatten() {
+        // SAFETY: each candidate is a live node of `module`; nothing in this
+        // crate calls `Module::drop_block`.
+        if let Some(items) = unsafe { module.array_items(candidate) } {
+            return items
+                .iter()
+                .map(|item| dyn_node(item.node))
+                .collect::<Result<Vec<_>, _>>()
+                .ok();
+        }
+    }
+    None
+}
+
+/// A member of `node`'s equality class that holds a **value** — a node the deep
+/// pass has already evaluated.  The counterpart of [`class_computation_node`]
+/// for a class whose defining member is a materialized value (a tuple literal,
+/// a string) rather than an operator, which states no operation to trace.
+fn class_value_node<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let root = equality_rep(module, node);
+    disjoint::members(&module.nodes, root)
+        .into_iter()
+        .find(|member| module.node_value(AnyNodeId::Dynamic(*member)).is_some())
 }
 
 /// Is `node` the parameter's *value* node — `Index(param_pair, 0)`?  The
@@ -1971,6 +2206,21 @@ fn flatten_offset(domain: &LowShape, path: &[usize]) -> Result<usize, String> {
         }
     }
     Ok(offset)
+}
+
+/// The domain shape a parameter index `path` reads — the mirror of
+/// [`flatten_offset`], which answers the same path with a local offset instead
+/// of a shape.  A path into a scalar is `None`: a scalar domain is only ever
+/// read whole, as the empty path.
+fn sub_shape<'a>(domain: &'a LowShape, path: &[usize]) -> Option<&'a LowShape> {
+    let mut shape = domain;
+    for &i in path {
+        let LowShape::Tuple(items) = shape else {
+            return None;
+        };
+        shape = items.get(i)?;
+    }
+    Some(shape)
 }
 
 /// Flatten a kernel argument value (a scalar `USize` leaf, or a possibly

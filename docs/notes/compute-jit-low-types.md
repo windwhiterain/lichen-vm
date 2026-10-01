@@ -34,6 +34,23 @@ A domain that is undecided after the pass is refused, with a message that says
 what to write. A domain the wasm signature cannot express (a `string`, an
 array) is refused with its own message. Neither falls back.
 
+## The callee's domain is read, not inferred
+
+A cross-kernel call's domain is a fact of the **callee's registration**: the
+`LowShape` stored with the callee's fragment, not anything the call site says.
+The bare `k x` apply states no signature at all (that is why the caller's own
+parameter needs an annotation to have a decided domain), so the emitter reads
+the callee's shape out of the kernel registry and flattens the argument to
+match it — see
+[lichen-compute §8](lichen-compute.md#multi-arity-cross-kernel-calls).
+
+That read is **cloned out and the lock released before any emission**, because
+emitting an argument can reach a further cross-kernel call, which locks the
+same registry again, and the lock is not reentrant. The count is a correctness
+requirement rather than a lowering choice: the callee is
+`(i64) * flat_arity(domain)`, so a shorter argument would make the callee read
+whatever follows it on the stack.
+
 ## The one node the value graph cannot decide: the parameter
 
 The parameter's domain is read from its **type slot**, never inferred from body
