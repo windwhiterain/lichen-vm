@@ -22,19 +22,34 @@ use crate::module_key::ModuleKey;
 use crate::{Hash, hex, sha256};
 use sha2::Digest as _;
 
-/// The artifact hash of a compiled package: the raw source bytes followed by
-/// its direct dependency keys in source order.  The hash is transitive — a
-/// dependency change changes the importer's hash — and deterministic, so every
-/// process computes the same hash for the same source chain.
-pub fn artifact_hash(source: &[u8], dep_keys: &[ModuleKey]) -> Hash {
+/// The artifact identity of a compiled package: its own source hash followed
+/// by each direct dependency's `(key, identity)` in source order.
+///
+/// The hash is transitive — a change anywhere in the recorded closure changes
+/// every importer's identity — and deterministic, so every process computes the
+/// same identity for the same source chain.
+///
+/// The dependency's **identity**, not its key, is what makes it transitive: a
+/// recompile reuses the key ([`DeviceRegistry::alloc`]), so the key names the
+/// cache slot, not the content behind it.  Folding the key alone therefore
+/// leaves an importer's identity unchanged when a dependency's *content*
+/// changes, and its frozen artifact — full of cross-module node references
+/// written as `(dependency key, index)` — would then be served against the
+/// dependency's new node layout.
+pub fn artifact_hash(source: Hash, deps: &[(ModuleKey, Hash)]) -> Hash {
     use sha2::Sha256;
     let mut hasher = Sha256::new();
     hasher.update(source);
-    for &key in dep_keys {
+    for (key, identity) in deps {
         hasher.update(key.as_raw().to_le_bytes());
+        hasher.update(identity);
     }
     hasher.finalize().into()
 }
+
+/// The identity of a dependency this store has no record of: all zeros, which
+/// no real identity equals, so an artifact keyed by it can never be served.
+const UNKNOWN_IDENTITY: Hash = [0; 32];
 
 /// The stable cache key of a file ID: SHA-256 over the identity string.  Used
 /// as the artifact file name, so the same file ID always occupies the same
@@ -72,11 +87,17 @@ pub fn is_lichen_file_id(file_id: &str) -> bool {
 }
 
 /// One registered artifact's record: its device key, the hash of the raw
-/// source it was compiled from, and its direct dependencies (file ID + key).
+/// source it was compiled from, the identity that source compiled to (see
+/// [`artifact_hash`]), and its direct dependencies (file ID + key).
 #[derive(Debug, Clone)]
 pub struct Entry {
     pub key: ModuleKey,
     pub source_hash: Hash,
+    /// This artifact's identity, recorded when it was published: the fold of
+    /// its source hash with the identities its dependencies had *then*.  A
+    /// dependency republished since changes this artifact's recomputed
+    /// identity, which is how a stale frozen artifact is rejected.
+    pub artifact: Hash,
     pub deps: Vec<(String, ModuleKey)>,
 }
 
@@ -263,8 +284,11 @@ impl DeviceRegistry {
                     // A pending entry: `source_hash` all-zero can never
                     // verify (a real hash is all-zero with probability
                     // 2^-256), so a crash between allocation and publish
-                    // reads as a miss and recompiles.
+                    // reads as a miss and recompiles.  `artifact` is zeroed for
+                    // the same reason: until it is published, a dependent must
+                    // not be able to fold in a settled identity.
                     source_hash: [0; 32],
+                    artifact: UNKNOWN_IDENTITY,
                     deps: Vec::new(),
                 },
             );
@@ -273,9 +297,43 @@ impl DeviceRegistry {
         })
     }
 
+    /// The registry's current on-disk state, read fresh.  Reads lock nothing
+    /// (see the module docs), so this is also what a *write* side must read from
+    /// when it needs to agree with [`Self::verify`].
+    fn state(&self) -> Option<RegistryState> {
+        let bytes = std::fs::read(self.registry_path()).ok()?;
+        parse_registry(&bytes).ok()
+    }
+
+    /// The identity `file_id`'s artifact will have when it is published from a
+    /// source hashing to `source_hash` with these recorded dependencies: the
+    /// same fold [`Self::publish`] records and [`Self::verify`] recomputes.
+    ///
+    /// A caller needs this *before* publishing, because the frozen artifact
+    /// carries the identity in its header and the load rejects a header that
+    /// does not match — so the two sides must be answered from the same place.
+    /// That place is the registry's own record, **not** the caller's in-memory
+    /// view of its dependencies: an embedded dependency (`virtual:<name>`) has
+    /// no source file and need have no record here, and it must contribute the
+    /// all-zero sentinel on *both* sides of the fold or every dependent would
+    /// miss its cache on every single run.
+    pub fn artifact_identity(&self, source_hash: Hash, deps: &[(String, ModuleKey)]) -> Hash {
+        // An unreadable state is a state with no records, which is exactly what
+        // `reload` recovers to — so this still agrees with what `publish` will
+        // record.
+        let empty = HashMap::new();
+        let entries = &self
+            .state()
+            .map_or_else(|| empty.clone(), |state| state.entries);
+        artifact_hash(source_hash, &dep_identities(entries, deps))
+    }
+
     /// Complete an artifact's record after its compile: its raw-source hash
     /// and its dependency list (file ID + key).  `key` must match the pending
-    /// allocation.
+    /// allocation.  The artifact's identity is folded here, from the
+    /// dependencies' identities as they stand *now* — they are published
+    /// before their importer compiles, so this is the same fold the importer
+    /// computed when it built.
     pub fn publish(
         &mut self,
         file_id: &str,
@@ -284,12 +342,14 @@ impl DeviceRegistry {
         deps: Vec<(String, ModuleKey)>,
     ) {
         self.with_lock(|registry| {
+            let identities = dep_identities(&registry.entries, &deps);
             let entry = registry
                 .entries
                 .get_mut(file_id)
                 .expect("publishing an artifact that was never allocated");
             assert_eq!(entry.key, key, "publishing under a mismatched device key");
             entry.source_hash = source_hash;
+            entry.artifact = artifact_hash(source_hash, &identities);
             entry.deps = deps;
         });
     }
@@ -333,18 +393,23 @@ impl DeviceRegistry {
     /// node): each node compares one source-file hash against its record and
     /// recurses into its recorded dependencies.  Returns the artifact identity
     /// when the whole graph verifies.
+    ///
+    /// The returned identity is **recomputed** from the graph as it stands now,
+    /// not read from the record.  That is the whole point: a dependency that was
+    /// republished since this artifact was built folds in its *new* identity, so
+    /// the answer no longer matches the identity written into the frozen
+    /// artifact's header, and the load rejects it and recompiles.
     pub fn verify(&self, file_id: &str, source: &[u8]) -> Option<Verified> {
-        let bytes = std::fs::read(self.registry_path()).ok()?;
-        let state = parse_registry(&bytes).ok()?;
+        let state = self.state()?;
         let entry = state.entries.get(file_id)?;
         if sha256(source) != entry.source_hash {
             return None;
         }
         verify_entry(&state, file_id, source, &mut HashSet::new())?;
-        let dep_keys: Vec<ModuleKey> = entry.deps.iter().map(|(_, key)| *key).collect();
+        let identities = dep_identities(&state.entries, &entry.deps);
         Some(Verified {
             key: entry.key,
-            hash: artifact_hash(source, &dep_keys),
+            hash: artifact_hash(entry.source_hash, &identities),
             deps: entry.deps.clone(),
         })
     }
@@ -438,6 +503,31 @@ fn quarantine(path: &Path) -> Option<PathBuf> {
         candidate = parent.join(format!("{name}.corrupt.{suffix}"));
     }
     std::fs::rename(path, &candidate).ok().map(|()| candidate)
+}
+
+/// The identity each recorded dependency contributes to an importer's fold: its
+/// key, and the identity its own artifact was published with.  A dependency with
+/// no record contributes [`UNKNOWN_IDENTITY`].
+///
+/// This is the **one** answer to that question, shared by the three sites that
+/// need it ([`DeviceRegistry::artifact_identity`], [`DeviceRegistry::publish`]
+/// and [`DeviceRegistry::verify`]).  They have to agree: a mismatch is not a
+/// miss but a permanent one, because the importer would then recompile on every
+/// single run.
+fn dep_identities(
+    entries: &HashMap<String, Entry>,
+    deps: &[(String, ModuleKey)],
+) -> Vec<(ModuleKey, Hash)> {
+    deps.iter()
+        .map(|(dep_file_id, dep_key)| {
+            (
+                *dep_key,
+                entries
+                    .get(dep_file_id)
+                    .map_or(UNKNOWN_IDENTITY, |dep| dep.artifact),
+            )
+        })
+        .collect()
 }
 
 /// Where a quarantine put its bytes — or that there were none to put.
@@ -539,7 +629,7 @@ struct RegistryState {
 fn serialize_registry(registry: &DeviceRegistry) -> Vec<u8> {
     let mut w = Writer::new();
     w.bytes(b"LCHREG");
-    w.u32(2);
+    w.u32(3);
     w.u64(registry.next_key);
     w.u64(registry.free.len() as u64);
     for &index in &registry.free {
@@ -550,6 +640,7 @@ fn serialize_registry(registry: &DeviceRegistry) -> Vec<u8> {
         w.path(Path::new(file_id));
         w.u64(entry.key.as_raw());
         w.bytes(&entry.source_hash);
+        w.bytes(&entry.artifact);
         w.u64(entry.deps.len() as u64);
         for (dep_file_id, dep_key) in &entry.deps {
             w.path(Path::new(dep_file_id));
@@ -564,7 +655,10 @@ fn parse_registry(bytes: &[u8]) -> Result<RegistryState, String> {
     if r.take(6)? != b"LCHREG" {
         return Err("bad registry magic".into());
     }
-    if r.u32()? != 2 {
+    // Version 2 recorded no artifact identity, so a version-2 registry cannot
+    // say which content a key held; it reads as unreadable and is recovered as
+    // a fresh registry, which costs one full recompile and nothing else.
+    if r.u32()? != 3 {
         return Err("unknown registry format version".into());
     }
     let next_key = r.u64()?;
@@ -577,6 +671,7 @@ fn parse_registry(bytes: &[u8]) -> Result<RegistryState, String> {
         let file_id = r.path()?.to_string_lossy().into_owned();
         let key = ModuleKey::from_raw(r.u64()?);
         let source_hash: Hash = r.take(32)?.try_into().expect("32 bytes");
+        let artifact: Hash = r.take(32)?.try_into().expect("32 bytes");
         let mut deps = Vec::new();
         for _ in 0..r.u64()? {
             let dep_file_id = r.path()?.to_string_lossy().into_owned();
@@ -588,6 +683,7 @@ fn parse_registry(bytes: &[u8]) -> Result<RegistryState, String> {
             Entry {
                 key,
                 source_hash,
+                artifact,
                 deps,
             },
         );

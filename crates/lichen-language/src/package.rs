@@ -148,6 +148,27 @@ impl<P: ProgramCodecOf> PackageStore<P> {
         store
     }
 
+    /// A store backed by an already-open device registry at `cache_dir`.  For a
+    /// host that keeps one registry handle across requests (the language
+    /// server) instead of reopening — and reparsing — the registry file each
+    /// time: the handle carries the same cache directory
+    /// [`Self::with_cache_dir`] would have opened.  Every mutation re-reads the
+    /// registry under the cross-process lock and every verification reads it
+    /// back, so a long-lived handle observes another process's writes exactly
+    /// as a freshly opened one would.
+    pub fn with_device(cache_dir: PathBuf, device: DeviceRegistry) -> Self {
+        let mut store = PackageStore::new();
+        store.cache_dir = Some(cache_dir);
+        store.device = Some(device);
+        store
+    }
+
+    /// Take the open device registry back out, so a host can hold it across
+    /// requests (see [`Self::with_device`]).  `None` for an in-memory store.
+    pub fn into_device(self) -> Option<DeviceRegistry> {
+        self.device
+    }
+
     /// Explicitly garbage-collect the device cache: reclaim every artifact
     /// not reachable from a path alias whose source file still exists.
     /// Returns the number of reclaimed artifacts.
@@ -340,7 +361,9 @@ where
         module.evaluate_node_deep(build.root_val, None);
         module.evaluate_node_deep(build.root_ty, None);
 
-        let hash = persist::artifact_hash(source.as_bytes(), &[]);
+        // The embedded compute package has no imports, so its identity is its
+        // own source hash alone.
+        let hash = persist::artifact_hash(persist::sha256(source.as_bytes()), &[]);
         let (key, _is_new) = self.alloc_key(&persist::virtual_file_id(COMPUTE_PATH));
         let freeze = self
             .registry
@@ -504,15 +527,21 @@ where
             return Err(std::mem::take(&mut diags));
         }
 
-        // The artifact identity: the raw source plus the dependency keys in
-        // source order — transitive, so a dependency change re-keys this
-        // artifact.
-        let dep_keys: Vec<ModuleKey> = preprocessed
+        // The artifact identity: the raw source hash, then each dependency's
+        // own identity.  Transitive by construction — a dependency's identity
+        // is the identity it was built as, so a change anywhere in the import
+        // closure changes this one, and the frozen artifact this key writes
+        // into its header stops matching the one a later verification computes.
+        //
+        // The recorded dependency identity is the file ID, not the import's
+        // display path (they differ for an embedded source).
+        let deps: Vec<(String, ModuleKey)> = preprocessed
             .imports
             .iter()
-            .map(|import| import.export.module)
+            .map(|import| (self.dependency_file_id(&import.path), import.export.module))
             .collect();
-        let hash = persist::artifact_hash(source.as_bytes(), &dep_keys);
+        let source_hash = persist::sha256(source.as_bytes());
+        let hash = self.artifact_identity(source_hash, &deps);
         // A file ID is compiled once and overwritten: the key is stable per
         // file, so recompiling a changed file reuses the same slot.
         let (key, _is_new) = self.alloc_key(&file_id);
@@ -558,14 +587,6 @@ where
                 },
             );
 
-        // The recorded dependency identity: the file ID, not the import's
-        // display path (they differ for an embedded source).
-        let deps: Vec<(String, ModuleKey)> = preprocessed
-            .imports
-            .iter()
-            .map(|import| (self.dependency_file_id(&import.path), import.export.module))
-            .collect();
-
         // Serialize into the device cache under the file ID slot (overwritten
         // on recompile), and record the source hash + dependency graph.
         if let Some(device) = &mut self.device {
@@ -598,6 +619,44 @@ where
             export,
             direct: Vec::new(),
         })
+    }
+
+    /// The artifact identity this unit's source and recorded dependencies will
+    /// produce — the fold every side must agree on, or the cache misses on
+    /// every run instead of once (see [`persist::artifact_hash`]).
+    ///
+    /// A cache-backed store asks the device, because the device's record is
+    /// what a later verification recomputes from; an in-memory store has no
+    /// artifact to key and nothing to be consistent with across loads, so its
+    /// own registry answers.
+    fn artifact_identity(&self, source_hash: Hash, deps: &[(String, ModuleKey)]) -> Hash {
+        match &self.device {
+            Some(device) => device.artifact_identity(source_hash, deps),
+            None => {
+                let identities = self.dependency_identities(deps);
+                persist::artifact_hash(source_hash, &identities)
+            }
+        }
+    }
+
+    /// The recorded identity of each dependency in an **in-memory** store: what
+    /// its module was frozen as.  A dependency this store has no record of
+    /// contributes the all-zero sentinel, which no real identity equals.
+    fn dependency_identities(&self, deps: &[(String, ModuleKey)]) -> Vec<(ModuleKey, Hash)> {
+        let registry = self
+            .registry
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        deps.iter()
+            .map(|(_, dep_key)| {
+                (
+                    *dep_key,
+                    registry
+                        .get(*dep_key)
+                        .map_or([0; 32], |package| package.hash),
+                )
+            })
+            .collect()
     }
 
     /// Resolve an import path relative to the current source file's directory.
@@ -710,7 +769,10 @@ where
         module.evaluate_node_deep(build.root_val, None);
         module.evaluate_node_deep(build.root_ty, None);
 
-        let hash = persist::artifact_hash(source.as_bytes(), &[]);
+        // A registered native package is compiled from the source embedded in
+        // this binary and has no imports, so its identity is its own source
+        // hash alone.
+        let hash = persist::artifact_hash(persist::sha256(source.as_bytes()), &[]);
         let (key, _is_new) = self.alloc_key(&persist::virtual_file_id(virtual_path));
         let freeze = self
             .registry

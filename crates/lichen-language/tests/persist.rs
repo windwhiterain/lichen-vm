@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use lichen_language::diag::Stage;
 use lichen_language::package::PackageStore;
 use lichen_language::persist::{
-    DeviceRegistry, artifact_hash, deserialize_artifact, file_id_hash, hex,
+    DeviceRegistry, artifact_hash, deserialize_artifact, file_id_hash, hex, sha256,
 };
 use lichen_language::program::{LangProgram, LangValue};
 use lichen_language::run::evaluate_raw;
@@ -238,7 +238,7 @@ fn a_corrupted_body_is_rejected_by_the_header_digest() {
             .join(format!("{}.module", hex(&file_id_hash(&file_id)))),
     )
     .unwrap();
-    let hash = artifact_hash(source.as_bytes(), &[]);
+    let hash = artifact_hash(sha256(source.as_bytes()), &[]);
     let modules = HashMap::new();
 
     // A valid artifact the writer produced still loads: a digest read or

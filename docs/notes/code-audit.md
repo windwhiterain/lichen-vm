@@ -1263,6 +1263,135 @@ the memoized check — does not exist, (b) avoids the lex and parse but not the
 check, so it is worth doing for the keystroke path and is not a substitute for
 (a).
 
+**Outcome — (a) and (c) are in, (b) still is not, and measuring them found a
+crash the item had been standing on.** The first half is a plain refactor with a
+measured payoff; the second half is a defect in the artifact cache, not in the
+editor, and it was reachable from the CLI too — nothing about it is
+editor-specific.
+
+**The mechanism.** `Doc` is split in two. The `Send` half is `DocIndex` (the
+frontend artifacts, the name-resolution index, and the diagnostics *rendered*
+for the protocol); the `!Send` half is the `Doc<P>` handle, which adds the
+checker's structured diagnostics and derefs to the index. That split is what
+makes a cache possible at all: `tower_lsp` requires `Send + Sync`, and `Doc`
+owns arena-bound raw pointers through the checker's diagnostic type, so the
+server could never have held one. The server now holds a `DocIndex` per open
+document and builds the `!Send` handle only inside the analysis.
+
+The cache is keyed by **the text's own sha256, not the client's version** — a
+version is only as injective as the client that sends it, while the text's hash
+is injective by construction, and the client number is still not published, so a
+client cannot reject a stale diagnostic either way. The second half of the key
+is **the sha256 of every imported file the run loaded**; a hit requires all of
+them unchanged, since the on-disk artifact cache is shared with other processes
+(`docs/notes/artifact-cache.md`). A run that failed to resolve or read a package
+is **not** cacheable: no set of *existing* files names the one whose appearance
+or repair would change the answer, so a hit could go on reporting a failure the
+editor has already fixed. The device registry handle is kept open across
+requests (`PackageStore::with_device` / `into_device`) and taken out for the
+duration of a run, so two overlapping runs cannot share one handle.
+
+The keystroke path gets a **150 ms debounce** and a **generation gate**: an edit
+is analyzed only after the window without a newer edit, and an analysis publishes
+only while the text it was launched for is still the document's current one, so
+a superseded analysis stops instead of completing. Neither can abort a run that
+has already started — `tower-lsp` answers `$/cancelRequest` by dropping the
+request future, and a `spawn_blocking` closure is detached from its join handle,
+so the run finishes and its result is discarded. That is stated in the module
+docs rather than papered over: the gate suppresses a *stale publish*, which is
+the part a user sees, and does not buy back the work.
+
+**The numbers** (release builds, same machine, 30 warm hovers and a 10-edit
+burst per run; the "before" binary is this branch's own `HEAD` built out):
+
+| | before | after |
+|---|---|---|
+| hover, 120-statement document | **7.01 ms** median | **0.040 ms** median (≈175×) |
+| hover, `examples/import/_.lichen` (two imports) | **1.76 ms** median | **0.128 ms** median (≈14×) |
+| 10-edit burst → frontend runs | **10** | **1** |
+| 10-edit burst → last diagnostic at | 75 ms | 172 ms |
+| `didOpen` → first diagnostic | 7.1 ms | 7.8 ms (unchanged — it was always one run) |
+
+The burst row is the honest cost: the last diagnostic now arrives ~100 ms later
+because the edit waits out the debounce instead of being analyzed immediately.
+That is the trade being made deliberately — ten frontend runs per burst become
+one — and it is a latency-for-throughput swap, not a free win. The unchanged
+`didOpen` row is the control: the first analysis of a document still costs a full
+run, which is exactly what the cache is not for.
+
+**Every answer is unchanged.** 506 responses — hover, definition and completion
+over a grid of positions across the import example, plus the semantic-token
+payload and a full diagnostic set after an edit — are byte-identical between the
+two builds. A caching change that cannot be shown to answer the same thing is
+not worth landing, so this is the assertion that matters more than the timings.
+
+**The crash the measurement found.** The stale-dependency check in the bench —
+open a document that imports `math.lichen`, hover, change `math.lichen` on disk,
+hover again — **killed the server**, on this branch's `HEAD` as much as on the
+new code, with `invalid SlotMap key used` from the union-find
+(`lichen-utils/src/disjoint.rs:126`), surfacing as
+`compile lichen source: JoinError::Panic` at the `spawn_blocking` join. With the
+repo's own `examples/import` shapes it is a hard crash; with smaller ones it is
+silently *wrong* instead — the same file, the same sources, differing only in
+whether an artifact cache is warm, produced two spurious errors
+(`this value is not a container`, `table lookup missed`) against none.
+
+The cause is not in the editor. An artifact's identity was
+`sha256(own_source, dependency_keys)`, and a recompile **reuses a dependency's
+`ModuleKey`** ("recompiles reuse it, overwriting the slot") — so a dependency's
+key survives its own change, and an importer whose own bytes never changed kept
+its identity, and therefore kept its frozen artifact. That artifact is full of
+cross-module node references written as `(dependency key, index)`; served after
+the dependency changed, those indices name the dependency's **new** node layout.
+Wrong answers, or an index that is no longer a slot. The `verify` walk does not
+catch it, and cannot: a dependency that was *already recompiled earlier in the
+same store* matches its record again. This is a **pre-existing defect on `dev`**
+(`git show dev:…/device.rs` carries the identical function), and the note's own
+claim that dirtiness is transitive — "a dependency change changes the importer's
+hash" — was simply false.
+
+**Fixed, at the identity rather than at the symptom.** The fold now takes each
+dependency's `(key, identity)`, where a dependency's identity is what *it* was
+published as, so the closure is genuinely transitive. Three sites answer "what
+does this dependency contribute" and all three read the **registry's own
+record**, never the caller's in-memory view — an embedded dependency has no
+source file and need have no record, and it must contribute the all-zero
+sentinel on both sides or every dependent would miss its cache forever. That
+last point was not a prediction: the first version read the store's in-memory
+registry on the write side and the device record on the read side, and the
+pre-existing test `a_package_that_imports_an_embedded_source_verifies_across_stores`
+caught it as a permanent miss. `Entry` now records the identity per file ID
+(registry format version 3; a version-2 file reads as unreadable and is recovered
+as a fresh registry, costing one full recompile). Pinned by
+`lichen-language/tests/artifact_transitivity.rs` and the fold itself in
+`lichen-registry/tests/artifact_hash.rs`, and **watched to go red**: with the
+identity removed from the fold the transitivity test fails `left: (0, 2)` —
+compiled 0, served 2 — exactly the stale-artifact behaviour. See
+[artifact-cache](artifact-cache.md).
+
+Two smaller findings from the same work, both worth more than the timings:
+
+- **The bench's restore check was wrong, not the server.** It compared two whole
+  responses, `"id":200` against `"id":202`, so it reported `STALE` for a server
+  that had in fact returned to the earlier answer exactly. A harness that cannot
+  pass is worse than no harness: it would have sent the next reader looking for
+  a bug in the code. Fixed to compare the `result` object.
+- **A warm cache is a correctness dependency, not just a speed one.** Every
+  measurement in this item is conditional on the importer chain being rebuilt
+  correctly, and until the identity fix that was not true. The item as written
+  (a cache plus a dependency key) is a *cache*; it only became safe once the
+  dependency key was made a function of the dependency's content.
+
+**Still open.** (b) — `BufferSession`, to avoid the lex and parse on the
+keystroke path — is untouched and remains blocked on T3, the memoized check;
+skipping the check without it is not a win. `did_save` /
+`did_change_watched_files` are still absent, which is why the dependency half of
+the key is load-bearing rather than a belt-and-braces extra: an editor that
+never tells the server a file changed leaves the server to notice by hashing, on
+the next request. Document version tracking is also still absent, so a client
+cannot reject a stale diagnostic set; the text hash is what makes the *cache*
+sound, and it is not the same thing as a version the client can compare against.
+
 ### P1-18 — Compute: unbounded globals, per-launch rebuild, unbounded `plrun` `verified`
 
 `crates/lichen-compute/src/compute.rs:90-119` — two process-global
