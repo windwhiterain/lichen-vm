@@ -334,6 +334,30 @@ Because the mask is excluded from the signature, `r2` needs no re-lowering of
 - **Thread/stack.** `parse::parse` spawns a 16 MB worker thread every call. T2
   should thread the parser's construction once (or per masked region) rather
   than per whole file.
+- **The window's byte projection is the splice's sharp edge** (found and fixed
+  after this note's landing, `3463f22`). The splice re-parses the token range
+  `[ns, ne)` and splices it between the untouched prefix and suffix, so it needs
+  the window's *new* byte range and the suffix's token shift. Two rules are
+  load-bearing, and both fail on an edit that **deletes whole statements**,
+  because such an edit also deletes the separator between the window and the
+  suffix:
+  - the window's new **end** is projected from the **suffix's** first byte (at or
+    after the edit end by construction), *not* from the window's own last token,
+    which ends inside the replaced region;
+  - the suffix's shift is measured from the suffix's **own** first token in each
+    stream — the same token on both sides — *not* from the window's end token,
+    which the edit may have deleted.
+  Project either and the window cuts through the statement that follows: a
+  truncated binding is re-parsed, the suffix is spliced after it, statements are
+  duplicated, and a `stmt_ranges` entry can end one past the token stream — the
+  next splice then panics on `old_tokens[old_th - 1]`. The corrupted program
+  still *evaluated* correctly, so the tell was a spurious parse diagnostic and
+  the later panic, not the value. An **empty** window (`ns == ne`, prefix meets
+  suffix) is legal and must not be handed to the region parser, which requires at
+  least one statement.
+  The oracle that found it is `incremental-update.md` §7.3's differential
+  comparison (value *and* diagnostics against a fresh compile, over every prefix
+  of an edit sequence); a count-only reading would have missed it.
 
 ## 9. Roadmap
 

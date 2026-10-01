@@ -543,6 +543,32 @@ And the boundaries:
 - **pruning**: after a rename (which the key gate reuses wholesale) a second edit forces
   a rebuild, and the store is reconciled against the *new* program's marks — `dropped`
   is 2, not 1, so the path the rename left behind does not accumulate.
+- a **whole-statement deletion** (`mid = 9` between two marked bindings removed): the
+  window is **empty**, and the splice still runs — the prefix and the suffix meet with
+  nothing between them. 2 cells retained, both reused (2/0/0), value `USize(8)`,
+  `ok=true`, and the same as a fresh compile. This is the shape that used to corrupt the
+  program and then panic (§12.4), and the one that made the empty window legal.
+
+### 7.3 The differential oracle
+
+The check that matters is not a count but a comparison: **the session's value, build
+outcome and diagnostic count after every prefix of an edit sequence must equal a fresh
+session's over the same source.** The fresh session has no cells, so it compiles
+everything; the replayed one has whatever the prefix left behind. A missed dirty edge, a
+stale cell, or a splice that produced a different program all show up as a divergence.
+
+Measured (`--example session_diff_probe`, since removed): **0 mismatches of 26 prefixes**
+over a sequence that covers a leaf edit in each of a chain's two marked bindings, a
+rename (which the key gate reuses wholesale), a rebuild after it, a statement inserted
+ahead of the marked ones, a mark removed and re-added, a read that appears and one that
+disappears, a mark nested in a block, a shadowing duplicate name, a lambda body's mark, an
+unresolved name, a type error and its fix, statements inserted between and ahead, a
+tail-only edit, and a marked binding whose value becomes a block with a mark inside.
+
+**This is the oracle §9 names, and it earned its keep immediately: it found a
+pre-existing splice bug on its first run** (§12.4). A count-only reading would not have:
+the corrupted program still evaluated to the right value, and only the *diagnostic count*
+and the next splice's panic gave it away.
 
 ## 8. Costs and failure modes
 
@@ -693,6 +719,8 @@ And the boundaries:
 | `66043e9` | the note becomes a handoff; the code stops saying `cache` is inert |
 | `389e727` | a repeated name falls back to its index, so a path is an identity |
 | `b42dac2` | the session retains cells and dirties them by propagation (`dirty.rs`, the `cache` key, the failed-build guard) |
+| `b338ec5` | the note records the propagation landing (this handoff) |
+| `3463f22` | the splice's window projection: an edit that deletes statements no longer cuts the window |
 
 ### 12.2 The entry points
 
@@ -767,6 +795,22 @@ And the boundaries:
 - **A full re-parse dirties everything.** That is correct and expensive: the fallback
   path (`splice_program` → `None`) drops every cell. It is also what makes the fallback
   *safe* — do not "optimize" it into a narrower window without the two-space argument.
+- **A window boundary inside the replaced region corrupts the program** (fixed in
+  `3463f22`, and the rule is the landmine). The window's new **end** must be projected
+  from the *suffix's* first byte, and the suffix's shift measured from the suffix's
+  **own** first token in each stream. An edit that deletes whole statements also deletes
+  the separator between the window and the suffix, so both the window's last token and
+  the window's end token end up *inside* the replaced region: project either and the
+  window cuts through the statement that follows — a truncated binding is re-parsed and
+  the suffix is spliced after it, which duplicates statements and can push a
+  `stmt_ranges` entry one past the token stream (the next splice then panics on
+  `old_tokens[old_th - 1]`). The corrupted program still *evaluated* correctly, so only
+  the diagnostic count and the later panic gave it away — which is why §7.3's oracle
+  compares diagnostics too.
+- **An empty window is a splice, not a parse.** `ns == ne` is legal (prefix meets
+  suffix) and must not be handed to `parse_statement_region_traced`: the region parser
+  requires at least one statement, so an empty region reports "found the end of the
+  program" — a spurious diagnostic on an edit that deleted a statement.
 - **The `dirty.rs` walk must stay exhaustive over `Expr`.** It is written as a full match
   on purpose: a new expression form that falls into a catch-all would contribute no
   edges, and a missed edge is a stale cell.
@@ -805,6 +849,10 @@ reading, write one as an `examples/` binary and delete it after. The numbers to 
 §7.1 (0/2/2 static nodes and `USize(5)`; 13 positions, 0 mismatches; every path unique;
 3-of-4 nodes; 1 obligation released once) and §7.2 (the `CellEvents` per edit, the two
 propagation cases, `USize(37)`/`USize(19)`/`USize(16)`, and 0 cells from a failed check).
+
+**Write the differential probe first** (§7.3) — it is the cheapest oracle for the whole
+mechanism, it compares diagnostics as well as values, and it is what found the last
+pre-existing bug in this area. A reading of the cell counts alone would have missed it.
 
 A session probe reads the value by **consuming** the session: a `Build`'s module is
 evaluated through a `&mut`, and the report's `Arc` is only unique once the session's own
