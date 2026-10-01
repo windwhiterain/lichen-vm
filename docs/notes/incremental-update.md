@@ -265,7 +265,8 @@ Decided by the superior:
 | 1 | the front end / checker | **not built**: recording a marked cell's read paths while it is computed |
 | 2 | `lichen-language-lex` / `-parser` / `ast.rs` | **landed**: the `cache` keyword and `Binding.cached` — parsed and carried, consumed by nothing |
 | 2 | `language-spec.md` §2 + `tree-sitter-lichen` (`grammar.js`, `highlights.scm`) | **landed**: the statement form, the keyword list, the highlighting |
-| 3 | `lichen-registry` (the store) | cells keyed by path; freeze/read in place; the four events reported |
+| 3 | `lichen-lowlevel/src/static_module/freeze.rs` | **landed**: `freeze_closure` (the closure of a root set) and `freeze_set` (the shared phases); `from_module_mapped` is now "the closure of every node" |
+| 3 | `lichen-registry` (the store) | **not built**: cells keyed by path; freeze/read in place; the four events reported |
 | 3 | `session.rs:243` (`content_key` gate), `artifact_hash` | **demoted**: they may still move bytes between processes and feed diagnostics, but they no longer decide reuse |
 | 4 | the program's own graph data (the PCG graph a program builds) | node paths and the edit descriptor. **Not** `lichen-graph-ir`: that crate is the JIT's recorded evaluation graph, a different structure with a different identity (§1.1) |
 
@@ -325,6 +326,13 @@ Two rules follow:
 - **cells freeze in dependency order**: `freeze_mapped` already asserts that every
   referenced key is registered, the same discipline packages use, and a cell that read
   another cell's frozen reference satisfies it by construction.
+
+**Measured · a temporary probe in the lowlevel's own test harness, since removed.**
+On a four-node module — an array of two constants, plus one node no root reaches —
+the closure of the array root filed **3 nodes of 4**, the unreachable node was not
+pulled in, and the frozen artifact read both items (10 and 20) back through its own
+arena; adding that node as a second root grew the closure to all 4. That is the
+per-cell claim in its smallest form: the artifact is as big as the value it keeps.
 
 The dirty input for this landing is the caller's, and it is the granularity the
 superior chose for source edits: the edit declares which file changed, and every file

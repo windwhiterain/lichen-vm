@@ -1,6 +1,7 @@
 //! Freezing a solved module into static form under its registry-allocated key.
 
 use super::*;
+use crate::ValueExt as _;
 impl<P: Program> StaticModule<P> {
     /// The node's solved value — `Parameterized` when the node is a
     /// residual computation with no cached answer.
@@ -41,16 +42,52 @@ impl<P: Program> StaticModule<P> {
         module: &Module<P>,
         key: ModuleKey,
     ) -> (Self, HashMap<NodeId, LocalNodeId>) {
+        let nodes: Vec<NodeId> = module.nodes.iter().map(|(id, _)| id).collect();
+        let functions: Vec<FunctionId> = module.functions.iter().map(|(id, _)| id).collect();
+        Self::freeze_set(module, key, &nodes, &functions)
+    }
+
+    /// [`Self::from_module`] for the **closure** of `roots` — the per-cell
+    /// freeze: only the nodes those roots can reach are filed, so an artifact is
+    /// as small as the value it keeps, and an edit freezes only the cells it
+    /// dirtied.
+    ///
+    /// The soundness obligations are the whole-module freeze's: the caller files
+    /// the artifact under a key that is not yet taken, in a registry that already
+    /// holds every key the closure's values reference.  What is new is that the
+    /// closure, not the module, must be self-contained — see [`closure`].
+    pub fn freeze_closure(
+        module: &Module<P>,
+        key: ModuleKey,
+        roots: &[NodeId],
+    ) -> (Self, HashMap<NodeId, LocalNodeId>) {
+        let (nodes, functions) = closure(module, roots);
+        Self::freeze_set(module, key, &nodes, &functions)
+    }
+
+    /// Freeze exactly `node_ids`/`function_ids`, both in slotmap order so the
+    /// artifact's local indices are dense and canonical for the codec.
+    ///
+    /// Every intra-artifact reference must land inside the set: the maps below
+    /// are indexed with `[...]`, so a reference that escapes panics here rather
+    /// than producing an artifact that names a node it does not contain.
+    fn freeze_set(
+        module: &Module<P>,
+        key: ModuleKey,
+        node_ids: &[NodeId],
+        function_ids: &[FunctionId],
+    ) -> (Self, HashMap<NodeId, LocalNodeId>) {
         // Phase 1: indices and per-node facts.  Two passes: every id must
         // be in the map before any meta is remapped (a class's member list
         // points forward in slotmap order).
         let mut node_map: HashMap<NodeId, LocalNodeId> = HashMap::new();
-        for (index, (id, _)) in module.nodes.iter().enumerate() {
+        for (index, &id) in node_ids.iter().enumerate() {
             node_map.insert(id, LocalNodeId { index });
         }
-        let mut nodes: Vec<StaticNode<P>> = Vec::with_capacity(module.nodes.len());
-        let mut values: Vec<Option<P::Value>> = Vec::with_capacity(module.nodes.len());
-        for (id, node) in module.nodes.iter() {
+        let mut nodes: Vec<StaticNode<P>> = Vec::with_capacity(node_ids.len());
+        let mut values: Vec<Option<P::Value>> = Vec::with_capacity(node_ids.len());
+        for &id in node_ids {
+            let node = &module.nodes[id];
             values.push(node.value);
             nodes.push(StaticNode {
                 value: None, // rewritten in phase 2, once arena offsets exist
@@ -74,8 +111,9 @@ impl<P: Program> StaticModule<P> {
             });
         }
         let mut function_map: HashMap<FunctionId, StaticFunctionId> = HashMap::new();
-        let mut functions: Vec<StaticFunction> = Vec::with_capacity(module.functions.len());
-        for (id, function) in module.functions.iter() {
+        let mut functions: Vec<StaticFunction> = Vec::with_capacity(function_ids.len());
+        for &id in function_ids {
+            let function = &module.functions[id];
             function_map.insert(id, StaticFunctionId(functions.len()));
             functions.push(StaticFunction {
                 parameter: node_map[&function.parameter],
@@ -95,8 +133,10 @@ impl<P: Program> StaticModule<P> {
         // dependency's shared arena and is filed verbatim — no copy.
         let mut unique: Vec<(usize, usize, usize)> = Vec::new(); // (ptr, len, align)
         let mut seen: HashSet<(usize, usize)> = HashSet::new();
-        for (_, node) in module.nodes.iter() {
-            let Some(value) = node.value else { continue };
+        for &id in node_ids {
+            let Some(value) = module.nodes[id].value else {
+                continue;
+            };
             if let Some(LowValue::Array(AnyHandle::Dynamic(handle))) = value.as_enum() {
                 // SAFETY: a dynamic payload is allocated in a block arena of
                 // `module` by `Module::alloc_array`, and the freeze holds
@@ -334,4 +374,117 @@ fn rewrite_value<P: Program>(
         }
         _ => value,
     }
+}
+
+/// The **closure** of `roots`: the node and function sets a freeze must contain
+/// for the artifact to be self-contained, in slotmap order so the local indices
+/// agree with the whole-module freeze's.
+///
+/// Closed under four edge kinds, plus whatever a value reports of itself:
+///
+/// - a value's items/entries (arrays, tables);
+/// - `operation.operand` — a residual node must be able to re-run later, so
+///   unlike the GC's walk, which deliberately does not follow a cached value's
+///   operand, this one must;
+/// - the **whole equality class** — `parent`/`next`/`tail` all go through
+///   `node_map`, and half a class is a broken class;
+/// - the **whole function template** — `StaticFunction.nodes` is the template's
+///   member list, and a missing member is a broken template.
+///
+/// It also takes whatever the value reports through [`ValueExt::traced`] — the
+/// contract the GC relies on, and the only way to see a node an opaque ext
+/// payload holds: phase 3 rewrites a handle and never the bytes behind it, so a
+/// value that holds nodes without saying so would freeze into an artifact that
+/// does not contain them.  **A value that fails to answer is not caught**, here
+/// exactly as in the GC.
+fn closure<P: Program>(module: &Module<P>, roots: &[NodeId]) -> (Vec<NodeId>, Vec<FunctionId>) {
+    let mut nodes: HashSet<NodeId> = HashSet::new();
+    let mut functions: HashSet<FunctionId> = HashSet::new();
+    let mut work: Vec<NodeId> = roots.to_vec();
+    while let Some(node) = work.pop() {
+        if !nodes.insert(node) {
+            continue;
+        }
+        // A released node still named by a template's member list is skipped,
+        // as the GC skips one.
+        let Some(entry) = module.nodes.get(node) else {
+            continue;
+        };
+        for member in class_members(module, node) {
+            work.push(member);
+        }
+        if let Some(operand) = entry.operation.and_then(|operation| operation.operand) {
+            work.push(operand);
+        }
+        let Some(value) = entry.value else { continue };
+        let mut traced = Vec::new();
+        value.traced(module, &mut traced);
+        work.extend(traced);
+        match value.as_enum() {
+            Some(LowValue::Array(AnyHandle::Dynamic(handle))) => {
+                // SAFETY: the payload was allocated in a block arena of `module`
+                // by `Module::alloc_array`, and this walk borrows `module`, so
+                // the arena is alive.
+                for item in unsafe { &*handle.0 } {
+                    if let AnyNodeId::Dynamic(node) = item.node {
+                        work.push(node);
+                    }
+                }
+            }
+            Some(LowValue::Table(AnyHandle::Dynamic(handle))) => {
+                // SAFETY: as in the array arm above (`Module::alloc_table`).
+                for item in unsafe { &*handle.0 } {
+                    if let AnyNodeId::Dynamic(node) = item.key {
+                        work.push(node);
+                    }
+                    if let AnyNodeId::Dynamic(node) = item.value {
+                        work.push(node);
+                    }
+                }
+            }
+            Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => {
+                if functions.insert(function) {
+                    let template = &module.functions[function];
+                    work.push(template.parameter);
+                    work.push(template.r#return);
+                    work.extend(template.asserts.iter().copied());
+                    work.extend(template.nodes.iter().copied());
+                }
+            }
+            // A static payload names a frozen dependency: its refs are absolute
+            // from birth and its arena belongs to that dependency, so nothing is
+            // pulled in.  A leaf holds nothing.
+            _ => {}
+        }
+    }
+    let node_ids: Vec<NodeId> = module
+        .nodes
+        .iter()
+        .map(|(id, _)| id)
+        .filter(|id| nodes.contains(id))
+        .collect();
+    let function_ids: Vec<FunctionId> = module
+        .functions
+        .iter()
+        .map(|(id, _)| id)
+        .filter(|id| functions.contains(id))
+        .collect();
+    (node_ids, function_ids)
+}
+
+/// Every member of `node`'s equality class, read-only: up through `parent` to
+/// the representative, then across `next` — the list `write_node_value`
+/// replicates over.  No path compression, so a read never mutates the tree.
+fn class_members<P: Program>(module: &Module<P>, node: NodeId) -> Vec<NodeId> {
+    let mut root = node;
+    while let Some(parent) = module.nodes[root].equality.parent() {
+        root = parent;
+    }
+    let mut members = vec![root];
+    let mut current = root;
+    while let Some(next) = module.nodes[current].equality.next() {
+        members.push(next);
+        current = next;
+    }
+    members
 }
