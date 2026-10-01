@@ -125,12 +125,8 @@ fn resident_cost(context: &GpuContext) -> (f64, f64) {
     (samples[0], samples[REPEATS / 2])
 }
 
-/// One chain of `links` dispatches over a single uploaded buffer, in
-/// milliseconds, with the trailing readback counted.
-///
-/// The readback is counted deliberately: a chain a program actually runs ends in
-/// a value somebody wanted, so leaving it out would flatter every number
-/// derived from this.
+/// One chain of `links` dispatches, each its own submission, in milliseconds
+/// with the trailing readback counted.
 fn time_chain(context: &GpuContext, input: &[i64], count: usize, links: usize) -> f64 {
     let started = Instant::now();
     let mut current = context
@@ -152,6 +148,54 @@ fn time_chain(context: &GpuContext, input: &[i64], count: usize, links: usize) -
     elapsed
 }
 
+/// One fused chain of `links` dispatches in a single submission, in
+/// milliseconds, with the trailing readback counted so the two are comparable.
+fn time_fused_chain(context: &GpuContext, input: &[i64], count: usize, links: usize) -> f64 {
+    let started = Instant::now();
+    let id = context
+        .run_chain(&fragment(), input, count, links)
+        .expect("the fused chain records");
+    let _answer = context
+        .fetch(id, count)
+        .expect("the fused chain comes home");
+    let elapsed = started.elapsed().as_secs_f64() * 1e3;
+    context.release(id);
+    elapsed
+}
+
+/// A fused chain's answer, checked against the kernel's own closed form.
+///
+/// The kernel is `out[i] = 2*in[i] + 1`, so `n` links give `2^n * in[i] +
+/// (2^n - 1)`. That is **derived, not run** — which is the whole point. Checking
+/// a fused chain against a second CPU copy of the same loop would agree with a
+/// mis-ordered chain just as cheerfully, because both would apply the links in
+/// the same wrong order. The closed form has no order to get wrong.
+///
+/// This is also the first execution of the two rules that until now existed only
+/// as comments: one descriptor set per dispatch with the pool reset outside the
+/// submission, and a trailing barrier naming a shader as well as a transfer. A
+/// chain with either of them wrong reads undefined data, so this is the check
+/// that says whether they are right.
+fn check_fused(context: &GpuContext, count: usize, links: usize) {
+    let input: Vec<i64> = (0..count as i64).collect();
+    let id = context
+        .run_chain(&fragment(), &input, count, links)
+        .expect("the chain under test records");
+    let answer = context
+        .fetch(id, count)
+        .expect("the chain under test comes home");
+    context.release(id);
+
+    let factor = 1i64 << links;
+    for (index, value) in answer.iter().enumerate() {
+        let expected = factor * index as i64 + (factor - 1);
+        assert_eq!(
+            *value, expected,
+            "a fused chain of {links} over {count} element(s) is wrong at index {index}"
+        );
+    }
+}
+
 fn main() {
     let Ok(context) = GpuContext::new() else {
         eprintln!("no usable Vulkan device; nothing to compare against");
@@ -163,8 +207,19 @@ fn main() {
     println!("empty dispatch over 200 runs: best {best:.3} ms, median {median:.3} ms\n");
     let (link_floor, link_median) = resident_cost(&context);
     println!(
-        "resident-input dispatch over 200 runs: best {link_floor:.3} ms, median {link_median:.3} ms\n"
+        "resident-input dispatch over 200 runs: best {link_floor:.3} ms, median {link_median:.3} ms"
     );
+    println!("\nchecking a fused chain against the kernel's closed form...");
+    for (count, links) in [
+        (1_024usize, 16usize),
+        (16_384, 16),
+        (65_536, 2),
+        (1_048_576, 1),
+    ] {
+        check_fused(&context, count, links);
+        println!("  {count} element(s), {links} link(s): correct");
+    }
+    println!();
     println!(
         "{:>10}  {:>12}  {:>12}  {:>12}  {:>8}",
         "count", "gpu (ms)", "dispatch", "fetch", "ratio"
@@ -300,10 +355,12 @@ fn main() {
     const REPEATS: usize = 20;
     const LINKS: usize = 16;
 
-    println!("\nper-dispatch overhead against kernel size — {LINKS} links, best of {REPEATS}");
     println!(
-        "{:>10}  {:>10}  {:>10}  {:>12}  {:>14}  {:>11}",
-        "count", "1 link", "16 links", "per link", "fusion share", "overhead"
+        "\nper-dispatch overhead, and what fusing a chain actually buys — {LINKS} links, best of {REPEATS}"
+    );
+    println!(
+        "{:>10}  {:>9}  {:>9}  {:>9}  {:>10}  {:>9}  {:>11}  {:>8}",
+        "count", "1 link", "serial", "fused", "per link", "overhead", "predicted", "actual"
     );
 
     for count in [1_024usize, 4_096, 16_384, 65_536, 262_144, 1_048_576] {
@@ -316,44 +373,43 @@ fn main() {
         }
 
         let mut single = f64::MAX;
-        let mut chained = f64::MAX;
+        let mut serial = f64::MAX;
+        let mut fused = f64::MAX;
         for _ in 0..REPEATS {
             single = single.min(time_chain(&context, &input, count, 1));
-            chained = chained.min(time_chain(&context, &input, count, LINKS));
+            serial = serial.min(time_chain(&context, &input, count, LINKS));
+            fused = fused.min(time_fused_chain(&context, &input, count, LINKS));
         }
 
         // A per-link cost at or below zero would mean the long chain beat the
         // short one, which is noise rather than a result, and dividing by it
         // would invert every column to its right. Clamped, so that case reads
         // as "no signal here" instead of as a spectacular win.
-        let per_link = ((chained - single) / (LINKS - 1) as f64).max(f64::MIN_POSITIVE);
-        let saved = (LINKS - 1) as f64 * link_floor;
+        let per_link = ((serial - single) / (LINKS - 1) as f64).max(f64::MIN_POSITIVE);
+        let removable = (LINKS - 1) as f64 * link_floor;
         println!(
-            "{count:>10}  {single:>10.3}  {chained:>10.3}  {per_link:>12.3}  {:>13.1}%  {:>10.1}%",
-            saved / chained * 100.0,
+            "{count:>10}  {single:>9.3}  {serial:>9.3}  {fused:>9.3}  {per_link:>10.3}  {:>8.1}%  {:>10.1}%  {:>7.1}%",
             link_floor / per_link * 100.0,
+            removable / serial * 100.0,
+            (serial - fused) / serial * 100.0,
         );
     }
 
-    // The last two columns answer different questions and both are needed.
+    // **predicted** is `15 x link floor / serial`: the share of the serial chain
+    // that the fifteen submissions and waits it does not need should be worth.
+    // **actual** is `(serial - fused) / serial`: the share of it that fusing
+    // really removed. Putting them side by side is the point of the table --
+    // predicted is arithmetic done before the feature existed, actual is the
+    // feature, and the gap between them is what the fused path costs or saves
+    // beyond removing submissions: the extra barriers, the descriptor set per
+    // link, and the pool's larger footprint.
     //
-    // **fusion share** is `15 x link floor / 16 links`: the speed-up a program
-    // running a 16-link chain would get from having those fifteen submissions
-    // removed. It is a *ceiling* — it assumes every submit and every wait but
-    // the last disappears, which is the Batch schedule. Async keeps the submits
-    // and removes only the waits, so it collects part of this and not all of it;
-    // how much is the submit/wait split below, and that is not measured yet.
-    //
-    // **overhead** is `link floor / per link`: what fraction of one marginal
-    // link is spent not doing the work. This is the diagnostic, and it is the
-    // column that moves with count. The two differ because the first divides by
-    // a total that includes the upload and the download, and the second does
-    // not.
-    //
-    // Both divide by `per link`, which is a difference of two chain lengths. A
-    // negative one would mean the long chain beat the short one, which is noise
-    // rather than a result, so it is clamped above and that case reads as no
-    // signal rather than as a spectacular win.
+    // Two cautions on reading it. *predicted* is a ceiling — it assumes every
+    // submit and every wait but the last disappears, which is exactly what
+    // `run_chain` does, so the two should land close; a schedule that kept the
+    // submits (Async) would collect less and this table would not describe it.
+    // And *actual* cannot exceed 100% but can go negative, which would mean
+    // fusing made it slower, not that it went fast enough to be free.
     println!(
         "\nthe floor used above is {link_floor:.3} ms — a dispatch that reads a resident\n\
          buffer, not the {best:.3} ms host-input one, because a chain link after the first\n\

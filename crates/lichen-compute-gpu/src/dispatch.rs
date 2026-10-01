@@ -88,6 +88,18 @@ pub enum RunError {
     /// rather than of the device — refused by name instead of surfacing as pool
     /// exhaustion.
     TooManyBindings { total: usize, max: usize },
+    /// A chain asked for a number of dispatches that one submission cannot
+    /// record. The range is one to `MAX_DISPATCHES_PER_SUBMISSION`, which is
+    /// what the descriptor pool has sets for; over it, the chain would exhaust
+    /// the pool on the device instead of being refused here. Zero is refused
+    /// too, and for a different reason worth stating: a submission with no
+    /// dispatch in it is not a shorter chain, it is a different request.
+    ChainLength { wanted: usize, max: usize },
+    /// A chain needs each link to have one input and one output, so that link
+    /// `n + 1` can be handed link `n`'s result without the caller naming
+    /// buffers. A wider shape is a real requirement and a real graph node, but
+    /// it is not a linear chain.
+    ChainNotLinear { inputs: usize, outputs: usize },
     /// A resident id this context is not holding — never issued, or already
     /// released.  Refused rather than read as empty: an id is a handle, and using
     /// a dead one means the host lost track of its own buffers, which reporting
@@ -124,6 +136,16 @@ impl fmt::Display for RunError {
                 "the run binds {total} storage buffer(s) and this backend's descriptor pool is \
                  sized for {max}, so it is refused here rather than left to fail as pool \
                  exhaustion on the device"
+            ),
+            RunError::ChainLength { wanted, max } => write!(
+                f,
+                "a chain of {wanted} dispatch(es) cannot be recorded in one submission: the \
+                 range is 1 to {max}, which is what the descriptor pool has sets for."
+            ),
+            RunError::ChainNotLinear { inputs, outputs } => write!(
+                f,
+                "a chain needs one input and one output per link so each can be handed the \
+                 previous one's result, and this fragment has {inputs} and {outputs}."
             ),
             RunError::Emit(refusal) => write!(f, "{refusal}"),
             RunError::InputShorterThanCount { buffer, len, count } => write!(
@@ -554,6 +576,172 @@ impl GpuContext {
         Ok(ids)
     }
 
+    /// Record `links` dispatches into **one** command buffer, submit once, wait
+    /// once, and hand back the last link's output.
+    ///
+    /// Each link consumes the previous link's result, over one `fragment` and
+    /// one `count`, with the first link's input uploaded once from the host. So
+    /// the shape is a linear chain, and that is a real restriction: a graph
+    /// names every node's inputs and may fan out, which this cannot express.
+    /// What it is for is the thing a graph would sit on top of — proving that
+    /// several dispatches can share a submission, which is the first time the
+    /// one-set-per-dispatch rule and the widened trailing barrier are actually
+    /// executed rather than merely written down.
+    ///
+    /// **What it saves is bounded, and the bound is measured**: one submit and
+    /// one fence wait instead of `links` of each, worth 65% to 81% of a 16-link
+    /// chain at counts up to 65 536 and 10.7% at a million. See
+    /// [lichen-compute-gpu.md](../../docs/notes/lichen-compute-gpu.md).
+    pub fn run_chain(
+        &self,
+        fragment: &KernelFragment,
+        input: &[i64],
+        count: usize,
+        links: usize,
+    ) -> Result<ResidentId, RunError> {
+        if links == 0 || links > MAX_DISPATCHES_PER_SUBMISSION {
+            return Err(RunError::ChainLength {
+                wanted: links,
+                max: MAX_DISPATCHES_PER_SUBMISSION,
+            });
+        }
+        if input.len() < count {
+            return Err(RunError::InputShorterThanCount {
+                buffer: 0,
+                len: input.len(),
+                count,
+            });
+        }
+        // A parallel fragment's parameters are its input slots followed by the
+        // index, so one buffer input is an arity of two. See `spirv::index_local`.
+        if fragment.param_shape.flat_arity() != 2 || fragment.outputs != 1 {
+            return Err(RunError::ChainNotLinear {
+                inputs: fragment.param_shape.flat_arity().saturating_sub(1),
+                outputs: fragment.outputs,
+            });
+        }
+
+        let pipeline = self.pipeline(
+            fragment,
+            Binding {
+                inputs: 1,
+                outputs: 1,
+            },
+        )?;
+        let padded = count.div_ceil(LOCAL_SIZE_X as usize) * LOCAL_SIZE_X as usize;
+        if padded == 0 {
+            return Err(RunError::EmptyRun);
+        }
+        let element = std::mem::size_of::<i64>() as vk::DeviceSize;
+        let data_bytes = count as vk::DeviceSize * element;
+        let padded_bytes = padded as vk::DeviceSize * element;
+
+        // Staging is held and sized for the **whole chain** up front. Growing it
+        // after recording has begun would be a use-after-write on the mapping:
+        // the device reads staging during the submission, and reallocating the
+        // buffer unmaps the memory a recorded copy still points at.
+        let mut staging = self.staging.lock().unwrap();
+        staging.reserve(self, data_bytes)?;
+
+        let mut scratch = ScratchGuard {
+            context: self,
+            buffers: Vec::with_capacity(1),
+        };
+        let source = self.allocate(padded)?;
+        scratch.buffers.push(source);
+        // SAFETY: `reserve` sized and mapped staging for `count` elements before
+        // anything was recorded, and the copy below writes exactly that many.
+        unsafe {
+            std::ptr::copy_nonoverlapping(input.as_ptr(), staging.at(0) as *mut i64, count);
+        }
+        let upload = Transfer {
+            src_offset: 0,
+            dst: source.handle,
+            bytes: data_bytes,
+            tail: padded_bytes - data_bytes,
+        };
+
+        // **Two output buffers, ping-ponged, not one per link.** A link reads
+        // the buffer the link before it wrote, so the one before *that* is dead.
+        // For a chain recorded into one command buffer that is the difference
+        // between two buffers and sixteen, and the one-per-link version is not
+        // merely bigger, it is **slower**: a pool that has to hold a buffer per
+        // link is empty at the start of every call, so every call allocates the
+        // lot and throws most of it straight away again. Measured with the cap
+        // raised to cover it, the one-per-link chain cost 2.226 ms against
+        // 0.115 ms — three times *slower* than not fusing at all, entirely in
+        // `vkAllocateMemory`.
+        //
+        // What this costs is a hazard the other version does not have: link `i`
+        // reads the buffer link `i + 2` writes. That is write-after-read, and the
+        // trailing barrier in `record_dispatch` is widened to order it.
+        //
+        // It holds **because this is a linear chain**. A fan-out needs two live
+        // buffers at once, and then which can be shared is a question about
+        // liveness, which is the graph's to answer — see the memory note in the
+        // graph design.
+        let first = self.allocate(padded)?;
+        let second = self.allocate(padded)?;
+
+        let submit = self.submit.lock().unwrap();
+        // One reset for the whole submission and **none** inside it. A reset
+        // frees every set, including the ones an earlier dispatch in this same
+        // command buffer is still bound to, and those reads happen at execution
+        // time, long after the recording.
+        check("descriptor pool reset", unsafe {
+            self.device
+                .reset_descriptor_pool(self.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
+        })?;
+        self.begin_recording(&submit)?;
+
+        let mut current = source;
+        let (mut into, mut onto) = (first, second);
+        for step in 0..links {
+            let descriptors = [current.descriptor(), into.descriptor()];
+            // Only the first link uploads. Later links read a buffer an earlier
+            // link's shader wrote, and the barrier between them is the trailing
+            // one in `record_dispatch`, not a transfer barrier.
+            let uploads: &[Transfer] = if step == 0 {
+                std::slice::from_ref(&upload)
+            } else {
+                &[]
+            };
+            self.record_dispatch(
+                &submit,
+                pipeline,
+                &descriptors,
+                staging.handle,
+                uploads,
+                count,
+            )?;
+            current = into;
+            std::mem::swap(&mut into, &mut onto);
+        }
+
+        self.end_and_submit(&submit)?;
+        self.wait_on(&submit)?;
+        drop(staging);
+
+        // The last link's output is the answer and becomes resident; the uploaded
+        // source is scratch and so is whichever ping-pong buffer the answer did
+        // not land in. Two buffers go back to the pool, not one per link.
+        if current.handle == first.handle {
+            self.recycle(second);
+        } else {
+            self.recycle(first);
+        }
+        let id = ResidentId(self.next_id.fetch_add(1, AtomicOrdering::Relaxed));
+        self.resident.lock().unwrap().insert(
+            id,
+            DeviceBuffer {
+                handle: current.handle,
+                memory: current.memory,
+                padded,
+            },
+        );
+        Ok(id)
+    }
+
     /// The device-local buffer behind a resident id.
     fn resident_buffer(&self, id: ResidentId) -> Result<DeviceBuffer, RunError> {
         self.resident
@@ -746,32 +934,45 @@ impl GpuContext {
         target: &Submit,
         record: impl FnOnce(vk::CommandBuffer),
     ) -> Result<(), RunError> {
+        self.begin_recording(target)?;
+        record(target.command);
+        self.end_and_submit(target)
+    }
+
+    /// Reset `target`'s command buffer and open it for recording.
+    ///
+    /// Split from the close so one submission can record **more than one**
+    /// dispatch: a command buffer is a single recording however many dispatches
+    /// go into it, and a chain is exactly that.
+    fn begin_recording(&self, target: &Submit) -> Result<(), RunError> {
         let device = &self.device;
-        let command = target.command;
-        let fence = target.fence;
         check("command buffer reset", unsafe {
-            device.reset_command_buffer(command, vk::CommandBufferResetFlags::empty())
+            device.reset_command_buffer(target.command, vk::CommandBufferResetFlags::empty())
         })
         .and_then(|()| {
             check("command recording", unsafe {
-                device.begin_command_buffer(command, &vk::CommandBufferBeginInfo::default())
+                device.begin_command_buffer(target.command, &vk::CommandBufferBeginInfo::default())
             })
-        })?;
+        })
+    }
 
-        record(command);
-
+    /// Close `target`'s recording and hand it to the queue, without waiting.
+    fn end_and_submit(&self, target: &Submit) -> Result<(), RunError> {
+        let device = &self.device;
         check("command buffer end", unsafe {
-            device.end_command_buffer(command)
+            device.end_command_buffer(target.command)
         })
         .and_then(|()| {
             // The fence is created unsignalled and left signalled by the wait,
             // so it has to be reset or this would return immediately.
-            check("fence reset", unsafe { device.reset_fences(&[fence]) })?;
+            check("fence reset", unsafe {
+                device.reset_fences(&[target.fence])
+            })?;
             check("queue submit", unsafe {
                 device.queue_submit(
                     self.queue,
-                    &[vk::SubmitInfo::default().command_buffers(&[command])],
-                    fence,
+                    &[vk::SubmitInfo::default().command_buffers(&[target.command])],
+                    target.fence,
                 )
             })
         })
@@ -811,6 +1012,37 @@ impl GpuContext {
         &self,
         target: &Submit,
         wait: bool,
+        pipeline: vk::Pipeline,
+        descriptors: &[vk::DescriptorBufferInfo],
+        staging: vk::Buffer,
+        uploads: &[Transfer],
+        count: usize,
+    ) -> Result<(), RunError> {
+        self.begin_recording(target)?;
+        self.record_dispatch(target, pipeline, descriptors, staging, uploads, count)?;
+        self.end_and_submit(target)?;
+        if wait {
+            self.wait_on(target)?;
+        }
+        Ok(())
+    }
+
+    /// Record one dispatch into the command buffer that is **already open**.
+    ///
+    /// There is deliberately no begin and no end here. The caller opened the
+    /// recording and will close it, which is what lets a chain put several
+    /// dispatches into one submission. Each call still takes **its own**
+    /// descriptor set, and that is not tidiness: a set is read when the
+    /// submission executes, so one set rewritten between two dispatches would
+    /// change what the first one sees — see [`GpuContext::descriptor_pool`].
+    ///
+    /// The correctness of a chain rests on the trailing barrier below, whose
+    /// destination scope names a shader as well as a transfer. Narrow it to the
+    /// transfer alone and a consumer inside the same submission reads undefined
+    /// data — not stale data, and not a crash.
+    fn record_dispatch(
+        &self,
+        target: &Submit,
         pipeline: vk::Pipeline,
         descriptors: &[vk::DescriptorBufferInfo],
         staging: vk::Buffer,
@@ -864,52 +1096,66 @@ impl GpuContext {
             .collect();
         unsafe { device.update_descriptor_sets(&writes, &[]) };
 
-        self.record_and_submit(target, |command| unsafe {
-            // The host wrote staging before this submit, so the copies below are
-            // the first reader of it: make that write visible to them.
-            device.cmd_pipeline_barrier(
-                command,
-                vk::PipelineStageFlags::HOST,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[vk::MemoryBarrier::default()
-                    .src_access_mask(vk::AccessFlags::HOST_WRITE)
-                    .dst_access_mask(vk::AccessFlags::TRANSFER_READ)],
-                &[],
-                &[],
-            );
-            for transfer in uploads {
-                device.cmd_copy_buffer(
+        let command = target.command;
+        unsafe {
+            // These three only exist for the uploads. A later link of a chain
+            // reads a buffer an earlier link's *shader* wrote, and the ordering
+            // for that is the trailing barrier below — a transfer barrier with
+            // no transfer in it is not just wasted recording, it is a claim
+            // about work that did not happen.
+            if !uploads.is_empty() {
+                // The host wrote staging before this submit, so the copies below
+                // are the first reader of it: make that write visible to them.
+                device.cmd_pipeline_barrier(
                     command,
-                    staging,
-                    transfer.dst,
-                    &[vk::BufferCopy {
-                        src_offset: transfer.src_offset,
-                        dst_offset: 0,
-                        size: transfer.bytes,
-                    }],
+                    vk::PipelineStageFlags::HOST,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::DependencyFlags::empty(),
+                    &[vk::MemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::HOST_WRITE)
+                        .dst_access_mask(vk::AccessFlags::TRANSFER_READ)],
+                    &[],
+                    &[],
                 );
-                // The surplus lanes read past `count`, and that read has to land
-                // on a defined value — so the tail is cleared here, on the
-                // device, rather than uploaded as zeroes the host already had
-                // copies of.
-                if transfer.tail > 0 {
-                    device.cmd_fill_buffer(command, transfer.dst, transfer.bytes, transfer.tail, 0);
+                for transfer in uploads {
+                    device.cmd_copy_buffer(
+                        command,
+                        staging,
+                        transfer.dst,
+                        &[vk::BufferCopy {
+                            src_offset: transfer.src_offset,
+                            dst_offset: 0,
+                            size: transfer.bytes,
+                        }],
+                    );
+                    // The surplus lanes read past `count`, and that read has to
+                    // land on a defined value — so the tail is cleared here, on
+                    // the device, rather than uploaded as zeroes the host already
+                    // had copies of.
+                    if transfer.tail > 0 {
+                        device.cmd_fill_buffer(
+                            command,
+                            transfer.dst,
+                            transfer.bytes,
+                            transfer.tail,
+                            0,
+                        );
+                    }
                 }
+                // Both the uploads and the tail fills land in buffers the shader
+                // is about to read, so one barrier after them covers both.
+                device.cmd_pipeline_barrier(
+                    command,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[vk::MemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                        .dst_access_mask(vk::AccessFlags::SHADER_READ)],
+                    &[],
+                    &[],
+                );
             }
-            // Both the uploads and the tail fills land in buffers the shader is
-            // about to read, so one barrier after them covers both.
-            device.cmd_pipeline_barrier(
-                command,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                &[vk::MemoryBarrier::default()
-                    .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                    .dst_access_mask(vk::AccessFlags::SHADER_READ)],
-                &[],
-                &[],
-            );
             device.cmd_bind_pipeline(command, vk::PipelineBindPoint::COMPUTE, pipeline);
             device.cmd_bind_descriptor_sets(
                 command,
@@ -923,23 +1169,36 @@ impl GpuContext {
             // The results stay on the device, so this does not hand them to the
             // host; it makes them visible to whoever reads them next.
             //
-            // **Both of the possible readers are in the destination scope, and
-            // leaving either out is not a narrower barrier, it is a wrong one.**
-            // A `fetch` in a later submission reads them as a transfer.  A
-            // dispatch recorded after this one *in the same command buffer* reads
-            // them as a shader, and nothing in Vulkan orders two dispatches against
-            // each other without a barrier that says so — a consumer that is not
-            // in scope does not read stale data, it reads undefined data, and the
-            // run does not fail, it answers something else.  So the scope names
-            // both, which over-covers the one-dispatch-per-submission case that is
-            // all this records today and under-covers nothing.
+            // **The scope is wide on purpose, and it names three readers/writers
+            // rather than the two this path was born needing.** A `fetch` in a
+            // later submission reads the results as a transfer. A dispatch
+            // recorded after this one *in the same command buffer* reads them as
+            // a shader. And a chain that hands the same buffer round again —
+            // `run_chain` ping-pongs two buffers rather than allocating one per
+            // link — has this dispatch **reading** a buffer a later dispatch
+            // **writes**, and that is a write-after-read hazard the other two
+            // scopes do not order at all.
             //
-            // That over-coverage is a cost, not a free choice, so it was measured
+            // Each of the three is a case where leaving it out does not slow
+            // anything down, it makes the chain read undefined data: not stale
+            // data, and not a crash. So the scope carries all three, which
+            // over-covers the single-dispatch case that is what the `run` path
+            // records and under-covers nothing.
+            //
+            // That over-coverage is a cost, so the first widening was measured
             // rather than assumed: 16 links at 1 048 576 elements cost 7.79 ms
-            // before the widening and 7.17 ms after, and an empty dispatch 0.046
-            // against 0.048. Both differences are smaller than the spread between
-            // runs of the example that produced them, so the reading is that the
-            // widening is not measurable — not that it is free.
+            // before it and 7.17 ms after, and an empty dispatch 0.046 against
+            // 0.048, both inside the run-to-run spread of the example that
+            // produced them. The reading was that the widening is not
+            // measurable — not that it is free.
+            //
+            // **The write-after-read half above has not been measured that way.**
+            // It is only needed by a chain that reuses a buffer, so nothing on
+            // the `run` path depends on it, and the runs of the example on this
+            // machine span a range wider than any effect it could plausibly
+            // have. It is paid here on the strength of the specification, not of
+            // a number, and that is worth knowing before anyone treats the
+            // barrier above as a cost that was justified by measurement.
             //
             // Note what does *not* imply this barrier is needed: `spirv`'s
             // single-`OpLabel` invariant says every invocation reaches its write.
@@ -950,16 +1209,15 @@ impl GpuContext {
                 vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::TRANSFER,
                 vk::DependencyFlags::empty(),
                 &[vk::MemoryBarrier::default()
-                    .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                    .src_access_mask(vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::SHADER_READ)
                     .dst_access_mask(
-                        vk::AccessFlags::SHADER_READ | vk::AccessFlags::TRANSFER_READ,
+                        vk::AccessFlags::SHADER_READ
+                            | vk::AccessFlags::SHADER_WRITE
+                            | vk::AccessFlags::TRANSFER_READ,
                     )],
                 &[],
                 &[],
             );
-        })?;
-        if wait {
-            self.wait_on(target)?;
         }
         Ok(())
     }
