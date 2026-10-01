@@ -135,22 +135,24 @@ impl<P: Program> Module<P> {
                 P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(function)))
             }
             // A program-specific value may carry a handle into an arena, and
-            // may carry references the lowlevel cannot see on its own: an
-            // operator's result is cached, and a cached node's operand is not
-            // followed, so a value holding a node has to name it or the node
-            // dies with the block this walk is vacating. `traced` is walked by
-            // this same function, one level up from here, so the shape dispatch
-            // above is what resolves a traced node into an array's items, a
-            // table's entries or a function's scope — a value declares nodes and
-            // nothing else.
+            // may carry nodes the lowlevel cannot see on its own: an operator's
+            // result is cached, and a cached node's operand is not followed, so a
+            // value holding a node has to name it or the node dies with the block
+            // this walk is vacating.
+            //
+            // The value looks through a shared `TraceContext` and the walk then
+            // mutates, so the two never hold a borrow of the module at once, and
+            // collecting into a scratch the GC owns means a value never has to
+            // hold its references as one contiguous run of its own.
             None => {
-                // The walked value is discarded, exactly as the array and table
-                // arms discard theirs: a node keeps its id across the move, so
-                // only its block changes, and this value holds the id.
-                let mut walk = |node: NodeId| {
+                let mut traced = Vec::new();
+                value.traced(self, &mut traced);
+                for node in traced {
+                    // The walked value is discarded, exactly as the array and
+                    // table arms discard theirs: a node keeps its id across the
+                    // move, so only its block changes, and a value holds the id.
                     self.garbage_collect_node(node, source, target);
-                };
-                value.traced(&mut walk);
+                }
                 Self::copy_ext(self, value, target)
             }
             _ => value,

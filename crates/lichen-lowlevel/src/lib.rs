@@ -413,6 +413,48 @@ pub enum LowOperator {
 /// - [`Self::handle`]'s length is a **byte** count, and the crate's copy path
 ///   copies exactly that many bytes into a slot aligned to
 ///   [`Self::alignment`].
+/// What a program-specific value may look at while declaring the nodes it keeps
+/// alive — the read-only half of a [`Module`], handed to
+/// [`ValueExt::traced`].
+///
+/// **Narrower than `&Module<P>` on purpose, and for a structural reason.** Every
+/// question a holder legitimately asks here — which block is this node in, is it
+/// still there, what does this block or this function hold — is answered in
+/// lowlevel's own types, so none of it needs a program's value type. The single
+/// thing `&Module<P>` would add is reading a node's **value**, and a value that
+/// keeps nodes alive is keeping ids, not values. Keeping `P` off [`ValueExt`]
+/// therefore costs nothing a holder wants and saves a program parameter being
+/// threaded through every `ValueType` bound above the highlevel's checker.
+///
+/// Read-only, and that is not incidental: [`ValueExt::traced`] runs *inside* the
+/// GC walk, which holds the module mutably to move what it names.
+pub trait TraceContext {
+    /// The block `node` is homed in, or `None` if it has been released.
+    fn node_block(&self, node: NodeId) -> Option<BlockId>;
+
+    /// The nodes homed directly in `block`, or `None` if it is gone.
+    fn block_nodes(&self, block: BlockId) -> Option<&[NodeId]>;
+
+    /// The body nodes of `function`, or `None` if it has been released.
+    fn function_nodes(&self, function: FunctionId) -> Option<&[NodeId]>;
+}
+
+impl<P: Program> TraceContext for Module<P> {
+    fn node_block(&self, node: NodeId) -> Option<BlockId> {
+        self.nodes.get(node).map(|node| node.block)
+    }
+
+    fn block_nodes(&self, block: BlockId) -> Option<&[NodeId]> {
+        self.blocks.get(block).map(|block| block.nodes.as_slice())
+    }
+
+    fn function_nodes(&self, function: FunctionId) -> Option<&[NodeId]> {
+        self.functions
+            .get(function)
+            .map(|function| function.nodes.as_slice())
+    }
+}
+
 pub trait ValueExt: Debug + Copy + PartialEq {
     fn is_handle(&self) -> bool;
     /// The value's handle payload as bytes.  Available if
@@ -439,7 +481,7 @@ pub trait ValueExt: Debug + Copy + PartialEq {
     fn alignment() -> usize {
         1
     }
-    /// Hand every node this one keeps alive to `visit`.
+    /// Append every node this one keeps alive to `out`.
     ///
     /// **One kind of thing, exactly like an array item.** The GC walks a node by
     /// looking at that node's *value* and dispatching on its shape — an array's
@@ -449,18 +491,45 @@ pub trait ValueExt: Debug + Copy + PartialEq {
     /// function is not a separate kind here: a closure is kept alive by naming
     /// the node it is the value of, and the walk takes it from there.
     ///
-    /// # A callback and not a slice
+    /// # Why `out` and not a slice back
     ///
     /// `&[NodeId]` would demand that a value carry its references as one
-    /// contiguous run it could hand back by slice, and that is a shape no real
-    /// holder has. A compiled graph interleaves the nodes it keeps with the
-    /// kernel ids, counts and element data it also holds, so there is no slice
-    /// of it that is "the node list" — naming them is a walk over the structure,
-    /// not a read off the front of it. A callback also costs a value that keeps
-    /// nothing a single `&[]`, and lets a holder decide *what* to name as it
-    /// goes rather than having decided it at build time.
+    /// contiguous run it could hand back by slice, and no real holder has that
+    /// shape. A compiled graph interleaves the nodes it keeps with the kernel
+    /// ids, counts and element data it also holds, so there is no slice of it
+    /// that is "the node list". Appending also costs a value that keeps nothing
+    /// nothing at all, where a slice forces it to own an empty array.
     ///
-    /// The default is empty, and for the compute vocabulary that is not a
+    /// # Why the context is handed over, and why it is not `&Module<P>`
+    ///
+    /// Because the set need not be *stored*. A value that keeps a node because
+    /// of where that node sits — a block it shares, an operand edge above it —
+    /// has to be able to look, and the module is where looking happens.
+    ///
+    /// It is handed over as a [`TraceContext`] rather than as the module itself,
+    /// for two reasons that point the same way. It is read-only, so naming and
+    /// walking cannot overlap and the walk needs no second phase. And it keeps
+    /// `P` off this trait: everything a holder legitimately needs to look at
+    /// here — a node's block, a block's node list, a function's scope — is
+    /// spelled in lowlevel's own types, so nothing that matters needs a
+    /// program's value type. The one thing a `&Module<P>` would add is reading a
+    /// node's **value**, and a value that keeps nodes is keeping ids, not values.
+    /// Putting `P` on this trait to get at it would cost a program parameter
+    /// threaded through every `ValueType` bound in the highlevel's checker, for
+    /// a capability no holder wants.
+    ///
+    /// # Why this is a seam and not a convenience
+    ///
+    /// The GC's contract is that everything reachable from a live value is moved
+    /// out of the block being vacated *before* [`Module::drop_block`] removes it
+    /// — and `drop_block` deletes by block membership, not by reachability. An
+    /// operator's result is cached, and a cached node's operand is deliberately
+    /// not followed ("a cached value means the node is memoized and its operand
+    /// is dead"). So a value holding a reference only the GC cannot see is
+    /// dropped at the end of the very block evaluation that produced it, with no
+    /// diagnostic. That is the failure this closes.
+    ///
+    /// The default appends nothing, and for the compute vocabulary that is not a
     /// simplification but the truth: a `Buffer` payload is element bytes, a
     /// `DeviceBuffer` is an id and a length, a kernel id is a registry slot
     /// number. None of them names a node, so none of them is an edge the GC has
@@ -474,22 +543,11 @@ pub trait ValueExt: Debug + Copy + PartialEq {
     /// by the tests beside it, not by the collector. That is worth knowing before
     /// writing one, because the failure it guards is the quiet kind.
     ///
-    /// # Why this is a seam and not a convenience
-    ///
-    /// The GC's contract is that everything reachable from a live value is moved
-    /// out of the block being vacated *before* [`Module::drop_block`] removes it
-    /// — and `drop_block` deletes by block membership, not by reachability. An
-    /// operator's result is cached, and a cached node's operand is deliberately
-    /// not followed ("a cached value means the node is memoized and its operand
-    /// is dead"). So a value holding a reference only the GC cannot see is
-    /// dropped at the end of the very block evaluation that produced it, with no
-    /// diagnostic. That is the failure this closes.
-    ///
     /// Nodes only, and only from this module: a static-module object is pinned by
     /// the registry for as long as the value can be read, so it needs no edge,
     /// and naming it would be a category error rather than a stronger claim.
-    fn traced(&self, visit: &mut dyn FnMut(NodeId)) {
-        let _ = visit;
+    fn traced(&self, context: &dyn TraceContext, out: &mut Vec<NodeId>) {
+        let _ = (context, out);
     }
     /// Full equality of two values: handle payloads compare by content
     /// (same variant, byte-wise against the pointed-to allocation), every

@@ -26,7 +26,7 @@ mod table;
 use lichen_lowlevel::{
     AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, BudgetExhausted, EvalError,
     EvaluatedDeep, Function, FunctionId, GlobalExt, Handle, LowOperator, LowValue, Module, NodeId,
-    Operation, OperatorExt, Program, StaticHandle, ValueExt,
+    Operation, OperatorExt, Program, StaticHandle, TraceContext, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 use std::collections::HashSet;
@@ -84,9 +84,13 @@ impl ValueExt for TestValue {
     fn alignment() -> usize {
         16
     }
-    fn traced(&self, visit: &mut dyn FnMut(NodeId)) {
+    fn traced(&self, context: &dyn TraceContext, out: &mut Vec<NodeId>) {
+        // The context is what lets a set be *derived* rather than stored: this
+        // one happens to have a node on hand, but a holder that kept a block
+        // could ask `context.block_nodes` for everything in it instead.
+        let _ = context;
         if let TestValue::HoldsNode(node) = self {
-            visit(*node);
+            out.push(*node);
         }
     }
     fn handle(&self) -> AnyHandle<[u8]> {
