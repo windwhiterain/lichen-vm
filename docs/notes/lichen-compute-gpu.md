@@ -283,31 +283,45 @@ device-local memory. Two things moved it:
    why the fixed floor fell from ~0.54 ms to ~0.30 ms.
 
 **The GPU wins on a chain, and the fixed cost is what decided it.** An **empty**
-dispatch — one workgroup, so nothing but the dispatch itself — costs **0.046 ms
-at best and 0.053 ms at the median** over 200 runs. That is the per-dispatch
+dispatch — one workgroup, so nothing but the dispatch itself — costs **0.048 ms
+at best and 0.061 ms at the median** over 200 runs. That is the per-dispatch
 fixed cost a chain pays once per link, and the chain table shows what it buys:
 
 | count | chain | GPU | sequential | ratio |
 |---|---|---|---|---|
-| 65 536 | 16 | 1.74 ms | 0.48 ms | 0.28× |
-| 262 144 | 16 | 2.81 ms | 3.64 ms | **1.30×** |
-| 1 048 576 | 1 | 5.52 ms | 3.09 ms | 0.56× |
-| 1 048 576 | 2 | 6.86 ms | 5.14 ms | 0.75× |
-| 1 048 576 | 4 | 6.56 ms | 7.34 ms | **1.12×** |
-| 1 048 576 | 8 | 7.21 ms | 11.43 ms | **1.59×** |
-| 1 048 576 | 16 | 7.79 ms | 21.19 ms | **2.72×** |
+| 65 536 | 16 | 1.493 ms | 0.283 ms | 0.19× |
+| 262 144 | 16 | 3.494 ms | 2.397 ms | 0.69× |
+| 1 048 576 | 1 | 5.769 ms | 3.653 ms | 0.63× |
+| 1 048 576 | 2 | 5.560 ms | 4.818 ms | 0.87× |
+| 1 048 576 | 4 | 7.857 ms | 7.849 ms | **1.00×** |
+| 1 048 576 | 8 | 7.315 ms | 11.434 ms | **1.56×** |
+| 1 048 576 | 16 | 7.168 ms | 25.733 ms | **3.59×** |
 
 A single cold dispatch still loses, and that is not a bug: the first upload is
 8 MB across PCIe, which costs about what the scalar loop costs outright. The
 cross-over is at **about four links** at a million elements, and it climbs from
-there. Note the shape of the GPU column: 16 links cost 7.79 ms against 5.52 ms
-for one, so a link is roughly **0.15 ms** now — the chain is nearly free to
-extend, which is the property that makes a long pipeline worth writing.
+there.
+
+**Read the GPU column's shape loosely.** It is not monotonic in links — two
+links came out *cheaper* than one, and four more expensive than eight — so the
+run-to-run spread of this example is on the order of a millisecond at this
+scale, and the marginal cost of a link is not well determined by it. The earlier
+run of the same table put the 1→16 link slope at 0.15 ms per link and this one
+puts it at 0.09 ms. Treat the per-dispatch floor above, which is measured
+directly over 200 samples, as the reliable number and the slope as a range. That
+matters below: the submit-fusion estimate is built from the floor, not from the
+slope.
+
+The `sequential` column drifted by more than the GPU column did between the two
+runs, so the **ratios** moved further than the GPU times did — the 16-link ratio
+went 2.72× → 3.59× while its GPU time went 7.79 ms → 7.168 ms. The ratio is the
+less trustworthy of the two numbers on this table, because its denominator is a
+stand-in for a thread pool that is not being measured here.
 
 **Where the fixed cost went, and the surprise in it.** Getting from 0.46 ms to
-0.046 ms took three changes, and they were not equally important:
+0.048 ms took three changes, and they were not equally important:
 
-1. **Recycling released device buffers** — 0.20 ms → 0.046 ms, about **4×**, and
+1. **Recycling released device buffers** — 0.20 ms → 0.048 ms, about **4×**, and
    by far the largest single win. `vkAllocateMemory` is a kernel-mode allocation
    and it was happening once per run, for an 8 MB buffer at a million elements.
 2. **Reusing the per-dispatch objects** — command pool, command buffer, fence,
@@ -343,13 +357,21 @@ about a quantity that is not the one that decides it.
 
 Named rather than implied, because each is a decision not a gap:
 
-- **Launching a chain as one submission.** **Designed, not built** — see
+- **Launching a chain as one submission.** **Designed, and its two blocking
+  rules are settled; the machinery is not built** — see
   [compute-graph-jit.md](compute-graph-jit.md). It is a sibling of `jit`, not a
   mode of `plrun`, and the two seams it needs in `lichen-lowlevel` have landed.
   What is left is the `Segment` primitive, the scheduling, and the measurement
   that decides whether it is worth having: on these numbers submit fusion is
-  worth at most 8.9% of a 16-link chain at 1 048 576 elements, and what actually
-  decides it is kernel size rather than chain length.
+  worth about 10% of a 16-link chain at 1 048 576 elements, and what actually
+  decides it is kernel size rather than chain length. Two rules a fused
+  submission depends on are already in this file — one descriptor set per
+  dispatch with the reset at the submission boundary, and a trailing barrier
+  that names both a transfer and a shader as the next reader. Neither is
+  exercised, because nothing records two dispatches into one command buffer
+  yet; the entry point, when it comes, goes on `ParallelBackend` rather than in
+  an example, so the measurement is not built against a shape that has to be
+  thrown away.
 - **Cross-kernel calls.** `SpirvRefusal::CrossKernelCall`. Needs several
   functions in one module and a call graph; the refusal names the callee and the
   instruction position.
@@ -374,10 +396,14 @@ Named rather than implied, because each is a decision not a gap:
   backend.** The backstops are `GpuContext::drop`, which reclaims everything, and
   a refused allocation once the device is full, which names itself. A program
   that runs many large kernels in one process will hit that backstop.
-- **The per-dispatch submit and wait.** 0.046 ms best, paid once per link, so a
+- **The per-dispatch submit and wait.** 0.048 ms best, paid once per link, so a
   chain of N still does N submits and N fence waits where one would do. This is
-  worth roughly a factor of N on a long chain, and unlike everything above it is
-  **not** a per-run optimisation.
+  **not** worth a factor of N — an earlier version of this bullet said so and it
+  is wrong, because the saving is the fixed cost times the link count while the
+  baseline grows with the *kernel* cost, and those are independent. At
+  1 048 576 elements it is worth about 10%, because a kernel there is ~0.10 ms
+  and drowns it; a chain of many small kernels is where the fraction would be
+  large, and that has not been measured.
 - **A launch graph.** A `compute.graph` that JITs an ordinary lichen function
   into a graph IR — a DAG of kernels and the dataflow between them, which is the
   IR's natural shape rather than a special case to be detected — and optimises on
