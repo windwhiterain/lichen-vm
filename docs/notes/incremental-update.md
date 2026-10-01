@@ -794,11 +794,11 @@ and every later analysis is **0.15–0.2×**. The index build is ~0.6 ms and is 
 The 600-cell row is the pathological end and it is linear in marks: that is item 1's
 bill, and it is the reason item 1 stays first on the list.
 
-**Item 1 was then paid (§7.7)**, and this table is the before: the same probe shape
-re-measured after it gives **~17–19 ms** for the 75-cell first analysis (below the old
-path's 24–28 ms) and **~29 ms** for the 600-cell one (2× the old path, down from 6×),
-with the edit unchanged. The per-mark cost is now ~15 µs, and what it is made of is
-§12.3 item 1's remainder.
+**Item 1 was then paid (§7.7)**, and this table is the before: the same program shape
+re-measured after it (a `BufferSession`'s `compile` alone, the same probe run before and
+after) gives **15.7 ms** for the 75-cell first compile — half the old path's 24–28 ms —
+and **25.0 ms** for the 600-cell one (against 166.7 ms), with the edit unchanged. The
+per-mark cost is now ~15 µs, and what it is made of is §12.3 item 1's remainder.
 
 ### 7.7 The artifact's size: a decided leaf is not its class
 
@@ -842,18 +842,20 @@ module.
 
 **Measurements · a temporary probe (`--example cell_class_probe`), since removed.** 600
 bindings in 75 chains of 8, `--release`, a `BufferSession` over the whole file
-(`set_source`); "closure" is the marked binding's `[value, type]` pair, the edit is a
-literal in the last statement.
+(`set_source`), the *same probe run before and after* the change; "closure" is the marked
+binding's `[value, type]` pair, and the edit is a literal in the last statement.
 
-| | closure of a scalar cell | first compile (75 cells) | first compile (600 cells) | edit |
+| | closure of a scalar cell | first compile, 75 cells | first compile, 600 cells | edit |
 |---|---|---|---|---|
-| before | 607–635 nodes | 30–32 ms | 154–159 ms | 3.5–5.4 ms |
-| after | 6–27 nodes | 16–18 ms | ~29 ms | 3.1–4.6 ms |
+| before | 606–635 nodes (median 607) | 32.7 ms | 166.7 ms | 3.2–4.6 ms |
+| after | 6–27 nodes (median 6) | 15.7 ms | 25.0 ms | 3.6–4.9 ms |
 
-The 600-cell row is the pathological density (a mark on every binding): its first analysis
-is now **2×** the one-shot path instead of 6×, and at a realistic density the session's
-first analysis is *cheaper* than the old path (17–19 ms against 24–28 ms) — the artifact's
-size is no longer what a first analysis pays for. What it pays for now is ~15 µs per
+Both rows are the session's `compile` alone, so the server's index build (~0.6 ms) is on
+top of each. A plain one-shot `compile` of the same source is 13–16 ms in the same probe
+(the server's old path is 24–28 ms, because it parsed every analysis twice), so the
+realistic density is now at **parity** with compiling the file from scratch and the
+pathological one (a mark on every binding) is ~1.6× it, where it was ~11×. The artifact's
+size is no longer what a first analysis pays for; what it pays for now is ~15 µs per
 freeze, of which ~6 µs is the artifact's own build and ~9 µs is `freeze_closure_mapped`'s
 **module-wide** dependency scan (`referenced_keys(module)`: one lookup per node of the
 module, per freeze). That is §12.3 item 1's remainder, and its fix is a choice between
@@ -1267,8 +1269,9 @@ propagation cases, `USize(37)`/`USize(19)`/`USize(16)`, and 0 cells from a faile
 0.29–0.42× with one cell re-frozen), §7.6 (a first analysis at 1.2× the old one-shot
 path for 75 cells, 0.15–0.2× per edit, and `(2, 1, 1)` cells for an edit in the third of
 three marked statements, end to end through the real server binary) and §7.7 (a scalar
-cell's closure at 6–27 nodes, a 600-mark first analysis at ~29 ms against 154–159 ms,
-and the frozen classes' partition equal to the source's restricted to the artifact).
+cell's closure at 6–27 nodes against 606–635, the same probe's first compile at 15.7 ms
+for 75 marks and 25.0 ms for 600 against 32.7 ms and 166.7 ms, and the frozen classes'
+partition equal to the source's restricted to the artifact).
 
 Two of those probes are worth re-creating first, because they are the oracles:
 the **differential** one (§7.3 — every prefix of an edit sequence against a fresh
