@@ -339,6 +339,25 @@ correction, and the reason this is not merely a smaller `from_module`:
   in the bytes — the store's own eviction is the only path that has an obligation to
   run.
 
+  **The placement is to be corrected, and the reason is worth recording.** The hook
+  went on `Program` on the argument that only the program can reach an issuer.  That
+  argument is wrong: the issuer is reachable *process-wide*, through
+  `lichen_kernel_ir::parallel_backend()` (`lichen-kernel-ir/src/lib.rs:229`, installed
+  by `install_parallel_backend`, `:215`).  With the issuer reachable from a value, the
+  general home is [`ValueExt`] — **per leaf**, composed by the manifest macro exactly
+  as `is_handle`/`handle`/`set_handle`/`alignment` are (`program.rs:312-357`), so any
+  leaf can own resources rather than only the top-level program.  The landed `Program`
+  hook is therefore to be moved, not kept beside a second one.
+
+  **And a landmine for the JIT's own seam, found while reading that macro:** the
+  composed `ValueExt` impl forwards those four payload methods and **not `traced`**
+  (`program.rs:312-357`).  Today that is inert — `traced` has exactly one
+  implementation in the tree, the lowlevel's test harness — but the moment a
+  production value implements it (a recorded graph value is the one Seam A was built
+  for), `LangValue` will silently swallow the report, which is precisely the "sound
+  alone, unsound together" failure `compute-graph-jit` warns about.  The macro needs a
+  `traced` forward, and the closure walk above needs it too.
+
   This composes with the existing rule rather than fighting it: a value dropped by
   `drop_block` **still does not release** (the deliberate no-per-value-release
   decision), the context still owns the memory until it drops, and the artifact's
@@ -353,6 +372,21 @@ Two rules follow:
 - **cells freeze in dependency order**: `freeze_mapped` already asserts that every
   referenced key is registered, the same discipline packages use, and a cell that read
   another cell's frozen reference satisfies it by construction.
+
+Two things the store's landing needs, read off the code rather than assumed:
+
+- **the front end needs `BinderId → Path`, not a path stack.** The lowering walk would
+  otherwise have to carry a `Path` through every `compile_expr` arm; instead one
+  `path::for_each` pass over the resolved AST collects the marked bindings (each
+  carries its own `BinderId`), and a binding is looked up by that id where it is
+  compiled. `for_each` already descends the whole tree for exactly this.
+- **a filed artifact needs a key and a hash.** `StaticNodeId` resolves through the
+  registry, so a cell's artifact must be filed there: the key comes from a counter
+  (`ModuleKey::from_raw`, as the lowlevel's own tests do — the device registry
+  allocates in production), and the registry's `hash` slot is required by the API even
+  though a cell's reuse is decided by its **path**. That hash is a documented
+  placeholder on the cell path, which is the same demotion §7's table records for
+  `content_key`: the moment a hash decides reuse, the requirement is broken.
 
 **Measured · a temporary probe in the lowlevel's own test harness, since removed.**
 On a four-node module — an array of two constants, plus one node no root reaches —
