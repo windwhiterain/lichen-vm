@@ -1374,14 +1374,15 @@ which is worth more than three correct arms that each know their own case.
 
 **And the probe that found all this found something larger, which this does not
 close.** A body of three statements — dispatch, `collect` the result into a name
-nobody reads, dispatch again — records a two-node graph, runs, and answers with the
-numbers the chain gives anyway. The `collect` was not refused or miscompiled: **it
-was never executed**, because a block's value is the tuple of its statements' values
-and nothing demanded that one. So the recording is complete only as far as the walk
-forces it, and a graph that is *missing a dispatch the program wrote* produces an
-answer that does not say so. The refusals above cannot catch that, because the
-statement never reaches an operator arm. See the landmine, where it is recorded as
-open rather than as fixed.
+nobody reads, dispatch again — records a two-node graph and answers with the numbers
+the chain gives anyway. The `collect` was not refused or miscompiled: **it was never
+executed**, because a block's value is the tuple of its statements' values and nothing
+demanded that one. That is dead-code elimination, and dead code is not a bug. The wart
+is that the elision is invisible while the refusal is loud, so **one more `let` binding
+turns a working program into a named refusal for a reason that has nothing to do with
+what it computes.** The refusals above cannot catch the elided case, because the
+statement never reaches an operator arm. Whether the walk should demand every statement
+— making the elision impossible rather than silent — is open; see the landmine.
 
 ## The next step, in order
 
@@ -1541,16 +1542,18 @@ open rather than as fixed.
   succeeds on a kernel nobody wrote. The two roles are separate functions.
 - **A recorded body is only recorded as far as the recording walk *forces* it.**
   Measured, not reasoned: a body of three statements — dispatch, `collect` the
-  dispatch's result into an unused name, dispatch again — produced a two-node
-  graph, the program ran, and it answered with the numbers the chain gives
-  anyway. The `collect` was not dropped, refused or miscompiled: **it was never
-  executed**, because a block's value is the tuple of its statements' values and
-  nothing read that one. The graph is therefore not wrong, it is *incomplete*,
-  and the program's answer does not say so. Anything that reaches for a
-  placeholder is now refused by name, which closes the three shapes this was
-  found through (`collect`, a host `read`, a scalar `call`) — but it cannot
-  close this one, because a statement nobody forces never reaches the operator
-  arms at all. **This is the open question on the recording, not a settled one.**
+  dispatch's result into a name nobody reads, dispatch again — produced a two-node
+  graph, and the program answered with the numbers the chain gives anyway. The
+  `collect` was not dropped or miscompiled: **it was never executed**, because a
+  block's value is the tuple of its statements' values and nothing read that one.
+  **As dead code that is correct** — a dispatch whose result is discarded has no
+  observable effect but device time, and leaving it out is what any compiler
+  would do. The wart is not the elision, it is that **the same statement is
+  refused or silently elided depending on whether anything reads its result**: one
+  more `let` binding in the body and the `collect` is now a named refusal, and the
+  program that was working stops working for a reason that has nothing to do with
+  what it computes. Whether the walk should demand every statement instead — and
+  make the elision impossible rather than invisible — is open.
 - **A graph that captures anything is a use-after-free waiting for a
   `drop_block`.** Nothing in the type says so, because `Graph` is plain data and
   a capture is what the *builder* would have done. The refusal is the only thing
