@@ -1372,29 +1372,62 @@ arms all failed the same way, so a boundary drawn in three arms is not a boundar
 the rule is one sentence — *a `plrun` is the only operator that may see a placeholder* —
 which is worth more than three correct arms that each know their own case.
 
-**And the probe that found all this found something larger, which this does not
-close.** A body of three statements — dispatch, bind the result to a name nobody reads,
-dispatch again — records a two-node graph and answers with the numbers the chain gives
-anyway. The middle dispatch was neither refused nor miscompiled: **it was never
-performed**, because a `let` inside a block is lazy and nothing read the name. The
-decision taken is that this must not stand — a graph has to be what its function wrote,
-or a dispatch the program performed is missing from the thing that is supposed to be the
-program, and the program's own answer gives nothing away.
+**And the probe that found all this found something larger — which turned out to say the
+opposite of what it first looked like.** A body of three statements — dispatch, bind the
+result to a name nobody reads, dispatch again — records a two-node graph. The middle
+dispatch was neither refused nor miscompiled: **it was never performed**, because a `let`
+inside a block is lazy and nothing read the name.
 
-**It cannot be fixed from `lichen-compute`, and the reason is measured.** The lowlevel
-has the right walk — `Module::evaluate_node_forced`, which descends every array position
-and forces operand chains before the operation runs — and it performs every statement.
-It also leaves the deep pass's value caches unwritten, so `returned_value_ids` finds no
-value where the function's return is, and **every** recording refuses with "this
-function's return is not a value a graph can hand back" — including the ordinary
-two-dispatch chain with nothing unread in it. A second ordinary deep pass over the
-block's own items did not put the caches back. Forcing is the right walk in general and
-the wrong one for a recording, because what it spends is the lowlevel's laziness
-invariants.
+**The decision taken at the time was that this must not stand**, on the grounds that a
+graph has to be what its function *wrote*, or a dispatch the program performed is missing
+from the thing that is supposed to be the program. **That premise was wrong, and the
+measurement that corrected it is the most useful thing in this section.**
 
-So this half is left open on purpose, with the number pinned in
-`an_unread_dispatch_is_missing_from_the_graph_and_that_is_measured`, and the next step is
-in the lowlevel: a pass that descends the shallow mask without giving up the caches.
+> Run the same body with no graph anywhere in the program — `out = step (3,)` — and
+> count the dispatches the backend actually receives. It is **two**. The program does
+> not perform the third one either.
+
+There is no expression-level CSE in this compiler to explain the absence (the `dedup`
+in the tree is over diagnostic text, name suggestions, and arena payloads in the static
+module freeze — never over expressions), so identical written statements are distinct
+nodes and both would run if both were reached. A variant with a `dead` binding that
+differs from the live ones in both kernel and operands dispatches twice as well. **The
+elimination is laziness, and it is the program doing it, not the recording.**
+
+So the invariant was the wrong one. **A graph is a transcript of the run, not of the
+source**, and the recording already satisfies it: `a_graph_dispatches_exactly_what_the_
+program_dispatches` runs one body twice — plainly and through a graph — and compares the
+two traces, order and inputs included. A count would have been satisfied by a graph that
+dispatched the right things against the wrong buffers; a trace is not.
+
+**A walk that forced the rest would have been a bug, not a completion.** It would have
+put a dispatch in the graph that the program never makes, and the graph would then answer
+with work its own author did not ask for.
+
+**What forcing actually costs, measured while looking for a third option.** The two
+knobs in `evaluate_node_deep_inner` make four walks, and all four were run:
+
+| `skip_shallow` | `force_operand` | dispatches recorded | the function's return slot |
+|---|---|---|---|
+| on (the deep pass, in use) | off | **2** | readable |
+| off | off | **2** | readable |
+| off | on (`evaluate_node_forced`) | 3 | **empty** |
+| on | on | — | **empty** |
+
+The first two rows are the finding: descending every position in order reaches nothing
+extra, because the unread statement is not behind a shallow mark — the deep pass already
+reaches its node. It hangs on the **operand edge** of the apply, because the frontend
+desugars a `let` into a lambda parameter, so the binding expression is an *argument* of
+the apply and nothing evaluates an argument nobody reads. Only the operand forcing
+reaches it, and turning that on empties the return slot **on its own**, with the shallow
+mask untouched — so the cost is attributable to `force_operand` specifically, not to
+descending past the mask. That empties the value `returned_value_ids` has to read, and
+every recording refuses, including bodies with nothing unread in them. Reading an unread
+body item in order does not help either: it reads back `Parameterized` and caches
+nothing, which is the VM's own documented contract for an operation whose operands were
+unbound when it was last evaluated.
+
+**So the gap closed by being measured, and nothing in `lichen-lowlevel` had to change.**
 
 ## The next step, in order
 
@@ -1552,25 +1585,24 @@ in the lowlevel: a pass that descends the shallow mask without giving up the cac
   that resolves to a number are two different mistakes, and the tempting repair
   for the second — treat the number as a one-element host vector — is a run that
   succeeds on a kernel nobody wrote. The two roles are separate functions.
-- **A recorded body is only recorded as far as the recording walk *forces* it, and
-  that is a measured gap rather than a settled decision.** Measured, not reasoned: a
-  body of three statements — dispatch, bind the result to a name nobody reads, dispatch
-  again — produced a two-node graph, and the program answered with the numbers the chain
-  gives anyway. The middle dispatch was not dropped or miscompiled: **it was never
-  performed**, because a `let` inside a block is lazy and nothing read the name. A block's
-  value is the tuple of its statements' values, and that tuple does not even contain the
-  unread one — so nothing reachable from the result can force it.
-  **The decision taken is that a graph must be what its function wrote**, and the answer
-  is not the obvious one. `Module::evaluate_node_forced` is the lowlevel's own "ignore
-  laziness, descend everything" pass, and it *does* perform every statement — and it also
-  leaves the deep pass's value caches unwritten, so the reader that has to name the
-  function's return finds no value and **every** recording refuses, including one with no
-  unread statement at all. A second ordinary deep pass over the block's items did not
-  restore the caches. Forcing is the right walk in general and it is the wrong one here:
-  what it trades away is `lichen-lowlevel`'s laziness invariants, and they are worth more
-  than this completeness until the lowlevel grows a pass that descends without spending
-  them. `an_unread_dispatch_is_missing_from_the_graph_and_that_is_measured` pins the
-  number, so the day it becomes 3 that is the fix rather than a regression.
+- **A graph is a transcript of the run, and the run is lazy — so a dispatch whose result
+  nothing reads belongs in neither.** This replaced the opposite claim, which was recorded
+  here first and was wrong. A body of three statements — dispatch, bind the result to a name
+  nobody reads, dispatch again — produced a two-node graph, and that was first read as a
+  missing dispatch. **Running the same body with no graph in the program at all also
+  dispatches twice**, so the program itself never performs the third one: a `let` inside a
+  block is lazy, nothing read the name, and there is no expression-level CSE in this
+  compiler that could have accounted for it instead. The graph was faithful all along; the
+  invariant "a graph must be what its function wrote" was the thing that had to go. The
+  measurable form of the correct one is
+  `a_graph_dispatches_exactly_what_the_program_dispatches`: one body, run plainly and
+  through a graph, with the two dispatch traces compared.
+  **The landmine now points the other way**: a graph that dispatched *more* than its
+  program would be running work nobody asked for, and no refusal would catch it. The
+  operand-forcing walk reaches the unread statement and is refused only by accident — it
+  empties the function's return slot, so every recording fails rather than succeeding with
+  an extra node. A future change that repairs that slot without noticing this would
+  reintroduce the bug the number 2 was protecting against.
 - **A graph that captures anything is a use-after-free waiting for a
   `drop_block`.** Nothing in the type says so, because `Graph` is plain data and
   a capture is what the *builder* would have done. The refusal is the only thing

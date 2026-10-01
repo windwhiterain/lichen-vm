@@ -360,47 +360,12 @@ compute.collect (compute.graphrun built (3,))
 /// that collected a dispatch's result mid-chain recorded a graph that was quietly
 /// missing the collect, and the chain's own numbers looked right anyway, so
 /// nothing in the program's answer said the collect had not happened.
-/// **A gap, pinned as a measurement rather than left as a claim.** The invariant a
-/// graph should be held to is that it is what its function wrote. It is not, yet,
-/// and this test is the evidence: a `let` inside a block is lazy, so a dispatch
-/// whose result nothing reads is never performed, is never recorded, and the graph
-/// is two nodes where the program wrote three.
 ///
-/// The answer is **not** `evaluate_node_forced`, which was tried and is the wrong
-/// walk here: it performs every statement and also leaves the deep pass's value
-/// caches unwritten, so the reader that has to name the function's return finds no
-/// value and *every* recording refuses — including one with no unread statement at
-/// all. The invariants forcing trades away are `lichen-lowlevel`'s, and reaching
-/// the dead statement means changing them. Until then the number below is the
-/// truth, and a change that makes it 3 is the fix rather than a regression.
-#[test]
-fn an_unread_dispatch_is_missing_from_the_graph_and_that_is_measured() {
-    let (_guard, stub) = stub();
-    run(&format!(
-        r#"@{{
-  compute = import "compute.lichen"
-@}}
-{KERNELS}
-step = ins => {{
-  first = compute.plrun k1 (ins(0),)
-  dead = compute.plrun k2 (ins(0), (first,))
-  compute.plrun k2 (ins(0), (first,))
-}}
-built = compute.graph step
-compute.collect (compute.graphrun built (3,))
-"#
-    ));
-    assert_eq!(
-        stub.saw().len(),
-        2,
-        "three dispatches were written and two were submitted: the middle one's \
-         result is bound to a name nobody reads, so the block never performed it. \
-         **This is the gap, not the goal** — a graph has to be what its function \
-         wrote. See the comment above: {:?}",
-        stub.saw()
-    );
-}
-
+/// **Whether an unread dispatch belongs in the graph was measured, and the answer
+/// is that it does not** — see
+/// [`a_graph_dispatches_exactly_what_the_program_dispatches`], which runs the same
+/// body with and without a graph and compares the two traces. There is no separate
+/// test here for a gap that measurement closed.
 #[test]
 fn what_a_recorded_body_may_not_reach_for_is_refused_by_name() {
     let (_guard, _stub) = stub();
@@ -557,5 +522,79 @@ compute.graphrun built (3,)
             .iter()
             .any(|message| message.contains("one runner against one backend")),
         "and it says why the second one cannot simply win: {joined}"
+    );
+}
+
+/// **A graph performs what its function performs — the same dispatches, in the
+/// same order, with the same wiring.** The trace is compared rather than a count,
+/// because a count is satisfied by a graph that dispatched the right things in
+/// the wrong order or against the wrong inputs, and that graph answers with
+/// numbers a reader has no way to distrust.
+///
+/// **This is the invariant, and it is stronger than the one it replaces.** The
+/// earlier claim was that the graph had to be *what its function wrote*, measured
+/// as three dispatches written and two recorded — and it was wrong in a way worth
+/// keeping: **the program does not perform the third dispatch either.** `dead` is
+/// bound to a name the body never reads, so the VM's laziness eliminates it, and
+/// running `step (3,)` without any graph in the program dispatches twice. There is
+/// no expression-level CSE in this compiler to explain the absence, so the
+/// elimination is the one every other unread binding already gets.
+///
+/// A graph is therefore not a transcript of the source; it is a transcript of the
+/// run. Requiring more of it would have meant forcing a walk that *adds* a dispatch
+/// the program never makes — and `Module::evaluate_node_forced`, the walk tried for
+/// that, emptied the function's return slot as well, refusing every recording
+/// including bodies with no unread statement at all. **Laziness is the semantics
+/// here, not a compromise with it.** The two `plrun k2` lines below are both
+/// written and one is never reached, so the trace is the shorter one by exactly
+/// the binding nobody reads.
+#[test]
+fn a_graph_dispatches_exactly_what_the_program_dispatches() {
+    let (_guard, stub) = stub();
+    let body = r#"step = ins => {
+  first = compute.plrun k1 (ins(0),)
+  dead = compute.plrun k2 (ins(0), (first,))
+  compute.plrun k2 (ins(0), (first,))
+}"#;
+    run(&format!(
+        r#"@{{
+  compute = import "compute.lichen"
+@}}
+{KERNELS}
+{body}
+out = step (3,)
+"#
+    ));
+    let plain = stub.saw();
+    // The log is one stub for the whole binary, so the plain run's two lines are
+    // still in it; forgetting here is what makes the second trace the graph's own
+    // rather than the two runs stacked.
+    stub.forget();
+    run(&format!(
+        r#"@{{
+  compute = import "compute.lichen"
+@}}
+{KERNELS}
+{body}
+built = compute.graph step
+out = compute.collect (compute.graphrun built (3,))
+"#
+    ));
+    let recorded = stub.saw();
+    assert_eq!(
+        recorded, plain,
+        "a graph is a transcript of the run, so recording and running the same \
+         body have to reach the backend in the same order with the same inputs. \
+         `dead` is bound to a name nothing reads, so the program never performs \
+         it either and the graph must not: a recorded trace that is *longer* is \
+         the graph running work the program did not ask for"
+    );
+    assert_eq!(
+        plain.len(),
+        2,
+        "and the shorter trace is the two the body actually reaches — the first \
+         `plrun k1` and the `plrun k2` that reads it. The unread `plrun k2` is \
+         absent from the program's own run, which is the whole finding: \
+         {plain:?}"
     );
 }

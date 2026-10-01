@@ -3561,18 +3561,24 @@ where
     // empty graph that still looks like a graph. The deep pass is what *demands*
     // the tuple, and demanding it is what performs the dispatches.
     //
-    // **Not forced, and the reason is measured rather than preferred.** A deep
-    // pass still honours the shallow mask, so a statement the body's answer never
-    // reads is a subtree nothing descends into — and the recording misses the
-    // dispatch the program performed. `Module::evaluate_node_forced` reaches it
-    // and was tried here: it performs every statement, and it also leaves the
-    // deep pass's value caches unwritten, so the reader that has to name the
-    // function's return finds no value and every recording — including one with
-    // no unread statement at all — refuses with "this function's return is not a
-    // value a graph can hand back". A second ordinary deep pass over the block's
-    // items did not restore the caches. Forcing is the right walk and it is not
-    // this one: the invariants it trades away are the lowlevel's, and they are
-    // worth more here than the completeness is worth on its own. See the landmine.
+    // **Not forced, and this is now measured rather than argued.** A graph is not
+    // a transcript of the source, it is a transcript of the run, and the run does
+    // not perform a dispatch whose result nothing reads: the same body, called
+    // directly with no graph anywhere in the program, reaches the backend twice
+    // where it writes three dispatches. There is no expression-level CSE in this
+    // compiler to account for the missing one, so the elimination is the laziness
+    // every unread binding already gets. A walk that forced the rest would be
+    // adding a dispatch the program never makes.
+    //
+    // **Forcing was tried anyway, and it broke more than it reached.**
+    // `Module::evaluate_node_forced` performs every statement, and it also leaves
+    // the function's return slot empty, so the reader that has to name the return
+    // finds no value and *every* recording refuses — including bodies with no
+    // unread statement at all. The empty slot was isolated to the operand forcing
+    // rather than the shallow descent: a walk that descends every position in
+    // order (`skip_shallow` off, `force_operand` off) records the same two
+    // dispatches, and turning `force_operand` on alone empties the return slot
+    // with the shallow mask untouched. See the landmine.
     let result = module.evaluate_node_deep(apply, Some(block));
     if matches!(
         AsEnum::<LowValue>::as_enum(&result),
