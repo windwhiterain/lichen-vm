@@ -59,7 +59,7 @@ queue's order is deliberate.
 | P1-14 | high | language | `run.rs` never checks `Build::ok` | done |
 | P1-15 | high | language | `Err(vec![])` — an error carrying no diagnostic | done |
 | P1-16 | high | language, language-server | `stage_depends` wired on one of two store entry points | done |
-| P1-17 | high | language-server | Every request runs the whole frontend | todo |
+| P1-17 | high | language-server | Every request runs the whole frontend | done (Outcome below; (b) still open) |
 | P1-18 | high | compute | Unbounded global registries; per-launch wasm rebuild; unbounded `plrun` | blocked:D15 |
 | P1-19 | medium | lowlevel | `evaluate_block` expects a return the budget may refuse | done |
 | P1-20 | low | package | `download` uses a predictable shared temp name and skips `fsync` | done |
@@ -71,9 +71,9 @@ queue's order is deliberate.
 | P1-26 | high | language | The table-key hash changed meaning without an artifact version bump | done |
 | P1-27 | high | registry | A leaf name longer than 255 bytes desynchronises the artifact stream | done |
 | P1-28 | medium | language-parser, language | One AST walk is unguarded, and a caller runs it on the caller's stack | done |
-| P1-29 | medium | compute, registry | A compute value reaching the artifact codec panics | todo |
-| P1-30 | low | compute | A refused `plrun` count is silent | todo |
-| P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
+| P1-29 | medium | compute, registry | A compute value reaching the artifact codec panics | done |
+| P1-30 | low | compute | A refused `plrun` count is silent | done |
+| P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | done (doc); wiring is D6(b) |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | done |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | done |
 | P2-4 | medium | lowlevel | `Node`'s `pub` fields break the documented write choke-point | done |
@@ -2142,7 +2142,7 @@ stand-in rather than any real caller's stack.
 `cargo test -p lichen-language --test pipeline --test examples --test persist
 --test registry` passes.
 
-### P1-29 — A compute value reaching the artifact codec panics `reported`
+### P1-29 — A compute value reaching the artifact codec panics `done`
 
 Found while fixing `P1-18`, read but not reproduced, so `reported`:
 `ComputeValue::write_value` **panics** on `Kernel`, `ParKernel` and `Buffer`. The
@@ -2161,7 +2161,57 @@ diagnostic naming the value, not a panic inside a codec — the same standard
 one, it needs an encoding; if it cannot, the panic is in the wrong layer and the
 refusal belongs where the freeze decides what to serialize.
 
-### P1-30 — A refused `plrun` count is silent `verified`
+**Outcome — reachable, and the refusal belongs to the cache, not the compile.**
+Reproduced on the first try, and the shape is exactly the predicted one:
+
+```text
+kernels.lichen:  k_double = compute.jit (y => y + y)
+_.lichen:        compute.launch kernels.k_double 3
+```
+
+The importer's freeze of `kernels.lichen` walks its values, meets the live
+kernel, and the process dies at `compute.rs:275` with
+*"serializing a compute value (Kernel/ParKernel/Buffer are runtime-only)"*; the
+exit code is 101 and no diagnostic is printed. Nothing about it is exotic — the
+package does not have to `jit` *alone* to be imported, it only has to `jit` at
+its top level.
+
+**The codec *cannot* meet one, so this is a wrong-layer panic.** A kernel is a
+process-local registry handle: `KERNELS` is keyed by a `usize` that means
+nothing in another process, which is what `D15` is about. There is no encoding to
+add. The honest question is what the *caller* does, and the answer is decided by
+a measurement the note had not made: **the program is valid and runs.** The same
+`jit` at the top level of a *single* file evaluates to `6: Int` today, because
+only packages are frozen and serialized — the main program is not. So refusing
+the compile would turn working lichen into an error to protect a cache.
+
+That leaves "refuse the cache", and the store already has the shape for it:
+every other failure in `build_package` degrades to a miss rather than failing the
+build. `serialize_artifact_with` is now allowed to fail and the artifact write +
+`publish` are simply skipped, which leaves the pending device entry `alloc_key`
+wrote unpublished — and an unpublished entry can never verify, so the package is
+uncached *permanently* rather than recompiled into a stale artifact later. The
+importer of such a package is uncached too, transitively, because
+`verify_entry` walks to a dependency whose `source_hash` is still all-zero.
+
+**The bug underneath was a half-finished refactor, not a design error.** The
+outer `ArtifactCodec::write_value`/`write_operator` already returned
+`Result<(), String>` — `P1-27` made them fallible for a leaf name that overflows
+its discriminator — but the *inner* per-leaf `ValueCodec`/`OperatorCodec` traits
+were left infallible, so the leaves that can genuinely refuse had no way to say
+so and panicked instead. Both traits are fallible now, all seven leaves
+propagate, and the two panicking compute arms refuse by name. The same change
+retired **three more panics of the identical kind** in `LowValue::write_value`:
+a dynamic array/table/function payload in a module being serialized was also an
+`assert`-by-panic, and a dynamic payload in a module that reached the writer is
+the same "cannot cache this" fact, not a broken invariant.
+
+Pinned by `crates/lichen-language/tests/runtime_only_package.rs`, which is the
+reproduction: the imported-kernel program must *run* (exit 0, `6: Int`), which is
+red on a panic and red again if the refusal is ever turned back into a failed
+build.
+
+### P1-30 — A refused `plrun` count is silent `done`
 
 `P1-18` bounded `plrun`'s element count (`MAX_PARALLEL_ELEMENTS = 1 << 20`) and
 chose to **refuse** rather than truncate, which is right — but the refusal returns
@@ -2176,9 +2226,48 @@ variant in the right place, not a reuse of the wrong one — decide which channe
 owns "a resource limit was reached", and if that means extending the budget enum,
 say so.
 
+**Outcome — the channel already existed; what was missing was its reader.**
+`Module::extension_diagnostics` is exactly "a layer above the lowlevel decided
+something the lowlevel cannot describe", and `compute` was **already recording
+the `$jit` refusal on it** (`compute.rs:404`) — but nothing anywhere read it, so
+*both* refusals were silent. The decision the item asked for is therefore not a
+new channel but the one the tree already has, and `compiler-plugin.md` had
+already stated the contract that settles it: *"What a host renders from these
+entries is the host's own decision."* The host is `lichen-language`, and it now
+renders them — at the two points where a `Module` outlives its check, the report
+assembly (`lib.rs`, the failure path) and `run::render_build` (the run path,
+where a `plrun` actually executes). `BudgetExhausted` is left alone: it is the
+*non-termination* verdict, and all three of its renderings say "this binding
+never terminates", which is false for a buffer size the user asked for and can
+lower.
+
+**A refusal is an explanation, so it is reported only when there is something to
+explain.** The first version reported every recorded refusal and broke
+`jit_cross_kernel_subexpr` — a *working* program. The checker evaluates
+speculatively, so a `$jit` whose parameter domain is not decided *yet* records a
+refusal, and a later attempt with the domain known compiles that very kernel; the
+program then produces `7: Int`. The line is the outcome, not the channel: a
+refusal explains a value that never arrived, and a program that produced one has
+nothing to explain. That rule also gives the polymorphic-`jit` case its designed
+behaviour for free — `jit` of a template whose domain stays undecided produces
+the lazy marker *and* now names the reason, which is what Phase 3c asked for.
+
+**One refusal is one diagnostic.** The channel is append-only, and a node is
+deep-evaluated several times (the checker walks the top-level statements and then
+the root; the run walks the root again), so the over-limit `plrun` first reported
+**three times**. `record_extension_diagnostic` now drops an entry identical to
+one it already holds in `(category, node, message)` — refusing twice is not two
+findings. A linear scan is the right shape there, unlike `apply_errors`, which is
+recorded per apply and keeps a set beside it.
+
+Pinned by `a_refused_plrun_count_says_why` in `crates/lichen-language/tests/
+compute.rs`, which asserts one diagnostic naming both the count asked for and the
+limit; with the reporting disabled it fails with the old symptom, `expected this
+program to fail: "parameterized: Int"`.
+
 ## P2 — architecture
 
-### P2-1 — `BufferSession` is built but unwired `verified`
+### P2-1 — `BufferSession` is built but unwired `done (doc); D6(b) (wiring)`
 
 ~1100 lines of incremental machinery (`language/src/session.rs`,
 `resolve.rs:385-706` `content_key`, `lex::lex_resume`,
@@ -2197,6 +2286,28 @@ generous: T3 (memoized check) is not implemented, so even a wired session would
 only avoid lex/parse.
 
 **Fix.** Correct the doc immediately; wiring is `D6`.
+
+**Outcome — the doc half is done and the wiring half is a decision, not a gap.**
+The code-side claim this item was filed for is gone: `analysis.rs`'s module doc
+named `BufferSession` for the checker run, and `P5-3` corrected it (to
+`frontend_at` + `build_report`); `P1-17` rewrote that module doc again when the
+index split out, and it still names the real path.  What remained was in the
+*notes*, which is where the claim was load-bearing: three plan documents
+(`artifact-cache.md`, `liche-lsp-home.md`, `language-toolchain.md`) stated as
+settled design that the live buffer is re-analyzed *by* `BufferSession`. It is
+not, and `P1-17` makes that definite rather than incidental — the server caches a
+`DocIndex` per text and runs no session at all. All three now say what exists and
+name the wiring as `P2-1`'s open half.
+
+That half is `D6`'s (b), and the item is explicit that it is a wiring job rather
+than a defect, so it is left to the decision that sequences it — with one thing
+now known that was not when `D6` was written: (a) landed, and it changed what (b)
+is worth. The index cache removes *every* repeat request for a text, but it does
+nothing when the text **changes** — which is every keystroke, and is exactly the
+case `BufferSession`'s splice addresses by resuming the lex and the
+statement-region parse. So (b) is no longer "worth doing for the keystroke path
+and not a substitute for (a)"; it is the only remaining win on that path, and T3
+(the memoized check) is still what would keep the check from dominating it.
 
 ### P2-2 — Five hand-written AST traversals `verified`
 

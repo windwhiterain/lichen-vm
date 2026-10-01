@@ -53,10 +53,11 @@ pub enum SortOp {
 /// value leaf) for its leaves; this one is a scalar operator, so the codec is
 /// a one-tag identical round-trip.
 impl OperatorCodec for SortOp {
-    fn write_operator(w: &mut Writer, op: Self) {
+    fn write_operator(w: &mut Writer, op: Self) -> Result<(), String> {
         match op {
             SortOp::Sort => w.u8(0),
         }
+        Ok(())
     }
 
     fn read_operator(r: &mut Reader<'_>) -> Result<Self, String> {

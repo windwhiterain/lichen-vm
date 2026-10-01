@@ -261,6 +261,19 @@ where
                 })
                 .collect::<Vec<_>>(),
         );
+        // Refusals a layer above the lowlevel recorded on its general channel
+        // while the check ran — a `$jit` whose body is outside the kernel-safe
+        // subset, say.  The channel carries the layer's **own rendered text**,
+        // because the lowlevel has no vocabulary for it, so this is the host
+        // doing the rendering the channel's contract leaves to it
+        // (`docs/notes/compiler-plugin.md`).  No span: the entry names a
+        // lowlevel node, not an IR expression, so there is nothing to point at.
+        diagnostics.extend(build.module.extension_diagnostics.iter().map(|entry| {
+            Diag::unattributed(
+                Stage::Check,
+                format!("{}: {}", entry.category, entry.message),
+            )
+        }));
         // The invariant every consumer of a `Report` relies on: a failed build
         // carries at least one diagnostic.  `Build::diagnostics` skips a
         // recorded failure it cannot attribute to an expression — an assert

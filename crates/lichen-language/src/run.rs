@@ -30,7 +30,20 @@ use lichen_utils::extend::AsEnum;
 /// type, then render `value<attributes>: type`.  The one place the output line
 /// is formed, so [`evaluate`] and [`evaluate_raw`] — which differ only in how
 /// they obtain the build — cannot drift.
-fn render_build<P>(build: Build<P>) -> String
+///
+/// **A refusal is an explanation, so it is reported only when there is
+/// something to explain.**  The deep evaluation is where an operator actually
+/// executes, so it is where a plugin's *runtime* refusal lands (a `plrun` whose
+/// element count is past the limit, say — see `P1-30`), and the value that comes
+/// back is the lazy marker: returning that as the output would print
+/// `parameterized: Int` and say nothing about why.  But the same channel also
+/// carries a **provisional** refusal — the checker evaluates speculatively, so a
+/// `$jit` whose parameter domain is not decided *yet* records one, and a later
+/// attempt with the domain known compiles the very same kernel.  That program
+/// works and has a value.  The line between them is the outcome, not the
+/// channel: a refusal explains a value that never arrived, and a program that
+/// produced one has nothing to explain.
+fn render_build<P>(build: Build<P>) -> Result<String, Vec<Diag<P>>>
 where
     P: LangProgramShape,
     P::Value: ValueType
@@ -45,7 +58,26 @@ where
     let mut module = build.module;
     let value = module.evaluate_node_deep(build.root_val, None);
     module.evaluate_node_deep(build.root_ty, None);
-    format!(
+    let produced_nothing = matches!(
+        AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value),
+        Some(lichen_lowlevel::LowValue::Parameterized | lichen_lowlevel::LowValue::Void)
+    );
+    if produced_nothing && !module.extension_diagnostics.is_empty() {
+        // The refusing layer's own text, rendered by the host that owns the
+        // message channel — see `docs/notes/compiler-plugin.md`.  No span: the
+        // entry names a lowlevel node, not an IR expression.
+        return Err(module
+            .extension_diagnostics
+            .iter()
+            .map(|entry| {
+                Diag::unattributed(
+                    crate::diag::Stage::Check,
+                    format!("{}: {}", entry.category, entry.message),
+                )
+            })
+            .collect());
+    }
+    Ok(format!(
         "{}{}: {}",
         print_value_lang::<P>(&module, value, build.root_ty),
         {
@@ -60,7 +92,7 @@ where
             }
         },
         print_type_lang::<P>(&module, build.root_ty)
-    )
+    ))
 }
 
 /// Compile, check, and run `source`; the rendered output value and its type.
@@ -76,7 +108,7 @@ pub fn evaluate(source: &str) -> Result<String, Vec<Diag<LangProgram>>> {
     if !report.ok() {
         return Err(report.diagnostics);
     }
-    Ok(render_build(report.build.unwrap()))
+    render_build(report.build.unwrap())
 }
 
 /// Compile, check, and run a raw source file after preprocessing imports.
@@ -115,5 +147,5 @@ where
     if !report.ok() {
         return Err(report.diagnostics);
     }
-    Ok(render_build(report.build.unwrap()))
+    render_build(report.build.unwrap())
 }

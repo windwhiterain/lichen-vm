@@ -37,9 +37,10 @@ artifacts exactly as the CLI does.
 ## The change
 
 Route the LSP's *settled imported packages* through the persistent device store
-at Lichen Home. The open buffer's own text stays in-process (`BufferSession`),
-as `artifact-cache.md`/`incremental-parse-compile.md` require; only the settled
-imported `.lichen` packages are cached on disk and shared cross-process.
+at Lichen Home. The open buffer's own text stays in-process — re-analyzed by the
+server's own `DocIndex` cache (`P1-17`), not by `BufferSession`, which remains
+unwired (`P2-1`); only the settled imported `.lichen` packages are cached on disk
+and shared cross-process.
 
 ### 1. `home.rs` — `LichenHome` (new)
 

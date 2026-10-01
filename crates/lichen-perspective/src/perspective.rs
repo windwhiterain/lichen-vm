@@ -32,10 +32,11 @@ pub enum GcdOp {
 
 // The perspective leaf's per-leaf artifact codec: the single `Gcd` operator.
 impl OperatorCodec for GcdOp {
-    fn write_operator(w: &mut Writer, op: Self) {
+    fn write_operator(w: &mut Writer, op: Self) -> Result<(), String> {
         match op {
             GcdOp::Gcd => w.u8(0),
         }
+        Ok(())
     }
 
     fn read_operator(r: &mut Reader<'_>) -> Result<Self, String> {

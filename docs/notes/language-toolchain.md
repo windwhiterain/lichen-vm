@@ -123,8 +123,12 @@ artifacts at `artifacts/<sha256(file_id)>.module`, identity verified by a
 transitive, deterministic [`artifact_hash`](artifact-cache.md)) — and
 `PackageStore` (`package.rs`) loads those artifacts without recompiling, with
 incremental dependency-graph verification. **The tooling crates reuse that store
-for settled per-file artifacts, and [`BufferSession`](incremental-parse-compile.md)
-for the live buffer**, rather than building a second cache. See
+for settled per-file artifacts, and the language server adds its own per-text
+index cache for the live buffer** (`P1-17`), rather than building a second
+artifact cache.  `BufferSession` — the incremental lex/parse splice documented in
+[`incremental-parse-compile.md`](incremental-parse-compile.md) — is built and
+tested but unwired (`P2-1`); wiring it is what would avoid the lex and parse on
+the keystroke path, which the index cache does not.  See
 [`artifact-cache.md`](artifact-cache.md) for the whole mechanism.
 
 The store is **scoped per plugin set**: a plugin-built compiler uses its own

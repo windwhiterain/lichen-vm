@@ -1016,7 +1016,10 @@ pub struct Module<P: Program> {
     /// [`ExtensionDiagnostic`].  Append-only and never cleared, the same
     /// contract as [`Self::unify_errors`] and [`Self::eval_errors`]: an entry
     /// is a fact about work that already happened, and a second pass must be
-    /// able to see the first pass's records.
+    /// able to see the first pass's records.  Recording the *same* fact twice
+    /// is the one thing it declines (`Module::record_extension_diagnostic`):
+    /// a node is deep-evaluated more than once, and refusing twice is not two
+    /// findings.
     pub extension_diagnostics: Vec<ExtensionDiagnostic>,
     /// Program-global extension state — see [`Program::GlobalExt`].
     pub global_ext: P::GlobalExt,

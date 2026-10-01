@@ -438,3 +438,38 @@ compute.collect out
         "parallel collect produced: {out:?}"
     );
 }
+
+#[test]
+fn a_refused_plrun_count_says_why() {
+    // `P1-30`: `plrun`'s element count is bounded (the count sizes the buffer
+    // and the interpreted work), and a count past the bound is refused rather
+    // than truncated.  The refusal must *say so*: the alternative is the lazy
+    // marker alone, which prints `parameterized: Int` and tells the user
+    // nothing about a number they can lower.  The count is the only problem
+    // here, so the message has to name it.
+    let messages = fail(
+        r#"
+@{
+  compute = import "compute.lichen"
+@}
+f = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + i]
+}
+k = compute.parallel f
+out = compute.plrun k (2000000,)
+compute.read [out, 2]
+"#,
+    );
+    assert_eq!(
+        messages.len(),
+        1,
+        "one refusal is one diagnostic, not one per evaluation: {messages:?}"
+    );
+    let message = &messages[0];
+    assert!(
+        message.contains("2000000") && message.contains("1048576"),
+        "the refusal must name the count asked for and the limit: {message:?}"
+    );
+}

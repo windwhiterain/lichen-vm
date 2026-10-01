@@ -131,6 +131,16 @@ about what `category` means, so **a new external error kind never means a new ch
 here**. `compute.jit` uses it to say why a kernel stayed lazy instead of discarding the
 reason. What a host *renders* from these entries is the host's own decision.
 
+The host here is `lichen-language`, and it renders them in two places, because a `Module`
+outlives its check in two ways: the report assembly (`lib.rs`) carries them into a failed
+build's diagnostics, and `run::render_build` reports them when the program produced no
+value — a `plrun` whose count is past the bound, whose refusal *is* the explanation for the
+`parameterized` output. A refusal is an explanation and not a verdict, so a program that
+produced a real value drops them: the checker evaluates speculatively, and a `$jit` whose
+parameter domain is not decided yet records a refusal that a later attempt supersedes.
+Recording is idempotent for an identical `(category, node, message)` — a node is deep-
+evaluated several times, and refusing twice is not two findings.
+
 ## Extension point 5: global extension state (`GlobalExt`)
 
 A plugin can carry per-module, program-global state in the module's `global_ext` slot.

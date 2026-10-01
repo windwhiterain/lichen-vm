@@ -518,7 +518,7 @@ macro_rules! define_type_value_codec {
                 w: &mut Writer,
                 value: Self,
                 _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
-            ) {
+            ) -> Result<(), String> {
                 match value {
                     $(TypeValue::$variant => w.u8($tag),)*
                     TypeValue::TypeId(n) => {
@@ -526,6 +526,7 @@ macro_rules! define_type_value_codec {
                         w.u64(n as u64);
                     }
                 }
+                Ok(())
             }
 
             fn read_value<P: Program>(
@@ -561,10 +562,11 @@ macro_rules! define_type_operator_codec {
         }
 
         impl OperatorCodec for TypeOperator {
-            fn write_operator(w: &mut Writer, op: Self) {
+            fn write_operator(w: &mut Writer, op: Self) -> Result<(), String> {
                 match op {
                     $(TypeOperator::$variant => w.u8($tag),)*
                 }
+                Ok(())
             }
 
             fn read_operator(r: &mut Reader<'_>) -> Result<Self, String> {

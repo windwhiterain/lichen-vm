@@ -172,14 +172,19 @@ plugin sources).
   per-file artifacts, exactly as the CLI does — the LSP, run on the same
   `~/.lichen`, sees the CLI's compiled artifacts and vice versa, which is the
   cross-process sharing demo.
-- **The live edit path stays in-process.** The open buffer's incremental
-  re-analysis is [`BufferSession`](incremental-parse-compile.md) (already in
-  `lichen-language`) — deliberately separate from the frozen cross-process
-  artifacts, because a buffer being typed is not a settled module.
+- **The live edit path stays in-process, and it does not reuse the session.**
+  The open buffer's re-analysis is the language server's own per-text cache of
+  its extracted index (`DocIndex`, `P1-17`) — deliberately separate from the
+  frozen cross-process artifacts, because a buffer being typed is not a settled
+  module.  [`BufferSession`](incremental-parse-compile.md) is the incremental
+  machinery this note once named for that job; it is built and tested but has
+  **no production consumer** (`P2-1`), and wiring it is `D6`'s (b) — it would
+  avoid the lex and parse when the text *changes*, which the index cache does
+  not, and it stays worth doing on its own terms.
 - **What is actually new** is the editor-view glue: span↔LSP-position
   conversion, the name-resolution index for hover / go-to-definition, and
   diagnostics→LSP — i.e. the `lichen-language-server` tooling library, layered on
-  the existing frontend + session.
+  the existing frontend.
 
 ## The remaining seam (only if re-parse is ever measured to dominate)
 

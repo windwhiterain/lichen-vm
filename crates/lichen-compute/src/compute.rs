@@ -258,23 +258,49 @@ pub enum ComputeOperator {
 // only**: they are process-local registry handles/operations with no stable
 // on-disk identity, so a persistent artifact must never carry them (a frozen
 // module is a *type* artifact, not a runnable kernel).  `TypeBuffer` is a pure
-// type-constant marker and is serializable like the other kind markers.  The
-// panic arms keep the byte format total while staying honest: a compute value
-// in a frozen module is an invariant violation.
+// type-constant marker and is serializable like the other kind markers.
+//
+// These arms **refuse** rather than panic, and the difference is reachable, not
+// cosmetic: a package that `$jit`s at its top level and is then imported holds a
+// live kernel in a module that the importer must freeze, so the shape is
+// ordinary user code.  The program is valid — the same `$jit` in a single file
+// runs — so the refusal is of the *cache*, not of the compile: the caller leaves
+// the package uncached and the program still runs.
 
 impl ValueCodec for ComputeValue {
     fn write_value<P: Program>(
         w: &mut Writer,
         value: Self,
         _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
-    ) {
+    ) -> Result<(), String> {
         match value {
             ComputeValue::TypeBuffer => w.u8(0),
             ComputeValue::TypeWrite => w.u8(1),
-            ComputeValue::Kernel(_) | ComputeValue::ParKernel(_) | ComputeValue::Buffer(_) => {
-                panic!("serializing a compute value (Kernel/ParKernel/Buffer are runtime-only)")
+            // The value's own name, so a reader can tell which of the three it
+            // met without a debugger.
+            ComputeValue::Kernel(_) => {
+                return Err(
+                    "this package is not cached: it holds a jit'd kernel at its top level, \
+                     and a kernel is a runtime value with no on-disk form"
+                        .into(),
+                );
+            }
+            ComputeValue::ParKernel(_) => {
+                return Err(
+                    "this package is not cached: it holds a jit'd parallel kernel at its top \
+                     level, and a kernel is a runtime value with no on-disk form"
+                        .into(),
+                );
+            }
+            ComputeValue::Buffer(_) => {
+                return Err(
+                    "this package is not cached: it holds a live buffer at its top level, \
+                     and a buffer is a runtime value with no on-disk form"
+                        .into(),
+                );
             }
         }
+        Ok(())
     }
 
     fn read_value<P: Program>(
@@ -293,8 +319,12 @@ impl ValueCodec for ComputeValue {
 }
 
 impl OperatorCodec for ComputeOperator {
-    fn write_operator(_w: &mut Writer, op: Self) {
+    fn write_operator(_w: &mut Writer, op: Self) -> Result<(), String> {
         match op {
+            // Every compute operator is an operation the VM performs, not a
+            // value the artifact describes: a frozen module holds the *types* a
+            // package exports, and no exported type is a kernel call.  Refused
+            // for the same reason a kernel value is (see `ValueCodec` above).
             ComputeOperator::Jit
             | ComputeOperator::Launch
             | ComputeOperator::Call
@@ -303,9 +333,11 @@ impl OperatorCodec for ComputeOperator {
             | ComputeOperator::Range
             | ComputeOperator::Read
             | ComputeOperator::Write
-            | ComputeOperator::BufferCollect => {
-                panic!("serializing a compute operator (Jit/Launch/... are runtime-only)")
-            }
+            | ComputeOperator::BufferCollect => Err(
+                "this package is not cached: it holds a compute operation, and a compute \
+                 operation is a runtime form with no on-disk representation"
+                    .into(),
+            ),
         }
     }
 
@@ -552,7 +584,18 @@ where
                         buffers().lock().unwrap().insert(bid, results);
                         <P::Value as From<ComputeValue>>::from(ComputeValue::Buffer(bid))
                     }
-                    Err(..) => <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                    Err(err) => {
+                        // The refusal is the reason this launch produced no
+                        // value, so it is recorded rather than discarded: the
+                        // lazy marker alone would tell the user nothing about
+                        // why they got `parameterized`.  The general channel
+                        // owns it (see `P1-30`), because `BudgetExhausted` is
+                        // the *non-termination* verdict and every one of its
+                        // renderings says "never terminates" — false here, the
+                        // program terminated and merely asked for too much.
+                        module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
+                        <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                    }
                 }
             }
             ComputeOperator::Read => {

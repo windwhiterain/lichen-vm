@@ -299,16 +299,33 @@ impl<P: Program> Module<P> {
     /// plugin that cannot compile a body.  The companion decision is always the
     /// caller's: a record is not an error state, and recording one never
     /// changes what the VM does next.
+    ///
+    /// **The same refusal about the same node is one fact.**  A node is deep-
+    /// evaluated more than once — the checker walks the top-level statements and
+    /// then the root, and the run walks the root again — and an operator that
+    /// refuses records on each attempt.  Refusing twice is not two findings, so
+    /// an identical `(category, node, message)` entry is dropped.  A linear
+    /// scan is the right shape here: this channel holds the handful of things a
+    /// layer declined to do, unlike `apply_errors`, which is recorded per apply
+    /// and so keeps a set beside it.
     pub fn record_extension_diagnostic(
         &mut self,
         category: &'static str,
         node: Option<NodeId>,
         message: impl Into<String>,
     ) {
+        let message = message.into();
+        let duplicate = self
+            .extension_diagnostics
+            .iter()
+            .any(|e| e.category == category && e.node == node && e.message == message);
+        if duplicate {
+            return;
+        }
         self.extension_diagnostics.push(ExtensionDiagnostic {
             category,
             node,
-            message: message.into(),
+            message,
         });
     }
 

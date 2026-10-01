@@ -601,16 +601,27 @@ where
                 }
                 modules
             };
-            let bytes = persist::serialize_artifact_with::<P, P::Codec>(
+            // A codec refusal means this package has no artifact form, not that
+            // the package is wrong.  The shape is ordinary code: a package whose
+            // top level `$jit`s holds a live kernel, and a kernel is a
+            // process-local registry handle.  The program runs either way, so
+            // the answer is to leave the package **uncached** — the same
+            // degradation every other failure in this store takes — rather than
+            // to fail a compile that would have succeeded.
+            //
+            // The pending device entry `alloc_key` wrote stays unpublished, and
+            // an unpublished entry can never verify, so the refusal is
+            // permanent for this file rather than a one-off miss.
+            if let Ok(bytes) = persist::serialize_artifact_with::<P, P::Codec>(
                 modules[&freeze.key].as_ref(),
                 &modules,
                 hash,
                 export.index,
                 P::Codec::default(),
-            )
-            .map_err(|error| vec![Diag::io(error)])?;
-            device.store_artifact(&file_id, &bytes);
-            device.publish(&file_id, key, persist::sha256(source.as_bytes()), deps);
+            ) {
+                device.store_artifact(&file_id, &bytes);
+                device.publish(&file_id, key, persist::sha256(source.as_bytes()), deps);
+            }
         }
         self.compiled += 1;
         Ok(PackageHandle {

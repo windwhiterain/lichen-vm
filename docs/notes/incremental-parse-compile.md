@@ -6,6 +6,12 @@
 > checkpoint/rollback) remain proposed.  Nothing here reflects work that was
 > not done; the implemented stages are marked below.
 >
+> **There is no production consumer** (`P2-1`): the language server caches its
+> own per-text index (`P1-17`) and never runs a session, so everything below is
+> exercised by its own tests and reachable only from them.  Wiring it is `D6`'s
+> (b), and it is the only remaining win on the keystroke path — the index cache
+> covers a repeat request for one text, not a text that changed.
+>
 > **Implemented (the "T1" heart):**
 > - *Step 1* — the `Placeholder` / `ErrorBlock` split: `Expr::Err` now carries a
 >   byte `range` (and `start`); the parser surfaces the recovered error regions

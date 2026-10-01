@@ -416,13 +416,13 @@ macro_rules! lang_compose_vocabulary {
                 if let Some(v) = <LangValue as ::lichen_utils::extend::AsEnum<$low>>::as_enum(&value)
                 {
                     w.leaf(stringify!($low_name))?;
-                    <$low as ::lichen_lowlevel::codec::ValueCodec>::write_value(w, v, modules);
+                    <$low as ::lichen_lowlevel::codec::ValueCodec>::write_value(w, v, modules)?;
                     return Ok(());
                 }
                 if let Some(v) = <LangValue as ::lichen_utils::extend::AsEnum<$tyv>>::as_enum(&value)
                 {
                     w.leaf(stringify!($tyv_name))?;
-                    <$tyv as ::lichen_lowlevel::codec::ValueCodec>::write_value(w, v, modules);
+                    <$tyv as ::lichen_lowlevel::codec::ValueCodec>::write_value(w, v, modules)?;
                     return Ok(());
                 }
                 $(
@@ -432,7 +432,7 @@ macro_rules! lang_compose_vocabulary {
                         w.leaf(stringify!($extra_v_name))?;
                         <$extra_v as ::lichen_lowlevel::codec::ValueCodec>::write_value(
                             w, v, modules,
-                        );
+                        )?;
                         return Ok(());
                     }
                 )*
@@ -499,14 +499,14 @@ macro_rules! lang_compose_vocabulary {
                     <LangOperator as ::lichen_utils::extend::AsEnum<$lowop>>::as_enum(&operator)
                 {
                     w.leaf(stringify!($lowop_name))?;
-                    <$lowop as ::lichen_lowlevel::codec::OperatorCodec>::write_operator(w, op);
+                    <$lowop as ::lichen_lowlevel::codec::OperatorCodec>::write_operator(w, op)?;
                     return Ok(());
                 }
                 if let Some(op) =
                     <LangOperator as ::lichen_utils::extend::AsEnum<$tyop>>::as_enum(&operator)
                 {
                     w.leaf(stringify!($tyop_name))?;
-                    <$tyop as ::lichen_lowlevel::codec::OperatorCodec>::write_operator(w, op);
+                    <$tyop as ::lichen_lowlevel::codec::OperatorCodec>::write_operator(w, op)?;
                     return Ok(());
                 }
                 $(
@@ -514,7 +514,7 @@ macro_rules! lang_compose_vocabulary {
                         <LangOperator as ::lichen_utils::extend::AsEnum<$extra_op>>::as_enum(&operator)
                     {
                         w.leaf(stringify!($extra_op_name))?;
-                        <$extra_op as ::lichen_lowlevel::codec::OperatorCodec>::write_operator(w, op);
+                        <$extra_op as ::lichen_lowlevel::codec::OperatorCodec>::write_operator(w, op)?;
                         return Ok(());
                     }
                 )*

@@ -40,12 +40,19 @@ pub use lichen_registry::codec::{Reader, Writer};
 /// emits, the reader decodes to the equal value, and nothing else.  A mismatch
 /// compiles but silently breaks every cache load (a stored artifact fails to
 /// deserialize and is recompiled).
+///
+/// Writing is **fallible** because a value can be one this artifact format
+/// deliberately cannot carry: a vocabulary's runtime-only leaf (a compute
+/// kernel, whose identity is a process-local registry handle) has no on-disk
+/// form.  A leaf refuses such a value by name rather than panicking, and the
+/// caller's answer is to *not cache* the module — never to fail the compile,
+/// because the program itself is valid and runs.
 pub trait ValueCodec: Sized {
     fn write_value<P: Program>(
         w: &mut Writer,
         value: Self,
         modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
-    );
+    ) -> Result<(), String>;
     fn read_value<P: Program>(
         r: &mut Reader<'_>,
         self_key: ModuleKey,
@@ -55,9 +62,11 @@ pub trait ValueCodec: Sized {
     ) -> Result<Self, String>;
 }
 
-/// Encode/decode one **operator leaf** enum.
+/// Encode/decode one **operator leaf** enum.  Writing is fallible for the same
+/// reason [`ValueCodec::write_value`] is: an operator can be one this format
+/// cannot carry, and refusing it by name is not the same as panicking.
 pub trait OperatorCodec: Sized {
-    fn write_operator(w: &mut Writer, op: Self);
+    fn write_operator(w: &mut Writer, op: Self) -> Result<(), String>;
     fn read_operator(r: &mut Reader<'_>) -> Result<Self, String>;
 }
 
@@ -198,7 +207,7 @@ impl ValueCodec for LowValue {
         w: &mut Writer,
         value: Self,
         modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
-    ) {
+    ) -> Result<(), String> {
         match value {
             LowValue::USize(n) => {
                 w.u8(0);
@@ -208,15 +217,20 @@ impl ValueCodec for LowValue {
                 w.u8(1);
                 write_relocated_handle(w, modules, handle.module, handle.offset);
             }
+            // A dynamic payload belongs to a live module's arena.  Freezing
+            // rewrites every one of them to a static ref before anything is
+            // written, so reaching here means the module was not a frozen
+            // artifact — refused by name rather than asserted, because the
+            // caller's answer is to not cache it, not to fail the compile.
             LowValue::Array(AnyHandle::Dynamic(_)) => {
-                panic!("serializing a frozen module that carries a dynamic array payload")
+                return Err("cannot serialize a module carrying a dynamic array payload".into());
             }
             LowValue::Table(AnyHandle::Static(handle)) => {
                 w.u8(6);
                 write_relocated_handle(w, modules, handle.module, handle.offset);
             }
             LowValue::Table(AnyHandle::Dynamic(_)) => {
-                panic!("serializing a frozen module that carries a dynamic table payload")
+                return Err("cannot serialize a module carrying a dynamic table payload".into());
             }
             LowValue::Function(AnyFunctionId::Static(function)) => {
                 w.u8(2);
@@ -224,7 +238,7 @@ impl ValueCodec for LowValue {
                 w.u64(function.index.0 as u64);
             }
             LowValue::Function(AnyFunctionId::Dynamic(_)) => {
-                panic!("serializing a frozen module that carries a dynamic function ref")
+                return Err("cannot serialize a module carrying a dynamic function ref".into());
             }
             LowValue::None => w.u8(3),
             // Tag 7 is additive: artifacts written before `Void` existed
@@ -237,6 +251,7 @@ impl ValueCodec for LowValue {
                 w.bytes(s.as_bytes());
             }
         }
+        Ok(())
     }
 
     fn read_value<P: Program>(
@@ -293,12 +308,13 @@ impl ValueCodec for LowValue {
 }
 
 impl OperatorCodec for LowOperator {
-    fn write_operator(w: &mut Writer, op: LowOperator) {
+    fn write_operator(w: &mut Writer, op: LowOperator) -> Result<(), String> {
         match op {
             LowOperator::Index => w.u8(0),
             LowOperator::Apply => w.u8(1),
             LowOperator::TableGet => w.u8(2),
         }
+        Ok(())
     }
 
     fn read_operator(r: &mut Reader<'_>) -> Result<LowOperator, String> {
