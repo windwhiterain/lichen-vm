@@ -184,10 +184,19 @@ cross-module-shared artifacts.
 ## 4. Codegen: bytecode fragments, not a module
 
 `jit` emits the function's **body** as a `KernelFragment { param_shape, body,
-outputs, results, int_width }` — a `Vec<KernelInstr>` of *abstract* instructions, not raw wasm.
+inputs, outputs, results, int_width }` — a `Vec<KernelInstr>` of *abstract* instructions, not raw wasm.
 Splitting "emit bytecode" from "assemble a module" is what lets the launcher
 resolve cross-kernel call indices after the kernel's relative launch set is laid
 out.
+
+`inputs` and `outputs` are the two buffer spaces, and both are counted by the
+emitter as it emits the positions rather than declared by hand, so neither can
+disagree with the body. They are also **not** in `param_shape`: a parallel
+fragment's shape is `(config, index)` however many buffers it reads, because the
+buffers are bound as storage buffers and reached through a read's position. How
+many buffers a *dispatch* supplies is a separate fact, read at apply time from the
+call site's cfg tuple — see
+[compute-graph-jit.md](compute-graph-jit.md#how-many-buffers-a-fragment-reads-is-not-in-its-shape-and-the-check-that-asked-was-wrong).
 
 That IR lives in **`lichen-kernel-ir`**, a dependency-free crate, not in this one.
 The split is by stage: **lowering** a checked graph to a fragment needs the lowlevel
