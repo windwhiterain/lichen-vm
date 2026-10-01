@@ -128,14 +128,15 @@ pub(crate) fn compile_resolved(
                 .statements
                 .iter()
                 .map(|bs| {
-                    let (name, value, binder, field) = match &bs.stmt {
+                    let (name, value, binder, field, cached) = match &bs.stmt {
                         Stmt::Binding(b) => (
                             Some(b.name.clone()),
                             b.value.clone(),
                             b.binder,
                             !b.restrictive,
+                            b.cached,
                         ),
-                        Stmt::Expr(e) => (None, e.clone(), None, true),
+                        Stmt::Expr(e) => (None, e.clone(), None, true, false),
                     };
                     RecordField {
                         name,
@@ -143,6 +144,7 @@ pub(crate) fn compile_resolved(
                         value,
                         public: bs.public,
                         field,
+                        cached,
                         span: bs.stmt.span(),
                     }
                 })
@@ -905,7 +907,7 @@ impl Compiler {
                     value: f.value.clone(),
                     span: f.span,
                     restrictive: !f.field,
-                    cached: false,
+                    cached: f.cached,
                 }),
                 None => Stmt::Expr(f.value.clone()),
             })

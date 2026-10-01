@@ -1790,7 +1790,7 @@ impl Walk {
                             value: f.value.clone(),
                             span: f.span,
                             restrictive: !f.field,
-                            cached: false,
+                            cached: f.cached,
                         }),
                         None => Stmt::Expr(f.value.clone()),
                     })
@@ -2085,7 +2085,7 @@ impl<'a> ScopeCapture<'a> {
                             value: f.value.clone(),
                             span: f.span,
                             restrictive: !f.field,
-                            cached: false,
+                            cached: f.cached,
                         }),
                         None => Stmt::Expr(f.value.clone()),
                     })

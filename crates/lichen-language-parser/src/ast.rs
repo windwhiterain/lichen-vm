@@ -342,6 +342,11 @@ pub struct RecordField {
     pub public: bool,
     /// `false` for a `let` binding (a block-local, never a struct field).
     pub field: bool,
+    /// `cache` — the field is a retained cell, exactly as
+    /// [`Binding::cached`] is for a statement binding (a record block's fields
+    /// *are* the block's statements).  **Nothing honors the mark yet** — see
+    /// `docs/notes/incremental-update.md`.
+    pub cached: bool,
     pub span: Span,
 }
 
