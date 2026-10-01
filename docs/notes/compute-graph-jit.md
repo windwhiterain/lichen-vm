@@ -221,11 +221,39 @@ round trip goes from 92% of a link to 30%. Fusion is worth **65% to 81% of a
 which is what a real pipeline is made of, and the 10% figure that was quoted
 until now was the single row least favourable to it.
 
-**What the sweep does not settle.** `fusion share` is a **Batch ceiling** — it
-assumes fifteen submits *and* fifteen waits all disappear. Async keeps the
-submits and removes only the waits, so it collects part of this. How much is
-the split inside the 0.036 ms between the record-and-submit side and the wait
-side, and that is still unmeasured.
+### And then the feature was built, and it hits that number (`519c9d1`)
+
+`run_chain` records a chain into one command buffer, submits once and waits once.
+The *fusion share* column above was arithmetic done before the feature existed;
+this is the feature:
+
+| count | unfused 16 links | fused 16 links | speed-up | predicted | actual |
+|---|---|---|---|---|---|
+| 1 024 | 0.646 ms | **0.113 ms** | **5.7×** | 86.3% | 82.5% |
+| 4 096 | 0.653 ms | **0.120 ms** | 5.4× | 85.4% | 81.7% |
+| 16 384 | 0.681 ms | **0.146 ms** | 4.7× | 82.0% | 78.5% |
+| 65 536 | 0.801 ms | **0.266 ms** | 3.0× | 69.7% | 66.8% |
+| 262 144 | 1.625 ms | **1.091 ms** | 1.5× | 34.3% | 32.8% |
+| 1 048 576 | 5.752 ms | **4.669 ms** | 1.23× | 9.7% | **18.8%** |
+
+*actual* is `(unfused − fused) / unfused`. Fusing is faster at every count, and
+*actual* lands within a few points of *predicted* — **below** it at the small
+counts, where the fused path's own barriers and per-dispatch set allocations are
+paid, and **above** it at a million, where removing them shows up because the
+0.036 ms floor never counted the host-side work either. The model is
+conservative, which is the direction a model should be wrong in.
+
+**Correctness is checked, not assumed.** The example verifies a fused chain
+against the kernel's closed form, `2^n * x + (2^n − 1)` — derived, not run,
+because checking against a second CPU copy of the same loop would agree with a
+mis-ordered chain just as cheerfully. Four shapes pass, the largest a 16-link
+chain. That is the first execution of the two rules below, and they hold.
+
+**What the sweep does not settle.** The *actual* column is a **Batch ceiling** —
+it assumes fifteen submits *and* fifteen waits all disappear, which is exactly
+what `run_chain` does. Async keeps the submits and removes only the waits, so it
+collects part of this. How much is the split inside the 0.036 ms between the
+record-and-submit side and the wait side, and that is still unmeasured.
 
 ## What is built and what is not
 
@@ -241,20 +269,25 @@ side, and that is still unmeasured.
 | `6c5ac4d` | the two rules a fused submission depends on — see below |
 | `91a324c` | delete the single `detached` submit the new design made wrong |
 | `b4d89c1` | the count sweep, and the wrong floor it was first divided by |
+| `519c9d1` | `run_chain` — a chain in one submission, verified and measured |
 
 **Not built:** the graph IR crate, the `Graph` value, the `GraphRun` operator,
 the pool of submission slots, and the submit/wait split.
 
-**Measured:** the count sweep above. It is the measurement this design was
-waiting on, and it says build it.
+**Measured:** the count sweep, and the fused chain it predicted.
 
-## Two rules settled before anything depends on them (`6c5ac4d`)
+## Two rules, settled before anything depended on them, and since executed (`6c5ac4d`, `519c9d1`)
 
 Both were landmines on this list. They are decided now, while nothing depends on
 them, because each is a **miscompile rather than a slowdown** and so cannot be
-caught by watching the numbers. Neither is exercised: no code records two
-dispatches into one command buffer, so what exists is the rule and the capacity
-for it, not a fused path.
+caught by watching the numbers.
+
+They were written down first and **executed later**, which is the only order that
+works for a rule whose failure mode is a wrong answer rather than a slow one: with
+nothing depending on them they are reviewable in isolation, and `run_chain` is
+then the first thing that can be checked against them rather than the first thing
+that depends on them. It is checked, against the kernel's closed form, at four
+shapes up to a 16-link chain, and both hold.
 
 **One descriptor set per dispatch, and no reset under a running command
 buffer.** A set is read when the submission *executes*, so one set cannot serve
@@ -287,14 +320,18 @@ carry that count, and it is the only part of this rule with no code behind it.
 
 ## The next step, in order
 
-1. **A configurable pool of submission slots — not a `Segment` object.** The
-   earlier plan here said a segment must outlive the `GraphRun` operator call,
-   and everything downstream of it was built on that: a `Box<dyn Segment>` on
-   the trait, a token, a `Drop` that has to wait. **That was wrong.** A graph is
-   a value that can be run again, so running it is one operator call that
-   returns when the run is finished. There is no "submitted but not yet waited
-   for" state to carry across a call boundary, because there is no boundary
-   inside a run.
+1. **A configurable pool of submission slots — not a `Segment` object.** Depth 1
+   is already built and measured (`run_chain`), and it is the whole of the
+   **Batch** case: one submission, one wait, no cross-call state. What the pool
+   adds is **depth greater than one**, which only Async needs — several
+   submissions in flight at once so the host work between them overlaps the
+   device work. The earlier plan here said a segment must outlive the `GraphRun`
+   operator call, and everything downstream of it was built on that: a
+   `Box<dyn Segment>` on the trait, a token, a `Drop` that has to wait. **That
+   was wrong.** A graph is a value that can be run again, so running it is one
+   operator call that returns when the run is finished. There is no boundary
+   inside a run for "submitted but not yet waited for" to cross, so the state is
+   a local in the executor, and the "who waits" question does not arise.
 
    The shape is two call-scoped methods beside the three that exist, in the same
    style as the three that exist: `submit`, which records a stretch of dispatches
@@ -351,18 +388,22 @@ carry that count, and it is the only part of this rule with no code behind it.
 
 ## Landmines, each of which is a silent wrong answer
 
-- **The fused-submission capacity exists and has never run.** One set per
-  dispatch, the widened barrier and 64 sets of pool are all in place, and none
-  of it is exercised, because nothing records a second dispatch into a command
-  buffer yet. Both rules are miscompiles if they are wrong, so the first fused
-  dispatch is the first real test of them — judge it by reading its output, not
-  by watching whether it is fast.
 - **A recorded-but-unsubmitted command buffer is clobbered by the next
   `record_and_submit` into the same target**, and a command buffer whose
   submission is still in flight cannot be recorded into at all. This is the
   whole reason the pool exists and the reason a slot is not released until its
   fence signals — the single `detached: Mutex<Submit>` that stood in for it
   handles exactly one outstanding submission and is replaced by the pool.
+- **A chain that reuses a buffer has a write-after-read hazard that the
+  one-buffer-per-link version does not have.** `run_chain` ping-pongs two
+  buffers, so link `i` reads what link `i + 2` writes; the trailing barrier
+  is widened to order it. The first version did not reuse and did not need
+  it, and it was three times **slower** — a pool holding a buffer per link is
+  empty at the start of every call, so every call allocates the lot and
+  discards most of it. Measured: 2.226 ms fused against 0.679 ms unfused,
+  all of it in `vkAllocateMemory`. The memory profile does **not** invert for
+  a linear chain; it inverts for a fan-out, and there which buffers can be
+  shared is a question about liveness that the graph has to answer.
 - **`BufferSlot::Host` inputs are staged by `memcpy` before recording.** A
   submission that grows staging after recording has begun is a use-after-write
   on the mapping — and with several slots in flight, a *different* slot growing
@@ -375,12 +416,17 @@ carry that count, and it is the only part of this rule with no code behind it.
 - **A `DeviceBuffer` value dropped by `drop_block` never calls `release`.** Its
   memory lives until `GpuContext::drop`. Same rule as the deliberate
   no-per-value-release decision already recorded there.
-- **A graph's memory profile inverts.** Today one output buffer is live at a
-  time; batching holds every output of the segment until the flush. The
-  recycled-buffer cap was tuned for one-at-a-time. The graph's liveness
-  information is what makes this survivable — recycle at flush time, for buffers
-  whose last consumer is inside the flushed region — but the peak between
-  recording and flush is real and unmeasured.
+- **A fan-out graph's memory profile inverts; a linear chain's does not.** This
+  note used to claim the inversion without the qualifier, and building the fused
+  chain is what showed it was half wrong. `run_chain` ping-pongs two output
+  buffers, so a 16-link chain at 1 048 576 elements holds 16 MB rather than
+  128 MB and needs no pool deeper than a serial run's. The inversion is real
+  only where two buffers are live at once: a node with two consumers, or two
+  nodes writing from the same input. There the graph's liveness information is
+  the only thing that decides what can be shared, and the recycled-buffer cap
+  was tuned for one-at-a-time — so a fan-out that keeps more than a handful live
+  will be allocating and discarding on every call, at a cost measured above at
+  roughly 0.2 ms per buffer.
 
 ## Related
 

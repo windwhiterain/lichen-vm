@@ -356,6 +356,44 @@ Best of 20 is not a stylistic choice either. The single-sample table above reads
 6.076 ms where this one reads 5.096 ms for the same point — 16% apart, wider than
 most of the effects being measured.
 
+### And the prediction, met
+
+`run_chain` records a chain into one command buffer, submits once and waits once.
+The *fusion share* column above is arithmetic done before that existed; this is
+the feature answering it.
+
+| count | unfused 16 links | fused 16 links | speed-up | predicted | actual |
+|---|---|---|---|---|---|
+| 1 024 | 0.646 ms | **0.113 ms** | **5.7×** | 86.3% | 82.5% |
+| 4 096 | 0.653 ms | **0.120 ms** | 5.4× | 85.4% | 81.7% |
+| 16 384 | 0.681 ms | **0.146 ms** | 4.7× | 82.0% | 78.5% |
+| 65 536 | 0.801 ms | **0.266 ms** | 3.0× | 69.7% | 66.8% |
+| 262 144 | 1.625 ms | **1.091 ms** | 1.5× | 34.3% | 32.8% |
+| 1 048 576 | 5.752 ms | **4.669 ms** | 1.23× | 9.7% | **18.8%** |
+
+*actual* is `(unfused − fused) / unfused`. Fusing is faster at every count, and
+lands within a few points of the prediction — below it at the small counts, where
+the fused path pays for a barrier and a descriptor set per link, and **above** it
+at a million, where removing the host-side work per link shows up because the
+0.036 ms floor never counted that work either. The model is conservative, which
+is the direction to be wrong in.
+
+**And the chain is checked, not assumed.** The example verifies a fused chain
+against the kernel's closed form, `2^n * x + (2^n − 1)` — derived rather than
+run, because a second CPU copy of the same loop would agree with a mis-ordered
+chain just as cheerfully. Four shapes pass, the largest a 16-link chain.
+
+**The version that was three times slower is worth recording too.** It allocated
+one output buffer per link, reasoning that they are all live. They are not: a
+link reads the buffer the link before it wrote, so the one before *that* is dead,
+and two buffers ping-ponged round the chain are enough. Allocating per link was
+not merely bigger — 2.226 ms against 0.679 ms unfused, **three times slower than
+not fusing at all** — because a pool that has to hold a buffer per link is empty
+at the start of every call, so every call allocates the lot and throws most of it
+away. This is the same lesson as the largest win in the history above, arriving
+from the opposite direction: the allocation is the cost, and a design that needs
+more buffers than the pool holds is paying it on every single call.
+
 **Where the fixed cost went, and the surprise in it.** Getting from 0.46 ms to
 0.046 ms — the host-input floor, which is the larger of the two — took three
 changes, and they were not equally important:
@@ -396,24 +434,18 @@ about a quantity that is not the one that decides it.
 
 Named rather than implied, because each is a decision not a gap:
 
-- **Launching a chain as one submission.** **Designed, and its two blocking
-  rules are settled; the machinery is not built** — see
+- **Launching a chain as one submission.** **Built at depth one, and measured.**
+  `run_chain` records a chain into one command buffer, submits once and waits
+  once, and it is faster than the unfused chain at every count measured — 5.7×
+  at 1 024 elements, 3.0× at 65 536, 1.23× at a million. See
   [compute-graph-jit.md](compute-graph-jit.md). It is a sibling of `jit`, not a
   mode of `plrun`, and the two seams it needs in `lichen-lowlevel` have landed.
-  What is left is the pool of submission slots, the scheduling, and one
-  measurement that the count sweep narrowed but did not finish: fusing is worth
-  **65% to 81% of a 16-link chain at counts up to 65 536** and 10.7% at a
-  million, and that 65–81% is a *Batch ceiling* — it assumes fifteen submits and
-  fifteen waits all disappear, while the Async schedule keeps the submits and
-  removes only the waits. How much of the 0.036 ms is the submit side is not
-  measured, so how much Async reaches is not known. Two rules a fused
-  submission depends on are already in this file — one descriptor set per
-  dispatch with the reset at the submission's own start, and a trailing barrier
-  that names both a transfer and a shader as the next reader. Neither is
-  exercised, because nothing records two dispatches into one command buffer
-  yet; the entry point, when it comes, goes on `ParallelBackend` rather than in
-  an example, so the measurement is not built against a shape that has to be
-  thrown away.
+  What is left is the **pool of submission slots** for depth greater than one,
+  which only the Async schedule needs, and the submit/wait split that says how
+  much of the above Async can reach — the numbers here are the Batch ceiling,
+  where fifteen submits *and* fifteen waits disappear, while Async keeps the
+  submits and removes only the waits. Its shape is a linear chain of one
+  fragment, and a graph's fan-out is not that.
 - **Cross-kernel calls.** `SpirvRefusal::CrossKernelCall`. Needs several
   functions in one module and a call graph; the refusal names the callee and the
   instruction position.
@@ -440,13 +472,12 @@ Named rather than implied, because each is a decision not a gap:
   that runs many large kernels in one process will hit that backstop.
 - **The per-dispatch submit and wait.** 0.036 ms best against a resident input,
   paid once per link, so a chain of N still does N submits and N fence waits
-  where one would do. This is **not** worth a factor of N — an earlier version
-  of this bullet said so and it is wrong, because the saving scales with the
-  link count while the baseline scales with the *kernel* cost, and those are
-  independent. What it is worth depends entirely on kernel size, and the count
-  sweep answers that: **65% to 81% of a 16-link chain at counts up to 65 536,
-  10.7% at a million.** The kernel there is ~0.08 ms and drowns a 0.036 ms round
-  trip; at 16 384 elements a link is 0.041 ms and is 88% overhead.
+  where one would do — `run_chain` is what makes it one, and it is done. This is
+  **not** worth a factor of N: the saving scales with the link count while the
+  baseline scales with the *kernel* cost, and those are independent. What it is
+  worth depends entirely on kernel size, and the count sweep answers that.
+  Measured, at 16 links: **5.7× at 1 024 elements, 3.0× at 65 536, 1.23× at a
+  million.** A link there is 88% overhead and here it is 29%.
 - **A launch graph.** A `compute.graph` that JITs an ordinary lichen function
   into a graph IR — a DAG of kernels and the dataflow between them, which is the
   IR's natural shape rather than a special case to be detected — and optimises on
