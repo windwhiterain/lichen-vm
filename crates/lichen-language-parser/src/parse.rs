@@ -17,7 +17,12 @@
 //! `let` before a binding (`let a = …`) is *restrictive*: the name is in
 //! scope only in later statements, never in its own value.  Statements are
 //! separated by `;`, `,`, or a newline (the lexer lexes all as `Separator`), and
-//! consecutive, leading, and trailing separators are all tolerated.  A
+//! consecutive, leading, and trailing separators are all tolerated — one rule,
+//! shared by every list form too: the separators between a tuple's, array's,
+//! table entry's, struct type's or struct instantiation's items, and the run
+//! after the last of them, are of any quantity as well ([`separator_run`]).
+//! What a run never does is let an *expression* continue across it: `1 +\n2`,
+//! `table { 1 ==>\n2 }` and `x =>\n x + 1` are all parse errors.  A
 //! binding at statement start is `name =` (or `let name =`); anything else
 //! is an expression — a bare expression is a statement anywhere, and only
 //! the last statement is the list's value.  Within an expression, one
@@ -297,15 +302,8 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
     let expr = expression(region);
     // `seps elem (seps elem)* seps` — like the statement list, but without the
     // tail pop.  Leading/trailing separators are consumed and dropped.
-    let seps = token(TokenKind::Separator)
-        .ignored()
-        .repeated()
-        .collect::<Vec<_>>();
-    let seps1 = token(TokenKind::Separator)
-        .ignored()
-        .repeated()
-        .at_least(1)
-        .collect::<Vec<_>>();
+    let seps = separator_run();
+    let seps1 = separators_between();
     let elem = block_statement(region, expr.clone())
         .recover_with(skip_then_retry_until(
             any::<In<'_>, E<'_>>().ignored(),
@@ -362,6 +360,36 @@ fn token<'a>(kind: TokenKind) -> impl Parser<'a, In<'a>, Token, E<'a>> + Clone {
     any::<In<'a>, E<'a>>()
         .filter(move |t: &Token| t.kind == kind)
         .labelled(label)
+}
+
+/// A **run** of separators, any quantity including none: the statement level's
+/// own "consecutive, leading, and trailing separators are all tolerated" rule
+/// as one combinator, so every list form below shares it and none of them can
+/// drift from the statement form or from each other.
+///
+/// The output is the run's tokens, so a caller that *distinguishes* a run from
+/// no run (a trailing comma makes an instantiation where a bare argument makes
+/// a positional read) can still ask; a caller that only drops them ignores it.
+///
+/// [`repeated`] rewinds an iteration that fails, so a run that is not there
+/// leaves the enclosing closer (`)`, `]`, `>`, `}`) or the end of the input to
+/// match at the same position — this is what lets the trailing run be optional
+/// without consuming a token the caller still needs.
+fn separator_run<'a>() -> impl Parser<'a, In<'a>, Vec<()>, E<'a>> + Clone {
+    token(TokenKind::Separator)
+        .ignored()
+        .repeated()
+        .collect::<Vec<_>>()
+}
+
+/// A run of separators of **at least one** — the separator *between* two list
+/// items.  See [`separator_run`] for the rewinding property.
+fn separators_between<'a>() -> impl Parser<'a, In<'a>, Vec<()>, E<'a>> + Clone {
+    token(TokenKind::Separator)
+        .ignored()
+        .repeated()
+        .at_least(1)
+        .collect::<Vec<_>>()
 }
 
 /// A name token — an identifier.  `_` is *not* a name: it lexes as its own
@@ -1086,20 +1114,29 @@ fn struct_inst_field<'a>(
 /// comma appeared*, which the callers use to split the single-comma-free form
 /// from the instantiating one.  One combinator, so the comma discipline and
 /// the trailing-comma tolerance of the two callers below cannot differ.
+///
+/// The separators are *runs*, not single tokens: any quantity of them between
+/// two items and after the last, exactly as at the statement level — so
+/// `(1,\n2)` is the same list as `(1, 2)` and `(1,\n)` the same as `(1,)`.
 fn comma_list<'a, T>(
     item: impl Parser<'a, In<'a>, T, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, (Vec<T>, bool), E<'a>> + Clone {
     let first = item.clone().or_not();
     first
         .then(
-            token(TokenKind::Separator)
+            separators_between()
                 .ignore_then(item)
                 .repeated()
                 .collect::<Vec<_>>(),
         )
-        .then(token(TokenKind::Separator).or_not())
+        .then(separator_run())
         .map(|((first, rest), trailing)| {
-            let saw_comma = !rest.is_empty() || trailing.is_some();
+            // The discriminator is a separator that ran *between* two items or
+            // *after* the last one, so a bare `A(1)` stays a positional read and
+            // `A(1,)` / `A(1\n2)` are instantiations.  No leading-run term is
+            // needed: the loop above pairs every run with the item that follows
+            // it, so a run cannot be left over at the front.
+            let saw_comma = !rest.is_empty() || !trailing.is_empty();
             let mut items = Vec::new();
             if let Some(first) = first {
                 items.push(first);
@@ -1136,7 +1173,8 @@ fn paren_fields<'a>(
 
 /// `(e)` — grouping, parens transparent; `(e1, …, en)` — a tuple value (always
 /// a [`Expr::Tuple`]; the [`Expr::TypeTuple`] form comes from angle brackets,
-/// see [`angle_tuple`]).  A trailing comma is tolerated.
+/// see [`angle_tuple`]).  A trailing comma is tolerated, and the separators
+/// are runs, so the elements may be one per line.
 fn paren<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1144,16 +1182,16 @@ fn paren<'a>(
     token(TokenKind::LParen)
         .ignore_then(expr.clone())
         .then(
-            token(TokenKind::Separator)
+            separators_between()
                 .ignore_then(expr.clone())
                 .repeated()
                 .collect::<Vec<_>>(),
         )
-        .then(token(TokenKind::Separator).or_not())
+        .then(separator_run())
         .then_ignore(token(TokenKind::RParen))
         .map_with(|((first, rest), trailing), me| {
             let span = span_at(tokens, me.span().start);
-            if rest.is_empty() && trailing.is_none() {
+            if rest.is_empty() && trailing.is_empty() {
                 first
             } else {
                 Expr::Tuple(std::iter::once(first).chain(rest).collect(), span)
@@ -1195,12 +1233,12 @@ fn array_literal<'a>(
     token(TokenKind::LBracket)
         .ignore_then(element.clone())
         .then(
-            token(TokenKind::Separator)
+            separators_between()
                 .ignore_then(element.clone())
                 .repeated()
                 .collect::<Vec<_>>(),
         )
-        .then(token(TokenKind::Separator).or_not())
+        .then(separator_run())
         .then_ignore(token(TokenKind::RBracket))
         .map_with(|((first, rest), _trailing), me| {
             Expr::Array(
@@ -1271,7 +1309,8 @@ fn tilde_marked<'a>(
 /// `<e1, …, en>` — always a `TypeTuple`, in term and type position alike
 /// (angle brackets are exclusively type-level, so there is no mode flag
 /// here, unlike `( )`).  At least two elements: a single element is a typo
-/// for either `(e)` grouping or a real tuple type.
+/// for either `(e)` grouping or a real tuple type.  The separators are runs, so
+/// the elements may be one per line, and a trailing one is tolerated.
 fn angle_tuple<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1279,14 +1318,15 @@ fn angle_tuple<'a>(
     token(TokenKind::LAngle)
         .ignore_then(expr.clone())
         .then(
-            token(TokenKind::Separator)
+            separators_between()
                 .ignore_then(expr.clone())
                 .repeated()
                 .at_least(1)
                 .collect::<Vec<_>>(),
         )
+        .then(separator_run())
         .then_ignore(token(TokenKind::RAngle))
-        .map_with(|(first, rest), me| {
+        .map_with(|((first, rest), _trailing), me| {
             Expr::TypeTuple(
                 std::iter::once(first).chain(rest).collect(),
                 span_at(tokens, me.span().start),
@@ -1313,7 +1353,8 @@ fn struct_field<'a>(
 
 /// `struct<T1, …, Tn>` — a nominal struct type.  Each field may carry an
 /// optional name (`.name type`); a bare field is positional.  At least one
-/// field.
+/// field.  The separators are runs, so the fields may be one per line, and a
+/// trailing one is tolerated.
 fn struct_type<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1324,13 +1365,14 @@ fn struct_type<'a>(
         .ignore_then(token(TokenKind::LAngle))
         .ignore_then(field.clone())
         .then(
-            token(TokenKind::Separator)
+            separators_between()
                 .ignore_then(field)
                 .repeated()
                 .collect::<Vec<_>>(),
         )
+        .then(separator_run())
         .then_ignore(token(TokenKind::RAngle))
-        .map_with(|(first, rest), me| {
+        .map_with(|((first, rest), _trailing), me| {
             Expr::StructType(
                 std::iter::once(first).chain(rest).collect(),
                 span_at(tokens, me.span().start),
@@ -1342,7 +1384,8 @@ fn struct_type<'a>(
 /// keyword-led exactly like `struct<…>`.  This replaces the old glued
 /// `T<e>` array-type postfix, which is now the raw type-component read
 /// (`X<e>`).  Exactly two fields: `array<Int, 3>` (a single field is a
-/// typo).
+/// typo).  The one separator between them is a run, so the two fields may be on
+/// different lines, and a trailing one is tolerated.
 fn array_type<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1351,9 +1394,10 @@ fn array_type<'a>(
         .ignore_then(token(TokenKind::Glue).ignored().or_not())
         .ignore_then(token(TokenKind::LAngle))
         .ignore_then(expr.clone())
-        .then(token(TokenKind::Separator).ignore_then(expr.clone()))
+        .then(separators_between().ignore_then(expr.clone()))
+        .then(separator_run())
         .then_ignore(token(TokenKind::RAngle))
-        .map_with(|(element_type, length), me| Expr::TypeArray {
+        .map_with(|((element_type, length), _trailing), me| Expr::TypeArray {
             element_type: Box::new(element_type),
             length: Box::new(length),
             span: span_at(tokens, me.span().start),
@@ -1439,15 +1483,8 @@ fn block_body<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, BlockBody, E<'a>> + Clone {
-    let seps = token(TokenKind::Separator)
-        .ignored()
-        .repeated()
-        .collect::<Vec<_>>();
-    let seps1 = token(TokenKind::Separator)
-        .ignored()
-        .repeated()
-        .at_least(1)
-        .collect::<Vec<_>>();
+    let seps = separator_run();
+    let seps1 = separators_between();
     // Each item: a `return <expr>` (the tail marker), or a (possibly `pub`)
     // statement.  Broken items are recovered by skipping tokens and retrying —
     // stopping at the end of the input *or* a block's closing brace, so a

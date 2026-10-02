@@ -212,6 +212,72 @@ fn newlines_separate_statements() {
 }
 
 #[test]
+fn a_run_of_separators_inside_a_list_form_is_tolerated() {
+    // The statement level tolerates any quantity of separators, and every list
+    // form shares the rule now: a run *between* items is the same list, and a
+    // run after the last one is the same trailing separator.  `array<…>` is the
+    // narrowest end of it — exactly one separator in the whole form.
+    let Expr::Tuple(elements, _) = parse_ok("(1,\n2)") else {
+        panic!("expected a tuple")
+    };
+    assert_eq!(elements.len(), 2);
+    let Expr::TypeArray {
+        element_type,
+        length,
+        ..
+    } = parse_ok("array<Int,\n2>")
+    else {
+        panic!("expected an array type")
+    };
+    assert!(matches!(*element_type, Expr::TypeConst(TypeConst::Int, _)));
+    assert!(matches!(*length, Expr::Int(2, _)));
+    // The remaining list forms, one item per line.
+    assert!(matches!(
+        parse_ok("[1,\n2]"),
+        Expr::Array(elements, _) if elements.len() == 2
+    ));
+    assert!(matches!(
+        parse_ok("<Int,\nstring>"),
+        Expr::TypeTuple(elements, _) if elements.len() == 2
+    ));
+    assert!(matches!(
+        parse_ok("struct<Int,\nstring>"),
+        Expr::StructType(fields, _) if fields.len() == 2
+    ));
+    assert!(matches!(
+        parse_ok("A(1,\n2)"),
+        Expr::StructInst { fields, .. } if fields.len() == 2
+    ));
+    assert!(matches!(
+        parse_ok("table { 1 ==> 2,\n3 ==> 4 }"),
+        Expr::Table(entries, _) if entries.len() == 2
+    ));
+    // A run after the last item is still a *separator*, so it keeps the form
+    // a tuple (a bare `(1)` is transparent grouping) and still reads as an
+    // instantiation rather than a positional slot read.
+    assert!(matches!(
+        parse_ok("(1,\n)"),
+        Expr::Tuple(elements, _) if elements.len() == 1
+    ));
+    assert!(matches!(
+        parse_ok("A(1,\n)"),
+        Expr::StructInst { fields, .. } if fields.len() == 1
+    ));
+}
+
+#[test]
+fn an_expression_cannot_continue_across_a_separator() {
+    // The other side of the same rule: a run *between list items* is tolerated,
+    // but an expression still stops at a separator — the flip side the spec
+    // states.  Widening the list forms' separators must not reach these.
+    for source in ["1 +\n2", "x =>\n x + 1", "table { 1 ==>\n2 }"] {
+        let tokens = lex(source).tokens;
+        let Parsed { errors, .. } = parse(&tokens);
+        assert!(!errors.is_empty(), "{source:?} must not parse");
+    }
+}
+
+#[test]
 fn application_is_left_associative() {
     let Expr::Apply {
         function, argument, ..
