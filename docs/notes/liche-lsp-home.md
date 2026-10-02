@@ -166,6 +166,8 @@ New tests (following `crates/lichen-language/tests/persist.rs`, but through
 second `Doc` on the same cache; a missing home is created; a corrupt `registry`
 is tolerated (still produces diagnostics). A composed server's `Backend<P>` is
 still `Send + Sync` (the worker holds only a `Send` job sender). And
-`tests/lsp_incremental.rs` drives the real binary end to end: the per-document
-cells are retained across an edit (through the `lichen/analysis` telemetry), and an
-edit to an imported file refreshes the answer.
+`tests/lsp_incremental.rs` drives the real binary end to end: a burst of edits runs
+the frontend once, a close publishes nothing further, and an edit to an imported
+file refreshes the answer. The per-document cells' retention is **not** asserted by
+a test — it is the `lichen/analysis` telemetry a client (or a probe) reads, and the
+handoff says how to check it by hand (`incremental-update.md` §12.5).

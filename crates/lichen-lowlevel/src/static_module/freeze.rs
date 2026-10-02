@@ -55,13 +55,26 @@ impl<P: Program> StaticModule<P> {
     /// The soundness obligations are the whole-module freeze's: the caller files
     /// the artifact under a key that is not yet taken, in a registry that already
     /// holds every key the closure's values reference.  What is new is that the
-    /// closure, not the module, must be self-contained — see [`closure`].
-    pub fn freeze_closure(
+    /// closure, not the module, must be self-contained — see [`closure`], and
+    /// [`Self::freeze_set`] for the one edge that may leave it.
+    ///
+    /// `check` is handed that second obligation's **evidence** — the closure's
+    /// dependency keys ([`referenced_keys_of`]) — and it is handed them *before*
+    /// anything is frozen, for two reasons.  The keys are the closure's, not the
+    /// module's, because a cell references only what its own closure reaches and
+    /// the module-wide set costs a scan of every node on every freeze.  And the
+    /// order matters beyond speed: a freeze takes the artifact's **release
+    /// obligations** off the values it freezes (the ownership transfer), so a
+    /// refusal that came after it would have to drop an artifact whose
+    /// obligations it had already taken.
+    pub(crate) fn freeze_closure(
         module: &Module<P>,
         key: ModuleKey,
         roots: &[NodeId],
+        check: impl FnOnce(HashSet<ModuleKey>),
     ) -> (Self, HashMap<NodeId, LocalNodeId>) {
         let (nodes, functions) = closure(module, roots);
+        check(referenced_keys_of(module, &nodes));
         Self::freeze_set(module, key, &nodes, &functions)
     }
 
