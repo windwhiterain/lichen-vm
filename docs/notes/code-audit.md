@@ -80,6 +80,10 @@ queue's order is deliberate.
 | P1-34 | medium | highlevel, language, docs | The spec and `check_index` disagree about `e[i]` on a tuple or a struct | done (D16: the spec was the stale half) |
 | P1-35 | medium | language, highlevel, lowlevel | A raw read `X<e>` of a runtime container yields `none` with no diagnostic | done |
 | P1-36 | medium | highlevel | A duplicate kind-marker tag shadows a codec arm and warns instead of failing | todo |
+| P1-37 | high | compute, graph-ir | The graph registry freezes the backend of the first graph of a shape | done (fixed on `feature/gpu-algorithms`; each pin is a test that fails without it) |
+| P1-38 | high | compute | A decided non-buffer at a read, a collect or a `cfg` position is answered `parameterized` | done (fixed on `feature/gpu-algorithms`; each pin is a test that fails without it) |
+| P1-39 | medium | compute | A `compute.call` inside a **parallel** kernel body is refused with a `NodeId`, so the device has no working call route | todo |
+| P1-40 | medium | lowlevel | The apply budget refuses a long **terminating** loop as non-terminating | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | done (wired: the server's compile worker, `incremental-update.md` §7.6) |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | done |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | done |
@@ -2616,6 +2620,23 @@ skeleton and `check_binop`'s pin — is refuted: nothing the checker does is
 involved, and the parameter annotation's only effect is which argument the
 definition pass happens to be holding.
 
+**What wants this fixed, and what it is not.** A `loop` operator for kernel
+bodies — `loop f n`, applying `f` `n` times — is the shape that wants this, and
+it is *the* thing standing between the language and an unrolled loop in a kernel.
+Its own status, and the two ceilings a static expansion runs into instead, are in
+[`gpu-algorithm-roadmap.md`](gpu-algorithm-roadmap.md#41-axis-b-already-in-the-language-and-what-it-does-not-reach)
+§4.1; `P1-39` is the other half, because in a kernel the operator also needs the
+body applied before it is lowered, and `P1-40` is what a *dynamic* loop removes by
+construction. Today the only working form is the annotation this entry records as
+the escape:
+
+```text
+loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x))
+     : (Int -> Int) -> Int -> Int -> Int
+inc = x => x + 1
+(loop inc 3 0, loop inc 10 5, loop inc 0 7)   -- (3, 15, 7): <Int, Int, Int>
+```
+
 ### P1-34 — The spec and `check_index` disagree about `e[i]` on a tuple or a struct `verified`
 
 **The code says `[i]` is arrays only, deliberately.** `check_index`
@@ -2853,6 +2874,171 @@ already uses for the attribute order), add a `build.rs`/macro-time deduplication
 that refuses at expansion, or pin the registry's tags to a checked constant.
 `floating-point.md` §3.2 records the trap for whoever allocates the next tag; the
 guard itself is this item.
+
+### P1-37 — The graph registry freezes the backend of the first graph of a shape `verified`
+
+`verified` at `dev@1fe580c` (still live), first-hand at the cited lines; fixed on
+`feature/gpu-algorithms`, merged to `dev` as `6f8f2db`. Found by writing algorithms
+against the compute surface — the record is
+[`gpu-algorithms-ladder.md`](gpu-algorithms-ladder.md).
+
+`graph_digest` (`crates/lichen-compute/src/compute/graph.rs`) hashes the `Graph`
+and deliberately **not** the backend, on the stated ground that *"it is a property
+of how the graph is **run**, not of what it computes"*. `intern` stored the whole
+`BuiltGraph` — backend included — under the id that digest produced.
+
+So the first build of a shape in a process fixes the backend for every later build
+of that shape, and a later build is handed the earlier one's `BuiltGraph` back.
+The registries are process-global by design, so this crosses program boundaries:
+a process that has ever built a cpu graph of a shape can never run a gpu graph
+of it.
+
+```text
+a 16-link `compute.graph` chain named "cpu", then the same chain named "gpu"
+-- compute.graph: this graph was compiled for the "cpu" backend, and a graph
+   runs through the ParallelBackend contract — which the cpu path is not
+```
+
+— for a program that never mentions the cpu. The invariant the design wanted
+(*"a cache can never serve one backend's graph for another's"*) is true of the
+fragment registry, where the backend is genuinely absent from what is stored; it
+was false of the graph registry, where the backend is stored and simply not
+keyed. The same rule `ComputeValue::ParKernel` already follows.
+
+**Fixed** by moving the backend onto `ComputeValue::Graph(GraphId, Backend)`, so
+`graph_digest`'s reasoning is true rather than worked around: the registry stores
+a graph and nothing else, and the run reads the backend off the value. `BuiltGraph`
+is gone. Pinned by `a_graph_recorded_for_one_backend_runs_on_another`
+(`crates/lichen-language/tests/graph_jit.rs`), which builds a cpu graph of a shape
+and then a gpu graph of the same shape and requires the second to run; it reaches
+a stub backend, so it needs no device, and it fails without the fix.
+
+### P1-38 — A decided non-buffer is answered `parameterized` `verified`
+
+`verified` at `dev@1fe580c` (still live), first-hand at the cited lines; fixed on
+`feature/gpu-algorithms`, merged to `dev` as `6f8f2db`.
+
+`compute.read`, `compute.collect` and a parallel launch's `cfg(1)` each matched
+their non-buffer arm by falling through to `LowValue::Parameterized`, with no
+diagnostic. So a program that passed a plain array where a buffer belonged ran to
+completion, printed `parameterized`, and **still showed the type
+`array<?a, ?b>`** — a plausible-looking program that computed nothing.
+
+```text
+data = [3, 1, 4, 1, 5, 9, 2, 6]
+out = compute.plrun (compute.parallel f "cpu") (8, (data,))
+compute.collect out          -- parameterized: array<?a, ?b>
+```
+
+The lazy fallback is **right for an undecided value and wrong for a decided
+one**, which is what makes this a defect rather than a limitation: a program
+array *is* decided, it is an ordinary lichen value with ordinary elements, and no
+buffer is ever going to arrive for it. This was also the symptom of a missing
+feature — there is no `compute.buffer`, so a program has no way to get data onto
+a device at all except by running a fill kernel — and the fix is the refusal half
+of that: a named refusal is only helpful once the thing the author wanted exists.
+
+**Fixed** at all three sites, each naming its own position and what it holds
+(`what_this_is` reads both vocabularies, because a program array is a `LowValue`
+and a buffer is a `ComputeValue`). Pinned by
+`a_program_value_where_a_buffer_belongs_is_refused`
+(`crates/lichen-language/tests/compute.rs`), which requires one diagnostic naming
+`cfg(1)`, the position, and `array`; it fails without the fix.
+
+### P1-39 — A `compute.call` in a parallel kernel body is refused with a `NodeId` `verified`
+
+`verified` at `dev@1fe580c`, first-hand at the cited lines. Found by
+`crates/lichen-language/examples/recursion.rs`.
+
+```text
+k0 = compute.jit (v : Int => v + 1)
+p = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, compute.call k0 i]
+}) "gpu"
+-- compute.parallel: kernel body hits a node with neither value nor operation
+   (node=NodeId(394v1))
+```
+
+Three facts make it worse than a missing feature, and they compound.
+
+**It is the only refusal in the compute surface that named nothing.** Every other
+one names its own cause — `CONDITIONAL_WRITE`, `UNDECIDED_DOMAIN`, `CALLEE_ARGUMENT`,
+the `SpirvRefusal` variants. This one reported a `NodeId`, a compiler-internal
+number, which tells a reader nothing they can act on.
+
+**The same call works in a scalar body.** `k1 = compute.jit (v : Int =>
+compute.call k0 v + 1)` compiles and runs, answering `5 : Int`. So "one kernel
+body calls another" is solved in one of the two body shapes and not the other,
+and the difference was not named either.
+
+**It means the device has no working call at all.** Only `parallel` names a
+backend, so a cross-kernel call is reachable on a device *only* from inside a
+parallel body — and that path fails in the compiler, before any backend sees it.
+So `SpirvRefusal::CrossKernelCall`, which
+[`lichen-compute-gpu.md`](lichen-compute-gpu.md#not-yet) documents as the reason
+cross-kernel calls are out of scope there, **is a refusal no lichen program can
+currently provoke.**
+
+**Partly fixed, and the remainder is three cases of one fact.** The message is
+now the fact all three share (*a kernel is compiled from a template before any
+apply, so a binding the body would fill in at run time is still empty*) and lists
+the three shapes, **deliberately without claiming which one it is** — a refusal
+that names the wrong cause sends the reader to the wrong place, and the first
+version of this message did exactly that by asserting a body-local binding when
+the case that exposed it was a `compute.call`. The three cases, all confirmed on
+both backends:
+
+| program | result |
+|---|---|
+| a `compute.call` inside a **parallel** body (the identical call in a *scalar* body runs) | refused |
+| a module-level helper called with a **body-local alias** fed by a read | refused |
+| a helper **defined in the body** and called there | refused |
+
+All three are the same **missing apply**, not three bugs: the enabling change is
+compiling a kernel against an *applied* body, which
+[`compute-jit-low-types.md`](compute-jit-low-types.md) calls "a fact about the
+language, not a mechanism gap" and parks as per-call-site specialisation. That is
+also the prerequisite for `P1-33`'s intended use (below), so the two are worth
+looking at together. Recorded in
+[`gpu-algorithm-roadmap.md`](gpu-algorithm-roadmap.md#8-the-defects-and-which-are-fixed)
+§4.1 and §8.
+
+### P1-40 — The apply budget refuses a long *terminating* loop as non-terminating `verified`
+
+`verified` at `dev@cd1ddeb`, first-hand, via `crates/lichen-language/examples/recursion.rs`.
+
+The VM's budget is a real and good thing — it is how a runaway recursion is caught
+rather than hung. But it reports one verdict for two different situations, and the
+message names the wrong one:
+
+```text
+sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)
+sum_to (1000, 0)     -- 1000: ?a          25.4 ms
+sum_to (4000, 0)     -- this binding never terminates — it applied a function
+                      -- more than 2000 times (non-terminating recursion)
+```
+
+The second program **terminates**, in 62 ms. The budget exists to say "this never
+terminates"; here it says that about a loop that finishes, and the reader is sent
+to look for non-termination that is not there. This is the same class as `P1-31`
+(conflated verdicts), and the same fix shape: **the verdict needs to distinguish
+"stopped because it exceeded a budget" from "stopped because it cannot
+terminate."** A budget that refuses must say which.
+
+**Related and separate:** the second ceiling an unrolled loop runs into is the
+emitter's own recursion, which **overflows the stack between 400 and 1000
+iterations with no diagnostic at all** — a crash rather than a refusal. Measured:
+100 iterations 4.4 ms, 400 iterations 11.6 ms for a four-element kernel (about
+29 µs of compile time per iteration), and a hard overflow at 1000. The fix shape
+is the same as this item's: a depth limit that **refuses by name** rather than
+one that crashes. Both ceilings are why
+[`gpu-algorithm-roadmap.md`](gpu-algorithm-roadmap.md#41-axis-b-already-in-the-language-and-what-it-does-not-reach)
+§4.1 measures an unrolled loop before recommending it. Note that a *dynamic* loop
+— one the JIT emits into the backend IR rather than expanding — removes both
+ceilings by construction, which is the argument for `P1-33`'s operator being a
+builtin rather than a library function.
 
 ## P2 — architecture
 

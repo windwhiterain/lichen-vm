@@ -39,7 +39,7 @@ capability or only a constant factor.
 | axis | the question | today |
 |---|---|---|
 | **A. ingress** | can a program value become a buffer? | no; a fill kernel is the only source |
-| **B. body** | can a body loop, or reach across indices? | no; straight-line, compile-time sizes only |
+| **B. body** | can a body loop, or reach across indices? | no; straight-line, compile-time sizes only, and a decidable trip count is the ceiling |
 | **C. width** | can one invocation own several elements? can invocations see each other? | no; one element per lane, no shared memory, no barrier |
 | **D. slot** | can a lane read-modify-write a slot another lane may touch? | no, and it is silently wrong |
 | **E. value** | is there anything but an integer? | no — deferred, §6 |
@@ -58,7 +58,13 @@ over a lane group's elements is a sub-group reduction, which is the thing
 algorithms actually want. D before nothing in particular — it is last because it
 is the only axis that **removes a stated invariant** (§4.4).
 
-B splits into two features that are not the same feature, and §4.1 says so.
+**B was split here into "expansion" and "a loop that runs", and only the first
+existed** — the second was listed as not proposed on the reasoning that a device
+loop has no wasm counterpart. §4.1 reverses that: a dynamic loop is the missing
+primitive *between* "one element per lane" and "a workgroup that can do work",
+it is additive (the decidable case needs no IR change), and **B is better stated
+as one `loop` operator that either expands or lowers, than as two features.** So B
+is a single item, and the thing that makes C reachable is B's dynamic case.
 
 ## 3. What the order is worth
 
@@ -153,155 +159,97 @@ already parks that as "a fact about the language, not a mechanism gap" rather
 than a codegen one. That is the same fork §7 names, and it is a larger decision
 than this roadmap should make.
 
-**Recommended: nothing here.** Not a "small first win" — the feature exists. What
-the work *did* leave is two refusals that were reporting a compiler-internal
-`NodeId` and nothing else; both are named now, and §8 has the third.
+#### The `loop` operator, and why it must be a builtin rather than a function
 
-#### A `loop` combinator, and the two ceilings it runs into
+`loop f n : T -> T`, applying `f` `n` times. **It is the right surface** — one
+expression, asked for rather than syntax the compiler invents — and it is the
+answer this section's §7 fork wanted. But **which `loop` is being proposed
+decides the whole thing**, and the two are not variants of one feature:
 
-The natural next step is a `loop` operator — `loop f n : T -> T`, applying `f`
-`n` times. **It is the right shape and it needs no compiler at all**, which is
-the strongest argument for it: as a lichen function it is one line,
-
-```lichen
-loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
-```
-
-using the recursion the interpreter already has. No IR form, no backend change,
-no persist discriminator — a **native plugin** at worst, and a library function
-at best. It is also the answer the roadmap's original §7 wanted: a loop that is
-*asked for* rather than a syntax the compiler invents.
-
-**The signature as proposed does not check — and the reason is already filed, as
-[P1-33](code-audit.md#p1-33--a-self-recursive-call-in-a-conditionals-branch-is-refused-reported).**
-`loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)` answers
-
-> `expected Int -> Int, found Int -> Int`
-
-and that is the audit's P1-33 verbatim: *"A self-recursive call in a
-conditional's branch is refused as `expected Int, found Int`"*, status **todo**.
-P1-33's own narrowing table is what identifies it, and it corrects the first
-guess made here — this is **not** about a function argument threaded through a
-partial application:
-
-| shape | result | so |
+| | as a **library function** | as a **builtin operator** |
 |---|---|---|
-| `f = x => if x == 0 then x else f (x - 1)` | **runs** | one-argument self-recursion in a branch is fine |
-| `f = a => b => f b (a - b)` | **runs** | a self-reference with no conditional is fine |
-| `g = a => b => a - b; f = a => b => if b == 0 then a else g b (a - b)` | **runs** | a non-recursive two-argument callee in the branch is fine |
-| `f = a => b => if b == 0 then a else f b (a - b)` | refused | a **self-referential** two-argument call in the branch is the trigger |
+| decidable `n` | expands (works today) | expands (identical) |
+| run-time `n` | **refused** — nothing to expand | **a real loop in the backend IR** |
+| code size | O(n) | O(1) |
+| the two ceilings of an expanded loop | present | **absent by construction** |
+| surface cost | a type annotation, per `P1-33` | none |
 
-**And the escape is the one P1-33 names: write the function's type out.** Which
-makes the whole proposal *one annotated line of lichen, working today* — no IR
-form, no backend change, no persist discriminator, no new operator in Rust:
+**So the builtin is not a refinement — it is the feature**, and a library function
+is the fallback it already has. This corrects what an earlier draft of this
+section concluded ("recommended: nothing here"): a library `loop` buys ergonomics
+at a ceiling, and the thing a GPU kernel needs is the *unbounded* count. The two
+ceilings are the argument rather than a side note, and they are
+[`P1-40`](code-audit.md) with the measurement: **1024** is a matmul's inner loop
+and **2²⁰** is a scan, and both are past the 2000-apply budget and the ~400–1000
+emitter depth. A dynamic loop removes both by construction — which is the
+strongest single reason to make it a builtin rather than a function.
 
-```lichen
-loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x))
-     : (Int -> Int) -> Int -> Int -> Int
-inc = x => x + 1
-(loop inc 3 0, loop inc 10 5, loop inc 0 7)   -- (3, 15, 7): <Int, Int, Int>
-```
+**And it is not free of `P1-33` on the host side.** The operator's own *declaration*
+is the annotated one above, and that annotation is P1-33's escape, so a builtin
+fixes the surface and leaves the underlying closure-instantiation defect for
+whatever else hits it.
 
-All three, including the zero-trip case, on the interpreter. So the operator is
-**not** a roadmap item: it is a library function the day P1-33 is worked around,
-and the annotation is a real cost that a `#[loop]`-shaped compiler form would
-remove.
+**What a builtin costs, and it is a real IR change.** The lowered body is a flat
+stack machine with no branch but a two-element `select`; a loop makes it a **CFG**.
+Concretely, `lichen-kernel-ir/src/lib.rs` gains a structured body, and every
+backend consequence below is real work rather than a spelling change:
 
-**In a kernel it is still refused**, and that is the *same* missing **apply** this
-section is about rather than a loop problem: `loop inc 3 i` inside a parallel
-body reaches an unresolvable node, because the kernel is lowered from the
-template and `loop inc 3` has not been reduced to its nested applies when the
-emitter walks the body. Nothing about a loop changes that.
+- **wasm** — `block` / `loop` / `br_if` and a label stack the emitter does not
+  keep today.
+- **SPIR-V** — `OpLoopMerge` + `OpBranch`, which means turning a function body into
+  basic blocks. `spirv.rs` is hand-written and
+  [`compute-graph-jit.md`](compute-graph-jit.md) names its **single-`OpLabel`
+  invariant** as a soundness obligation; a loop breaks that invariant outright.
+- **The emitter's per-slot type tracking** — the two facts it already records are
+  "scalar or `bool`" and "was this a comparison". A loop introduces a merge point
+  where two values meet, and neither machinery has an answer for it.
+- **The every-ordinal-written invariant** — a `compute.write` inside a loop body
+  would run once per iteration. That is compatible (a mapping kernel loops over an
+  inner dimension, so each index still writes once) but it is a new interaction,
+  and the guard is the existing `CONDITIONAL_WRITE` discipline applied to a new
+  place.
 
-**The error messages remain a defect, and P1-33 makes that sharper rather than
-softer.** `expected Int -> Int, found Int -> Int` renders two *incompatible*
-types identically, and the audit has already located the mechanism: it is not a
-checker's pin at all but *"a parameter check the VM runs at the apply"*, whose
-two sides hold the call's argument **values**. So the message is comparing
-values and calling them types — the same class as the `NodeId` refusal §8 fixed,
-and the same fix: name what was compared.
+**What is genuinely cheap, and it is the reason to do it as one operator:** the
+decidable case needs **no IR change at all**. `loop f 3` expands exactly as a
+library function does. So the builtin is purely additive — a new capability for
+the run-time case, with the static case unchanged — which makes it a far smaller
+decision than a loop *syntax* would be, and a smaller one than the roadmap's
+original B2 framing implied.
 
-**And the ceiling decides the usefulness, and it is small.** An unrolled loop is
-`n` copies of the step's body, and it runs into **two independent limits**:
+**And it is the first thing that makes axis C reachable at all.** A workgroup
+without a loop can only vectorise; every algorithm that needs a workgroup — a
+scan, a tiled matmul, a sub-group reduction — needs an *inner* loop over something
+the host cannot enumerate. **A dynamic loop is the missing primitive between
+"one element per lane" and "a workgroup that can do work".**
+
+**The shape is still not a reduction, and that is unchanged.** `T -> T` repeats a
+step. A reduction needs an accumulator, and the one a GPU algorithm wants is a
+fold over a **buffer** whose trip count is the buffer's length — so a `reduce`
+over a buffer is a **separate operator**, and it is the one that would make `sum`,
+`min` and `argmin` expressible. Naming it here rather than folding it into `loop`
+is the decision; whether it is a second operator or a shape `loop` can also take
+is not, and is cheaper to settle when the loop exists.
+
+#### The ceilings, measured
+
+An expanded loop is `n` copies of the step's body, and it runs into **two
+independent limits**, both on the *host* side and neither on the device:
 
 | limit | where | what it does |
 |---|---|---|
 | **2000 applies** | the VM's own budget | *"this binding never terminates — it applied a function more than 2000 times"*, at 4000 iterations that terminate in 62 ms |
 | **stack, between 400 and 1000** | the emitter's walk | a **hard overflow**, not a diagnostic |
 
-Cost is linear at about **29 µs of compile time per iteration** (400 iterations:
-11.6 ms for a four-element kernel). So a statically expanded `loop` is
-comfortable at the trip counts the ladder could already write by hand —
-`dot4`, a 2×2 matmul, `K ≤ 16` — and **unusable at the ones a data-parallel
-kernel actually wants**: 1024 is a matmul's inner loop and 2²⁰ is a scan.
+Cost is linear at about **29 µs of compile time per iteration** — 100 iterations
+4.4 ms, 400 iterations 11.6 ms, for a four-element kernel. So an expanded `loop`
+is comfortable where the ladder could already write by hand (`dot4`, a 2×2 matmul,
+`K ≤ 16`) and **unusable at what a data-parallel kernel wants**.
 
-**So the answer to "is it enough" is no, and the reason is sharper than "a device
-loop would be better".** The two ceilings are the real content: one is a budget
-whose *message conflates a long loop with a non-terminating one*, and the other
-is a depth that should be a named refusal rather than a crash. Both are small,
-bounded pieces of work, and both are prerequisites rather than the feature.
-
-**What is not fixed by any of this is the shape.** `T -> T` covers *repeating a
-step*, not *reducing a buffer*. A reduction needs an accumulator —
-`f : S -> T -> S`, `loop f n : S -> [T] -> S` — and the reduction a GPU algorithm
-wants is a fold over a **buffer**, whose trip count is the buffer's length: a
-run-time value, which is the one thing already refused. **A loop that cannot
-reduce is not the loop most GPU algorithms are missing.**
-
-**What survives of the original B1/B2 split.** B1 is answered: recursion and
-composition are both expressible, within the limit above. B2 — **a loop that runs
-on the device, with a runtime trip count** — is unchanged and still not
-recommended. It is a new IR form; the wasm emitter has exactly one branch
-(`Select`, a two-element conditional with no jump), so a device loop has no wasm
-counterpart and the backend contract would have to say what a target that cannot
-express one does. Nothing in the ladder needs it, and it is the one case
-§7's specialisation fork would *not* cover either, which is what keeps it open.
-Listed in §5 as explicitly not proposed.
-- **It is a compiler plugin**, and it is *already codesigned*. `Perspective` is
-  the reference compiler plugin; the grammar production, AST fields, IR form
-  and persist discriminator all exist. This axis adds no new codesign — which
-  makes it the **cheapest capability in this roadmap by a wide margin.**
-- **The machinery is half-built.** The emitter's stack already records, per
-  slot, whether a value is a scalar or a `bool`, because "was this a
-  comparison" is knowledge only the walk has
-  ([lichen-compute-gpu](lichen-compute-gpu.md#the-two-type-facts-the-ir-does-not-carry)).
-  "Is this uniform" is the same kind of fact about the same stack.
-- **What it does not buy**: it makes a body that is already correct run wider.
-  It cannot express a scan, a sort, a reduction or a scatter. **Axis C is a
-  constant factor, not a capability** — it multiplies the width of what a
-  dispatch already computes, and a kernel that is one element per invocation
-  stays one element per invocation for everything it cannot yet say. It is
-  first because it is cheap, not because it is the prize.
-- **Recommended, first.**
-
-**The mismatch this exposes, which is a real finding and not a detail.** The
-`Perspective` lattice is **divisibility** — `attributes.md` is explicit that
-`2 ⊑ 4` and that `4` and `6` are incomparable. A hardware group is a small fixed
-width: a sub-group is 8, 16 or 32 depending on the target, and this backend's
-workgroup is 64. So the language can express a uniformity width that **no
-device has**, and the emitter must either refuse it, round it down, or round it
-to a power of two. Rounding silently would be the worst of the three: a body
-proved uniform over 6 lanes is not automatically uniform over 4, and the program
-would not know which answer it got. This is §7's first open question.
-
-**And the part C does not cover.** A lane group that cannot talk to itself buys
-throughput, not capability. Tiled matrix multiply, a scan and a sub-group
-reduction all need **shared memory and a barrier** — lanes seeing each other's
-intermediate results. That is a *third* thing, distinct from both the width and
-the unroll, and it is the largest single item in this roadmap:
-
-- **The surface is a native plugin** (a new operator, a new buffer kind bound at
-  a group scope, a barrier op) — but the *IR* must grow, because a fragment has
-  no notion of local memory or of a synchronisation point. So it is the first
-  item here that is not confined to `lichen-compute`.
-- **What it buys**: it is the axis that makes scan, sort, tiled matmul and
-  sub-group reduction expressible at all. Every one of those is out of reach
-  without it, and reachable with it.
-- **What it does not buy**: anything on its own. A workgroup that cannot talk to
-  itself is B1 in costume.
-- **Recommended, and the one to argue about** — because it is the most expensive
-  item and the one whose payoff depends on algorithms the language still cannot
-  write, for want of E.
+The first is [`P1-40`](code-audit.md) and its message is wrong in a way worth
+fixing on its own: it reports a **terminating** loop as non-terminating, which
+sends the reader to look for a fault that is not there. The second should be a
+named refusal where the first is a named verdict — a depth limit that crashes is
+the same defect class as the `NodeId` message, one level out.
 
 ### 4.2 Axis C: lane width, and the consumer `Perspective` has been waiting for
 
@@ -432,7 +380,12 @@ contend" is the one that already exists and is unread.
 
 Named so they are decisions rather than omissions.
 
-- **A device-side loop** (§4.1, B2) — no wasm counterpart, no ladder evidence.
+- **A loop *syntax*.** §4.1 argues for a `loop` **operator** instead, and the
+  difference is the whole design: an operator is one expression the compiler
+  either expands or lowers to a real loop, so the decidable and run-time cases are
+  the *same* source program. A new grammar form would be a second thing to learn
+  for the cases the operator already covers. This was the first answer here and it
+  was the wrong one.
 - **A multi-dimensional extent.** A 2-D dispatch is `i / w % h` over a flat
   index, and the ladder's 2×2 matmul already does exactly that. A real 2-D
   extent is ergonomics, not capability, and it would make the tail-lane
