@@ -475,7 +475,7 @@ k = compute.jit (y => y + y)
 k
 "#);
     assert_eq!(
-        out, "(Kernel, parameterized): struct<.native [?a, ?b], .sig Int -> Int>",
+        out, "(Kernel, parameterized): struct<.native raw<[?a, ?b]>, .sig Int -> Int>",
         "kernel value/type: {out:?}"
     );
 }
@@ -555,14 +555,15 @@ fn jit_tuple_codomain_launches_through_the_cross_kernel_wrapper() {
     // a tuple because `call` is the **untyped** form: `CallOp` types its result
     // as a fresh codomain cell (the callee's signature is read at assembly time,
     // not by the gate), so the type is undecided here — the same fact
-    // `jit_cross_kernel_call` pins for the single-value case.
+    // `jit_cross_kernel_call` pins for the single-value case.  With no type to
+    // read the value against, the result is a raw dump, marked `raw<[…]>`.
     let out = run(r#"
 --- compute = import "compute.lichen" ---
 k = compute.jit (p : <Int, Int> => (p(0) - p(1), p(0) + p(1)))
 compute.call k (10, 4)
 "#);
     assert_eq!(
-        out, "[6, 14]: ?a",
+        out, "raw<[6, 14]>: ?a",
         "compute.call on a tuple-codomain kernel produced: {out:?}"
     );
 }
@@ -608,7 +609,7 @@ k = compute.jit (p : <Int, Int> => p(0) + p(1))
 k
 "#);
     assert_eq!(
-        out, "(Kernel, parameterized): struct<.native [?a, ?b], .sig <Int, Int> -> Int>",
+        out, "(Kernel, parameterized): struct<.native raw<[?a, ?b]>, .sig <Int, Int> -> Int>",
         "tuple-domain kernel value/type: {out:?}"
     );
 }
@@ -625,7 +626,7 @@ fn wrapper_functions_render_with_named_type_variables() {
 --- compute = import "compute.lichen" ---
 compute.jit
 "#),
-        "Function: ?a -> ?b -> struct<.native [?c, ?d], .sig ?a -> ?b>",
+        "Function: ?a -> ?b -> struct<.native raw<[?c, ?d]>, .sig ?a -> ?b>",
         "jit wrapper value/type"
     );
     // `launch` reads the kernel's `.sig` lazily and returns its codomain, so it

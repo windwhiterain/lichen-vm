@@ -4,8 +4,10 @@
 > §3 names what is not traced, and nothing in this note should be read as a cause
 > for the rows it cannot explain.
 >
-> Companion: [defer-pending-type-forms](defer-pending-type-forms.md), whose §5
-> argument was built on a printed type name and is withdrawn because of this.
+> Companions: [defer-pending-type-forms](defer-pending-type-forms.md), whose §5
+> argument was built on a printed type name and is withdrawn because of this,
+> and [raw-rendering-mark](raw-rendering-mark.md), which marks the fallback
+> step 6 below without touching the tag/structured split this note is about.
 
 ## 1. The symptom
 
@@ -42,7 +44,8 @@ vocabularies.
    optionally `#n` (`:186`);
 4. `[shape, [marker, K]]` → `in -> out` / `<T…>` / `array<T, len>` (`:205`);
 5. a checker-registered arrow shape (`:256`);
-6. **fallback: the raw elements**, `[a, b]` (`:263`).
+6. **fallback: the raw elements**, spelled `raw<[a, b]>` — the raw mark
+   (`:263`).
 
 So a tag, a structured form and a raw form are all reachable from the same
 printer, and step 6 is the cascade admitting it may recognise nothing at all.
@@ -76,9 +79,10 @@ A type diagnostic is how a user reads a type error. Two type values of the same
 standing printing as `TypeStruct` and `<Type, Type>` means the message cannot be
 used to decide *what was compared* — which is exactly the mistake
 [defer-pending-type-forms](defer-pending-type-forms.md) §5 records, and the
-reason its argument is withdrawn there. A raw `[a, b]` fallback is reachable in
-the same slot, so the message can also read as a value list where a type is
-meant.
+reason its argument is withdrawn there. A raw fallback is reachable in the same
+slot, but it is spelled `raw<[a, b]>`, so it no longer reads as a value list
+where a type is meant; what a reader still cannot separate is a **marker tag**
+from a **structured form** — the split §1 measures.
 
 ## 5. What is not this
 

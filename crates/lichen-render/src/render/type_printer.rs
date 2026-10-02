@@ -260,12 +260,12 @@ where
                 self.any_node(elements[1].node)
             );
         }
-        // Fallback: render the raw elements.
+        // Fallback: render the raw elements, marked as raw.
         let parts: Vec<String> = elements
             .iter()
             .map(|item| self.any_node(item.node))
             .collect();
-        format!("[{}]", parts.join(", "))
+        format!("raw<[{}]>", parts.join(", "))
     }
 
     /// Is `node`'s class a checker-registered arrow shape?  A class the walk
@@ -427,12 +427,12 @@ where
                 _ => {}
             }
         }
-        // Fallback: render the raw static elements.
+        // Fallback: render the raw static elements, marked as raw.
         let parts: Vec<String> = elements
             .iter()
             .map(|item| self.static_any(item.node, visiting))
             .collect();
-        format!("[{}]", parts.join(", "))
+        format!("raw<[{}]>", parts.join(", "))
     }
 
     fn static_any(

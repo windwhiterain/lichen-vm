@@ -30,7 +30,8 @@ where
     }
 
     /// Render a value against its type: the type chain decides how the value
-    /// reads.  When the type chain is opaque, fall back to the raw layout.
+    /// reads.  When the type chain is opaque, fall back to the raw layout,
+    /// which marks a list of cells `raw<[…]>`.
     fn value(&mut self, value: P::Value, ty: NodeId) -> String {
         // The universe as the type: the value is an atomic type constant —
         // `Int`, `Type`, or an extension's own type constant.
@@ -293,7 +294,8 @@ where
 
     /// The raw value layout — the fallback when the type chain cannot guide
     /// the reading: a type pair `[head, [Type, ↺]]` renders as its head
-    /// (`[TypeInt, K]` → `Int`), arrays `[ ]`, functions `Function`, and the
+    /// (`[TypeInt, K]` → `Int`), a list of cells as `raw<[…]>` (the mark that
+    /// says the type chain did not read it), functions `Function`, and the
     /// type constants by their spellings `Int` / `Type`.
     fn raw(&mut self, value: P::Value) -> String {
         self.raw_any(value)
@@ -334,7 +336,7 @@ where
                         let text = self.raw_any(value);
                         out.push(text);
                     }
-                    format!("[{}]", out.join(", "))
+                    format!("raw<[{}]>", out.join(", "))
                 }
             };
         }
