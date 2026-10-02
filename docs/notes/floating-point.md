@@ -311,37 +311,41 @@ a hole gets opened.** `lichen-compute` has three sites that all match on
 | `domain_is_known` | can the ABI lower this to decided `i64` locals | **`false`** |
 | `flat_arity` | how many locals a domain flattens to | `1` |
 
-`domain_is_known` is the load-bearing one and the answer is `false` **for a
-different reason than `Unknown`'s**. `Unknown` is undecided; a float is decided
-and has no local to be decided into. The reason it has to be that site and not
-another: `kernel_domain` consults `domain_is_known` first and its `Tuple` arm
-accepts without re-checking elements, so `domain_is_known` is the **only** code
-that can see a float inside a tuple domain — and that case is reachable, because
-an undecided tuple position is filled from the element class and a float value
-now states `LowShape::Float`. Answer `true` there and the tuple is admitted, the
-other two sites have no refusal variant to answer with, and a fragment is
-registered claiming an `i64` signature for a float position: registered, never
-run, and silently mis-laid-out — which is the outcome phase 0 exists to prevent.
+All three read **one recursive walk**, `domain_obstacle`, which answers not a
+bool but *which* obstacle a position holds — `Undecided` for an `Unknown` leaf,
+`Float` for a float leaf — and combines them with `max`, so the strongest cause
+wins and the one with the derive's variant order to match. `domain_is_known` is
+that walk read as a boolean, and `kernel_domain` reads the same walk to name the
+cause, so **the gate and the message cannot disagree about a position** — which
+is the point, because they did once.
 
-`flat_arity` answers `1` rather than `0` deliberately. Nothing reaches it behind
-the closed gate, and `0` would be a different claim — that a float occupies no
-local of a signature `kernel_shape` sizes as one — which would put the two arities
-in disagreement.
+`Float` is the load-bearing answer and it is `false` **for a different reason
+than `Unknown`'s**: `Unknown` is undecided, a float is decided and has no local
+to be decided into. That distinction is why the walk returns a reason rather
+than a bool — a gate alone cannot tell a reader which of the two it hit, and
+telling a float domain to "annotate the parameter" asks for something the author
+already did.
+
+**The walk recurses through every position, and that is where a hole was.**
+`kernel_domain`'s `Tuple` arm accepts without re-checking elements, so the walk
+is the only thing that can see inside. Two positions are reached that a
+first-position-only walk would miss, and both were **admitted** before the walk
+existed: `Array(Float, 3)` nested in a tuple, because the old compound arm asked
+only `element.is_known()` and a float is a decided shape; and `Function(USize,
+Float)`, whose codomain the old arm skipped on the stated grounds that "those two
+positions are decided together or not at all" — which that shape disproves,
+because the domain is decided and the codomain is a float. Neither is reachable
+now.
+
+The uniform walk has one consequence worth stating: an `Unknown` **codomain or
+value** position inside a tuple domain now refuses at compile time rather than
+being admitted and failing later at launch. That is a strictly earlier and
+strictly clearer refusal — it names the placeholder the author can fill — and no
+position flipped from refused to admitted.
 
 A float still cannot reach a `ParallelBackend` even so, for reasons that hold
 independently of the above: inputs are `i64` *by type*, every producer of a
 buffer is an `i64` source, and `collect_args` refuses a float leaf.
-
-**Known gap, and it is a misleading diagnostic.** `low_type_of` has arms for the
-`int`, `string` and `Type` markers but none for `float_marker`, so a **declared**
-`p : float` decodes to `Unknown` rather than to `Float`. The refusal is correct
-but its wording is not: an annotated float parameter is refused with
-`UNDECIDED_DOMAIN`, whose message asks the author to annotate the parameter —
-which they did. Two candidate fixes, both in other crates: an explicit
-`LowShape::Float` arm in `kernel_domain` ahead of the `domain_is_known` check, or
-a `float_marker` arm in `low_type_of`. Unresolved, and recorded here because a
-refusal that misdescribes the user's program is the failure class §4.3's
-invariant is written against.
 
 ## 4. Decisions
 
