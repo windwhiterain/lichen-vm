@@ -2438,8 +2438,8 @@ analysis is 30–32 ms against the old path's 24–28 ms, and every edit is
 3.5–5.4 ms (0.15–0.2×) with only the cells the edit reached re-derived. The
 first-analysis surcharge was the per-cell artifact size, and that is now paid
 (`incremental-update.md` §7.7): a scalar cell's closure went from ~611 nodes to
-6–27, so the 75-cell first compile is 15.7 ms — half the old path — and the
-pathological 600-cell one is 25.0 ms against 166.7 ms. The `T3` caveat above is
+6–27, so the 75-cell first compile is ~18 ms against the old path's 24–28 ms and
+the pathological 600-cell one is ~21 ms against 166.7 ms. The `T3` caveat above is
 answered for the key-unchanged case only: a session whose *resolved content* is
 unchanged reuses the established `Build` and skips the check entirely, which is
 the typing path — an edit that changes the content still re-checks.

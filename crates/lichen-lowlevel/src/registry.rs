@@ -100,10 +100,13 @@ impl<P: Program> Registry<P> {
     /// freeze: only the nodes those roots can reach are filed, so an artifact is
     /// as small as the value it keeps (see [`StaticModule::freeze_closure`]).
     ///
-    /// The preconditions are `freeze_mapped`'s, and are checked the same way.  The
-    /// dependency check is over the **whole module** rather than the closure,
-    /// which is stricter than the closure needs and free: a live module's
-    /// referenced keys are registered, or a read of one would already panic.
+    /// The preconditions are `freeze_mapped`'s, and are checked the same way —
+    /// except that the dependency check is over the **closure's** own refs rather
+    /// than the whole module's.  The closure's set is what the artifact will
+    /// reference, so it is the predicate this filing needs; the module's is
+    /// stricter than a single cell needs and costs a scan of every node of the
+    /// module on every freeze (measured: ~9 µs of a 15 µs freeze at 600 marks).
+    /// The check runs before the freeze, so a refusal has transferred nothing.
     pub fn freeze_closure_mapped(
         &mut self,
         module: &Module<P>,
@@ -111,18 +114,23 @@ impl<P: Program> Registry<P> {
         roots: &[NodeId],
         hash: [u8; 32],
     ) -> Freeze {
-        let module_refs = crate::static_module::referenced_keys(module);
-        for dep in &module_refs {
-            assert!(
-                self.entries.contains_key(dep),
-                "freezing a module that references dependency key {dep:?}, which is not registered here — freeze dependencies first"
-            );
-        }
         assert!(
             !self.entries.contains_key(&key),
             "freezing a module under device key {key:?}, which is already registered — the same content must not be compiled twice"
         );
-        let (static_module, node_map) = StaticModule::freeze_closure(module, key, roots);
+        let (static_module, node_map) = StaticModule::freeze_closure(
+            module,
+            key,
+            roots,
+            |dependencies| {
+                for dependency in dependencies {
+                    assert!(
+                        self.entries.contains_key(&dependency),
+                        "freezing a module that references dependency key {dependency:?}, which is not registered here — freeze dependencies first"
+                    );
+                }
+            },
+        );
         // The **closure's** refs, not the whole module's: the module-level set is a
         // superset, and a superset would refuse to evict an artifact nothing
         // actually references — a leak in the name of safety.

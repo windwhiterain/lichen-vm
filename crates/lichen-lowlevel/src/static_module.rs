@@ -183,68 +183,97 @@ fn static_ref<P: Program>(module: &StaticModule<P>, node: LocalNodeId) -> AnyNod
 pub(crate) fn referenced_keys<P: Program>(module: &Module<P>) -> HashSet<ModuleKey> {
     let mut keys = HashSet::new();
     for node in module.nodes.values() {
-        let Some(value) = node.value else { continue };
-        match value.as_enum() {
-            Some(LowValue::Array(AnyHandle::Static(handle))) => {
-                keys.insert(handle.module);
-                // SAFETY: the payload lives in the dependency's shared arena,
-                // pinned by the registry the artifact is filed into — and
-                // `freeze_mapped` asserts every dependency key is registered
-                // there before it freezes the referencing module.
-                for item in unsafe { &*handle.offset } {
-                    if let AnyNodeId::Static(sref) = item.node {
-                        keys.insert(sref.module);
-                    }
-                }
-            }
-            Some(LowValue::Array(AnyHandle::Dynamic(handle))) => {
-                // SAFETY: the handle points into one of `module`'s own block
-                // arenas (`Module::alloc_array`), alive as long as the module
-                // is — the `drop_block` contract.
-                for item in unsafe { &*handle.0 } {
-                    if let AnyNodeId::Static(sref) = item.node {
-                        keys.insert(sref.module);
-                    }
-                }
-            }
-            Some(LowValue::Table(AnyHandle::Static(handle))) => {
-                keys.insert(handle.module);
-                // SAFETY: as in the static array arm above — the payload lives
-                // in the dependency's registered shared arena.
-                for item in unsafe { &*handle.offset } {
-                    if let AnyNodeId::Static(sref) = item.key {
-                        keys.insert(sref.module);
-                    }
-                    if let AnyNodeId::Static(sref) = item.value {
-                        keys.insert(sref.module);
-                    }
-                }
-            }
-            Some(LowValue::Table(AnyHandle::Dynamic(handle))) => {
-                // SAFETY: as in the dynamic array arm above — the payload was
-                // allocated in one of `module`'s own block arenas by
-                // `Module::alloc_table`.
-                for item in unsafe { &*handle.0 } {
-                    if let AnyNodeId::Static(sref) = item.key {
-                        keys.insert(sref.module);
-                    }
-                    if let AnyNodeId::Static(sref) = item.value {
-                        keys.insert(sref.module);
-                    }
-                }
-            }
-            Some(LowValue::Function(AnyFunctionId::Static(function))) => {
-                keys.insert(function.module);
-            }
-            _ if value.is_handle() => {
-                if let AnyHandle::Static(handle) = value.handle() {
-                    keys.insert(handle.module);
-                }
-            }
-            _ => {}
+        if let Some(value) = node.value {
+            collect_referenced_keys::<P>(value, &mut keys);
         }
     }
     keys
+}
+
+/// [`referenced_keys`] over `node_ids` instead of the whole module — the closure
+/// a per-cell freeze is about to file ([`StaticModule::freeze_closure`]).
+///
+/// The answer is the dependency half of what the artifact's own values will name:
+/// the rewrite keeps every dependency ref verbatim, and a ref into the artifact
+/// itself is not a dependency.  So this is exactly the predicate
+/// [`Registry::freeze_closure_mapped`] checks — and it is O(closure), where the
+/// module-wide set is O(module) and stricter than a single cell needs.
+pub(crate) fn referenced_keys_of<P: Program>(
+    module: &Module<P>,
+    node_ids: &[NodeId],
+) -> HashSet<ModuleKey> {
+    let mut keys = HashSet::new();
+    for &node in node_ids {
+        if let Some(value) = module.nodes[node].value {
+            collect_referenced_keys::<P>(value, &mut keys);
+        }
+    }
+    keys
+}
+
+/// One value's contribution to [`referenced_keys`]: every module key a static ref
+/// in `value` names.  The single site of this match, so the module-wide scan and
+/// the closure-scoped one cannot disagree.
+fn collect_referenced_keys<P: Program>(value: P::Value, keys: &mut HashSet<ModuleKey>) {
+    match value.as_enum() {
+        Some(LowValue::Array(AnyHandle::Static(handle))) => {
+            keys.insert(handle.module);
+            // SAFETY: the payload lives in the dependency's shared arena,
+            // pinned by the registry that holds the dependency — the registry
+            // this freeze is about to file into, which is what the check
+            // before it establishes.
+            for item in unsafe { &*handle.offset } {
+                if let AnyNodeId::Static(sref) = item.node {
+                    keys.insert(sref.module);
+                }
+            }
+        }
+        Some(LowValue::Array(AnyHandle::Dynamic(handle))) => {
+            // SAFETY: the handle points into one of `module`'s own block
+            // arenas (`Module::alloc_array`), alive as long as the module
+            // is — the `drop_block` contract.
+            for item in unsafe { &*handle.0 } {
+                if let AnyNodeId::Static(sref) = item.node {
+                    keys.insert(sref.module);
+                }
+            }
+        }
+        Some(LowValue::Table(AnyHandle::Static(handle))) => {
+            keys.insert(handle.module);
+            // SAFETY: as in the static array arm above — the payload lives
+            // in the dependency's registered shared arena.
+            for item in unsafe { &*handle.offset } {
+                if let AnyNodeId::Static(sref) = item.key {
+                    keys.insert(sref.module);
+                }
+                if let AnyNodeId::Static(sref) = item.value {
+                    keys.insert(sref.module);
+                }
+            }
+        }
+        Some(LowValue::Table(AnyHandle::Dynamic(handle))) => {
+            // SAFETY: as in the dynamic array arm above — the payload was
+            // allocated in one of `module`'s own block arenas by
+            // `Module::alloc_table`.
+            for item in unsafe { &*handle.0 } {
+                if let AnyNodeId::Static(sref) = item.key {
+                    keys.insert(sref.module);
+                }
+                if let AnyNodeId::Static(sref) = item.value {
+                    keys.insert(sref.module);
+                }
+            }
+        }
+        Some(LowValue::Function(AnyFunctionId::Static(function))) => {
+            keys.insert(function.module);
+        }
+        _ if value.is_handle() => {
+            if let AnyHandle::Static(handle) = value.handle() {
+                keys.insert(handle.module);
+            }
+        }
+        _ => {}
+    }
 }
 
 impl<P: Program> StaticModule<P> {

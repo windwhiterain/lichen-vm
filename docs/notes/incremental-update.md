@@ -10,9 +10,9 @@
 > every edit is 0.29–0.42× — three times faster than compiling the file from scratch —
 > with one cell re-frozen; through the server (§7.6) an edit is 0.15–0.2× the path it
 > replaced, and a first analysis is no longer billed for the artifact's size (a scalar
-> cell's closure went from ~611 nodes to 6–27, §7.7). What is left is the fine cuts: the
-> per-freeze dependency scan (§12.3 item 1), the reverse import closure, the eviction
-> timing, backdating. **§12 is the handoff**: what exists, in what order to continue, the
+> cell's closure went from ~611 nodes to 6–27) nor for a per-mark scan of the module
+> (§7.7). What is left is the fine cuts: the reverse import closure, the eviction timing,
+> backdating. **§12 is the handoff**: what exists, in what order to continue, the
 > landmines, and how to verify. Read that first if you are picking this up cold.
 >
 > This is the *cross-build* half of the incrementality question. It supersedes the
@@ -765,8 +765,10 @@ re-checks instead of pointing it at the replacement.
 **Telemetry, because silence is the failure mode.** The session's `CellEvents` exists
 because a caller cannot otherwise tell a rebuild that reused nine cells from one that
 reused none; the server is now that caller, so it pushes what each compile did as a
-`lichen/analysis` notification. The end-to-end test reads it, which is what makes "the
-LSP is a real caller" an assertion rather than a wiring claim.
+`lichen/analysis` notification. Nothing in the tree asserts it — the project writes no
+tests without a reason to, and the wiring was checked by hand (§12.5) — so it is the
+surface a client (or the next probe) reads to see whether the server is really driving
+the session, rather than a claim the code makes about itself.
 
 **A compile that panics does not take the worker with it.** A panic inside a job is
 caught, the session that did it is dropped (its state is not trusted again), and the
@@ -797,8 +799,9 @@ bill, and it is the reason item 1 stays first on the list.
 **Item 1 was then paid (§7.7)**, and this table is the before: the same program shape
 re-measured after it (a `BufferSession`'s `compile` alone, the same probe run before and
 after) gives **15.7 ms** for the 75-cell first compile — half the old path's 24–28 ms —
-and **25.0 ms** for the 600-cell one (against 166.7 ms), with the edit unchanged. The
-per-mark cost is now ~15 µs, and what it is made of is §12.3 item 1's remainder.
+and **25.0 ms** for the 600-cell one (against 166.7 ms), with the edit unchanged. §7.7
+then took the last piece of the per-mark bill, the dependency check's module-wide scan,
+to ~21 ms for the 600-cell first compile.
 
 ### 7.7 The artifact's size: a decided leaf is not its class
 
@@ -854,24 +857,45 @@ Both rows are the session's `compile` alone, so the server's index build (~0.6 m
 top of each. A plain one-shot `compile` of the same source is 13–16 ms in the same probe
 (the server's old path is 24–28 ms, because it parsed every analysis twice), so the
 realistic density is now at **parity** with compiling the file from scratch and the
-pathological one (a mark on every binding) is ~1.6× it, where it was ~11×. The artifact's
-size is no longer what a first analysis pays for; what it pays for now is ~15 µs per
-freeze, of which ~6 µs is the artifact's own build and ~9 µs is `freeze_closure_mapped`'s
-**module-wide** dependency scan (`referenced_keys(module)`: one lookup per node of the
-module, per freeze). That is §12.3 item 1's remainder, and its fix is a choice between
-hoisting the scan to the caller (one per build, since the module's refs are the same for
-every cell of one build) and checking the artifact's own refs after the build instead
-(which is *more* precise — the whole-module check is stricter than the closure needs — but
-moves the panic after the freeze's ownership transfer, §12.4).
+pathological one (a mark on every binding) is ~1.6× it, where it was ~11×.
+
+**The last per-mark cost was the dependency check's scan.** With the artifact small, a
+freeze cost ~15 µs, of which ~9 µs was `freeze_closure_mapped` scanning the **whole
+module** for referenced keys (`referenced_keys(module)`: one lookup per node of the module,
+per freeze) — a check stricter than a single cell needs, because the artifact can only
+reference what its own closure reaches. It is now the **closure's** own keys, computed by
+the walk that decides the closure and handed to the registry *before* the freeze:
+`referenced_keys_of(module, nodes)`. Two things fall out of the order. The check is the
+exact predicate this filing needs (the artifact's dependency refs — the rewrite keeps every
+dependency ref verbatim, and a ref into the artifact itself is not a dependency), so the
+soundness argument is *shorter* than before, not longer. And a refusal happens while the
+freeze still owns nothing: a freeze takes the artifact's release obligations off the values
+it freezes, so a check that ran after it would have to drop an artifact whose obligations it
+had already taken (§12.4).
+
+| | first compile, 75 cells | first compile, 600 cells |
+|---|---|---|
+| module-wide check | 18.3–20.2 ms | 26.3–35.2 ms |
+| closure-scoped check | 17.8–18.1 ms | 20.9–21.4 ms |
+
+(The same probe, run before and after in one session; the machine is shared, so the
+*delivery* is what to read — ~9 µs per mark, which is the ~15 µs freeze's remaining
+per-mark component. The 75-cell row is within noise: at that density the scan was ~0.7 ms
+in total.)
 
 **Verified** by a temporary probe check over every closure freeze of two programs (1,130
 of them): the frozen class links induce **the same partition as the source's, restricted
 to the nodes the artifact holds** — so `static_find`'s grouping of clones is unchanged —
 the links are self-consistent (one representative per class, a member list covering the
 class exactly once, tail and size agreeing with it, every member's parent chain reaching
-the representative), and the frozen concreteness flags agree with the source's. Plus the
-influenced suites: `lichen-lowlevel` (143), `lichen-language`, `lichen-language-server`,
-`lichen-package`, `lichen-compiler` — all green.
+the representative), and the frozen concreteness flags agree with the source's. And by a
+second probe (`--example closure_check_probe`, since removed) for the check itself: a cell
+whose value reads a registered import freezes and its artifact's refs resolve (1 dependency
+ref); a closure whose value names an unregistered key is refused with the dependency
+message, with nothing filed; every filed artifact's refs resolve in the registry it was
+filed into; and the whole-module path still checks its own way. Plus the influenced suites:
+`lichen-lowlevel` (143), `lichen-language`, `lichen-language-server`, `lichen-package`,
+`lichen-compiler` — all green.
 
 ## 8. Costs and failure modes
 
@@ -1041,6 +1065,8 @@ influenced suites: `lichen-lowlevel` (143), `lichen-language`, `lichen-language-
 | `64db7c4` | the caller's view (code region, base, imports), the report's frontend artifacts, the registry-owned cell key space, a reuse that moves its spans |
 | `4400d6a` | the language server as the first real caller: the compile worker, one registry, the replacing freeze, the import record (§7.6) |
 | `c0b5f56` | the artifact's size: the class edge only from an unbound node, a spliced class, the walk's ordering without a module scan (§7.7) |
+| `TBD-1` | the tests the caller's landing added are removed, and the note stops claiming them |
+| `TBD-2` | the dependency check is the closure's own keys, and it runs before the freeze (§7.7, §12.4) |
 
 ### 12.2 The entry points
 
@@ -1070,9 +1096,12 @@ influenced suites: `lichen-lowlevel` (143), `lichen-language`, `lichen-language-
 - `lichen_lowlevel::Package` — `refs`, the keys the artifact references (read off the
   frozen values, so it is the closure's set); `StaticModule::referenced_keys` is the
   reader.
-- `lichen_lowlevel::StaticModule` — `freeze_closure(module, key, roots)`, `releases`,
-  `Drop`. The closure's edges and the class splice are §7.7; `freeze_set` is the shared
-  phase.
+- `lichen_lowlevel::StaticModule` (crate-private) — `freeze_closure(module, key, roots,
+  check)`: `check` is handed the closure's dependency keys (`referenced_keys_of`, the
+  closure-scoped form of the module-wide `referenced_keys`) *before* anything is frozen,
+  which is the registry's precondition and must stay in that order (§12.4); `freeze_set`
+  is the shared phase, and the closure's edges and the class splice are §7.7. `releases`,
+  `Drop`.
 - `lichen_lowlevel::ValueExt` — `traced`, `release_obligations`;
   `lichen_lowlevel::Release`.
 - `lichen_language_lex::lex_resume(prev, old, new, line_starts, base, a, b)` — the
@@ -1088,31 +1117,23 @@ influenced suites: `lichen-lowlevel` (143), `lichen-language`, `lichen-language-
 
 ### 12.3 What to do next, in order
 
-1. **The per-freeze dependency scan** (§7.7 — the remainder of what was "the artifact's
-   size", and now the only per-`cache`-mark cost the first analysis has). The artifact is
-   down to 6–27 nodes for a scalar cell and the closure walk no longer scans the module,
-   so a freeze costs ~15 µs, of which ~6 µs is the artifact's own build and ~9 µs is
-   `freeze_closure_mapped`'s **module-wide** `referenced_keys(module)` check (one lookup
-   per node of the module, per freeze). Two shapes: **hoist** the scan to the caller —
-   the module's referenced keys are the same for every cell of one build, so the session
-   could compute them once — or **check the artifact's own refs** after the build, which
-   is more precise (the whole-module check is stricter than the closure needs, as
-   `registry.rs` says) but moves the panic after the freeze's ownership transfer (see the
-   `Release` landmine below).
-2. **The eviction *timing*** (§11). The mechanism and its refusal are landed (§7.4) and
+The two costs §7.5 and §7.6 opened — the artifact's size and the per-mark dependency scan
+— are both paid (§7.7). What is left is the fine cuts.
+
+1. **The eviction *timing*** (§11). The mechanism and its refusal are landed (§7.4) and
    the server now has the caller's two moments: a document **close** (the session, and
    the artifacts it retained, are dropped — nothing outside the worker ever holds a
    report) and a **session drop** (the import record's coarse cut). What is open is
    whether a long-lived document should pay earlier, e.g. after a compile whose
    `dropped` is non-zero — and `pending_evictions` is still the number to watch.
-3. **The reverse import closure** (§7.6, item 4's fine form): drop the *cells* of every
+2. **The reverse import closure** (§7.6, item 3's fine form): drop the *cells* of every
    file that imports the changed one, transitively (`CellStore::invalidate_source` plus
    the package store's `ResolvedImport` graph, `package.rs`), instead of the whole
    session. This is also what makes the eviction refusal load-bearing rather than
    unreachable-by-accident (§11).
-4. **Backdating** (§4.4) — the refinement that stops a value-preserving byte edit from
+3. **Backdating** (§4.4) — the refinement that stops a value-preserving byte edit from
    dirtying consumers. A recompute-heap change, not a filter.
-5. **Step 4** (the PCG graph's own node paths and edit descriptor) — a consumer, not a
+4. **Step 4** (the PCG graph's own node paths and edit descriptor) — a consumer, not a
    change to `lichen-graph-ir`.
 
 ### 12.4 Landmines, each of which is a silent wrong answer or a leak
@@ -1124,11 +1145,21 @@ influenced suites: `lichen-lowlevel` (143), `lichen-language`, `lichen-language-
   mode if someone forces it (`unsafe impl Send`) is a checker reading another thread's
   arena.
 - **A cell and its imports must share one registry.** `freeze_closure_mapped` asserts
-  every key the module references is registered where the artifact is filed, so a session
-  with imports and a *private* registry panics on the first freeze (a `cache`d binding
-  whose value read the import). `BufferSession::with_registry` is the entry point, and
-  the two key allocators must not meet: the device's is a dense counter, the cell's is
-  the top bit of the key.
+  every key the **closure** references is registered where the artifact is filed (§7.7),
+  so a session with imports and a *private* registry panics on the first freeze (a
+  `cache`d binding whose value read the import). `BufferSession::with_registry` is the
+  entry point, and the two key allocators must not meet: the device's is a dense counter,
+  the cell's is the top bit of the key.
+- **The dependency check runs before the freeze, and that order is load-bearing.** The
+  check is handed the closure's keys *before* `freeze_set` runs, because a freeze takes
+  the artifact's **release obligations** off the values it freezes (the ownership
+  transfer): a refusal that came after it would have to drop an artifact whose
+  obligations it had already taken, releasing (say) a device buffer the live module still
+  names. So the check cannot be moved to "after the build, on the artifact's own refs",
+  however tempting that is — the sets agree, but the ownership does not. What the check
+  *is* scoped to is the closure rather than the module: the artifact can only reference
+  what its own closure reaches, and the module-wide set cost a scan of every node on
+  every freeze (~9 µs per mark, §7.7).
 - **A recompiled package must replace its slot, not assert it empty.** With a long-lived
   registry the previous run's artifact for the same file is resident, and a file whose
   source or a dependency moved is recompiled into its own device key
@@ -1267,20 +1298,19 @@ propagation cases, `USize(37)`/`USize(19)`/`USize(16)`, and 0 cells from a faile
 §7.4 (2/1/0/2 freed, and the shared-array case's 1 then 0 with `pending` stuck at 1 until
 `b` is recompiled), §7.5 (a first build at 2.1× a plain compile; every edit at
 0.29–0.42× with one cell re-frozen), §7.6 (a first analysis at 1.2× the old one-shot
-path for 75 cells, 0.15–0.2× per edit, and `(2, 1, 1)` cells for an edit in the third of
-three marked statements, end to end through the real server binary) and §7.7 (a scalar
-cell's closure at 6–27 nodes against 606–635, the same probe's first compile at 15.7 ms
-for 75 marks and 25.0 ms for 600 against 32.7 ms and 166.7 ms, and the frozen classes'
-partition equal to the source's restricted to the artifact).
+path for 75 cells, 0.15–0.2× per edit) and §7.7 (a scalar cell's closure at 6–27 nodes
+against 606–635, a 600-mark first compile at ~21 ms against 26–35 ms, and the frozen
+classes' partition equal to the source's restricted to the artifact).
 
 Two of those probes are worth re-creating first, because they are the oracles:
 the **differential** one (§7.3 — every prefix of an edit sequence against a fresh
 compile, comparing value *and* diagnostics) and a **span** one (§7.5 — a failing
 expression in the cloned suffix, comparing the session's diagnostic span against a
 fresh compile's, shape by shape). The first found the window-projection bug, the second
-the stale-span bug; a count-only or value-only reading misses both. §7.6's end-to-end
-test is the third: it is the only thing that fails if the server stops driving the
-session, because the diagnostics stay correct either way.
+the stale-span bug; a count-only or value-only reading misses both. A third worth
+writing when the server is touched: drive the binary and read the `lichen/analysis`
+notifications (§7.6) — an edit that stops reusing cells leaves the diagnostics correct,
+so the telemetry is the only thing that shows it.
 
 **Write the differential probe first** (§7.3) — it is the cheapest oracle for the whole
 mechanism, it compares diagnostics as well as values, and it is what found the last
