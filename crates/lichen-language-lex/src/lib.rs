@@ -28,8 +28,11 @@
 //! slice of a larger source, mapping every token's span and range back to the
 //! original file via a base offset and the source's line starts.
 //!
-//! Int, string, Type, struct, table, let, if, then, else, return, pub,
-//! cache, type_of, and array lex as keywords.  '->'
+//! Int, Float, string, Type, struct, table, let, if, then, else, return, pub,
+//! cache, type_of, and array lex as keywords.  A float literal is
+//! `[0-9]+\.[0-9]+`: a digit is required before the dot, so `.5` is a dot then
+//! an integer and `x.5` is a field read, and there is no exponent form --
+//! `1.5e3` is a float then the name `e3`.  '->'
 //! is the function-type arrow, '=>' a lambda, '::' the raw named-read
 //! separator, '==>' the table key/value separator, '!' a prefix assert.  A
 //! bare '~' folds into Tilde(usize::MAX) and '~' with adjacent digits into

@@ -90,7 +90,7 @@ farg     := '.' name expr                         -- named instantiation argumen
            | expr                                 -- positional argument
 ```
 
-- **Keywords:** `Int`, `string`, `Type`, `struct`, `array`, `table`, `let`, `if`, `then`,
+- **Keywords:** `Int`, `Float`, `string`, `Type`, `struct`, `array`, `table`, `let`, `if`, `then`,
   `else`, `return`, `pub`, `cache`, `type_of`, `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `?`,
   `$`, `::`, `==>`,
   `~`, `!`, and the
@@ -119,7 +119,7 @@ farg     := '.' name expr                         -- named instantiation argumen
   as `=>` (`x =>\n  x + 1` is a parse error), and a tuple or array cannot be
   broken across lines without parens.
 - **Names:** lowercase or mixed-case identifiers (`x`, `id`, `n2`).  The keywords
-  (`Int`, `string`, `Type`, `struct`, `array`, `table`, `let`, `if`, `then`,
+  (`Int`, `Float`, `string`, `Type`, `struct`, `array`, `table`, `let`, `if`, `then`,
   `else`, `return`, `pub`, `type_of`) are reserved — they cannot be bound or used
   as names.
 - **The `_` placeholder.**  `_` is an inference placeholder hole in *any*
@@ -432,7 +432,13 @@ span back to the original file.
   an `if`.  An `Int` is a machine-sized **unsigned** integer, so `+ - *` wrap,
   `/` and `%` are the unsigned division and remainder, the four order
   comparisons are unsigned (`0 - 1 > 1` is `1`), and every implementation —
-  interpreter, CPU-JIT, GPU-JIT — reads them the same way.  A **zero divisor**
+  interpreter, CPU-JIT, GPU-JIT — reads them the same way.  **No operator
+   accepts or produces a `Float`.**  A `Float` is a value and a type today and
+   nothing more: `1.5 + 1.5` does not check, `1 == 1.0` does not check, and
+   there is no conversion in either direction — `Int` and `Float` are unrelated
+   types, not one of which widens into the other.  See
+   [notes/floating-point](notes/floating-point.md) for what a float does and
+   does not yet do.  A **zero divisor**
   has no value: the interpreter records `operator.divide_by_zero` and answers
   the lazy marker, as it does for every other refused computation, while inside
   a jitted kernel it stays the author's responsibility (the CPU kernel's wasm
@@ -594,8 +600,10 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | source | `ExprKind` |
 |---|---|
 | `5` | `Literal(IntLit(5))` |
+| `1.5` | `Literal(FloatLit(1.5))` |
 | `"s"` | `Literal(StrLit("s"))` |
 | `Int` | `Literal(IntTypeLit)` |
+| `Float` | `Literal(FloatTypeLit)` |
 | `string` | `Literal(StringTypeLit)` |
 | `Type` | `Literal(TypeTypeLit)` |
 | name use | the binder's own `ExprId` (pre-resolved) |

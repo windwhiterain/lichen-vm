@@ -1,9 +1,12 @@
 # Floating point: `Float` as a ninth kind marker
 
-> Status: **proposed.** Nothing here is implemented. This is the shape of the
-> change and the decisions taken for it — the width, the relation to `Int`, and
-> where a conversion is allowed to happen (§4) — not a description of what the
-> code does today. Today the only numeric value the lowlevel has is `USize`.
+> Status: **phase 0 landed; phase 1 and 2 proposed.** `LowValue::Float(f32)`,
+> `LowShape::Float`, the `TypeFloat` kind marker, the `Float` keyword and its
+> literal, and the printer's round-tripping spelling are implemented and tested
+> — §3.1–§3.6 plus the four round trips §5 names. **§3.7 (the operators) and
+> §3.8 (the kernels) are not**, so a float is refused everywhere a kernel could
+> take it rather than lowered into one. Today the only numeric value the lowlevel
+> *offered* was `USize`; it now offers both, and they are unrelated types.
 >
 > Points at: `crates/lichen-lowlevel/src/lib.rs` (`LowValue`, `LowShape`,
 > `ValueExt`), `crates/lichen-lowlevel/src/codec.rs` (the value tags),
