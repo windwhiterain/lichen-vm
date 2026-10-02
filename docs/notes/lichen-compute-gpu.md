@@ -127,7 +127,22 @@ two — the buffer struct's member, the element, *and* the element struct's
 member, because the element is itself a struct.
 
 `spirv-val` and `spirv-dis` are a development aid only. The crate depends on
-`ash` and the IR, nothing else.
+`ash` and the IR, nothing else — and that is still true, because
+`tests/spirv_validation.rs` **runs** the validator rather than depending on it:
+it emits a fragment, pipes the words to `spirv-val --target-env vulkan1.1 -`, and
+asserts the module validates. That check needs no device, and it **skips loudly**
+(rather than passing quietly) when the tool is not on `PATH`. So the manual step
+above is also a checked one, and the two agree rather than drifting apart — with
+the caveat that the fragment in the test is a copy of the one in
+`examples/emit-spv.rs`, so a change to the example must be mirrored there.
+
+The device-backed tests skip for the same reason and the same way:
+`tests/common/mod.rs` holds the one helper, and every caller returns early and
+prints the reason — which, note, is **any** failure to open a context, so a
+genuinely broken backend on a GPU machine now skips rather than fails. A passing
+run is therefore evidence that nothing crashed, not that a device agreed;
+`--nocapture` is how a skip is read, because libtest captures stderr for a
+passing test.
 
 ## Two position spaces, and the silent bug they caused
 

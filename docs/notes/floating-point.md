@@ -462,6 +462,56 @@ failure the whiting notes keep returning to — a wrong image nobody sees until 
 render finishes — and the answer is the one they settled on: a note that says so,
 beside the value, not silence.
 
+### 4.4 The phase-2 decisions, taken before any of it is written
+
+Phase 2 is not one edit. A survey of the real blast radius — the note's original
+"five places" was accurate as far as it went but missed four whole classes of
+site, and the ABI **cannot carry a class at all** (`KernelShape`'s leaf has none,
+`KernelBin` is defined as unsigned-integer operations, and `KernelFragment`'s one
+class-ish field is fragment-wide) — found **five** decisions that the code cannot
+answer for itself. They are settled here because three of them decide what every
+implementation agent has to build, and settling them after the code would mean
+rewriting it.
+
+**Which positions are permitted.** Every position `domain_obstacle` walks,
+including the two compound ones phase 0 closed deliberately: an `Array(Float, _)`
+nested in a tuple, and a function's codomain. Phase 0 refused them because the
+ABI had nowhere to put a class, not because a float there was meaningless.
+
+**What a compound position is.** Following the existing filler — `flat_arity`
+answers `1` for every non-scalar and non-tuple today, as a total function — an
+`array<Float, 3>` parameter is **one local of the element's class**, not three.
+That is what keeps `flat_arity`'s convention and `KernelShape`'s fold agreeing,
+and it means "one class per fragment" still holds.
+
+**The class rides in two places, not one.** The **parameter** class goes on
+`KernelShape`'s leaf, and `fragment_digest` already hashes `param_shape` whole, so
+its coverage is free. The **buffer element** class goes on a `KernelFragment`
+field beside `inputs`/`outputs` — because `inputs` is already barred from
+`param_shape` for a reason that applies verbatim ("a parallel fragment's shape is
+`(config, index)` however many buffers it reads": that domain is integers, its
+buffers are not) — and it must be added to `fragment_digest`. A
+purely-fragment-carried or a purely-value-carried class cannot cover both, and
+`fetch` forces the read-back's class onto the value because its implementor has
+no fragment at all.
+
+**`IntWidth` keeps meaning integer width.** A `ScalarClass` beside it says the
+class, and `I32` is still free to take the width slot the field's own doc
+reserves for it. Widening `IntWidth` with an `F32` would make `bits()` stop
+answering its question — `I32` and `F32` are both 32 — and every existing
+`bits() != 64` check would accept a float fragment as an integer one.
+
+**Float division is not specified inside a kernel, and that is the answer.**
+SPIR-V's `OpFDiv` with a zero divisor is undefined; wasm's `f32.div` is IEEE. The
+language does not check it and does not promise it: a kernel that divides floats
+by zero returns what its backend returns. This is outside the kernel-safe subset
+— which [operators](operators.md) defines as the intersection of what the two
+backends compute the same way — and it is the price of admitting floats at all.
+**§3.7's interpreter answer is unchanged**: `1.0 / 0.0` is `+inf` in lichen,
+because the interpreter is not a kernel. The thing this note's §4.3 was shaped
+around, a boundary conversion, is what a float **parameter** needs; it says
+nothing about a float **operator** whose result a backend computes.
+
 ## 5. What landing this would look like
 
 Phase 0 is §3.1–§3.6: a float literal checks, prints, round-trips through an
