@@ -334,7 +334,7 @@ lattice already sends two different decided shapes to `Unknown`
 ([lowlevel-low-types](lowlevel-low-types.md)), so `USize ∨ Float` is `Unknown`,
 which is the bottom a backend already falls back on. That part is free.
 
-The rest is not free, because the kernel ABI is `i64` in five places at once:
+The rest is not free, because the kernel ABI was `i64` in five places at once:
 
 | what | where |
 |---|---|
@@ -344,9 +344,32 @@ The rest is not free, because the kernel ABI is `i64` in five places at once:
 | `KernelInstr::Const(i64)` | `:371` |
 | `IntWidth { I64 }` | `:267` |
 
-`fetch` is the one to read twice: it is the **read-back**, so a float result
-buffer comes back as `i64` unless the ABI itself moves. That is a larger change
-than widening `IntWidth`, and it is why §4.3 is the costliest of the three.
+**That list is accurate and badly incomplete, and saying so is the point.** It is
+five sites *in one file*, and it misses that the ABI **cannot carry a class at
+all**: `KernelShape`'s leaf had none, `KernelBin` is *defined* as the
+unsigned-integer operations, and `KernelFragment`'s one class-ish field was
+fragment-wide. So §4.3's "conversion at the boundary" had nothing at the boundary
+to convert *to*. The real inventory is roughly seventy sites across five crates —
+the ABI's consumers include `lichen-graph-ir`, which the note never mentioned, and
+`ParallelBackend` has six implementors — and about thirty of them are load-bearing.
+
+**The carrier has since landed** (§4.4's decisions, in `lichen-kernel-ir` and its
+consumers), so of the five rows above: `fetch` returns `ScalarData`, `ResidentBuffer`
+carries a `ScalarClass`, `KernelShape::Scalar` carries one, and `KernelFragment`
+gained `input_classes` / `output_classes` — all hashed by `fragment_digest`. **A
+float is still refused at every position**, because the carrier landed ahead of
+the permission; the two refusal tests in `crates/lichen-language/tests/compute.rs`
+are the witness that nothing observable moved.
+
+**Two carriers remain open, and both belong to the step that permits floats.**
+`BufferSlot` is deliberately still `Host(&[i64])` — no producer of a float slot
+exists, and a variant with no constructors would be dead code in every backend's
+match. But `run` takes `&[BufferSlot]`, so a float producer forces the decision:
+either the host reinterprets `f32` bytes as `i64` words, which makes the slot's
+`len()` and the fragment's `count` mean different things, or `BufferSlot` is
+widened and gives up `Eq`. And `graph.rs`'s `returned_role` drops the class,
+because `Value::device(id, count)` has nowhere to put one — the one path where a
+float graph result could come home mislabelled.
 
 **Where a float is refused is not a single question, and answering it once is how
 a hole gets opened.** `lichen-compute` has three sites that all match on
