@@ -44,6 +44,11 @@ capability or only a constant factor.
 | **D. slot** | can a lane read-modify-write a slot another lane may touch? | no, and it is silently wrong |
 | **E. value** | is there anything but an integer? | no — deferred, §6 |
 
+**And one thing that is none of these**: the **graph's shape** — how many
+dispatches there are — is decided at build time today, and §4.5 argues it should
+not be. It is not a fifth axis because it is not about a kernel body at all; it
+is the level above, and it is what the other four are waiting on.
+
 ## 2. The order, and why it is that order
 
 **A → B → C → D**, with E gating what any of them is *for*.
@@ -65,6 +70,11 @@ primitive *between* "one element per lane" and "a workgroup that can do work",
 it is additive (the decidable case needs no IR change), and **B is better stated
 as one `loop` operator that either expands or lowers, than as two features.** So B
 is a single item, and the thing that makes C reachable is B's dynamic case.
+
+**And §4.5 sits above all four**, because the "compile-time constant" limit that
+keeps recurring in this document is not a property of any one axis — it is what
+fixing the shape at build time costs. A dynamic graph is the only item here that
+removes it, and it is also the only one whose first user is *not* a fixed count.
 
 ## 3. What the order is worth
 
@@ -99,12 +109,13 @@ a class of program expressible that is not expressible at all". Each axis below
 is judged on that, and the two axes that only move a constant factor say so
 about themselves.
 
-## 4. The four axes
+## 4. The four axes, and the level above them
 
 Each is classified against [plugin-taxonomy](plugin-taxonomy.md)'s one rule —
 does the language layer have to change to accommodate it — because that rule is
 what decides whether a package manager can pull the feature or the compiler has
-to be written with it.
+to be written with it. §4.5 is not an axis: it is the **graph** rather than a
+kernel body, and it is the level the other four are waiting on.
 
 ### 4.1 Axis B: **already in the language**, and what it does not reach
 
@@ -376,6 +387,89 @@ contend" is the one that already exists and is unread.
 - **What it does not buy**: determinism. It buys a *refusal* where there was a
   race, and a sound atomic where the program asked for one.
 
+### 4.5 A dynamic graph, which is not one of the four axes
+
+The four axes are about what a **kernel body** may say. This is about the
+**graph** — how many dispatches there are — and it is the proposal that most of
+the others are downstream of, because it is the only one that removes the
+"compile-time constant" limit that keeps recurring in this document.
+
+**The shape of the idea.** The graph is built by recording an evaluation
+([compute-graph-jit](compute-graph-jit.md)), and today the recording is of a
+*fixed* number of dispatches: the node list is the topological order, and the
+shape is decided when `compute.graph` runs. A **dynamic** graph decides the node
+count at *run* time, and the mechanism is a recursion expanded over a grid — the
+recursive function is the local pattern, instantiated once per grid point. A
+`loop f n` at the graph level is the degenerate case: `n` nodes in one submission
+rather than `n` submits.
+
+**Why this is more than the loop of §4.1, and where it is not.** For a **fixed**
+count, the kernel loop is strictly better and much cheaper: `loop step 1000` as a
+shader loop is *one* dispatch, against 1000 graph nodes. §4.1 measured that a
+16-link fused chain is worth 65–81% over unfused at counts up to 65 536 and about
+10% at a million — so the *saving* from fusing 1000 links is real but shrinks
+exactly where the algorithm stops being interesting. **The dynamic graph earns
+its keep only where a loop cannot go at all**, and that is the honest case for
+it:
+
+| shape | loop | dynamic graph |
+|---|---|---|
+| `loop step 1000` (fixed count) | **one dispatch** | 1000 nodes |
+| iterate until `err <= tol` | impossible — a trip count must bound the loop | **the shape is the answer** |
+| one dispatch per nonzero of a sparse input | impossible — the count is data | **nodes emitted as found** |
+| a recurrence whose step count is a `collect`ed length | needs the length first | the length is a value on an edge |
+
+**So the first user is not the fixed-count case**, and that is what keeps this
+from being §4.1 restated.
+
+**The capability it requires already exists on the queue, refused by name.**
+`Policy::Batch` in `lichen-graph-ir` is *"refused by name"* because
+[compute-graph-jit](compute-graph-jit.md) states the reason exactly: *"a backend
+can only fuse if it can be handed several dispatches to be put in one command
+buffer, and the contract has no way to ask for that — `submit` records one run
+and hands it over."* **A growing graph is that missing capability.** The design
+here is therefore not a new mechanism but a **contract change**:
+`ParallelBackend` gains something like *"hand me this segment, put it in one
+submission, tell me when it is done"* — one method, and the two seams that must
+be sound together (the segment boundary, and the demand point) are already named
+in that note. That is a far smaller and better-specified piece of work than it
+looks from the outside.
+
+**The cost, and it is structural: "no dispatch while building" has to go.** That
+property is currently a boast of the design — *"the graph is built by recording an
+evaluation that has already happened"*, with every `ParLaunch` intercepted and a
+placeholder substituted, so nothing runs. A dynamic graph must **let dispatches
+actually run** in order to learn the shape, which makes the recording *interleaved
+with execution*. The boundary — which dispatches run, and at what point the
+recording stops and the running starts — is a new design decision and not an
+implementation detail. There is also a soundness obligation already on file: *"if
+a closure form ever appears that can capture a post-launch value, the scheduler
+becomes unsound, silently."* A build that runs is exactly where that becomes
+reachable.
+
+**The "local pattern" needs a name in the IR.** If the grid is a graph, then the
+pattern is a **subgraph template** — nodes and edges — instantiated at a
+coordinate, with each instantiation's buffers and counts substituted. Today
+`lichen-graph-ir`'s node is one kind (`Node::Kernel`), and a composite node
+holding a sub-graph and a coordinate is a new concept, not a new leaf.
+
+**And the grid framing reopens an extent question §5 closed.** A 2-D grid is a
+stencil, and §5 declines a multi-dimensional extent on the grounds that `i / w % h`
+over a flat index already gives what the ladder's 2×2 matmul needed. **A grid
+framework either subsumes that decision or reinvents it**, and it has to answer it
+explicitly, because a stencil is the case that most wants it. Worth noting the
+analogy's limit too: **polyhedral compilation is the thing that makes a grid
+*static but parameterised*** — symbolic index sets, symbolic trip counts, O(1)
+code. "Polyhedral without the parallel optimization" therefore lands on §4.1's
+*loop*, not on a run-time grid. The dynamic graph is the part polyhedral
+compilation deliberately leaves out, which is a point in the proposal's favour and
+a point against the analogy.
+
+- **Where it sits in the order**: after B, because a dynamic graph is a way to
+  express what a loop cannot, not a way to do loops.
+- **What it needs first**: the `Batch` capability on the backend contract. That is
+  a small, self-contained change and it is the honest place to start.
+
 ## 5. Explicitly not proposed
 
 Named so they are decisions rather than omissions.
@@ -386,10 +480,13 @@ Named so they are decisions rather than omissions.
   the *same* source program. A new grammar form would be a second thing to learn
   for the cases the operator already covers. This was the first answer here and it
   was the wrong one.
-- **A multi-dimensional extent.** A 2-D dispatch is `i / w % h` over a flat
-  index, and the ladder's 2×2 matmul already does exactly that. A real 2-D
-  extent is ergonomics, not capability, and it would make the tail-lane
-  obligation two-dimensional for no gain the flat form does not already give.
+- **A multi-dimensional extent, as a *dispatch* feature.** §4.5 reopens this,
+  because a stencil grid wants it: a 2-D extent is what a grid is, and declining
+  it while proposing a grid is incoherent. What §4.5 does *not* support is the
+  weaker claim it used to rest on — that a 2-D extent is "ergonomics, not
+  capability", which was inferred from a 2×2 matmul that `i / w % h` already
+  expresses. A stencil is the case that refutes that, so the item moves from
+  *declined* to *deferred to §4.5*.
 - **Buffer views and strides.** A `Buffer` is a dense `[i64]`; a view is a
   different type with its own lifetime story, and nothing in the ladder wanted
   one.
@@ -477,6 +574,16 @@ the honest classification: it is not a codegen task, so it does not belong in a
 roadmap about what a kernel can express. It decides two of the four axes' limits
 at once, which is why it is worth naming here even though it is not this
 document's to decide.
+
+**§4.5 may dissolve this fork rather than answer it**, and that is the one place
+where the two interact. A kernel loop needs a run-time count, so it needs the
+count to be a value the emitter can read — which is a smaller requirement than
+compiling the whole body against a call site. A **dynamic graph** needs no
+applied body at all, because the shape is decided by *running* the graph's head.
+So if §4.5 is built, the specialisation question narrows to "which constructs
+inside a single kernel body still need an applied body", rather than "does the
+language ever specialise a kernel". Worth knowing before answering it, and worth
+not assuming the loop and the graph need the same fix.
 
 ## 8. The defects, and which are fixed
 
