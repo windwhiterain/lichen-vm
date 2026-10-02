@@ -438,14 +438,18 @@ span back to the original file.
   a jitted kernel it stays the author's responsibility (the CPU kernel's wasm
   traps; a GPU kernel's is undefined, and a guard would cost a branch on the
   device's hottest path).  See [operators](notes/operators.md).
-- **Indexing.**  `e[i]` reads the `i`-th element of an array, tuple, or
-  struct instance (a struct instance's positional fields are its wrapped
-  tuple's elements).  A
+- **Indexing.**  `e[i]` reads the `i`-th element of an **array**.  A tuple's or
+  a struct instance's positional slots are read with the dedicated positional
+  form `a(k)` (`s(0)` is the first field, `(0, 1)` the first element of a
+  tuple) or by name (`s.x`) — the operator is chosen by syntax, never by a
+  runtime kind dispatch, so `e[i]` on a concretely non-array container is a
+  diagnostic rather than a silently different read.  A
   literal index into a statically-known array is checked against its length
   at check time (an out-of-bounds index is an `IndexOutOfBounds`
   diagnostic); an index known only at runtime (a parameter, a call result)
   is checked when evaluated.  Indexing a *concretely* non-indexable type —
-  a function or an atomic type — is an `IndexTarget`
+  a tuple, a struct, a function, a table or an atomic type — is an
+  `IndexTarget`
   diagnostic at check time, not a runtime panic (mirroring the apply
   guard).  `[then, else][i]` is the mechanism under the conditional form
   (`if c then e1 else e2` desugars to it) — an integer index selects a branch, and the untaken
@@ -515,10 +519,12 @@ span back to the original file.
   callee (a parameter, a deferred read) is *pinned* to a struct kind, so a
   non-struct actual callee fails the apply's argument check per call; a
   call-result callee (`(mk (Int))(1, 2)`) is force-evaluated at check time,
-  so the static checks see the concrete struct type.  Indexing an instance reads
-  its positional fields: `s(1, 2)[0]` is the first field, and its type is
-  the corresponding field type (an out-of-bounds field index is an
-  `IndexOutOfBounds` diagnostic).  A struct instance with named fields also
+  so the static checks see the concrete struct type.  An instance's positional
+  fields are read with the positional form: `s(1, 2)(0)` is the first field,
+  and its type is the corresponding field type (an out-of-bounds field index is
+  an `IndexOutOfBounds` diagnostic).  `s(1, 2)[0]` is **not** that read — `e[i]`
+  is an array read, and a struct instance is not an array (see *Indexing*
+  above).  A struct instance with named fields also
   reads by name: `a.x` resolves `x` through the struct's name→index table to
   the field's positional index (a `a.x` on a struct without that field is a
   `NamedField` diagnostic; a `a.x` on a non-struct is an `IndexTarget`

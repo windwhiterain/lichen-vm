@@ -77,7 +77,7 @@ queue's order is deliberate.
 | P1-31 | medium | lowlevel | The deep-pass verdict conflates "never ran" with "in progress" | done |
 | P1-32 | medium | language-parser | A run of separators is refused inside every list form | done |
 | P1-33 | medium | highlevel, language | A self-recursive call in a conditional's branch is refused as "expected Int, found Int" | todo |
-| P1-34 | medium | highlevel, language, docs | The spec and `check_index` disagree about `e[i]` on a tuple or a struct | blocked:D16 |
+| P1-34 | medium | highlevel, language, docs | The spec and `check_index` disagree about `e[i]` on a tuple or a struct | done (D16: the spec was the stale half) |
 | P1-35 | medium | language, highlevel, lowlevel | A raw read `X<e>` of a runtime container yields `none` with no diagnostic | done |
 | P1-36 | medium | highlevel | A duplicate kind-marker tag shadows a codec arm and warns instead of failing | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | done (wired: the server's compile worker, `incremental-update.md` §7.6) |
@@ -2552,6 +2552,70 @@ skeleton and the per-apply parameter clones (`lowlevel::function`, and
 `checker/operators.rs`'s pin of an `Int` operand to `self.int_type`). Nothing here
 has read that path; this is a starting point, not a diagnosis.
 
+**Located, not fixed — re-measured at `dev@cbf4fcc`, and the lead above was
+wrong about which side is at fault.** It is not the checker's cells at all: the
+diagnostic is `DiagKind::Runtime` with `loc: None` — an **apply-time parameter
+check in the VM**, not a checker's pin. The two sides it compares evaluate to
+`USize(48)` and `USize(18)`, i.e. the *values* the two arguments were given at
+the call site, and they print as `Int` only because a `Type`-typed value is
+rendered by its type.
+
+The trigger, narrowed first-hand (the earlier table above all holds; `if c then
+t else e` lowers to `[e, t][c]` — the branches are swapped, `compile.rs:754` —
+so "the array index" and "the `if`" are one form):
+
+| shape | result |
+|---|---|
+| `f = a => b => [f b a, 0][b == 0]` | **refused** — the minimal form |
+| `f = a => b => [0, f b a][b == 0]` | runs — same call, other element, so the *branch* is never taken |
+| `f = a => b => [f b a, 0][0]` | recurses (budget) — a literal index does not trigger it |
+| `f = a => b => [f b a, 0][c]`, `c = 0` | recurses — nor does a constant index |
+| `f = a => b => [f b a, 0][b - b]` | **refused** — any computation over the parameter does |
+| `f = a => b => [f b a, 0][b == b]` | runs — that one evaluates to 1, so the other branch is taken |
+| `f = a => b => [f a b, 0][b == 0]` | recurses — passing the parameter to the *second* argument is fine |
+| `f = a => b => [f b, 0][b == 0]` | **refused** — one curried apply is enough |
+| `f = a => b => [a, 0][b == 0]` | runs — no recursive call |
+
+So: the index expression must **read a parameter**, the selected element must be
+a **self-recursive apply passing that same parameter to the function's first
+parameter**, and the function's type must be unwritten. Everything else in the
+report above is downstream of that.
+
+**Where it goes wrong, traced.** Instrumenting `apply_parameter_check`
+(temporary, reverted) on `f = a => b => [f b a, 0][b == 0]; f 48 18` shows
+three applies, and the third is the wrong one:
+
+```
+APPLY fn=1v1 … template_param=19v1 leaf=Parameterized   argument leaf=USize(48)
+APPLY fn=3v1 … template_param=96v1 leaf=Parameterized   argument leaf=USize(18)
+APPLY fn=5v1 … template_param=162v1 leaf=USize(48)      argument leaf=USize(18)   <- refused
+```
+
+`1v1` is `f` and `3v1` the inner `b => …`; **`5v1` is a fresh closure clone**,
+and *its declared parameter already holds 48* — the first argument of the
+enclosing call, not the 18 this apply is checking. The unify is
+`unify(cloned_param, argument)` at the pair's leaf: 48 against 18. So the
+statement to take forward is: **when an apply instantiates the curried closure
+that `f`'s body will apply again, the clone's parameter is seeded with the
+enclosing apply's argument**, which is exactly the class of defect the note's
+lead guessed at, one level down from where it guessed. The candidate sites are
+`function.rs`'s closure branch in `value_apply` (`:464-562`: the fresh id is
+registered with the *source* parameter at `:485-492` and re-pointed at the
+remapped clone at `:517`/`:558`) and `regroup_clones` re-establishing the
+template's class topology among the clones (`function.rs:179-187`) — both of
+which can seed a fresh parameter from a source that is already bound.
+
+**Why this is recorded and not fixed.** The two candidate sites are the VM's
+closure-instantiation and class-regrouping paths, where a wrong answer is a
+silently wrong *value* rather than a crash; the audit has no `lowlevel` test
+that pins a curried closure's per-call parameter (`tests/basic/evaluation.rs`
+covers recursion, not this), and this item's own scope is the queue's. A fix
+here is its own item with its own regression test, and the diagnosis above is
+what that item needs to start from. The lead paragraph's guess — the checker's
+skeleton and `check_binop`'s pin — is refuted: nothing the checker does is
+involved, and the parameter annotation's only effect is which argument the
+definition pass happens to be holding.
+
 ### P1-34 — The spec and `check_index` disagree about `e[i]` on a tuple or a struct `verified`
 
 **The code says `[i]` is arrays only, deliberately.** `check_index`
@@ -2586,6 +2650,29 @@ the spec's paragraph looks like the stale half — but "the spec is the single
 source of truth for the language" is this project's own rule, and a language that
 *should* index tuples is a feature, not a doc fix. Both are cheap; picking one is
 not this note's to do.
+
+**Outcome — `D16` decided: the spec is the stale half, and the code did not
+move.** `docs/language-spec.md` §3 (*Indexing*) now says `e[i]` reads the `i`-th
+element of an **array**, that a tuple's and a struct instance's positional slots
+are read with `a(k)` or `s.x`, and that the reason is the one `check_index`
+already documents — *the operator and the type extraction are chosen by syntax,
+never by a runtime kind dispatch* — so `e[i]` over a concretely non-array
+container is a diagnostic rather than a silently different read. Its
+non-indexable list is now the whole one (a tuple, a struct, a function, a table,
+an atomic type), which is what `check_index`'s doc already said. §3 (*Struct
+instantiation*) drops *"Indexing an instance reads its positional fields:
+`s(1, 2)[0]` is the first field"* for the positional spelling `s(1, 2)(0)` and
+says outright that `s(1, 2)[0]` is not that read.
+
+Nothing in the checker, the parser or the examples changed, so the two
+reproductions in the report still answer `expected array<Int, Int>, found
+<Int, Int>` and `expected array<Int, string>, found struct<Int, string>` —
+now because the spec says so. A reader who wants `(1, 2)[0]` to be `1` is asking
+for the language `check_index` would have to be taught, which is a new item
+rather than a reopening of this one; the shape that answer would need (what a
+*struct's* positional index means, given that `a(k)` resolves through the
+struct's name table while the spec's answer was "its wrapped tuple's elements")
+is recorded in `D16` below.
 
 **The raw form is not an available substitute, and that is its own item.** The
 tempting answer — "spell it `s<0>`" — does not work on a runtime container: see
@@ -6236,8 +6323,9 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   the leaf answering `is_handle = false` the relocation test fails at the
   dispatch, with `set_handle` a no-op it fails at the address, and the intern
   tests fail if the id is per-compile again.
-- **D16 — Is `e[i]` an array read, or a positional read of any container? (open;
-  found by `P1-34`.)** The spec and the checker state two different languages.
+- **D16 — Is `e[i]` an array read, or a positional read of any container? —
+  DECIDED: arrays only; the spec is corrected.** The spec and the checker state
+  two different languages.
 
   *Arrays only* is what `check_index` implements and documents
   (`checker/indexing.rs:19-28`, `:39-52`): the container's type is pinned to a
@@ -6246,25 +6334,34 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   dedicated `a(k)` — the operator is chosen by syntax, never by a runtime kind
   dispatch. Every example agrees (`examples/index.lichen` reads `b(0)`).
 
-  *Any container* is what `language-spec.md` §3 states, twice and explicitly:
+  *Any container* is what `language-spec.md` §3 stated, twice and explicitly:
   `e[i]` reads the `i`-th element of "an array, tuple, or struct instance", and
   `s(1, 2)[0]` "is the first field".
 
   The two are not reconcilable, and they differ on what a written program means,
   not on how it is spelled: `(1, 2)[0]` is `expected array<Int, Int>, found
-  <Int, Int>` today and would be `1` under the spec. Resolving it means either
-  deleting the spec's sentence (a doc fix, and the code's intent plus the
-  examples are the evidence for it) or teaching `check_index` the tuple and
-  struct kinds (a language feature, and it would have to say what a *struct's*
-  positional index means, since the spec's own answer is "its wrapped tuple's
-  elements" while `a(k)` resolves through the struct's name table). Both are
-  cheap; the answer is a design call, so the queue does not take one.
+  <Int, Int>` today and would be `1` under the spec. **Chosen — the doc fix:**
+  the code's intent is explicit, its doc argues *why* (syntax picks the
+  operator, never a runtime kind dispatch — the same rule that keeps `e[i]`,
+  `a(k)` and `t{k}` three different things), every example agrees, and a
+  language that *should* index tuples is a feature rather than a
+  reconciliation. `P1-34` corrected §3's two sentences; nothing in the checker,
+  the parser or the examples moved, so both reproductions still answer with the
+  guard.
+
+  *Rejected — teaching `check_index` the tuple and struct kinds:* it is the
+  larger of the two and it would have to answer a question the deleted sentence
+  answered badly — what a *struct's* positional index means, given that the
+  spec's answer was "its wrapped tuple's elements" while `a(k)` resolves through
+  the struct's name table. A user who wants `(1, 2)[0]` to be `1` files that as
+  a new item, and it starts by answering the struct question.
 
   One adjacent fact belongs with the decision rather than the item: the raw form
-  `X<e>` *looks* like it could spell the spec's meaning without touching
-  `check_index`, and it cannot — over a runtime container it produces `none` and
-  no diagnostic at all (`P1-35`). So the choice really is between the two sides
-  above; there is no third spelling available today.
+  `X<e>` *looks* like it could have spelled the spec's meaning without touching
+  `check_index`, and it cannot — over a runtime container it reads elements that
+  are not value/type pairs, which is now a **reported** runtime error where it
+  used to print `none` silently (`P1-35`). So the choice really was between the
+  two sides above; there is no third spelling available today.
 
 ## Checked and found clean
 
