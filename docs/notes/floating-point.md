@@ -272,13 +272,29 @@ second decision is what a float means *to* that set, so the two are read
 together. A float needs `+ - * /`; it does **not** need a conversion operator,
 and that is a consequence rather than an omission — see §4.2.
 
-`==`/`!=` are the one place the decision has a visible edge. They are the
-**generalized** equality over "any two same-typed values" (`operators.md` §1),
-and `Int` and `Float` are now two types, so `1 == 1.0` compares two
-differently-typed values and does not check. That is the consistent answer
-rather than a special case to argue for: any answer that made it true would be a
-conversion wearing a comparison's clothes, and would have to be argued twice —
-once here and once in the kernel boundary of §3.8.
+`==`/`!=` are the one place the decision has a visible edge, and it resolves the
+way the rest of the language resolves things: **by asking the value.** They are
+the **generalized** equality over "any two same-typed values"
+(`operators.md` §1), and the mechanism for "same-typed values are equal" already
+exists as [`ValueExt::value_eq`] — which is where a float's equality was decided
+in §3.1, at the float's own site. `==` routes through it. So:
+
+- `1 == 1.5` **does not check**, because the operands are differently-typed
+  values and the checker unifies their types first (§4.2 forbids conversion in
+  either direction). Any answer that made it check would be a conversion wearing
+  a comparison's clothes.
+- `1.5 == 1.5` is `1`, `0.0 == -0.0` is `0`, and `NaN == NaN` is `1`.
+
+That last line is the price, and it is the right price: it is what "there is one
+relation" means. `==`, unification of two concrete values, table-key comparison
+and frozen-artifact reuse all read [`ValueExt::value_eq`], so they agree **by
+construction rather than by discipline** — and a second relation for the
+language would have reintroduced exactly the divergence that one relation
+removes. IEEE was considered and declined: it is not an equivalence relation
+(`NaN != NaN`), so it could not live in [`ValueExt::value_eq`] without breaking
+the hash tables and the marker lookups that read it.
+
+[`ValueExt::value_eq`]: crates/lichen-lowlevel/src/lib.rs
 
 ### 3.8 The kernels
 
