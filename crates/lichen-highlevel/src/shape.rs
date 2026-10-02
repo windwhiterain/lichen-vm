@@ -9,7 +9,7 @@
 //! (`shape_of`, `kind_of`, `is_function_type`) instead of re-deriving it
 //! from raw array offsets.
 //!
-//! The 8 kind markers (`Int`, `String`, `Type`, `Function`, `Tuple`,
+//! The 9 kind markers (`Int`, `Float`, `String`, `Type`, `Function`, `Tuple`,
 //! `Array`, `Struct`, `Table`) are defined once in the
 //! [`for_each_kind_marker`] registry list; the `TypeValue` variants, the
 //! `ValueType` marker methods, the `Ctx` node accessors, the checker's
@@ -41,7 +41,7 @@ use crate::program::ValueType;
 
 // --- the kind-marker registry ---------------------------------------------------
 //
-// THE one list of the 8 kind markers.  Adding or removing a marker means
+// THE one list of the 9 kind markers.  Adding or removing a marker means
 // editing this list alone: the `TypeValue` variants, the `ValueType` marker
 // methods (default bodies), the `Ctx` node accessors, the checker's
 // installed marker fields (and its `Ctx::value_node` dispatch and the
@@ -59,7 +59,9 @@ use crate::program::ValueType;
 // artifacts: an existing entry's tag must NEVER change, and a new marker
 // takes the next unused tag (the tags are deliberately NOT the list
 // positions — `TypeString` is `7` — so reordering this list for
-// presentation can never renumber the format).
+// presentation can never renumber the format).  The tag space is the
+// `TypeValue` codec's, not this list's: `TypeValue::TypeId` (not a kind
+// marker) holds tag `8` there, so a new kind marker starts at `9`.
 //
 // A consumer macro receives the whole list as its input; an optional
 // `[ args… ]` group is forwarded verbatim ahead of it, so a consumer that
@@ -70,6 +72,9 @@ macro_rules! for_each_kind_marker {
         $mac! { $( [ $($args)* ] )?
             /// The `int` type constant — `USize` literals pair with `[int, K]`.
             TypeInt { 0, "int", int_marker, int_marker_node }
+            /// The `float` type constant — `Float` literals pair with
+            /// `[float, K]`.
+            TypeFloat { 9, "float", float_marker, float_marker_node }
             /// The `string` type constant — the builtin immutable string
             /// value; `Str` literals pair with `[string, K]`.
             TypeString { 7, "string", string_marker, string_marker_node }

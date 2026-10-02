@@ -836,7 +836,7 @@ where
     /// type expression `[int, K]` every literal's pair carries.
     fn install_constants(&mut self) {
         let root = self.current_block;
-        // The 8 kind markers, one shared node each, registry order.
+        // The 9 kind markers, one shared node each, registry order.
         for_each_kind_marker!(define_install_markers[self, root]);
         // `K = [Type, K]`: allocate the node, then point its type slot at
         // itself.  The self-loop is cut by the lowlevel deep-evaluation
@@ -1504,7 +1504,7 @@ where
         self.string_type
     }
 
-    // The 8 marker-node accessors — registry-derived.
+    // The 9 marker-node accessors — registry-derived.
     for_each_kind_marker!(define_ctx_marker_accessor_impls);
 
     fn check_unify(&mut self, a: NodeId, b: NodeId, loc: Loc, kind: DiagKind) {
