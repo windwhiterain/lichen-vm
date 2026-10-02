@@ -554,6 +554,44 @@ lands when the parts are merged together.
 Phase 1 is §3.7 and the operator set. Phase 2 is §3.8, and it is the only phase
 that touches a backend.
 
+### 5.1 What phase 2 landed, and the three things it did not close
+
+**Landed.** The carrier (§4.4's four points), then both backends. The wasm
+backend admits a float domain, lowers `F32*`, and **computes**: a cross-kernel
+`jit` chain in `Float`, a float buffer written and read back by two kernels, and
+plain lichen agreeing with the result. The SPIR-V emitter produces a float module
+that `spirv-val` accepts — `OpTypeFloat 32`, `ArrayStride 4`, no `Int64`, the
+index a 32-bit constant, `OpFAdd`/`OpFDiv`, and `Eq`/`Neq` as bitcasts and
+`IEqual`/`INotEqual` rather than `OpFOrdEqual`.
+
+**Three things stayed open, and none of them is a detail.**
+
+**1. The two halves disagree about the layout of the same buffer.** wasm's host
+slot is `AnyHandle<[i64]>` — **one `i64` word per element, for both classes**, a
+float being its bits in the low 32. The SPIR-V emitter declares `ArrayStride`
+**4** for a float. So a host float buffer of `N` elements occupies `8N` bytes and
+a GPU module reads it as if it were `4N` — the same buffer cannot feed both
+backends, and neither half noticed because nothing runs a float fragment through
+both. This is what a cross-backend agreement test exists to find, and it is the
+first thing it will find.
+
+**2. A float GPU kernel cannot be dispatched yet.** The SPIR-V side emits and
+validates but the run path is not class-aware: `stage_run` and `fetch` size and
+stride everything at `size_of::<i64>()`, and a `ResidentId` records no class.
+`DeviceBuffer` gaining the class is the named next carrier, and the three
+`size_of::<i64>()` sites and `ScalarData::Int` follow it.
+
+**3. Two shapes are refused rather than lowered, both for one reason.** A body
+with **no concrete `Float` operand** cannot learn its class, so
+`jit (x : Float => compute.launch k_double (x + 1.0))` is refused — the callee
+is lowered in `Float` and the caller in `Int`. Adding `+ 0.0` makes it run. The
+same rule makes an **unanchored** `read` type `Int` while its value is `Float` at
+run time; the run then refuses it by name rather than coercing, but the static
+claim and the value disagree before that. Both follow from §4.4's "a float
+operand decides, and none means `Int`", and closing the second needs a
+value-to-type reconciliation at `read`/`collect` — a checker change, and out of
+scope for the backend work.
+
 The verification for phase 0 is four tests, one per round-trip that can fail
 quietly: a literal's pair; the printer's spelling re-lexed and re-checked; an
 artifact written and read back through `ArtifactCodec`; and a `cache` cell
