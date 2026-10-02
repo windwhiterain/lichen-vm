@@ -61,8 +61,8 @@ use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram, TypeOperator, ValueType};
 use lichen_highlevel::shape::{PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, low_type_of_slot};
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
-    fragment_digest,
+    BufferSlot, Flow, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
+    Terminator, fragment_digest,
 };
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
@@ -210,6 +210,7 @@ fn intern_kernel(fragment: KernelFragment) -> KernelId {
 #[cfg(test)]
 mod kernel_intern_tests {
     use super::*;
+    use lichen_kernel_ir::KernelBody;
 
     fn fragment(body: Vec<KernelInstr>) -> KernelFragment {
         KernelFragment {
@@ -220,6 +221,88 @@ mod kernel_intern_tests {
             results: 1,
             int_width: IntWidth::I64,
         }
+    }
+
+    /// A loop needs a backedge, and a body without one is a loop a backend
+    /// cannot close: there is no edge to branch back along, so the only faithful
+    /// emission is a refusal. This is the rule that makes a zero-trip loop
+    /// correct rather than a dropped branch.
+    #[test]
+    fn a_loop_with_a_backedge_is_well_formed_and_one_without_is_refused() {
+        let header = 0u32;
+        let exit = 1u32;
+
+        let looping = |backedge: bool| KernelBody {
+            labels: 2,
+            entry: Flow::Block {
+                entry: Some(Label(header)),
+                instrs: vec![KernelInstr::Const(1), KernelInstr::LocalGet(0)],
+                terminator: Box::new(Terminator::While {
+                    header: Label(header),
+                    carried: 1,
+                    passed_out: 1,
+                    exit: Label(exit),
+                    // A backedge *is* a jump back to the header — the body's
+                    // last act, not a terminator it holds.
+                    body: Box::new(if backedge {
+                        Flow::Jump {
+                            target: Label(header),
+                            passes: 1,
+                        }
+                    } else {
+                        Flow::Block {
+                            entry: None,
+                            instrs: vec![KernelInstr::Const(2)],
+                            terminator: Box::new(Terminator::Return),
+                        }
+                    }),
+                }),
+            },
+        };
+
+        looping(true)
+            .validate()
+            .unwrap_or_else(|broken| panic!("a loop with a backedge is well formed: {broken}"));
+        let refusal = looping(false)
+            .validate()
+            .expect_err("a loop whose body never returns to its header has no backedge");
+        assert!(
+            refusal.contains("backedge"),
+            "the refusal must name the missing backedge, and said: {refusal}"
+        );
+    }
+
+    /// A label arrived at but never defined is a block with no code, so it is
+    /// refused too — a backend would otherwise have nowhere to branch.
+    #[test]
+    fn a_label_with_no_definition_is_refused() {
+        let refusal = KernelBody {
+            labels: 1,
+            entry: Flow::Jump {
+                target: Label(0),
+                passes: 0,
+            },
+        }
+        .validate()
+        .expect_err("nothing defines block 0");
+        assert!(
+            refusal.contains("nothing defines it"),
+            "the refusal must say the label has no definition, and said: {refusal}"
+        );
+    }
+
+    /// The straight-line path is unchanged: a body with no transfer is still the
+    /// form a lowering produces, and both backends lower it as they always did.
+    #[test]
+    fn a_straight_line_body_is_still_straight_line() {
+        let body = KernelBody::straight_line(vec![KernelInstr::Const(1), KernelInstr::LocalGet(0)]);
+        assert!(body.is_straight_line());
+        assert_eq!(
+            body.straight_line_instrs().map(<[KernelInstr]>::len),
+            Some(2)
+        );
+        body.validate()
+            .expect("a straight-line body is well formed");
     }
 
     /// The point of content addressing: the same function compiled twice — which
@@ -2008,11 +2091,45 @@ fn assemble_module(
     exports.export("main", ExportKind::Func, base);
     wasm.section(&exports);
 
+    // A structured body needs a `() -> (i64 × n)` block type per distinct `n` it
+    // hands a branch or a loop, and the type section is written before the code
+    // section — so the arities are collected here and declared below the function
+    // types.
+    let mut block_arities: Vec<usize> = ordered
+        .iter()
+        .flat_map(|frag| block_arities(&frag.body.entry))
+        .collect();
+    block_arities.sort_unstable();
+    block_arities.dedup();
+    let mut block_types: HashMap<usize, u32> = HashMap::new();
+    for arity in &block_arities {
+        let id = types.len();
+        types.ty().function(vec![], vec![ValType::I64; *arity]);
+        block_types.insert(*arity, id);
+    }
+
     let mut code = CodeSection::new();
     for frag in ordered {
-        let mut body = Function::new([]);
-        let instrs = straight_line_body(frag)?;
-        lower_body(instrs, index, base, &mut body)?;
+        // A loop's carried values become locals, so the declaration is written
+        // before the body rather than grown into.
+        let params = frag.param_shape.flat_arity();
+        let carried = count_carried(&frag.body.entry);
+        // Locals are declared as (repeat count, type) pairs, and a loop's
+        // carried values are the only ones this emitter needs.
+        let mut body = if carried == 0 {
+            Function::new([])
+        } else {
+            Function::new(vec![(carried as u32, ValType::I64)])
+        };
+
+        let mut state = WasmState {
+            index,
+            base,
+            at: 0,
+            next_local: params,
+            block_types: &block_types,
+        };
+        lower_body(frag, &mut state, &mut body)?;
         body.instruction(&Instruction::End);
         code.function(&body);
     }
@@ -2020,25 +2137,299 @@ fn assemble_module(
     Ok(wasm.finish())
 }
 
-/// The straight-line instructions of a fragment's body, or a refusal.
+/// The block arities a flow needs: every `If`'s join and every `While`'s exit.
+fn block_arities(flow: &Flow) -> Vec<usize> {
+    let mut out = Vec::new();
+    fn walk(flow: &Flow, out: &mut Vec<usize>) {
+        match flow {
+            Flow::Jump { .. } => {}
+            Flow::Block { terminator, .. } => match &**terminator {
+                Terminator::Return => {}
+                Terminator::If {
+                    on_one,
+                    on_zero,
+                    passes,
+                    ..
+                } => {
+                    out.push(*passes);
+                    walk(on_one, out);
+                    if let Some(on_zero) = on_zero {
+                        walk(on_zero, out);
+                    }
+                }
+                Terminator::While {
+                    body, passed_out, ..
+                } => {
+                    out.push(*passed_out);
+                    walk(body, out);
+                }
+            },
+        }
+    }
+    walk(flow, &mut out);
+    out
+}
+
+/// How many locals a flow's loops need: one per `carried` value of each `While`.
+fn count_carried(flow: &Flow) -> usize {
+    let mut total = 0;
+    fn walk(flow: &Flow, total: &mut usize) {
+        match flow {
+            Flow::Jump { .. } => {}
+            Flow::Block { terminator, .. } => match &**terminator {
+                Terminator::Return => {}
+                Terminator::If {
+                    on_one, on_zero, ..
+                } => {
+                    walk(on_one, total);
+                    if let Some(on_zero) = on_zero {
+                        walk(on_zero, total);
+                    }
+                }
+                Terminator::While { body, carried, .. } => {
+                    *total += carried;
+                    walk(body, total);
+                }
+            },
+        }
+    }
+    walk(flow, &mut total);
+    total
+}
+
+/// A label in the kernel IR, named apart from the lowlevel's own `BlockId`
+/// (which is an arena block, not a control-flow label).
+use lichen_kernel_ir::BlockId as Label;
+
+/// One wasm frame a `br` can target, and the IR label it stands for.
+enum Frame {
+    /// A `block` or an `if`: branching to it **exits** it, and the values it
+    /// produces are the operands the `br` leaves on the stack.
+    Exit { label: Option<Label>, arity: usize },
+    /// A `loop`: branching to it **re-enters** it, and takes no operands — a
+    /// value that survives the backedge is in a local, not on the stack.
+    Header {
+        label: Label,
+        locals: std::ops::Range<usize>,
+    },
+}
+
+struct WasmState<'a> {
+    index: &'a HashMap<KernelId, u32>,
+    base: u32,
+    at: usize,
+    next_local: usize,
+    block_types: &'a HashMap<usize, u32>,
+}
+
+impl WasmState<'_> {
+    fn block_type(&self, arity: usize) -> Result<u32, String> {
+        self.block_types
+            .get(&arity)
+            .copied()
+            .ok_or_else(|| format!("compute.wasm: no block type was declared for {arity} value(s)"))
+    }
+
+    /// `local.set` each of `locals`, innermost first, so the outermost ends up
+    /// holding the topmost stack value.
+    fn set_locals(&self, locals: std::ops::Range<usize>, out: &mut wasm_encoder::Function) {
+        use wasm_encoder::Instruction;
+        for local in locals.rev() {
+            out.instruction(&Instruction::LocalSet(local as u32));
+        }
+    }
+}
+
+/// Lower a fragment's whole body, structured transfers included.
 ///
-/// **A body with a transfer is refused, never emitted straight-line.** The
-/// transfer is already in the IR, so this is the emitter's limit rather than
-/// something the program could not say — and dropping the branch would compile a
-/// fragment that computes a different program than it was lowered from. See
-/// `docs/notes/loop-conversion.md` §8.
-fn straight_line_body(fragment: &KernelFragment) -> Result<&[KernelInstr], String> {
+/// # The three shapes, and what each becomes
+///
+/// - **`Return`** is the function's own `return`: the top `results` values are
+///   already on the stack, and a wasm `return` works from any nesting depth.
+/// - **`If`** is `if`/`else`/`end`, and **the `if` frame is the join label** — so
+///   an arm that leaves for the join is a `br` whose operands are the join's
+///   values, which is why the `if`'s block type is `() -> (i64 × passes)`. A
+///   missing arm falls out of the `if` with the stack as it stood, so a
+///   one-armed branch invents no value for the absent side.
+/// - **`While`** is a `loop` **wrapped in a `block`**. The `loop` is the header
+///   and the `block` is the exit; falling off the loop's `end` and `br`-ing out
+///   of the block both land after the block's `end` carrying `passed_out`
+///   values, which is what makes the two exits agree.
+///
+/// # Why a loop's carried values are locals
+///
+/// A `br` to a `loop` label takes **no operands** — there is nowhere to put
+/// them. So a value that survives the backedge goes in a local: `local.set` on
+/// entry and on the backedge, and `local.get` wherever the body reads it. wasm
+/// locals are engine-SSA'd and live in registers, so this is the fast route and
+/// not a spill.
+///
+/// # A bound worth stating
+///
+/// An `if` and a `while` are both **terminators**, so nothing follows them in
+/// the enclosing block. That covers every kernel body the compute surface
+/// lowers today — a branch's arms end the function, and a reduction's loop is
+/// the last thing the body does — but a body that wanted code *after* a branch
+/// would need the IR to grow a statement list rather than a terminator.
+fn lower_body(
+    fragment: &KernelFragment,
+    state: &mut WasmState<'_>,
+    out: &mut wasm_encoder::Function,
+) -> Result<(), String> {
     fragment
         .body
         .validate()
         .map_err(|broken| format!("compute.wasm: the kernel body is malformed: {broken}"))?;
-    fragment.body.straight_line_instrs().ok_or_else(|| {
-        format!(
-            "compute.wasm: the kernel body allocates {} label(s) and has a transfer, and this \
-                 emitter does not yet emit one",
-            fragment.body.labels
-        )
-    })
+    match &fragment.body.entry {
+        Flow::Block {
+            entry: None,
+            instrs,
+            terminator,
+        } => {
+            let mut frames = Vec::new();
+            lower_instrs(instrs, state, out)?;
+            lower_terminator(terminator, &mut frames, state, out)
+        }
+        _ => Err(
+            "compute.wasm: a kernel body must begin with a block that has no entry label — the \
+             function's own parameters are its first arrival"
+                .to_string(),
+        ),
+    }
+}
+
+fn lower_terminator(
+    terminator: &Terminator,
+    frames: &mut Vec<Frame>,
+    state: &mut WasmState<'_>,
+    out: &mut wasm_encoder::Function,
+) -> Result<(), String> {
+    use wasm_encoder::{BlockType, Instruction};
+    match terminator {
+        Terminator::Return => {
+            out.instruction(&Instruction::Return);
+            Ok(())
+        }
+        Terminator::If {
+            on_one,
+            on_zero,
+            join,
+            passes,
+        } => {
+            // The selector is the `0`/`1` scalar the body left on the stack;
+            // wasm's condition is an `i32`.
+            out.instruction(&Instruction::I32WrapI64);
+            let block_type = state.block_type(*passes)?;
+            out.instruction(&Instruction::If(BlockType::FunctionType(block_type)));
+            frames.push(Frame::Exit {
+                label: Some(*join),
+                arity: *passes,
+            });
+            let mut failure = lower_flow(on_one, frames, state, out);
+            if failure.is_ok()
+                && let Some(on_zero) = on_zero
+            {
+                out.instruction(&Instruction::Else);
+                failure = lower_flow(on_zero, frames, state, out);
+            }
+            frames.pop();
+            out.instruction(&Instruction::End);
+            failure
+        }
+        Terminator::While {
+            header,
+            body,
+            exit,
+            carried,
+            passed_out,
+        } => {
+            let exit_type = state.block_type(*passed_out)?;
+            out.instruction(&Instruction::Block(BlockType::FunctionType(exit_type)));
+            frames.push(Frame::Exit {
+                label: Some(*exit),
+                arity: *passed_out,
+            });
+            out.instruction(&Instruction::Loop(BlockType::FunctionType(exit_type)));
+            let first = state.next_local;
+            state.next_local += carried;
+            frames.push(Frame::Header {
+                label: *header,
+                locals: first..first + carried,
+            });
+            // Entering the loop, the top `carried` values are the header's
+            // parameters.
+            if let Frame::Header { locals, .. } = frames.last().expect("just pushed") {
+                state.set_locals(locals.clone(), out);
+            }
+            let failure = lower_flow(body, frames, state, out);
+            frames.pop();
+            out.instruction(&Instruction::End);
+            frames.pop();
+            out.instruction(&Instruction::End);
+            failure
+        }
+    }
+}
+
+fn lower_flow(
+    flow: &Flow,
+    frames: &mut Vec<Frame>,
+    state: &mut WasmState<'_>,
+    out: &mut wasm_encoder::Function,
+) -> Result<(), String> {
+    match flow {
+        Flow::Block {
+            instrs, terminator, ..
+        } => {
+            lower_instrs(instrs, state, out)?;
+            lower_terminator(terminator, frames, state, out)
+        }
+        Flow::Jump { target, passes } => {
+            use wasm_encoder::Instruction;
+            // The depth a `br` needs counts from the innermost frame, so it is
+            // how many frames sit between here and the one standing for `target`.
+            let position = frames
+                .iter()
+                .rposition(|frame| match frame {
+                    Frame::Exit { label, .. } => *label == Some(*target),
+                    Frame::Header { label, .. } => label == target,
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "compute.wasm: block {} is arrived at, but no enclosing branch stands for it",
+                        target.0
+                    )
+                })?;
+            let depth = (frames.len() - 1 - position) as u32;
+            match &frames[position] {
+                // A loop label takes no operands, so the values go to the locals
+                // the body reads them from.
+                Frame::Header { locals, .. } => {
+                    if locals.len() != *passes {
+                        return Err(format!(
+                            "compute.wasm: block {} takes {} value(s) but the jump passes {}",
+                            target.0,
+                            locals.len(),
+                            passes
+                        ));
+                    }
+                    state.set_locals(locals.clone(), out);
+                }
+                // An exit's values are the `br`'s operands, and they are already
+                // the top of the stack in order.
+                Frame::Exit { arity, .. } => {
+                    if arity != passes {
+                        return Err(format!(
+                            "compute.wasm: block {} takes {} value(s) but the jump passes {}",
+                            target.0, arity, passes
+                        ));
+                    }
+                }
+            }
+            out.instruction(&Instruction::Br(depth));
+            Ok(())
+        }
+    }
 }
 
 /// Lower a sequence of abstract [`KernelInstr`]s into a wasm function body.
@@ -2047,13 +2438,13 @@ fn straight_line_body(fragment: &KernelFragment) -> Result<&[KernelInstr], Strin
 /// (the number of leading host-import function indices, so a defined function
 /// `i` is wasm index `base + i`).  `BufferReadCall`/`BufferWriteCall` lower to
 /// the `read` (index 0) and `write` (index 1) imports.
-fn lower_body(
+fn lower_instrs(
     body: &[KernelInstr],
-    index: &HashMap<KernelId, u32>,
-    base: u32,
+    state: &mut WasmState<'_>,
     out: &mut wasm_encoder::Function,
 ) -> Result<(), String> {
     use wasm_encoder::Instruction;
+    let (index, base) = (state.index, state.base);
 
     for instr in body {
         match instr {

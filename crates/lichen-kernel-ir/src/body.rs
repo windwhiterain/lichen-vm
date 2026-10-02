@@ -271,8 +271,23 @@ impl KernelBody {
                 ));
             }
         }
+        // A loop's `exit` is its own fall-through: with the loop as a terminator
+        // there is no code *after* it, so the exit is the point control reaches by
+        // leaving — and a jump to it is a branch out. Two loops may not share one,
+        // because that would give the label two arrival points again.
+        let mut exits = Vec::new();
+        collect_exits(&self.entry, &mut exits);
+        for (at, id) in exits.iter().enumerate() {
+            if exits[..at].contains(id) {
+                return Err(format!(
+                    "two loops leave for block {}; a label names one arrival point, and a shared \
+                     exit would name two",
+                    id.0
+                ));
+            }
+        }
         for arrived in &named {
-            if !defined.contains(arrived) {
+            if !defined.contains(arrived) && !exits.contains(arrived) {
                 return Err(format!(
                     "block {} is arrived at but nothing defines it; a transfer with no \
                      definition is a block a backend cannot emit",
@@ -281,6 +296,32 @@ impl KernelBody {
             }
         }
         validate_flow(&self.entry, None)
+    }
+}
+
+/// The labels a [`Terminator::While`] leaves for — its fall-through points.
+fn collect_exits(flow: &Flow, out: &mut Vec<BlockId>) {
+    match flow {
+        Flow::Jump { .. } => {}
+        Flow::Block { terminator, .. } => terminator_exits(terminator, out),
+    }
+}
+
+fn terminator_exits(terminator: &Terminator, out: &mut Vec<BlockId>) {
+    match terminator {
+        Terminator::Return => {}
+        Terminator::If {
+            on_one, on_zero, ..
+        } => {
+            collect_exits(on_one, out);
+            if let Some(on_zero) = on_zero {
+                collect_exits(on_zero, out);
+            }
+        }
+        Terminator::While { body, exit, .. } => {
+            out.push(*exit);
+            collect_exits(body, out);
+        }
     }
 }
 
