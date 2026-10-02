@@ -1,8 +1,9 @@
 # Floating point: `Float` as a ninth kind marker
 
 > Status: **proposed.** Nothing here is implemented. This is the shape of the
-> change and the list of decisions still open, not a description of what the code
-> does today. Today the only numeric value the lowlevel has is `USize`.
+> change and the decisions taken for it — the width, the relation to `Int`, and
+> where a conversion is allowed to happen (§4) — not a description of what the
+> code does today. Today the only numeric value the lowlevel has is `USize`.
 >
 > Points at: `crates/lichen-lowlevel/src/lib.rs` (`LowValue`, `LowShape`),
 > `crates/lichen-lowlevel/src/codec.rs` (the value tags),
@@ -10,8 +11,9 @@
 > `crates/lichen-highlevel/src/program.rs` (`TypeValue`, `ValueType`),
 > `crates/lichen-language-lex/src/lib.rs` (`RawToken`, `TokenKind`),
 > `crates/lichen-language-parser/src/`, `crates/lichen-render/src/render/`
-> (`struct_field_names`), `crates/lichen-kernel-ir/src/lib.rs` (`KernelBin`,
-> `IntWidth`), and [language-spec](../language-spec.md) for the syntax.
+> (`ValuePrinter`), `crates/lichen-kernel-ir/src/lib.rs` (`BufferSlot`,
+> `ParallelBackend`, `KernelInstr::Const`, `IntWidth`), and
+> [language-spec](../language-spec.md) for the syntax.
 > The demand is recorded in [whiting-scene-document](whiting-scene-document.md);
 > the decision rule this has to be argued against is
 > [plugin-taxonomy](plugin-taxonomy.md).
@@ -73,16 +75,14 @@ that its semantic core is small enough to live where the marker does.
 
 ## 3. The sites
 
-Seven groups, in dependency order. The first two are the ones that decide
-whether the rest is cheap.
+Eight groups, in dependency order. The first two are the ones that decide
+whether the rest is cheap, and the last is the only one that touches a backend.
+§4 records the three decisions this list is shaped by.
 
 ### 3.1 The lowlevel value
 
-`LowValue::Float(f64)` beside `USize`. `f64` rather than `f32` because the
-consumer's document is float-valued and a scene carries colour and transform
-matrices; the four-byte boundary is a packing decision made where the buffer is
-built, not a property of the value. `ValueExt` needs no work — a float is not a
-handle and is not traced.
+`LowValue::Float(f32)` beside `USize` — `f32`, for the reasons in §4.1.
+`ValueExt` needs no work: a float is not a handle and is not traced.
 
 `LowShape` (`crates/lichen-lowlevel/src/lib.rs:209`) needs `Float` beside
 `USize`. `LowShape` is the kernel-safe scalar subset and is the thing a backend
@@ -113,22 +113,36 @@ the lexer resolves longest-match, so `3.5` must lex as one token while `x.5`
 regex alone, is what makes this decidable, and the test that settles it is a
 lexer test over the four shapes rather than a parser change.
 
-`TokenKind` gains `Float(f64)` beside `Int(usize)`, plus `KwFloat` beside
+`TokenKind` gains `Float(f32)` beside `Int(usize)`, plus `KwFloat` beside
 `KwInt` — the type constant is a keyword for the same reason `Int` is. Negative
 literals are unary minus today and stay that way; `-1.5` is `Minus`, `Float`.
 
 ### 3.4 The parser and the literal's type
 
-A literal builds a pair: `Float(f) : [float, K]` for `Float(f)`. The parser's
-literal arm is where a `USize` literal is given `[int, K]` today.
+A literal builds a `[value, type]` pair. `Int(5)` builds
+`[USize(5), [int, K]]` today; `Float(1.5)` builds
+`[Float(1.5), [float, K]]`, and the parser's literal arm is the one place that
+pair is built. §4.2 is what keeps this a single arm rather than a decision: the
+literal's type is its own class, with nothing to choose.
 
 ### 3.5 The printer
 
 `lichen-render`'s `ValuePrinter` spells a `LowValue`; an unhandled variant is a
-diagnostic that prints nothing. `f64` needs a spelling that **round-trips**, and
-that is a real constraint rather than a style one: the printer's output is what
+diagnostic that prints nothing. A float needs a spelling that **round-trips**,
+and that is a constraint rather than a style one: the printer's output is what the
 `README` examples and the `readme.rs` sync test compare, and `1.0` printed as `1`
-would read back as a different `LowValue` in a different language.
+reads back as an `Int` — a different `LowValue`, which §4.2 makes a different
+type, so the round trip would not merely lose a digit, it would change what the
+program means.
+
+This is not hypothetical: the consumer hits it. Its `Value::Float` `Display` is
+`inner.to_string()`, and Rust's float `to_string` prints `1` for `1.0`.
+
+`Str` has no escapes and no concatenation, which is why it round-trips by being
+atomic. A float should take the same accident, with the one addition `Str` does
+not need: printing is the only place a float becomes text, so that place has to
+keep the digits Rust's own shortest-round-trip formatting chooses, and nothing
+else may re-spell a float.
 
 ### 3.6 The artifact codec — two tag spaces, both full
 
@@ -143,70 +157,106 @@ before any code:
 Both next-tags being `8` is a coincidence, not a shared space. They are separate
 encodings and one may be read without the other.
 
-`Str` has no escapes and no concatenation, which is why it round-trips by being
-atomic. A float has the same accident available and should take it: printing is
-the only place a float becomes text, and a shortest-round-trip format keeps that
-one place honest.
-
 ### 3.7 The operators
 
-[operators](operators.md) is the note that owns the operator set. A float needs
-`+ - * /` and the four comparisons, and each raises the same question the integer
-set already answers: whether one operator leaf dispatches on the operand's class
-or whether a float leaf exists beside the integer one. The answer is recorded
-there and must not be restated here.
+[operators](operators.md) is the note that owns the operator set, and §4's
+second decision is what a float means *to* that set, so the two are read
+together. A float needs `+ - * /`; it does **not** need a conversion operator,
+and that is a consequence rather than an omission — see §4.2.
 
-## 4. Decisions this note does **not** make
+`==`/`!=` are the one place the decision has a visible edge. They are the
+**generalized** equality over "any two same-typed values" (`operators.md` §1),
+and `Int` and `Float` are now two types, so `1 == 1.0` compares two
+differently-typed values and does not check. That is the consistent answer
+rather than a special case to argue for: any answer that made it true would be a
+conversion wearing a comparison's clothes, and would have to be argued twice —
+once here and once in the kernel boundary of §3.8.
 
-Each is a genuine fork, not an oversight, and each is cheaper to decide before
-the lexer changes than after.
+### 3.8 The kernels
 
-**Width and rounding.** `f64` in the value is proposed above. What a float
-*rounds to* when an artifact is written, and whether `Float` is a machine float
-or an exact rational, is open. An exact rational would be a much better fit for a
-language whose thesis is "types are values" and a much worse fit for a buffer
-that has to be four little-endian bytes per component.
+`LowShape` gains `Float` beside `USize`, and the join needs no new rule: the
+lattice already sends two different decided shapes to `Unknown`
+([lowlevel-low-types](lowlevel-low-types.md)), so `USize ∨ Float` is `Unknown`,
+which is the bottom a backend already falls back on. That part is free.
 
-**Whether `Int` unifies with `Float`.** lichen has no subtyping, and the warning
-in the root [README](../../README.md) is explicit that a compound type is typed by
-its kind. Three answers, all defensible:
+The rest is not free, because the kernel ABI is `i64` in five places at once:
 
-- *distinct, no widening.* `1 + 1.5` does not check. Honest, and it makes every
-  mixed expression an explicit conversion — which is a conversion operator that
-  does not exist yet.
-- *distinct, widening at the literal only.* An `Int` **literal** in a position
-  the checker has decided is float-typed widens; an `Int` **value** does not.
-  This is not subtyping — it is a literal rule, and the checker already knows a
-  literal's provenance because it just built it. It is the answer that makes
-  scene documents readable without giving up the no-subtyping stance.
-- *widen by unification.* This is subtyping, and it contradicts the README.
+| what | where |
+|---|---|
+| `BufferSlot::Host(&'a [i64])` | `crates/lichen-kernel-ir/src/lib.rs:64` |
+| `ParallelBackend::run(…, inputs: &[BufferSlot], …)` | `:156` |
+| `ParallelBackend::fetch(id, count) -> Result<Vec<i64>, String>` | `:192` |
+| `KernelInstr::Const(i64)` | `:371` |
+| `IntWidth { I64 }` | `:267` |
 
-The consumer's own schema takes the same position as the first answer — its
-`Int` and `Float` are distinct kinds and an `Int` value does not satisfy a
-`Float` schema — which is evidence for "distinct" and says nothing about the
-literal rule.
+`fetch` is the one to read twice: it is the **read-back**, so a float result
+buffer comes back as `i64` unless the ABI itself moves. That is a larger change
+than widening `IntWidth`, and it is why §4.3 is the costliest of the three.
 
-**Whether a float reaches a kernel.** `KernelBin` is integer-only and
-`IntWidth` has exactly one variant, `I64`; `KernelInstr::Const` carries an `i64`.
-So today a float cannot be `jit`-ed, `launch`-ed, or dispatched to a device. A
-`LowShape::Float` that no backend traces is a value only the interpreter can
-read, which is a narrower feature than it looks and should be described that way
-until [lowlevel-low-types](lowlevel-low-types.md) and
-[compute-jit-low-types](compute-jit-low-types.md) say otherwise. Whether the
-kernels widen is a separate, larger decision: it touches the wasm and SPIR-V
-backends and the `i64` scalar ABI that
-[compute-graph-jit](compute-graph-jit.md) is built on.
+## 4. Decisions
 
-**Whether a float is a `Str`-like opaque scalar or a first-class number.** `Str`
-is atomic and `Copy`; a float can be both, and staying `Copy` with no payload
-handle is what makes it free in the GC and in the freeze path.
+Three forks, all answered. Each was cheaper to decide before the lexer moves
+than after.
+
+### 4.1 `f32`, not `f64`
+
+Most GPUs are `f32`, and the demand is a scene document whose bulk is vertex
+data. More usefully, it is the width the consumer's buffer already uses: a
+whiting packed component is four little endian bytes, which is exactly an `f32`,
+so the seam is a copy rather than a conversion.
+
+The consumer's **in-document** float is `f64` (`whiting-definition`
+`value.rs:42`), so the handoff widens `f32 → f64` — exact, and one-directional.
+A scene whiting authored may carry values this `Float` rounds; that is fine,
+because lichen authors scenes here and does not edit them.
+
+An exact rational was considered and rejected on the same grounds: a buffer has
+to be four bytes per component, and a rational has no fixed width.
+
+### 4.2 `Int` and `Float` do not convert
+
+Not by subtyping, and not by a literal rule either. The language says nothing
+about mixing them: `1 + 1.5` does not check, and neither does a `1` that came
+out of a `let`. This is the strongest form of the no-subtyping stance in the root
+[README](../../README.md), and it is also what the consumer's own schema already
+takes — its `Int` and `Float` are distinct kinds and an `Int` value does not
+satisfy a `Float` schema.
+
+### 4.3 The JIT converts across the IR, on demand
+
+**Where it can fire is the whole content of this decision, and it is narrower
+than "wherever a float meets an integer".** §4.2 means a fragment is homogeneous
+by construction: a kernel body is written in one type or the other, never both,
+so there is no intra-expression conversion for the lowering to insert. The
+conversion is a **boundary** conversion, at the two places where a class is not
+already agreed:
+
+- a buffer of floats reaching a fragment whose `LowShape` is `Unknown` — the
+  conservative bottom, where the backend was always going to pick something;
+- a fragment whose declared `IntWidth` disagrees with the class of the slot it
+  reads or writes.
+
+Both are places where **nothing above the backend decided**, which is the only
+place a conversion can honestly be a lowering's choice rather than a type
+system's.
+
+**The invariant that has to be written down with this, not after:** the checker
+never sees a conversion, so a wrong one is a wrong number and not a type error.
+And `i64 → f32` is exact only below 2^24, so a large `Int` that reaches a kernel
+as a float is a rounded answer that checked perfectly. This is the same class of
+failure the whiting notes keep returning to — a wrong image nobody sees until the
+render finishes — and the answer is the one they settled on: a note that says so,
+beside the value, not silence.
 
 ## 5. What landing this would look like
 
-Phase 0 is the whole of §3.1–§3.6 with §4's first three decisions answered, and
-nothing else: a float literal checks, prints, round-trips through an artifact,
-and is refused by every kernel rather than silently mis-encoded. Phase 1 is
-§3.7. Phase 2 is the kernel widening, if it is ever wanted.
+Phase 0 is §3.1–§3.6: a float literal checks, prints, round-trips through an
+artifact, and is **refused by every kernel** rather than silently mis-encoded —
+which under §4.3 means the conversion does not exist yet, so phase 0's float is
+a value only the interpreter can read.
+
+Phase 1 is §3.7 and the operator set. Phase 2 is §3.8, and it is the only phase
+that touches a backend.
 
 The verification for phase 0 is four tests, one per round-trip that can fail
 quietly: a literal's pair; the printer's spelling re-lexed and re-checked; an
@@ -218,7 +268,8 @@ no handle has to survive being filed under an occurrence path.
 
 - [whiting-scene-document](whiting-scene-document.md) — the demand for this
 - [plugin-taxonomy](plugin-taxonomy.md) — why this is a compiler plugin
-- [operators](operators.md) — the operator set §3.7 edits
-- [lowlevel-low-types](lowlevel-low-types.md) — `LowShape` and what a backend traces
-- [compute-jit-low-types](compute-jit-low-types.md) — the `i64` kernel ABI
+- [operators](operators.md) — the operator set §3.7 edits, and `==` over two types
+- [lowlevel-low-types](lowlevel-low-types.md) — the `LowShape` lattice §3.8 joins on
+- [compute-jit-low-types](compute-jit-low-types.md) — what a backend traces from a shape
+- [compute-graph-jit](compute-graph-jit.md) — the `i64` kernel ABI §3.8 moves
 - [language-spec](../language-spec.md) — the syntax this changes
