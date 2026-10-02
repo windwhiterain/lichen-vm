@@ -2365,8 +2365,26 @@ where
         if let Some(definer) = class_computation_node(module, node) {
             return emit_node(module, params, definer, body, tally);
         }
+        // **A node nothing can resolve, described rather than numbered.** This used
+        // to report only its `NodeId`, which is a compiler-internal number: the
+        // reader learns that something is unresolvable and nothing about what.
+        //
+        // **It does not claim one cause, because this shape has more than one** and
+        // naming the wrong one is worse than naming none. Every way this is reached
+        // is the same fact underneath: a kernel is compiled from a template
+        // **before any apply**, so a binding the body would have filled in at run
+        // time is still empty here. A `let` alias whose value comes from a buffer
+        // read is one; a helper defined in the body rather than at module level is
+        // another; a `compute.call`'s callee wrapper is a third. The message says
+        // so, and the two ways to write past it, without claiming which one this is.
         return Err(format!(
-            "kernel body hits a node with neither value nor operation (node={node:?})"
+            "a kernel body reached a node with neither a value nor an operation, so there is \
+             nothing to emit for it (node={node:?}). A kernel is compiled from a template before \
+             any apply, so a binding the body would fill in at run time is still empty here — a \
+             `let` alias fed by a buffer read, a helper defined in the body rather than at module \
+             level, and a `compute.call`'s wrapper all have this shape. Move the binding to module \
+             level, or write what it would have computed directly into the expression the kernel \
+             uses"
         ));
     };
 

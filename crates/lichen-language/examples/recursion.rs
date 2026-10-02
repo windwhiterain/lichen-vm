@@ -61,6 +61,88 @@ p = compute.parallel (cfg => {
 compute.read [compute.plrun p (8,), 3]
 "#;
 
+/// A **module-level** helper called from inside a parallel body — the
+/// composition case, and the one a library would actually be written in.
+const MODULE_HELPER: &str = r#"
+@{ compute = import "compute.lichen" @}
+square = x => x * x
+p = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  v = compute.read [cfg(1)(0), i]
+  compute.write [n, i, square v]
+}) "BACKEND"
+seed = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + 1]
+}) "BACKEND"
+s = compute.plrun seed (8,)
+compute.collect (compute.plrun p (8, (s,)))
+"#;
+
+/// A single-parameter recursive helper whose trip count is a **literal** at the
+/// call site. Expansion only terminates if the conditional's selector folds to a
+/// constant, so this is the program that says whether it does.
+const RECURSIVE_LITERAL: &str = r#"
+@{ compute = import "compute.lichen" @}
+steps = k => if k == 0 then 0 else steps (k - 1) + 1
+p = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, steps 4 + compute.range n * 0]
+}) "BACKEND"
+compute.read [compute.plrun p (8,), 3]
+"#;
+
+/// A **body-local alias** and no call at all. This is the control for the two
+/// probes above: if it fails, the alias — not the inlining — is what cannot be
+/// resolved in an unapplied template.
+const BODY_LOCAL_ALIAS: &str = r#"
+@{ compute = import "compute.lichen" @}
+p = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  v = compute.read [cfg(1)(0), i]
+  compute.write [n, i, v]
+}) "BACKEND"
+seed = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + 1]
+}) "BACKEND"
+s = compute.plrun seed (8,)
+compute.collect (compute.plrun p (8, (s,)))
+"#;
+
+/// The helper called with a **literal** argument, so nothing but the callee is
+/// unresolved. This separates "the callee cannot be found" from "the argument
+/// cannot be re-emitted".
+const HELPER_LITERAL_ARG: &str = r#"
+@{ compute = import "compute.lichen" @}
+square = x => x * x
+p = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, square 3]
+}) "BACKEND"
+compute.collect (compute.plrun p (4,))
+"#;
+
+/// The same helper, called with an argument the **host cannot reduce** —
+/// `i + 1` depends on the loop index, so the call survives to the kernel
+/// compiler. This is the case static expansion exists for.
+const HELPER_INDEX_ARG: &str = r#"
+@{ compute = import "compute.lichen" @}
+square = x => x * x
+p = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, square (i + 1)]
+}) "BACKEND"
+compute.collect (compute.plrun p (4,))
+"#;
+
 /// A `jit` chain `k0 → k1 → … → k{N-1}`, each adding one, plus a parallel kernel
 /// that calls the last. **The hand-written, un-expanded form of a loop.**
 fn chain(depth: usize) -> String {
@@ -151,6 +233,30 @@ fn main() {
         };
 
         println!("  -- expressibility --");
+        probe(
+            "helper, index-dependent argument",
+            &HELPER_INDEX_ARG.replace("BACKEND", backend),
+        );
+        probe(
+            "helper, literal argument",
+            &HELPER_LITERAL_ARG.replace("BACKEND", backend),
+        );
+        probe(
+            "body-local alias, no call",
+            &BODY_LOCAL_ALIAS.replace("BACKEND", backend),
+        );
+        probe(
+            "module-level helper in a body",
+            &MODULE_HELPER.replace("BACKEND", backend),
+        );
+        probe(
+            "recursive helper, literal count",
+            &RECURSIVE_LITERAL.replace("BACKEND", backend),
+        );
+        probe(
+            "body-local helper in a body",
+            &RECURSIVE_INLINE.replace("BACKEND", backend),
+        );
         probe(
             "call in a scalar body",
             &CALL_IN_SCALAR_BODY.replace("BACKEND", backend),

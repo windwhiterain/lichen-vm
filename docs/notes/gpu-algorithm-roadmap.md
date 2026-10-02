@@ -100,87 +100,117 @@ does the language layer have to change to accommodate it — because that rule i
 what decides whether a package manager can pull the feature or the compiler has
 to be written with it.
 
-### 4.1 Axis B, in two parts: unrolling, and a loop that runs
+### 4.1 Axis B: **already in the language**, and what it does not reach
 
-These are commonly the same request. They are not the same feature, and the
-difference is the whole of the value.
+**Correction, made by writing the feature and finding it unnecessary.** This
+section argued for a "static expansion" — a compiler pass that inlines a
+recursive function to a compile-time depth — on the strength of a comment in
+`emit_node`'s `Apply` arm reading *"Style 1: a full lichen-function call (inline
+its body) — deferred"*. **That comment describes the unreduced case, and the
+reduced case already works.** Measured, on unmodified `dev`:
 
-**B1 — the compiler expands calls to a finite depth.** A recursive function,
-expanded at kernel-compile time to a straight-line body, with the depth a
-compile-time constant. The IR needs nothing: it already has no loops, and an
-expanded body contains no instruction a kernel does not already have. The wasm
-and SPIR-V emitters are unchanged.
+```lichen
+@{ compute = import "compute.lichen" @}
+square = x => x * x
+p = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, square (i + 1)]
+}) "gpu"
+-- [1, 4, 9, 16]
+```
 
-**Recursion is the surface, and it should be** — it answers
-[§7](#7-what-this-does-not-decide)'s open question with "a new form, and no
-codesign", and three things already line up behind it:
+and `square 3` gives `[9, 9, 9, 9]`, and a self-recursive `steps = k => if k == 0
+then 0 else steps (k - 1) + 1` applied as `steps 4` gives `4 : Int` — **all
+three before any change.** A same-module call in a kernel body is already
+inlined, and recursion with a decidable trip count already works.
 
-- **The code names this mechanism.** `emit_node`'s `Apply` arm reads
-  `// Style 1: a full lichen-function call (inline its body) — deferred`. B1 is
-  that comment made true, and the arm already sits next to the style-2 path
-  that works.
-- **A call in a body is already a solved problem — in one of the two body
-  shapes.** `k1 = compute.jit (v : Int => compute.call k0 v + 1)` runs and
-  answers `5 : Int`. "One kernel body calls another" needs no new concept.
-- **A recursive function's base case is an instruction the IR already has.**
-  `KernelInstr::Select` is a two-element conditional with no jump, which is
-  exactly what `if k == 0 then … else …` lowers to.
+**The mechanism is the deep pass, not the emitter.** `emit_node`'s own comment
+says it: the apply-clone *"unifies* a substituted parameter with the argument, so
+a reduced same-module call's parameter reference resolves to this kernel's
+parameter — emit a `local.get` for it instead of failing." The body is reduced
+before it is lowered, so by the time the emitter walks it there is no call left
+to expand. An emitter-side inlining pass is therefore not merely redundant, it
+is **unreachable** — no program written for this reached it, and the attempt was
+reverted rather than shipped as dead code.
 
-- **A native plugin.** No grammar production, no AST node, no IR form, no
-  persist discriminator: the syntax is recursion, which the grammar already has.
-- **What it buys**: `dot`, `sum` and `map` become functions rather than
-  hand-written unrollings, usable at a size the author names, and a recursive
-  function that is *not* a kernel is the same definition used both ways.
-- **What it does not buy**: a trip count that is not visible at kernel-compile
-  time. A kernel is compiled from a **template, before any apply**
-  ([compute-jit-low-types](compute-jit-low-types.md)), so a depth the host
-  computed at run time is not there to expand. The escape is per-call-site
-  specialization, which that note lists as "a fact about the language, not a
-  mechanism gap" — so **this restriction is not specific to recursion**, and a
-  bounded loop form would have exactly the same one.
-- **Recommended, first, cheap** — and the honest framing is **expressibility,
-  not speed and not capability.** See the measurement below.
+**What the unreduced case actually is, and it is one fact.** A kernel is
+compiled from a **template, before any apply**
+([compute-jit-low-types](compute-jit-low-types.md)). So a binding the body would
+fill in at run time is still empty when the kernel is compiled:
 
-**What the measurement says, because it removes the reason to inline.** A body
-of one add and a body of eight adds, over 262 144 elements, whole program, best
-of 10:
-
-| body | cpu | gpu |
+| program | result | why |
 |---|---|---|
-| 1 add, unrolled | 266 ms | 2.35 ms |
-| 8 adds, unrolled | 237 ms | 2.45 ms |
+| `square (i + 1)`, `square` at module level | works | the callee is a module binding, already in the graph |
+| `square v`, `v` a body-local alias fed by a read | refused | `v` is an empty cell in the unapplied template |
+| a helper *defined in the body*, called there | refused | the callee binding is itself empty |
+| a trip count the host computed at run time | refused | nothing decided it before the template was lowered |
 
-**The depth is free.** The two are the same within noise, on both backends,
-because the body's arithmetic is nothing next to the per-element dispatch. So
-the performance argument for expanding a call away is empty — and the argument
-*against* keeping `CallKernel` is that a runtime call is the one thing that
-would cost something per element per level. B1 is worth building to make a loop
-**expressible**; if it were *not* an inline it would be a loss.
+**So there is no missing expansion pass. There is a missing *apply*.** The
+enabling change is compiling a kernel against an **applied** body — which is
+per-call-site specialisation, and [compute-jit-low-types](compute-jit-low-types.md)
+already parks that as "a fact about the language, not a mechanism gap" rather
+than a codegen one. That is the same fork §7 names, and it is a larger decision
+than this roadmap should make.
 
-**B2 — a loop that runs on the device.** A real loop in the shader, with a
-runtime trip count. This is a new IR form, and it is not confined to the GPU:
-the wasm emitter has exactly one branch (`Select`, a two-element conditional
-with no jump), so a device loop has no wasm counterpart and the backend
-contract would have to say what a target that cannot express one does.
+**Recommended: nothing here.** Not a "small first win" — the feature exists. What
+the work *did* leave is two refusals that were reporting a compiler-internal
+`NodeId` and nothing else; both are named now, and §8 has the third.
 
-- **Not recommended yet.** Nothing in the ladder needs it, a uniform-trip-count
-  loop is a B1 special case, and a non-uniform one is a *workgroup* problem
-  (C) wearing a loop's clothes.
-- It is listed in §5 as explicitly not proposed.
+**What survives of the original B1/B2 split.** B1 is answered: recursion and
+composition are both expressible, within the limit above. B2 — **a loop that runs
+on the device, with a runtime trip count** — is unchanged and still not
+recommended. It is a new IR form; the wasm emitter has exactly one branch
+(`Select`, a two-element conditional with no jump), so a device loop has no wasm
+counterpart and the backend contract would have to say what a target that cannot
+express one does. Nothing in the ladder needs it, and it is the one case
+§7's specialisation fork would *not* cover either, which is what keeps it open.
+Listed in §5 as explicitly not proposed.
+- **It is a compiler plugin**, and it is *already codesigned*. `Perspective` is
+  the reference compiler plugin; the grammar production, AST fields, IR form
+  and persist discriminator all exist. This axis adds no new codesign — which
+  makes it the **cheapest capability in this roadmap by a wide margin.**
+- **The machinery is half-built.** The emitter's stack already records, per
+  slot, whether a value is a scalar or a `bool`, because "was this a
+  comparison" is knowledge only the walk has
+  ([lichen-compute-gpu](lichen-compute-gpu.md#the-two-type-facts-the-ir-does-not-carry)).
+  "Is this uniform" is the same kind of fact about the same stack.
+- **What it does not buy**: it makes a body that is already correct run wider.
+  It cannot express a scan, a sort, a reduction or a scatter. **Axis C is a
+  constant factor, not a capability** — it multiplies the width of what a
+  dispatch already computes, and a kernel that is one element per invocation
+  stays one element per invocation for everything it cannot yet say. It is
+  first because it is cheap, not because it is the prize.
+- **Recommended, first.**
 
-**And one thing B1 cannot start from.** The only route to a cross-kernel call
-on a device is from inside a parallel body, and **that is broken today**: a
-`compute.call` in a parallel kernel body is refused with
+**The mismatch this exposes, which is a real finding and not a detail.** The
+`Perspective` lattice is **divisibility** — `attributes.md` is explicit that
+`2 ⊑ 4` and that `4` and `6` are incomparable. A hardware group is a small fixed
+width: a sub-group is 8, 16 or 32 depending on the target, and this backend's
+workgroup is 64. So the language can express a uniformity width that **no
+device has**, and the emitter must either refuse it, round it down, or round it
+to a power of two. Rounding silently would be the worst of the three: a body
+proved uniform over 6 lanes is not automatically uniform over 4, and the program
+would not know which answer it got. This is §7's first open question.
 
-> `compute.parallel: kernel body hits a node with neither value nor operation
-> (node=NodeId(394v1))`
+**And the part C does not cover.** A lane group that cannot talk to itself buys
+throughput, not capability. Tiled matrix multiply, a scan and a sub-group
+reduction all need **shared memory and a barrier** — lanes seeing each other's
+intermediate results. That is a *third* thing, distinct from both the width and
+the unroll, and it is the largest single item in this roadmap:
 
-on both backends, while the same call in a *scalar* body works. So the GPU has
-no working call at all — the failure is in the compiler, before any backend
-sees it, and `SpirvRefusal::CrossKernelCall` is a refusal no lichen program can
-currently provoke. **That is a defect to fix first**, and it is smaller than
-B1: it is the seam B1 would build on, and until it holds there is nothing to
-measure an expansion against.
+- **The surface is a native plugin** (a new operator, a new buffer kind bound at
+  a group scope, a barrier op) — but the *IR* must grow, because a fragment has
+  no notion of local memory or of a synchronisation point. So it is the first
+  item here that is not confined to `lichen-compute`.
+- **What it buys**: it is the axis that makes scan, sort, tiled matmul and
+  sub-group reduction expressible at all. Every one of those is out of reach
+  without it, and reachable with it.
+- **What it does not buy**: anything on its own. A workgroup that cannot talk to
+  itself is B1 in costume.
+- **Recommended, and the one to argue about** — because it is the most expensive
+  item and the one whose payoff depends on algorithms the language still cannot
+  write, for want of E.
 
 ### 4.2 Axis C: lane width, and the consumer `Perspective` has been waiting for
 
@@ -375,19 +405,18 @@ for declaring contention. Whether that is a second `Perspective` order, a new
 declaration — three answers with different costs, and the second of them is a
 codesign.
 
-**What the unroll's surface is. — Answered in [§4.1](#41-axis-b-in-two-parts-unrolling-and-a-loop-that-runs):
-recursion.** The grammar already has it, the emitter already names the
-mechanism (`inline its body`), and a base case is already an instruction. The
-consequence is that B1 is a **native plugin** rather than a compiler plugin,
-which is the cheapest possible classification.
-
-What it does *not* settle is the depth bound. A kernel is compiled from a
-template before any apply, so a trip count the host computed at run time cannot
-be expanded — and that restriction belongs to **per-call-site specialization**,
-which [compute-jit-low-types](compute-jit-low-types.md) calls "a fact about the
-language, not a mechanism gap". So the question is not about the unroll's
-syntax at all; it is whether the language ever compiles a kernel against a call
-site, and that is a larger decision than this roadmap should make.
+**Does the language ever compile a kernel against a call site? — This is the
+fork, and [§4.1](#41-axis-b-already-in-the-language-and-what-it-does-not-reach)
+is where it was found rather than first seen.** Same-module calls and recursion
+are already inlined by the deep pass, so the question was never the unroll's
+syntax; it is whether a kernel is ever compiled against an *applied* body, which
+is what a run-time trip count and a body-local binding both need.
+[compute-jit-low-types](compute-jit-low-types.md) calls per-call-site
+specialisation "a fact about the language, not a mechanism gap", and that is
+the honest classification: it is not a codegen task, so it does not belong in a
+roadmap about what a kernel can express. It decides two of the four axes' limits
+at once, which is why it is worth naming here even though it is not this
+document's to decide.
 
 ## 8. The defects, and which are fixed
 
@@ -415,22 +444,31 @@ for a decided one; all three refuse by name now.
 Neither is a gap in the primitive, but the second is the symptom of axis A, and
 fixing it without axis A leaves a refusal where a user wants a feature.
 
-**A cross-kernel call in a parallel body is refused without naming its cause —
-open, and the first thing to fix.** A `compute.call` inside a parallel kernel
-body answers *"kernel body hits a node with neither value nor operation
-(node=NodeId(394v1))"* on both backends, while the identical call in a *scalar*
-body works. Three things follow, and they compound:
+**An unresolvable node was reported as a `NodeId` — fixed, and the cause is
+wider than the one case that was found.** A kernel body that reached a node with
+neither a value nor an operation answered *"kernel body hits a node with neither
+value nor operation (node=NodeId(394v1))"* — a compiler-internal number, and the
+only refusal in the compute surface that named nothing.
 
-- it is the only refusal in the compute surface that does not name its own
-  cause, and it names a `NodeId` — a compiler-internal number — to do it;
-- **the GPU has no working call at all**, because only `parallel` names a
-  backend, so a device call is reachable *only* from a parallel body, and that
-  path fails in the compiler before any backend sees it. So
-  `SpirvRefusal::CrossKernelCall`, which
-  [lichen-compute-gpu](lichen-compute-gpu.md#not-yet) documents as the reason
-  cross-kernel calls are out of scope there, **is a refusal no lichen program
-  can currently provoke**;
-- it is the seam axis B1 would be built on, and it is smaller than B1.
+The message now names the fact all of these share — *a kernel is compiled from a
+template before any apply, so a binding the body would fill in at run time is
+still empty* — and lists the three shapes that reach it, **without claiming
+which one this is**, because a refusal that names the wrong cause sends the
+reader to the wrong place. The three, all confirmed on both backends:
 
-So the order is: fix this, then B1, and only then is there anything to measure
-an expansion against.
+| program | result |
+|---|---|
+| a `compute.call` inside a **parallel** body (the identical call in a *scalar* body works) | refused |
+| a module-level helper called with a **body-local alias** fed by a read | refused |
+| a helper **defined in the body** and called there | refused |
+
+The first is the one on the critical path, and the reason is unchanged by the
+better message: **only `parallel` names a backend, so a device cross-kernel call
+is reachable *only* from a parallel body**, and that path fails in the compiler
+before any backend sees it. So `SpirvRefusal::CrossKernelCall`, which
+[lichen-compute-gpu](lichen-compute-gpu.md#not-yet) documents as the reason
+cross-kernel calls are out of scope there, **is a refusal no lichen program can
+currently provoke**.
+
+**What is left is not the message, it is the three cases.** All three are the
+same missing *apply* §4.1 is about, and none is fixed by naming them.

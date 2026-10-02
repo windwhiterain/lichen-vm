@@ -77,19 +77,19 @@ each other, a barrier, shared memory, and a sub-group reduction. None of those
 exist, and none of them can be built out of what is here — they are a different
 primitive, not a bigger version of this one.
 
-**Recursion is the other way to write a loop, and it is not available either.**
-A self-referential kernel is refused *by name* —
+**Recursion is the other way to write a loop, and it already works** — on
+unmodified `dev`. `square (i + 1)` in a kernel body gives `[1, 4, 9, 16]`, and a
+self-recursive `steps = k => if k == 0 then 0 else steps (k - 1) + 1` applied
+as `steps 4` gives `4 : Int`. The deep pass reduces a same-module call and
+unifies the substituted parameter with the argument *before* the emitter walks
+the body, so there is no call left to expand — see
+[below](#and-the-thing-this-corrected-static-expansion-already-exists).
 
-> `compute.jit: cross-kernel call target is not a kernel value`
-
-— and that is not a missing feature but a **structural** one: a `KernelId` is
-assigned by `jit`/`parallel`, so a body that names its own kernel would need the
-id before the kernel exists. Mutual recursion fails the same way. **A cycle in
-the kernel registry is unwritable, not merely unsupported**, which means
-recursion can only ever be *expanded to a finite depth at compile time* — and
-that is unrolling under another name. See
-[gpu-algorithm-roadmap §4.1](gpu-algorithm-roadmap.md#41-axis-b-in-two-parts-unrolling-and-a-loop-that-runs)
-for what that buys and what it does not.
+What does **not** work is a callee or an argument bound *inside* the body, or a
+trip count the host computed at run time, and all three are one fact: a kernel
+is compiled from a **template, before any apply**, so a binding the body would
+fill in at run time is still empty. See
+[gpu-algorithm-roadmap §4.1](gpu-algorithm-roadmap.md#41-axis-b-already-in-the-language-and-what-it-does-not-reach).
 
 ### 3. There is no way to get data in
 
@@ -232,8 +232,9 @@ interpreter.
 
 The first two are silent-wrong-answer defects — a plausible answer that is not
 the right one — and both are **fixed** on `feature/gpu-algorithms`, each with a
-test that fails without the fix. The third was found later, by the recursion
-probe, and is **not fixed**; it is the one on the critical path. The proposal's
+test that fails without the fix. The third is a refusal that named nothing; its
+**message is fixed** and the three cases it names are not, because all three are
+one missing *apply*. The proposal's
 [§8](gpu-algorithm-roadmap.md#8-the-defects-and-which-are-fixed) is the
 one-line version of all three.
 
@@ -281,50 +282,59 @@ launch site is the one the ladder actually reached, and it is the one that
 matters: a program that passed a plain array where a buffer belonged used to
 finish and print a type.
 
-### A cross-kernel call in a parallel body is refused without naming its cause
+### An unresolvable node is reported as a `NodeId`
 
-Found later, by the recursion probe below, and **not yet fixed** — it is a third
-defect and a bigger one than the other two, because it is the seam a
-recursion-expansion feature would build on.
+Found later, by the recursion probe below. **The message is fixed; the three
+cases it names are not.**
 
-```lichen
-k0 = compute.jit (v : Int => v + 1)
-p = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write [n, i, compute.call k0 i]
-}) "gpu"
-```
-
-answers, on **both** backends:
+A kernel body that reached a node with neither a value nor an operation answered
 
 > `compute.parallel: kernel body hits a node with neither value nor operation
 > (node=NodeId(394v1))`
 
-Three facts make it worse than a missing feature.
+on **both** backends — a compiler-internal number, and the only refusal in the
+compute surface that named nothing. The message now names the fact all three
+cases share (*a kernel is compiled from a template before any apply, so a
+binding the body would fill in at run time is still empty*) and lists the three
+shapes, **without claiming which one it is**, because naming the wrong cause
+sends the reader to the wrong place.
 
-**It is an unnamed refusal.** Every other refusal in this file names its own
-cause — `INLINE_CALL`, `CONDITIONAL_WRITE`, `UNDECIDED_DOMAIN`, `SpirvRefusal`'s
-variants. This one is the emitter reaching a node it had no arm for, and
-reporting the node. A `NodeId` is a compiler-internal number, so the message
-tells a reader nothing they can act on.
+The three, all confirmed on both backends:
 
-**The same call works in a scalar body.** `k1 = compute.jit (v : Int =>
-compute.call k0 v + 1)` compiles and runs, answering `5 : Int`. So "a kernel
-body calls another kernel" is solved in one of the two body shapes and not the
-other, and the difference is not named either.
+| program | result |
+|---|---|
+| a `compute.call` inside a **parallel** body — the identical call in a *scalar* body runs and answers `5 : Int` | refused |
+| a module-level helper called with a **body-local alias** fed by a buffer read | refused |
+| a helper **defined in the body** and called there | refused |
 
-**It means the GPU has no working call at all.** Only `parallel` names a
-backend, so a cross-kernel call is reachable on a device *only* from inside a
-parallel body — and that path fails in the compiler, before any backend sees
-it. `SpirvRefusal::CrossKernelCall` is therefore never reached from a lichen
-program; the note describes a refusal no program can currently provoke.
+The first is the one that matters, for a reason the message does not change:
+**only `parallel` names a backend**, so a device cross-kernel call is reachable
+*only* from a parallel body, and that path fails in the compiler before any
+backend sees it. `SpirvRefusal::CrossKernelCall` is therefore a refusal no
+lichen program can currently provoke.
+
+**What is left is the three cases, and all three are one missing *apply* — see
+[gpu-algorithm-roadmap §4.1](gpu-algorithm-roadmap.md#41-axis-b-already-in-the-language-and-what-it-does-not-reach).
+Naming them was the cheap half.
+
+### And the thing this corrected: static expansion already exists
+
+The probe was written to ask whether **recursion could stand in for a loop** as
+the unroll's surface. It cannot be *added*, because it is already there: on
+unmodified `dev`, `square (i + 1)` in a kernel body gives `[1, 4, 9, 16]`,
+`square 3` gives `[9, 9, 9, 9]`, and a self-recursive `steps 4` gives `4 : Int`.
+The deep pass reduces a same-module call and unifies the substituted parameter
+with the argument before the emitter ever walks the body, so by then there is no
+call left to expand. The `// Style 1 … deferred` comment in `emit_node` names
+the *unreduced* case, and reading it as "the feature is missing" is what the
+first version of this note did.
 
 **The probe.** `crates/lichen-language/examples/recursion.rs`, run with no
-arguments. It asks the three questions in order — is a call expressible in each
-body shape, is recursion expressible at all, and what does an un-expanded
-`CallKernel` chain cost against the same arithmetic inlined — and prints a
-refusal or a number for each.
+arguments. It asks the questions in order — is a same-module call expressible,
+with a decidable and with an index-dependent argument; is recursion expressible;
+is a call expressible in each body shape; what does an un-expanded `CallKernel`
+chain cost against the same arithmetic inlined — and prints a refusal or a
+number for each.
 
 ## What the ladder did not try
 
