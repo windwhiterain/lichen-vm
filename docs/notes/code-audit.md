@@ -2637,6 +2637,35 @@ inc = x => x + 1
 (loop inc 3 0, loop inc 10 5, loop inc 0 7)   -- (3, 15, 7): <Int, Int, Int>
 ```
 
+**The blast radius is wider than loops, and the repository's own example is
+written around this bug without saying so.** The trigger is not "recursion" and
+not "loops" — it is a **self-referential two-argument call inside a conditional's
+branch**, and the most natural way to write a two-argument recursive algorithm in
+a curried language is exactly that. Euclid, unannotated:
+
+```text
+gcd = a => b => if b == 0 then a else gcd b (a % b)
+gcd 48 18
+-- expected Int, found Int
+```
+
+The same body annotated checks and runs (`6 : Int`) — so the escape applies, and
+Ackermann, a two-parameter fold and a two-parameter tree walk are all in the same
+place. **`examples/gcd.lichen` dodges this twice over**: it takes a **tuple**
+parameter rather than two curried ones *and* writes the type out —
+
+```text
+gcd = (p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : <Int, Int> -> Int
+```
+
+— and its `doc` attributes the annotation to a *different* reason ("under
+self-recursion a call's result is its own type cell"). So the annotation is
+documented as an inference nicety while it is also what keeps the example from
+being refused, and a reader following the natural curried form gets a diagnostic
+that names two identical types. Worth recording because **the shape of the
+example is carrying a constraint the note does not state**, and the cost is paid
+by every program written the obvious way rather than by the one that is shown.
+
 ### P1-34 — The spec and `check_index` disagree about `e[i]` on a tuple or a struct `verified`
 
 **The code says `[i]` is arrays only, deliberately.** `check_index`
