@@ -184,10 +184,19 @@ cross-module-shared artifacts.
 ## 4. Codegen: bytecode fragments, not a module
 
 `jit` emits the function's **body** as a `KernelFragment { param_shape, body,
-inputs, outputs, results, int_width }` — a `Vec<KernelInstr>` of *abstract* instructions, not raw wasm.
+inputs, outputs, input_classes, output_classes, results, int_width }` — a
+`Vec<KernelInstr>` of *abstract* instructions, not raw wasm.
 Splitting "emit bytecode" from "assemble a module" is what lets the launcher
 resolve cross-kernel call indices after the kernel's relative launch set is laid
 out.
+
+`param_shape`'s leaf carries a `ScalarClass`, and `input_classes` /
+`output_classes` are one class per buffer position or write ordinal, because a
+parallel fragment's shape is `(config, index)` however many buffers it reads — so
+the buffers' classes cannot live on the shape. All three are in
+`fragment_digest`, and a fragment with a float anywhere in it is **still refused
+by name**: the classes are a carrier landed ahead of the permission, not the
+permission. See [floating-point](floating-point.md) §4.4.
 
 `inputs` and `outputs` are the two buffer spaces, and both are counted by the
 emitter as it emits the positions rather than declared by hand, so neither can
