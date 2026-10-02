@@ -79,6 +79,7 @@ queue's order is deliberate.
 | P1-33 | medium | highlevel, language | A self-recursive call in a conditional's branch is refused as "expected Int, found Int" | todo |
 | P1-34 | medium | highlevel, language, docs | The spec and `check_index` disagree about `e[i]` on a tuple or a struct | blocked:D16 |
 | P1-35 | medium | language, highlevel, lowlevel | A raw read `X<e>` of a runtime container yields `none` with no diagnostic | done |
+| P1-36 | medium | highlevel | A duplicate kind-marker tag shadows a codec arm and warns instead of failing | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | done (wired: the server's compile worker, `incremental-update.md` §7.6) |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | done |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | done |
@@ -2713,6 +2714,58 @@ the contract as it is written: the container may be any expression, its elements
 must be pairs, and anything else is a reported runtime error. `raw-index.md` and
 the spec (§2.1 and §3) now say exactly that, replacing the claim that `X<e>`
 reads "a component … of any expression's value".
+
+### P1-36 — A duplicate kind-marker tag shadows a codec arm and warns instead of failing `verified`
+
+`verified` at `dev@04b5aef`, first-hand at the cited lines; found while adding a
+ninth kind marker, which is recorded in
+[`floating-point.md`](floating-point.md).
+
+The kind-marker registry (`crates/lichen-highlevel/src/shape.rs:44`) states its
+own compatibility contract: *"an existing entry's tag must NEVER change, and a new
+marker takes the next unused tag"*. The `TypeValue` codec is generated from that
+registry, and `crates/lichen-highlevel/src/program.rs:541-545` additionally
+claimed that a registry entry colliding with a hand-spelled arm **"fail[s] to
+compile"**.
+
+Neither half of that is true, and the difference is the whole item.
+
+**The tag space is not the registry's.** `define_type_value_codec` expands the
+registry's arms and *then* appends `TypeValue::TypeId(n)` — a nominal struct
+identity, not a kind marker — which holds tag `8` (`:562-568` write, `:581` read).
+So the space is the `TypeValue` codec's, shared with an arm the registry does not
+own, and the ninth marker takes `9` rather than `8`.
+
+**A collision warns rather than fails.** The registry arms come first on both
+sides, so a marker claiming `8` makes `8 => TypeValue::TypeId` unreachable on
+read. The compiler emits `unreachable_patterns` — a **warning**. `cargo check`
+passes. Every persisted `TypeId` then decodes as that marker, with the `u64` that
+followed it left unread in the stream, and the failure surfaces as a wrong type
+somewhere later rather than as a build error.
+
+Measured while implementing: `cargo check -p lichen-highlevel` succeeded with the
+warning present, and the collision is caught by an existing round-trip check
+(`crates/lichen-language/src/persist/codec.rs:174-193`, which writes a
+`TypeId(7)` and then iterates `KIND_MARKERS`) — which is a test this crate does
+not run.
+
+**Latent, not live.** No marker claims a duplicate tag today, so nothing is
+broken. It is a trap for the next person who adds one, which is the same class as
+`P1-26` and `P1-27`: the format's guarantee lives in a comment rather than in a
+check.
+
+Note the asymmetry, which is correct and worth preserving: a *gap* in the tag
+space falls through to `tag => return Err(format!("unknown type-value tag {tag}"))`
+(`:582`) and is a clean error, while a *collision* shadows an arm and corrupts
+silently. Any guard added here must tighten the second without softening the
+first.
+
+Three ways to close it, none free: generate a compile-time duplicate check
+alongside the codec (a `const _: () = assert!(…)`, which is what the project
+already uses for the attribute order), add a `build.rs`/macro-time deduplication
+that refuses at expansion, or pin the registry's tags to a checked constant.
+`floating-point.md` §3.2 records the trap for whoever allocates the next tag; the
+guard itself is this item.
 
 ## P2 — architecture
 
