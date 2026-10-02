@@ -6,9 +6,18 @@
 >
 > **Three decisions are closed** and are not to be re-opened without a new
 > reason: the **surface** is a compile-time marker on the function, not a `loop`
-> builtin; the **scope** is tail-recursive cycles only; a `compute.write` inside
-> a converted loop is **allowed and unchecked** — see
-> [§6](#6-what-the-raw-write-decision-costs).
+> builtin; the **scope** is tail-recursive cycles only; and a `compute.write`
+> inside a converted loop is **refused**, on the same ground as
+> `CONDITIONAL_WRITE` — see [§6](#6-why-a-loop-body-may-not-write).
+>
+> **The third was first decided the other way and then reverted**, and the reason
+> is worth keeping because it is the reason the first decision was wrong: an
+> earlier draft allowed the write and made no claim, on the argument that a
+> device has no such rule. A device indeed has no such rule — but lichen's
+> `dispatch` **skips zero-filling the output buffers on the strength of one**
+> ([dispatch.rs](../../crates/lichen-compute-gpu/src/dispatch.rs)), and that skip
+> is ours, not CUDA's. Allowing the write was therefore not "following the
+> device", it was dropping a premise we had chosen to rely on.
 >
 > Points at: `crates/lichen-kernel-ir/src/lib.rs` (`KernelInstr`,
 > `KernelFragment::body`), `crates/lichen-compute/src/compute.rs` (`emit_node`'s
@@ -186,59 +195,48 @@ The cost of this finding is small and the benefit is large: the conversion's
 hardest-sounding rule was never a rule, and the flat IR — the thing Stage 1
 replaces anyway — was the only thing standing in the way.
 
-## 6. What the raw write decision costs
+## 6. Why a loop body may not write
 
-**Decided:** a `compute.write` inside a converted loop is allowed, and lichen
-makes **no claim** about its effects.
+**Decided:** a `compute.write` inside a converted loop is **refused by name**, on
+the same ground and with the same discipline as `CONDITIONAL_WRITE`.
 
-The claim it withdraws is stated as a theorem in
+The premise it would break is stated as a theorem in
 [compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md) — a
 run is "bit-identical to the sequential loop's, for every `count` and whatever
 the worker count" — and it is exactly what lets `dispatch` allocate output
 buffers **without initialising them** ([dispatch.rs](../../crates/lichen-compute-gpu/src/dispatch.rs),
 and the single-`OpLabel` invariant it is derived from in
-[spirv.rs](../../crates/lichen-compute-gpu/src/spirv.rs)). A lane that never
-reaches a `write` therefore leaves its slots at whatever a fresh allocation held,
-and the host reads them back as results.
+[spirv.rs](../../crates/lichen-compute-gpu/src/spirv.rs)). A loop is the first
+construct that makes a lane's *reachability* of a `write` data-dependent: a
+trip count of zero means the body never runs. The every-ordinal-written claim is
+then void, and the host reads back whatever a fresh allocation held.
 
-**This is the same hazard the ladder already records**, in the same vocabulary: a
-read past the end of a four-element buffer answers `0` on CPU and `5` on the GPU,
-because "the device's padding is the last value written"
-([gpu-algorithms-ladder §6](gpu-algorithms-ladder.md)). So the loop case joins
-that family rather than inventing one, and the note that must travel with it is:
+**The first draft of this note allowed it, and the argument it made was wrong in
+an instructive way.** The argument was: *a device has no such rule — CUDA leaves
+`cudaMalloc` memory undefined and every program is responsible for it itself, so
+following the device means making no claim.* The premise is true and the
+conclusion does not follow, because **the skip is ours.** `dispatch` is not
+following CUDA by skipping the zero-fill; it is doing something CUDA does not do,
+in exchange for being able to reason that every invocation reaches its write.
+Allowing a write inside a loop was therefore not "relaxing to match the device" —
+it was dropping a premise we had chosen to rely on and had documented as a
+theorem.
 
-> A body containing a loop makes the every-ordinal-written claim void; an
-> unwritten output slot is a fresh allocation on one backend and device padding
-> on the other.
+**So the rule is a `write` is refused anywhere control flow can skip it**, and
+that is one rule with two sites, not two rules:
 
-**And the asymmetry is not a GPU rule — it is a rule we bought.** CUDA has no such
-premise at all: `cudaMalloc` leaves memory undefined, a kernel that never writes
-an element simply leaves it undefined, and every program is responsible for that
-itself. What makes it a premise *here* is that `dispatch` skips the zero-fill, and
-that skip is a lichen-specific optimisation that has no CUDA counterpart. So the
-loop is unremarkable on the device and load-bearing here, and the fix — if one is
-ever wanted — is to give the zero-fill back, not to constrain the loop.
+| site | why it is refused today | what changes it |
+|---|---|---|
+| a `write` in a `Select` arm | the flat IR emits **both** arms, so the arm's `write` would run on every lane and overwrite the selected arm's own ([compute.rs](../../crates/lichen-compute/src/compute.rs) — the check is `then_body.contains(&BufferWriteCall) || else_body.contains(&BufferWriteCall)`) | a real `CondBr`: the arm's `write` runs on exactly the lanes that took it, and a `write`'s position is a compile-time constant while its index is the lane's own `i`, so every-ordinal-written **holds again** |
+| a `write` inside a loop | **nothing changes it** — a zero trip count is a real possibility, not an artifact of the flat IR | either the trip count is uniform across the warp, or the zero-fill comes back |
 
-**One consequence is worth stating plainly, because it is the price:** the
-scattered-histogram shape becomes expressible and silently wrong — 64 elements into
-3 buckets, last writer wins, on both backends, no diagnostic
-([gpu-algorithms-ladder §5](gpu-algorithms-ladder.md)). That is accepted.
-
-**And `CONDITIONAL_WRITE` is not merely left in place — Stage 1 should delete
-it.** An earlier draft of this section framed the two as separate rules that a
-reader might confuse. They are not separate, and the loop is not an exemption from
-a rule the branch somehow escapes. A `write` in a branch is refused *today* only
-because the flat IR forces both arms to be emitted, so the arm's `write` would run
-on every lane and overwrite the selected arm's own write
-([compute.rs](../../crates/lichen-compute/src/compute.rs) — the check is
-`then_body.contains(&BufferWriteCall) || else_body.contains(&BufferWriteCall)`,
-and it exists because a flat stream has nowhere to put a branch). Once the arm is
-a real `CondBr`, the arm's `write` runs on exactly the lanes that took it, and
-because a `write`'s buffer position is a compile-time constant while its index is
-the lane's own `i` ([kernel-ir](../../crates/lichen-kernel-ir/src/lib.rs)), the
-every-ordinal-written claim holds again. **A conditional write is not made legal by
-a decision; it becomes correct by construction.** What survives is only the
-zero-iteration case, which is the loop's own caveat above.
+**A conditional write is not made legal by a decision; it becomes correct by
+construction.** A loop write has no such second route today, so it stays refused.
+What is still true of it, and is recorded so the day there is a barrier: the
+uniform count is not a correctness rule for a `write` (each lane writes its own
+index) but it is what makes a non-zero-trip count *guaranteed*, and
+[§9](#9-the-performance-model-a-converted-loop-runs-under) is why that is the
+shape to reach for.
 
 What is *not* withdrawn: rule 6 above, and the fact that a converted loop is
 compiled against a **template** — so a body-local binding the loop would fill in

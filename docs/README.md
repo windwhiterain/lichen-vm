@@ -72,7 +72,7 @@ Every note opens with a `> Status:` line:
 | [lichen-compute: the JIT package](notes/lichen-compute.md) | `lichen-compute`, `lichen-language` (`program`/`package`), `lichen-highlevel` (`native`) | current |
 | [Kernels as `.native`/`.sig` structs](notes/compute-kernel-struct.md) | `lichen-compute`, `lichen-language` (`program`) | current |
 | [Parallel buffer map (`range`/`read`/`write`)](notes/compute-parallel-buffer-read-write.md) | `lichen-compute` | current |
-| [Loop conversion: recursion into a loop nest](notes/loop-conversion.md) | `lichen-kernel-ir` (`KernelInstr`/`KernelFragment`), `lichen-compute` (`emit_node`/`lower_body`), `lichen-compute-gpu` (`spirv.rs`/`dispatch.rs`) | **proposed** — the three decisions are closed; nothing implemented |
+| [Loop conversion: recursion into a loop nest](notes/loop-conversion.md) | `lichen-kernel-ir` (`KernelBody`/`Flow`/`Terminator`, `KernelFragment::body`), `lichen-compute` (`emit_node`/`lower_body`), `lichen-compute-gpu` (`spirv.rs`/`dispatch.rs`) | **proposed** — the three decisions are closed; Stage 1a landed (the IR and both backends' refusal), the emitters do not emit a transfer yet |
 | [The GPU backend for the lowered-kernel IR](notes/lichen-compute-gpu.md) | `lichen-compute-gpu`, `lichen-kernel-ir` | current |
 | [Graph JIT: a chain of dispatches as one submission](notes/compute-graph-jit.md) | `lichen-graph-ir`, `lichen-compute` (`compute/graph.rs`) | current |
 | [The compute JIT on low types](notes/compute-jit-low-types.md) | `lichen-compute` | current |
