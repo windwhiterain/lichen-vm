@@ -132,9 +132,10 @@ impl fmt::Display for RunError {
             }
             RunError::MissingInt64 { device } => write!(
                 f,
-                "the device {device:?} does not support 64-bit integers in shaders, and the \
-                 fragment was lowered to mean 64-bit ones. Narrowing the values would change \
-                 what the program computes, so this is refused rather than converted."
+                "the device {device:?} does not support `shaderInt64`, and this fragment's values \
+                 are 64-bit integers. Narrowing the values would change what the program \
+                 computes, so this is refused rather than converted. A fragment whose values are \
+                 floats does not need the feature: its integers are 32-bit indices."
             ),
             RunError::EmptyRun => write!(
                 f,
@@ -215,6 +216,16 @@ pub struct GpuContext {
     /// Retained so a pipeline cache key can be checked against what the device
     /// actually accepted, and for the device name in a refusal.
     name: String,
+    /// Whether the device offers `shaderInt64`.
+    ///
+    /// **A property of the fragment decides whether it matters**, not a property
+    /// of the device: an integer fragment's module declares a 64-bit integer and
+    /// needs the feature, while a float one's integers are 32-bit indices and
+    /// its scalar is core `Float32` ([`spirv::needs_int64`]). So the feature is
+    /// recorded here and checked where a fragment is compiled, rather than used
+    /// to reject the device at selection time — which would leave a float kernel
+    /// unable to run on a device for a reason that no longer applies.
+    shader_int64: bool,
     pipelines: Mutex<HashMap<(u64, usize, usize), vk::Pipeline>>,
     /// Buffers handed out as [`ResidentId`]s and not yet released. The value is
     /// the device-local allocation behind the id, so the id is the only handle
@@ -438,16 +449,17 @@ impl GpuContext {
             });
         }
 
-        let mut chosen: Option<(vk::PhysicalDevice, vk::PhysicalDeviceProperties, u32)> = None;
+        let mut chosen: Option<(vk::PhysicalDevice, vk::PhysicalDeviceProperties, u32, bool)> =
+            None;
         let seen = devices.len();
         for physical in devices {
             let properties = unsafe { instance.get_physical_device_properties(physical) };
             let features = unsafe { instance.get_physical_device_features(physical) };
-            if features.shader_int64 == 0 {
-                // Recorded rather than skipped silently, so the refusal below can
-                // name the device that was passed over and why.
-                continue;
-            }
+            // `shaderInt64` is recorded, not required: a float fragment's module
+            // has no 64-bit integer in it, so refusing the device here would
+            // refuse a kernel this device can run. It is still *preferred* below,
+            // because an integer fragment needs it and the common case is one.
+            let supports_int64 = features.shader_int64 != 0;
             let families =
                 unsafe { instance.get_physical_device_queue_family_properties(physical) };
             let Some(family) = families
@@ -459,20 +471,27 @@ impl GpuContext {
             let discrete = properties.device_type == vk::PhysicalDeviceType::DISCRETE_GPU;
             let better = match &chosen {
                 None => true,
-                Some((_, current, _)) => {
-                    discrete && current.device_type != vk::PhysicalDeviceType::DISCRETE_GPU
+                Some((_, current, _, current_int64)) => {
+                    let current_discrete =
+                        current.device_type == vk::PhysicalDeviceType::DISCRETE_GPU;
+                    match (discrete, current_discrete) {
+                        // A discrete device wins outright, and among equals the
+                        // lowest index still wins unless the incumbent cannot run
+                        // an integer fragment and this one can.
+                        (true, false) => true,
+                        (false, true) => false,
+                        _ => supports_int64 && !current_int64,
+                    }
                 }
             };
             if better {
-                chosen = Some((physical, properties, family as u32));
+                chosen = Some((physical, properties, family as u32, supports_int64));
             }
         }
 
-        let Some((physical, properties, family)) = chosen else {
+        let Some((physical, properties, family, shader_int64)) = chosen else {
             return Err(RunError::NoDevice {
-                detail: format!(
-                    "none of the {seen} device(s) offers both a compute queue and shaderInt64"
-                ),
+                detail: format!("none of the {seen} device(s) offers a compute queue"),
             });
         };
         let name = device_name(&properties);
@@ -521,6 +540,7 @@ impl GpuContext {
             queue,
             physical,
             name,
+            shader_int64,
             pipelines: Mutex::new(HashMap::new()),
             resident: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
@@ -1457,6 +1477,16 @@ impl GpuContext {
         fragment: &KernelFragment,
         binding: Binding,
     ) -> Result<vk::Pipeline, RunError> {
+        // The device gate is derived from the *fragment*, not applied when the
+        // device was chosen: an integer fragment's module declares a 64-bit
+        // integer and needs `shaderInt64`, and a float one's does not. Checked
+        // before the cache so a cached integer pipeline is not served on a device
+        // that could never have built it.
+        if spirv::needs_int64(fragment).map_err(RunError::Emit)? && !self.shader_int64 {
+            return Err(RunError::MissingInt64 {
+                device: self.name.clone(),
+            });
+        }
         let key = (fragment_digest(fragment), binding.inputs, binding.outputs);
         if let Some(pipeline) = self.pipelines.lock().unwrap().get(&key) {
             return Ok(*pipeline);
@@ -1591,12 +1621,17 @@ impl lichen_kernel_ir::ParallelBackend for GpuContext {
     }
 
     /// The inherent fetch returns integers because every buffer this context
-    /// allocates is `i64`: the emitter declares and emits one 64-bit unsigned
-    /// integer type, so there is no float buffer on the device to bring home.
-    /// The class the value carries is therefore `Int`, stated here rather than
-    /// derived, because the device has nothing to derive it from — the buffer a
-    /// resident id names does not record a class of its own.  A float element
-    /// type is the emitter's step, and this is where it will be read
+    /// allocates is `i64`-strided: the staging, the device buffers and the
+    /// read-back are all sized for eight-byte elements, which is the integer
+    /// ABI's element.
+    ///
+    /// **The emitter's half of this is done and the run's half is not.** A float
+    /// fragment's module declares four-byte elements ([`spirv::module_class`]'s
+    /// class decides the element type, the pointer into it and the array
+    /// stride), but nothing on the record a [`ResidentId`] names says which class
+    /// its elements are, so this path cannot read one back: a float fragment run
+    /// through it would be fetched at the wrong stride. The class carrier for a
+    /// run's buffers is the open piece, not the module
     /// (`docs/notes/floating-point.md` §3.8, §4.4).
     fn fetch(&self, id: ResidentId, count: usize) -> Result<ScalarData, String> {
         GpuContext::fetch(self, id, count)

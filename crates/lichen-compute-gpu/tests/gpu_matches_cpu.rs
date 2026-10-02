@@ -7,6 +7,10 @@
 //! counts are deliberately not multiples of the workgroup size, so the surplus
 //! lanes of the last workgroup are covered too: those lanes address padding, and
 //! if that padding were not allocated the run would scribble past the buffers.
+//!
+//! The "CPU reference" is **this file's own third reading** of the IR and not
+//! the wasm backend in `lichen-compute`; [`reference`] says so in full, and says
+//! what that means for a float.
 
 mod common;
 
@@ -188,76 +192,217 @@ fn unsigned_reading() -> KernelFragment {
     fragment(body)
 }
 
+/// One value on the reference's stack.
+///
+/// There is no separate boolean: the language says a comparison yields its
+/// class's `1`/`0`, which over two floats is `1.0`/`0.0`.
+#[derive(Clone, Copy)]
+enum Scalar {
+    /// A constant the body pushed. **The IR's `Const` is an `i64` and says
+    /// nothing about its class**, so it is read the way the position demands:
+    /// the float whose bits the payload holds in a value position, the integer
+    /// it spells in an index or a buffer position. The emitter resolves the same
+    /// fact at the same place (`spirv::Kind`), and it is the IR that leaves it to
+    /// be resolved.
+    Literal(i64),
+    Int(i64),
+    Float(f32),
+}
+
+impl Scalar {
+    /// This value as `class`'s scalar, reading a literal.
+    fn as_class(self, class: ScalarClass) -> Scalar {
+        match (self, class) {
+            (Scalar::Literal(value), ScalarClass::Int) => Scalar::Int(value),
+            (Scalar::Literal(value), ScalarClass::Float) => {
+                Scalar::Float(f32::from_bits(value as u32))
+            }
+            (value, _) => value,
+        }
+    }
+
+    /// The element index a buffer operation takes.
+    ///
+    /// An index is an integer whatever class the body's values are, so a literal
+    /// is its payload **as a number** — not the float those bits would spell.
+    fn as_index(self) -> usize {
+        match self {
+            Scalar::Literal(value) | Scalar::Int(value) => value as usize,
+            Scalar::Float(_) => panic!("the reference takes an index from an integer, not a float"),
+        }
+    }
+
+    /// The word this value is stored as, which is what a buffer holds.
+    fn bits(self) -> i64 {
+        match self {
+            Scalar::Literal(value) | Scalar::Int(value) => value,
+            Scalar::Float(value) => i64::from(value.to_bits()),
+        }
+    }
+
+    /// Whether this value is a true condition.
+    ///
+    /// **The bit pattern is what is tested, not the value.** That is what wasm's
+    /// `select` means by its `i32` condition — the emitter's `as_condition` says
+    /// so in full — and over a float it differs from `!= 0.0` in both directions:
+    /// `-0.0` is a non-zero pattern, and a `NaN`'s pattern is non-zero even
+    /// though the value equals nothing.
+    fn is_true(self, class: ScalarClass) -> bool {
+        match (self, class) {
+            (Scalar::Literal(value), ScalarClass::Float) => (value as u32) != 0,
+            (Scalar::Literal(value), ScalarClass::Int) => value != 0,
+            (Scalar::Int(value), _) => value != 0,
+            (Scalar::Float(value), _) => value.to_bits() != 0,
+        }
+    }
+}
+
+/// The class's `1`/`0` for a comparison's answer.
+fn boolean(class: ScalarClass, holds: bool) -> Scalar {
+    match class {
+        ScalarClass::Int => Scalar::Int(i64::from(holds)),
+        ScalarClass::Float => Scalar::Float(if holds { 1.0 } else { 0.0 }),
+    }
+}
+
 /// An independent reading of the IR, written from the `KernelInstr` docs rather
 /// than from the shader, used as the second opinion on the GPU's answer.
+///
+/// # This is a third reading, and it is not the wasm backend
+///
+/// Both real backends implement the same IR: the wasm one in `lichen-compute`
+/// and this crate's SPIR-V emitter. **This function is neither of them** — it is
+/// a third, hand-written from the instruction docs, and a value it agrees with
+/// is a value two hand-written readings agree about. That is worth something,
+/// and it is not worth what a cross-backend test would be worth: a float
+/// compared against this file proves the shader agrees with *this file*, and
+/// says nothing about `lichen-compute`, which lowers the same body differently
+/// and can be wrong where this reading cannot see it.
+///
+/// # What "for floats" changes here
+///
+/// The reading is per class, because a module's class is: the buffer elements
+/// and every value in the body are the fragment's class
+/// ([`lichen_compute_gpu::spirv::module_class`] derives it for the emitter, and
+/// it is read here rather than re-derived so the two cannot drift about what the
+/// fragment declares). The four places the class shows are written out below as
+/// the **language's** rules rather than the hardware's: `==`/`!=` compare
+/// `to_bits`, a condition is the bit pattern rather than the value, a
+/// comparison's answer is the class's `1`/`0`, and a constant is the position's
+/// class. The int reading is unchanged, and is unsigned throughout.
 fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64> {
+    let class = lichen_compute_gpu::spirv::module_class(fragment)
+        .expect("the reference reads the class the fragment declares");
     let index = fragment.param_shape.flat_arity() - 1;
     let mut output = vec![0i64; count];
     for element in 0..count {
-        let mut stack: Vec<i64> = Vec::new();
+        let mut stack: Vec<Scalar> = Vec::new();
         for instruction in &fragment.body {
             match instruction {
-                KernelInstr::Const(value) => stack.push(*value),
+                KernelInstr::Const(value) => stack.push(Scalar::Literal(*value)),
                 KernelInstr::LocalGet(local) => {
                     let value = if *local as usize == index {
                         element as i64
                     } else {
                         input[*local as usize]
                     };
-                    stack.push(value);
+                    stack.push(Scalar::Int(value));
                 }
-                // A comparison yields 1 or 0 here; a `select` only tests it.
-                //
-                // **Unsigned, all of it.** An `Int` is a machine-sized unsigned
-                // integer in this language, so `Div`/`Rem` and the order
-                // comparisons read the two words as `u64` — which is also what
-                // the shader does, its buffer elements being declared
-                // unsigned. A reference that used the signed reading would
-                // agree for every value below 2^63 and disagree above it.
+                // A comparison yields 1 or 0 here, or 1.0 and 0.0 over floats; a
+                // `select` only tests it.
                 KernelInstr::Bin(operator) => {
-                    let rhs = stack.pop().unwrap();
-                    let lhs = stack.pop().unwrap();
-                    let (left, right) = (lhs as u64, rhs as u64);
-                    stack.push(match operator {
-                        KernelBin::Add => lhs.wrapping_add(rhs),
-                        KernelBin::Sub => lhs.wrapping_sub(rhs),
-                        KernelBin::Mul => lhs.wrapping_mul(rhs),
-                        KernelBin::Div => (left / right) as i64,
-                        KernelBin::Rem => (left % right) as i64,
-                        KernelBin::Lt => i64::from(left < right),
-                        KernelBin::Gt => i64::from(left > right),
-                        KernelBin::Leq => i64::from(left <= right),
-                        KernelBin::Geq => i64::from(left >= right),
-                        KernelBin::Eq => i64::from(lhs == rhs),
-                        KernelBin::Neq => i64::from(lhs != rhs),
-                        KernelBin::BitAnd => lhs & rhs,
-                        KernelBin::BitOr => lhs | rhs,
-                        KernelBin::BitXor => lhs ^ rhs,
+                    let rhs = stack.pop().unwrap().as_class(class);
+                    let lhs = stack.pop().unwrap().as_class(class);
+                    stack.push(match (lhs, rhs) {
+                        // **Unsigned, all of it.** An `Int` is a machine-sized
+                        // unsigned integer in this language, so `Div`/`Rem` and
+                        // the order comparisons read the two words as `u64` —
+                        // which is also what the shader does, its buffer elements
+                        // being declared unsigned. A reference that used the
+                        // signed reading would agree for every value below 2^63
+                        // and disagree above it.
+                        (Scalar::Int(lhs), Scalar::Int(rhs)) => {
+                            let (left, right) = (lhs as u64, rhs as u64);
+                            Scalar::Int(match operator {
+                                KernelBin::Add => lhs.wrapping_add(rhs),
+                                KernelBin::Sub => lhs.wrapping_sub(rhs),
+                                KernelBin::Mul => lhs.wrapping_mul(rhs),
+                                KernelBin::Div => (left / right) as i64,
+                                KernelBin::Rem => (left % right) as i64,
+                                KernelBin::Lt => i64::from(left < right),
+                                KernelBin::Gt => i64::from(left > right),
+                                KernelBin::Leq => i64::from(left <= right),
+                                KernelBin::Geq => i64::from(left >= right),
+                                KernelBin::Eq => i64::from(lhs == rhs),
+                                KernelBin::Neq => i64::from(lhs != rhs),
+                                KernelBin::BitAnd => lhs & rhs,
+                                KernelBin::BitOr => lhs | rhs,
+                                KernelBin::BitXor => lhs ^ rhs,
+                            })
+                        }
+                        // **The language's relations, not IEEE's.** `==`/`!=`
+                        // route through `ValueExt::value_eq`, which for a float is
+                        // `to_bits` — so `0.0 == -0.0` is `0` and `NaN == NaN` is
+                        // `1`, and both differ from what `f32`'s own operators
+                        // answer (`docs/notes/floating-point.md` §3.7).
+                        (Scalar::Float(lhs), Scalar::Float(rhs)) => match operator {
+                            KernelBin::Add => Scalar::Float(lhs + rhs),
+                            KernelBin::Sub => Scalar::Float(lhs - rhs),
+                            KernelBin::Mul => Scalar::Float(lhs * rhs),
+                            // IEEE here, undefined in SPIR-V: the language does
+                            // not specify a kernel's float division and does not
+                            // promise one (`docs/notes/floating-point.md` §4.4),
+                            // so this reading is the CPU's, not a contract.
+                            KernelBin::Div => Scalar::Float(lhs / rhs),
+                            KernelBin::Eq => boolean(class, lhs.to_bits() == rhs.to_bits()),
+                            KernelBin::Neq => boolean(class, lhs.to_bits() != rhs.to_bits()),
+                            KernelBin::Lt => boolean(class, lhs < rhs),
+                            KernelBin::Gt => boolean(class, lhs > rhs),
+                            KernelBin::Leq => boolean(class, lhs <= rhs),
+                            KernelBin::Geq => boolean(class, lhs >= rhs),
+                            KernelBin::Rem
+                            | KernelBin::BitAnd
+                            | KernelBin::BitOr
+                            | KernelBin::BitXor => {
+                                panic!("the language has no such operator over floats")
+                            }
+                        },
+                        _ => panic!("the reference does not mix classes in one operation"),
                     });
                 }
                 KernelInstr::I32WrapI64 => {}
                 KernelInstr::Select => {
                     let condition = stack.pop().unwrap();
-                    let otherwise = stack.pop().unwrap();
-                    let then = stack.pop().unwrap();
-                    stack.push(if condition != 0 { then } else { otherwise });
+                    let otherwise = stack.pop().unwrap().as_class(class);
+                    let then = stack.pop().unwrap().as_class(class);
+                    stack.push(if condition.is_true(class) {
+                        then
+                    } else {
+                        otherwise
+                    });
                 }
                 KernelInstr::BufferReadCall => {
-                    let element_index = stack.pop().unwrap() as usize;
-                    let position = stack.pop().unwrap() as usize;
+                    let element_index = stack.pop().unwrap().as_index();
+                    let position = stack.pop().unwrap().as_index();
                     let value = if position == 0 {
                         input[element_index]
                     } else {
                         output[element_index]
                     };
-                    stack.push(value);
+                    stack.push(match class {
+                        ScalarClass::Int => Scalar::Int(value),
+                        // A float element is four bytes: its bits are the low
+                        // half of the word the host hands over, which is the same
+                        // reading the emitter's constant pool makes.
+                        ScalarClass::Float => Scalar::Float(f32::from_bits(value as u32)),
+                    });
                 }
                 KernelInstr::BufferWriteCall => {
-                    let value = stack.pop().unwrap();
-                    let element_index = stack.pop().unwrap() as usize;
-                    let position = stack.pop().unwrap() as usize;
+                    let value = stack.pop().unwrap().as_class(class);
+                    let element_index = stack.pop().unwrap().as_index();
+                    let position = stack.pop().unwrap().as_index();
                     if position == 0 {
-                        output[element_index] = value;
+                        output[element_index] = value.bits();
                     }
                 }
                 KernelInstr::CallKernel(_) => panic!("the reference emits no cross-kernel calls"),
