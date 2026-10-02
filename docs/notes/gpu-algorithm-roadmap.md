@@ -157,6 +157,73 @@ than this roadmap should make.
 the work *did* leave is two refusals that were reporting a compiler-internal
 `NodeId` and nothing else; both are named now, and §8 has the third.
 
+#### A `loop` combinator, and the two ceilings it runs into
+
+The natural next step is a `loop` operator — `loop f n : T -> T`, applying `f`
+`n` times. **It is the right shape and it needs no compiler at all**, which is
+the strongest argument for it: as a lichen function it is one line,
+
+```lichen
+loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
+```
+
+using the recursion the interpreter already has. No IR form, no backend change,
+no persist discriminator — a **native plugin** at worst, and a library function
+at best. It is also the answer the roadmap's original §7 wanted: a loop that is
+*asked for* rather than a syntax the compiler invents.
+
+**The signature as proposed does not check, and the reason is worth stating
+precisely**, because it is a type-system fact and not a codegen one. A recursive
+binding cannot receive a function argument through a partial application: `loop
+f` is a *function value*, and unifying it against the binding's own type cell
+compares two function **kinds** — which lichen refuses, because a compound type
+is typed by its kind and there is no subtyping. Measured:
+
+| shape | result |
+|---|---|
+| `sum_to n x = … sum_to (n - 1) (x + 1)` — two-stage curried | `expected Int, found Int` |
+| `loop f s = … loop f (… , f …)` — the step threaded through | `expected ?c -> Int, found ?c -> Int` |
+| `sum_to s = … sum_to (s(0) - 1, s(1) + 1)` — **one tuple argument** | **`[3, 4, 5, 6]`** |
+
+So the shape that works is a **specialised** loop: the step is baked into the
+binding and the recursive call is a single application of one tuple. That is
+exactly the `dot4`/`mat2` shape the ladder already wrote by hand — and it is one
+definition per step, which is what the operator was meant to remove.
+
+**The error messages are themselves a defect, and worth fixing whatever is
+decided here.** `expected Int, found Int` renders two *incompatible* types
+identically, so the reader is told nothing at all. Every other refusal in the
+compute surface names its own cause; these two name a type the reader cannot
+distinguish from the one it was expected to be. That is the same class as the
+`NodeId` refusal §8 fixed.
+
+**And the ceiling decides the usefulness, and it is small.** An unrolled loop is
+`n` copies of the step's body, and it runs into **two independent limits**:
+
+| limit | where | what it does |
+|---|---|---|
+| **2000 applies** | the VM's own budget | *"this binding never terminates — it applied a function more than 2000 times"*, at 4000 iterations that terminate in 62 ms |
+| **stack, between 400 and 1000** | the emitter's walk | a **hard overflow**, not a diagnostic |
+
+Cost is linear at about **29 µs of compile time per iteration** (400 iterations:
+11.6 ms for a four-element kernel). So a statically expanded `loop` is
+comfortable at the trip counts the ladder could already write by hand —
+`dot4`, a 2×2 matmul, `K ≤ 16` — and **unusable at the ones a data-parallel
+kernel actually wants**: 1024 is a matmul's inner loop and 2²⁰ is a scan.
+
+**So the answer to "is it enough" is no, and the reason is sharper than "a device
+loop would be better".** The two ceilings are the real content: one is a budget
+whose *message conflates a long loop with a non-terminating one*, and the other
+is a depth that should be a named refusal rather than a crash. Both are small,
+bounded pieces of work, and both are prerequisites rather than the feature.
+
+**What is not fixed by any of this is the shape.** `T -> T` covers *repeating a
+step*, not *reducing a buffer*. A reduction needs an accumulator —
+`f : S -> T -> S`, `loop f n : S -> [T] -> S` — and the reduction a GPU algorithm
+wants is a fold over a **buffer**, whose trip count is the buffer's length: a
+run-time value, which is the one thing already refused. **A loop that cannot
+reduce is not the loop most GPU algorithms are missing.**
+
 **What survives of the original B1/B2 split.** B1 is answered: recursion and
 composition are both expressible, within the limit above. B2 — **a loop that runs
 on the device, with a runtime trip count** — is unchanged and still not

@@ -143,6 +143,112 @@ p = compute.parallel (cfg => {
 compute.collect (compute.plrun p (4,))
 "#;
 
+/// **A `loop` operator written in pure lichen — no Rust, no new operator.** It is
+/// the proposal as a one-line library function, using the recursion the
+/// interpreter already has:
+///
+/// ```lichen
+/// loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
+/// ```
+///
+/// If this works in a kernel body, the whole feature is free and the roadmap
+/// item is a library function rather than a codegen task.
+const LOOP_IN_LICHEN: &str = r#"
+@{ compute = import "compute.lichen" @}
+loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
+inc = x => x + 1
+p = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, loop inc 3 i]
+}) "BACKEND"
+compute.collect (compute.plrun p (4,))
+"#;
+
+/// The same, with the trip count the **kernel's own count** — a runtime value.
+/// This is the case §4.1 says is refused, and `loop` is supposed to be worse,
+/// not better: `n` is not decided when the body is lowered.
+const LOOP_RUNTIME_COUNT: &str = r#"
+@{ compute = import "compute.lichen" @}
+loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
+inc = x => x + 1
+p = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, loop inc n i]
+}) "BACKEND"
+compute.read [compute.plrun p (4,), 3]
+"#;
+
+/// Two-stage **curried** recursion — `sum_to (n - 1) (x + 1)` is *two*
+/// applications, where `fib`'s single application works. If this is what the
+/// `loop` combinator's type error is, the fix is a one-argument shape.
+const TWO_STAGE_CURRIED: &str = r#"
+@{ compute = import "compute.lichen" @}
+sum_to = n => x => if n == 0 then x else sum_to (n - 1) (x + 1)
+p = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, sum_to 3 i]
+}) "BACKEND"
+compute.collect (compute.plrun p (4,))
+"#;
+
+/// The same, with the two arguments in **one** tuple — one application, so one
+/// instantiation of the binding.
+const ONE_STAGE_TUPLE: &str = r#"
+@{ compute = import "compute.lichen" @}
+sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)
+p = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, sum_to (3, i)]
+}) "BACKEND"
+compute.collect (compute.plrun p (4,))
+"#;
+
+/// The proposed operator, written over a **tuple** state instead of a curried
+/// pair, so the recursive call is a single application.
+const LOOP_TUPLE: &str = r#"
+@{ compute = import "compute.lichen" @}
+loop = f => s => if s(0) == 0 then s(1) else loop f (s(0) - 1, f s(1))
+inc = x => x + 1
+p = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, loop inc (3, i)]
+}) "BACKEND"
+compute.collect (compute.plrun p (4,))
+"#;
+
+/// `loop` in the shape that **does** check: the step is baked into the binding
+/// and the recursive call is a single application of one tuple argument. This is
+/// what a trip count is measured against — the expansion is `n` copies of the
+/// step's body, so the interesting number is how that grows.
+fn loop_program(trip: usize) -> String {
+    format!(
+        r#"@{{ compute = import "compute.lichen" @}}
+sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)
+p = compute.parallel (cfg => {{
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, sum_to ({trip}, i)]
+}}) "BACKEND"
+compute.read [compute.plrun p (4,), 3]
+"#
+    )
+}
+
+/// The same expansion with **no kernel at all** — a plain host recursion. If this
+/// overflows too, the depth is in the graph the host builds, not in the emitter
+/// that lowers it, and the two need different fixes.
+fn host_program(trip: usize) -> String {
+    format!(
+        "sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)\n\
+         sum_to ({trip}, 0)\n"
+    )
+}
+
 /// A `jit` chain `k0 → k1 → … → k{N-1}`, each adding one, plus a parallel kernel
 /// that calls the last. **The hand-written, un-expanded form of a loop.**
 fn chain(depth: usize) -> String {
@@ -232,6 +338,60 @@ fn main() {
                 .replace("COUNT", &count.to_string())
         };
 
+        println!("  -- the `loop` operator, as a lichen function --");
+        probe(
+            "loop, decidable trip count",
+            &LOOP_IN_LICHEN.replace("BACKEND", backend),
+        );
+        probe(
+            "loop, trip count = the kernel count",
+            &LOOP_RUNTIME_COUNT.replace("BACKEND", backend),
+        );
+        probe(
+            "two-stage curried recursion",
+            &TWO_STAGE_CURRIED.replace("BACKEND", backend),
+        );
+        probe(
+            "one-stage, tuple argument",
+            &ONE_STAGE_TUPLE.replace("BACKEND", backend),
+        );
+        probe(
+            "loop over a tuple state",
+            &LOOP_TUPLE.replace("BACKEND", backend),
+        );
+        println!("  -- where the depth goes: host graph vs emitter --");
+        for trip in [100usize, 400, 1_000, 4_000] {
+            let start = Instant::now();
+            match run(&host_program(trip)) {
+                Ok(out) => println!(
+                    "  host   {trip:>6}  {:>9.1} ms  {out}",
+                    start.elapsed().as_secs_f64() * 1000.0
+                ),
+                Err(diags) => println!(
+                    "  host   {trip:>6}  {:>9.1} ms  refused: {}",
+                    start.elapsed().as_secs_f64() * 1000.0,
+                    diags.join(" | ")
+                ),
+            }
+        }
+        println!("  -- what a trip count costs: expansion is O(n) code --");
+        println!("  {:>8}  {:>12}  {}", "trip", "compile+run", "answer");
+        for trip in [1usize, 10, 100, 400] {
+            let source = loop_program(trip).replace("BACKEND", backend);
+            let start = Instant::now();
+            match run(&source) {
+                Ok(out) => println!(
+                    "  {trip:>8}  {:>10.1} ms  {}",
+                    start.elapsed().as_secs_f64() * 1000.0,
+                    out
+                ),
+                Err(diags) => println!(
+                    "  {trip:>8}  {:>10.1} ms  refused: {}",
+                    start.elapsed().as_secs_f64() * 1000.0,
+                    diags.join(" | ")
+                ),
+            }
+        }
         println!("  -- expressibility --");
         probe(
             "helper, index-dependent argument",
