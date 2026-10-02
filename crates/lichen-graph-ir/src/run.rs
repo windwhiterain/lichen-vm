@@ -193,7 +193,9 @@ impl<'backend> Runner<'backend> {
                         Policy::Serial => self
                             .backend
                             .run(&kernel.fragment, &slots, count)
-                            .map(|ids| Value::device_all(ids, count))
+                            .map(|ids| {
+                                Value::device_all(ids, count, &kernel.fragment.output_classes)
+                            })
                             .map_err(|reason| GraphRefusal::Backend {
                                 what: "dispatching a kernel node",
                                 reason,
@@ -207,7 +209,12 @@ impl<'backend> Runner<'backend> {
                                 reason,
                             })?;
                             let ids = submission.outputs().to_vec();
-                            Value::pending_all(submission, ids, count)
+                            Value::pending_all(
+                                submission,
+                                ids,
+                                count,
+                                &kernel.fragment.output_classes,
+                            )
                         }
                     };
                     values.extend(produced);

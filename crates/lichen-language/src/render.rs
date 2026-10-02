@@ -57,7 +57,7 @@ where
         // backend a run is dispatched to is a property of the program rather
         // than something a reader of one value needs.
         Some(ComputeValue::ParKernel(..)) => Some("ParKernel".to_string()),
-        Some(ComputeValue::Buffer(_)) | Some(ComputeValue::TypeBuffer) => {
+        Some(ComputeValue::Buffer(..)) | Some(ComputeValue::TypeBuffer) => {
             Some("Buffer".to_string())
         }
         _ => None,
