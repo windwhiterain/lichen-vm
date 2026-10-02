@@ -402,8 +402,11 @@ macro_rules! lang_compose_vocabulary {
         // The type-constant markers all live in the core `TypeValue` leaf, so
         // the trait's registry-derived default bodies
         // (`Self::from(TypeValue::$variant)`, over the composed `From` impl)
-        // already provide every marker — the impl spells only the two
-        // nominal-id methods, which have no default.  The
+        // already provide every core marker — the impl spells only the two
+        // nominal-id methods plus the **open** marker predicate: the core
+        // `TypeValue` markers (every variant but `TypeId`) and, for each
+        // extension leaf, the leaf's own `LeafKindMarkers` (a plugin's type
+        // constants, e.g. compute's `TypeBuffer`).  The
         // `<path>::Variant` qualified path bypasses the macro_rules rule that
         // a `$path:path` fragment cannot be followed directly by `::`.
         impl ::lichen_highlevel::program::ValueType for LangValue {
@@ -415,6 +418,19 @@ macro_rules! lang_compose_vocabulary {
             }
             fn type_id_value(n: usize) -> Self {
                 Self::$tyv_name(<$tyv>::TypeId(n))
+            }
+            fn is_kind_marker(&self) -> bool {
+                match self {
+                    // Every `TypeValue` variant but `TypeId` is a kind marker.
+                    Self::$tyv_name(inner) => inner.as_type_id().is_none(),
+                    $(
+                        Self::$extra_v_name(inner) => {
+                            < $extra_v as ::lichen_highlevel::program::LeafKindMarkers >
+                                ::is_kind_marker(inner)
+                        }
+                    )*
+                    _ => false,
+                }
             }
         }
 

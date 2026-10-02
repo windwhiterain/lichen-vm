@@ -89,7 +89,10 @@ pub trait Program: Sized + Copy + Debug + PartialEq {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Deferral {
     /// Merge the classes after all: the pending computation resolves later
-    /// and the merge erases nothing.
+    /// and the merge erases nothing.  The lowlevel commits the other side's
+    /// decided value onto the merged class (its pending operations keep
+    /// their operand edge, so the apply's clone machinery still recomputes
+    /// against the real argument — the deferred check surfacing there).
     Merge,
     /// Record the conflict now.
     Conflict,
@@ -107,6 +110,10 @@ pub struct PendingSide {
     /// That operation is an `Index` that cannot be resolved yet (its target
     /// is not a concrete array).
     pub pending_index_read: bool,
+    /// That operation is an `Apply` — a call that stays lazy because its
+    /// argument is not decided yet (a type-level computation spelled as a
+    /// type-function call rather than a read).
+    pub pending_apply: bool,
     /// The class is an all-unbound structure: no value, no operation.
     pub skeleton: bool,
     /// The class is a single unbound cell.
