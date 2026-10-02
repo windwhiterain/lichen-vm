@@ -249,7 +249,15 @@ where
         DiagKind::InstantiateNamesNotStatic => {
             "named arguments require a statically known struct type".to_string()
         }
-        DiagKind::BinOp => format!("expected Int, found {}", printer.node(d.a)),
+        // A binary operator's expected side is the class the operation
+        // computes over — `Int` for the `Int`-only operators and the default
+        // class, `Float` when an operand selected it — so the expected half is
+        // read from the report rather than spelled here.
+        DiagKind::BinOp => format!(
+            "expected {}, found {}",
+            printer.node(d.b),
+            printer.node(d.a)
+        ),
         // A runtime apply-time failure: the parameter is the expected side
         // (a), the argument the found side (b).
         DiagKind::Runtime => format!(
