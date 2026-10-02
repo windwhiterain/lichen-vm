@@ -58,9 +58,18 @@ impl Stub {
         self.saw.lock().unwrap().clear();
     }
 
+    /// The elements of a slot, decoded.
+    ///
+    /// A host slot is packed bytes at the class's width
+    /// ([`lichen_kernel_ir::ScalarClass::byte_width`]) rather than a word per
+    /// element, so an `i64` column is that payload decoded — and every fragment
+    /// this stub is handed is an `Int` one.
     fn column(&self, slot: &BufferSlot<'_>) -> Vec<i64> {
         match slot {
-            BufferSlot::Host(data) => data.to_vec(),
+            BufferSlot::Host(data) => data
+                .chunks_exact(8)
+                .map(|word| i64::from_le_bytes(word.try_into().unwrap_or_default()))
+                .collect(),
             BufferSlot::Resident(id) => self.data.lock().unwrap()[id.0 as usize - 1].clone(),
         }
     }

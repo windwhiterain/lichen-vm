@@ -16,8 +16,32 @@ mod common;
 
 use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X, RunError};
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, Pending, ScalarClass,
+    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, Pending,
+    ScalarClass, ScalarData,
 };
+
+/// The **packed** bytes of `words`, one `i64` each — what the ABI carries, and
+/// what a host slot for an integer fragment is.
+///
+/// Not a slice reinterpretation: a payload's elements are packed at the class's
+/// own width ([`ScalarClass::byte_width`]), so the bytes are built element by
+/// element rather than read out of an `i64` array.
+fn pack(words: &[i64]) -> Vec<u8> {
+    words.iter().flat_map(|word| word.to_le_bytes()).collect()
+}
+
+/// The `i64` words of a fetched payload, for a fragment whose class is `Int`.
+fn words(data: ScalarData) -> Vec<i64> {
+    match data {
+        ScalarData::Int(elements) => elements,
+        ScalarData::Float(elements) => {
+            panic!(
+                "an integer run's result came back as {} float element(s)",
+                elements.len()
+            )
+        }
+    }
+}
 
 /// A fragment over `(input, index)` — the shape a single-input parallel kernel has.
 ///
@@ -391,9 +415,12 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                     };
                     stack.push(match class {
                         ScalarClass::Int => Scalar::Int(value),
-                        // A float element is four bytes: its bits are the low
-                        // half of the word the host hands over, which is the same
-                        // reading the emitter's constant pool makes.
+                        // **This reading's own word layout, not the ABI's.** The
+                        // reference is handed `i64` words, and a float element in
+                        // one is its bits in the low 32; what crosses to the
+                        // device is the packed `f32` the fragment's class says
+                        // (`ScalarClass::byte_width`), which `check` packs before
+                        // the run.
                         ScalarClass::Float => Scalar::Float(f32::from_bits(value as u32)),
                     });
                 }
@@ -429,17 +456,20 @@ fn check(
     expected: &[i64],
 ) -> String {
     let count = input.len();
+    let packed = pack(input);
     let resident = context
-        .run(fragment, &[BufferSlot::Host(input)], count)
+        .run(fragment, &[BufferSlot::Host(&packed)], count)
         .expect("the dispatch completes");
     assert_eq!(
         resident.len(),
         fragment.outputs,
         "one resident buffer per declared output"
     );
-    let from_gpu = context
-        .fetch(resident[0], count)
-        .expect("the result comes back off the device");
+    let from_gpu = words(
+        context
+            .fetch(resident[0], count)
+            .expect("the result comes back off the device"),
+    );
     assert_eq!(from_gpu.len(), count, "the result is exactly `count` long");
 
     assert_eq!(
@@ -515,14 +545,16 @@ fn a_second_run_consumes_the_first_runs_id_without_a_round_trip() {
     // out = in + in + 1, then out = in + in + 1 again: composed, the answer is
     // known without consulting the device, so a wrong chain cannot pass.
     let first = context
-        .run(&adds(), &[BufferSlot::Host(&input)], count)
+        .run(&adds(), &[BufferSlot::Host(&pack(&input))], count)
         .expect("the first run completes");
     let second = context
         .run(&adds(), &[BufferSlot::Resident(first[0])], count)
         .expect("the second run consumes the first run's id");
-    let result = context
-        .fetch(second[0], count)
-        .expect("the chained result comes back");
+    let result = words(
+        context
+            .fetch(second[0], count)
+            .expect("the chained result comes back"),
+    );
 
     let expected: Vec<i64> = input
         .iter()
@@ -532,9 +564,11 @@ fn a_second_run_consumes_the_first_runs_id_without_a_round_trip() {
 
     // The intermediate is still on the device and still readable, which is what
     // "never came home" means: one download, of the last link only.
-    let intermediate = context
-        .fetch(first[0], count)
-        .expect("the intermediate is still resident after being consumed");
+    let intermediate = words(
+        context
+            .fetch(first[0], count)
+            .expect("the intermediate is still resident after being consumed"),
+    );
     assert_eq!(
         intermediate,
         reference(&adds(), &input, count),
@@ -566,22 +600,24 @@ fn a_recycled_buffer_never_shows_the_previous_run_its_contents() {
 
     for round in 0..8 {
         let adds_run = context
-            .run(&adds(), &[BufferSlot::Host(&input)], count)
+            .run(&adds(), &[BufferSlot::Host(&pack(&input))], count)
             .expect("the adds run completes");
         assert_eq!(
-            context.fetch(adds_run[0], count).expect("adds comes back"),
+            words(context.fetch(adds_run[0], count).expect("adds comes back")),
             adds_expected,
             "round {round}: the adds run is right"
         );
         context.release(adds_run[0]);
 
         let select_run = context
-            .run(&conditional(), &[BufferSlot::Host(&input)], count)
+            .run(&conditional(), &[BufferSlot::Host(&pack(&input))], count)
             .expect("the conditional run completes");
         assert_eq!(
-            context
-                .fetch(select_run[0], count)
-                .expect("the conditional run comes back"),
+            words(
+                context
+                    .fetch(select_run[0], count)
+                    .expect("the conditional run comes back")
+            ),
             select_expected,
             "round {round}: the conditional run is right, on a buffer the adds run just \
              released — a leaked byte would show here as a value the kernel never wrote"
@@ -685,7 +721,7 @@ fn a_submission_can_be_fed_to_one_that_is_still_in_flight() {
     let input: Vec<i64> = (0..count as i64).collect();
 
     let first = context
-        .submit(&adds(), &[BufferSlot::Host(&input)], count)
+        .submit(&adds(), &[BufferSlot::Host(&pack(&input))], count)
         .expect("the first submission is recorded");
     // Deliberately not waited, and deliberately feeding the second from the
     // first: `first.outputs()[0]` names a buffer the device has not promised to
@@ -704,18 +740,22 @@ fn a_submission_can_be_fed_to_one_that_is_still_in_flight() {
 
     let expected: Vec<i64> = input.iter().map(|value| 4 * value + 3).collect();
     assert_eq!(
-        context
-            .fetch(second_ids[0], count)
-            .expect("the chained result comes back off the device"),
+        words(
+            context
+                .fetch(second_ids[0], count)
+                .expect("the chained result comes back off the device")
+        ),
         expected,
         "adds applied to adds, recorded before the first had finished"
     );
     // A consumer of the intermediate, fetched after its own wait, so this one is
     // a plain fetch of a waited buffer.
     assert_eq!(
-        context
-            .fetch(first_ids[0], count)
-            .expect("the intermediate comes back"),
+        words(
+            context
+                .fetch(first_ids[0], count)
+                .expect("the intermediate comes back")
+        ),
         input
             .iter()
             .map(|value| value + value + 1)
@@ -747,19 +787,19 @@ fn dropping_a_submission_nobody_waited_for_still_frees_it() {
     for round in 0..4 {
         drop(
             context
-                .submit(&adds(), &[BufferSlot::Host(&input)], count)
+                .submit(&adds(), &[BufferSlot::Host(&pack(&input))], count)
                 .expect("the abandoned submission is recorded"),
         );
         // An id from an abandoned submission is still a live buffer, and it is
         // still readable — the drop waited, so the data is there.
         let pending = context
-            .submit(&adds(), &[BufferSlot::Host(&input)], count)
+            .submit(&adds(), &[BufferSlot::Host(&pack(&input))], count)
             .expect("the next submission is recorded");
         let ids = Box::new(pending)
             .wait()
             .expect("the next submission finishes");
         assert_eq!(
-            context.fetch(ids[0], count).expect("comes back"),
+            words(context.fetch(ids[0], count).expect("comes back")),
             input
                 .iter()
                 .map(|value| value + value + 1)

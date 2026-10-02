@@ -18,6 +18,40 @@ use crate::GraphRefusal;
 /// correct rather than dangerous.
 type Shared<'backend> = Arc<Mutex<Option<Box<dyn Pending + 'backend>>>>;
 
+/// The packed payload of `words`, each element at `class`'s width.
+///
+/// A graph's host data crosses as bytes because that is what the ABI carries: an
+/// `Int` element is its `i64` and a `Float` element its `f32`, four bytes to
+/// eight, and [`ScalarClass::byte_width`] is the only thing that says which.
+fn pack(class: ScalarClass, words: &[i64]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(words.len() * class.byte_width());
+    for word in words {
+        match class {
+            ScalarClass::Int => bytes.extend_from_slice(&word.to_le_bytes()),
+            ScalarClass::Float => bytes.extend_from_slice(&(*word as u32).to_le_bytes()),
+        }
+    }
+    bytes
+}
+
+/// The elements of a packed payload, one word each — the inverse of [`pack`],
+/// used to state a host value's element length without a second decoder.
+///
+/// A float element is its bits in the low 32 of the word, which is the shape this
+/// crate's own reader runs on; the width the bytes were packed at comes from the
+/// class and not from a constant here.
+fn elements(class: ScalarClass, bytes: &[u8]) -> Vec<i64> {
+    bytes
+        .chunks_exact(class.byte_width())
+        .map(|element| match class {
+            ScalarClass::Int => i64::from_le_bytes(element.try_into().unwrap_or_default()),
+            ScalarClass::Float => {
+                i64::from(u32::from_le_bytes(element.try_into().unwrap_or_default()))
+            }
+        })
+        .collect()
+}
+
 /// A value a graph node produces.
 ///
 /// # The three states, and why the middle one is its own case
@@ -98,11 +132,11 @@ pub enum Value<'backend> {
     /// Host data. What a caller passes for a graph's own input.
     ///
     /// **The class is here for the same reason it is on a device value**: the
-    /// payload is one `i64` word per element for both classes — an `Int` is its
-    /// value, a `Float` is an `f32`'s bits — so a value that dropped the class
-    /// would hand a float buffer to a backend as integers
-    /// (`docs/notes/floating-point.md` §4.4).
-    Host { data: Vec<i64>, class: ScalarClass },
+    /// payload is the class's elements packed at [`ScalarClass::byte_width`]
+    /// bytes each — an `Int` is its `i64`, a `Float` its `f32` — so a value that
+    /// dropped the class would hand a float buffer's four-byte elements to a
+    /// backend that reads eight (`docs/notes/floating-point.md` §4.4).
+    Host { data: Vec<u8>, class: ScalarClass },
     /// A number.
     ///
     /// **`i64` rather than `usize` because a graph is a program and a program's
@@ -127,7 +161,9 @@ impl fmt::Debug for Value<'_> {
             Value::Device { id, count, .. } => {
                 write!(f, "Device(buffer {:?}, {count} element(s))", id.0)
             }
-            Value::Host { data, .. } => write!(f, "Host({} element(s))", data.len()),
+            Value::Host { data, class } => {
+                write!(f, "Host({} element(s))", data.len() / class.byte_width())
+            }
             Value::Int(number) => write!(f, "Int({number})"),
         }
     }
@@ -141,16 +177,23 @@ impl<'backend> Value<'backend> {
     }
 
     /// Host data the caller already holds, read as `Int` elements.
+    ///
+    /// The argument is the elements themselves rather than bytes, because every
+    /// caller that is not a float buffer holds integers: this packs each one at
+    /// [`ScalarClass::Int`]'s width, which is what [`Self::host_data`] is for a
+    /// class that is not `Int`.
     pub fn host(data: Vec<i64>) -> Self {
         Value::Host {
-            data,
+            data: pack(ScalarClass::Int, &data),
             class: ScalarClass::Int,
         }
     }
 
-    /// Host data of a class the caller names — a float buffer's words are
-    /// `f32` bits, and only this says so.
-    pub fn host_data(class: ScalarClass, data: Vec<i64>) -> Self {
+    /// Host data of a class the caller names, as the **packed bytes** that class
+    /// reads: a float buffer's payload is four bytes per element, not the eight a
+    /// word-per-element convention would need, and this is the one place that
+    /// says so.
+    pub fn host_data(class: ScalarClass, data: Vec<u8>) -> Self {
         Value::Host { data, class }
     }
 
@@ -242,6 +285,19 @@ impl<'backend> Value<'backend> {
         }
     }
 
+    /// The elements of a host value, one word each, or `None` for anything else.
+    ///
+    /// A device value has no elements on this side — they are on the device until
+    /// a fetch — so this is the host half of the same split [`Self::slot`] makes,
+    /// and it decodes at the value's own class rather than at a width a caller
+    /// would have to know (`[`ScalarClass::byte_width`]`).
+    pub fn elements(&self) -> Option<Vec<i64>> {
+        match self {
+            Value::Host { data, class } => Some(elements(*class, data)),
+            _ => None,
+        }
+    }
+
     /// The number this holds, for a dispatch's count.
     ///
     /// The mirror of [`Self::slot`], and separate for the same reason: a value
@@ -272,10 +328,12 @@ impl<'backend> Value<'backend> {
     /// How many elements this holds, or `None` for a number.
     ///
     /// `None` rather than `0` because a number has no length and reporting
-    /// `0` for it would be a length a caller could act on.
+    /// `0` for it would be a length a caller could act on.  A host value's length
+    /// is its payload over its class's width: the payload is bytes, and one
+    /// element is not one byte ([`ScalarClass::byte_width`]).
     pub fn count(&self) -> Option<usize> {
         match self {
-            Value::Host { data, .. } => Some(data.len()),
+            Value::Host { data, class } => Some(data.len() / class.byte_width()),
             Value::Device { count, .. } | Value::Pending { count, .. } => Some(*count),
             Value::Int(_) => None,
         }

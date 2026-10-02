@@ -93,6 +93,23 @@ fn resident(value: &Value<'_>) -> ResidentId {
     }
 }
 
+/// A fetched payload as the `i64` elements these integer fragments produce.
+///
+/// The class is checked rather than assumed: a fetch that came back classed as
+/// floats from an integer fragment would be the ABI reading the buffer at the
+/// wrong width, which is a wrong number rather than a failed shape.
+fn words(data: lichen_kernel_ir::ScalarData) -> Vec<i64> {
+    match data {
+        lichen_kernel_ir::ScalarData::Int(elements) => elements,
+        lichen_kernel_ir::ScalarData::Float(elements) => {
+            panic!(
+                "an integer run's result came back as {} float element(s)",
+                elements.len()
+            )
+        }
+    }
+}
+
 /// Hand back every buffer the run produced, so the device memory is not left
 /// resident for the context's own destructor to reclaim.
 fn release_all(context: &GpuContext, values: &[Value<'_>]) {
@@ -162,9 +179,11 @@ fn a_graph_of_dispatches_computes_the_same_numbers() {
         );
         let id = resident(out.last().expect("the last node produced one"));
         assert_eq!(
-            context
-                .fetch(id, count)
-                .expect("the answer comes off the device"),
+            words(
+                context
+                    .fetch(id, count)
+                    .expect("the answer comes off the device")
+            ),
             expected,
             "{policy:?}: a graph produces what the same fragments produce outside one"
         );
@@ -219,9 +238,11 @@ fn an_extent_that_is_one_of_the_graphs_own_values_runs_at_that_extent() {
         let returned = graph.returns().expect("the return was recorded")[0];
         let id = resident(&out[returned]);
         assert_eq!(
-            context
-                .fetch(id, count as usize)
-                .expect("the answer comes off the device"),
+            words(
+                context
+                    .fetch(id, count as usize)
+                    .expect("the answer comes off the device")
+            ),
             (0..count).map(|value| 2 * value + 1).collect::<Vec<i64>>(),
             "the dispatch covered [0, {count}) because the count was the graph's \
              second argument, not because the builder knew it"

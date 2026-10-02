@@ -55,7 +55,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use ash::vk;
-use lichen_kernel_ir::{BufferSlot, KernelFragment, ResidentId, ScalarData, fragment_digest};
+use lichen_kernel_ir::{
+    BufferSlot, KernelFragment, ResidentId, ScalarClass, ScalarData, fragment_digest,
+};
 
 use crate::spirv::{self, Binding, LOCAL_SIZE_X, SpirvRefusal};
 
@@ -254,10 +256,12 @@ pub struct GpuContext {
     /// uploaded across `[0, count)` with the tail filled on the device, so no
     /// stale byte is ever read back.
     ///
-    /// Keyed by exact count, so a chain at a fixed size is served from here
-    /// forever and a different size simply allocates. The cap is what keeps this
-    /// from turning a release into a permanent VRAM reservation.
-    recycled: Mutex<HashMap<usize, Vec<DeviceBuffer>>>,
+    /// Keyed by exact element count **and class**, so a chain at a fixed size and
+    /// class is served from here forever and a different size — or the same size
+    /// in the other class, whose elements are half as wide — simply allocates.
+    /// The cap is what keeps this from turning a release into a permanent VRAM
+    /// reservation.
+    recycled: Mutex<HashMap<(usize, ScalarClass), Vec<DeviceBuffer>>>,
 }
 
 /// How deep a pool is when nobody says otherwise.
@@ -702,6 +706,13 @@ impl GpuContext {
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<Staged, RunError> {
+        // **The class, and so the width, comes from the fragment the run is
+        // emitting for.**  A fragment's positions are all one class
+        // (`spirv::module_class` refuses a mixed one), which is the same class the
+        // emitted module's element type and `ArrayStride` are, so the bytes staged
+        // here are the bytes that module reads.
+        let class = spirv::module_class(fragment).map_err(RunError::Emit)?;
+        let element = class.byte_width() as vk::DeviceSize;
         let binding = Binding {
             inputs: inputs.len(),
             outputs: fragment.outputs,
@@ -710,11 +721,11 @@ impl GpuContext {
             // Only a host slot can be too short; a resident one already holds what
             // an earlier run put there, and its length is that run's business.
             if let BufferSlot::Host(data) = slot
-                && data.len() < count
+                && data.len() < count * class.byte_width()
             {
                 return Err(RunError::InputShorterThanCount {
                     buffer: index,
-                    len: data.len(),
+                    len: data.len() / class.byte_width(),
                     count,
                 });
             }
@@ -730,7 +741,6 @@ impl GpuContext {
             // has nothing to dispatch, and saying so beats a driver error.
             return Err(RunError::EmptyRun);
         }
-        let element = std::mem::size_of::<i64>() as vk::DeviceSize;
         let data_bytes = count as vk::DeviceSize * element;
         let padded_bytes = padded as vk::DeviceSize * element;
 
@@ -741,7 +751,7 @@ impl GpuContext {
         // "this run's upload is somewhere the device is not reading" true by
         // construction rather than by the caller remembering it.
         let mut segment = self.acquire()?;
-        let host_inputs: Vec<&[i64]> = inputs
+        let host_inputs: Vec<&[u8]> = inputs
             .iter()
             .filter_map(|slot| match slot {
                 BufferSlot::Host(data) => Some(*data),
@@ -762,7 +772,7 @@ impl GpuContext {
                 // and it is why chaining two runs costs one upload, not two.
                 BufferSlot::Resident(id) => self.resident_buffer(*id)?,
                 BufferSlot::Host(data) => {
-                    let buffer = self.allocate(padded)?;
+                    let buffer = self.allocate(padded, class)?;
                     let offset = uploads.len() as u64 * data_bytes;
                     // SAFETY: `reserve` sized the slot's staging for every host
                     // input's `count` elements, and `offset` counts whole such
@@ -773,8 +783,8 @@ impl GpuContext {
                     unsafe {
                         std::ptr::copy_nonoverlapping(
                             data.as_ptr(),
-                            segment.staging().at(offset) as *mut i64,
-                            count,
+                            segment.staging().at(offset),
+                            data_bytes as usize,
                         );
                     }
                     uploads.push(Transfer {
@@ -804,7 +814,7 @@ impl GpuContext {
         // shader is about to overwrite in full; `spirv`'s module docs carry this
         // invariant, and a branch in the emitted body would break it.
         for _ in 0..binding.outputs {
-            let buffer = self.allocate(padded)?;
+            let buffer = self.allocate(padded, class)?;
             descriptors.push(buffer.descriptor());
             scratch.buffers.push(buffer);
         }
@@ -830,6 +840,10 @@ impl GpuContext {
                     handle: buffer.handle,
                     memory: buffer.memory,
                     padded,
+                    // The class the shader's element type was emitted for, so a
+                    // fetch of this buffer reads it back at the width it was
+                    // written at rather than at the integer default.
+                    class,
                 },
             );
             ids.push(id);
@@ -864,7 +878,7 @@ impl GpuContext {
     pub fn run_chain(
         &self,
         fragment: &KernelFragment,
-        input: &[i64],
+        input: &[u8],
         count: usize,
         links: usize,
     ) -> Result<ResidentId, RunError> {
@@ -874,10 +888,14 @@ impl GpuContext {
                 max: MAX_DISPATCHES_PER_SUBMISSION,
             });
         }
-        if input.len() < count {
+        // The class comes off the fragment, exactly as it does in `stage_run`, so
+        // the bytes this chain stages are the bytes the emitted module reads.
+        let class = spirv::module_class(fragment).map_err(RunError::Emit)?;
+        let element = class.byte_width();
+        if input.len() < count * element {
             return Err(RunError::InputShorterThanCount {
                 buffer: 0,
-                len: input.len(),
+                len: input.len() / element,
                 count,
             });
         }
@@ -901,7 +919,7 @@ impl GpuContext {
         if padded == 0 {
             return Err(RunError::EmptyRun);
         }
-        let element = std::mem::size_of::<i64>() as vk::DeviceSize;
+        let element = element as vk::DeviceSize;
         let data_bytes = count as vk::DeviceSize * element;
         let padded_bytes = padded as vk::DeviceSize * element;
 
@@ -918,16 +936,16 @@ impl GpuContext {
             context: self,
             buffers: Vec::with_capacity(1),
         };
-        let source = self.allocate(padded)?;
+        let source = self.allocate(padded, class)?;
         scratch.buffers.push(source);
         // SAFETY: `reserve` sized and mapped this slot's staging for `count`
         // elements before anything was recorded, and the copy below writes
-        // exactly that many. Nothing is in flight on this slot.
+        // exactly that many bytes. Nothing is in flight on this slot.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 input.as_ptr(),
-                segment.staging().at(0) as *mut i64,
-                count,
+                segment.staging().at(0),
+                data_bytes as usize,
             );
         }
         let upload = Transfer {
@@ -956,8 +974,8 @@ impl GpuContext {
         // buffers at once, and then which can be shared is a question about
         // liveness, which is the graph's to answer — see the memory note in the
         // graph design.
-        let first = self.allocate(padded)?;
-        let second = self.allocate(padded)?;
+        let first = self.allocate(padded, class)?;
+        let second = self.allocate(padded, class)?;
 
         // One reset for the whole submission and **none** inside it, and it
         // happened in `acquire` rather than here: a reset frees every set,
@@ -1000,6 +1018,7 @@ impl GpuContext {
                 handle: current.handle,
                 memory: current.memory,
                 padded,
+                class,
             },
         );
         Ok(id)
@@ -1015,25 +1034,29 @@ impl GpuContext {
             .ok_or(RunError::UnknownResident { id: id.0 })
     }
 
-    /// A fresh device-local buffer for `padded` elements, from the recycled pool
-    /// when one of that size is free.
+    /// A fresh device-local buffer for `padded` elements of `class`, from the
+    /// recycled pool when one of that size and class is free.
     ///
     /// Its contents are undefined until something writes them, and every consumer
     /// writes all of it — see [`GpuContext::recycled`]. A run fills its outputs
     /// before the dispatch, and an upload's staging is copied over the whole real
     /// range with the tail cleared on the device.
-    fn allocate(&self, padded: usize) -> Result<DeviceBuffer, RunError> {
+    ///
+    /// The class is part of what a buffer *is* — its byte size and the width a
+    /// fetch reads it back at — so the pool is keyed on both and a float run never
+    /// draws an integer-sized allocation.
+    fn allocate(&self, padded: usize, class: ScalarClass) -> Result<DeviceBuffer, RunError> {
         if let Some(buffer) = self
             .recycled
             .lock()
             .unwrap()
-            .get_mut(&padded)
+            .get_mut(&(padded, class))
             .and_then(Vec::pop)
         {
             return Ok(buffer);
         }
         let device = &self.device;
-        let bytes = DeviceBuffer::bytes(padded);
+        let bytes = DeviceBuffer::bytes(padded, class);
         let handle = check("buffer creation", unsafe {
             device.create_buffer(
                 &vk::BufferCreateInfo::default()
@@ -1083,14 +1106,15 @@ impl GpuContext {
             handle,
             memory,
             padded,
+            class,
         })
     }
 
     /// Hand a device buffer back for reuse, or free it if the pool for its size
-    /// is already full.
+    /// and class is already full.
     fn recycle(&self, buffer: DeviceBuffer) {
         let mut recycled = self.recycled.lock().unwrap();
-        let pool = recycled.entry(buffer.padded).or_default();
+        let pool = recycled.entry((buffer.padded, buffer.class)).or_default();
         if pool.len() < RECYCLED_PER_SIZE {
             pool.push(buffer);
         } else {
@@ -1106,7 +1130,14 @@ impl GpuContext {
     ///
     /// A submit and a wait of its own, which is the point of the method: a run
     /// whose results nobody asks for never pays for moving them.
-    pub fn fetch(&self, id: ResidentId, count: usize) -> Result<Vec<i64>, RunError> {
+    ///
+    /// **The class is the buffer's own**, read off the record the run left, so
+    /// the copy below is sized at [`ScalarClass::byte_width`] and the elements
+    /// come back as the class's own [`ScalarData`] — a float buffer is decoded as
+    /// `f32`s rather than handed over as the bits of one.  A fetch has no
+    /// fragment to consult, which is why the class travels on the resident record
+    /// (`docs/notes/floating-point.md` §3.8, §4.4).
+    pub fn fetch(&self, id: ResidentId, count: usize) -> Result<ScalarData, RunError> {
         let buffer = self.resident_buffer(id)?;
         if count > buffer.padded {
             return Err(RunError::FetchLongerThanBuffer {
@@ -1114,7 +1145,7 @@ impl GpuContext {
                 count,
             });
         }
-        let bytes = (count * std::mem::size_of::<i64>()) as vk::DeviceSize;
+        let bytes = (count * buffer.class.byte_width()) as vk::DeviceSize;
         let device = &self.device;
 
         // A fetch takes a slot like anything else, and for the same reason: it is
@@ -1153,7 +1184,7 @@ impl GpuContext {
             );
         }
 
-        segment.submit_and_read_back(count)
+        segment.submit_and_read_back(count, buffer.class)
     }
 
     /// Give a resident buffer's device memory back.
@@ -1620,23 +1651,14 @@ impl lichen_kernel_ir::ParallelBackend for GpuContext {
         ))
     }
 
-    /// The inherent fetch returns integers because every buffer this context
-    /// allocates is `i64`-strided: the staging, the device buffers and the
-    /// read-back are all sized for eight-byte elements, which is the integer
-    /// ABI's element.
-    ///
-    /// **The emitter's half of this is done and the run's half is not.** A float
-    /// fragment's module declares four-byte elements ([`spirv::module_class`]'s
-    /// class decides the element type, the pointer into it and the array
-    /// stride), but nothing on the record a [`ResidentId`] names says which class
-    /// its elements are, so this path cannot read one back: a float fragment run
-    /// through it would be fetched at the wrong stride. The class carrier for a
-    /// run's buffers is the open piece, not the module
+    /// The class comes off the resident record the run left, so a float
+    /// fragment's result is fetched at the width its module declared — and this
+    /// is the half that used to be missing: a float module's `ArrayStride` was
+    /// emitted at four bytes while everything this path staged, allocated and
+    /// read back was sized at eight, so a float fragment could not be run at all
     /// (`docs/notes/floating-point.md` §3.8, §4.4).
     fn fetch(&self, id: ResidentId, count: usize) -> Result<ScalarData, String> {
-        GpuContext::fetch(self, id, count)
-            .map(ScalarData::Int)
-            .map_err(|error| error.to_string())
+        GpuContext::fetch(self, id, count).map_err(|error| error.to_string())
     }
 
     fn release(&self, id: ResidentId) {
@@ -1780,11 +1802,18 @@ impl Drop for GpuPending<'_> {
     }
 }
 
-/// A device-local buffer of `i64` elements.
+/// A device-local buffer of `padded` elements of one class.
 ///
 /// Device-local because the shader reads and writes it where the shader runs. A
 /// host-visible buffer would put every one of those accesses on the path between
 /// the CPU and the GPU, which is the cost this whole shape exists to avoid.
+///
+/// **The class is part of the record, not of the id.**  A [`ResidentId`] names a
+/// buffer and nothing else, so the width a buffer's elements were written at has
+/// to travel beside it or a fetch of a float buffer is a fetch at the integer
+/// width — the wrong numbers, not a failed shape.  It is the class the fragment
+/// declared, so it is the class the module's `ArrayStride` was emitted at
+/// ([`spirv::element_stride`]) and the two cannot disagree.
 #[derive(Clone, Copy)]
 struct DeviceBuffer {
     handle: vk::Buffer,
@@ -1792,18 +1821,20 @@ struct DeviceBuffer {
     /// The buffer's capacity in elements — the run's *padded* count, not the
     /// count the caller asked about.
     padded: usize,
+    /// The class its elements are, and so the width they occupy.
+    class: ScalarClass,
 }
 
 impl DeviceBuffer {
-    fn bytes(padded: usize) -> vk::DeviceSize {
-        (padded * std::mem::size_of::<i64>()) as vk::DeviceSize
+    fn bytes(padded: usize, class: ScalarClass) -> vk::DeviceSize {
+        (padded * class.byte_width()) as vk::DeviceSize
     }
 
     fn descriptor(&self) -> vk::DescriptorBufferInfo {
         vk::DescriptorBufferInfo {
             buffer: self.handle,
             offset: 0,
-            range: Self::bytes(self.padded),
+            range: Self::bytes(self.padded, self.class),
         }
     }
 
@@ -2114,7 +2145,16 @@ impl Segment<'_> {
     /// rewrite the very mapping being copied out of — which returns the *wrong
     /// numbers* rather than failing, so it has to be structurally impossible
     /// rather than merely discouraged.
-    fn submit_and_read_back(mut self, count: usize) -> Result<Vec<i64>, RunError> {
+    ///
+    /// `count` is a count of **elements**, so the byte range read is `count * 4`
+    /// for a float buffer and `count * 8` for an integer one: the copy above moved
+    /// exactly that many bytes, and reading a word per element here would read the
+    /// bytes of the two elements after this one.
+    fn submit_and_read_back(
+        mut self,
+        count: usize,
+        class: ScalarClass,
+    ) -> Result<ScalarData, RunError> {
         self.hand_to_queue()?;
         self.context.wait_on(self.slot())?;
         // The fence has signalled, so nothing is in flight and the claim can go
@@ -2126,8 +2166,22 @@ impl Segment<'_> {
         // filling it has finished, and the copy's own barrier made the write
         // host-visible. The claim is still held, so no other thread can be
         // writing this mapping.
-        let data = unsafe { std::slice::from_raw_parts(self.staging().at(0) as *const i64, count) };
-        Ok(data.to_vec())
+        let data =
+            unsafe { std::slice::from_raw_parts(self.staging().at(0), count * class.byte_width()) };
+        Ok(match class {
+            ScalarClass::Int => ScalarData::Int(
+                data.chunks_exact(8)
+                    .map(|bytes| i64::from_le_bytes(bytes.try_into().unwrap_or_default()))
+                    .collect(),
+            ),
+            ScalarClass::Float => ScalarData::Float(
+                data.chunks_exact(4)
+                    .map(|bytes| {
+                        f32::from_bits(u32::from_le_bytes(bytes.try_into().unwrap_or_default()))
+                    })
+                    .collect(),
+            ),
+        })
     }
 }
 

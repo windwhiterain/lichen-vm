@@ -26,20 +26,34 @@ fn payload_address(value: &LangValue) -> usize {
     let compute = AsEnum::<ComputeValue>::as_enum(value).expect("the node holds a compute value");
     match compute {
         ComputeValue::Buffer(AnyHandle::Dynamic(handle), _) => {
-            handle.as_ptr() as *const i64 as usize
+            handle.as_ptr() as *const u8 as usize
         }
         other => panic!("expected a buffer payload, got {other:?}"),
     }
 }
 
 /// The payload's elements.
+///
+/// The payload is packed bytes — [`ScalarClass::byte_width`] per element, which
+/// is four for a float — so the elements are decoded at the class the value
+/// carries rather than read through an `i64` view the payload no longer has the
+/// alignment or the length for.
 fn payload_items(value: &LangValue) -> Vec<i64> {
     let compute = AsEnum::<ComputeValue>::as_enum(value).expect("the node holds a compute value");
     match compute {
-        ComputeValue::Buffer(AnyHandle::Dynamic(handle), _) => {
+        ComputeValue::Buffer(AnyHandle::Dynamic(handle), class) => {
             // SAFETY: the value was read out of the module on a live borrow, so
             // its payload's home block is alive for this read.
-            unsafe { (*handle.as_ptr()).to_vec() }
+            let bytes = unsafe { &*handle.as_ptr() };
+            bytes
+                .chunks_exact(class.byte_width())
+                .map(|element| match class {
+                    ScalarClass::Int => i64::from_le_bytes(element.try_into().unwrap_or_default()),
+                    ScalarClass::Float => {
+                        i64::from(u32::from_le_bytes(element.try_into().unwrap_or_default()))
+                    }
+                })
+                .collect()
         }
         other => panic!("expected a buffer payload, got {other:?}"),
     }
@@ -51,8 +65,13 @@ fn a_collected_payload_is_relocated_when_its_block_is_released() {
     let root = module.add_block(None);
     let child = module.add_block(Some(root));
 
-    // A buffer value in the child block, its payload in the child's arena.
-    let payload = module.alloc_payload(&[10_i64, 20, 30], child);
+    // A buffer value in the child block, its payload in the child's arena — the
+    // class's packed elements, which for an `Int` buffer is eight bytes each.
+    let words: Vec<u8> = [10_i64, 20, 30]
+        .into_iter()
+        .flat_map(i64::to_le_bytes)
+        .collect();
+    let payload = module.alloc_payload(&words, child);
     let node = module.add_node(
         child,
         None,
