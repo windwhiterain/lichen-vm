@@ -1107,6 +1107,7 @@ fn node_or_default(id: AnyNodeId) -> NodeId {
 fn observed_low_shape(value: impl AsEnum<LowValue>) -> Option<LowShape> {
     match value.as_enum()? {
         LowValue::USize(_) => Some(LowShape::USize),
+        LowValue::Float(_) => Some(LowShape::Float),
         LowValue::Array(array) => Some(LowShape::Array(
             Box::new(LowShape::Unknown),
             // SAFETY: only the length is read, and the caller passes a value

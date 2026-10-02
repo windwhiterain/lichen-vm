@@ -213,6 +213,13 @@ impl ValueCodec for LowValue {
                 w.u8(0);
                 w.u64(n as u64);
             }
+            // Tag 8 is additive (`Void` took 7), and the float travels as its
+            // 32-bit pattern: the artifact is bytes, and a decimal spelling
+            // would not round-trip every value.
+            LowValue::Float(n) => {
+                w.u8(8);
+                w.u32(n.to_bits());
+            }
             LowValue::Array(AnyHandle::Static(handle)) => {
                 w.u8(1);
                 write_relocated_handle(w, modules, handle.module, handle.offset);
@@ -263,6 +270,7 @@ impl ValueCodec for LowValue {
     ) -> Result<Self, String> {
         Ok(match r.u8()? {
             0 => LowValue::USize(r.u64()? as usize),
+            8 => LowValue::Float(f32::from_bits(r.u32()?)),
             1 => LowValue::Array(AnyHandle::Static(read_relocated_handle::<ArrayItem, P>(
                 r, self_key, self_arena, self_base, modules,
             )?)),

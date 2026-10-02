@@ -285,6 +285,7 @@ fn walk(expr: &Expr, deps: &mut Deps) {
             }
         }
         Expr::Int(..)
+        | Expr::Float(..)
         | Expr::Str(..)
         | Expr::TypeConst(..)
         | Expr::TypeOf(..)

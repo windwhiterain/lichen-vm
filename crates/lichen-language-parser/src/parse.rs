@@ -880,10 +880,12 @@ fn starts_an_expression(kind: &TokenKind) -> bool {
     matches!(
         kind,
         TokenKind::Int(_)
+            | TokenKind::Float(_)
             | TokenKind::Str(_)
             | TokenKind::Name(_)
             | TokenKind::Placeholder
             | TokenKind::KwInt
+            | TokenKind::KwFloat
             | TokenKind::KwString
             | TokenKind::KwType
             | TokenKind::KwStruct
@@ -944,12 +946,19 @@ fn atom_parser<'a>(
                     _ => unreachable!("filtered for an int"),
                 }),
             any::<In<'a>, E<'a>>()
+                .filter(|t: &Token| matches!(t.kind, TokenKind::Float(_)))
+                .map(|t| match t.kind {
+                    TokenKind::Float(n) => Expr::Float(n, t.span),
+                    _ => unreachable!("filtered for a float"),
+                }),
+            any::<In<'a>, E<'a>>()
                 .filter(|t: &Token| matches!(t.kind, TokenKind::Str(_)))
                 .map(|t| match t.kind {
                     TokenKind::Str(s) => Expr::Str(s, t.span),
                     _ => unreachable!("filtered for a string"),
                 }),
             token(TokenKind::KwInt).map(|t| Expr::TypeConst(TypeConst::Int, t.span)),
+            token(TokenKind::KwFloat).map(|t| Expr::TypeConst(TypeConst::Float, t.span)),
             token(TokenKind::KwString).map(|t| Expr::TypeConst(TypeConst::String, t.span)),
             token(TokenKind::KwType).map(|t| Expr::TypeConst(TypeConst::Type, t.span)),
             // The bare `type_of` atom: an ordinary function value applied by

@@ -1366,9 +1366,10 @@ fn classify_token_kind(
 ) -> Option<(SemanticTokenType, Vec<SemanticTokenModifier>)> {
     match kind {
         TokenKind::Int(_) => Some((SemanticTokenType::NUMBER, Vec::new())),
+        TokenKind::Float(_) => Some((SemanticTokenType::NUMBER, Vec::new())),
         TokenKind::Str(_) => Some((SemanticTokenType::STRING, Vec::new())),
         // The builtin type constants are type-ish, not keywords.
-        TokenKind::KwInt | TokenKind::KwString | TokenKind::KwType => {
+        TokenKind::KwInt | TokenKind::KwFloat | TokenKind::KwString | TokenKind::KwType => {
             Some((SemanticTokenType::TYPE, Vec::new()))
         }
         TokenKind::KwStruct
@@ -1512,6 +1513,7 @@ impl<'a> NameClass<'a> {
                 self.expr(argument);
             }
             Expr::Int(..)
+            | Expr::Float(..)
             | Expr::Str(..)
             | Expr::TypeConst(..)
             | Expr::Name(..)
@@ -1731,6 +1733,7 @@ impl Walk {
     fn expr(&mut self, e: &Expr) {
         match e {
             Expr::Int(..)
+            | Expr::Float(..)
             | Expr::Str(..)
             | Expr::TypeConst(..)
             | Expr::Placeholder(..)
@@ -2035,6 +2038,7 @@ impl<'a> ScopeCapture<'a> {
         }
         match e {
             Expr::Int(..)
+            | Expr::Float(..)
             | Expr::Str(..)
             | Expr::TypeConst(..)
             | Expr::Placeholder(..)

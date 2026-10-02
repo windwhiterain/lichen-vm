@@ -23,6 +23,7 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 start: *start,
             }),
             Expr::Int(..)
+            | Expr::Float(..)
             | Expr::Str(..)
             | Expr::TypeConst(..)
             | Expr::Name(..)

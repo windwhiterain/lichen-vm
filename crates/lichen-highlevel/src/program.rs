@@ -167,11 +167,16 @@ pub trait Ctx<P: Program> {
     /// across occurrences, since diagnostics are attributed by the lowlevel
     /// unify trace and the checker's edges (never by span-on-node).
     fn int_type(&self) -> NodeId;
+    /// The canonical, shared `[float, Type]` type expression — the type of
+    /// every `Float` value and the pair of the `Float` type constant.
+    /// Referenced, not rebuilt: shared across occurrences on the same terms as
+    /// [`Self::int_type`] (`docs/notes/floating-point.md` §3.4).
+    fn float_type(&self) -> NodeId;
     /// The canonical, shared `[string, Type]` type expression — the type of
     /// every `Str` value and the pair of the `string` type constant.  Shared
     /// across occurrences like [`Self::int_type`].
     fn string_type(&self) -> NodeId;
-    // The 8 marker-node accessors (`int_marker_node`, `string_marker_node`,
+    // The 9 marker-node accessors (`int_marker_node`, `string_marker_node`,
     // `type_marker_node`, …) are registry-derived — one per kind marker.
     for_each_kind_marker!(define_ctx_marker_accessors);
     /// A checker-issued unification — an extension's type check, executed
@@ -232,6 +237,30 @@ where
     }
 }
 
+/// The built-in float literal: stores the `f32` value the lexer round-tripped
+/// (`docs/notes/floating-point.md` §3.3).  `build` references the canonical,
+/// shared `[float, Type]` type expression for the type, so the pair is
+/// `[Float(1.5), [float, Type]]` — never an `Int`-shaped pair, which §4.2 makes
+/// a *different type* rather than a lossy rendering of this one.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct FloatLit(pub f32);
+
+impl<P> LiteralExt<P> for FloatLit
+where
+    P: Program,
+{
+    fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
+        let value_node = ctx.value_node(P::Value::from(LowValue::Float(self.0)));
+        let ty = ctx.float_type();
+        let pair = ctx.pair(value_node, ty);
+        LiteralBuild {
+            pair,
+            value: value_node,
+            ty,
+        }
+    }
+}
+
 /// The built-in string literal: stores the (immutable) string content, a
 /// `&'static str` leaked once from the source.  `build` references the
 /// canonical, shared `[string, Type]` type expression for the type, exactly
@@ -270,6 +299,28 @@ where
         let value_node = ctx.int_marker_node();
         let ty = ctx.universe();
         let pair = ctx.int_type();
+        LiteralBuild {
+            pair,
+            value: value_node,
+            ty,
+        }
+    }
+}
+
+/// The built-in `Float` type constant — `Float : Type`.  A unit literal.  Its
+/// pair is the shared `[float, Type]` type expression, exactly as
+/// [`IntTypeLit`]'s is `[int, Type]`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct FloatTypeLit;
+
+impl<P> LiteralExt<P> for FloatTypeLit
+where
+    P: Program,
+{
+    fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
+        let value_node = ctx.float_marker_node();
+        let ty = ctx.universe();
+        let pair = ctx.float_type();
         LiteralBuild {
             pair,
             value: value_node,
@@ -319,17 +370,19 @@ where
     }
 }
 
-// The highlevel program's literal vocabulary: the built-in int & string
-// literals and the `Int`/`string`/`Type` type-constant literals, as sibling
-// carry variants.  Each type constant has its own literal; each `build`
+// The highlevel program's literal vocabulary: the built-in int, float & string
+// literals and the `Int`/`Float`/`string`/`Type` type-constant literals, as
+// sibling carry variants.  Each type constant has its own literal; each `build`
 // rebuilds its value/type nodes fresh per occurrence.
 lichen_utils::enum_ext! {
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum HighProgramLiteral {
     }
     + IntLit as Int;
+    + FloatLit as Float;
     + StrLit as Str;
     + IntTypeLit as IntType;
+    + FloatTypeLit as FloatType;
     + StringTypeLit as StringType;
     + TypeTypeLit as TypeType;
 }
@@ -341,15 +394,17 @@ where
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         match self {
             HighProgramLiteral::Int(lit) => lit.build(ctx),
+            HighProgramLiteral::Float(lit) => lit.build(ctx),
             HighProgramLiteral::Str(lit) => lit.build(ctx),
             HighProgramLiteral::IntType(lit) => lit.build(ctx),
+            HighProgramLiteral::FloatType(lit) => lit.build(ctx),
             HighProgramLiteral::StringType(lit) => lit.build(ctx),
             HighProgramLiteral::TypeType(lit) => lit.build(ctx),
         }
     }
 }
 
-// The 8 kind-marker variants are generated from the registry
+// The 9 kind-marker variants are generated from the registry
 // ([`crate::shape::for_each_kind_marker`]) — adding or removing a marker
 // touches that one list.  `TypeId` is NOT a kind marker (it carries the
 // nominal id a struct marker references) and is spelled out below.
@@ -435,7 +490,7 @@ macro_rules! define_value_type_marker_methods {
 /// own [`HighProgramValue`] or an extended one — implements this; the
 /// checker is generic over it.
 ///
-/// The 8 kind-marker methods are registry-derived
+/// The 9 kind-marker methods are registry-derived
 /// ([`crate::shape::for_each_kind_marker`]) with default bodies over
 /// `From<TypeValue>`; an implementation spells only [`Self::type_id`] and
 /// [`Self::type_id_value`].
@@ -540,7 +595,9 @@ pub const DIVIDE_BY_ZERO: &str = "operator.divide_by_zero";
 // changes and a new marker takes the next unused tag, so the tags are
 // deliberately not the list positions (`TypeString` is `7`).  `TypeId` is not
 // a kind marker; it keeps tag 8, spelled here — a registry entry claiming 8
-// would collide with it as a duplicate match arm and fail to compile.
+// would shadow this read arm (`unreachable_patterns`, a warning rather than
+// the compile error it was believed to be) and silently decode every
+// persisted `TypeId` as that marker.
 macro_rules! define_type_value_codec {
     ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
         impl TypeValue {

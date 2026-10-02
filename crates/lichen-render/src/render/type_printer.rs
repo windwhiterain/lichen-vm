@@ -113,6 +113,10 @@ where
         if let Some(structural) = value.as_enum() {
             return match structural {
                 LowValue::USize(n) => n.to_string(),
+                // A float in a type expression is a structural value, as a
+                // `USize` array length is: it prints its own digits, never the
+                // marker's name (`type_constant` spells that).
+                LowValue::Float(value) => float_literal(value),
                 LowValue::Str(s) => format!("\"{s}\""),
                 // SAFETY: `array` is the payload of `node`, a live node of the
                 // module being rendered; this printer releases no block.
@@ -135,6 +139,12 @@ where
     pub(crate) fn type_constant(&self, value: &P::Value) -> Option<String> {
         if value == &P::Value::int_marker() {
             Some("Int".to_string())
+        } else if value == &P::Value::float_marker() {
+            // The marker itself, not a float value: source syntax spells the
+            // type constant `Float` (the lexer's keyword), not the registry's
+            // doc label `float`.  A float *value* is the other site, and prints
+            // its digits through `float_literal`.
+            Some("Float".to_string())
         } else if value == &P::Value::string_marker() {
             Some("string".to_string())
         } else if value == &P::Value::type_marker() {
@@ -314,6 +324,8 @@ where
         let value = value.unwrap();
         let out = match value.as_enum() {
             Some(LowValue::USize(n)) => n.to_string(),
+            // As in `value`: the float's digits, not the marker's name.
+            Some(LowValue::Float(value)) => float_literal(value),
             Some(LowValue::Str(s)) => format!("\"{s}\""),
             Some(LowValue::Parameterized) => self.static_class_name(sref),
             // A computed nothing is a concrete value, never a class letter.

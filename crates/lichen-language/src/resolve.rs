@@ -383,6 +383,7 @@ impl Resolver {
             }
             // No children/binders — nothing to resolve.
             Expr::Int(..)
+            | Expr::Float(..)
             | Expr::Str(..)
             | Expr::TypeConst(..)
             | Expr::TypeOf(..)

@@ -2157,7 +2157,14 @@ fn kernel_domain(domain: LowShape) -> Result<LowShape, String> {
 /// path already tolerates, and would change behaviour rather than preserve it.
 fn kernel_shape(domain: &LowShape) -> KernelShape {
     match domain {
-        LowShape::USize => KernelShape::Scalar,
+        // A float is a **decided scalar shape**, so it is answered as one: this
+        // is the *shape* question ("one value, or a tuple of them"), not the
+        // dispatchability one, and a float domain is one value.  The refusal
+        // that keeps it out of an `i64` wasm signature is `kernel_domain`'s, and
+        // it has already run: `domain_is_known` rejects a float leaf, so this
+        // arm states the layout a float would have rather than one anything
+        // reaches (`docs/notes/floating-point.md` §3.8, §5).
+        LowShape::USize | LowShape::Float => KernelShape::Scalar,
         LowShape::Tuple(items) => KernelShape::Tuple(items.iter().map(kernel_shape).collect()),
         LowShape::Unknown
         | LowShape::Array(_, _)
@@ -2166,12 +2173,28 @@ fn kernel_shape(domain: &LowShape) -> KernelShape {
     }
 }
 
-/// Whether a shape has no undecided position anywhere in it.  A domain with a
-/// single `Unknown` leaf is as undecided as an all-`Unknown` one: the wasm
-/// arity comes from flattening, so one unknown leaf is one unknown local.
+/// Whether a shape has no position anywhere in it that the kernel ABI cannot
+/// lower to a decided `i64` local — the gate [`kernel_domain`] reads before its
+/// own shape match.
+///
+/// A domain with a single `Unknown` leaf is as undecided as an all-`Unknown`
+/// one: the wasm arity comes from flattening, so one unknown leaf is one
+/// unknown local.  A **`Float` leaf gets the same answer for a different
+/// reason** — it is decided, but the ABI has no local for it (`i64` in five
+/// places, `lichen_kernel_ir`), so an arity read off it would be a
+/// mis-encoding.
 fn domain_is_known(shape: &LowShape) -> bool {
     match shape {
         LowShape::Unknown => false,
+        // The load-bearing arm, and the narrower of the two questions.  This is
+        // read *before* `kernel_domain`'s shape match, and that match accepts
+        // `Tuple(_)` without re-checking elements, so this is the only thing
+        // that can refuse `Tuple([Float, …])`.  Answering `true` would let a
+        // float reach `kernel_shape` and `flat_arity`, which have no refusal
+        // variant to answer with, and compile an `i64` wasm signature for it —
+        // the silent mis-encoding phase 0 forbids
+        // (`docs/notes/floating-point.md` §3.8, §5).
+        LowShape::Float => false,
         LowShape::USize => true,
         LowShape::Tuple(items) => items.iter().all(domain_is_known),
         LowShape::Array(element, _)
@@ -2197,6 +2220,16 @@ fn domain_is_known(shape: &LowShape) -> bool {
 fn flat_arity(shape: &LowShape) -> usize {
     match shape {
         LowShape::USize => 1,
+        // One leaf, and deliberately the *layout* answer rather than a
+        // dispatchability one: a float is one value and [`KernelShape::Scalar`]
+        // is also one, so this stays consistent with `kernel_shape`, which is
+        // what keeps a domain's locals contiguous.  No float reaches here —
+        // every caller flattens a `ParamSlot`'s shape or a sub-shape of one,
+        // and `kernel_domain`/`domain_is_known` is the gate a float is refused
+        // at.  Zero would be a different claim (that a float occupies no local
+        // of the signature `KernelShape` sizes as one) and would put the two
+        // arities in disagreement.
+        LowShape::Float => 1,
         LowShape::Tuple(items) => items.iter().map(flat_arity).sum(),
         LowShape::Array(_, _) | LowShape::Function(..) | LowShape::Table(..) => 1,
         LowShape::Unknown => 1,
@@ -3311,6 +3344,12 @@ where
 /// all.
 fn argument_kind(value: Option<&LowValue>) -> &'static str {
     match value {
+        // A float is a concrete scalar, so it is named as one rather than left
+        // to the "no value" catch-all: the refusal this feeds has to say what
+        // the user actually wrote, and a float argument is the phase-0 case a
+        // kernel must refuse (`docs/notes/floating-point.md` §3.8, §5).  The
+        // `i64` vector `collect_args` builds has no element for it.
+        Some(LowValue::Float(_)) => "a float",
         Some(LowValue::Str(_)) => "a string",
         Some(LowValue::Table(_)) => "a table",
         Some(LowValue::Function(_)) => "a function",
