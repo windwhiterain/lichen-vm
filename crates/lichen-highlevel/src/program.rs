@@ -529,22 +529,33 @@ pub enum TypeOperator {
     Fresh,
     /// Binary operators over `[left, right]`.
     ///
-    /// `Add`/`Sub`/`Mul`/`Div`/`Rem` and `BitAnd`/`BitOr`/`BitXor` compute on
-    /// `Int` operands; the comparisons (`Lt`/`Gt`/`Leq`/`Geq`/`Eq`/`Neq`)
-    /// compare and yield `USize(0/1)` — no `Bool` value exists, the comparison
-    /// result drives the lazy `Index` branch of an `if` directly.
+    /// `Add`/`Sub`/`Mul`/`Div` and the four order comparisons
+    /// (`Lt`/`Gt`/`Leq`/`Geq`) compute over one of the language's two scalar
+    /// classes, `Int` or `Float`, and never over a mixture: the classes do not
+    /// convert (`docs/notes/floating-point.md` §4.2), so the checker pins both
+    /// operands to the class a concretely float operand selects — or to `Int`
+    /// when neither operand names one.  `Rem` and `BitAnd`/`BitOr`/`BitXor` are
+    /// `Int`-only, because a float has no remainder and no bit pattern here.
+    ///
+    /// A comparison yields `USize(0/1)` whatever its operands are — no `Bool`
+    /// value exists, and the result drives the lazy `Index` branch of an `if`
+    /// directly.  The four arithmetic operators yield their operands' own
+    /// class, which is what makes a float sum a `Float` again.
     ///
     /// **An `Int` is unsigned**, so `Div`/`Rem` are integer division and
     /// remainder on the machine-sized unsigned value and the four order
-    /// comparisons are the unsigned ones; `Div`/`Rem` by zero have no value and
-    /// are the one case this operator refuses at run time (see
-    /// [`DIVIDE_BY_ZERO`]).  `Mul` and `Sub` wrap, exactly as `Add` does.
+    /// comparisons are the unsigned ones when their operands are `Int`s;
+    /// `Div`/`Rem` by zero have no value and are the one case the integer side
+    /// refuses at run time (see [`DIVIDE_BY_ZERO`]).  `Mul` and `Sub` wrap,
+    /// exactly as `Add` does.  A float's arithmetic is IEEE instead, division
+    /// by zero included (§4.3's infinity and `NaN` are ordinary float values
+    /// here), so nothing on the float side is refused.
     ///
     /// `Eq`/`Neq` are the generalized equality (docs/language-spec.md): they
-    /// compare any two *same-typed* values whole (two `Int`s, or two type
-    /// values — `S::a == Int` is `1`), while a cross-type comparison is a
-    /// check-time error (the checker unifies the operand types; every other
-    /// operator pins both to `Int`).
+    /// compare any two *same-typed* values whole (two `Int`s, two floats, or
+    /// two type values — `S::a == Int` is `1`) through the values' own
+    /// [`ValueExt::value_eq`], while a cross-type comparison is a check-time
+    /// error (the checker unifies the operand types).
     ///
     /// The lowlevel deep-evaluates the operand and gates on its
     /// parameterized subtree before calling `run`, so an unbound operand
@@ -566,7 +577,7 @@ pub enum TypeOperator {
     BitXor,
 }
 
-/// The category a `Div`/`Rem` by zero is recorded under.
+/// The category an **integer** `Div`/`Rem` by zero is recorded under.
 ///
 /// **A run-time refusal, not a check error**, and recorded through the
 /// lowlevel's general extension channel because [`eval_errors`] is a closed
@@ -574,6 +585,10 @@ pub enum TypeOperator {
 /// a divisor that evaluated to zero is neither.  The operator's answer is the
 /// lazy marker, which is what every other refused computation in this language
 /// answers, so the program reports the unbound result and this says why.
+///
+/// **`Int`-only**: a float `Div` has the IEEE answer — an infinity or a `NaN`,
+/// both ordinary float values here — so no float divisor is recorded (see
+/// [`TypeOperator`] and `docs/notes/floating-point.md` §3.7).
 ///
 /// Only the interpreter refuses.  A JIT'd kernel has already left this crate:
 /// wasm's integer division traps and SPIR-V's is undefined, and a guard would
@@ -808,20 +823,20 @@ where
                     unreachable!("is_unbound covers the empty slot")
                 };
                 match self {
-                    // A non-USize operand is a *reported* type error, not an
+                    // A non-`Int` operand is a *reported* type error, not an
                     // invariant violation: the checker pins both operands to
                     // `Int`, so a wrong shape only arrives here through an
                     // argument unify that already failed (recording the
                     // diagnostic) — stay lazy instead of panicking.
-                    TypeOperator::Add
-                    | TypeOperator::Sub
-                    | TypeOperator::Mul
-                    | TypeOperator::Div
-                    | TypeOperator::Rem
-                    | TypeOperator::Lt
-                    | TypeOperator::Gt
-                    | TypeOperator::Leq
-                    | TypeOperator::Geq
+                    //
+                    // `Int` is a machine-sized **unsigned** integer, so `%` and
+                    // the bitwise trio are the unsigned operations, and a zero
+                    // divisor is the one operand shape that has no value at all:
+                    // it is recorded rather than panicked — the same lazy answer
+                    // every other refused computation gives.  Only these
+                    // operators refuse; the float arithmetic below has an IEEE
+                    // answer for both zero-divisor cases.
+                    TypeOperator::Rem
                     | TypeOperator::BitAnd
                     | TypeOperator::BitOr
                     | TypeOperator::BitXor => {
@@ -832,41 +847,99 @@ where
                         let (Some(left), Some(right)) = (to_usize(&left), to_usize(&right)) else {
                             return P::Value::from(LowValue::Parameterized);
                         };
-                        // `Int` is a machine-sized **unsigned** integer, so the
-                        // divisor check is against zero and the four order
-                        // comparisons are the unsigned ones.  A zero divisor is
-                        // the one operand shape that has no value at all, and it
-                        // is recorded rather than panicked — the same lazy
-                        // answer every other refused computation gives.
                         let value = match self {
-                            TypeOperator::Add => left.wrapping_add(right),
-                            TypeOperator::Sub => left.wrapping_sub(right),
-                            TypeOperator::Mul => left.wrapping_mul(right),
-                            TypeOperator::Div => match left.checked_div(right) {
-                                Some(n) => n,
-                                None => return divide_by_zero(module, false),
-                            },
                             TypeOperator::Rem => match left.checked_rem(right) {
                                 Some(n) => n,
                                 None => return divide_by_zero(module, true),
                             },
-                            TypeOperator::Lt => (left < right) as usize,
-                            TypeOperator::Gt => (left > right) as usize,
-                            TypeOperator::Leq => (left <= right) as usize,
-                            TypeOperator::Geq => (left >= right) as usize,
                             TypeOperator::BitAnd => left & right,
                             TypeOperator::BitOr => left | right,
                             TypeOperator::BitXor => left ^ right,
-                            _ => unreachable!("the Int operators are handled above"),
+                            _ => unreachable!("the Int-only operators are handled above"),
                         };
                         P::Value::from(LowValue::USize(value))
                     }
-                    // `==`/`!=` are the generalized equality: they compare the
-                    // two values whole (two `Int`s, or two type values).  The
-                    // checker unifies the operands' types, so a cross-type
-                    // comparison is already a reported error before `run`.
-                    TypeOperator::Eq => P::Value::from(LowValue::USize((left == right) as usize)),
-                    TypeOperator::Neq => P::Value::from(LowValue::USize((left != right) as usize)),
+                    // `+ - * /` and the four order comparisons compute over the
+                    // two scalar classes and never over a mixture: the checker
+                    // has already refused a cross-class operand (recording the
+                    // diagnostic), so the mixed case stays lazy here rather
+                    // than coercing (`docs/notes/floating-point.md` §4.2).
+                    TypeOperator::Add
+                    | TypeOperator::Sub
+                    | TypeOperator::Mul
+                    | TypeOperator::Div
+                    | TypeOperator::Lt
+                    | TypeOperator::Gt
+                    | TypeOperator::Leq
+                    | TypeOperator::Geq => match (left.as_enum(), right.as_enum()) {
+                        // `Int` is unsigned, so the four order comparisons are
+                        // the unsigned ones and the arithmetic wraps.
+                        (Some(LowValue::USize(left)), Some(LowValue::USize(right))) => {
+                            let value = match self {
+                                TypeOperator::Add => left.wrapping_add(right),
+                                TypeOperator::Sub => left.wrapping_sub(right),
+                                TypeOperator::Mul => left.wrapping_mul(right),
+                                TypeOperator::Div => match left.checked_div(right) {
+                                    Some(n) => n,
+                                    None => return divide_by_zero(module, false),
+                                },
+                                TypeOperator::Lt => (left < right) as usize,
+                                TypeOperator::Gt => (left > right) as usize,
+                                TypeOperator::Leq => (left <= right) as usize,
+                                TypeOperator::Geq => (left >= right) as usize,
+                                _ => {
+                                    unreachable!("the float operators are handled beside this arm")
+                                }
+                            };
+                            P::Value::from(LowValue::USize(value))
+                        }
+                        // A float's arithmetic is IEEE, and that is the whole of
+                        // its refusal story: `1.0 / 0.0` is an infinity and
+                        // `0.0 / 0.0` is a `NaN`, both ordinary float values here
+                        // — phase 0's lexer produces an infinity from an
+                        // overflowing literal and the printer spells `NaN`
+                        // deliberately — so no divisor is recorded.  A float
+                        // comparison is IEEE too: `NaN` is less than, greater
+                        // than and equal to nothing.
+                        (Some(LowValue::Float(left)), Some(LowValue::Float(right))) => match self {
+                            TypeOperator::Add => P::Value::from(LowValue::Float(left + right)),
+                            TypeOperator::Sub => P::Value::from(LowValue::Float(left - right)),
+                            TypeOperator::Mul => P::Value::from(LowValue::Float(left * right)),
+                            TypeOperator::Div => P::Value::from(LowValue::Float(left / right)),
+                            TypeOperator::Lt => {
+                                P::Value::from(LowValue::USize((left < right) as usize))
+                            }
+                            TypeOperator::Gt => {
+                                P::Value::from(LowValue::USize((left > right) as usize))
+                            }
+                            TypeOperator::Leq => {
+                                P::Value::from(LowValue::USize((left <= right) as usize))
+                            }
+                            TypeOperator::Geq => {
+                                P::Value::from(LowValue::USize((left >= right) as usize))
+                            }
+                            _ => unreachable!("the Int operators are handled beside this arm"),
+                        },
+                        _ => P::Value::from(LowValue::Parameterized),
+                    },
+                    // `==`/`!=` are the generalized equality, and it is the
+                    // values' own relation: [`ValueExt::value_eq`] is the
+                    // identity every reader of a value shares — the unification
+                    // of two concrete values, table keys, frozen-artifact reuse —
+                    // so routing the operator through it makes `==` and identity
+                    // agree by construction.  For a float that relation is its
+                    // 32 bits, decided at the float's own site by `LowValue`'s
+                    // hand-written `PartialEq` (`docs/notes/floating-point.md`
+                    // §3.1), which is why `0.0 == -0.0` is `0` and `NaN == NaN`
+                    // is `1`.  The checker unifies the operands' types, so a
+                    // cross-type comparison is already a reported error before
+                    // `run`.
+                    TypeOperator::Eq => {
+                        P::Value::from(LowValue::USize(left.value_eq(&right) as usize))
+                    }
+                    TypeOperator::Neq => {
+                        P::Value::from(LowValue::USize((!left.value_eq(&right)) as usize))
+                    }
                     TypeOperator::Fresh => unreachable!("Fresh is handled above"),
                 }
             }
@@ -875,22 +948,34 @@ where
 
     /// The low-type transfer of the type-level operators.
     ///
-    /// Every binary operator produces a `USize` — lichen has no `Bool`
-    /// value, so a comparison result *is* a machine scalar — whatever its
-    /// operands are, which is what lets a pre-apply template decide a body's
-    /// arithmetic before any argument exists.  `Fresh` produces a nominal type
-    /// id, which the low type vocabulary has no shape for, so it declines.
-    ///
-    /// The `==`/`!=` result is the honest one here: the generalized equality
-    /// compares any two *same-typed* values, so its result is a scalar even
+    /// Every comparison produces a `USize` — lichen has no `Bool` value, so a
+    /// comparison result *is* a machine scalar — and so do the `Int`-only
+    /// operators and the generalized equality, whose result is a scalar even
     /// when its operands are not.
-    fn low_type(&self, _arguments: &[Option<LowShape>]) -> Option<LowShape> {
+    ///
+    /// The four arithmetic operators produce their operands' own class: a
+    /// `USize` transfer here, and `Float` when either operand's low type is a
+    /// float.  That is what keeps a float-valued expression out of a backend —
+    /// the kernel domain walk refuses a `Float` leaf
+    /// (`docs/notes/floating-point.md` §3.8) — while leaving an operand whose
+    /// type is still undecided on the `USize` transfer a pre-apply template has
+    /// always been given.
+    ///
+    /// `Fresh` produces a nominal type id, which the low type vocabulary has no
+    /// shape for, so it declines.
+    fn low_type(&self, arguments: &[Option<LowShape>]) -> Option<LowShape> {
         match self {
-            TypeOperator::Add
-            | TypeOperator::Sub
-            | TypeOperator::Mul
-            | TypeOperator::Div
-            | TypeOperator::Rem
+            TypeOperator::Add | TypeOperator::Sub | TypeOperator::Mul | TypeOperator::Div => {
+                if arguments
+                    .iter()
+                    .any(|argument| matches!(argument, Some(LowShape::Float)))
+                {
+                    Some(LowShape::Float)
+                } else {
+                    Some(LowShape::USize)
+                }
+            }
+            TypeOperator::Rem
             | TypeOperator::Lt
             | TypeOperator::Gt
             | TypeOperator::Leq

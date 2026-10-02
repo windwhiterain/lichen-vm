@@ -1,5 +1,7 @@
 //! The binary-operator rule.
 
+use lichen_lowlevel::LowShape;
+
 use super::*;
 
 impl<P: HighProgram> Checker<P>
@@ -7,17 +9,34 @@ where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
-    /// A binary integer operation `a op b`: both operands must be `Int`, and
-    /// the result is `Int` (a comparison yields `0/1` to drive an `if`'s
-    /// lazy `Index` branch).  Each operand's type is unified against the int
-    /// type expression — a concretely non-`Int` operand is a check error,
-    /// and an unbound operand (a parameter) is *pinned* to `Int`, so a
-    /// later apply at a non-`Int` argument is a runtime failure in the
-    /// argument unify, not a panic inside the operator.
+    /// A binary operation `a op b`.
     ///
-    /// `Eq`/`Neq` are the exception: they are the generalized equality over any
-    /// two *same-typed* values, so their operands are unified with **each
-    /// other** rather than with `Int`.
+    /// `Eq`/`Neq` are the generalized equality over any two *same-typed*
+    /// values: their operands are unified with **each other**, and the result is
+    /// the `0`/`1` scalar that drives an `if` (the language has no `Bool`).
+    ///
+    /// `+ - * /` and the four order comparisons compute over the language's two
+    /// scalar classes, `Int` and `Float`, and never mix them: a concretely
+    /// `Float` operand selects `Float` for the whole operation, so a
+    /// cross-class expression (`1.5 + 1`) fails an operand unify and the
+    /// diagnostic names the class it expected — a refusal, never a conversion
+    /// (`docs/notes/floating-point.md` §4.2).  An operand whose class is not
+    /// decided yet names neither, so the operation keeps its historical
+    /// default — `Int` — and pins both operands there.
+    ///
+    /// `%` and the bitwise trio are `Int`-only: a float has no remainder and no
+    /// bit pattern in this language, so a float operand is a check error for
+    /// them and for them alone.
+    ///
+    /// An operand's type is unified against the class the operation computes
+    /// over — a concretely wrong operand is a check error, and an unbound
+    /// operand (a parameter) is *pinned* to that class, so a later apply at the
+    /// other class is a runtime failure in the argument unify, not a panic
+    /// inside the operator.
+    ///
+    /// The result's type is the operands' own class for the four arithmetic
+    /// operators, and the machine scalar for every comparison: that is what
+    /// makes `1.5 + 1.5` type as a `Float` and `1.5 < 2.5` drive an `if`.
     pub(super) fn check_binop(
         &mut self,
         e: ExprId,
@@ -27,18 +46,25 @@ where
     ) -> NodeId {
         self.check_expr(left);
         self.check_expr(right);
+        // Whether this operation computes over floats: a concretely `Float`
+        // operand says so, and any other operand — an `Int`, a not-yet-decided
+        // parameter, a non-scalar — leaves the operation on the `Int` default
+        // it had before floats existed.
+        let float = self.names_float_class(self.state[left].ty.unwrap())
+            || self.names_float_class(self.state[right].ty.unwrap());
         match operator {
-            // `==`/`!=` compare two *same-typed* values and yield 0/1: the Int
-            // equalities (`s.a == 1`, `x == y`) and the type-value equalities
-            // (`S::a == Int`) — the operands' types must be equal, so a type
-            // value (`: Type`) can be compared with a type constant.
+            // The generalized equality: the operands must be the same type, so
+            // a type value (`: Type`) can be compared with a type constant and
+            // a cross-class comparison is the operand unify's refusal.
             BinOp::Eq | BinOp::Neq => self.check_unify(
                 self.state[left].ty.unwrap(),
                 self.state[right].ty.unwrap(),
                 self.loc(left, 1),
                 DiagKind::BinOp,
             ),
-            _ => {
+            // The `Int`-only operators: a float operand is refused here, by the
+            // same unify that refuses every other non-`Int`.
+            BinOp::Rem | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
                 self.check_unify(
                     self.state[left].ty.unwrap(),
                     self.int_type,
@@ -52,16 +78,63 @@ where
                     DiagKind::BinOp,
                 );
             }
+            BinOp::Add
+            | BinOp::Sub
+            | BinOp::Mul
+            | BinOp::Div
+            | BinOp::Lt
+            | BinOp::Gt
+            | BinOp::Leq
+            | BinOp::Geq => {
+                let scalar = if float {
+                    self.float_type
+                } else {
+                    self.int_type
+                };
+                self.check_unify(
+                    self.state[left].ty.unwrap(),
+                    scalar,
+                    self.loc(left, 1),
+                    DiagKind::BinOp,
+                );
+                self.check_unify(
+                    self.state[right].ty.unwrap(),
+                    scalar,
+                    self.loc(right, 1),
+                    DiagKind::BinOp,
+                );
+            }
         }
+        // A comparison yields the `0`/`1` scalar whatever its operands are; the
+        // four arithmetic operators yield the class they computed over.
+        let result = match operator {
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div if float => self.float_type,
+            _ => self.int_type,
+        };
         let operator = P::Operator::from(TypeOperator::from(operator));
         let left = self.value_of(left);
         let right = self.value_of(right);
         let operands = self.array_node(self.current_block, &[left, right]);
         let value = self.op_node(self.current_block, operator, Some(operands));
-        let pair = self.pair_of(value, self.int_type);
+        let pair = self.pair_of(value, result);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value);
-        self.state[e].ty = Some(self.int_type);
+        self.state[e].ty = Some(result);
         pair
+    }
+
+    /// Whether an expression's type slot names the `Float` class — the one
+    /// operand shape that selects float arithmetic and the float order
+    /// comparisons.
+    ///
+    /// The decode is [`crate::shape::low_type_of_slot`], the same authority the
+    /// kernel boundary reads a parameter's domain with: it answers
+    /// [`LowShape::Float`] for a slot naming the float type — directly, or
+    /// through the pair an annotated parameter's type cell holds — and
+    /// [`LowShape::Unknown`] for a cell that has not bound yet.  So an
+    /// undecided operand selects no class and is pinned to `Int`, exactly as
+    /// every numeric operand was before floats existed.
+    fn names_float_class(&self, ty: NodeId) -> bool {
+        crate::shape::low_type_of_slot(&self.module, AnyNodeId::Dynamic(ty)) == LowShape::Float
     }
 }
