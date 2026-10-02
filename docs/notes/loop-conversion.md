@@ -4,20 +4,27 @@
 > research settled on, the qualification rules it is gated by, and the order the
 > work goes in — not a description of what the code does today.
 >
-> **Three decisions are closed** and are not to be re-opened without a new
-> reason: the **surface** is a compile-time marker on the function, not a `loop`
-> builtin; the **scope** is tail-recursive cycles only; and a `compute.write`
-> inside a converted loop is **refused**, on the same ground as
-> `CONDITIONAL_WRITE` — see [§6](#6-why-a-loop-body-may-not-write).
+> **Four decisions are closed** and are not to be re-opened without a new
+> reason: the **surface** is a `loop` keyword on the function; the **scope** is
+> tail-recursive cycles only; a `compute.write` inside a converted loop is
+> **refused**, on the same ground as `CONDITIONAL_WRITE` ([§6](#6-why-a-loop-body-may-not-write));
+> and **the absence of the keyword still means unroll** ([§1.1](#11-unroll-is-the-default-and-the-keyword-is-the-override)).
 >
-> **The third was first decided the other way and then reverted**, and the reason
-> is worth keeping because it is the reason the first decision was wrong: an
-> earlier draft allowed the write and made no claim, on the argument that a
-> device has no such rule. A device indeed has no such rule — but lichen's
-> `dispatch` **skips zero-filling the output buffers on the strength of one**
+> The third was first decided the other way and then reverted, and the reason is
+> worth keeping because it is the reason the first decision was wrong: an earlier
+> draft allowed the write and made no claim, on the argument that a device has no
+> such rule. A device indeed has no such rule — but lichen's `dispatch` **skips
+> zero-filling the output buffers on the strength of one**
 > ([dispatch.rs](../../crates/lichen-compute-gpu/src/dispatch.rs)), and that skip
 > is ours, not CUDA's. Allowing the write was therefore not "following the
 > device", it was dropping a premise we had chosen to rely on.
+>
+> **Where the conversion happens was also decided the wrong way first.** An
+> earlier draft put it in the emitter, at the `Style 1` seam in `emit_node`, as a
+> pass over a not-yet-emitted body. It belongs in **lichen evaluation** — the
+> same pass that expands an unmarked recursion today — so that one place decides
+> per recursive call between expanding it and recording a loop, and the JIT reads
+> a loop that is already there. See [§3](#3-the-shape-of-the-transformation).
 >
 > Points at: `crates/lichen-kernel-ir/src/lib.rs` (`KernelInstr`,
 > `KernelFragment::body`), `crates/lichen-compute/src/compute.rs` (`emit_node`'s
@@ -58,6 +65,41 @@ about 29 µs of compile time per iteration.
 **The missing half is a dynamic loop.** A loop reads its trip count from a
 register, so it removes both ceilings by construction, and it is the only form
 the device can actually run.
+
+### 1.1 Unroll is the default, and the keyword is the override
+
+**This is the part that decides where the work goes.** A lichen function with no
+`loop` keyword is **expanded during evaluation** — the same pass that already
+reduces a same-module call, working at the point where the recursion is *walked*,
+which is why `steps 4` and `square (i + 1)` need no separate machinery. That is
+the default and it stays the default: expansion is what you want whenever it
+terminates, because a straight line has no branch, no divergence, and a
+per-element write that runs exactly once.
+
+A `loop` keyword does not turn expansion off in general. It says **this recursion
+may become a loop**, and the evaluator takes that option at the same place it
+would otherwise have expanded:
+
+| the function | the trip count | what evaluation produces |
+|---|---|---|
+| no `loop` | decidable | **expanded**, as today |
+| no `loop` | not decidable | refused, as today |
+| `loop` | decidable | **expanded** — the default still wins when it works |
+| `loop` | not decidable | **a recorded loop**, which the JIT then emits natively |
+
+So the keyword is not "compile this to a loop"; it is "this recursion is allowed
+to need one". The last row is the only new capability, and it is the row the two
+ceilings above live in.
+
+**And this is why the conversion belongs in evaluation, not in the emitter.** An
+earlier draft put it in `lichen-compute`, at the `Style 1` seam, as a separate
+pass over a body the emitter was about to walk. That is two passes making the same
+kind of decision at two different times, and the second one is too late to have
+the information the first one had — the evaluator is what *is* the recursion, so
+it is the only place that knows the cycle, the state, and the base test while
+they are still the things it walked. Putting it there also means the emitter's
+job shrinks to reading a structure that is already in the graph, which is exactly
+what the two backends then need to be able to do.
 
 ## 2. What the research settled
 
@@ -111,15 +153,18 @@ which is what makes a barrier inside a data-dependent loop a separate question.
 
 ## 3. The shape of the transformation
 
-It runs **in `lichen-compute`, at the seam §1 names** — the `Apply` arm of
-`emit_node` (`compute.rs:2547`) — because that is where a reduced same-module
-call has already been consumed and an *unreduced* one is still a node. It is a
-rewrite of the not-yet-emitted body, not an emitter-side inline pass: a cycle
-cannot be recognised from a stack-machine walk, because the walk sees one call at
-a time and has already lost the caller.
+**It runs in lichen evaluation, at the point where the recursion is walked** — the
+same decision the unmarked case makes when it expands (§1.1) — and what it
+produces is a **loop already recorded in the graph**, which the JIT reads and
+emits. It is not a pass over an emitter's body and not an emitter-side inline: a
+cycle cannot be recognised from a stack-machine walk of a finished body, because
+that walk sees one call at a time and has already lost the caller. The evaluator
+is what *is* the recursion.
 
-1. **Find the cycle.** Over the function values the body can reach, build the
-   call graph and take its strongly connected components. Only a component of
+Three steps, and the first two are the evaluator's:
+
+1. **Find the cycle.** Over the functions a `loop`-marked binding can reach, build
+   the call graph and take its strongly connected components. Only a component of
    size ≥ 2, or a self-loop, is recursion; a call that leaves the component stays
    a call.
 2. **Defunctionalise the component.** Each `f_i` in the cycle becomes
@@ -269,6 +314,15 @@ a change to one program. A silent fallback cannot offer either.
 
 ## 8. The order of the work
 
+**Stage 0 — the `loop` keyword and the evaluator's choice.** The surface lands
+first, and it is the smallest thing that can be observed working: a `loop` keyword
+on a binding, carried from the lexer to the highlevel IR, so the evaluator can
+see it. The default is unchanged — an unmarked recursion still expands — and the
+first observable behaviour is the **refusal** side: a `loop`-marked recursion
+whose count is not decidable still says "this is a loop and I have no way to
+record one yet", which is a diagnostic that names the missing piece instead of the
+`NodeId` one names today.
+
 **Stage 1 — the structured body, and it must carry values, not just control
 flow.** `KernelFragment::body` becomes an arena of basic blocks with explicit
 terminators, and both backends are taught it: wasm gains `block`/`loop`/`br_if` and
@@ -291,13 +345,19 @@ repository's own invariant already names both missing pieces in one sentence —
 emitter emits **no branch and no phi**"
 ([spirv.rs](../../crates/lichen-compute-gpu/src/spirv.rs)) — and this stage has to
 answer both, because **the `phi` is the half that costs nothing to get right and
-everything to get wrong later.**
+everything to get wrong later.** The rule is not a preference: SPIR-V's validator
+rejects a Function-storage-class `OpVariable` outside a function's first block, so
+on the GPU target the scratch route is not merely slow, it is illegal.
 
-This is the expensive half and it is not optional, so it goes first and alone,
-with a single-loop shape to prove the IR and the two emitters before any analysis
-exists on top of it. It also converts the emitter's **400-to-1000 hard overflow**
-into a named refusal, which is worth having even if nothing else lands, and it is
-what makes `CONDITIONAL_WRITE` deletable (§6).
+**And the stage order was wrong when this section was first written.** It put
+Stage 1 first "because it is expensive", on the reasoning that the emitters are the
+big risk. The correction (§3) is that the emitters are **downstream** of the
+evaluator: the evaluator records a loop, and the emitters read one. So the emitters
+are necessary but they are not first, and starting them before Stage 0 is building
+a reader for a document nothing writes yet. Stage 1a's part of this stage has
+landed — the `KernelBody` type, its validator, and both backends refusing a
+transfer by name — which is the right order for it: the shape is fixed and
+enforced before anything emits one.
 
 **The acceptance case is a dynamic reduction.** Everything above is argued; a
 reduction is where it is either true or not, because it is the one shape that has
@@ -315,7 +375,7 @@ not a compile-time constant:
 
 ```lichen
 @{ compute = import "compute.lichen" @}
-sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + compute.read [buf, s(0) - 1])
+loop sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + compute.read [buf, s(0) - 1])
 p = compute.parallel (cfg => { ... sum_to (cfg(0), 0) ... }) "BACKEND"
 ```
 
