@@ -174,8 +174,14 @@ the pattern or at the site rather than left to a reader to infer:
   rediscovered as a gap.
 
 `TokenKind` gains `Float(f32)` beside `Int(usize)`, plus `KwFloat` beside
-`KwInt` — the type constant is a keyword for the same reason `Int` is. Negative
-literals are unary minus today and stay that way; `-1.5` is `Minus`, `Float`.
+`KwInt` — the type constant is a keyword for the same reason `Int` is.
+
+**There is no prefix minus, and so a float literal is never negative.** `Minus`
+appears exactly once in the parser, as the binary `BinOp::Sub`; the only prefix
+operator is `!`. `-1` is therefore a **parse error today**, which is worth
+stating because it is easy to assume otherwise from `-` being a token. A float
+literal needs nothing here, and unary minus over floats — which would be the
+first negation in the language — belongs to §3.7 if it is ever wanted at all.
 
 **`Eq` comes off `TokenKind`, `Token` and `RawToken`, and no bits stand-in
 replaces it.** Nothing folds a token into a key — every consumer keeps tokens in
@@ -232,7 +238,16 @@ without the others, and the same value is written under a different tag in each.
 | kind markers | `0`–`7` (`TypeString` is `7`, deliberately not its list position) | **`9`** | `crates/lichen-highlevel/src/shape.rs:58-62` |
 | `LowShape` variants | `0`–`5` (`0`–`4` decided, `5` is `Unknown`, the lattice's bottom) | **`6`** | `crates/lichen-language/src/persist/container.rs:135-164` |
 
-Three traps in this table, each of which has already cost somebody something:
+There is a **fourth** versioned thing, which is not a tag space but behaves like
+one: the AST content key. `crates/lichen-language/src/resolve/content_key.rs`
+carries `KEY_FORMAT_VERSION` (currently `2`) and its own contract says that adding
+an `Expr` variant **bumps it** — an `Expr::Float` that does not is a retained key
+that silently collides. The key is also a place a float becomes text, so it owes
+the same discipline as the printer: hash the float's **bits**, for the same
+reason `LowShape`'s table's sibling does and for the same reason `f32` is not
+`Eq`.
+
+Four traps in this table, each of which has already cost somebody something:
 
 - **The kind-marker row is `9`, not `8`.** That space is the `TypeValue` codec's,
   and `TypeValue::TypeId` already holds `8` without being a kind marker. See
@@ -244,6 +259,8 @@ Three traps in this table, each of which has already cost somebody something:
   **lowlevel** enum and its persisted form lives in `lichen-language`, not
   beside it — so the crate that owns the value owns only one of the two tag
   spaces its change needs.
+- **The fourth is a counter, not a tag, and the failure is the same shape**: a
+  stale retained key is a wrong answer rather than a rejected read.
 
 ### 3.7 The operators
 
@@ -280,6 +297,48 @@ The rest is not free, because the kernel ABI is `i64` in five places at once:
 `fetch` is the one to read twice: it is the **read-back**, so a float result
 buffer comes back as `i64` unless the ABI itself moves. That is a larger change
 than widening `IntWidth`, and it is why §4.3 is the costliest of the three.
+
+**Where a float is refused is not a single question, and answering it once is how
+a hole gets opened.** `lichen-compute` has three sites that all match on
+`LowShape` and all look like the same question. Two of them are not:
+
+| site | question | `Float` |
+|---|---|---|
+| `kernel_shape` | what *shape* — one value, or a tuple of them | `Scalar` |
+| `domain_is_known` | can the ABI lower this to decided `i64` locals | **`false`** |
+| `flat_arity` | how many locals a domain flattens to | `1` |
+
+`domain_is_known` is the load-bearing one and the answer is `false` **for a
+different reason than `Unknown`'s**. `Unknown` is undecided; a float is decided
+and has no local to be decided into. The reason it has to be that site and not
+another: `kernel_domain` consults `domain_is_known` first and its `Tuple` arm
+accepts without re-checking elements, so `domain_is_known` is the **only** code
+that can see a float inside a tuple domain — and that case is reachable, because
+an undecided tuple position is filled from the element class and a float value
+now states `LowShape::Float`. Answer `true` there and the tuple is admitted, the
+other two sites have no refusal variant to answer with, and a fragment is
+registered claiming an `i64` signature for a float position: registered, never
+run, and silently mis-laid-out — which is the outcome phase 0 exists to prevent.
+
+`flat_arity` answers `1` rather than `0` deliberately. Nothing reaches it behind
+the closed gate, and `0` would be a different claim — that a float occupies no
+local of a signature `kernel_shape` sizes as one — which would put the two arities
+in disagreement.
+
+A float still cannot reach a `ParallelBackend` even so, for reasons that hold
+independently of the above: inputs are `i64` *by type*, every producer of a
+buffer is an `i64` source, and `collect_args` refuses a float leaf.
+
+**Known gap, and it is a misleading diagnostic.** `low_type_of` has arms for the
+`int`, `string` and `Type` markers but none for `float_marker`, so a **declared**
+`p : float` decodes to `Unknown` rather than to `Float`. The refusal is correct
+but its wording is not: an annotated float parameter is refused with
+`UNDECIDED_DOMAIN`, whose message asks the author to annotate the parameter —
+which they did. Two candidate fixes, both in other crates: an explicit
+`LowShape::Float` arm in `kernel_domain` ahead of the `domain_is_known` check, or
+a `float_marker` arm in `low_type_of`. Unresolved, and recorded here because a
+refusal that misdescribes the user's program is the failure class §4.3's
+invariant is written against.
 
 ## 4. Decisions
 
