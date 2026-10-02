@@ -178,15 +178,18 @@ pub struct ResidentId(pub u64);
 /// resident value's, where it is genuinely per-buffer and not derivable from an
 /// ordinal — see `ResidentBuffer` in `lichen-compute`.
 ///
-/// **That is a deferral, not a closed question**, because a `Host` slot is a
-/// slice of the ABI's own element type rather than of [`ScalarData`]: when a
-/// float producer exists its elements have to reach [`ParallelBackend::run`]
-/// somehow, and there are exactly two routes — the host reinterprets the `f32`
-/// bytes as `i64` words, or this type gains a class-carrying variant after all.
-/// The reinterpretation is sound only while nothing reads two slots as one
-/// value, and it is worth naming what it costs: the slot's `len()` would then
-/// count `i64` words while the fragment's count counts `f32` elements, so the
-/// two numbers a caller compares are no longer the same quantity.
+/// # One word per element, for both classes
+///
+/// A host payload holds **one `i64` word per element**: an `Int` element is its
+/// value, and a `Float` element is an `f32`'s bits in the low 32 bits — the
+/// element size a float position is read at is the class's business, decided by
+/// the reader, and the words themselves are the same shape either way.  The
+/// alternative considered was to widen this type with a typed `HostF32(&[f32])`
+/// variant; it was declined because it gives up `Eq` and forces an arm into
+/// every implementor's match, and it buys nothing the raw payload plus the
+/// fragment's declared class does not already say — a backend still has to
+/// consult `input_classes` to know which positions are floats, because a
+/// fragment's buffers may be either class while the slot is one type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferSlot<'a> {
     /// Data the host already holds, at least `count` elements long, read as the
@@ -581,7 +584,8 @@ pub struct KernelFragment {
     /// written.
     pub outputs: usize,
     /// The element class of each input buffer, **one entry per read position**,
-    /// in position order — so the length is [`Self::inputs`].
+    /// in position order — so the length is [`Self::inputs`], and every entry is
+    /// the class the fragment's body is lowered in.
     ///
     /// # Why this is beside `inputs` rather than in `param_shape`
     ///
@@ -598,10 +602,17 @@ pub struct KernelFragment {
     ///
     /// **This is the list a host slot is matched against**, because a dispatch's
     /// slots are ordered to match it — so position *is* the ordinal a slot would
-    /// need, and the slot's own carrier is the deferral [`BufferSlot`] records.
+    /// need, and a slot carries no class of its own to be read from instead.
     pub input_classes: Vec<ScalarClass>,
-    /// The element class of each output buffer, **one entry per write ordinal**,
-    /// in ordinal order — so the length is [`Self::outputs`].
+    /// The element class of each value the fragment hands out.
+    ///
+    /// **For a parallel fragment: one entry per write ordinal**, in ordinal
+    /// order, so the length is [`Self::outputs`].  For a fragment that writes no
+    /// buffers — a scalar kernel, whose results are its wasm return values — the
+    /// list is **one entry per wasm result**, in source order, so the length is
+    /// [`Self::results`]: one field holds both because both are "the class of a
+    /// value this fragment produces", and the fragment's single class is its
+    /// first entry either way.
     ///
     /// The ordinal/write-position correspondence is the same compile-time
     /// constant [`KernelInstr::BufferWriteCall`] is fed, so a caller reading

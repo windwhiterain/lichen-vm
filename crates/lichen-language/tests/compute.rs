@@ -660,7 +660,14 @@ k = compute.parallel f "cpu"
 out = compute.plrun k (4,)
 compute.read [out, 2]
 "#);
-    assert_eq!(out, "4: Int", "parallel range/write map produced: {out:?}");
+    assert_eq!(out, "4: ?a", "parallel range/write map produced: {out:?}");
+    // The element type renders as an unbound cell, and that is the honest
+    // answer now: a buffer's element class is a fact of the *value*, so
+    // `compute.read` no longer pins its result to `Int` — which is exactly the
+    // pin that made a `buffer<Float>` inexpressible
+    // (`docs/notes/floating-point.md` §3.7, §4.2).  The *value* is the map's,
+    // unchanged from the `i + i` the kernel computed; only the static class of
+    // a value that came back from a buffer is unresolved.
 }
 
 #[test]
@@ -859,7 +866,7 @@ outs = compute.plrun k (3,)
 (compute.read [outs(0), 2], compute.read [outs(1), 2])
 "#);
     assert_eq!(
-        out, "(2, 4): <Int, Int>",
+        out, "(2, 4): <?a, ?b>",
         "multi-output parallel map produced: {out:?}"
     );
 }
@@ -967,7 +974,7 @@ outs = compute.plrun k (4096,)
 (compute.read [outs(0), 0], compute.read [outs(0), 2048], compute.read [outs(0), 4095], compute.read [outs(1), 0], compute.read [outs(1), 2048], compute.read [outs(1), 4095])
 "#);
     assert_eq!(
-        out, "(3, 2051, 4098, 0, 4096, 8190): <Int, Int, Int, Int, Int, Int>",
+        out, "(3, 2051, 4098, 0, 4096, 8190): <?a, ?b, ?c, ?d, ?e, ?f>",
         "a fan-out over 4096 indices produced: {out:?}"
     );
 }
@@ -1083,77 +1090,91 @@ compute.collect (compute.plrun k (8, (data,)))
     );
 }
 
-/// A float anywhere in a kernel's parameter domain is refused by name.
+/// A float parameter domain is **permitted at every position the domain walk
+/// reaches** — §4.4's first decision, and the two compound positions phase 0
+/// closed deliberately are the interesting half of it.
 ///
-/// The positions below are answers of **one** walk, not four code paths, and the
-/// last two are the compound ones a first-position-only walk would miss: an
-/// `array<Float, 3>` nested in a tuple, and a function codomain.  A float is a
-/// *decided* shape, so describing it as an undecided domain would ask for an
-/// annotation the author already wrote
-/// (`docs/notes/floating-point.md` §3.8, §5).
+/// The two halves are different decisions and both are pinned here.  A *scalar*
+/// position is handed a value, so those kernels run.  A *compound* position is
+/// one local of the element's class, so an aggregate has nothing to be lowered
+/// into and a function has no scalar encoding at all: the `jit` succeeds and the
+/// **argument** is what is refused, by name
+/// (`docs/notes/floating-point.md` §4.2, §4.4).
 #[test]
-fn jit_refuses_a_float_domain_at_every_position_by_its_own_reason() {
-    // Every case ends in a launch, because a runtime refusal is surfaced only
-    // when the root produced nothing (`render_build`); the `jit` has already
-    // recorded it by then, and the launch argument is written to match the
-    // kernel's own signature so the checker adds no diagnostic of its own.
-    for (position, source) in [
-        (
-            "the parameter itself",
-            r#"
+fn a_float_domain_is_permitted_at_every_position_the_walk_reaches() {
+    // The parameter itself: a real float kernel, compiled, run and read back.
+    let out = run(r#"
 --- compute = import "compute.lichen" ---
 k = compute.jit (x : Float => x + 1.0)
 compute.launch k 1.5
-"#,
-        ),
-        (
-            "a tuple element",
-            r#"
+"#);
+    assert_eq!(
+        out, "2.5: Float",
+        "a float-domain jit+launch produced: {out:?}"
+    );
+
+    // A tuple element: a mixed domain, where the leaf the body reads keeps its
+    // own class and the fragment is lowered in the *body's*.
+    let out = run(r#"
 --- compute = import "compute.lichen" ---
 k = compute.jit (p : <Int, Float> => p(0))
 compute.launch k (1, 1.5)
-"#,
-        ),
-        (
-            "an array element inside a tuple",
-            r#"
+"#);
+    assert_eq!(out, "1: Int", "a float tuple element produced: {out:?}");
+
+    // An array element inside a tuple: the `jit` is permitted, and the aggregate
+    // argument is what the ABI cannot place — a compound position is one local,
+    // so its argument is one value rather than its three elements.
+    let messages = fail(
+        r#"
 --- compute = import "compute.lichen" ---
 k = compute.jit (p : <Int, array<Float, 3>> => p(0))
 compute.launch k (1, [1.5, 2.5, 3.5])
 "#,
-        ),
-        (
-            "a function codomain",
-            r#"
+    );
+    assert_eq!(
+        messages.len(),
+        1,
+        "one refusal is one diagnostic: {messages:?}"
+    );
+    assert!(
+        messages[0].contains("compute.kernel_launch")
+            && messages[0].contains("takes 2 arguments")
+            && messages[0].contains("supplied 4"),
+        "the aggregate's three elements are three locals a two-local domain does not have: \
+         {messages:?}"
+    );
+
+    // A function codomain: the walk reaches it, so the `jit` is permitted, and a
+    // function argument has no scalar encoding to be lowered into.
+    let messages = fail(
+        r#"
 --- compute = import "compute.lichen" ---
-k = compute.jit (p : Int -> Float => 1)
-compute.launch k (y => 1.0)
+k = compute.jit (p : <Int, Int -> Float> => p(0))
+compute.launch k (1, y => 1.0)
 "#,
-        ),
-    ] {
-        let messages = fail(source);
-        assert_eq!(
-            messages.len(),
-            1,
-            "a float at {position} is one refusal: {messages:?}"
-        );
-        assert_eq!(
-            messages[0],
-            "compute.jit: the kernel parameter's type contains a float, which a kernel cannot \
-             take: the kernel ABI is `i64`-only, so a float has no local to be lowered into",
-            "a float at {position} must be refused as a float, not as an undecided domain"
-        );
-    }
+    );
+    assert_eq!(
+        messages.len(),
+        1,
+        "one refusal is one diagnostic: {messages:?}"
+    );
+    assert!(
+        messages[0].contains("argument element 1") && messages[0].contains("a function"),
+        "the refusal must name the position and what it holds: {messages:?}"
+    );
 }
 
-/// A float launch argument is refused by name, not by the "no value" catch-all.
+/// A float launch argument is refused **by class**, not by the "no value"
+/// catch-all and not by a pin on the kernel's side.
 ///
-/// `argument_kind` feeds this wording for both run operators, and the `call` form
-/// is the one that reaches it: `launch` reads the kernel's signature, so a float
-/// against a decided `Int` domain is refused by the checker before the run
-/// (`docs/notes/floating-point.md` §3.8).
+/// `call` gates its argument against a *fresh* domain cell, so `1.5` reaches the
+/// run against an `Int` parameter and the run is the only place that can see
+/// both classes.  `launch` reads the kernel's signature, so the checker refuses
+/// it first — the `call` form is the one that reaches this message at all
+/// (`docs/notes/floating-point.md` §4.2).
 #[test]
-fn a_float_launch_argument_is_refused_by_name() {
+fn a_float_argument_to_an_int_parameter_is_refused_by_class() {
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
@@ -1168,9 +1189,9 @@ compute.call k 1.5
     );
     assert_eq!(
         messages[0],
-        "compute.kernel_launch: the argument must be a concrete Int or a tuple of them (the \
-         kernel's parameter domain), but this one is a float",
-        "the refusal must name what the user wrote"
+        "compute.kernel_launch: argument 0 is Float, but the kernel's parameter there is Int: \
+         Int and Float do not convert",
+        "the refusal must name the position and both classes"
     );
 }
 
@@ -1231,7 +1252,7 @@ out = compute.plrun k2 (3, (inbuf,))
     lichen_compute_gpu::uninstall();
 
     assert_eq!(
-        out, "(20, 22, 24, [20, 22, 24]): <Int, Int, Int, array<?a, ?b>>",
+        out, "(20, 22, 24, [20, 22, 24]): <?a, ?b, ?c, array<?d, ?e>>",
         "a two-kernel \"gpu\" chain produced"
     );
     assert_eq!(

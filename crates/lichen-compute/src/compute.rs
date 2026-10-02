@@ -142,6 +142,15 @@ pub use lichen_kernel_ir::KernelId;
 /// payloads, so the buffer dies with its block and the crate's copy path
 /// relocates it like any other payload.  There is no id, no registry and no
 /// eviction: the arena's block lifetime *is* the ownership.
+///
+/// **One `i64` word per element, for both classes.**  An `Int` element is its
+/// value; a `Float` element is an `f32`'s bits in the low 32 bits of the word.
+/// That is what keeps the payload's length equal to the element count — the
+/// count `collect`/`read` index by — and what keeps [`ValueExt`]'s byte
+/// arithmetic ([`std::mem::size_of::<i64>()`] per element) the same for a float
+/// buffer as for an integer one.  A packed representation (two `f32` per word)
+/// would make the payload's length and the element count disagree for an odd
+/// count and would truncate the last element through the copy path's byte view.
 pub type BufferPayload = AnyHandle<[i64]>;
 
 /// The process kernel registry: compiled kernel **fragments** (bytecode units),
@@ -352,6 +361,24 @@ fn buffer_items(payload: &BufferPayload) -> Option<&[i64]> {
         // serialize and so cannot exist: a buffer is runtime-only.
         AnyHandle::Static(_) => None,
     }
+}
+
+/// One buffer element as the class says it is: an `Int` is the word's value, a
+/// `Float` is the `f32` its low 32 bits spell.
+///
+/// The two are the same 64 bits, which is why the class has to travel beside
+/// the payload rather than be recovered from it
+/// (`docs/notes/floating-point.md` §4.4).
+fn element_value(class: ScalarClass, word: i64) -> LowValue {
+    match class {
+        ScalarClass::Int => LowValue::USize(word as usize),
+        ScalarClass::Float => LowValue::Float(f32::from_bits(word as u32)),
+    }
+}
+
+/// One `f32` element as the word a buffer payload holds.
+fn float_word(value: f32) -> i64 {
+    value.to_bits() as i64
 }
 
 // The lowered-kernel IR — `KernelBin`, `KernelInstr`, `KernelFragment`,
@@ -588,7 +615,15 @@ pub enum ComputeValue {
     /// [`Self::is_handle`]).  `reads`/`collect`s therefore dereference the
     /// arena, and the crate's copy path relocates the payload when the value is
     /// copied into another block.
-    Buffer(BufferPayload),
+    ///
+    /// **The element class rides on the value**, because the payload alone
+    /// cannot say it: a float element is an `f32`'s bits in a word and an `Int`
+    /// element is the value, and the two are the same 64 bits.  It is read off
+    /// the producing fragment's [`KernelFragment::output_classes`] at the
+    /// ordinal the buffer was produced at (or, for a `"gpu"` result, off the
+    /// [`ResidentBuffer`] the backend issued), so a buffer names what its
+    /// elements are without anyone having to still hold the fragment.
+    Buffer(BufferPayload, ScalarClass),
     /// A run's results, still **on the device**.
     ///
     /// A `"gpu"` `plrun` produces one of these per declared output rather than a
@@ -681,6 +716,33 @@ pub struct ResidentBuffer {
     pub class: ScalarClass,
 }
 
+/// One host buffer's payload: the class its elements are, and **one `i64` word
+/// per element** — an `Int` element is its value, a `Float` element is an
+/// `f32`'s bits in the low 32 bits.
+///
+/// The word-per-element representation is the host half of the same convention
+/// [`BufferSlot`] states for a backend: it keeps the payload's length equal to
+/// the element count, which is what every read and write index is, and it keeps
+/// the bytes 8-aligned for the `i64` view the arena and the copy path take.  A
+/// backend reads the class from the fragment's
+/// [`KernelFragment::input_classes`]/[`KernelFragment::output_classes`], which
+/// is the only thing that can say what a raw word means.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BufferWords {
+    class: ScalarClass,
+    words: Vec<i64>,
+}
+
+impl BufferWords {
+    /// An integer buffer's payload.
+    fn ints(words: Vec<i64>) -> Self {
+        BufferWords {
+            class: ScalarClass::Int,
+            words,
+        }
+    }
+}
+
 /// What one parallel run produced: host data, or results left on the device.
 ///
 /// A `"cpu"` run always produces the first and a `"gpu"` run the second.  The
@@ -688,15 +750,15 @@ pub struct ResidentBuffer {
 /// a download whether or not anyone ever looked at the result.
 #[derive(Debug, PartialEq, Eq)]
 enum RunOutcome {
-    Host(Vec<Vec<i64>>),
+    Host(Vec<BufferWords>),
     Resident(Vec<ResidentBuffer>),
 }
 
 /// One input to a run, as the language holds it.
 #[derive(Debug)]
 enum RunInput {
-    /// Data the host already has.
-    Host(Vec<i64>),
+    /// Data the host already has, with the class its elements are.
+    Host(BufferWords),
     /// Results a previous run left on the device.
     Resident(ResidentBuffer),
 }
@@ -711,14 +773,15 @@ enum RunInput {
 /// process-registry *code*, not arena data, and the markers carry none.
 impl ValueExt for ComputeValue {
     fn is_handle(&self) -> bool {
-        matches!(self, ComputeValue::Buffer(_))
+        matches!(self, ComputeValue::Buffer(..))
     }
 
-    /// The buffer's payload viewed as bytes — `i64` elements, so eight bytes
-    /// each, which is how the crate's copy path and the codec move it.
+    /// The buffer's payload viewed as bytes — one `i64` word per element, eight
+    /// bytes each whatever the class, which is how the crate's copy path and the
+    /// codec move it.
     fn handle(&self) -> AnyHandle<[u8]> {
         match self {
-            ComputeValue::Buffer(AnyHandle::Dynamic(handle)) => {
+            ComputeValue::Buffer(AnyHandle::Dynamic(handle), _) => {
                 // SAFETY: `handle` points at a live `[i64]` payload (the value's
                 // handle), and re-viewing those bytes as `u8` neither moves nor
                 // invalidates anything.
@@ -729,7 +792,7 @@ impl ValueExt for ComputeValue {
                     ))
                 })
             }
-            ComputeValue::Buffer(AnyHandle::Static(handle)) => {
+            ComputeValue::Buffer(AnyHandle::Static(handle), _) => {
                 // SAFETY: as above, for a payload in a static module's arena.
                 AnyHandle::Static(unsafe {
                     StaticHandle::from_raw(
@@ -747,11 +810,13 @@ impl ValueExt for ComputeValue {
 
     fn set_handle(&mut self, payload: AnyHandle<[u8]>) {
         match self {
-            ComputeValue::Buffer(slot) => {
+            ComputeValue::Buffer(slot, _) => {
                 *slot = match payload {
                     // The payload is the same allocation, re-viewed as `i64`
                     // elements: the copy path allocated `len` bytes for this
                     // value's payload, so the element count is that over eight.
+                    // **Both classes take this branch**: a float element is one
+                    // word too, so the class never changes the arithmetic.
                     AnyHandle::Dynamic(handle) => {
                         let elements = handle.as_ptr().len() / std::mem::size_of::<i64>();
                         AnyHandle::Dynamic(unsafe {
@@ -919,7 +984,7 @@ impl ValueCodec for ComputeValue {
                         .into(),
                 );
             }
-            ComputeValue::Buffer(_) => {
+            ComputeValue::Buffer(..) => {
                 return Err(
                     "this package is not cached: it holds a live buffer at its top level, \
                      and a buffer is a runtime value with no on-disk form"
@@ -1104,40 +1169,18 @@ where
                 else {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 };
-                // The argument is a scalar `USize` for an arity-1 kernel, or
-                // an `Array` (possibly nested for a tuple-of-tuples domain)
-                // for a tuple-domain kernel.  Flatten it to the wasm argument
-                // vector.  Anything else (a non-literal element, e.g. a
-                // computed scalar) stays lazy — the definition pass reports
-                // the unbound result — and each way that can happen records the
-                // cause it is, because the lazy marker alone tells the user
-                // nothing about the argument they wrote.
-                let mut args: Vec<i64> = Vec::new();
-                match module
-                    .node_value(operands[1].node)
-                    .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-                {
-                    Some(LowValue::USize(n)) => args.push(n as i64),
-                    Some(LowValue::Array(_)) => {
-                        if let Err(reason) = collect_args(module, operands[1].node, &mut args, "") {
-                            module.record_extension_diagnostic(
-                                KERNEL_LAUNCH_DIAGNOSTIC,
-                                None,
-                                reason,
-                            );
-                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                        }
-                    }
-                    argument => {
-                        module.record_extension_diagnostic(
-                            KERNEL_LAUNCH_DIAGNOSTIC,
-                            None,
-                            format!(
-                                "the argument must be a concrete Int or a tuple of them (the kernel's \
-                                 parameter domain), but this one is {}",
-                                argument_kind(argument.as_ref())
-                            ),
-                        );
+                // The argument is a scalar for an arity-1 kernel, or an `Array`
+                // (possibly nested for a tuple-of-tuples domain) for a
+                // tuple-domain kernel.  Flatten it to the wasm argument vector.
+                // Anything else (a non-literal element, e.g. a computed scalar)
+                // stays lazy — the definition pass reports the unbound result —
+                // and each way that can happen records the cause it is, because
+                // the lazy marker alone tells the user nothing about the
+                // argument they wrote.
+                let args = match kernel_arguments(module, operands[1].node) {
+                    Ok(args) => args,
+                    Err(reason) => {
+                        module.record_extension_diagnostic(KERNEL_LAUNCH_DIAGNOSTIC, None, reason);
                         return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                     }
                 };
@@ -1173,32 +1216,10 @@ where
                 else {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 };
-                let mut args: Vec<i64> = Vec::new();
-                match module
-                    .node_value(operands[1].node)
-                    .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-                {
-                    Some(LowValue::USize(n)) => args.push(n as i64),
-                    Some(LowValue::Array(_)) => {
-                        if let Err(reason) = collect_args(module, operands[1].node, &mut args, "") {
-                            module.record_extension_diagnostic(
-                                KERNEL_LAUNCH_DIAGNOSTIC,
-                                None,
-                                reason,
-                            );
-                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                        }
-                    }
-                    argument => {
-                        module.record_extension_diagnostic(
-                            KERNEL_LAUNCH_DIAGNOSTIC,
-                            None,
-                            format!(
-                                "the argument must be a concrete Int or a tuple of them (the kernel's \
-                                 parameter domain), but this one is {}",
-                                argument_kind(argument.as_ref())
-                            ),
-                        );
+                let args = match kernel_arguments(module, operands[1].node) {
+                    Ok(collected) => collected,
+                    Err(reason) => {
+                        module.record_extension_diagnostic(KERNEL_LAUNCH_DIAGNOSTIC, None, reason);
                         return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                     }
                 };
@@ -1315,12 +1336,19 @@ where
                             .node_value(item.node)
                             .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
                         {
-                            Some(ComputeValue::Buffer(payload)) => {
+                            Some(ComputeValue::Buffer(payload, class)) => {
                                 // SAFETY: the buffer value is read out of
                                 // `module` on this borrow, so the payload's home
                                 // block is alive for the walk below.
                                 if let Some(data) = buffer_items(&payload) {
-                                    inputs.push(RunInput::Host(data.to_vec()));
+                                    // The buffer's class travels with the words:
+                                    // a run reads a float input as `f32`s and an
+                                    // integer one as `Int`s, and the raw words
+                                    // are the same either way.
+                                    inputs.push(RunInput::Host(BufferWords {
+                                        class,
+                                        words: data.to_vec(),
+                                    }));
                                 } else {
                                     return <P::Value as From<LowValue>>::from(
                                         LowValue::Parameterized,
@@ -1359,9 +1387,10 @@ where
                         // Each buffer value becomes a node of this block first,
                         // the way a collected element does, so the tuple holds
                         // live nodes rather than detached values.
-                        let buffer = |payload: BufferPayload| {
-                            <P::Value as From<ComputeValue>>::from(ComputeValue::Buffer(payload))
-                        };
+                        //
+                        // Each buffer carries the class its producer declared for
+                        // the ordinal, so a float run's results are float buffers
+                        // all the way to `collect`.
                         if results.len() != 1 {
                             let items: Vec<ArrayItem> = results
                                 .iter()
@@ -1369,7 +1398,12 @@ where
                                     let node = module.add_node(
                                         block,
                                         None,
-                                        Some(buffer(module.alloc_payload(result, block))),
+                                        Some(<P::Value as From<ComputeValue>>::from(
+                                            ComputeValue::Buffer(
+                                                module.alloc_payload(&result.words, block),
+                                                result.class,
+                                            ),
+                                        )),
                                     );
                                     ArrayItem::new(AnyNodeId::Dynamic(node))
                                 })
@@ -1382,7 +1416,10 @@ where
                         // arena, so the buffer is owned by this block and dies
                         // with it (`D15`) — the same bump allocation every other
                         // payload uses.
-                        buffer(module.alloc_payload(&results[0], block))
+                        <P::Value as From<ComputeValue>>::from(ComputeValue::Buffer(
+                            module.alloc_payload(&results[0].words, block),
+                            results[0].class,
+                        ))
                     }
                     Ok(RunOutcome::Resident(results)) => {
                         // The same single-or-tuple shape, with the results left
@@ -1442,18 +1479,23 @@ where
                     Some(LowValue::USize(n)) => n,
                     _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
                 };
-                match module
+                let element = match module
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
                 {
-                    Some(ComputeValue::Buffer(payload)) => {
+                    Some(ComputeValue::Buffer(payload, class)) => {
                         // SAFETY: the buffer value was just read out of `module`, so its
                         // payload's home block is alive for this read.
                         match buffer_items(&payload).and_then(|items| items.get(index)) {
+                            // The element becomes the value its class says it is
+                            // — the buffer's own class, which is what says
+                            // whether the word is an `Int` or an `f32`'s bits.
                             Some(&value) => {
-                                <P::Value as From<LowValue>>::from(LowValue::USize(value as usize))
+                                <P::Value as From<LowValue>>::from(element_value(class, value))
                             }
-                            None => <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                            None => {
+                                return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                            }
                         }
                     }
                     Some(ComputeValue::DeviceBuffer(resident)) => {
@@ -1501,7 +1543,8 @@ where
                             "its buffer position",
                         );
                     }
-                }
+                };
+                element
             }
             ComputeOperator::Range | ComputeOperator::Write => {
                 // Kernel-only operators: `range`/`write` are lowered by the
@@ -1530,14 +1573,24 @@ where
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
                 {
-                    Some(ComputeValue::Buffer(payload)) => {
+                    Some(ComputeValue::Buffer(payload, class)) => {
                         // SAFETY: the buffer value was just read out of `module`, so its
                         // payload's home block is alive while the elements are
                         // materialized below.
                         let Some(items) = buffer_items(&payload) else {
                             return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                         };
-                        ScalarData::Int(items.to_vec())
+                        // The buffer's own class says how each word is read:
+                        // an integer value, or an `f32`'s bits.
+                        match class {
+                            ScalarClass::Int => ScalarData::Int(items.to_vec()),
+                            ScalarClass::Float => ScalarData::Float(
+                                items
+                                    .iter()
+                                    .map(|word| f32::from_bits(*word as u32))
+                                    .collect(),
+                            ),
+                        }
                     }
                     Some(ComputeValue::DeviceBuffer(resident)) => {
                         match fetch_resident(resident, 0) {
@@ -1790,8 +1843,23 @@ where
     // wasm signature and the value the launcher reads back are both a function
     // of the body's own value rather than of a hardcoded one.
     let leaves = codomain_leaves(module, ret_value)?;
+    // **The fragment's class, decided before anything is emitted.**  A body is
+    // written in one class (`docs/notes/floating-point.md` §4.2), and every
+    // instruction the emitter produces — a constant's representation, an
+    // arithmetic opcode, the result types — is lowered in it, so it has to be
+    // known before the first instruction rather than read off the finished body.
+    // A codomain that mixes the two has no single class to lower in and is
+    // refused by name here.
+    let result_classes: Vec<ScalarClass> = leaves
+        .iter()
+        .map(|leaf| node_class(module, *leaf))
+        .collect();
+    let class = result_classes.first().copied().unwrap_or(ScalarClass::Int);
+    if result_classes.iter().any(|leaf| *leaf != class) {
+        return Err(MIXED_CLASS_BODY.into());
+    }
     for leaf in &leaves {
-        emit_node(module, &params, *leaf, &mut body, &mut tally)?;
+        emit_node(module, &params, *leaf, class, &mut body, &mut tally)?;
     }
 
     Ok(KernelFragment {
@@ -1799,8 +1867,14 @@ where
         body: body.into(),
         inputs: tally.reads,
         outputs: tally.writes,
-        input_classes: tally.input_classes(),
-        output_classes: tally.output_classes(),
+        input_classes: tally.input_classes(class),
+        // **A scalar fragment has no buffer ordinals, so this is its result
+        // classes** — one entry per wasm result, in source order, which is the
+        // same carrier a parallel fragment uses for its write ordinals.  It is
+        // what makes the fragment's class recoverable at assembly and at the
+        // host boundary without a second field
+        // (`docs/notes/floating-point.md` §4.4).
+        output_classes: result_classes,
         results: leaves.len(),
         int_width: IntWidth::I64,
     })
@@ -1943,6 +2017,28 @@ where
         base: 0,
     }];
     let mut body_instr: Vec<KernelInstr> = Vec::new();
+    // **The fragment's class, decided before anything is emitted.**  A parallel
+    // index function computes in one class for the same reason any kernel body
+    // does (`docs/notes/floating-point.md` §4.2), and every constant, operator
+    // and buffer the body touches is lowered in it: the read/write element type,
+    // the positions and the loop index all take this class's wasm value type, so
+    // it has to be known before the first instruction rather than read off the
+    // finished body.  It is the class of the value each output position writes —
+    // the body's own codomain — and writes that disagree are refused by name
+    // because the ABI's `read`/`write` import has one element type.
+    let write_classes: Vec<Option<ScalarClass>> = outputs
+        .iter()
+        .map(|output| write_value_node(module, *output).map(|value| node_class(module, value)))
+        .collect();
+    let class = write_classes
+        .iter()
+        .flatten()
+        .copied()
+        .next()
+        .unwrap_or(ScalarClass::Int);
+    if write_classes.iter().flatten().any(|write| *write != class) {
+        return Err(MIXED_CLASS_BUFFERS.into());
+    }
     // One `compute.write` per codomain position, in position order, so write `k`
     // is emitted with `out_pos = k`.  A position is *required* to emit exactly
     // one write: a position that emits none is named, and the total is checked
@@ -1952,7 +2048,7 @@ where
     let mut tally = Positions::default();
     for (position, output) in outputs.iter().enumerate() {
         let before = tally.writes;
-        emit_node(module, &params, *output, &mut body_instr, &mut tally)?;
+        emit_node(module, &params, *output, class, &mut body_instr, &mut tally)?;
         if tally.writes == before {
             return Err(format!(
                 "output {position} of the parallel index function is not a `compute.write` \
@@ -1968,30 +2064,120 @@ where
             outputs.len()
         ));
     }
+    if tally.write_classes.iter().any(|write| *write != class) {
+        return Err(MIXED_CLASS_BUFFERS.into());
+    }
     // The index function writes into the output buffers (side effects); leave a
     // dummy scalar on the stack so the shared `assemble_module` signature holds
     // for the write-only kernel.  That dummy is exactly **one** value, which is
     // what this fragment's `results` records — a parallel kernel's result
     // buffers are its outputs, not its wasm results, and the run reads them out
-    // of the buffers the `write` import filled.
-    body_instr.push(KernelInstr::Const(0));
+    // of the buffers the `write` import filled.  It is a value of the fragment's
+    // class like every other value in the body, so the signature's result type
+    // follows the class too.
+    body_instr.push(KernelInstr::Const(const_bits(class, 0)));
     Ok(KernelFragment {
         // `(config, index)` however many buffers the body reads: the buffers are
         // bound rather than passed, so this shape is the parallel signature and
         // says nothing about them. `tally.reads` is what says that.
+        //
+        // **Both leaves take the body's class**, because this signature is the
+        // ABI's rather than a language fact (`cfg(0)`'s type is a fresh cell the
+        // body pins, if it uses it at all): a float fragment's count, index and
+        // buffer positions are `f32` values, and the host's `read`/`write`
+        // closures convert them.  The count and the index are exact in `f32` —
+        // the launch count is bounded by [`MAX_PARALLEL_ELEMENTS`], far below
+        // 2^24.
         param_shape: KernelShape::Tuple(vec![
-            KernelShape::Scalar(ScalarClass::Int),
-            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(class),
+            KernelShape::Scalar(class),
         ]),
         body: body_instr.into(),
         inputs: tally.reads,
         outputs: tally.writes,
-        input_classes: tally.input_classes(),
+        input_classes: tally.input_classes(class),
         output_classes: tally.output_classes(),
         results: 1,
         int_width: IntWidth::I64,
     })
 }
+
+/// The value a `compute.write` position writes — the expression whose class is
+/// the class the whole index function computes in.
+///
+/// A position reaches the emitter wrapped: the wrapper's slot-read destructuring
+/// leaves a constant `Index` over a materialized array (`write [a, b, c]` →
+/// `x(0)/x(1)/x(2)`), and that element is reached through the `[value, type]`
+/// pair or a `value_of` extraction over one.  All three are walked here in the
+/// order the emitter walks them, because the class has to be known *before* the
+/// instructions are emitted.  `None` for a position that is not a write at all,
+/// which the emission names with the more specific cause rather than this walk.
+fn write_value_node<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let mut node = value_of_node(module, node)
+        .or_else(|| pair_value_node(module, node))
+        .unwrap_or(node);
+    for _ in 0..8 {
+        if let Some(operation) = module.node_operation(node)
+            && matches!(
+                AsEnum::<ComputeOperator>::as_enum(&operation.operator),
+                Some(ComputeOperator::Write)
+            )
+        {
+            let items = operand_items(module, operation.operand?).ok()?;
+            return dyn_node(items.get(2)?.node).ok();
+        }
+        node = concrete_element(module, node)?;
+    }
+    None
+}
+
+/// The element a constant `Index` into a **materialized array value** selects —
+/// the wrapper's slot-read destructuring step, and the one the emitter makes
+/// before it reaches the operation behind a position.  `None` when `node` is not
+/// such an index.
+fn concrete_element<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let operation = module.node_operation(node)?;
+    if !matches!(
+        AsEnum::<LowOperator>::as_enum(&operation.operator),
+        Some(LowOperator::Index)
+    ) {
+        return None;
+    }
+    let (target, index) = operand_pair(module, operation.operand).ok()?;
+    let k = usize_value(module, index)?;
+    let array_value = value_of_node(module, target).or(Some(target))?;
+    // SAFETY: `array_value` is a live node of `module`.
+    let items = unsafe { module.array_items(array_value) }?;
+    dyn_node(items.get(k)?.node).ok()
+}
+
+/// A kernel body that mixes `Int` and `Float` values.
+///
+/// A kernel is written in one class (`docs/notes/floating-point.md` §4.2), and
+/// the wasm half is where that stops being a stylistic claim: one fragment has
+/// one opcode family for its arithmetic, one result type and one element type
+/// for its buffers, so a body that computes both classes has no single lowering.
+/// Refused by name at compile time rather than mis-lowered.
+const MIXED_CLASS_BODY: &str = "a kernel body must compute one class: this body's result mixes Int \
+     and Float, and a kernel fragment is lowered in one class";
+
+/// A parallel index function whose outputs are written in different classes.
+///
+/// The fragment's `read`/`write` host import has one value type, so every buffer
+/// the body touches has to be the same class; two classes would need two imports
+/// the ABI does not have (`docs/notes/floating-point.md` §4.4).
+const MIXED_CLASS_BUFFERS: &str = "a parallel index function must read and write one class: this \
+     one names both Int and Float buffers, and the fragment's buffer ABI is one class";
 
 /// Resolve an index function's return value into its per-position output
 /// nodes — the codomain's arity, as a list.
@@ -2049,62 +2235,54 @@ fn assemble_module(
 ) -> Result<Vec<u8>, String> {
     use wasm_encoder::{
         CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection,
-        ImportSection, Instruction, Module as WasmModule, TypeSection, ValType,
+        ImportSection, Instruction, Module as WasmModule, TypeSection,
     };
 
     // A fragment that lowers buffer `read`/`write` calls declares the two host
     // imports (function indices 0 and 1); the defined functions then start at
     // `base` (2).  A pure scalar kernel has no imports (base 0).
-    let uses_imports = ordered.iter().any(|f| {
-        f.body.instrs().into_iter().any(|i| {
-            matches!(
-                i,
-                KernelInstr::BufferReadCall | KernelInstr::BufferWriteCall
-            )
-        })
-    });
+    let imports_class = buffered_class(ordered)?;
+    let uses_imports = imports_class.is_some();
     let base: u32 = if uses_imports { 2 } else { 0 };
 
-    // Type section: the import signatures (if any), then one
-    // `(param-arity) -> (result-arity)` signature per distinct **pair** of
-    // arities.
+    // Type section: the import signatures (if any), then one signature per
+    // distinct **whole** `(params, results)` pair of value types.
     //
-    // Keying on the pair is what a multi-value codomain requires: two fragments
-    // can share a parameter arity and differ in result arity (`(i64) -> i64`
-    // against `(i64) -> (i64, i64)`), and wasm function types are indexed by
-    // type, not by arity — so keying on the parameter arity alone would hand the
-    // second fragment the first one's single-`i64` signature and the module
-    // would not validate.  Keying on the pair also keeps the shared entry for
-    // the two runs that *do* agree: the scalar root and the parallel path's
-    // write-only kernel, both `(i64…; n) -> i64`.
+    // Keying on the class vectors is what a float fragment requires on top of
+    // what a multi-value codomain already required: wasm function types are
+    // indexed by type, not by arity, and a float fragment's `(f32) -> f32` has
+    // the same arities as an integer `(i64) -> i64` — so a key that named only
+    // the arities would hand the second fragment the first one's signature and
+    // the module would not validate.  Keying on the value types also keeps the
+    // shared entry for the two runs that *do* agree: the scalar root and the
+    // parallel path's write-only kernel.
     let mut types = TypeSection::new();
     let (mut read_ty, mut write_ty) = (0u32, 0u32);
-    if uses_imports {
+    if let Some(class) = imports_class {
+        // A float fragment's positions and indices are its own class too, so the
+        // two imports are `(class, class) -> class` and `(class, class, class)`;
+        // the host's closures in `run_parallel_range` declare the same types.
+        let class = value_type(class);
         read_ty = types.len();
-        types
-            .ty()
-            .function(vec![ValType::I64, ValType::I64], vec![ValType::I64]);
+        types.ty().function(vec![class, class], vec![class]);
         write_ty = types.len();
-        types
-            .ty()
-            .function(vec![ValType::I64, ValType::I64, ValType::I64], vec![]);
+        types.ty().function(vec![class, class, class], vec![]);
     }
-    // Keyed by the **whole** signature, not the parameter arity alone: wasm
-    // indexes a type by its whole `(params, results)` pair, and `(i64) -> i64`
-    // and `(i64) -> (i64, i64)` share a parameter arity, so keying on one half
-    // would hand the second fragment the first one's signature and the module
-    // would not validate.
-    let mut type_index_by_signature: HashMap<(usize, usize), u32> = HashMap::new();
+    let mut type_index_by_signature: HashMap<(Vec<ScalarClass>, Vec<ScalarClass>), u32> =
+        HashMap::new();
     let mut func_types: Vec<u32> = Vec::with_capacity(ordered.len());
     for frag in ordered {
-        let (params, results) = (frag.param_shape.flat_arity(), frag.results);
+        let params = param_classes(frag);
+        let results = vec![fragment_class(frag); frag.results];
         let ti = type_index_by_signature
             .entry((params, results))
-            .or_insert_with(|| {
+            .or_insert_with_key(|(params, results)| {
                 let id = types.len();
-                types
-                    .ty()
-                    .function(vec![ValType::I64; params], vec![ValType::I64; results]);
+                let params: Vec<wasm_encoder::ValType> =
+                    params.iter().map(|class| value_type(*class)).collect();
+                let results: Vec<wasm_encoder::ValType> =
+                    results.iter().map(|class| value_type(*class)).collect();
+                types.ty().function(params, results);
                 id
             });
         func_types.push(*ti);
@@ -2127,25 +2305,40 @@ fn assemble_module(
     exports.export("main", ExportKind::Func, base);
     wasm.section(&exports);
 
-    // A structured body needs a `() -> (i64 × n)` block type per distinct `n` it
-    // hands a branch or a loop, and the type section is written before the code
-    // section — so the arities are collected here and declared below the function
-    // types.
-    let mut block_arities: Vec<usize> = ordered
+    // A structured body needs a `() -> (T × n)` block type per distinct `(T, n)`
+    // it hands a branch or a loop, `T` being the fragment's class — an `f32` body
+    // and an `i64` body need different block types for the same arity.  The type
+    // section is written before the code section, so the pairs are collected here
+    // and declared below the function types.
+    let mut block_arities: Vec<(ScalarClass, usize)> = ordered
         .iter()
-        .flat_map(|frag| block_arities(&frag.body.entry))
+        .flat_map(|frag| {
+            let class = fragment_class(frag);
+            block_arities(&frag.body.entry)
+                .into_iter()
+                .map(move |arity| (class, arity))
+        })
         .collect();
-    block_arities.sort_unstable();
+    // The order is only here so that equal pairs are adjacent; `ScalarClass` has
+    // no `Ord` of its own and none is claimed for it.
+    block_arities.sort_unstable_by_key(|&(class, arity)| (class == ScalarClass::Float, arity));
     block_arities.dedup();
-    let mut block_types: HashMap<usize, u32> = HashMap::new();
-    for arity in &block_arities {
+    let mut block_types: HashMap<(ScalarClass, usize), u32> = HashMap::new();
+    for (class, arity) in &block_arities {
         let id = types.len();
-        types.ty().function(vec![], vec![ValType::I64; *arity]);
-        block_types.insert(*arity, id);
+        types
+            .ty()
+            .function(vec![], vec![value_type(*class); *arity]);
+        block_types.insert((*class, *arity), id);
     }
 
     let mut code = CodeSection::new();
     for frag in ordered {
+        // The class the whole body is lowered in — the fragment's, decided before
+        // emission, so a local a loop carries is the class of the values that
+        // reach it and every constant is already in the representation its
+        // opcode reads ([`const_bits`]).
+        let class = fragment_class(frag);
         // A loop's carried values become locals, so the declaration is written
         // before the body rather than grown into.
         let params = frag.param_shape.flat_arity();
@@ -2155,7 +2348,7 @@ fn assemble_module(
         let mut body = if carried == 0 {
             Function::new([])
         } else {
-            Function::new(vec![(carried as u32, ValType::I64)])
+            Function::new(vec![(carried as u32, value_type(class))])
         };
 
         let mut state = WasmState {
@@ -2164,6 +2357,7 @@ fn assemble_module(
             at: 0,
             next_local: params,
             block_types: &block_types,
+            class,
         };
         lower_body(frag, &mut state, &mut body)?;
         body.instruction(&Instruction::End);
@@ -2255,15 +2449,21 @@ struct WasmState<'a> {
     base: u32,
     at: usize,
     next_local: usize,
-    block_types: &'a HashMap<usize, u32>,
+    block_types: &'a HashMap<(ScalarClass, usize), u32>,
+    /// The class the fragment's whole body is lowered in, read off
+    /// [`fragment_class`] before emission — the class of every local a loop
+    /// carries and of every block type the body names.
+    class: ScalarClass,
 }
 
 impl WasmState<'_> {
-    fn block_type(&self, arity: usize) -> Result<u32, String> {
+    fn block_type(&self, class: ScalarClass, arity: usize) -> Result<u32, String> {
         self.block_types
-            .get(&arity)
+            .get(&(class, arity))
             .copied()
-            .ok_or_else(|| format!("compute.wasm: no block type was declared for {arity} value(s)"))
+            .ok_or_else(|| {
+                format!("compute.wasm: no {class:?} block type was declared for {arity} value(s)")
+            })
     }
 
     /// `local.set` each of `locals`, innermost first, so the outermost ends up
@@ -2284,7 +2484,8 @@ impl WasmState<'_> {
 ///   already on the stack, and a wasm `return` works from any nesting depth.
 /// - **`If`** is `if`/`else`/`end`, and **the `if` frame is the join label** — so
 ///   an arm that leaves for the join is a `br` whose operands are the join's
-///   values, which is why the `if`'s block type is `() -> (i64 × passes)`. A
+///   values, which is why the `if`'s block type is `() -> (T × passes)`, `T`
+///   being the fragment's class. A
 ///   missing arm falls out of the `if` with the stack as it stood, so a
 ///   one-armed branch invents no value for the absent side.
 /// - **`While`** is a `loop` **wrapped in a `block`**. The `loop` is the header
@@ -2355,7 +2556,7 @@ fn lower_terminator(
             // The selector is the `0`/`1` scalar the body left on the stack;
             // wasm's condition is an `i32`.
             out.instruction(&Instruction::I32WrapI64);
-            let block_type = state.block_type(*passes)?;
+            let block_type = state.block_type(state.class, *passes)?;
             out.instruction(&Instruction::If(BlockType::FunctionType(block_type)));
             frames.push(Frame::Exit {
                 label: Some(*join),
@@ -2379,7 +2580,7 @@ fn lower_terminator(
             carried,
             passed_out,
         } => {
-            let exit_type = state.block_type(*passed_out)?;
+            let exit_type = state.block_type(state.class, *passed_out)?;
             out.instruction(&Instruction::Block(BlockType::FunctionType(exit_type)));
             frames.push(Frame::Exit {
                 label: Some(*exit),
@@ -2468,12 +2669,87 @@ fn lower_flow(
     }
 }
 
+/// The wasm value type a fragment's class is lowered to.
+fn value_type(class: ScalarClass) -> wasm_encoder::ValType {
+    match class {
+        ScalarClass::Int => wasm_encoder::ValType::I64,
+        ScalarClass::Float => wasm_encoder::ValType::F32,
+    }
+}
+
+/// A fragment's parameter leaves, as classes, in flattening order — the
+/// signature's parameter types, one per local.
+///
+/// **A leaf's own class, not the fragment's**: an `array<Float, 3>` position is
+/// one `f32` local inside a body that may compute integers
+/// (`docs/notes/floating-point.md` §4.4), and the argument encoding follows the
+/// same per-leaf answer.
+fn param_classes(fragment: &KernelFragment) -> Vec<ScalarClass> {
+    fn walk(shape: &KernelShape, out: &mut Vec<ScalarClass>) {
+        match shape {
+            KernelShape::Scalar(class) => out.push(*class),
+            KernelShape::Tuple(items) => items.iter().for_each(|item| walk(item, out)),
+        }
+    }
+    let mut classes = Vec::with_capacity(fragment.param_shape.flat_arity());
+    walk(&fragment.param_shape, &mut classes);
+    classes
+}
+
+/// The class of the fragments that lower the buffer `read`/`write` imports, or
+/// `None` for a launch set that uses no imports.
+///
+/// **One class for the whole module, and that is the ABI's limit**: the module
+/// declares one `read` and one `write` import, each with a single value type,
+/// so two buffered fragments of different classes could not share it.  They
+/// cannot arise from one program (`docs/notes/floating-point.md` §4.2 — a kernel
+/// body is written in one class), so a set that mixes them is refused by name
+/// rather than given one fragment's signature.
+fn buffered_class(ordered: &[KernelFragment]) -> Result<Option<ScalarClass>, String> {
+    let mut class: Option<ScalarClass> = None;
+    for fragment in ordered {
+        // **Every instruction in the body, transfers included** — the question is
+        // "does this fragment call a buffer import anywhere", and a read or write
+        // inside a branch still needs the import declared.  A walk over
+        // `straight_line_instrs` would answer `None` for a branch and leave the
+        // module calling an import it never declared
+        // ([`KernelBody::instrs`](lichen_kernel_ir::KernelBody::instrs)).
+        let buffered = fragment.body.instrs().into_iter().any(|instruction| {
+            matches!(
+                instruction,
+                KernelInstr::BufferReadCall | KernelInstr::BufferWriteCall
+            )
+        });
+        if !buffered {
+            continue;
+        }
+        let this = fragment_class(fragment);
+        match class {
+            None => class = Some(this),
+            Some(seen) if seen == this => {}
+            Some(_) => {
+                return Err(
+                    "this launch set mixes Int and Float buffer fragments, and one module \
+                     declares one `read`/`write` import whose value type is one class"
+                        .into(),
+                );
+            }
+        }
+    }
+    Ok(class)
+}
+
 /// Lower a sequence of abstract [`KernelInstr`]s into a wasm function body.
 /// `index` resolves each cross-kernel `CallKernel` to the callee's in-module
 /// function index (assigned by the launch-time assembly), offset by `base`
 /// (the number of leading host-import function indices, so a defined function
 /// `i` is wasm index `base + i`).  `BufferReadCall`/`BufferWriteCall` lower to
 /// the `read` (index 0) and `write` (index 1) imports.
+///
+/// The class the instructions are lowered in is the state's — the fragment's,
+/// decided before emission, so every constant is already in the representation
+/// its opcode reads ([`const_bits`]) and every arithmetic operator is the
+/// class's.
 fn lower_instrs(
     body: &[KernelInstr],
     state: &mut WasmState<'_>,
@@ -2481,55 +2757,74 @@ fn lower_instrs(
 ) -> Result<(), String> {
     use wasm_encoder::Instruction;
     let (index, base) = (state.index, state.base);
+    let class = state.class;
 
     for instr in body {
         match instr {
             KernelInstr::Const(n) => {
-                out.instruction(&Instruction::I64Const(*n));
+                out.instruction(&match class {
+                    ScalarClass::Int => Instruction::I64Const(*n),
+                    ScalarClass::Float => Instruction::F32Const(f32::from_bits(*n as u32)),
+                });
             }
             KernelInstr::Bin(op) => match op {
                 KernelBin::Add => {
-                    out.instruction(&Instruction::I64Add);
+                    out.instruction(&arithmetic(class, Instruction::I64Add, Instruction::F32Add));
                 }
                 KernelBin::Sub => {
-                    out.instruction(&Instruction::I64Sub);
+                    out.instruction(&arithmetic(class, Instruction::I64Sub, Instruction::F32Sub));
                 }
                 KernelBin::Mul => {
-                    out.instruction(&Instruction::I64Mul);
+                    out.instruction(&arithmetic(class, Instruction::I64Mul, Instruction::F32Mul));
                 }
                 // An `Int` is unsigned, so these are the unsigned division,
                 // remainder and comparisons (`I64DivS` would agree below 2^63
-                // and differ above).  The order comparisons yield an `i32`
-                // boolean, which is widened to the `0/1` scalar the language
-                // has instead of a `Bool` — the same widening `Eq` needs.
+                // and differ above).  A **float division is IEEE and unguarded**
+                // — the language does not specify a kernel's float division by
+                // zero and promises nothing about it, so no guard is added here
+                // (`docs/notes/floating-point.md` §4.4).
+                //
+                // The order comparisons yield an `i32` boolean in both classes
+                // (wasm's float comparisons are `i32` too), which is widened to
+                // the `0/1` scalar the language has instead of a `Bool` — the
+                // same widening `Eq` needs.
                 KernelBin::Div => {
-                    out.instruction(&Instruction::I64DivU);
+                    out.instruction(&arithmetic(
+                        class,
+                        Instruction::I64DivU,
+                        Instruction::F32Div,
+                    ));
                 }
                 KernelBin::Rem => {
+                    // `Rem` and the bitwise trio have no float form and the
+                    // emitter refuses a float operand by name, so these are
+                    // always the language's Int-scalar operators — including
+                    // over two comparison results, which are `0/1` scalars even
+                    // in a float fragment.
                     out.instruction(&Instruction::I64RemU);
                 }
                 KernelBin::Lt => {
-                    out.instruction(&Instruction::I64LtU);
+                    out.instruction(&comparison(class, Instruction::I64LtU, Instruction::F32Lt));
                     out.instruction(&Instruction::I64ExtendI32U);
                 }
                 KernelBin::Gt => {
-                    out.instruction(&Instruction::I64GtU);
+                    out.instruction(&comparison(class, Instruction::I64GtU, Instruction::F32Gt));
                     out.instruction(&Instruction::I64ExtendI32U);
                 }
                 KernelBin::Leq => {
-                    out.instruction(&Instruction::I64LeU);
+                    out.instruction(&comparison(class, Instruction::I64LeU, Instruction::F32Le));
                     out.instruction(&Instruction::I64ExtendI32U);
                 }
                 KernelBin::Geq => {
-                    out.instruction(&Instruction::I64GeU);
+                    out.instruction(&comparison(class, Instruction::I64GeU, Instruction::F32Ge));
                     out.instruction(&Instruction::I64ExtendI32U);
                 }
                 KernelBin::Eq => {
-                    out.instruction(&Instruction::I64Eq);
+                    out.instruction(&comparison(class, Instruction::I64Eq, Instruction::F32Eq));
                     out.instruction(&Instruction::I64ExtendI32U);
                 }
                 KernelBin::Neq => {
-                    out.instruction(&Instruction::I64Ne);
+                    out.instruction(&comparison(class, Instruction::I64Ne, Instruction::F32Ne));
                     out.instruction(&Instruction::I64ExtendI32U);
                 }
                 KernelBin::BitAnd => {
@@ -2570,6 +2865,39 @@ fn lower_instrs(
     Ok(())
 }
 
+/// The opcode one arithmetic operator lowers to for a fragment's class.
+///
+/// The class is the fragment's, and it is the same class for every operator in
+/// the body: the emitter refuses an operator whose operands are the other class,
+/// so a `Bin` never mixes the two families.
+fn arithmetic<'a>(
+    class: ScalarClass,
+    int: wasm_encoder::Instruction<'a>,
+    float: wasm_encoder::Instruction<'a>,
+) -> wasm_encoder::Instruction<'a> {
+    match class {
+        ScalarClass::Int => int,
+        ScalarClass::Float => float,
+    }
+}
+
+/// The opcode one order/equality comparison lowers to for a fragment's class.
+///
+/// Separate from [`arithmetic`] only to say why the two exist: a comparison's
+/// *result* is always the language's `0/1` scalar (the caller widens it with
+/// `I64ExtendI32U`), so only the comparison's own operand type follows the
+/// class.
+fn comparison<'a>(
+    class: ScalarClass,
+    int: wasm_encoder::Instruction<'a>,
+    float: wasm_encoder::Instruction<'a>,
+) -> wasm_encoder::Instruction<'a> {
+    match class {
+        ScalarClass::Int => int,
+        ScalarClass::Float => float,
+    }
+}
+
 /// The reason a `jit` reports when the parameter's domain is not decided at
 /// compile time.  Wording matters here: the user can only fix this by
 /// annotating the parameter, so the message says what to write.
@@ -2580,74 +2908,21 @@ fn lower_instrs(
 const UNDECIDED_DOMAIN: &str = "the kernel parameter's type is not decided when the kernel is compiled; \
 annotate it (for example `p : <Int, Int>`) so its domain is known";
 
-/// The reason a `jit` reports when the parameter's domain **holds** a float —
-/// anywhere the domain walk reaches, not only when the parameter is one.  A
-/// float is a shape that **is** decided, so [`UNDECIDED_DOMAIN`] would
-/// misdescribe the program and ask for an annotation the author already wrote.
-/// A kernel's ABI is `i64` in five places at once (`lichen_kernel_ir`), so
-/// there is no float local to lower the position into
-/// (`docs/notes/floating-point.md` §3.8).
-const FLOAT_DOMAIN: &str = "the kernel parameter's type contains a float, which a kernel cannot take: \
-the kernel ABI is `i64`-only, so a float has no local to be lowered into";
-
-/// A position of a domain shape that the kernel ABI cannot lower to a decided
-/// `i64` local.
-///
-/// **The variant order is the report order**, strongest last, so `max` answers
-/// with the cause to name: a `Float` outranks an `Undecided` position because
-/// it is the one annotating cannot clear
-/// (`docs/notes/floating-point.md` §3.8, §5).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum DomainObstacle {
-    /// An `Unknown` leaf: the shape states nothing.
-    Undecided,
-    /// A `Float` leaf: decided, but the ABI has no local for it (`i64` in five
-    /// places, `lichen_kernel_ir`), so an arity read off it is a mis-encoding.
-    Float,
-}
-
-/// **The one walk over a domain shape**, read by the gate [`domain_is_known`]
-/// and by [`kernel_domain`] for the cause it names, so the two cannot disagree
-/// about a position.
-///
-/// It **recurses through every position**, and that is the load-bearing part: a
-/// compound shape reached through an accepted `Tuple` is walked too, because
-/// asking a compound shape's own `is_known` answers `true` for `Array(Float, _)`
-/// — a float is a decided shape — and `kernel_domain` accepts `Tuple(_)`
-/// without re-checking elements.  A function's codomain and a table's value
-/// position are walked as well, because they are decided independently of their
-/// sibling: a declared `Int -> Float` puts a float in exactly that position.
-fn domain_obstacle(shape: &LowShape) -> Option<DomainObstacle> {
-    match shape {
-        LowShape::Unknown => Some(DomainObstacle::Undecided),
-        LowShape::Float => Some(DomainObstacle::Float),
-        LowShape::USize => None,
-        LowShape::Tuple(items) => items.iter().filter_map(domain_obstacle).max(),
-        LowShape::Array(element, _) => domain_obstacle(element),
-        LowShape::Function(domain, codomain) => {
-            domain_obstacle(domain).max(domain_obstacle(codomain))
-        }
-        LowShape::Table(key, value) => domain_obstacle(key).max(domain_obstacle(value)),
-    }
-}
-
-/// A kernel domain must be a decided scalar or a tuple of decided scalars —
+/// A kernel domain must be a decided scalar or a tuple of decided positions —
 /// everything else is a refusal, and each refusal names its own cause rather
 /// than falling back to a shape that would compile into a wrong signature.
 ///
-/// A float is named **ahead of** the gate below, at any position the walk
-/// reaches: the gate answers `false` for a float because the ABI has no local
-/// for it, not because the shape is undecided, so a float reported there would
-/// be described as an undecided domain.
+/// **A float is a decided position and is accepted**, at every position the
+/// walk reaches, including the two compound ones (an `Array(Float, _)` nested
+/// in a tuple, and a function's codomain) that phase 0 closed deliberately
+/// (`docs/notes/floating-point.md` §4.4).  The class a position's local takes
+/// is [`kernel_shape`]'s answer, and the ABI is what lowers it.
 fn kernel_domain(domain: LowShape) -> Result<LowShape, String> {
-    if let Some(DomainObstacle::Float) = domain_obstacle(&domain) {
-        return Err(FLOAT_DOMAIN.into());
-    }
     if !domain_is_known(&domain) {
         return Err(UNDECIDED_DOMAIN.into());
     }
     match &domain {
-        LowShape::USize | LowShape::Tuple(_) => Ok(domain),
+        LowShape::USize | LowShape::Float | LowShape::Tuple(_) => Ok(domain),
         _ => Err("kernel domain must be a scalar or a tuple of scalars".into()),
     }
 }
@@ -2659,46 +2934,80 @@ fn kernel_domain(domain: LowShape) -> Result<LowShape, String> {
 /// **Total, on purpose, and it preserves the arity convention.** A domain
 /// `kernel_domain` accepted is a scalar or a tuple, but a tuple's *element* is
 /// not itself re-checked, so a shape with no IR counterpart can still arrive
-/// here; those fold to [`KernelShape::Scalar`] with [`ScalarClass::Int`], which
-/// flattens to one leaf exactly as the `flat_arity` filler arms do for the same
-/// shapes.  A separate refusal arm would be a second failure mode for a case
-/// the parameter-count path already tolerates, and would change behaviour
+/// here; those fold to [`KernelShape::Scalar`] with the element's class ([`scalar_class_of`]),
+/// which flattens to one leaf exactly as the `flat_arity` filler arms do for the
+/// same shapes.  A separate refusal arm would be a second failure mode for a
+/// case the parameter-count path already tolerates, and would change behaviour
 /// rather than preserve it.
 ///
-/// **The class is read off the leaf, and a float leaf is answered as `Float`.**
+/// **The class is read off the leaf, and a compound leaf takes its element's.**
 /// This is the *shape* question ("one value, or a tuple of them, of what
-/// class"), not the dispatchability one; the refusal that keeps a float out of
-/// an `i64` wasm signature is `kernel_domain`'s and has already run, so a float
-/// answer here states the class a float parameter would have rather than one
-/// anything reaches today (`docs/notes/floating-point.md` §3.8, §4.4, §5).
+/// class"), and `docs/notes/floating-point.md` §4.4 answers the compound half:
+/// an `array<Float, 3>` parameter is **one `f32` local**, not three and not one
+/// integer — the element's class, which is what keeps this fold and
+/// [`flat_arity`] agreeing about how many locals a position occupies.
 fn kernel_shape(domain: &LowShape) -> KernelShape {
     match domain {
         LowShape::USize => KernelShape::Scalar(ScalarClass::Int),
         LowShape::Float => KernelShape::Scalar(ScalarClass::Float),
         LowShape::Tuple(items) => KernelShape::Tuple(items.iter().map(kernel_shape).collect()),
-        LowShape::Unknown
-        | LowShape::Array(_, _)
+        LowShape::Array(element, _) => KernelShape::Scalar(scalar_class_of(element)),
+        // A function, a table and an unknown leaf have no scalar element to take
+        // a class from, so the filler's integer local is the whole answer; a
+        // function's codomain may be a float and is *permitted* by the walk, but
+        // a function value has no scalar encoding to be typed by.
+        LowShape::Function(..) | LowShape::Table(..) | LowShape::Unknown => {
+            KernelShape::Scalar(ScalarClass::Int)
+        }
+    }
+}
+
+/// The class a single local takes for a position of `shape` — a scalar's own,
+/// an array's element's (recursively), and `Int` for a compound position with no
+/// scalar element (`docs/notes/floating-point.md` §4.4).
+fn scalar_class_of(shape: &LowShape) -> ScalarClass {
+    match shape {
+        LowShape::Float => ScalarClass::Float,
+        LowShape::Array(element, _) => scalar_class_of(element),
+        LowShape::USize
+        | LowShape::Tuple(_)
         | LowShape::Function(..)
-        | LowShape::Table(..) => KernelShape::Scalar(ScalarClass::Int),
+        | LowShape::Table(..)
+        | LowShape::Unknown => ScalarClass::Int,
     }
 }
 
 /// Whether a shape has no position anywhere in it that the kernel ABI cannot
-/// lower to a decided `i64` local — the gate [`kernel_domain`] reads before its
-/// own shape match, answered from [`domain_obstacle`] so that there is one walk
-/// over a shape rather than two copies of it.
+/// lower to a decided local — the gate [`kernel_domain`] reads before its own
+/// shape match.
 ///
-/// A domain with a single `Unknown` leaf is as undecided as an all-`Unknown`
-/// one: the wasm arity comes from flattening, so one unknown leaf is one
-/// unknown local.  A **`Float` leaf gets the same answer for a different
-/// reason** — it is decided, but the ABI has no local for it.
+/// It **recurses through every position**, and that is the load-bearing part: a
+/// compound shape reached through an accepted `Tuple` is walked too, because
+/// asking a compound shape's own `is_known` answers `true` for `Array(Float, _)`
+/// — a float is a decided shape — and `kernel_domain` accepts `Tuple(_)`
+/// without re-checking elements.  A function's codomain and a table's value
+/// position are walked as well, because they are decided independently of their
+/// sibling: a declared `Int -> Float` puts a float in exactly that position.
+///
+/// **`Float` is decided, so it is not an obstacle.**  Phase 0 reported it as one
+/// because the ABI had no local for it; the phase-2 permission is that the ABI
+/// does (`docs/notes/floating-point.md` §4.4).
 fn domain_is_known(shape: &LowShape) -> bool {
-    domain_obstacle(shape).is_none()
+    match shape {
+        LowShape::Unknown => false,
+        LowShape::USize | LowShape::Float => true,
+        LowShape::Tuple(items) => items.iter().all(domain_is_known),
+        LowShape::Array(element, _) => domain_is_known(element),
+        LowShape::Function(domain, codomain) => {
+            domain_is_known(domain) && domain_is_known(codomain)
+        }
+        LowShape::Table(key, value) => domain_is_known(key) && domain_is_known(value),
+    }
 }
 
-/// The number of scalar `i64` locals a domain shape flattens to — the wasm
-/// parameter count.  A scalar is one local; a tuple is the sum of its
-/// elements' arities (so `((Int,Int), Int)` is `1 + 1 + 1 = 3`).
+/// The number of scalar locals a domain shape flattens to — the wasm parameter
+/// count.  A scalar is one local; a tuple is the sum of its elements' arities
+/// (so `((Int,Int), Int)` is `1 + 1 + 1 = 3`).
 ///
 /// An undecided domain is refused before arity is ever computed — the domain
 /// check in `compile_fragment` rejects anything that is not a decided scalar
@@ -2708,16 +3017,15 @@ fn domain_is_known(shape: &LowShape) -> bool {
 fn flat_arity(shape: &LowShape) -> usize {
     match shape {
         LowShape::USize => 1,
-        // One leaf, and deliberately the *layout* answer rather than a
-        // dispatchability one: a float is one value and [`KernelShape::Scalar`]
-        // is also one, so this stays consistent with `kernel_shape`, which is
-        // what keeps a domain's locals contiguous.  No float reaches here —
-        // every caller flattens a `ParamSlot`'s shape or a sub-shape of one,
-        // and `kernel_domain`'s gate reads `domain_obstacle`, which walks a
-        // compound shape's element too, so a float is refused at every position
-        // a domain can hold.  Zero would be a different claim (that a float
-        // occupies no local of the signature `KernelShape` sizes as one) and
-        // would put the two arities in disagreement.
+        // One leaf, and deliberately the *layout* answer rather than a class
+        // one: a float is one value and [`KernelShape::Scalar`] is also one, so
+        // this stays consistent with `kernel_shape`, which is what keeps a
+        // domain's locals contiguous.  A compound position is one leaf here for
+        // the same reason and takes the same class there
+        // (`docs/notes/floating-point.md` §4.4).  Zero would be a different
+        // claim (that a float occupies no local of the signature
+        // `KernelShape` sizes as one) and would put the two arities in
+        // disagreement.
         LowShape::Float => 1,
         LowShape::Tuple(items) => items.iter().map(flat_arity).sum(),
         LowShape::Array(_, _) | LowShape::Function(..) | LowShape::Table(..) => 1,
@@ -2819,31 +3127,25 @@ struct Positions {
     /// a body that reads position 1 and not position 0 has one entry here and a
     /// count of two. [`Self::input_classes`] is what reconciles them, and the
     /// reconciliation is decided in one place rather than left to each caller.
+    ///
+    /// **Every entry is the fragment's own class.**  A kernel body is written in
+    /// one class (`docs/notes/floating-point.md` §4.2), so a read's element is
+    /// the class the body computes in — the same class the write ordinals carry,
+    /// and the one the emitter reads off the value the read feeds.  A position
+    /// whose read is decided as a *different* class is a body that mixes the two,
+    /// which the fragment's one-class ABI cannot express; [`emit_node`] refuses
+    /// it by name rather than recording a class the module cannot type.
     read_classes: Vec<ScalarClass>,
 }
 
 impl Positions {
-    /// The class to record for one buffer element the body reads or writes.
-    ///
-    /// **`Int` is the whole of today's answer, and the ABI is where that lives
-    /// rather than here.** Every buffer a kernel can read today is produced by
-    /// an `i64` source and every write is emitted as an `i64` value, because
-    /// `assemble_module` types both the body and the buffers at `ValType::I64`
-    /// and no float ever reaches an emit site. Reading the class off the
-    /// *shape* of the value instead would be a second answer to a question the
-    /// emitter has already answered once, at the point the module's signature is
-    /// built — and it is the step that gives a float a `ValType::F32` which
-    /// turns both of these into the value's real class
-    /// (`docs/notes/floating-point.md` §3.8, §4.4, §5).
-    const BUFFER_ELEMENT: ScalarClass = ScalarClass::Int;
-
     /// The declared class of every input position, one per position, at least
     /// [`Self::reads`] long: a position a body never read is still a position a
-    /// caller binds, and it takes the default above for the same reason the
-    /// default is the default.
-    fn input_classes(&self) -> Vec<ScalarClass> {
+    /// caller binds, and it takes the fragment's class for the same reason the
+    /// reads do.
+    fn input_classes(&self, class: ScalarClass) -> Vec<ScalarClass> {
         let mut classes = self.read_classes.clone();
-        classes.resize(self.reads.max(classes.len()), Self::BUFFER_ELEMENT);
+        classes.resize(self.reads.max(classes.len()), class);
         classes
     }
     /// The declared class of every write ordinal, one per ordinal — this is the
@@ -2851,6 +3153,87 @@ impl Positions {
     fn output_classes(&self) -> Vec<ScalarClass> {
         self.write_classes.clone()
     }
+}
+
+/// The class of the values a fragment's body computes — the one class its
+/// operators, its result types and its buffer elements are all lowered in.
+///
+/// **Read off [`KernelFragment::output_classes`], which is the fragment's one
+/// class-carrying field.**  For a parallel fragment the list is one entry per
+/// write ordinal, so its first entry is the class the index function computes
+/// in; for a scalar fragment it is one entry per wasm result (a fragment that
+/// writes no buffers declares its result classes there), so its first entry is
+/// the class the body returns.  A fragment with no entry at all — a hand-built
+/// one, or a legacy shape — is the ABI's integer default rather than a panic.
+fn fragment_class(fragment: &KernelFragment) -> ScalarClass {
+    fragment
+        .output_classes
+        .first()
+        .copied()
+        .unwrap_or(ScalarClass::Int)
+}
+
+/// A constant in the representation the fragment's class's opcode reads: an
+/// `Int` local takes the value, a `Float` local takes an `f32`'s bits.
+///
+/// Every `KernelInstr::Const` of one fragment is lowered in the fragment's own
+/// class, so an integer that a float fragment carries — a buffer position, a
+/// literal index — is converted here, once, rather than at each emission site.
+fn const_bits(class: ScalarClass, value: i64) -> i64 {
+    match class {
+        ScalarClass::Int => value,
+        // Exact for every value a fragment carries as an integer: buffer
+        // positions are ordinals and the loop index is bounded by
+        // `MAX_PARALLEL_ELEMENTS`, both far below 2^24.
+        ScalarClass::Float => float_word(value as f32),
+    }
+}
+
+/// The class a node's value is.
+///
+/// The node may be the `[value, type]` pair a term is, or an extraction over
+/// one; the class is stated by the *value*, so both are looked through exactly
+/// as the emitter looks through them at every emit site.
+///
+/// **A leaf's own value answers first, and that is not a shortcut around the
+/// low-type pass — it is the same observation the pass makes.**  A constant the
+/// checker built holds its value, and the pass's transfer declines for a leaf
+/// ("a leaf has no computation"), so the value is the only thing that can state
+/// its class; a *computed* node is the one the transfer answers for.  A node
+/// neither states — a bare cell, an undecided operand — is `Int`, the same
+/// default the language's own class-free transfer states.
+fn node_class<P>(module: &Module<P>, node: NodeId) -> ScalarClass
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let mut value = value_of_node(module, node)
+        .or_else(|| pair_value_node(module, node))
+        .unwrap_or(node);
+    // A constant selection over a materialized array is the wrapper's
+    // destructuring, and the element behind it is the value whose class is being
+    // asked for — the same step `emit_node` makes before it reaches it.
+    for _ in 0..8 {
+        let Some(element) = concrete_element(module, value) else {
+            break;
+        };
+        value = element;
+    }
+    if module.node_operation(value).is_none()
+        && let Some(held) = module
+            .node_value(AnyNodeId::Dynamic(value))
+            .and_then(|held| AsEnum::<LowValue>::as_enum(&held))
+    {
+        match held {
+            LowValue::USize(_) => return ScalarClass::Int,
+            LowValue::Float(_) => return ScalarClass::Float,
+            _ => {}
+        }
+    }
+    module
+        .low_type_of_node(value)
+        .map_or(ScalarClass::Int, |shape| scalar_class_of(&shape))
 }
 
 /// The kernel-safe reading of a highlevel binary operator — the one conversion
@@ -2893,10 +3276,19 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
 /// `tally` is the emitter's [`Positions`] counter, threaded through the walk so
 /// that the two buffer spaces' totals come out of the emission that produced the
 /// positions rather than out of a separate reading of the body.
+///
+/// `class` is the class the fragment's body is lowered in
+/// ([`fragment_class`]), decided before the walk: it is the representation every
+/// constant is pushed in ([`const_bits`]), and the class whose `KernelInstr` op
+/// codes [`lower_body`] picks.  An operator that has no form in that class — the
+/// bitwise trio and `Rem` over float operands — is refused here by name, where
+/// the operand's class is still visible, rather than emitted into a module that
+/// would not validate.
 fn emit_node<P>(
     module: &Module<P>,
     params: &[ParamSlot],
     node: NodeId,
+    class: ScalarClass,
     body: &mut Vec<KernelInstr>,
     tally: &mut Positions,
 ) -> Result<(), String>
@@ -2905,11 +3297,21 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    if let Some(value) = module.node_value(AnyNodeId::Dynamic(node))
-        && let Some(LowValue::USize(n)) = AsEnum::<LowValue>::as_enum(&value)
-    {
-        body.push(KernelInstr::Const(n as i64));
-        return Ok(());
+    if let Some(value) = module.node_value(AnyNodeId::Dynamic(node)) {
+        match AsEnum::<LowValue>::as_enum(&value) {
+            Some(LowValue::USize(n)) => {
+                body.push(KernelInstr::Const(const_bits(class, n as i64)));
+                return Ok(());
+            }
+            // A float literal is a scalar like any other: its bits ride in the
+            // same `Const`, because the fragment's class is what says how the
+            // opcode reads them (`docs/notes/floating-point.md` §3.4, §4.4).
+            Some(LowValue::Float(f)) => {
+                body.push(KernelInstr::Const(float_word(f)));
+                return Ok(());
+            }
+            _ => {}
+        }
     }
     let Some(operation) = module.node_operation(node) else {
         // A bare value cell (no value specialization, no operator).  If it is
@@ -2931,7 +3333,7 @@ where
         // parameterized: `launch` is two-step, assemble then call, so the
         // argument is only concrete at run time).  Emit the defining member.
         if let Some(definer) = class_computation_node(module, node) {
-            return emit_node(module, params, definer, body, tally);
+            return emit_node(module, params, definer, class, body, tally);
         }
         // **A node nothing can resolve, described rather than numbered.** This used
         // to report only its `NodeId`, which is a compiler-internal number: the
@@ -2977,7 +3379,7 @@ where
                 if usize_value(module, index) == Some(0)
                     && let Some(value_node) = value_of_node(module, node)
                 {
-                    return emit_node(module, params, value_node, body, tally);
+                    return emit_node(module, params, value_node, class, body, tally);
                 }
                 // A constant index into a concrete array value selects that
                 // element — the wrapper's slot-read destructuring
@@ -2992,7 +3394,7 @@ where
                     if let Some(items) = unsafe { module.array_items(array_value) }
                         && let Some(item) = items.get(k)
                     {
-                        return emit_node(module, params, dyn_node(item.node)?, body, tally);
+                        return emit_node(module, params, dyn_node(item.node)?, class, body, tally);
                     }
                 }
                 // A conditional `if c then a else b` lowers to `[b, a][c]` — a
@@ -3019,14 +3421,14 @@ where
                         let mut then_body = Vec::new();
                         let mut else_body = Vec::new();
                         let mut select_body = Vec::new();
-                        emit_node(module, params, then_node, &mut then_body, tally)?;
-                        emit_node(module, params, else_node, &mut else_body, tally)?;
+                        emit_node(module, params, then_node, class, &mut then_body, tally)?;
+                        emit_node(module, params, else_node, class, &mut else_body, tally)?;
                         if then_body.contains(&KernelInstr::BufferWriteCall)
                             || else_body.contains(&KernelInstr::BufferWriteCall)
                         {
                             return Err(CONDITIONAL_WRITE.into());
                         }
-                        emit_node(module, params, index, &mut select_body, tally)?;
+                        emit_node(module, params, index, class, &mut select_body, tally)?;
                         body.append(&mut then_body);
                         body.append(&mut else_body);
                         body.append(&mut select_body);
@@ -3048,7 +3450,7 @@ where
                 // the callee's function index once the kernel's relative launch
                 // set is laid out.
                 if kernel_id_of(module, callee).is_some() {
-                    return emit_cross_kernel_call(module, params, callee, arg, body, tally);
+                    return emit_cross_kernel_call(module, params, callee, arg, class, body, tally);
                 }
                 // Style 1: a full lichen-function call (inline its body) —
                 // deferred.
@@ -3071,8 +3473,27 @@ where
             ));
         };
         let (left, right) = operand_pair(module, operation.operand)?;
-        emit_node(module, params, left, body, tally)?;
-        emit_node(module, params, right, body, tally)?;
+        // **The operators a float does not have are refused by name.**  `%` and
+        // the bitwise trio have no float form and are not in a float's operator
+        // set (`docs/notes/floating-point.md` §3.7); a target's bitwise opcode
+        // is an integer opcode, so emitting one over two `f32` values would be a
+        // module that does not validate.  The refusal is here, at the operand,
+        // because the class is still visible — a class read off the finished
+        // body could not tell this from the same operators over two comparison
+        // results, which *are* integers and are emitted.
+        if matches!(
+            bin,
+            KernelBin::Rem | KernelBin::BitAnd | KernelBin::BitOr | KernelBin::BitXor
+        ) && (node_class(module, left) == ScalarClass::Float
+            || node_class(module, right) == ScalarClass::Float)
+        {
+            return Err(format!(
+                "`{ty_op:?}` has no float form: a kernel's float operators are `+ - * /` and the \
+                 four order comparisons, not `%` or the bitwise operators"
+            ));
+        }
+        emit_node(module, params, left, class, body, tally)?;
+        emit_node(module, params, right, class, body, tally)?;
         body.push(KernelInstr::Bin(bin));
         return Ok(());
     }
@@ -3083,7 +3504,7 @@ where
         match compute_op {
             ComputeOperator::Launch | ComputeOperator::Call => {
                 let (kernel, arg) = apply_pair(module, operation.operand)?;
-                return emit_cross_kernel_call(module, params, kernel, arg, body, tally);
+                return emit_cross_kernel_call(module, params, kernel, arg, class, body, tally);
             }
             // The loop index of the current parallel invocation.  The index is
             // the wasm param immediately after the cfg scalar params.
@@ -3139,10 +3560,17 @@ where
                 // The input count is a **max**, not a tally: the read positions are
                 // a sparse space, and a body that reads only `cfg(1)(1)` still
                 // needs two buffers bound or the one it read was never bound.
+                //
+                // **Every read position is the fragment's class.**  A body is
+                // written in one class (`docs/notes/floating-point.md` §4.2), so
+                // a read's element is the class the body computes in; whether the
+                // buffer actually holds that class is checked at the run, where
+                // the buffer's class is a fact of the value and the mismatch can
+                // be refused rather than reinterpreted (`check_input_classes`).
                 tally.reads = tally.reads.max(pos + 1);
-                tally.read_classes.push(Positions::BUFFER_ELEMENT);
-                body.push(KernelInstr::Const(pos as i64));
-                emit_node(module, params, idx, body, tally)?;
+                tally.read_classes.push(class);
+                body.push(KernelInstr::Const(const_bits(class, pos as i64)));
+                emit_node(module, params, idx, class, body, tally)?;
                 body.push(KernelInstr::BufferReadCall);
                 return Ok(());
             }
@@ -3163,10 +3591,14 @@ where
                 let val = dyn_node(items[2].node)?;
                 let out_pos = tally.writes;
                 tally.writes += 1;
-                tally.write_classes.push(Positions::BUFFER_ELEMENT);
-                body.push(KernelInstr::Const(out_pos as i64));
-                emit_node(module, params, idx, body, tally)?;
-                emit_node(module, params, val, body, tally)?;
+                // The element a write fills is the class of the value written —
+                // the same class the read positions take, because a body is
+                // written in one class and the write's ordinal is one of the
+                // buffers that class is the element type of.
+                tally.write_classes.push(node_class(module, val));
+                body.push(KernelInstr::Const(const_bits(class, out_pos as i64)));
+                emit_node(module, params, idx, class, body, tally)?;
+                emit_node(module, params, val, class, body, tally)?;
                 body.push(KernelInstr::BufferWriteCall);
                 return Ok(());
             }
@@ -3249,7 +3681,10 @@ have";
 /// (`compute.launch k x`) lower here — the latter is the typed form (its
 /// codomain is resolved by [`LaunchOp`]), the former the untyped-form gap.
 ///
-/// **The callee must return exactly one value.**  A multi-value callee is
+/// **The callee must return exactly one value**, and it must be the caller's own
+/// class: a cross-kernel call is an ordinary wasm `call`, so a float caller
+/// passing an `f32` to an integer callee — or reading an `i64` back into a float
+/// body — would be a module that does not validate.  A multi-value callee is
 /// refused by name (see [`CROSS_KERNEL_RESULT_ARITY`]) rather than truncated to
 /// its first result.
 fn emit_cross_kernel_call<P>(
@@ -3257,6 +3692,7 @@ fn emit_cross_kernel_call<P>(
     params: &[ParamSlot],
     kernel: NodeId,
     arg: NodeId,
+    class: ScalarClass,
     body: &mut Vec<KernelInstr>,
     tally: &mut Positions,
 ) -> Result<(), String>
@@ -3267,21 +3703,31 @@ where
 {
     let kid = kernel_id_of(module, kernel)
         .ok_or_else(|| "cross-kernel call target is not a kernel value".to_string())?;
-    // The callee's domain **and** result arity are facts of the *callee's*
-    // registration, read here and released before any emission: emitting can
-    // reach a further cross-kernel call, which locks the same registry again,
-    // and the lock is not reentrant.
-    let (shape, results) = {
+    // The callee's domain, its result arity **and its class** are facts of the
+    // *callee's* registration, read here and released before any emission:
+    // emitting can reach a further cross-kernel call, which locks the same
+    // registry again, and the lock is not reentrant.
+    let (shape, results, callee_class) = {
         let fragments = kernels().lock().unwrap();
         let fragment = fragments
             .get(&kid)
             .ok_or_else(|| "cross-kernel callee is not a registered kernel".to_string())?;
-        (fragment.param_shape.clone(), fragment.results)
+        (
+            fragment.param_shape.clone(),
+            fragment.results,
+            fragment_class(fragment),
+        )
     };
     if results != 1 {
         return Err(format!(
             "cross-kernel call to kernel {kid}, which returns {results} value(s): {}",
             CROSS_KERNEL_RESULT_ARITY
+        ));
+    }
+    if callee_class != class {
+        return Err(format!(
+            "cross-kernel call to kernel {kid}, which is lowered in {callee_class:?}, from a body \
+             lowered in {class:?}: Int and Float do not convert, so the call has no signature"
         ));
     }
     if shape.flat_arity() == 1 {
@@ -3290,9 +3736,9 @@ where
         // (A *tuple* domain has to resolve its own encoding; see
         // `emit_callee_args`.)
         let arg = pair_value_node(module, arg).unwrap_or(arg);
-        emit_node(module, params, arg, body, tally)?;
+        emit_node(module, params, arg, class, body, tally)?;
     } else {
-        emit_callee_args(module, params, arg, &shape, body, tally)?;
+        emit_callee_args(module, params, arg, &shape, class, body, tally)?;
     }
     body.push(KernelInstr::CallKernel(kid));
     Ok(())
@@ -3324,6 +3770,7 @@ fn emit_callee_args<P>(
     params: &[ParamSlot],
     arg: NodeId,
     shape: &KernelShape,
+    class: ScalarClass,
     body: &mut Vec<KernelInstr>,
     tally: &mut Positions,
 ) -> Result<(), String>
@@ -3333,7 +3780,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let KernelShape::Tuple(items) = shape else {
-        return emit_node(module, params, arg, body, tally);
+        return emit_node(module, params, arg, class, body, tally);
     };
     // A candidate that reads as a tuple but disagrees with the domain is a
     // cause worth reporting; one that simply is not a tuple only says the
@@ -3350,6 +3797,7 @@ where
             params,
             candidate,
             items,
+            class,
             &mut leaves,
             &mut candidate_tally,
         ) {
@@ -3410,6 +3858,7 @@ fn emit_tuple_leaves<P>(
     params: &[ParamSlot],
     node: NodeId,
     items: &[KernelShape],
+    class: ScalarClass,
     out: &mut Vec<KernelInstr>,
     tally: &mut Positions,
 ) -> Result<(), String>
@@ -3446,9 +3895,9 @@ scalar(s)",
     for (element, element_shape) in elements.iter().zip(items) {
         match element_shape {
             KernelShape::Tuple(nested) => {
-                emit_tuple_leaves(module, params, *element, nested, out, tally)?
+                emit_tuple_leaves(module, params, *element, nested, class, out, tally)?
             }
-            KernelShape::Scalar(_) => emit_node(module, params, *element, out, tally)?,
+            KernelShape::Scalar(_) => emit_node(module, params, *element, class, out, tally)?,
         }
     }
     Ok(())
@@ -3812,11 +4261,64 @@ fn sub_shape<'a>(domain: &'a LowShape, path: &[usize]) -> Option<&'a LowShape> {
     Some(shape)
 }
 
-/// Flatten a kernel argument value (a scalar `USize` leaf, or a possibly
+/// One scalar crossing a kernel's ABI — a launch/call argument, or a value a run
+/// handed back: the class it is and the bits that class's wasm value takes.
+///
+/// The class travels with the value because the two are the same 64 bits to
+/// everything downstream — the argument vector, the wasm call, the result
+/// buffer — and only the class says whether an `i64` or an `f32` is meant
+/// (`docs/notes/floating-point.md` §4.2, §4.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScalarValue {
+    class: ScalarClass,
+    /// An `Int`'s own value, or an `f32`'s bits in the low 32 bits.
+    bits: i64,
+}
+
+impl ScalarValue {
+    fn int(value: i64) -> Self {
+        ScalarValue {
+            class: ScalarClass::Int,
+            bits: value,
+        }
+    }
+
+    fn float(value: f32) -> Self {
+        ScalarValue {
+            class: ScalarClass::Float,
+            bits: float_word(value),
+        }
+    }
+
+    /// The value as the class's wasm value.
+    fn wasmi(self) -> wasmi::Val {
+        match self.class {
+            ScalarClass::Int => wasmi::Val::I64(self.bits),
+            ScalarClass::Float => wasmi::Val::F32(wasmi::F32::from_bits(self.bits as u32)),
+        }
+    }
+
+    /// The zero a run's result vector starts from — `wasmi` sizes its result
+    /// slots, it does not fill them.
+    fn wasmi_zero(class: ScalarClass) -> wasmi::Val {
+        ScalarValue { class, bits: 0 }.wasmi()
+    }
+
+    /// The value `v` holds, read as `class` — the read-back half of [`Self::wasmi`].
+    fn from_wasmi(class: ScalarClass, v: &wasmi::Val) -> Option<Self> {
+        let bits = match class {
+            ScalarClass::Int => v.i64()?,
+            ScalarClass::Float => i64::from(v.f32()?.to_bits()),
+        };
+        Some(ScalarValue { class, bits })
+    }
+}
+
+/// Flatten a kernel argument value (a scalar `Int`/`Float` leaf, or a possibly
 /// nested `Array` of them, as a tuple-of-tuples domain needs) into the wasm
-/// argument vector.  Returns `Err` naming the first element that is not a
-/// scalar `USize` leaf — the definition pass reports the unbound result, but
-/// only this says *which* element was unusable.
+/// argument vector, each leaf with its own class.  Returns `Err` naming the
+/// first element that is not a scalar leaf — the definition pass reports the
+/// unbound result, but only this says *which* element was unusable.
 ///
 /// `path` is the offending element's position in the argument: `""` at the
 /// root, then `"1"`, `"1.0"`, …  It is built as the walk descends, because for
@@ -3826,7 +4328,7 @@ fn sub_shape<'a>(domain: &'a LowShape, path: &[usize]) -> Option<&'a LowShape> {
 fn collect_args<P>(
     module: &Module<P>,
     node: AnyNodeId,
-    out: &mut Vec<i64>,
+    out: &mut Vec<ScalarValue>,
     path: &str,
 ) -> Result<(), String>
 where
@@ -3839,7 +4341,11 @@ where
         .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
     {
         Some(LowValue::USize(n)) => {
-            out.push(n as i64);
+            out.push(ScalarValue::int(n as i64));
+            Ok(())
+        }
+        Some(LowValue::Float(f)) => {
+            out.push(ScalarValue::float(f));
             Ok(())
         }
         Some(LowValue::Array(arr)) => {
@@ -3867,10 +4373,45 @@ where
                 format!("argument element {path} is {kind}")
             };
             Err(format!(
-                "{refusal}, not a concrete Int, so the kernel's parameters could not be filled"
+                "{refusal}, not a concrete Int or Float, so the kernel's parameters could not be \
+                 filled"
             ))
         }
     }
+}
+
+/// The wasm argument vector for a `launch`/`call`, or the refusal to record —
+/// the one place a kernel's argument is read out of the program, so both run
+/// operators say the same thing about the same argument.
+///
+/// A scalar argument is one value of its own class; a tuple argument is
+/// flattened ([`collect_args`]).  Anything else is named by what the user wrote:
+/// `launch`'s checker gate catches the shape for an annotated kernel, but
+/// `call`'s domain is a fresh cell, so this is where a string or a computed
+/// scalar becomes a diagnostic rather than a lazy marker.
+fn kernel_arguments<P>(module: &Module<P>, node: AnyNodeId) -> Result<Vec<ScalarValue>, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let mut args: Vec<ScalarValue> = Vec::new();
+    match module
+        .node_value(node)
+        .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+    {
+        Some(LowValue::USize(n)) => args.push(ScalarValue::int(n as i64)),
+        Some(LowValue::Float(f)) => args.push(ScalarValue::float(f)),
+        Some(LowValue::Array(_)) => collect_args(module, node, &mut args, "")?,
+        argument => {
+            return Err(format!(
+                "the argument must be a concrete Int or a tuple of them (the kernel's parameter \
+                 domain), and a concrete Float where the domain is one, but this one is {}",
+                argument_kind(argument.as_ref())
+            ));
+        }
+    }
+    Ok(args)
 }
 
 /// What a launch argument that is not a kernel parameter vector at all looks
@@ -3881,11 +4422,11 @@ where
 /// all.
 fn argument_kind(value: Option<&LowValue>) -> &'static str {
     match value {
-        // A float is a concrete scalar, so it is named as one rather than left
-        // to the "no value" catch-all: the refusal this feeds has to say what
-        // the user actually wrote, and a float argument is the phase-0 case a
-        // kernel must refuse (`docs/notes/floating-point.md` §3.8, §5).  The
-        // `i64` vector `collect_args` builds has no element for it.
+        // A float is a concrete scalar, so it is named as one: the refusal this
+        // feeds has to say what the user actually wrote.  It is only *refused*
+        // where the parameter it is handed to is an `Int` — that check is the
+        // run's, where the callee's leaf classes are in hand
+        // (`docs/notes/floating-point.md` §4.2).
         Some(LowValue::Float(_)) => "a float",
         Some(LowValue::Str(_)) => "a string",
         Some(LowValue::Table(_)) => "a table",
@@ -3982,7 +4523,7 @@ where
     <P::Value as From<LowValue>>::from(LowValue::Parameterized)
 }
 
-/// The value a completed kernel run produces: a bare `USize` for a
+/// The value a completed kernel run produces: the bare scalar for a
 /// single-result kernel, and the **tuple** of them for a multi-result one.
 ///
 /// This is the same shape `ParLaunch` builds for its several output buffers —
@@ -3990,23 +4531,33 @@ where
 /// rather than detached values — and it is the direct counterpart of
 /// [`codomain_leaves`], which is what decided how many results there are.  A
 /// lichen tuple is an ordinary array value, so `r(0)`/`r(1)` index it with no
-/// special case, exactly as the codomain's leaves were ordinary `i64`s.
-fn kernel_results_value<P>(module: &mut Module<P>, block: BlockId, results: Vec<usize>) -> P::Value
+/// special case, exactly as the codomain's leaves were ordinary scalars.
+///
+/// **Each result is the class the run said it was**: an integer result is the
+/// `USize` it always was, and a float result is the language's own `Float`, not
+/// the bit pattern of one read as an integer.
+fn kernel_results_value<P>(
+    module: &mut Module<P>,
+    block: BlockId,
+    results: Vec<ScalarValue>,
+) -> P::Value
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
+    let scalar = |value: &ScalarValue| {
+        <P::Value as From<LowValue>>::from(element_value(value.class, value.bits))
+    };
     let Some((first, rest)) = results.split_first() else {
         // A fragment always leaves at least one value, so an empty run is not
         // reachable; stay lazy rather than fabricating a value for it.
         return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
     };
     if rest.is_empty() {
-        // The single-result form is a bare `USize`, exactly what it always was.
-        return <P::Value as From<LowValue>>::from(LowValue::USize(*first));
+        // The single-result form is the bare scalar, exactly what it always was.
+        return scalar(first);
     }
-    let scalar = |value: &usize| <P::Value as From<LowValue>>::from(LowValue::USize(*value));
     let items: Vec<ArrayItem> = results
         .iter()
         .map(|value| {
@@ -4576,11 +5127,14 @@ where
             }
         };
         run_arguments.push(match value {
-            ComputeValue::Buffer(payload) => {
+            ComputeValue::Buffer(payload, class) => {
                 // SAFETY: read out of `module` on this borrow, so the payload's
                 // home block is alive while the data is copied out.
                 match buffer_items(&payload) {
-                    Some(data) => RunArgument::Buffer(data.to_vec()),
+                    Some(data) => RunArgument::Buffer {
+                        class,
+                        data: data.to_vec(),
+                    },
                     None => {
                         return refuse(
                             module,
@@ -4618,8 +5172,8 @@ where
     // way out would put a download on the path of every result.
     if produced.len() == 1 {
         return match &produced[0] {
-            RunResult::Buffer(data) => <P::Value as From<ComputeValue>>::from(
-                ComputeValue::Buffer(module.alloc_payload(data, block)),
+            RunResult::Buffer { class, data } => <P::Value as From<ComputeValue>>::from(
+                ComputeValue::Buffer(module.alloc_payload(data, block), *class),
             ),
             RunResult::Resident(resident) => {
                 <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(*resident))
@@ -4631,8 +5185,8 @@ where
         .iter()
         .map(|result| {
             let value = match result {
-                RunResult::Buffer(data) => <P::Value as From<ComputeValue>>::from(
-                    ComputeValue::Buffer(module.alloc_payload(data, block)),
+                RunResult::Buffer { class, data } => <P::Value as From<ComputeValue>>::from(
+                    ComputeValue::Buffer(module.alloc_payload(data, block), *class),
                 ),
                 RunResult::Resident(resident) => {
                     <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(*resident))
@@ -4798,10 +5352,11 @@ fn cached_module(
 }
 
 /// Execute a compiled kernel on an argument vector with wasmi, returning its
-/// results — one `usize` per value the fragment declares
+/// results — one [`ScalarValue`] per value the fragment declares
 /// ([`KernelFragment::results`]).  The dynamic [`wasmi::Func::call`] API accepts
-/// any number of `i64` inputs, so a tuple-domain kernel (arity N) launches with
-/// N arguments and a scalar kernel (arity 1) with one.
+/// any number of values, so a tuple-domain kernel (arity N) launches with N
+/// arguments and a scalar kernel (arity 1) with one, each of the class its
+/// parameter leaf is.
 ///
 /// **Both the argument count and the output buffer are decided here, not by
 /// `wasmi`.**  All three numbers are facts compute already holds — the callee's
@@ -4817,32 +5372,55 @@ fn cached_module(
 /// scalar or tuple of them ([`kernel_domain`]), which is what makes
 /// [`flat_arity`] an exact parameter count here rather than its filler.
 ///
+/// **The argument classes are checked here too**, and this is the one place they
+/// can be: the callee's leaf classes and the vector built from the argument are
+/// both in hand, and a mis-classed argument is otherwise an `i64` a float
+/// parameter would silently read as its bits.  `launch`'s checker gate catches
+/// the mismatch for an annotated kernel; `call`'s fresh domain cell does not, so
+/// this is its only account of it
+/// (`docs/notes/floating-point.md` §4.2).
+///
 /// The kernel's **relative launch set** — the kernel itself plus every kernel
 /// it (transitively) cross-calls, discovered by scanning each fragment's
 /// cross-kernel instructions — is assembled into one wasm module (launch-time
 /// assembly, the deferred linker), the root exported as `main`.  The module is
 /// fetched through [`cached_module`], so a repeat launch of the same kernel
 /// reuses it (`P1-18`).
-fn run_kernel(id: KernelId, args: &[i64]) -> Result<Vec<usize>, String> {
-    // Both counts are read under one lock and released before assembly, which
-    // locks the same registry again through [`assemble_launch_set`].
-    let (expected, results) = {
+fn run_kernel(id: KernelId, args: &[ScalarValue]) -> Result<Vec<ScalarValue>, String> {
+    // The leaf classes, the result arity and the fragment's class are read
+    // under one lock and released before assembly, which locks the same registry
+    // again through [`assemble_launch_set`].
+    let (expected, results, class) = {
         let fragments = kernels().lock().unwrap();
         let fragment = fragments
             .get(&id)
             .ok_or_else(|| format!("kernel {id} is not registered"))?;
-        (fragment.param_shape.flat_arity(), fragment.results)
+        (
+            param_classes(fragment),
+            fragment.results,
+            fragment_class(fragment),
+        )
     };
-    if args.len() != expected {
+    if args.len() != expected.len() {
         return Err(format!(
-            "the callee kernel {id} takes {expected} {}, but this call supplied {}",
-            if expected == 1 {
+            "the callee kernel {id} takes {} {}, but this call supplied {}",
+            expected.len(),
+            if expected.len() == 1 {
                 "argument"
             } else {
                 "arguments"
             },
             args.len()
         ));
+    }
+    for (position, (argument, leaf)) in args.iter().zip(&expected).enumerate() {
+        if argument.class != *leaf {
+            return Err(format!(
+                "argument {position} is {:?}, but the kernel's parameter there is {:?}: Int and \
+                 Float do not convert",
+                argument.class, leaf
+            ));
+        }
     }
     // A fragment's result arity is at least one (a body always leaves a value),
     // so the buffer is never empty; the guard keeps the invariant stated here
@@ -4857,17 +5435,22 @@ fn run_kernel(id: KernelId, args: &[i64]) -> Result<Vec<usize>, String> {
     let main = instance
         .get_func(&store, "main")
         .ok_or_else(|| "kernel has no export `main`".to_string())?;
-    let inputs: Vec<wasmi::Val> = args.iter().map(|&a| wasmi::Val::I64(a)).collect();
-    let mut results: Vec<wasmi::Val> = vec![wasmi::Val::I64(0); outputs];
+    let inputs: Vec<wasmi::Val> = args.iter().map(|argument| argument.wasmi()).collect();
+    let mut results: Vec<wasmi::Val> = (0..outputs)
+        .map(|_| ScalarValue::wasmi_zero(class))
+        .collect();
     main.call(&mut store, &inputs, &mut results)
         .map_err(|e| e.to_string())?;
     results
         .iter()
-        .map(|value| {
-            value
-                .i64()
-                .map(|result| result as usize)
-                .ok_or_else(|| "kernel `main` returned a non-i64".to_string())
+        .enumerate()
+        .map(|(position, value)| {
+            ScalarValue::from_wasmi(class, value).ok_or_else(|| {
+                format!(
+                    "kernel `main` returned a non-{class:?} value at result {position}, against \
+                     the {class:?} signature this crate emitted"
+                )
+            })
         })
         .collect()
 }
@@ -4936,17 +5519,21 @@ fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
 struct ParallelState<'a> {
     /// The input buffers (the cfg buffer tuple), indexed by cfg position.  They
     /// are never partitioned: a read is by a **global** index, so every worker
-    /// reads the whole buffer.
-    inputs: &'a [Vec<i64>],
+    /// reads the whole buffer.  A float input's words are its elements' `f32`
+    /// bits, so the `read` import answers `F32` rather than `I64`.
+    inputs: &'a [BufferWords],
     /// This worker's span of each output buffer, indexed by the write's
     /// `out_pos` ordinal.  There is one span per output the index function
     /// declares — the count comes from the compiled fragment
     /// ([`KernelFragment::outputs`]), never from which slots happened to be
-    /// written.
+    /// written.  The words are the same for both classes, one per element.
     outputs: Vec<&'a mut [i64]>,
     /// The global index of this partition's first element, which the `write`
     /// import adds to the index the kernel passes.
     base: usize,
+    /// The class the whole fragment is lowered in — the value type of the
+    /// `read`/`write` imports and of the kernel's own parameters and result.
+    class: ScalarClass,
 }
 
 /// Hand a run to the installed [`lichen_kernel_ir::ParallelBackend`].
@@ -4987,14 +5574,24 @@ fn run_on_installed_backend(
             outputs, fragment.outputs
         ));
     }
+    // The class check runs before the dispatch: a host slot is a raw bit
+    // payload, so a buffer of the wrong class would reach the device as the
+    // right shape and the wrong numbers.
+    check_input_classes(&fragment.input_classes, inputs)?;
     // The one place a run can be wired to leave its inputs where they are: an
     // input a previous run left on the device is handed back as the id it already
     // has, so a chain of kernels pays one upload for the whole chain rather than
     // one per link.
+    //
+    // **The host slot is the buffer's words, and its class is the fragment's.**
+    // `BufferSlot` carries a raw bit payload and no class of its own (staying
+    // `Eq`, and staying one variant for every backend), so the class a backend
+    // reads a host slot as is the one the fragment declares for that position —
+    // which is exactly why [`Self::check_input_classes`] runs first.
     let slots: Vec<BufferSlot> = inputs
         .iter()
         .map(|input| match input {
-            RunInput::Host(data) => BufferSlot::Host(data),
+            RunInput::Host(buffer) => BufferSlot::Host(&buffer.words),
             RunInput::Resident(resident) => BufferSlot::Resident(resident.id),
         })
         .collect();
@@ -5178,17 +5775,25 @@ fn run_parallel_kernel(
             "parallel launch count {count} exceeds the limit of {MAX_PARALLEL_ELEMENTS} elements"
         ));
     }
-    // The output count is a property of the *registered fragment*, so it is read
-    // here rather than carried in: a kernel id is content-addressed, so the
-    // fragment it names cannot be a different one.  The lock is released before
-    // any emission or assembly, which locks the same registry again.
-    let outputs = {
+    // The output count **and the element class** are properties of the
+    // *registered fragment*, so they are read here rather than carried in: a
+    // kernel id is content-addressed, so the fragment it names cannot be a
+    // different one.  The lock is released before any emission or assembly,
+    // which locks the same registry again.
+    let (outputs, class, input_classes) = {
         let fragments = kernels().lock().unwrap();
-        fragments
+        let fragment = fragments
             .get(&id)
-            .map(|fragment| fragment.outputs)
-            .ok_or_else(|| format!("parallel kernel {id} is not registered"))?
+            .ok_or_else(|| format!("parallel kernel {id} is not registered"))?;
+        (
+            fragment.outputs,
+            fragment_class(fragment),
+            fragment.input_classes.clone(),
+        )
     };
+    // A borrow of data already out of the registry, so the class check is a
+    // function of the classes rather than a second reason to hold the lock.
+    check_input_classes(&input_classes, &inputs)?;
     if let Backend::Gpu = backend {
         return run_on_installed_backend(id, count, &inputs, outputs);
     }
@@ -5197,28 +5802,20 @@ fn run_parallel_kernel(
     // backends meet, and it is a *fetch* rather than a silent refusal: the
     // program's data is on the device and the CPU has no way to reach it, so
     // moving it is what running on the CPU means — not a change in what is
-    // computed.
-    let mut host_inputs: Vec<Vec<i64>> = Vec::with_capacity(inputs.len());
+    // computed.  A fetched payload is turned into the same words a host input
+    // holds, so the interpreted run cannot tell the two apart.
+    let mut host_inputs: Vec<BufferWords> = Vec::with_capacity(inputs.len());
     for (position, input) in inputs.into_iter().enumerate() {
         match input {
-            RunInput::Host(data) => host_inputs.push(data),
+            RunInput::Host(buffer) => host_inputs.push(buffer),
             RunInput::Resident(resident) => {
-                // A `"cpu"` run's own buffers are `i64`, so a float an earlier
-                // `"gpu"` run left on the device has no host form to be brought
-                // home into.  Named rather than reinterpreted: this is the same
-                // boundary a wrong class is refused at inside `fetch_resident`,
-                // seen from the side that knows what it was going to do with the
-                // values (`docs/notes/floating-point.md` §3.8, §4.3).
-                let data = fetch_resident(resident, position)?;
-                match data {
-                    ScalarData::Int(elements) => host_inputs.push(elements),
-                    ScalarData::Float(_) => {
-                        return Err(format!(
-                            "input buffer {position} of this run holds Float elements on the \
-                             device, and a \"cpu\" run has no float local to bring them home \
-                             into: the kernel ABI is `i64`-only"
-                        ));
-                    }
+                let class = resident.class;
+                match fetch_resident(resident, position)? {
+                    ScalarData::Int(elements) => host_inputs.push(BufferWords::ints(elements)),
+                    ScalarData::Float(elements) => host_inputs.push(BufferWords {
+                        class,
+                        words: elements.into_iter().map(float_word).collect(),
+                    }),
                 }
             }
         }
@@ -5236,6 +5833,7 @@ fn run_parallel_kernel(
             inputs: &inputs,
             outputs: output_spans(&mut outputs),
             base: 0,
+            class,
         };
         run_parallel_range(&engine, &module, count, state, 0, count)?;
     } else {
@@ -5267,6 +5865,7 @@ fn run_parallel_kernel(
                             inputs,
                             outputs: partition,
                             base,
+                            class,
                         },
                         base,
                         end,
@@ -5292,7 +5891,39 @@ fn run_parallel_kernel(
             }
         }
     }
-    Ok(RunOutcome::Host(outputs))
+    Ok(RunOutcome::Host(
+        outputs
+            .into_iter()
+            .map(|words| BufferWords { class, words })
+            .collect(),
+    ))
+}
+
+/// Refuse a run whose input buffers are not the class the fragment reads them
+/// as.
+///
+/// **The one place the two halves of a buffer's class meet before an upload**:
+/// the fragment declares a class per read position, and each value carries the
+/// class it was produced with.  A disagreement is a wrong number rather than a
+/// wrong shape — the words are the same 64 bits either way — so it is refused by
+/// name rather than reinterpreted, the same discipline
+/// [`fetch_resident`] applies to a device's answer
+/// (`docs/notes/floating-point.md` §4.2, §4.4).
+fn check_input_classes(declared: &[ScalarClass], inputs: &[RunInput]) -> Result<(), String> {
+    for (position, input) in inputs.iter().enumerate() {
+        let declared = declared.get(position).copied().unwrap_or(ScalarClass::Int);
+        let held = match input {
+            RunInput::Host(buffer) => buffer.class,
+            RunInput::Resident(resident) => resident.class,
+        };
+        if held != declared {
+            return Err(format!(
+                "input buffer {position} holds {held:?} elements, but this kernel reads that \
+                 position as {declared:?}: Int and Float do not convert"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Bring one resident buffer home, naming the position it was read at.
@@ -5426,21 +6057,21 @@ fn run_parallel_range(
     base: usize,
     end: usize,
 ) -> Result<(), String> {
+    let class = state.class;
+    // The imports are typed in the fragment's own class, which is what
+    // `assemble_module` emitted for them: a float fragment's positions, indices
+    // and values are all `f32`, and the host converts the two index roles from
+    // the `f32` the ABI carries (`docs/notes/floating-point.md` §4.4).
+    let value_type = match class {
+        ScalarClass::Int => wasmi::ValType::I64,
+        ScalarClass::Float => wasmi::ValType::F32,
+    };
+
     let mut store = wasmi::Store::new(engine, state);
     let mut linker = wasmi::Linker::<ParallelState<'_>>::new(engine);
 
-    let read_ty = wasmi::FuncType::new(
-        [wasmi::ValType::I64, wasmi::ValType::I64],
-        [wasmi::ValType::I64],
-    );
-    let write_ty = wasmi::FuncType::new(
-        [
-            wasmi::ValType::I64,
-            wasmi::ValType::I64,
-            wasmi::ValType::I64,
-        ],
-        [],
-    );
+    let read_ty = wasmi::FuncType::new([value_type, value_type], [value_type]);
+    let write_ty = wasmi::FuncType::new([value_type, value_type, value_type], []);
     linker
         .func_new(
             "env",
@@ -5449,18 +6080,21 @@ fn run_parallel_range(
             |caller: wasmi::Caller<'_, ParallelState<'_>>,
              params: &[wasmi::Val],
              results: &mut [wasmi::Val]| {
-                let pos = params.first().and_then(|v| v.i64()).unwrap_or(0) as usize;
-                let idx = params.get(1).and_then(|v| v.i64()).unwrap_or(0) as usize;
+                let class = caller.data().class;
+                let pos = params.first().map_or(0, |v| import_index(class, v));
+                let idx = params.get(1).map_or(0, |v| import_index(class, v));
                 // The index is **global** — inputs are never partitioned — so
-                // no rebase here; a worker reads the whole input buffer.
+                // no rebase here; a worker reads the whole input buffer.  The
+                // word is the element's own bits for both classes: an `f32`'s
+                // for a float fragment, the value for an integer one.
                 let value = caller
                     .data()
                     .inputs
                     .get(pos)
-                    .and_then(|v| v.get(idx))
+                    .and_then(|buffer| buffer.words.get(idx))
                     .copied()
                     .unwrap_or(0);
-                results[0] = wasmi::Val::I64(value);
+                results[0] = word_value(class, value);
                 Ok(())
             },
         )
@@ -5473,9 +6107,10 @@ fn run_parallel_range(
             |mut caller: wasmi::Caller<'_, ParallelState<'_>>,
              params: &[wasmi::Val],
              _results: &mut [wasmi::Val]| {
-                let out_pos = params.first().and_then(|v| v.i64()).unwrap_or(0) as usize;
-                let idx = params.get(1).and_then(|v| v.i64()).unwrap_or(0) as usize;
-                let value = params.get(2).and_then(|v| v.i64()).unwrap_or(0);
+                let class = caller.data().class;
+                let out_pos = params.first().map_or(0, |v| import_index(class, v));
+                let idx = params.get(1).map_or(0, |v| import_index(class, v));
+                let value = params.get(2).map_or(0, |v| value_word(class, v));
                 let state = caller.data_mut();
                 // **The rebase.**  The kernel is handed a global index, and the
                 // worker owns `[base, base + span.len())` of this buffer, so the
@@ -5502,12 +6137,46 @@ fn run_parallel_range(
         .get_func(&store, "main")
         .ok_or_else(|| "parallel kernel has no export `main`".to_string())?;
     for i in base..end {
-        let args = [wasmi::Val::I64(count as i64), wasmi::Val::I64(i as i64)];
-        let mut results = [wasmi::Val::I64(0)];
+        // The count and the index are the fragment's own scalars; the result is
+        // the dummy `compile_parallel_fragment` leaves, in the same class.
+        let args = [
+            word_value(class, const_bits(class, count as i64)),
+            word_value(class, const_bits(class, i as i64)),
+        ];
+        let mut results = [word_value(class, 0)];
         main.call(&mut store, &args, &mut results)
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// The index a `read`/`write` import's position or index argument carries, in
+/// the fragment's class.
+///
+/// Exact for every value a launch can hand over: the count is bounded by
+/// [`MAX_PARALLEL_ELEMENTS`], far below `f32`'s 2^24 integer range.
+fn import_index(class: ScalarClass, value: &wasmi::Val) -> usize {
+    match class {
+        ScalarClass::Int => value.i64().unwrap_or(0) as usize,
+        ScalarClass::Float => value.f32().map_or(0, |bits| bits.to_float() as usize),
+    }
+}
+
+/// The word a `read`/`write` import's value argument carries, in the fragment's
+/// class — an `f32`'s bits for a float fragment, the value for an integer one.
+fn value_word(class: ScalarClass, value: &wasmi::Val) -> i64 {
+    match class {
+        ScalarClass::Int => value.i64().unwrap_or(0),
+        ScalarClass::Float => float_word(value.f32().map_or(0.0, |bits| bits.to_float())),
+    }
+}
+
+/// One buffer word as the wasm value the fragment's class takes.
+fn word_value(class: ScalarClass, word: i64) -> wasmi::Val {
+    match class {
+        ScalarClass::Int => wasmi::Val::I64(word),
+        ScalarClass::Float => wasmi::Val::F32(wasmi::F32::from_bits(word as u32)),
+    }
 }
 
 // --- The parallel run: the worker rule, the partition, the fan-out ---
@@ -5703,7 +6372,9 @@ mod parallel_launch_tests {
             id,
             Backend::Gpu,
             count,
-            vec![RunInput::Host((0..count as i64).collect())],
+            vec![RunInput::Host(BufferWords::ints(
+                (0..count as i64).collect(),
+            ))],
         )
         .expect("the first run completes");
         let RunOutcome::Resident(resident) = first else {
@@ -5933,7 +6604,7 @@ mod parallel_launch_tests {
     /// The host buffers of a `"cpu"` run.  A CPU run has no device to leave
     /// anything on, so a resident outcome here would be a routing bug rather
     /// than a shape to allow.
-    fn host_outputs(id: KernelId, count: usize) -> Vec<Vec<i64>> {
+    fn host_outputs(id: KernelId, count: usize) -> Vec<BufferWords> {
         match run_parallel_kernel(id, Backend::Cpu, count, vec![]).expect("the run must succeed") {
             RunOutcome::Host(outputs) => outputs,
             RunOutcome::Resident(_) => panic!("a \"cpu\" run must produce host buffers"),
@@ -5962,8 +6633,8 @@ mod parallel_launch_tests {
         // First, middle and last index of each buffer: the boundaries between
         // two workers are where a wrong rebase or a skipped chunk would show.
         for index in [0, count / 2, count - 1] {
-            assert_eq!(outputs[0][index], index as i64 + 1, "out0[{index}]");
-            assert_eq!(outputs[1][index], index as i64 * 2, "out1[{index}]");
+            assert_eq!(outputs[0].words[index], index as i64 + 1, "out0[{index}]");
+            assert_eq!(outputs[1].words[index], index as i64 * 2, "out1[{index}]");
         }
     }
 
@@ -5976,8 +6647,8 @@ mod parallel_launch_tests {
         let outputs = host_outputs(id, count);
         assert_eq!(parallel_launch_workers(), 1, "no spawn below the threshold");
         for index in [0, count / 2, count - 1] {
-            assert_eq!(outputs[0][index], index as i64 + 1, "out0[{index}]");
-            assert_eq!(outputs[1][index], index as i64 * 2, "out1[{index}]");
+            assert_eq!(outputs[0].words[index], index as i64 + 1, "out0[{index}]");
+            assert_eq!(outputs[1].words[index], index as i64 * 2, "out1[{index}]");
         }
     }
 }
@@ -6302,12 +6973,12 @@ where
     /// What the fresh cell costs is **static precision, not safety**: the
     /// element type is no longer named by the signature, so `read` on a `plrun`
     /// result binds its own element cell and resolves it from the value the
-    /// run produces (always `Int`, since `WriteOp` pins the written value to
-    /// `Int`).  An ordinal that does not exist is still **refused, at check
-    /// time, with a span** — the checker's evaluation pass reconciles the
-    /// constant index against the tuple the launch produced and records an
-    /// out-of-bounds `Index` — so the two shapes stay distinguishable exactly
-    /// where it matters.
+    /// run produces — the buffer's own class, `Int` or `Float`, which is what
+    /// makes a float `plrun` readable as an array of `Float`.  An ordinal that
+    /// does not exist is still **refused, at check time, with a span** — the
+    /// checker's evaluation pass reconciles the constant index against the tuple
+    /// the launch produced and records an out-of-bounds `Index` — so the two
+    /// shapes stay distinguishable exactly where it matters.
     fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let native = &args[0];
         let sig = &args[1];
@@ -6375,6 +7046,16 @@ where
     /// `buf : [?b, [TypeBuffer, Type]]` (binding the element type), index gate
     /// `Int`; the result is the element type `?b`.  In-kernel this lowers to the
     /// host `read` import; at the VM it reads a buffer value's element.
+    ///
+    /// **The wrapper is not annotated, and that is what makes a `buffer<Float>`
+    /// readable.**  A buffer's element class is a fact of the *value* — the
+    /// producing fragment's declared class, or the class a backend issued a
+    /// resident buffer with — so pinning the result to `Int` here is exactly
+    /// what made a float buffer inexpressible.  The element cell is unified with
+    /// the buffer's element type and stays unbound until something decides it,
+    /// which is why a program that only forwards a buffer prints its element as
+    /// `?a` rather than as the class the value turns out to be
+    /// (`docs/notes/floating-point.md` §3.7, §4.2, §4.4).
     fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let b = &args[0];
         let i = &args[1];
@@ -6404,8 +7085,8 @@ where
     P::Operator: From<ComputeOperator>,
 {
     /// `$write(n, i, val)` — a pending parallel write into the output buffer at
-    /// index `i` (length `n`).  Gate `n` and `i` as `Int`, `val` as the element
-    /// type `?b`; the result is a `Write` type `[?b, [TypeWrite, Type]]`.
+    /// index `i` (length `n`).  Gate `n` and `i` as `Int`, and `val` as the
+    /// element type `?b`; the result is a `Write` type `[?b, [TypeWrite, Type]]`.
     /// Kernel-only (lowers to the host `write` import).
     fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let n = &args[0];
@@ -6413,16 +7094,26 @@ where
         let val = &args[2];
         ctx.check_unify(n.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
         ctx.check_unify(i.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
-        // The `Write`'s element type is pinned to the canonical `Int` (v1: the
-        // val must be an `Int`), so the kernel signature's codomain carries a
-        // *concrete* element type — `compute.read` then returns `Int` and a
-        // dependent index function (`a + a`) typechecks.
-        ctx.check_unify(val.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
+        // **The `Write`'s element type is the written value's own**, so a
+        // `buffer<Float>` is expressible and a `buffer<Int>` is unchanged: the
+        // written value's type is the buffer's element type, with nothing to
+        // choose between them (`docs/notes/floating-point.md` §3.7, §4.2).
+        //
+        // It is a *fresh cell* rather than a fixed `Int` because a float write
+        // has to be able to name its class, and the cell is what the run
+        // resolves from the value it produces when nothing pins it — the same
+        // mechanism `plrun`'s result type already relies on.  A `val` whose own
+        // type is undecided leaves the cell undecided, which is why an index
+        // function that only forwards a buffer read keeps working: its element
+        // class is read off the buffer at run time, and its emission defaults to
+        // `Int` exactly as it always did.
+        let elem = ctx.fresh();
+        ctx.check_unify(val.ty, elem, loc.clone(), DiagKind::Guard);
         let write_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
             ComputeValue::TypeWrite,
         ));
         let write_kind = ctx.kind_expr(write_marker);
-        let write_ty = ctx.array_node(&[ctx.int_type(), write_kind]);
+        let write_ty = ctx.array_node(&[elem, write_kind]);
         let operands = ctx.array_node(&[n.value, i.value, val.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Write), Some(operands));
         let pair = ctx.array_node(&[op, write_ty]);

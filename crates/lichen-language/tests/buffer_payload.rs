@@ -16,6 +16,7 @@
 //! would pass while the payload was dangling.
 
 use lichen_compute::ComputeValue;
+use lichen_kernel_ir::ScalarClass;
 use lichen_language::program::{LangProgram, LangValue};
 use lichen_lowlevel::{AnyHandle, AnyNodeId, Module, Program, ValueExt};
 use lichen_utils::extend::AsEnum;
@@ -24,7 +25,9 @@ use lichen_utils::extend::AsEnum;
 fn payload_address(value: &LangValue) -> usize {
     let compute = AsEnum::<ComputeValue>::as_enum(value).expect("the node holds a compute value");
     match compute {
-        ComputeValue::Buffer(AnyHandle::Dynamic(handle)) => handle.as_ptr() as *const i64 as usize,
+        ComputeValue::Buffer(AnyHandle::Dynamic(handle), _) => {
+            handle.as_ptr() as *const i64 as usize
+        }
         other => panic!("expected a buffer payload, got {other:?}"),
     }
 }
@@ -33,7 +36,7 @@ fn payload_address(value: &LangValue) -> usize {
 fn payload_items(value: &LangValue) -> Vec<i64> {
     let compute = AsEnum::<ComputeValue>::as_enum(value).expect("the node holds a compute value");
     match compute {
-        ComputeValue::Buffer(AnyHandle::Dynamic(handle)) => {
+        ComputeValue::Buffer(AnyHandle::Dynamic(handle), _) => {
             // SAFETY: the value was read out of the module on a live borrow, so
             // its payload's home block is alive for this read.
             unsafe { (*handle.as_ptr()).to_vec() }
@@ -55,6 +58,7 @@ fn a_collected_payload_is_relocated_when_its_block_is_released() {
         None,
         Some(<LangProgram as Program>::Value::from(ComputeValue::Buffer(
             payload,
+            ScalarClass::Int,
         ))),
     );
     let before = module.node_value(AnyNodeId::Dynamic(node));

@@ -369,7 +369,7 @@ pub fn place(value: &ComputeValue, position: usize) -> Result<Placed, String> {
     match value {
         ComputeValue::GraphInput(slot) => Ok(Placed::Input(*slot)),
         ComputeValue::GraphValue(id) => Ok(Placed::Value(*id)),
-        ComputeValue::Buffer(_) | ComputeValue::DeviceBuffer(_) => Err(format!(
+        ComputeValue::Buffer(..) | ComputeValue::DeviceBuffer(_) => Err(format!(
             "argument {position} of this dispatch is {} and was not read from this function's \
              parameter, so the graph would have to hold it. A graph holds nothing but kernel \
              ids, edge numbers and counts: a value reaches a graph through the parameter, so \
@@ -389,7 +389,7 @@ pub fn describe(value: &ComputeValue) -> &'static str {
     match value {
         ComputeValue::Kernel(_) => "a single-invocation kernel",
         ComputeValue::ParKernel(..) => "a parallel kernel",
-        ComputeValue::Buffer(_) => "a buffer",
+        ComputeValue::Buffer(..) => "a buffer",
         ComputeValue::DeviceBuffer(_) => "a buffer that is still on a device",
         ComputeValue::TypeBuffer => "the buffer type marker",
         ComputeValue::TypeWrite => "the write type marker",
@@ -540,7 +540,11 @@ pub enum RunArgument {
     /// that owns the payload's arena and has to be able to keep using it — the
     /// alternative is a borrow that would make every refusal in the calling loop
     /// unreachable to write.
-    Buffer(Vec<i64>),
+    ///
+    /// **The class travels with the words**, because a float buffer's payload is
+    /// `f32` bits in the same `i64` words an integer one uses: a run that dropped
+    /// the class would hand a device integers where the program computed floats.
+    Buffer { class: ScalarClass, data: Vec<i64> },
     /// A buffer a previous run left on a device, handed over as the id it is.
     Resident(ResidentBuffer),
     /// A number, which a dispatch may read as its extent.
@@ -584,8 +588,10 @@ pub fn run(
     let inputs: Vec<Value<'_>> = arguments
         .iter()
         .map(|argument| match argument {
-            RunArgument::Buffer(data) => Value::host(data.clone()),
-            RunArgument::Resident(resident) => Value::device(resident.id, resident.count),
+            RunArgument::Buffer { class, data } => Value::host_data(*class, data.clone()),
+            RunArgument::Resident(resident) => {
+                Value::device(resident.id, resident.count, resident.class)
+            }
             RunArgument::Count(count) => Value::int(*count),
         })
         .collect();
@@ -637,28 +643,31 @@ pub fn run(
 /// is about to dispatch over it; a returned number becomes one here, on its way
 /// to the caller's value table. One rule, both callers, and the `i64` never
 /// reaches a `usize` slot without the conversion in between.
+/// **The class is read off the value, and that is the whole point of carrying it
+/// there.**  A `Value` says which class its elements are, whether it came from a
+/// host input, a device the backend wrote, or a submission that has since been
+/// waited for — so a float graph result comes home as a float buffer rather than
+/// as the bits of one read as integers
+/// (`docs/notes/floating-point.md` §3.8, §4.4).
 fn returned_role(value: &Value<'_>) -> Result<RunResult, GraphRefusal> {
     Ok(match value {
-        Value::Host(host) => RunResult::Buffer(host.to_vec()),
+        Value::Host { data, class } => RunResult::Buffer {
+            class: *class,
+            data: data.to_vec(),
+        },
         // The pending arm is a shape the match has to name rather than one it
         // expects: the runner settles every value before it hands the table back,
         // so a resident here has been waited for. Naming it anyway costs one arm
         // and means a readback that somehow met a submission would name the
         // buffer rather than disagree with the runner about what it is.
-        Value::Device { id, count } | Value::Pending { id, count, .. } => {
-            // A graph's own value table carries no class — a `Value` is an id, a
-            // count, host data or a number, and the buffers a graph produces are
-            // the `i64` buffers its fragments declare. So an integer is the
-            // answer the table can support, and it is the same one every
-            // fragment in this ABI declares today
-            // (`docs/notes/floating-point.md` §3.8, §4.4). A class-carrying
-            // device value is what would move this.
-            RunResult::Resident(ResidentBuffer {
-                id: *id,
-                count: *count,
-                class: ScalarClass::Int,
-            })
-        }
+        Value::Device { id, count, class }
+        | Value::Pending {
+            id, count, class, ..
+        } => RunResult::Resident(ResidentBuffer {
+            id: *id,
+            count: *count,
+            class: *class,
+        }),
         Value::Int(number) => usize::try_from(*number)
             .map(RunResult::Count)
             .map_err(|_| GraphRefusal::CountNegative { number: *number })?,
@@ -667,8 +676,9 @@ fn returned_role(value: &Value<'_>) -> Result<RunResult, GraphRefusal> {
 
 /// A returned value, already separated by the role it is in.
 pub enum RunResult {
-    /// Data on the host, which becomes an arena buffer.
-    Buffer(Vec<i64>),
+    /// Data on the host, which becomes an arena buffer — with the class its
+    /// elements are, so the buffer the caller builds says what it holds.
+    Buffer { class: ScalarClass, data: Vec<i64> },
     /// A buffer still on a device, which stays a resident id.
     Resident(ResidentBuffer),
     /// A number, which a function is allowed to have returned — its own extent,

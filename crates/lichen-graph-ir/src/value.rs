@@ -3,7 +3,7 @@
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use lichen_kernel_ir::{BufferSlot, Pending, ResidentId};
+use lichen_kernel_ir::{BufferSlot, Pending, ResidentId, ScalarClass};
 
 use crate::GraphRefusal;
 
@@ -83,16 +83,34 @@ pub enum Value<'backend> {
         submission: Shared<'backend>,
         id: ResidentId,
         count: usize,
+        /// The class the elements are to be read as — the same fact a settled
+        /// value carries, kept across the wait so the class cannot change by
+        /// being waited for.
+        class: ScalarClass,
     },
     /// Waited for: the device has written it and the contents are there.
-    Device { id: ResidentId, count: usize },
+    Device {
+        id: ResidentId,
+        count: usize,
+        /// The class the elements are to be read as.
+        class: ScalarClass,
+    },
     /// Host data. What a caller passes for a graph's own input.
-    Host(Vec<i64>),
+    ///
+    /// **The class is here for the same reason it is on a device value**: the
+    /// payload is one `i64` word per element for both classes — an `Int` is its
+    /// value, a `Float` is an `f32`'s bits — so a value that dropped the class
+    /// would hand a float buffer to a backend as integers
+    /// (`docs/notes/floating-point.md` §4.4).
+    Host { data: Vec<i64>, class: ScalarClass },
     /// A number.
     ///
     /// **`i64` rather than `usize` because a graph is a program and a program's
     /// count can be negative**, which is a mistake to be told about by name
     /// rather than one to be wrapped around into an enormous unsigned number.
+    ///
+    /// A count is always an `Int`: it is an extent, and an extent has no class
+    /// to carry.
     Int(i64),
 }
 
@@ -106,10 +124,10 @@ impl fmt::Debug for Value<'_> {
             Value::Pending { id, count, .. } => {
                 write!(f, "Pending(buffer {:?}, {count} element(s))", id.0)
             }
-            Value::Device { id, count } => {
+            Value::Device { id, count, .. } => {
                 write!(f, "Device(buffer {:?}, {count} element(s))", id.0)
             }
-            Value::Host(host) => write!(f, "Host({} element(s))", host.len()),
+            Value::Host { data, .. } => write!(f, "Host({} element(s))", data.len()),
             Value::Int(number) => write!(f, "Int({number})"),
         }
     }
@@ -118,13 +136,22 @@ impl fmt::Debug for Value<'_> {
 impl<'backend> Value<'backend> {
     /// A device value the caller already waited for — what a graph's own inputs
     /// are, and what a settled value becomes.
-    pub fn device(id: ResidentId, count: usize) -> Self {
-        Value::Device { id, count }
+    pub fn device(id: ResidentId, count: usize, class: ScalarClass) -> Self {
+        Value::Device { id, count, class }
     }
 
-    /// Host data the caller already holds.
+    /// Host data the caller already holds, read as `Int` elements.
     pub fn host(data: Vec<i64>) -> Self {
-        Value::Host(data)
+        Value::Host {
+            data,
+            class: ScalarClass::Int,
+        }
+    }
+
+    /// Host data of a class the caller names — a float buffer's words are
+    /// `f32` bits, and only this says so.
+    pub fn host_data(class: ScalarClass, data: Vec<i64>) -> Self {
+        Value::Host { data, class }
     }
 
     /// A number, for a count edge or a graph's own argument.
@@ -132,26 +159,53 @@ impl<'backend> Value<'backend> {
         Value::Int(number)
     }
 
+    /// The class this value's elements are to be read as, or `None` for a number
+    /// (which has no elements).
+    pub fn class(&self) -> Option<ScalarClass> {
+        match self {
+            Value::Host { class, .. }
+            | Value::Device { class, .. }
+            | Value::Pending { class, .. } => Some(*class),
+            Value::Int(_) => None,
+        }
+    }
+
     /// The outputs of one submission, none of them waited for.
+    ///
+    /// `classes` is the producing fragment's declared class per output ordinal;
+    /// a fragment that declared fewer than it produced falls back to the ABI's
+    /// integer default rather than panicking in a run's result path.
     pub(crate) fn pending_all(
         submission: Box<dyn Pending + 'backend>,
         ids: Vec<ResidentId>,
         count: usize,
+        classes: &[ScalarClass],
     ) -> Vec<Self> {
         let shared: Shared<'backend> = Arc::new(Mutex::new(Some(submission)));
         ids.into_iter()
-            .map(|id| Value::Pending {
+            .enumerate()
+            .map(|(ordinal, id)| Value::Pending {
                 submission: Arc::clone(&shared),
                 id,
                 count,
+                class: classes.get(ordinal).copied().unwrap_or(ScalarClass::Int),
             })
             .collect()
     }
 
     /// The outputs of one run that was already waited for.
-    pub(crate) fn device_all(ids: Vec<ResidentId>, count: usize) -> Vec<Self> {
+    pub(crate) fn device_all(
+        ids: Vec<ResidentId>,
+        count: usize,
+        classes: &[ScalarClass],
+    ) -> Vec<Self> {
         ids.into_iter()
-            .map(|id| Value::Device { id, count })
+            .enumerate()
+            .map(|(ordinal, id)| Value::Device {
+                id,
+                count,
+                class: classes.get(ordinal).copied().unwrap_or(ScalarClass::Int),
+            })
             .collect()
     }
 
@@ -182,7 +236,7 @@ impl<'backend> Value<'backend> {
     /// asks, and the runner is where both numbers are already in hand.
     pub fn slot(&self) -> Result<BufferSlot<'_>, &'static str> {
         match self {
-            Value::Host(host) => Ok(BufferSlot::Host(host)),
+            Value::Host { data, .. } => Ok(BufferSlot::Host(data)),
             Value::Device { id, .. } | Value::Pending { id, .. } => Ok(BufferSlot::Resident(*id)),
             Value::Int(_) => Err(self.state()),
         }
@@ -221,7 +275,7 @@ impl<'backend> Value<'backend> {
     /// `0` for it would be a length a caller could act on.
     pub fn count(&self) -> Option<usize> {
         match self {
-            Value::Host(host) => Some(host.len()),
+            Value::Host { data, .. } => Some(data.len()),
             Value::Device { count, .. } | Value::Pending { count, .. } => Some(*count),
             Value::Int(_) => None,
         }
@@ -242,12 +296,12 @@ impl<'backend> Value<'backend> {
             submission,
             id,
             count,
-            ..
+            class,
         } = self
         else {
             return Ok(());
         };
-        let (id, count) = (*id, *count);
+        let (id, count, class) = (*id, *count, *class);
         // Taken under the lock, so two values of one node cannot both wait. The
         // lock is not held across the wait itself: another thread must be able to
         // settle a different submission while this one blocks on the device.
@@ -258,7 +312,7 @@ impl<'backend> Value<'backend> {
                 reason,
             })?;
         }
-        *self = Value::Device { id, count };
+        *self = Value::Device { id, count, class };
         Ok(())
     }
 
@@ -271,7 +325,7 @@ impl<'backend> Value<'backend> {
     /// only the kind would hand a caller the first when they needed the second.
     fn state(&self) -> &'static str {
         match self {
-            Value::Host(_) => "host data",
+            Value::Host { .. } => "host data",
             Value::Device { .. } => "a device buffer that was waited for",
             Value::Pending { .. } => "a submission that has not been waited for",
             Value::Int(_) => "a number",

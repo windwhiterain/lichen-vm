@@ -530,7 +530,7 @@ fn a_parameter_is_bound_by_the_position_the_source_names_and_not_by_read_order()
     let (mut module, root) = run(BACK_TO_FRONT);
 
     let value = module.evaluate_node_deep(root, None);
-    let Some(ComputeValue::Buffer(handle)) = AsEnum::<ComputeValue>::as_enum(&value) else {
+    let Some(ComputeValue::Buffer(handle, _)) = AsEnum::<ComputeValue>::as_enum(&value) else {
         panic!("the dispatch ran, so the root is a buffer, got {value:?}");
     };
     assert_eq!(
