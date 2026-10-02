@@ -167,15 +167,16 @@ pub(crate) fn compile_resolved_with_cells(
                 .statements
                 .iter()
                 .map(|bs| {
-                    let (name, value, binder, field, cached) = match &bs.stmt {
+                    let (name, value, binder, field, cached, looping) = match &bs.stmt {
                         Stmt::Binding(b) => (
                             Some(b.name.clone()),
                             b.value.clone(),
                             b.binder,
                             !b.restrictive,
                             b.cached,
+                            b.looping,
                         ),
-                        Stmt::Expr(e) => (None, e.clone(), None, true, false),
+                        Stmt::Expr(e) => (None, e.clone(), None, true, false, false),
                     };
                     RecordField {
                         name,
@@ -184,6 +185,7 @@ pub(crate) fn compile_resolved_with_cells(
                         public: bs.public,
                         field,
                         cached,
+                        looping,
                         span: bs.stmt.span(),
                     }
                 })
@@ -1058,6 +1060,7 @@ impl Compiler {
                     span: f.span,
                     restrictive: !f.field,
                     cached: f.cached,
+                    looping: f.looping,
                 }),
                 None => Stmt::Expr(f.value.clone()),
             })

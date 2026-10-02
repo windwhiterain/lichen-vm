@@ -329,6 +329,14 @@ pub struct Binding {
     /// `lichen_language::compile_with_cells`, which lowers a clean cell to a
     /// static read; the design is `docs/notes/incremental-update.md`.
     pub cached: bool,
+    /// `@loop` — the binding's recursion **may become a loop**.
+    ///
+    /// Orthogonal to both marks above. It does **not** mean "compile this to a
+    /// loop": its absence is the unroll, which stays the default and still wins
+    /// whenever it terminates. It says this recursion is *allowed to need* one,
+    /// and evaluation takes that option where it would otherwise have expanded —
+    /// `docs/notes/loop-conversion.md` §1.1.
+    pub looping: bool,
 }
 
 /// One field of a `struct<…>` type: an optional name plus the field's type
@@ -367,6 +375,9 @@ pub struct RecordField {
     /// [`Binding::cached`] is for a statement binding (a record block's fields
     /// *are* the block's statements).  See `docs/notes/incremental-update.md`.
     pub cached: bool,
+    /// `@loop` — the field's binding's recursion may become a loop, exactly as
+    /// [`Binding::looping`] is for a statement binding.
+    pub looping: bool,
     pub span: Span,
 }
 

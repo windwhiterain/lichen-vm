@@ -99,6 +99,9 @@ pub enum TokenKind {
     KwElse,
     /// The return keyword -- a block's explicit tail expression marker.
     KwReturn,
+    /// `@loop` -- a binding whose recursion may become a loop. The keyword
+    /// sigil is `@`; this is the first keyword to carry it.
+    KwLoop,
     /// The pub keyword -- a block statement marked as a struct field.
     KwPub,
     /// The cache keyword -- a binding whose value is a *retained cell*
@@ -215,6 +218,7 @@ impl TokenKind {
             TokenKind::KwThen => "'then'".to_string(),
             TokenKind::KwElse => "'else'".to_string(),
             TokenKind::KwReturn => "'return'".to_string(),
+            TokenKind::KwLoop => "'@loop'".to_string(),
             TokenKind::KwPub => "'pub'".to_string(),
             TokenKind::KwCache => "'cache'".to_string(),
             TokenKind::KwTypeOf => "'type_of'".to_string(),
@@ -332,6 +336,11 @@ enum RawToken {
     KwPub,
     #[token("cache")]
     KwCache,
+    /// A `@`-prefixed word. Only the keywords carry the sigil, so the word is
+    /// matched whole and resolved below: an unknown one is a lex error, which is
+    /// what reserves `@` for the keywords that follow.
+    #[regex(r"@[A-Za-z_][A-Za-z0-9_]*")]
+    AtNameLit,
     #[token("type_of")]
     KwTypeOf,
     #[token("array")]
@@ -760,6 +769,19 @@ fn raw_to_kind(
             }
             Some(TokenKind::Str(slice[1..slice.len() - 1].to_string()))
         }
+        RawToken::AtNameLit => match &slice[1..] {
+            "loop" => Some(TokenKind::KwLoop),
+            other => {
+                errors.push(LexDiag {
+                    span: Some(lc),
+                    message: format!(
+                        "'@{other}' is not a keyword. `@` prefixes keywords, and `@loop` is the \
+                         only one so far"
+                    ),
+                });
+                None
+            }
+        },
         RawToken::NameLit => Some(match slice {
             "Int" => TokenKind::KwInt,
             "Float" => TokenKind::KwFloat,
@@ -773,6 +795,8 @@ fn raw_to_kind(
             "else" => TokenKind::KwElse,
             "return" => TokenKind::KwReturn,
             "pub" => TokenKind::KwPub,
+            "cache" => TokenKind::KwCache,
+            "array" => TokenKind::KwArray,
             "type_of" => TokenKind::KwTypeOf,
             "_" => TokenKind::Placeholder,
             _ => TokenKind::Name(slice.to_string()),

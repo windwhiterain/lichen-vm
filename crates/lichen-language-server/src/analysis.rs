@@ -1382,6 +1382,7 @@ fn classify_token_kind(
         | TokenKind::KwReturn
         | TokenKind::KwPub
         | TokenKind::KwCache
+        | TokenKind::KwLoop
         | TokenKind::KwTypeOf
         // `_` — a placeholder is a reserved inference form, never a name.
         | TokenKind::Placeholder => Some((SemanticTokenType::KEYWORD, Vec::new())),
@@ -1882,6 +1883,7 @@ impl Walk {
                             span: f.span,
                             restrictive: !f.field,
                             cached: f.cached,
+                            looping: f.looping,
                         }),
                         None => Stmt::Expr(f.value.clone()),
                     })
@@ -2178,6 +2180,7 @@ impl<'a> ScopeCapture<'a> {
                             span: f.span,
                             restrictive: !f.field,
                             cached: f.cached,
+                            looping: f.looping,
                         }),
                         None => Stmt::Expr(f.value.clone()),
                     })
