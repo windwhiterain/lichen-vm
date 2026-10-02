@@ -28,6 +28,8 @@
 >
 > **Target consumer: an agentic PCG graph.** The graph is long-lived, its expensive
 > outputs are generated content, and the agent's edit loop is what has to get cheap.
+> The one consumer designed so far is [whiting-scene-compiler](whiting-scene-compiler.md),
+> where a `cache`d generator is the thing a render frame keeps not re-deriving.
 >
 > Points at: `crates/lichen-language-parser/src/path.rs`,
 > `crates/lichen-language/src/{cells,compile,dirty,lib,session,run}.rs`,
