@@ -17,6 +17,7 @@ pub type BinderId = usize;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TypeConst {
     Int,
+    Float,
     String,
     Type,
 }
@@ -49,9 +50,16 @@ pub enum BinOp {
 pub enum Expr {
     /// An integer literal.
     Int(usize, Span),
+    /// A float literal — the payload is the same `f32` the lowlevel
+    /// `LowValue::Float` and the highlevel `FloatLit` carry
+    /// (`docs/notes/floating-point.md` §3.4), so the three are one width by
+    /// construction.  The form carries no sign: the lexer emits `Minus` then
+    /// `Float` (§3.3) and the parser has no prefix minus, so `-1.5` is a parse
+    /// error at the `-` exactly as `-1` is.
+    Float(f32, Span),
     /// A string literal — the immutable builtin `string` value.
     Str(String, Span),
-    /// One of the type constants `Int` / `string` / `Type`.
+    /// One of the type constants `Int` / `Float` / `string` / `Type`.
     TypeConst(TypeConst, Span),
     /// The bare `type_of` atom — an ordinary first-class function value:
     /// its application (`type_of e`, `type_of (e)`) reads the argument's
@@ -428,6 +436,7 @@ impl Expr {
     pub fn span(&self) -> Span {
         match self {
             Expr::Int(_, s) => *s,
+            Expr::Float(_, s) => *s,
             Expr::Str(_, s) => *s,
             Expr::TypeConst(_, s) => *s,
             Expr::TypeOf(s) => *s,
