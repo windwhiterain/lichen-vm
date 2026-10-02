@@ -190,6 +190,12 @@ one as a bare `Buffer`).
   program can answer differently on a machine with a different core count.  A
   kernel that writes at its own index (`compute.write [n, i, v]`, which is what
   a mapping kernel is) is unaffected.  See "The run is parallel" below.
+  **This is reachable from ordinary-looking code, and it was reached:**
+  [gpu-algorithms-ladder](gpu-algorithms-ladder.md) histograms 64 elements into
+  3 buckets and gets `(1, 1, 1)` on both backends, with no diagnostic.  The
+  remedy is not a bug fix but a decision — contention has to be *declared*, so
+  that a body which does not share a slot keeps this invariant.  That argument is
+  §4.4 of [gpu-algorithm-roadmap](gpu-algorithm-roadmap.md#44-axis-d-slot-access-and-the-invariant-it-breaks).
 
 ## The run is parallel
 

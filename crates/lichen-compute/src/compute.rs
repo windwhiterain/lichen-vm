@@ -533,7 +533,13 @@ pub enum ComputeValue {
     ///
     /// Not a handle, for the same reason a [`Self::ParKernel`] is not: the copy
     /// path relocates arena payloads and this is a slot number.
-    Graph(GraphId),
+    ///
+    /// **The backend rides here rather than in the registry entry**, exactly as it
+    /// rides on a [`Self::ParKernel`]: the graph's *shape* is content-addressed, so
+    /// two programs that record the same chain share one id, and an entry that also
+    /// stored which device to run it on would answer for whichever built it first.
+    /// Reading it off the value is what lets the registry store no answer.
+    Graph(GraphId, Backend),
     /// A placeholder for a graph's own `slot`-th input.
     ///
     /// **The slot is the number**, so `ins(i)` binds to the `i`-th argument and
@@ -826,7 +832,7 @@ impl ValueCodec for ComputeValue {
                         .into(),
                 );
             }
-            ComputeValue::Graph(_) => {
+            ComputeValue::Graph(..) => {
                 return Err(
                     "this package is not cached: it holds a built graph at its top level, and a \
                      graph is a runtime value with no on-disk form — the id names a process \
@@ -1202,7 +1208,7 @@ where
                     // SAFETY: `buf_tuple_node` names a live node of `module`.
                     && let Some(buf_items) = (unsafe { module.array_items(buf_tuple_node) })
                 {
-                    for item in buf_items {
+                    for (position, item) in buf_items.iter().enumerate() {
                         match module
                             .node_value(item.node)
                             .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
@@ -1226,8 +1232,20 @@ where
                                 // straight back out.
                                 inputs.push(RunInput::Resident(resident));
                             }
+                            // **A decided non-buffer here is the one way a launch
+                            // can be handed something it cannot run on**, and it
+                            // used to answer `parameterized` with no diagnostic —
+                            // so a program that passed a plain array where a
+                            // buffer belonged ran to completion, printed
+                            // `parameterized` and computed nothing.
                             _ => {
-                                return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                                return not_a_buffer::<P>(
+                                    module,
+                                    item.node,
+                                    "a parallel launch's `cfg(1)` is the tuple of buffers its \
+                                     kernel reads",
+                                    &format!("position {position} of it"),
+                                );
                             }
                         }
                     }
@@ -1365,7 +1383,14 @@ where
                             }
                         }
                     }
-                    _ => <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                    _ => {
+                        return not_a_buffer::<P>(
+                            module,
+                            operands[0].node,
+                            "a `compute.read` reads one element of one buffer",
+                            "its buffer position",
+                        );
+                    }
                 }
             }
             ComputeOperator::Range | ComputeOperator::Write => {
@@ -1413,7 +1438,14 @@ where
                             }
                         }
                     }
-                    _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                    _ => {
+                        return not_a_buffer::<P>(
+                            module,
+                            operands[0].node,
+                            "a `compute.collect` reads every element of one buffer",
+                            "its buffer position",
+                        );
+                    }
                 };
                 // Materialize each element as a fresh scalar node and build a
                 // real lichen array value over them, so `collect` yields an
@@ -2333,8 +2365,26 @@ where
         if let Some(definer) = class_computation_node(module, node) {
             return emit_node(module, params, definer, body, tally);
         }
+        // **A node nothing can resolve, described rather than numbered.** This used
+        // to report only its `NodeId`, which is a compiler-internal number: the
+        // reader learns that something is unresolvable and nothing about what.
+        //
+        // **It does not claim one cause, because this shape has more than one** and
+        // naming the wrong one is worse than naming none. Every way this is reached
+        // is the same fact underneath: a kernel is compiled from a template
+        // **before any apply**, so a binding the body would have filled in at run
+        // time is still empty here. A `let` alias whose value comes from a buffer
+        // read is one; a helper defined in the body rather than at module level is
+        // another; a `compute.call`'s callee wrapper is a third. The message says
+        // so, and the two ways to write past it, without claiming which one this is.
         return Err(format!(
-            "kernel body hits a node with neither value nor operation (node={node:?})"
+            "a kernel body reached a node with neither a value nor an operation, so there is \
+             nothing to emit for it (node={node:?}). A kernel is compiled from a template before \
+             any apply, so a binding the body would fill in at run time is still empty here — a \
+             `let` alias fed by a buffer read, a helper defined in the body rather than at module \
+             level, and a `compute.call`'s wrapper all have this shape. Move the binding to module \
+             level, or write what it would have computed directly into the expression the kernel \
+             uses"
         ));
     };
 
@@ -3271,6 +3321,70 @@ fn argument_kind(value: Option<&LowValue>) -> &'static str {
     }
 }
 
+/// What a node's value is, for a refusal that has to say — across **both**
+/// vocabularies, in that order.
+///
+/// A buffer position can be reached by a `compute.read` or a `compute.collect`,
+/// and the value there is a [`ComputeValue`] when it is a buffer and a
+/// [`LowValue`] when it is anything else, so a refusal that named only one of
+/// the two would say "no value" about a perfectly ordinary array. `argument_kind`
+/// cannot be reused for this: it is written for launch arguments, where `USize`
+/// and `Array` are the two shapes a parameter vector may take and are recognised
+/// before it is asked, and an array is exactly the case here.
+fn what_this_is<P>(module: &Module<P>, node: AnyNodeId) -> &'static str
+where
+    P: Program,
+    P::Value: AsEnum<ComputeValue> + AsEnum<LowValue>,
+{
+    if let Some(value) = module
+        .node_value(node)
+        .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
+    {
+        return graph::describe(&value);
+    }
+    module
+        .node_value(node)
+        .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+        .as_ref()
+        .map_or("no value", |value| match value {
+            LowValue::Array(_) => "an array",
+            LowValue::USize(_) => "a number",
+            other => argument_kind(Some(other)),
+        })
+}
+
+/// A buffer position holding something that is not a buffer.
+///
+/// **This is a refusal, and the `Parameterized` it replaces was a silent
+/// no-op.** The lazy cell is what makes a kernel's own read deferrable and what
+/// makes an undecided argument stay undecided — but a program array *is*
+/// decided, it is an ordinary lichen value with ordinary elements, and
+/// answering `parameterized` for it made `compute.read [data, i]` a
+/// plausible-looking program that computed nothing while still printing
+/// `array<?a, ?b>`. There is no way to make a buffer out of a program value, so
+/// the honest answer names that rather than waiting for a buffer that will not
+/// arrive.
+///
+/// `subject` says what the position is *for* and `at` names it, so the three
+/// sites that reach this describe their own mistake rather than sharing one
+/// sentence.
+fn not_a_buffer<P>(module: &mut Module<P>, node: AnyNodeId, subject: &str, at: &str) -> P::Value
+where
+    P: Program,
+    P::Value: From<LowValue> + AsEnum<ComputeValue> + AsEnum<LowValue>,
+{
+    module.record_extension_diagnostic(
+        PARALLEL_DIAGNOSTIC,
+        None,
+        format!(
+            "{subject}, and {at} holds {}. A buffer is what a `compute.plrun` or a \
+             `compute.graphrun` hands back, and there is no way to make one out of a program value",
+            what_this_is(module, node)
+        ),
+    );
+    <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+}
+
 /// The value a completed kernel run produces: a bare `USize` for a
 /// single-result kernel, and the **tuple** of them for a multi-result one.
 ///
@@ -3672,9 +3786,9 @@ where
         return refuse(module, reason);
     }
     match graph::finish() {
-        Ok(built) => {
-            let id = graph::intern(built);
-            <P::Value as From<ComputeValue>>::from(ComputeValue::Graph(id))
+        Ok((graph, backend)) => {
+            let id = graph::intern(graph);
+            <P::Value as From<ComputeValue>>::from(ComputeValue::Graph(id, backend))
         }
         Err(reason) => {
             // **An empty recording with a decided result is a different mistake
@@ -3806,11 +3920,11 @@ where
         module.record_extension_diagnostic(GRAPH_DIAGNOSTIC, None, reason);
         <P::Value as From<LowValue>>::from(LowValue::Parameterized)
     };
-    let id = match module
+    let (id, backend) = match module
         .node_value(graph_node)
         .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
     {
-        Some(ComputeValue::Graph(id)) => id,
+        Some(ComputeValue::Graph(id, backend)) => (id, backend),
         _ => {
             return refuse(
                 module,
@@ -3891,7 +4005,12 @@ where
             }
         });
     }
-    let values = match graph::run(id, run_arguments, GRAPH_POLICY.with(|policy| policy.get())) {
+    let values = match graph::run(
+        id,
+        backend,
+        run_arguments,
+        GRAPH_POLICY.with(|policy| policy.get()),
+    ) {
         Ok(values) => values,
         Err(reason) => return refuse(module, reason),
     };

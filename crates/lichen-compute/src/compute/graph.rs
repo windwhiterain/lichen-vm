@@ -50,20 +50,23 @@ use super::{Backend, ComputeValue, ResidentBuffer};
 /// process-local and its ids mean nothing outside the process that issued them.
 pub type GraphId = usize;
 
-/// One recorded graph, and the backend its dispatches are dispatched to.
+/// What the registry stores: a graph, and nothing else.
 ///
-/// The backend is **one value for the whole graph** and not a per-node field,
-/// because a graph is run by one runner against one backend. Two dispatches that
-/// disagree are refused while the graph is built rather than resolved while it
-/// runs, where picking one would silently change what the program asked for.
-#[derive(Clone)]
-pub struct BuiltGraph {
-    pub graph: Graph,
-    pub backend: Backend,
-}
-
-fn graphs() -> &'static Mutex<HashMap<GraphId, BuiltGraph>> {
-    static GRAPHS: OnceLock<Mutex<HashMap<GraphId, BuiltGraph>>> = OnceLock::new();
+/// **The backend is not here, and that is the fix.** It used to sit beside the
+/// graph in a `BuiltGraph` while deliberately *not* being part of
+/// [`graph_digest`], so the first build of a shape in a process decided the
+/// backend for every later build of that shape: a `"cpu"` graph was handed back
+/// to a `"gpu"` program, which is then refused for a backend it never named. The
+/// registries are process-global, so that crossed program boundaries.
+///
+/// The backend rides on the **value** instead — [`ComputeValue::Graph`] carries
+/// it, exactly as [`ComputeValue::ParKernel`] carries a parallel kernel's — which
+/// is what the digest's reasoning already assumed. What a graph *is* is
+/// content-addressed; which device runs it is a property of the run, so it is
+/// read off the value at run time and the registry stores no answer to that
+/// question.
+fn graphs() -> &'static Mutex<HashMap<GraphId, Graph>> {
+    static GRAPHS: OnceLock<Mutex<HashMap<GraphId, Graph>>> = OnceLock::new();
     GRAPHS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -82,6 +85,9 @@ fn digests() -> &'static Mutex<HashMap<u64, GraphId>> {
 ///
 /// The backend is **not** hashed, for the same reason it is not part of a
 /// fragment: it is a property of how the graph is *run*, not of what it computes.
+/// **And it is not stored either**, which is what makes the reasoning true — a
+/// key that left it out while the entry kept it would let the first build of a
+/// shape answer for every later one. It rides on [`ComputeValue::Graph`] instead.
 fn graph_digest(graph: &Graph) -> u64 {
     use std::hash::{Hash as _, Hasher as _};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -94,21 +100,21 @@ fn graph_digest(graph: &Graph) -> u64 {
 /// Content-addressed like a kernel, and for the same reason: `compute.graph`
 /// reached in a hot path would otherwise re-record the same body every time, and
 /// the recording is the expensive half.
-pub fn intern(built: BuiltGraph) -> GraphId {
-    let digest = graph_digest(&built.graph);
+pub fn intern(graph: Graph) -> GraphId {
+    let digest = graph_digest(&graph);
     let mut known = digests().lock().unwrap();
     if let Some(id) = known.get(&digest) {
         return *id;
     }
     let mut graphs = graphs().lock().unwrap();
     let id = graphs.len() as GraphId;
-    graphs.insert(id, built);
+    graphs.insert(id, graph);
     known.insert(digest, id);
     id
 }
 
 /// Read a graph back, or say that this process never built it.
-pub fn lookup(id: GraphId) -> Result<BuiltGraph, String> {
+pub fn lookup(id: GraphId) -> Result<Graph, String> {
     graphs()
         .lock()
         .unwrap()
@@ -237,8 +243,14 @@ pub fn begin() {
     });
 }
 
-/// Finish the innermost recording and hand back what it built.
-pub fn finish() -> Result<BuiltGraph, String> {
+/// Finish the innermost recording and hand back what it built: the graph, and the
+/// one backend every dispatch in it named.
+///
+/// **The backend comes out of the recording rather than out of the registry**,
+/// because a recording is the only place the agreement is knowable: the check
+/// that every dispatch named the same backend runs here, and its answer is what
+/// the caller puts on the value.
+pub fn finish() -> Result<(Graph, Backend), String> {
     RECORDINGS.with(|recordings| {
         let mut recordings = recordings.borrow_mut();
         let recording = recordings
@@ -301,7 +313,7 @@ pub fn finish() -> Result<BuiltGraph, String> {
                     format!("this graph's return could not be recorded: {refusal}")
                 })?;
         }
-        Ok(BuiltGraph { graph, backend })
+        Ok((graph, backend))
     })
 }
 
@@ -381,7 +393,7 @@ pub fn describe(value: &ComputeValue) -> &'static str {
         ComputeValue::DeviceBuffer(_) => "a buffer that is still on a device",
         ComputeValue::TypeBuffer => "the buffer type marker",
         ComputeValue::TypeWrite => "the write type marker",
-        ComputeValue::Graph(_) => "a graph",
+        ComputeValue::Graph(..) => "a graph",
         ComputeValue::GraphInput(_) => "a placeholder for a graph's own input",
         ComputeValue::GraphValue(_) => "a placeholder for a value the graph has produced",
     }
@@ -535,8 +547,8 @@ pub enum RunArgument {
     Count(i64),
 }
 
-/// Run a built graph and hand back what its source function returned, already
-/// separated by the role each value is in.
+/// Run a built graph on the backend its **value** names, and hand back what its
+/// source function returned, already separated by the role each value is in.
 ///
 /// **The result is left where it is.** A value the device wrote stays a resident
 /// id and the caller downloads it when it asks, which is the same discipline a
@@ -549,6 +561,7 @@ pub enum RunArgument {
 /// that owns it is gone.
 pub fn run(
     id: GraphId,
+    backend_name: Backend,
     arguments: Vec<RunArgument>,
     policy: Policy,
 ) -> Result<Vec<RunResult>, String> {
@@ -559,8 +572,8 @@ pub fn run(
                 .into(),
         );
     };
-    let built = lookup(id)?;
-    if let Backend::Cpu = built.backend {
+    let graph = lookup(id)?;
+    if let Backend::Cpu = backend_name {
         return Err(
             "this graph was compiled for the \"cpu\" backend, and a graph runs through the \
              ParallelBackend contract — which the cpu path is not: it is this crate's own wasm \
@@ -577,10 +590,9 @@ pub fn run(
         })
         .collect();
     let table = Runner::new(&*backend, policy)
-        .run(&built.graph, inputs)
+        .run(&graph, inputs)
         .map_err(|refusal| format!("this graph could not be run: {refusal}"))?;
-    let returned: Vec<ValueId> = built
-        .graph
+    let returned: Vec<ValueId> = graph
         .returns()
         .map(<[ValueId]>::to_vec)
         .unwrap_or_else(|| (0..table.len()).collect());

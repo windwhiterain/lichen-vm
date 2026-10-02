@@ -1040,6 +1040,49 @@ compute.read [outs(0), 2]
     );
 }
 
+/// A decided non-buffer in a buffer position is refused, not answered `parameterized`.
+///
+/// There is no way to make a buffer out of a program value, so the natural thing
+/// to reach for is a plain array. It used to be accepted and to produce nothing:
+/// the read stayed a lazy cell nothing forced, the launch answered
+/// `parameterized`, and the program still printed a type — `array<?a, ?b>` — so it
+/// read like a program that computed something.
+///
+/// The `Parameterized` fallback is not wrong in general: it is what makes a
+/// kernel's own read deferrable. A program array is **decided**, so it is not the
+/// case that fallback exists for, and a diagnostic is the honest answer.
+#[test]
+fn a_program_value_where_a_buffer_belongs_is_refused() {
+    let messages = fail(
+        r#"
+@{ compute = import "compute.lichen" @}
+data = [3, 1, 4, 1, 5, 9, 2, 6]
+f = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  v = compute.read [cfg(1)(0), i]
+  compute.write [n, i, v + 1]
+}
+k = compute.parallel f "cpu"
+compute.collect (compute.plrun k (8, (data,)))
+"#,
+    );
+    assert_eq!(
+        messages.len(),
+        1,
+        "one bad position is one diagnostic: {messages:?}"
+    );
+    let message = &messages[0];
+    assert!(
+        message.contains("cfg(1)") && message.contains("position 0") && message.contains("array"),
+        "the refusal must name the position and what it holds: {message:?}"
+    );
+    assert!(
+        message.contains("no way to make one out of a program value"),
+        "and it must say *why*, since the fix is not obvious from the fact: {message:?}"
+    );
+}
+
 /// The seam: a real lichen program, dispatching to a real device.
 ///
 /// Everything below this line is tested somewhere else and none of it together.
