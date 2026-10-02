@@ -1065,8 +1065,8 @@ filed into; and the whole-module path still checks its own way. Plus the influen
 | `64db7c4` | the caller's view (code region, base, imports), the report's frontend artifacts, the registry-owned cell key space, a reuse that moves its spans |
 | `4400d6a` | the language server as the first real caller: the compile worker, one registry, the replacing freeze, the import record (§7.6) |
 | `c0b5f56` | the artifact's size: the class edge only from an unbound node, a spliced class, the walk's ordering without a module scan (§7.7) |
-| `TBD-1` | the tests the caller's landing added are removed, and the note stops claiming them |
-| `TBD-2` | the dependency check is the closure's own keys, and it runs before the freeze (§7.7, §12.4) |
+| `06e4ba3` | the dependency check is the closure's own keys, and it runs before the freeze (§7.7, §12.4) |
+| `4bea81f` | the tests the caller's landing added are removed |
 
 ### 12.2 The entry points
 
