@@ -38,12 +38,12 @@ fn timed(source: &str, repeats: usize) -> Result<f64, Vec<String>> {
     Ok(best)
 }
 
-const HEADER: &str = "@{ compute = import \"compute.lichen\" @}\n";
+const HEADER: &str = "--- compute = import \"compute.lichen\" ---\n";
 
 /// A **scalar** kernel whose body calls another kernel. The chain's `jit`
 /// compiles; this checks the call actually runs.
 const CALL_IN_SCALAR_BODY: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k0 = compute.jit (v : Int => v + 1)
 k1 = compute.jit (v : Int => compute.call k0 v + 1)
 compute.launch k1 3
@@ -51,7 +51,7 @@ compute.launch k1 3
 
 /// The same call, from inside a **parallel** body.
 const CALL_IN_PARALLEL_BODY: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k0 = compute.jit (v : Int => v + 1)
 p = compute.parallel (cfg => {
   n = cfg(0)
@@ -64,7 +64,7 @@ compute.read [compute.plrun p (8,), 3]
 /// A **module-level** helper called from inside a parallel body — the
 /// composition case, and the one a library would actually be written in.
 const MODULE_HELPER: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 square = x => x * x
 p = compute.parallel (cfg => {
   n = cfg(0)
@@ -85,7 +85,7 @@ compute.collect (compute.plrun p (8, (s,)))
 /// call site. Expansion only terminates if the conditional's selector folds to a
 /// constant, so this is the program that says whether it does.
 const RECURSIVE_LITERAL: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 steps = k => if k == 0 then 0 else steps (k - 1) + 1
 p = compute.parallel (cfg => {
   n = cfg(0)
@@ -99,7 +99,7 @@ compute.read [compute.plrun p (8,), 3]
 /// probes above: if it fails, the alias — not the inlining — is what cannot be
 /// resolved in an unapplied template.
 const BODY_LOCAL_ALIAS: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
@@ -119,7 +119,7 @@ compute.collect (compute.plrun p (8, (s,)))
 /// unresolved. This separates "the callee cannot be found" from "the argument
 /// cannot be re-emitted".
 const HELPER_LITERAL_ARG: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 square = x => x * x
 p = compute.parallel (cfg => {
   n = cfg(0)
@@ -133,7 +133,7 @@ compute.collect (compute.plrun p (4,))
 /// `i + 1` depends on the loop index, so the call survives to the kernel
 /// compiler. This is the case static expansion exists for.
 const HELPER_INDEX_ARG: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 square = x => x * x
 p = compute.parallel (cfg => {
   n = cfg(0)
@@ -154,7 +154,7 @@ compute.collect (compute.plrun p (4,))
 /// If this works in a kernel body, the whole feature is free and the roadmap
 /// item is a library function rather than a codegen task.
 const LOOP_IN_LICHEN: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
 inc = x => x + 1
 p = compute.parallel (cfg => {
@@ -169,7 +169,7 @@ compute.collect (compute.plrun p (4,))
 /// This is the case §4.1 says is refused, and `loop` is supposed to be worse,
 /// not better: `n` is not decided when the body is lowered.
 const LOOP_RUNTIME_COUNT: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
 inc = x => x + 1
 p = compute.parallel (cfg => {
@@ -184,7 +184,7 @@ compute.read [compute.plrun p (4,), 3]
 /// applications, where `fib`'s single application works. If this is what the
 /// `loop` combinator's type error is, the fix is a one-argument shape.
 const TWO_STAGE_CURRIED: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 sum_to = n => x => if n == 0 then x else sum_to (n - 1) (x + 1)
 p = compute.parallel (cfg => {
   n = cfg(0)
@@ -197,7 +197,7 @@ compute.collect (compute.plrun p (4,))
 /// The same, with the two arguments in **one** tuple — one application, so one
 /// instantiation of the binding.
 const ONE_STAGE_TUPLE: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)
 p = compute.parallel (cfg => {
   n = cfg(0)
@@ -210,7 +210,7 @@ compute.collect (compute.plrun p (4,))
 /// The proposed operator, written over a **tuple** state instead of a curried
 /// pair, so the recursive call is a single application.
 const LOOP_TUPLE: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 loop = f => s => if s(0) == 0 then s(1) else loop f (s(0) - 1, f s(1))
 inc = x => x + 1
 p = compute.parallel (cfg => {
@@ -227,7 +227,7 @@ compute.collect (compute.plrun p (4,))
 /// step's body, so the interesting number is how that grows.
 fn loop_program(trip: usize) -> String {
     format!(
-        r#"@{{ compute = import "compute.lichen" @}}
+        r#"--- compute = import "compute.lichen" ---
 sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)
 p = compute.parallel (cfg => {{
   n = cfg(0)
@@ -252,7 +252,7 @@ fn host_program(trip: usize) -> String {
 /// The proposed operator **with its type written out** — the escape P1-33 names
 /// as "the whole difference" for the two-argument curried self-reference.
 const LOOP_ANNOTATED: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x)) : (Int -> Int) -> Int -> Int -> Int
 inc = x => x + 1
 p = compute.parallel (cfg => {
@@ -311,7 +311,7 @@ compute.read [compute.plrun p (COUNT,), 3]\n"
 
 /// A self-recursive function, called from inside a kernel body.
 const RECURSIVE_INLINE: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
@@ -323,14 +323,14 @@ compute.read [compute.plrun p (8,), 3]
 
 /// A kernel whose own body names the kernel it is being compiled into.
 const RECURSIVE_CROSS: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k = compute.jit (v : Int => compute.call k v + 1)
 compute.launch k 3
 "#;
 
 /// Two kernels naming each other — a cycle through the kernel registry.
 const MUTUAL: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 a = compute.jit (v : Int => compute.call b v + 1)
 b = compute.jit (v : Int => compute.call a v + 1)
 compute.launch a 3

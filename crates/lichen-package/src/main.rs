@@ -1,7 +1,7 @@
 //! The lichen package manager CLI.
 //!
 //! `lichen` manages a project whose dependencies are declared per-file as
-//! `name = depend "url"` directives in each `@{…@}` meta block: it fetches them
+//! `name = depend "url"` directives in each `---…---` meta block: it fetches them
 //! (`fetch`), fetches the toolchain binaries (`install`), rebuilds the
 //! compiler for a native plugin (`rebuild-plugin`), and reclaims the device
 //! cache (`clean`).
@@ -139,7 +139,7 @@ fn load_current() -> Result<Project, ExitCode> {
     })
 }
 
-/// The dependencies declared by a source's `@{…@}` block (`depend` and `plug`
+/// The dependencies declared by a source's `---…---` block (`depend` and `plug`
 /// bindings).
 fn depends_of(source: &str) -> Vec<Depend> {
     let (interior, _) = split_block(source);

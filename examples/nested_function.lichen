@@ -1,7 +1,7 @@
-@{
+---
   order = "2"
   output = "[1, 1]: array<Int, 2>"
-@}
+---
 f1 = x => {
     f2 = y => [y, y]
     f2 x 

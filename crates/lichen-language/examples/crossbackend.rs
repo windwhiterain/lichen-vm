@@ -16,7 +16,7 @@ fn run(source: &str) -> Result<String, Vec<String>> {
 
 /// A plain `v + 1` dispatch over `n` elements, read back at one index.
 const PLAIN: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
@@ -34,7 +34,7 @@ compute.read [compute.plrun k (4, (s,)), 2]
 
 /// The same `v + 1` body, twice over, recorded as a graph.
 const GRAPHED: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
@@ -54,7 +54,7 @@ compute.read [compute.graphrun built (4, s), 2]
 
 /// The bench's 16-link chain, verbatim, which is the shape that broke.
 const CHAIN: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 mk = cfg => {
   n = cfg(0)
   i = compute.range n

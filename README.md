@@ -91,7 +91,7 @@ lichen-compiler examples/bindings.lichen
 ```
 
 The package manager (a binary named `lichen`, in `crates/lichen-package`)
-fetches the git dependencies a file declares in its `@{…@}` block
+fetches the git dependencies a file declares in its `---…---` block
 (`name = depend "url"`) into the lichen-home source cache, downloads the
 `lichen-compiler` and `lichen-language-server` binaries, and rebuilds the
 compiler when a native plugin is imported: see [`crates/lichen-package`](crates/lichen-package/README.md).
@@ -105,30 +105,30 @@ This section is generated from [`examples`](examples) by `cargo run -p lichen-to
 ### `array.lichen`
 
 ```text
-@{
+---
   order = "0"
   output = "[1, 2, 3]: array<Int, 3>"
-@}
+---
 [1, 2, 3] : array<Int, 3>
 ```
 
 ### `tuple.lichen`
 
 ```text
-@{
+---
   order = "0"
   output = "(1, Int): <Int, Type>"
-@}
+---
 (1, Int) : <Int, Type>
 ```
 
 ### `index.lichen`
 
 ```text
-@{
+---
   order = "1"
   output = "(1, 2, 1, Int): <Int, Int, Int, Type>"
-@}
+---
 a = [1, 2]
 b = (1, Int)
 (a[0], a[1], b(0), b(1))
@@ -137,10 +137,10 @@ b = (1, Int)
 ### `closure.lichen`
 
 ```text
-@{
+---
   order = "2"
   output = "[1, 2, 3, 4]: array<Int, 4>"
-@}
+---
 a = 1
 f1 = x => {
     b = 2
@@ -153,10 +153,10 @@ f1 3 4
 ### `dependent_type.lichen`
 
 ```text
-@{
+---
   order = "2"
   output = "(1, Int): <Int, Type>"
-@}
+---
 a = x => (1, Int)(x)
 (a 0, a 1)
 ```
@@ -164,10 +164,10 @@ a = x => (1, Int)(x)
 ### `lazy_infinite.lichen`
 
 ```text
-@{
+---
   order = "2"
   output = "(1, 2, 3): <Int, Int, Int>"
-@}
+---
 f = x => [x, ~ f (x + 1)]
 inf = f 0
 (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))
@@ -176,10 +176,10 @@ inf = f 0
 ### `let_polymorphism.lichen`
 
 ```text
-@{
+---
   order = "2"
   output = "(Function, 1, Int): <?a -> ?a, Int, Type>"
-@}
+---
 f = x => x
 (f, f 1, f Int)
 ```
@@ -187,10 +187,10 @@ f = x => x
 ### `mutual_recursion.lichen`
 
 ```text
-@{
+---
   order = "2"
   output = "(0, 1): <Int, Int>"
-@}
+---
 is_even = x => [is_old (x - 1), 1][x == 0]
 is_old = x => [is_even (x - 1), 0][x == 0]
 (is_even 3, is_old 3)
@@ -199,10 +199,10 @@ is_old = x => [is_even (x - 1), 0][x == 0]
 ### `nested_function.lichen`
 
 ```text
-@{
+---
   order = "2"
   output = "[1, 1]: array<Int, 2>"
-@}
+---
 f1 = x => {
     f2 = y => [y, y]
     f2 x 
@@ -213,10 +213,10 @@ f1 1
 ### `recursion.lichen`
 
 ```text
-@{
+---
   order = "2"
   output = "55: Int"
-@}
+---
 fib = x => [fib (x - 1) + fib (x - 2), x][x <= 1]
 fib 10
 ```
@@ -224,10 +224,10 @@ fib 10
 ### `placeholder.lichen`
 
 ```text
-@{
+---
   order = "3"
   output = "Function: <Type, Int> -> Int"
-@}
+---
 f1 = x => x : Int
 f2 = x => {
     x: <Type, _>
@@ -239,10 +239,10 @@ f2
 ### `struct.lichen`
 
 ```text
-@{
+---
   order = "3"
   output = "(struct<.x Int, .y Type>, (1, Int), 1, Int, struct<.x Int>, (1,), 1): <TypeStruct, struct<.x Int, .y Type>, Int, Type, TypeStruct, struct<.x Int>, Int>"
-@}
+---
 A = struct<.x Int, .y Type>
 a = A(.x 1, .y Int)
 B = struct<.x Int>
@@ -253,10 +253,10 @@ b = B(.x 1,)
 ### `struct_recursion.lichen`
 
 ```text
-@{
+---
   order = "3"
   output = "(struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, struct<Type, …>>>, (1, (Int, (1, …))), (Int, (1, …))): <TypeStruct, TypeStruct, struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, …>>>"
-@}
+---
 A = struct<Int, B>
 B = struct<Type, A>
 a = A(1, b)
@@ -267,7 +267,7 @@ b = B(Int, a)
 ### `struct_generic.lichen`
 
 ```text
-@{
+---
   order = "4"
   doc = "A struct constructor is generic: `Box t` (juxtaposition — a space, not a
 parenthesized argument) builds the *same* nominal type for every field
@@ -276,7 +276,7 @@ type — the `Fresh` id is per occurrence and shared, so `Box Int` and
 their type (the shared kind).  They therefore coexist in one homogeneous
 tuple."
   output = "(struct<Int>, struct<Type>, struct<Int>): <TypeStruct, TypeStruct, TypeStruct>"
-@}
+---
 Box = t => struct<t>
 (Box Int, Box Type, Box Int)
 ```
@@ -284,10 +284,10 @@ Box = t => struct<t>
 ### `table.lichen`
 
 ```text
-@{
+---
   order = "4"
   output = "(10, 20): <Int, Int>"
-@}
+---
 t = table{ [1, 2] ==> 10, [3, 4] ==> 20 }
 (t{[1, 2]}, t{[3, 4]})
 ```
@@ -295,22 +295,22 @@ t = table{ [1, 2] ==> 10, [3, 4] ==> 20 }
 ### `import`
 
 ```text
-@{
+---
   order = "5"
   math = import "math.lichen"
   geo = import "geometry.lichen"
   output = "(42, 10, 7): <Int, Int, Int>"
-@}
+---
 (math.succ 41, geo.double 5, geo.inc_twice 5)
 ```
 
 #### `import/math.lichen`
 
 ```text
-@{
+---
   order = "0"
   output = "(Function, Function): struct<.succ Int -> Int, .add Int -> Int -> Int>"
-@}
+---
 succ = x => x + 1
 add = x => y => x + y
 ```
@@ -318,11 +318,11 @@ add = x => y => x + y
 #### `import/geometry.lichen`
 
 ```text
-@{
+---
   order = "1"
   math = import "math.lichen"
   output = "(Function, Function): struct<.double Int -> Int, .inc_twice Int -> Int>"
-@}
+---
 double = x => math.add x x
 inc_twice = x => math.succ (math.succ x)
 ```
@@ -330,10 +330,10 @@ inc_twice = x => math.succ (math.succ x)
 ### `type_of.lichen`
 
 ```text
-@{
+---
   order = "5"
   output = "(Int, Type, Int, array<Int, 2>, Type, 5): <Type, Type, Type, TypeArray, Type, Int>"
-@}
+---
 f = type_of
 g = x => type_of x
 n = 5 : type_of (1)
@@ -343,20 +343,20 @@ n = 5 : type_of (1)
 ### `perspective.lichen`
 
 ```text
-@{
+---
   order = "6"
   output = "3 # 2: Int"
-@}
+---
 ((1 # 4) + (2 # 6)) # 2
 ```
 
 ### `assert.lichen`
 
 ```text
-@{
+---
   order = "7"
   output = "(1, 5): <Int, Int>"
-@}
+---
 n = 5
 (! (n <= 5), n)
 ```
@@ -364,10 +364,10 @@ n = 5
 ### `assert_in_function.lichen`
 
 ```text
-@{
+---
   order = "8"
   output = "1: Int"
-@}
+---
 f = x => ! (x <= 10)
 f 5
 ```
@@ -375,11 +375,11 @@ f 5
 ### `compute_jit.lichen`
 
 ```text
-@{
+---
   order = "9"
   compute = import "compute.lichen"
   output = "8: Int"
-@}
+---
 k_double = compute.jit (y => y + y)
 k_outer  = compute.jit (x => compute.launch k_double (x + 1))
 compute.launch k_outer 3
@@ -388,10 +388,10 @@ compute.launch k_outer 3
 ### `doc.lichen`
 
 ```text
-@{
+---
   order = "10"
   output = "5 # 4 ? tag = 7: Int"
-@}
+---
 Doc = struct<.tag Int>
 five = 5 # 8 ? Doc(.tag 7)
 five # 4
@@ -400,20 +400,20 @@ five # 4
 ### `raw_index.lichen`
 
 ```text
-@{
+---
   order = "11"
   output = "(Int, string, Int, string): <Type, Type, Type, Type>"
-@}
+---
 (<Int, string><0>, <Int, string><1>, struct<Int, string><0>, struct<Int, string><1>)
 ```
 
 ### `raw_field.lichen`
 
 ```text
-@{
+---
   order = "12"
   output = "(Int, string, 1): <Type, Type, Int>"
-@}
+---
 S = struct<.a Int, .b string>
 s = S(.a 1, .b "h")
 (S::a, S::b, s.a)
@@ -422,7 +422,7 @@ s = S(.a 1, .b "h")
 ### `gcd.lichen`
 
 ```text
-@{
+---
   order = "13"
   doc = "Euclid's algorithm — the shape a real algorithm has: a recursive function
 whose base case is a comparison and whose step is a remainder.  The parameter is a
@@ -432,7 +432,7 @@ without `: <Int, Int> -> Int` the program computes the right number and reports
 its type as undetermined (`6: ?a`) — the language's answer to a recursive
 definition is to write its type out, exactly as an ML-family language needs."
   output = "6: Int"
-@}
+---
 gcd = (p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : <Int, Int> -> Int
 gcd (48, 18)
 ```
@@ -440,7 +440,7 @@ gcd (48, 18)
 ### `operators.lichen`
 
 ```text
-@{
+---
   order = "14"
   doc = "The arithmetic, comparison and bitwise operators, and the two precedence
 facts worth knowing: `* / %` bind tighter than `+ -`, and a comparison is the
@@ -448,7 +448,7 @@ loosest binary level — so `1 & 3 == 1` is `(1 & 3) == 1`.  `& | ^` over two
 comparison results are the language's `and`/`or`/`xor`, and `!=` is the
 generalized equality's other face, so it compares type values too."
   output = "(7, 3, 1, 3, 0, 1, 2, 1, Int): <Int, Int, Int, Int, Int, Int, Int, Int, Type>"
-@}
+---
 (1 + 2 * 3, 7 / 2, 7 % 2, 1 | 2 ^ 3 & 1, (2 > 1) & (2 < 1), (1 < 2) == 1, 6 & 3, Int != string, Int)
 ```
 

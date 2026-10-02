@@ -1,6 +1,6 @@
 //! The preprocessor, re-exported from the isolated [`lichen_preprocess`] crate.
 //!
-//! The `@{...@}` block scanner, its mini-frontend, the `Directive` grammar, the
+//! The `---...---` block scanner, its mini-frontend, the `Directive` grammar, the
 //! `Depend` git-dependency type, and the preprocessor's import path
 //! ([`lichen_preprocess::lichendir`] / [`lichen_preprocess::sources_root`])
 //! all live in `crates/lichen-preprocess`.  This module is a thin shim that
@@ -41,7 +41,7 @@ pub type ResolvedImport = lichen_preprocess::ResolvedImport<StaticNodeId>;
 /// The language crate pins the preprocessor's output to its static node id.
 pub type Preprocessed<'a> = lichen_preprocess::Preprocessed<'a, StaticNodeId>;
 
-/// Preprocess a project source: cut the leading `@{…@}` block, resolve its
+/// Preprocess a project source: cut the leading `---…---` block, resolve its
 /// `import` bindings through `store` (whose vendored dependency aliases have
 /// already been registered by the compiler against the source cache), and
 /// collect the block's string metadata.

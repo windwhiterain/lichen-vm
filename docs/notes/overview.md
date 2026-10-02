@@ -57,5 +57,5 @@ lichen-utils      shared extension plumbing (enum_ext!, disjoint, compose)
 - The compiler-plugin model (how a native package extends the vocabularies):
   [compiler-plugin](compiler-plugin.md) — with [lichen-compute](lichen-compute.md) as the
   worked example.
-- The source language and the `@{…@}` preprocessor block:
+- The source language and the `---…---` preprocessor block:
   [the spec](../language-spec.md) and [packages](packages.md).

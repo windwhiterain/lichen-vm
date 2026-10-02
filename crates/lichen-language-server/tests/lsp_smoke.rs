@@ -281,7 +281,7 @@ fn relative_imports_resolve_via_the_document_uri() {
     let main_path = write(
         &dir,
         "main.lichen",
-        "@{\n  math = import \"math.lichen\"\n@}\nmath.succ 41\n",
+        "---\n  math = import \"math.lichen\"\n---\nmath.succ 41\n",
     );
     let uri = Url::from_file_path(&main_path).unwrap();
 

@@ -80,12 +80,12 @@ fn cache_round_trip_across_stores() {
     write(
         &dir,
         "middle.lichen",
-        "@{inc = import \"inner.lichen\"@}x => inc x\n",
+        "---inc = import \"inner.lichen\"---x => inc x\n",
     );
     let main_path = write(
         &dir,
         "main.lichen",
-        "@{f = import \"middle.lichen\"@}f 41\n",
+        "---f = import \"middle.lichen\"---f 41\n",
     );
     let cache = dir.join("cache");
 
@@ -125,8 +125,8 @@ fn incremental_recompile_only_touches_the_changed_chain() {
     // the recorded dependency graph and loads from the cache unchanged.
     let dir = temp_dir("incremental");
     write(&dir, "c.lichen", "40\n");
-    write(&dir, "b.lichen", "@{c = import \"c.lichen\"@}c + 1\n");
-    let a_path = write(&dir, "a.lichen", "@{b = import \"b.lichen\"@}b + 1\n");
+    write(&dir, "b.lichen", "---c = import \"c.lichen\"---c + 1\n");
+    let a_path = write(&dir, "a.lichen", "---b = import \"b.lichen\"---b + 1\n");
     let cache = dir.join("cache");
 
     let mut store1 = PackageStore::<LangProgram>::with_cache_dir(cache.clone());
@@ -134,7 +134,7 @@ fn incremental_recompile_only_touches_the_changed_chain() {
     assert_eq!(store1.compiled, 3);
     let c_key = handle_of(&store1, "c.lichen").key;
 
-    write(&dir, "b.lichen", "@{c = import \"c.lichen\"@}c + 2\n");
+    write(&dir, "b.lichen", "---c = import \"c.lichen\"---c + 2\n");
     let mut store2 = PackageStore::<LangProgram>::with_cache_dir(cache.clone());
     let a2 = store2.load_package(&a_path).unwrap();
     assert_eq!(store2.compiled, 2, "only B and A recompile");
@@ -440,7 +440,11 @@ fn a_package_that_imports_an_embedded_source_verifies_across_stores() {
     // dependency can never change under this cache root and must not force the
     // package to recompile on every run.
     let dir = temp_dir("embedded-dep");
-    let pkg_path = write(&dir, "pkg.lichen", "@{p = import \"plug.lichen\"@}p + 1\n");
+    let pkg_path = write(
+        &dir,
+        "pkg.lichen",
+        "---p = import \"plug.lichen\"---p + 1\n",
+    );
     let cache = dir.join("cache");
 
     let mut first = PackageStore::<LangProgram>::with_cache_dir(cache.clone());

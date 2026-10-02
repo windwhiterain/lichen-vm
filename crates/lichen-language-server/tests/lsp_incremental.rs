@@ -251,7 +251,7 @@ fn an_edit_to_an_imported_file_refreshes_the_answer() {
     let main = write(
         &dir,
         "main.lichen",
-        "@{\n  math = import \"math.lichen\"\n@}\nmath.succ 41\n",
+        "---\n  math = import \"math.lichen\"\n---\nmath.succ 41\n",
     );
     let uri = Url::from_file_path(&main).unwrap().to_string();
 

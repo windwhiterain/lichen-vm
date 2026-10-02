@@ -204,9 +204,9 @@ fn a_recording_produces_the_same_numbers_as_running_the_dispatches() {
     let (_guard, stub) = stub();
     // The direct answer first, from the same kernels run one at a time.
     let direct = run(&format!(
-        r#"@{{
+        r#"---
   compute = import "compute.lichen"
-@}}
+---
 {KERNELS}
 first = compute.plrun k1 (3,)
 out = compute.plrun k2 (3, (first,))
@@ -214,9 +214,9 @@ compute.collect out
 "#
     ));
     let through_a_graph = run(&format!(
-        r#"@{{
+        r#"---
   compute = import "compute.lichen"
-@}}
+---
 {KERNELS}
 {CHAIN}
 compute.collect (compute.graphrun built (3,))
@@ -245,9 +245,9 @@ fn a_graph_runs_at_whichever_extent_its_argument_names() {
     // not having one.
     for count in [3, 5] {
         let out = run(&format!(
-            r#"@{{
+            r#"---
   compute = import "compute.lichen"
-@}}
+---
 {KERNELS}
 {CHAIN}
 compute.collect (compute.graphrun built ({count},))
@@ -275,9 +275,9 @@ fn a_buffer_the_body_closed_over_is_refused_by_the_capture() {
     // refusal names the capture, because "a graph cannot hold a buffer" is the
     // reason, and a caller who does not hear it will try the next thing.
     let messages = fail(&format!(
-        r#"@{{
+        r#"---
   compute = import "compute.lichen"
-@}}
+---
 {KERNELS}
 held = compute.plrun k1 (3,)
 step = ins => {{
@@ -316,9 +316,9 @@ fn a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_on
     // The count is also read *first*, before the buffer tuple, so a refusal from
     // the count filter is the one that answers.
     let messages = fail(&format!(
-        r#"@{{
+        r#"---
   compute = import "compute.lichen"
-@}}
+---
 {KERNELS}
 held = compute.plrun k1 (3,)
 step = ins => {{
@@ -377,9 +377,9 @@ fn what_a_recorded_body_may_not_reach_for_is_refused_by_name() {
     // because it is the other half of the boundary: the recording sees what the
     // walk forces, and what the walk does not force is not in the graph.
     let collect = fail(&format!(
-        r#"@{{
+        r#"---
   compute = import "compute.lichen"
-@}}
+---
 {KERNELS}
 step = ins => {{
   pulled = compute.collect (compute.plrun k1 (ins(0),))
@@ -401,9 +401,9 @@ compute.collect (compute.graphrun built (3,))
     // A host read of a dispatch's own result, which is the same boundary at a
     // different size: one number instead of a whole buffer.
     let read = fail(&format!(
-        r#"@{{
+        r#"---
   compute = import "compute.lichen"
-@}}
+---
 {KERNELS}
 step = ins => {{
   at_zero = compute.read (compute.plrun k1 (ins(0),), 0)
@@ -424,9 +424,9 @@ compute.collect (compute.graphrun built (3,))
     // A scalar kernel, refused outright rather than only when it is handed a
     // placeholder — it has no node to be, so no shape of it can go in.
     let scalar = fail(&format!(
-        r#"@{{
+        r#"---
   compute = import "compute.lichen"
-@}}
+---
 {KERNELS}
 one = compute.jit (cfg => cfg(0) + 1)
 step = ins => {{
@@ -468,9 +468,9 @@ fn a_function_that_dispatches_nothing_has_no_backend_to_run_on() {
     // backend to fall back to, and picking one would be the host overriding a
     // program that did not say.
     let messages = fail(
-        r#"@{
+        r#"---
   compute = import "compute.lichen"
-@}
+---
 step = ins => ins(0)
 built = compute.graph step
 compute.graphrun built (3,)
@@ -492,9 +492,9 @@ fn one_backend_for_the_whole_graph_is_checked_while_it_is_built() {
     // rather than at run time, where dropping one would silently change what the
     // program asked for.
     let messages = fail(
-        r#"@{
+        r#"---
   compute = import "compute.lichen"
-@}
+---
 f1 = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -557,9 +557,9 @@ fn a_graph_dispatches_exactly_what_the_program_dispatches() {
   compute.plrun k2 (ins(0), (first,))
 }"#;
     run(&format!(
-        r#"@{{
+        r#"---
   compute = import "compute.lichen"
-@}}
+---
 {KERNELS}
 {body}
 out = step (3,)
@@ -571,9 +571,9 @@ out = step (3,)
     // rather than the two runs stacked.
     stub.forget();
     run(&format!(
-        r#"@{{
+        r#"---
   compute = import "compute.lichen"
-@}}
+---
 {KERNELS}
 {body}
 built = compute.graph step
@@ -618,9 +618,9 @@ fn a_graph_recorded_for_one_backend_runs_on_another() {
     let (_guard, stub) = stub();
     let program = |backend: &str| {
         format!(
-            r#"@{{
+            r#"---
   compute = import "compute.lichen"
-@}}
+---
 f1 = cfg => {{
   n = cfg(0)
   i = compute.range n

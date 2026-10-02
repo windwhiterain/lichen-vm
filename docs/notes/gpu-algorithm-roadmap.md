@@ -127,7 +127,7 @@ its body) — deferred"*. **That comment describes the unreduced case, and the
 reduced case already works.** Measured, on unmodified `dev`:
 
 ```lichen
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 square = x => x * x
 p = compute.parallel (cfg => {
   n = cfg(0)

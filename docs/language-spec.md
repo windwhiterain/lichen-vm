@@ -104,7 +104,7 @@ farg     := '.' name expr                         -- named instantiation argumen
   tail expression), terminated by the end of the input — the end of the input is
   *not* a separator, it just ends the body.  `{` `}`
   delimit a block (a program-shaped expression).  **There are no comments:** the
-  lexer never skips any text, so prose lives in the file's leading `@{...@}`
+  lexer never skips any text, so prose lives in the file's leading `---...---`
   preprocessor block as metadata strings (see §2.2).  Whitespace (space/tab/cr)
   is trivia; `@` is reserved for the block delimiters and cannot appear in code
   outside a string.
@@ -283,12 +283,13 @@ delimiter is a fresh atom — an argument of an application:
   array type (`array<…>`) are *keyword-led*, so their delimiter sits directly
   after the keyword.
 
-### 2.2 The `@{...@}` preprocessor block
+### 2.2 The `---...---` preprocessor block
 
-A file may open with a single `@{...@}` block — once, before any code; a
-non-`@` prefix is allowed and ignored.  It is cut out of the source by a pure
-byte scan (independent of the lexer), so the language lexer/parser never see
-it.  Inside the block is a set of statements, Separator-separated:
+A file may open with a single `---...---` block — once, before any code; prose
+before it (a markdown header, say) is allowed and ignored.  It is cut out of the
+source by a pure byte scan (independent of the lexer), so the language
+lexer/parser never see it.  Inside the block is a set of statements,
+Separator-separated:
 
 - `name = import "path"` loads a package bound to `name` (the import namespace).
 - `name = "value"` defines a string metadata entry (the metadata namespace);
@@ -309,13 +310,17 @@ it.  Inside the block is a set of statements, Separator-separated:
   (which is what a `plug` implies).
 
 A string is `"…"` with no escape characters and may span newlines; its content
-is any character except `"` or `@`.  `@` is reserved for the block delimiters,
-so it cannot appear in the surrounding code or inside a string.  The block
-carries `order` / `output` / prose for the README tooling (see
-`crates/lichen-tools/src/readme.rs`).  The code to compile is the source
-after the block (or the whole source when there is no `@`); the preprocessor
-returns that borrowed slice plus a base byte offset so the lexer maps every
-span back to the original file.
+is any character except `"`.  The delimiters are `---`, which is free because
+**the language has no comments at all** — prose lives in this block — and
+`---` is reserved: it cannot appear in the surrounding code, nor before the
+block's own opening.  The block carries `order` / `output` / prose for the README
+tooling (see `crates/lichen-tools/src/readme.rs`).  The code to compile is the
+source after the block (or the whole source when there is none); the
+preprocessor returns that borrowed slice plus a base byte offset so the lexer
+maps every span back to the original file.
+
+`@` is **not** the block delimiter: it is the prefix every keyword carries
+(`@loop`, and every keyword after it), which is why the block moved to `---`.
 
 ## 3. Semantics
 
@@ -637,7 +642,7 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `t{k}` | `Find { container, key }` — the adjacent brace form; the entry whose stored key is deep-content-equal to `k` |
 | `X<e>` | `RawIndex { container, index }` — a raw, unvalidated element read |
 | `$name(args)` | `NativeCall { op, args }` — a native operator registered by the compiling module's plugin; `op` is a private name resolved only against that module's registry, and the checker adopts the `[value, type]` pair the plugin's builder returns |
-| a use of an `@{…@}`-imported package name, or of one of its direct exports | `Static { export }` — the value is read out of the shared registry by its export ref; the checker materializes the pair and leaves the payload in the package's static arena |
+| a use of an `---…---`-imported package name, or of one of its direct exports | `Static { export }` — the value is read out of the shared registry by its export ref; the checker materializes the pair and leaves the payload in the package's static arena |
 | `{ a = e; …; e }` | the final expression's own node — statements are scope-entered (bindings), then popped; a non-final statement list is wired into the root as `Index(Tuple([…, e]), n)` |
 | `{ x = 1; …; y = 2 }` (no tail) | `Record { value, names }` — a struct-returning block (the frontend's `RecordBlock` node): `value` is a tuple of the emitted field values and `names` a range of each field's optional name, index-aligned with the tuple; the checker builds the anonymous struct type from the element types |
 | `{ …; return e }` | the `return` expression's own node (the frontend's `Block` node carries it as the block's `expr`) — the block's value is its tail, and the `return` may sit anywhere among the statements |

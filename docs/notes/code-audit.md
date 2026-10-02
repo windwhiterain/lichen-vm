@@ -268,7 +268,7 @@ if let Some(rev) = rev { git_in(&dir_git, &["checkout", rev])?; }
 **no validation anywhere**. A source file containing
 
 ```lichen
-@{ x = depend "--upload-pack=<command>" @}
+--- x = depend "--upload-pack=<command>" ---
 x
 ```
 
@@ -911,7 +911,7 @@ should have had.
 
 *The premise held, and reachability is stronger than reported.* No artifact is
 needed. A package whose whole source is `[[1]]<0>` exports the inner array — a
-one-element array — and the importer `@{x = import "pkg.lichen"@}x` panicked at
+one-element array — and the importer `---x = import "pkg.lichen"---x` panicked at
 the unfixed `checker.rs:1280` with **"index out of bounds: the len is 1 but the
 index is 1"**. The neighbouring `[1, 2]<0>` case stays on the non-array side of
 the guard: its export is an unevaluated op node, so `array_items` answers
@@ -1202,7 +1202,7 @@ Both are load-bearing and were left untouched:
 
 *Reachability, and how `P1-14` widened it.* This is reachable from **ordinary
 source**, not a corrupt artifact: with `pkg.lichen` = `x => ! (x == 1)` and an
-importer `@{f = import "pkg.lichen"@}f 2`, the apply's assert clone fires in the
+importer `---f = import "pkg.lichen"---f 2`, the apply's assert clone fires in the
 *importer's* module with a `Static` template — measured: `build.ok == false`,
 `assert_errors == 1`, `eval_errors == 0`, `user_asserts == 0`, `diagnostics`
 empty. `ec9c4e4` (`P1-14`) is what puts `run` in this state: `evaluate`/

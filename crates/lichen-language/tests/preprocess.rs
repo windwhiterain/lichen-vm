@@ -11,7 +11,7 @@ use lichen_language::program::LangProgram;
 fn an_unfetched_dependency_is_not_reported_at_line_one() {
     // The alias is unique, so the package manager cannot have staged it into
     // `sources_root()`; `stage_depends` then reports the missing directory.
-    let source = "@{p5_13_unfetched_probe = depend \"https://example.invalid/probe.git\"@}\n42\n";
+    let source = "---p5_13_unfetched_probe = depend \"https://example.invalid/probe.git\"---\n42\n";
     let mut store = PackageStore::<LangProgram>::new();
     let diagnostics = stage_depends(&mut store, source);
     let diagnostic = diagnostics
@@ -39,8 +39,8 @@ fn a_dependency_sub_path_outside_its_clone_is_not_reported_at_line_one() {
     // The other resolution failure that fabricated the same position: `sub` is
     // free-form text from the source, rejected as not a relative path inside
     // the clone before the directory is ever looked at.
-    let source = "@{p5_13_sub_probe = depend \"https://example.invalid/probe.git\" \
-                  sub = \"../escape\"@}\n42\n";
+    let source = "---p5_13_sub_probe = depend \"https://example.invalid/probe.git\" \
+                  sub = \"../escape\"---\n42\n";
     let mut store = PackageStore::<LangProgram>::new();
     let diagnostics = stage_depends(&mut store, source);
     let diagnostic = diagnostics.first().expect("the bad sub path is reported");

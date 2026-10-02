@@ -1,4 +1,4 @@
-@{
+---
   order = "13"
   doc = "Euclid's algorithm — the shape a real algorithm has: a recursive function
 whose base case is a comparison and whose step is a remainder.  The parameter is a
@@ -8,6 +8,6 @@ without `: <Int, Int> -> Int` the program computes the right number and reports
 its type as undetermined (`6: ?a`) — the language's answer to a recursive
 definition is to write its type out, exactly as an ML-family language needs."
   output = "6: Int"
-@}
+---
 gcd = (p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : <Int, Int> -> Int
 gcd (48, 18)

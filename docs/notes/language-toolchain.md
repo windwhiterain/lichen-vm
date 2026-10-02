@@ -203,7 +203,7 @@ frontend stays a single source of truth for the *syntax*; resolution for
   dispatch, cancellation and error codes; the binary only decides how to answer
   each request.
 
-`Doc` is built by cutting the leading `@{…@}` block with `preprocess`, then
+`Doc` is built by cutting the leading `---…---` block with `preprocess`, then
 compiling the remainder with `frontend_at`/`build_report` (absolute spans). The
 server holds only the *source text* per open document and re-runs the frontend on
 demand in a blocking task, because `Doc` is `!Send` (it owns raw pointers into the
@@ -217,7 +217,7 @@ function calls / `.field` accesses) — into a `SemanticTokens` delta payload se
 by `textDocument/semanticTokens/full`. Because the LSP advertises the capability,
 an editor colors the buffer from the language's parser even where the tree-sitter
 grammar is absent; the grammar (when present) and the semantic tokens are
-complementary. The `@{…@}` preprocessor block is the one comment-like construct
+complementary. The `---…---` preprocessor block is the one comment-like construct
 and is colored as a comment.
 
 `tower-lsp` is a **non-default `server` feature** of this crate, and the `zed`

@@ -12,7 +12,7 @@
 The compiler binary is `lichen-compiler` (in `crates/lichen-compiler`, formerly
 the `lichen` binary).  The `lichen` name is now the **package manager**: a
 separate crate, `crates/lichen-package`, that resolves git dependencies from a
-file's own `@{…@}` block, fetches the toolchain binaries, and rebuilds the
+file's own `---…---` block, fetches the toolchain binaries, and rebuilds the
 compiler when a native plugin is imported.
 
 There is **no project manifest**: dependencies are declared per file.
@@ -22,7 +22,7 @@ There is **no project manifest**: dependencies are declared per file.
 - `lichen-compiler` (crates/lichen-compiler) — the command-line surface and the
   binary; the frontend, the package store, the persistent device cache and
   `run`/`build` live in the compiler library, `crates/lichen-language`.
-  Consumes the `@{…@}` block grammar and the `Depend` type from the isolated
+  Consumes the `---…---` block grammar and the `Depend` type from the isolated
   [`lichen-preprocess`](../../crates/lichen-preprocess/) crate (which owns the
   block *syntax* and the preprocessor import path).
 - `lichen` (crates/lichen-package) — the project workflow.  Owns the
@@ -33,14 +33,14 @@ There is **no project manifest**: dependencies are declared per file.
 
 ## Declaring dependencies
 
-Each file opens its `@{…@}` block with `name = depend "url"`:
+Each file opens its `---…---` block with `name = depend "url"`:
 
 ```lichen
-@{
+---
   math = depend "https://github.com/you/lic-math" rev = "abc123"
   gpu = depend "https://github.com/you/lic-gpu" plugin
   math = import "math"
-@}
+---
 …
 ```
 

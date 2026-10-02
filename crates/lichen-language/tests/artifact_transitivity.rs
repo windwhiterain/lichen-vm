@@ -71,7 +71,7 @@ fn a_dependency_change_rekeys_its_importer() {
     let geometry = write(
         &pkg,
         "geometry.lichen",
-        "@{\n  math = import \"math.lichen\"\n@}\ndouble = x => math.add x x\n",
+        "---\n  math = import \"math.lichen\"\n---\ndouble = x => math.add x x\n",
     );
 
     // First compile: everything is fresh.

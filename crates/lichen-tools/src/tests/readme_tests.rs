@@ -64,9 +64,9 @@ fn renders_the_tree_grouped_and_ordered() {
         "directories render as units ordered by their `_.lichen`, files by their `order =`"
     );
     // The face opens the directory: `_.lichen`'s whole file sits directly
-    // under the directory heading, `@{...@}` block included.
+    // under the directory heading, `---...---` block included.
     assert!(
-        blob.contains("### `pkg`\n\n```text\n@{"),
+        blob.contains("### `pkg`\n\n```text\n---"),
         "the directory's `_.lichen` is shown first inside the directory"
     );
     // The whole file is embedded, so its output metadata is what shows.
@@ -104,11 +104,11 @@ fn a_missing_example_directory_is_reported_not_a_panic() {
 #[test]
 fn declared_order_reads_the_block_anywhere() {
     assert_eq!(
-        declared_order(Path::new("a.lichen"), "@{order = \"2\"@}\nx"),
+        declared_order(Path::new("a.lichen"), "---order = \"2\"---\nx"),
         Some(2)
     );
     assert_eq!(
-        declared_order(Path::new("a.lichen"), "x\n@{order = \"42\"@}"),
+        declared_order(Path::new("a.lichen"), "x\n---order = \"42\"---"),
         Some(42)
     );
     assert_eq!(declared_order(Path::new("a.lichen"), "no order here"), None);
@@ -116,16 +116,16 @@ fn declared_order_reads_the_block_anywhere() {
 
 #[test]
 fn an_output_comment_is_replaced_in_place() {
-    let source = "@{order = \"2\"\noutput = \"stale\"@}\nrec f = x => x\nf 5\n";
+    let source = "---order = \"2\"\noutput = \"stale\"---\nrec f = x => x\nf 5\n";
     assert_eq!(
         replace_output_comment(source, "5: Int"),
-        "@{\n  order = \"2\"\n  output = \"5: Int\"\n@}\nrec f = x => x\nf 5\n"
+        "---\n  order = \"2\"\n  output = \"5: Int\"\n---\nrec f = x => x\nf 5\n"
     );
     // A multi-line output becomes a multi-line string.
-    let source = "@{output = \"x\ny\"@}\nb";
+    let source = "---output = \"x\ny\"---\nb";
     assert_eq!(
         replace_output_comment(source, "1\n2"),
-        "@{\n  output = \"1\n2\"\n@}\nb\n"
+        "---\n  output = \"1\n2\"\n---\nb\n"
     );
 }
 
@@ -134,20 +134,20 @@ fn a_missing_output_comment_is_appended() {
     let source = "rec f = x => x\nf 5\n";
     assert_eq!(
         replace_output_comment(source, "5: Int"),
-        "@{\n  output = \"5: Int\"\n@}\nrec f = x => x\nf 5\n"
+        "---\n  output = \"5: Int\"\n---\nrec f = x => x\nf 5\n"
     );
     // A file without a trailing newline still ends up clean.
     let source = "rec f = x => x\nf 5";
     assert_eq!(
         replace_output_comment(source, "5: Int"),
-        "@{\n  output = \"5: Int\"\n@}\nrec f = x => x\nf 5\n"
+        "---\n  output = \"5: Int\"\n---\nrec f = x => x\nf 5\n"
     );
 }
 
 #[test]
 #[should_panic]
 fn a_bad_order_value_panics() {
-    declared_order(Path::new("a.lichen"), "@{order = \"two\"@}");
+    declared_order(Path::new("a.lichen"), "---order = \"two\"---");
 }
 
 #[test]
@@ -156,17 +156,17 @@ fn declared_order_breaks_ties_by_name() {
         (
             "c.lichen".to_string(),
             PathBuf::from("c.lichen"),
-            "@{order = \"2\"@}".to_string(),
+            "---order = \"2\"---".to_string(),
         ),
         (
             "a.lichen".to_string(),
             PathBuf::from("a.lichen"),
-            "@{order = \"1\"@}".to_string(),
+            "---order = \"1\"---".to_string(),
         ),
         (
             "b.lichen".to_string(),
             PathBuf::from("b.lichen"),
-            "@{order = \"1\"@}".to_string(),
+            "---order = \"1\"---".to_string(),
         ),
         (
             "d.lichen".to_string(),

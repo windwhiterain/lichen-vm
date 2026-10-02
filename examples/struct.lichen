@@ -1,7 +1,7 @@
-@{
+---
   order = "3"
   output = "(struct<.x Int, .y Type>, (1, Int), 1, Int, struct<.x Int>, (1,), 1): <TypeStruct, struct<.x Int, .y Type>, Int, Type, TypeStruct, struct<.x Int>, Int>"
-@}
+---
 A = struct<.x Int, .y Type>
 a = A(.x 1, .y Int)
 B = struct<.x Int>

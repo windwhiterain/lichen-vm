@@ -374,7 +374,7 @@ by a seed kernel, at more than one length so that the trip count is demonstrably
 not a compile-time constant:
 
 ```lichen
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 loop sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + compute.read [buf, s(0) - 1])
 p = compute.parallel (cfg => { ... sum_to (cfg(0), 0) ... }) "BACKEND"
 ```

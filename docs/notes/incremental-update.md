@@ -713,7 +713,7 @@ session is a single-threaded object by construction — its value *is* the state
 compile left behind.
 
 **The caller's view.** The LSP must run the preprocessor itself (it owns the store and
-the `@{…@}` block's directive spans), so it hands the session the *code after the block*
+the `---…---` block's directive spans), so it hands the session the *code after the block*
 rather than a whole file: `BufferSession::set_view(code, base, line_starts, imports)`.
 Two things fell out of that:
 

@@ -1,7 +1,7 @@
 //! Git dependency fetching for the package manager.
 //!
 //! Dependencies are declared per-file as `depend "url"` directives in the
-//! `@{…@}` block.  Each is fetched with the `git` CLI (no libgit2 dependency)
+//! `---…---` block.  Each is fetched with the `git` CLI (no libgit2 dependency)
 //! into a **source cache under the lichen home** (`$LICHEN_HOME` or
 //! `~/.lichen`, the same root the compiler's static-module cache uses; see
 //! [`lichen_preprocess::lichendir`]).  A missing source is cloned, an

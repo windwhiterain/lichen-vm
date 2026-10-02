@@ -1,7 +1,7 @@
 //! The package manager's preprocessor surface, re-exported from the isolated
 //! [`lichen_preprocess`] crate.
 //!
-//! The `@{…@}` block scanner, its mini-frontend, the `Directive` grammar, the
+//! The `---…---` block scanner, its mini-frontend, the `Directive` grammar, the
 //! `Depend` git-dependency type, and the preprocessor's import path
 //! ([`lichen_preprocess::lichendir`] / [`lichen_preprocess::sources_root`])
 //! live in `crates/lichen-preprocess`.  The package manager **owns the

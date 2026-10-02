@@ -18,7 +18,7 @@
 // `a < b` as a comparison, and the comparison operators are new here.  See
 // `angle_tuple` — it is a second, glued `<` token, so the lexer settles it.
 //
-// The preprocessor block `@{ name = "value" | name = import "path" ... @}`
+// The preprocessor block `--- name = "value" | name = import "path" ... ---`
 // is the only "comment-like" construct; it is parsed as its own node so doc
 // strings can be highlighted.
 //
@@ -70,12 +70,14 @@ module.exports = grammar({
       optional($.statements),
     ),
 
-    // -- the @{ ... @} preprocessor block ----------------------------------
+    // -- the --- ... --- preprocessor block ----------------------------------
+    // The delimiter is symmetric, so the two ends are the same token and are
+    // told apart by alias rather than by spelling.
     preprocess_block: $ => seq(
-      '@{',
+      alias('---', 'block_open'),
       optional($.separator),
       repeat(seq($.pp_entry, optional($.separator))),
-      '@}',
+      alias('---', 'block_close'),
     ),
 
     pp_entry: $ => choice(

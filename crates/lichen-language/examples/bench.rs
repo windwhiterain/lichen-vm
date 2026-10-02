@@ -21,7 +21,7 @@ fn run(source: &str) -> Result<String, Vec<String>> {
 /// `mk` fills a buffer; `axpy` is one `y = 3x + y` dispatch and the answer is
 /// read back, so a run pays an upload, a dispatch and a download.
 const ONE: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 mk = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -42,7 +42,7 @@ compute.read [out, COUNT / 2]
 
 /// The same input, then sixteen dependent links recorded as one `compute.graph`.
 const CHAIN: &str = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 mk = cfg => {
   n = cfg(0)
   i = compute.range n

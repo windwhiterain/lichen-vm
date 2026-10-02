@@ -29,9 +29,9 @@ fn parallel_rejects_an_unknown_backend_name() {
     // accepted, rather than defaulted to a backend the author did not name.
     let diags = fail(
         r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 f = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -58,9 +58,9 @@ fn parallel_rejects_a_non_string_backend() {
     // runtime parse's authority. A number is not a backend name.
     let diags = fail(
         r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 f = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -82,9 +82,9 @@ fn jit_then_launch_scalar() {
     // `compute.jit` is `jit` — compiles the lambda to a wasm kernel; `launch k 5`
     // runs it and yields `6`, typed `Int`.
     let out = run(r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 k = compute.jit (x => x + 1)
 compute.launch k 5
 "#);
@@ -95,9 +95,9 @@ compute.launch k 5
 fn jit_multi_op_signature() {
     // A body of several scalar operations: `x + 1 + 2`.
     let out = run(r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 k = compute.jit (x => x + 1 + 2)
 compute.launch k 5
 "#);
@@ -109,9 +109,9 @@ fn jit_rejects_a_non_function() {
     // `jit` requires a function argument (the function-ness gate).
     let diags = fail(
         r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 compute.jit 5
 "#,
     );
@@ -126,9 +126,9 @@ fn launch_rejects_a_non_kernel() {
     // `launch` requires a kernel target (the kernel-ness gate).
     let diags = fail(
         r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 compute.launch (x => x + 1) 5
 "#,
     );
@@ -143,9 +143,9 @@ fn jit_multi_arg_tuple() {
     // A tuple-domain kernel: `(p : <Int, Int> => p(0) + p(1))` compiles to
     // a wasm `(i64, i64) -> i64` and launches with a 2-tuple argument.
     let out = run(r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 k = compute.jit (p : <Int, Int> => p(0) + p(1))
 compute.launch k (5, 3)
 "#);
@@ -155,9 +155,9 @@ compute.launch k (5, 3)
 #[test]
 fn jit_multi_arg_ternary() {
     let out = run(r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 k = compute.jit (p : <Int, Int, Int> => p(0) + p(1) + p(2))
 compute.launch k (5, 3, 2)
 "#);
@@ -167,9 +167,9 @@ compute.launch k (5, 3, 2)
 #[test]
 fn jit_multi_arg_sub() {
     let out = run(r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 k = compute.jit (p : <Int, Int> => p(0) - p(1))
 compute.launch k (10, 3)
 "#);
@@ -183,9 +183,9 @@ fn launch_rejects_wrong_arity() {
     // `<Int, Int>`, so a scalar `Int` fails.
     let diags = fail(
         r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 k = compute.jit (p : <Int, Int> => p(0) + p(1))
 compute.launch k 5
 "#,
@@ -202,9 +202,9 @@ fn jit_closes_over_constant() {
     // values are graph-shared, so the body references the value node in place
     // and the JIT lowers it to `i64.const`).
     let out = run(r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 a = 42
 k = compute.jit (x => x + a)
 compute.launch k 1
@@ -217,9 +217,9 @@ fn jit_multi_arg_all_ops() {
     // A tuple-domain body mixing `+`, `-`, `<=` and a constant.
     // (5 + 3) - (5 <= 3) = 8 - 0 = 8.
     let out = run(r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 k = compute.jit (p : <Int, Int> => (p(0) + p(1)) - (p(0) <= p(1)))
 compute.launch k (5, 3)
 "#);
@@ -242,7 +242,7 @@ fn jit_lowers_the_arithmetic_comparison_and_bitwise_operators() {
     // not tolerate (a pre-existing wart, unrelated to these operators — the
     // same program fails on `dev`), so this test does not depend on it.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k1 = compute.jit (x => ((x * 3) % 7) + (x / 2) + ((x < 5) & (x > 1)))
 k2 = compute.jit (p : <Int, Int> => p(0) > p(1))
 k3 = compute.jit (p : <Int, Int> => p(0) >= p(1))
@@ -262,9 +262,9 @@ fn jit_conditional_then() {
     // `if x <= 3 then 10 else 20` lowers to `[20, 10][x <= 3]` — a 2-element
     // array index the JIT lowers to a wasm `select`.
     let out = run(r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 k = compute.jit (x => if x <= 3 then 10 else 20)
 compute.launch k 2
 "#);
@@ -274,9 +274,9 @@ compute.launch k 2
 #[test]
 fn jit_conditional_else() {
     let out = run(r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 k = compute.jit (x => if x <= 3 then 10 else 20)
 compute.launch k 5
 "#);
@@ -289,9 +289,9 @@ fn jit_nested_tuple_domain() {
     // three wasm i64 locals, and `p(0)(0) + p(0)(1) + p(1)` reads them at
     // their flattened offsets (0, 1, 2).  Exercises recursive LowShape.
     let out = run(r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 k = compute.jit (p : <<Int, Int>, Int> => p(0)(0) + p(0)(1) + p(1))
 compute.launch k ((2, 3), 4)
 "#);
@@ -309,9 +309,9 @@ fn jit_cross_kernel_call() {
     // wrapper form `compute.launch k0 (x + 1)` *does* give `Int` — covered by
     // `jit_cross_kernel_wrapper` below.
     let out = run(r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 k0 = compute.jit (y => y + 1)
 k1 = compute.jit (x => k0 (x + 1))
 compute.launch k1 5
@@ -329,7 +329,7 @@ fn jit_cross_kernel_subexpr() {
     // extraction), which the JIT now looks through to emit the kernel call
     // directly:   launch k1 5 = k0(5) + 1 = 6 + 1 = 7.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k0 = compute.jit (y => y + 1)
 k1 = compute.jit (x => k0 (x) + 1)
 compute.launch k1 5
@@ -346,7 +346,7 @@ fn jit_inline_lichen_function() {
     // becomes a `local.get`.  `helper x + 1` → `(x + 2) + 1`:
     //   launch k 5 = (5 + 2) + 1 = 8.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 helper = y => y + 2
 k = compute.jit (x => helper x + 1)
 compute.launch k 5
@@ -364,7 +364,7 @@ fn jit_cross_kernel_wrapper() {
     // through the cell's equality class:  launch k1 5 = k0(5 + 1) = 7.
     // Unlike the bare `k x` apply, the wrapper's result is typed `Int`.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k0 = compute.jit (y => y + 1)
 k1 = compute.jit (x => compute.launch k0 (x + 1))
 compute.launch k1 5
@@ -382,7 +382,7 @@ fn jit_cross_kernel_tuple_argument() {
     // signature, so nothing in the body decides `x` (the wrapper `launch` of
     // the test below does, through `.sig`).
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k0 = compute.jit (p : <Int, Int> => p(0) + p(1))
 k1 = compute.jit (x : Int => k0 (x, 1))
 compute.launch k1 5
@@ -400,7 +400,7 @@ fn jit_cross_kernel_passes_the_parameter_through() {
     // caller's `q` *is* the callee's `p`:
     //   launch k1 (9, 4) = k0(9, 4) = 9 - 4 = 5.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k0 = compute.jit (p : <Int, Int> => p(0) - p(1))
 k1 = compute.jit (q : <Int, Int> => k0 q)
 compute.launch k1 (9, 4)
@@ -418,7 +418,7 @@ fn jit_cross_kernel_passes_a_sub_tuple_through() {
     // the callee's three arguments are locals 1, 2 and 3:
     //   launch k1 (100, ((9, 4), 5)) = k0((9, 4), 5) = 9 - 4 + 5 = 10.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k0 = compute.jit (p : <<Int, Int>, Int> => p(0)(0) - p(0)(1) + p(1))
 k1 = compute.jit (r : <Int, <<Int, Int>, Int>> => k0 r(1))
 compute.launch k1 (100, ((9, 4), 5))
@@ -436,7 +436,7 @@ fn jit_cross_kernel_tuple_argument_through_the_wrapper() {
     // reached through the cell's equality class rather than as an array value:
     //   launch k1 5 = k0(5, 1) = 6.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k0 = compute.jit (p : <Int, Int> => p(0) + p(1))
 k1 = compute.jit (x => compute.launch k0 (x, 1))
 compute.launch k1 5
@@ -453,7 +453,7 @@ fn jit_inline_nested_function() {
     // the leaf arithmetic, so `b x + 1` → `(x + 1) + 1 + 1`:
     //   a = y => y + 1;  b = y => a y + 1;  launch k 5 = (((5 + 1) + 1) + 1) = 8.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 a = y => y + 1
 b = y => a y + 1
 k = compute.jit (x => b x + 1)
@@ -470,7 +470,7 @@ fn a_kernel_value_and_type_render_by_name() {
     // `struct<.native <_>, .sig Int -> Int>`.  Dropping `TypeKernel` means no
     // renderer special-case — the struct's own fields carry the signature.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k = compute.jit (y => y + y)
 k
 "#);
@@ -488,7 +488,7 @@ fn jit_tuple_codomain_returns_several_values() {
     // them — the two facts are the same count, read from the body at compile
     // time and from the run at launch time.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k = compute.jit (p : <Int, Int> => (p(0), p(1)))
 compute.launch k (5, 3)
 "#);
@@ -505,7 +505,7 @@ fn jit_tuple_codomain_computes_each_leaf() {
     // as the wrong expression — or read from the wrong stack slot — would show
     // here.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k = compute.jit (p : <Int, Int> => (p(0), p(0) + p(1)))
 compute.launch k (5, 3)
 "#);
@@ -520,7 +520,7 @@ fn jit_tuple_codomain_elements_are_indexable() {
     // The tuple the launch returns is an ordinary lichen array value, so a
     // downstream read addresses a leaf by position with no special case.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k = compute.jit (p : <Int, Int> => (p(0) + 10, p(1) + 100))
 r = compute.launch k (2, 3)
 (r(0), r(1))
@@ -537,7 +537,7 @@ fn jit_three_value_codomain_returns_three_values() {
     // wasm signature from the two-value one, which is what forces the assembler
     // to key its type index on the (parameter arity, result arity) *pair*.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k = compute.jit (x : Int => (x, x + 1, x + 2))
 compute.launch k 7
 "#);
@@ -557,7 +557,7 @@ fn jit_tuple_codomain_launches_through_the_cross_kernel_wrapper() {
     // not by the gate), so the type is undecided here — the same fact
     // `jit_cross_kernel_call` pins for the single-value case.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k = compute.jit (p : <Int, Int> => (p(0) - p(1), p(0) + p(1)))
 compute.call k (10, 4)
 "#);
@@ -576,7 +576,7 @@ fn jit_refuses_a_cross_kernel_call_to_a_multi_value_kernel() {
     // (which would answer `p(0)` here and look like it worked).
     let messages = fail(
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k0 = compute.jit (p : <Int, Int> => (p(0), p(1)))
 k1 = compute.jit (q : <Int, Int> => compute.launch k0 q)
 compute.launch k1 (5, 3)
@@ -603,7 +603,7 @@ fn a_tuple_domain_kernel_type_renders_as_a_function() {
     // `.sig` field carries it, so the type renders as the struct
     // `struct<.native <_>, .sig <Int, Int> -> Int>`.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k = compute.jit (p : <Int, Int> => p(0) + p(1))
 k
 "#);
@@ -622,7 +622,7 @@ fn wrapper_functions_render_with_named_type_variables() {
     // an *applied* result resolves to `Int -> Int`.
     assert_eq!(
         run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 compute.jit
 "#),
         "Function: ?a -> ?b -> struct<.native [?c, ?d], .sig ?a -> ?b>",
@@ -633,7 +633,7 @@ compute.jit
     // module level) — the concrete codomain only resolves when applied.
     assert_eq!(
         run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 compute.launch
 "#),
         "Function: ?a -> ?b -> ?c",
@@ -648,9 +648,9 @@ fn parallel_range_write_is_map() {
     // over `[0, cfg(0))` (the count is fixed at cfg position 0) and returns the
     // output buffer.  `out = [0, 2, 4, 6]`; `read [out, 2] = 4`.
     let out = run(r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 f = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -669,9 +669,9 @@ fn parallel_read_input_buffer() {
     // (`cfg(1)(0)`, the input buffer tuple at cfg position 1) and doubles it.
     //   f2: out[i] = f1.out[i] + f1.out[i] = (i + 10) + (i + 10).
     let out = run(r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 f1 = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -699,9 +699,9 @@ compute.read [out, 1]
 fn parallel_write_only_collects_whole_buffer() {
     // `compute.collect out` materialises the whole output buffer into an array.
     let out = run(r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 f = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -727,9 +727,9 @@ fn a_refused_plrun_count_says_why() {
     // here, so the message has to name it.
     let messages = fail(
         r#"
-@{
+---
   compute = import "compute.lichen"
-@}
+---
 f = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -762,7 +762,7 @@ fn a_refused_call_argument_element_says_why() {
     // message must name.
     let messages = fail(
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k = compute.jit (x => x + 1)
 compute.call k (1, (2, "three"))
 "#,
@@ -793,7 +793,7 @@ fn a_refused_call_argument_shape_says_why() {
     // argument must be and what this one was.
     let messages = fail(
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k = compute.jit (x => x + 1)
 compute.call k "hello"
 "#,
@@ -821,7 +821,7 @@ fn a_refused_call_run_says_why() {
     // has to state them rather than report that the count was wrong.
     let messages = fail(
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 k = compute.jit (p : <Int, Int> => p(0) + p(1))
 compute.call k (1, 2, 3)
 "#,
@@ -848,7 +848,7 @@ fn parallel_multi_output_writes_every_output_in_one_pass() {
     // produces two output buffers: write `k` of the body is output buffer `k`
     // (`out(k)`), and both come out of the single pass over the indices.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 f = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -870,7 +870,7 @@ fn parallel_multi_output_collects_each_output() {
     // one output buffer whole, which is the point of a multi-output kernel — a
     // single pass emitting several result columns.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 f1 = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -912,7 +912,7 @@ fn a_multi_output_parallel_run_is_identical_sequential_and_parallel() {
     // `lichen-compute`'s `parallel_worker_count`, unit-tested there; no
     // lichen-level value can distinguish the two, which is the point.)
     let small = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 f = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -927,7 +927,7 @@ outs = compute.plrun k (4,)
         "the sequential multi-output run produced: {small:?}"
     );
     let big = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 f = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -956,7 +956,7 @@ fn a_parallel_run_over_the_threshold_covers_every_index() {
     // **both** output buffers: a worker that wrote into the wrong span, or one
     // that was skipped, cannot produce those values.
     let out = run(r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 f = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -987,7 +987,7 @@ fn a_write_inside_a_conditional_is_refused() {
     // run and does not silently produce one output buffer.
     let messages = fail(
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 f = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -1017,7 +1017,7 @@ fn an_output_position_that_is_not_a_write_is_refused() {
     // position, not by a generic "unsupported kernel" message.
     let messages = fail(
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 f = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -1055,7 +1055,7 @@ compute.read [outs(0), 2]
 fn a_program_value_where_a_buffer_belongs_is_refused() {
     let messages = fail(
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 data = [3, 1, 4, 1, 5, 9, 2, 6]
 f = cfg => {
   n = cfg(0)
@@ -1115,7 +1115,7 @@ fn a_gpu_program_chains_two_kernels_on_a_device() {
     }
 
     let source = r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 f1 = cfg => {
   n = cfg(0)
   i = compute.range n
