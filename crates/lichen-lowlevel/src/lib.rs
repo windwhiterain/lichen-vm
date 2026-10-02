@@ -153,9 +153,15 @@ pub trait GlobalExt: Default {}
 /// travels with the element through GC and apply clones, and
 /// [`Module::evaluate_node_deep`] skips the subtree of a marked element, so
 /// the element stays lazy until a read forces it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 pub enum LowValue {
     USize(usize),
+    /// A machine float — the lowlevel's only non-integer number.  `f32` is one
+    /// packed buffer component's width, so a buffer handoff is a copy rather
+    /// than a conversion.  It is a scalar like `USize`: no handle, no arena
+    /// payload, no GC edge, and no conversion to or from `USize`
+    /// (`docs/notes/floating-point.md` §4.1, §4.2).
+    Float(f32),
     /// An immutable string literal — the builtin `string` value.  The content
     /// is a `&'static str` (the source-owned literal is leaked once), so the
     /// variant is `Copy` like the other scalars and needs no arena relocation
@@ -182,6 +188,47 @@ pub enum LowValue {
     /// unit value and the unbound [`Self::Parameterized`] marker.
     Void,
     Parameterized,
+}
+
+/// Value identity as the lowlevel decides it: field-wise like the derive, with
+/// one variant deliberately different — a float compares by its 32 bits, never
+/// by IEEE `==`.
+///
+/// # The invariant: a float compares by its 32 bits
+///
+/// Every other variant compares field-wise, exactly as the derive would; the
+/// float compares by [`f32::to_bits`], so `0.0 != -0.0` (two bit patterns, so
+/// two values) and two equal `NaN` bit patterns are one value (`NaN == NaN`
+/// here, where IEEE `==` refuses).
+///
+/// That is the relation the three readers of this identity need, and all three
+/// compare a value against one the artifact codec reproduced **bit for bit**
+/// (tag `8`, `codec.rs`): whether two classes unify on one concrete value
+/// (`equality.rs`, via [`ValueExt::value_eq`]), whether two table keys are the
+/// same content ([`Module::key_eq`]), and whether a frozen artifact is the
+/// value a load is reusing.  "Equal but not the same bits" would let reuse
+/// accept one of two distinct artifacts, and IEEE `NaN != NaN` would make a
+/// cached `NaN` never match its own reload.  The content hash owes the one
+/// direction this forces — equal keys hash equal — and pays it by hashing the
+/// bits (`table.rs`, `hash_step`).
+///
+/// The language's `==` over floats is a separate relation, owned by the
+/// operator set (`docs/notes/floating-point.md` §3.7), and is not this one.
+impl PartialEq for LowValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (LowValue::Float(a), LowValue::Float(b)) => a.to_bits() == b.to_bits(),
+            (LowValue::USize(a), LowValue::USize(b)) => a == b,
+            (LowValue::Str(a), LowValue::Str(b)) => a == b,
+            (LowValue::Array(a), LowValue::Array(b)) => a == b,
+            (LowValue::Table(a), LowValue::Table(b)) => a == b,
+            (LowValue::Function(a), LowValue::Function(b)) => a == b,
+            (LowValue::None, LowValue::None) => true,
+            (LowValue::Void, LowValue::Void) => true,
+            (LowValue::Parameterized, LowValue::Parameterized) => true,
+            _ => false,
+        }
+    }
 }
 
 /// A host-side, **optional** static shape of a node's eventual value.
@@ -215,6 +262,12 @@ pub enum LowShape {
     /// A machine scalar (`USize`; the kernel-safe scalar subset) — `i64` in
     /// the wasm backend.
     USize,
+    /// A machine float — a decided shape beside [`LowShape::USize`] and part of
+    /// the same scalar subset: a float with no shape is a float no backend can
+    /// trace.  It takes no rule of its own in [`LowShape::join`]: the two are
+    /// different decided shapes, which the lattice already sends to
+    /// [`LowShape::Unknown`] (`docs/notes/floating-point.md` §3.8).
+    Float,
     /// A heterogeneous fixed-arity tuple.  A kernel whose domain is a tuple
     /// has shape `Tuple(..)` and arity = `self.len()`.
     Tuple(Vec<LowShape>),
@@ -392,12 +445,13 @@ pub enum LowOperator {
 }
 
 /// The cheap, structural equality a value vocabulary must provide —
-/// marker/`USize` variants compare by their fields, handle payloads compare
-/// by pointer identity ([`Handle`]'s [`PartialEq`]).  It decides the fast
-/// checks (`is_unbound`, kind-marker lookups); the *full* equality
-/// unification merges on is [`ValueExt::value_eq`], which compares handle
-/// payloads by content.  Equality *through* arrays is not any `==`'s job —
-/// unification recurses into them elementwise.
+/// marker/`USize` variants compare by their fields, a float by its bits
+/// ([`LowValue`]'s [`PartialEq`]), handle payloads compare by pointer identity
+/// ([`Handle`]'s [`PartialEq`]).  It decides the fast checks (`is_unbound`,
+/// kind-marker lookups); the *full* equality unification merges on is
+/// [`ValueExt::value_eq`], which compares handle payloads by content.
+/// Equality *through* arrays is not any `==`'s job — unification recurses into
+/// them elementwise.
 ///
 /// # Contract
 ///

@@ -291,6 +291,9 @@ impl<P: Program> Module<P> {
         };
         match value.as_enum() {
             Some(LowValue::USize(n)) => KeyState::Hashed(mix(n as u64)),
+            // A float hashes by the same bits `key_eq` compares it with, which
+            // is what the hash owes: equal keys hash equal.
+            Some(LowValue::Float(n)) => KeyState::Hashed(mix(n.to_bits() as u64)),
             // A string key hashes by its byte content.
             Some(LowValue::Str(s)) => KeyState::Hashed(mix(s
                 .as_bytes()
