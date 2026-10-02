@@ -2,6 +2,7 @@
 
 > Status: current — the audit inventory below was taken at `dev@e4c0bae`; the
 > queue is the work list, and each item's `Status:` field is the live state.
+> Items found later say which `dev` they were seen at in their own evidence.
 > Points at: the code it names (every claim carries a `file:line`).
 
 This is the one place the audit's findings live. It exists so the fixes can be
@@ -74,6 +75,10 @@ queue's order is deliberate.
 | P1-29 | medium | compute, registry | A compute value reaching the artifact codec panics | done |
 | P1-30 | low | compute | A refused `plrun` count is silent | done |
 | P1-31 | medium | lowlevel | The deep-pass verdict conflates "never ran" with "in progress" | done |
+| P1-32 | medium | language-parser | A run of separators is refused inside every list form | todo |
+| P1-33 | medium | highlevel, language | A self-recursive call in a conditional's branch is refused as "expected Int, found Int" | todo |
+| P1-34 | medium | highlevel, language, docs | The spec and `check_index` disagree about `e[i]` on a tuple or a struct | blocked:D16 |
+| P1-35 | medium | language, highlevel, lowlevel | A raw read `X<e>` of a runtime container yields `none` with no diagnostic | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | done (wired: the server's compile worker, `incremental-update.md` §7.6) |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | done |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | done |
@@ -2381,6 +2386,191 @@ re-exports and the `deep_pass_stats` example with them — on the same rule this
 queue's `P4-1` records ("a temporary counter … removed after"). The numbers are
 the record; the instrument is not. The pass's share of a build's wall-clock is
 still unmeasured.
+
+### P1-32 — A run of separators is refused inside every list form `verified`
+
+**Two documents promise the opposite of what the list parsers do.** The parser's
+own module doc (`parse.rs:19-20`) says the three separator characters are one
+token *"and consecutive, leading, and trailing separators are all tolerated"*;
+`language-spec.md` §2 says *"the quantity never matters … a run of them (a blank
+line, a stray trailing separator) is tolerated"*, and adds that a newline between
+two elements of a tuple means the same as a comma. The statement level does
+tolerate runs — `seps`/`seps1` are `Separator.repeated()`
+(`parse.rs:300-308`, `parse.rs:1442-1446`) — which is why a program may have blank
+lines between statements. **The list forms do not**, and each one is a different
+combinator shape:
+
+| form | site | separator shape |
+|---|---|---|
+| `$f(…)`, `A(…)` | `comma_list`, `parse.rs:1093-1100` | `(Separator item)*` then `Separator?` |
+| `(a, b)` | `paren`, `parse.rs:1145-1152` | same |
+| `[a, b]` | `array_literal`, `parse.rs:1196-1203` | same |
+| `<a, b>` | `angle_tuple`, `parse.rs:1279-1288` | `(Separator expr).at_least(1)` — no trailing tolerance either |
+| `struct<…>` | `struct_type`, `parse.rs:1326-1331` | `(Separator field)*` — no trailing tolerance either |
+| `array<T, n>` | `array_type`, `parse.rs:1350-1355` | exactly one `Separator` |
+
+So a *lone* separator between elements is fine — `(1\n2)` is `(1, 2)` and
+`s(1\n2)` instantiates — and a **run** is not. In `paren` the reason is visible in
+the shape: the fold's own separators are consumed one at a time, so the comma goes
+to the *optional trailing* `Separator` (`parse.rs:1150`), and the newline that
+follows is then unexpected where `)` is required. The diagnostic therefore points
+one token past the comma, which is where the user is not looking.
+
+Reproductions at `dev@a972a79`, first-hand (`cargo run -p lichen-compiler -- <file>`):
+
+```text
+(1,
+2)             error: expected '!', an expression, or ')', found a separator        --> 1:4
+[1,
+2]             error: expected '~', '!', an expression, or ']', found a separator   --> 1:4
+struct<a,
+b>             error: expected '.', '!', or an expression, found a separator        --> 1:10
+array<Int,
+2>             error: expected '!' or an expression, found a separator              --> 1:11
+s(1,
+2)             error: expected '.', '!', an expression, or ')', found a separator   --> 1:27
+```
+
+**Not this item:** a separator immediately *after* an operator or the table arrow
+(`table { 1 ==>\n 2 }`, `1 +\n2`) is refused for a different reason — the
+documented "an expression cannot continue across a separator" rule, also in §2. A
+fix here must not make those valid.
+
+**Fix direction — not a decision.** Give each site the statement level's
+treatment: a *run* between items (`Separator.repeated().at_least(1)`) and a run
+after the last (`Separator.repeated()`). `repeated()` rewinds a failed iteration,
+so the optional trailing run still leaves the enclosing closer to match. `needs-test`:
+a multi-line tuple and a multi-line `array<…>` (the exactly-one site) are the
+narrowest proof.
+
+### P1-33 — A self-recursive call in a conditional's branch is refused `reported`
+
+`reported` for the *site*, not for the symptom: the refusal reproduces first-hand,
+the cause is **not located**.
+
+```text
+f = a => b => if b == 0 then a else f b (a - b)
+f 48 18
+```
+
+`dev@a972a79` answers `error: expected Int, found Int` — no span line, both sides rendered
+as the same type name.
+
+**The escape hatch is to annotate the *function*, and that is what makes this an
+inference defect rather than a missing feature.** The same body prefixed with
+`: Int -> Int -> Int` checks and runs (it then exhausts the apply budget, as
+`-` on a wrapping `Int` must); annotating the *parameters* instead
+(`f = a => b => { a : Int; b : Int; … }`) still fails with the same message. So the
+program is well-typed, the checker cannot get there on its own, and what it
+reports is a type conflict between two nodes that both mean `Int` — a message
+that names the wrong thing. (`examples/gcd.lichen` writes the function's type out
+for the same reason, in the tuple-domain spelling.)
+
+Narrowing, each run first-hand against the same binary (`dev@a972a79`):
+
+| shape | result |
+|---|---|
+| `g = a => b => a - b; f = a => b => if b == 0 then a else g b (a - b)` | runs (`Int`) — a non-recursive two-argument callee in the branch is fine |
+| `f = a => b => [f b (a - b), a][b == 0]` | refused identically — so it is not the `if` desugaring, which is exactly this array index |
+| `f = a => b => f b (a - b)` | runs (and exhausts the apply budget, as it must) — a self-reference alone is fine |
+| `f = x => if x == 0 then x else f (x - 1)` | runs — single-argument self-recursion in a branch is fine |
+| `f = (a => b => if b == 0 then a else f b (a - b)) : Int -> Int -> Int` | **checks and runs** — the function's type written out is the whole difference |
+| `f = a => b => { a : Int; b : Int; if b == 0 then a else f b (a - b) }` | still refused — pinning the parameters is not enough |
+
+So the trigger is a **self-referential call as an element of the conditional's
+array**, with a curried two-argument function on both sides of it — and the
+checker gets there only while the function's own type is *unwritten*.
+
+**The lead, and it is only a lead:** both sides print `Int`, and `Int` does not
+fail to unify with `Int`, so the two sides are two *different* nodes that each mean
+`Int`. The annotation is the interesting half: writing the function's type out
+decides which nodes the recursive reference's domain and codomain cells *are*, and
+the failure disappears — so what is wrong is which cell the recursive call's
+argument is compared against, not the types involved. The place to look is the
+interaction between a block-wide (self-referential) binding's pre-registered
+skeleton and the per-apply parameter clones (`lowlevel::function`, and
+`checker/operators.rs`'s pin of an `Int` operand to `self.int_type`). Nothing here
+has read that path; this is a starting point, not a diagnosis.
+
+### P1-34 — The spec and `check_index` disagree about `e[i]` on a tuple or a struct `verified`
+
+**The code says `[i]` is arrays only, deliberately.** `check_index`
+(`checker/indexing.rs:39-52`) pins the container's type to a *fresh array type*
+with `DiagKind::Guard`, and its doc says so in as many words (`:19-28`): a
+concretely non-array container — *"a tuple, a struct, a function, a table"* —
+fails here, and *"tuple and struct slots are read with the dedicated positional
+form `a(k)`"*, because *"the operator and the type extraction are chosen by
+syntax, never by a runtime kind dispatch"*. The examples follow that: the tuple in
+`examples/index.lichen` is read `b(0)`/`b(1)`, never `b[0]`.
+
+**The spec says the opposite, twice.** `language-spec.md` §3, *Indexing*: *"`e[i]`
+reads the `i`-th element of an array, **tuple, or struct instance** (a struct
+instance's positional fields are its wrapped tuple's elements)"*; §3, *Struct
+instantiation*: *"Indexing an instance reads its positional fields: `s(1, 2)[0]`
+is the first field, and its type is the corresponding field type (an out-of-bounds
+field index is an `IndexOutOfBounds` diagnostic)."*
+
+Reproductions at `dev@a972a79`, first-hand:
+
+```text
+(1, 2)[0]                            error: expected array<Int, Int>, found <Int, Int>       --> 1:1
+s = struct<Int, string>(1, "a"); s[0] error: expected array<Int, string>, found struct<Int, string>  --> 1:5
+```
+
+`(1, 2)(0)` and `s(0)` both work and yield the field.
+
+**Which side is wrong is a call, so this is `blocked:D16`** and neither side was
+changed. The evidence leans one way — the code's intent is explicit, its doc
+explains *why* (syntax picks the operator), and every example agrees with it, so
+the spec's paragraph looks like the stale half — but "the spec is the single
+source of truth for the language" is this project's own rule, and a language that
+*should* index tuples is a feature, not a doc fix. Both are cheap; picking one is
+not this note's to do.
+
+**The raw form is not an available substitute, and that is its own item.** The
+tempting answer — "spell it `s<0>`" — does not work on a runtime container: see
+`P1-35`, where `[1, 2]<0>` and `(1, 2)<0>` evaluate to `none: none`. `X<e>` reads
+a component of a *type-as-value* (`<Int, string><0>` is `Int : Type`); over a
+runtime array or tuple it produces nothing.
+
+### P1-35 — A raw read `X<e>` of a runtime container yields `none`, silently `reported`
+
+`reported` for the *site*, as in `P1-33`: every output below was produced
+first-hand on `dev@a972a79`, the mechanism is not located.
+
+The read is specified as working over any container: `docs/notes/raw-index.md:24-33`
+says it reads a component of a type-as-value **and** that "an unbound container (a
+parameter, a call result) stays lazy and resolves at the apply, which is what makes
+it usable generically: `f = k => k<0>` reads the first field of whatever type `k`
+is applied to". Its documented failure mode for a non-positional or out-of-bounds
+read is *"a **runtime** lowlevel `Index` error, never a static diagnostic"*
+(`:25-27`). What happens instead:
+
+| program | output at `dev@a972a79` |
+|---|---|
+| `<Int, string><0>` | `Int: Type` — works (this is the documented use, and `examples/raw_index.lichen` pins it) |
+| `struct<Int, string><1>` | `string: Type` — works |
+| `[1, 2]<0>` | **`none: none`** |
+| `x = [1, 2]; x<0>` | **`none: none`** |
+| `(1, 2)<0>` | **`none: none`** |
+| `x = (1, 2); x<0>` | **`none: none`** |
+
+So the read over a *runtime* container produces no value and no type, and no
+diagnostic of any kind: not the runtime `Index` error the note promises, and not a
+value. The output line is literally `none: none`.
+
+Not located. All that is visible from outside is that the CLI has a *value* to
+print, and it prints it, so whatever happened is not a diagnostic on the path it
+takes. Two candidates, and they are on either side of a boundary this pass did not
+cross: the read never lowers to an `Index` that can succeed over a value pair, or
+its evaluation records something (`Module::eval_errors`) that the report does not
+carry. **The second is checkable without a compiler change** — compile `[1, 2]<0>`
+and read `Module::eval_errors` — which is why the item's site is `reported`; that
+check has not been run.
+
+`needs-test`: whichever mechanism it is, the smallest falsifier is a program whose
+value is `[1, 2]<0>` and whose output is `1: Int` — or, if the intended answer is a
+refusal, one that reports *something* rather than printing `none`.
 
 ## P2 — architecture
 
@@ -5851,6 +6041,35 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   the leaf answering `is_handle = false` the relocation test fails at the
   dispatch, with `set_handle` a no-op it fails at the address, and the intern
   tests fail if the id is per-compile again.
+- **D16 — Is `e[i]` an array read, or a positional read of any container? (open;
+  found by `P1-34`.)** The spec and the checker state two different languages.
+
+  *Arrays only* is what `check_index` implements and documents
+  (`checker/indexing.rs:19-28`, `:39-52`): the container's type is pinned to a
+  fresh array type, so a tuple or a struct instance is refused with
+  `DiagKind::Guard`, and the positional read of a tuple or struct is the
+  dedicated `a(k)` — the operator is chosen by syntax, never by a runtime kind
+  dispatch. Every example agrees (`examples/index.lichen` reads `b(0)`).
+
+  *Any container* is what `language-spec.md` §3 states, twice and explicitly:
+  `e[i]` reads the `i`-th element of "an array, tuple, or struct instance", and
+  `s(1, 2)[0]` "is the first field".
+
+  The two are not reconcilable, and they differ on what a written program means,
+  not on how it is spelled: `(1, 2)[0]` is `expected array<Int, Int>, found
+  <Int, Int>` today and would be `1` under the spec. Resolving it means either
+  deleting the spec's sentence (a doc fix, and the code's intent plus the
+  examples are the evidence for it) or teaching `check_index` the tuple and
+  struct kinds (a language feature, and it would have to say what a *struct's*
+  positional index means, since the spec's own answer is "its wrapped tuple's
+  elements" while `a(k)` resolves through the struct's name table). Both are
+  cheap; the answer is a design call, so the queue does not take one.
+
+  One adjacent fact belongs with the decision rather than the item: the raw form
+  `X<e>` *looks* like it could spell the spec's meaning without touching
+  `check_index`, and it cannot — over a runtime container it produces `none` and
+  no diagnostic at all (`P1-35`). So the choice really is between the two sides
+  above; there is no third spelling available today.
 
 ## Checked and found clean
 
