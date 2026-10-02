@@ -10,7 +10,7 @@ use super::*;
 /// bump invalidates every cached key, so every [`crate::session::BufferSession`]
 /// rebuilds on its next compile.  That is the intended answer — a stale key
 /// must never be silently reusable.
-const KEY_FORMAT_VERSION: u64 = 2;
+const KEY_FORMAT_VERSION: u64 = 3;
 
 /// The **resolved content key** of a resolved program: an exact, digest-free
 /// serialization of the name-resolved, beyond-error structure that the lowering
@@ -132,6 +132,15 @@ impl KeyWriter {
                 self.u(0);
                 self.u(*n as u64);
             }
+            // A float enters the key as its 32 bits, never as the number: the
+            // value identity `LowValue`'s hand-written `PartialEq` fixes
+            // (`f32::to_bits`, `lichen-lowlevel`) is the one this key must
+            // agree with, so `0.0` and `-0.0` are distinct keys and two equal
+            // `NaN` bit patterns are one.
+            Expr::Float(n, _) => {
+                self.u(33);
+                self.u(n.to_bits() as u64);
+            }
             Expr::Str(s, _) => {
                 self.u(24);
                 self.str(s);
@@ -140,6 +149,7 @@ impl KeyWriter {
                 self.u(1);
                 self.u(match c {
                     crate::ast::TypeConst::Int => 0,
+                    crate::ast::TypeConst::Float => 3,
                     crate::ast::TypeConst::Type => 1,
                     crate::ast::TypeConst::String => 2,
                 });

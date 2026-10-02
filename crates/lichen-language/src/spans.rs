@@ -34,6 +34,7 @@ pub(crate) fn shift_expr(
 ) {
     match expr {
         Expr::Int(_, span)
+        | Expr::Float(_, span)
         | Expr::Str(_, span)
         | Expr::TypeConst(_, span)
         | Expr::TypeOf(span)

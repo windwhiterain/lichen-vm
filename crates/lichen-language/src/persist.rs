@@ -112,4 +112,8 @@ pub use lichen_preprocess::{SOURCES_DIR, lichendir, sources_root};
 /// `5` added the low type's bottom, `LowShape::Unknown` (shape tag 5), so an
 /// artifact written before it cannot be read as one: a node's stored low type
 /// is now a lattice position rather than a decided shape.
-const ARTIFACT_FORMAT_VERSION: u32 = 6;
+///
+/// `7` added the float value to the body's value encoding (`LowValue::Float`,
+/// value tag `8`, written as its bits).  That is a change to the encoding half,
+/// so the check above retires the artifacts written before it.
+const ARTIFACT_FORMAT_VERSION: u32 = 7;
