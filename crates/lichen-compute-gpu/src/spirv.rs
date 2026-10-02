@@ -59,12 +59,35 @@
 //! a scalar *condition* has to become a bool. Wasm gets both from the two
 //! integer instructions that surround a comparison; this target emits the same
 //! two conversions where the position demands them instead (see
-//! [`as_scalar`]/[`as_condition`]). Same IR, same semantics, two spellings.
+//! [`as_class`]/[`as_condition`]). Same IR, same semantics, two spellings.
+//!
+//! # A module has one numeric class, and it is derived from the fragment
+//!
+//! `Int` and `Float` do not convert in either direction
+//! (`docs/notes/floating-point.md` §4.2), and a kernel body is written in one
+//! class or the other, so a module has **one** class: [`module_class`] reads it
+//! off the fragment's declared positions. The class is baked into the module
+//! rather than chosen per dispatch because the storage buffer's element type,
+//! the pointer into it and its array stride are all module-scope instructions —
+//! and [`Binding`], the caller's record of how many buffers a run binds, has
+//! nowhere to say which class they hold.
+//!
+//! The difference between the two is exactly the ABI. An integer module's scalar
+//! is a 64-bit unsigned integer, its buffer element is eight bytes, and it
+//! declares the `Int64` capability. A float module's scalar is a 32-bit float —
+//! core in SPIR-V, no capability — its element is four bytes, and its **index**
+//! is 32-bit, so a float module declares no 64-bit integer at all and needs no
+//! device with `shaderInt64`: [`needs_int64`] is what a caller checks before it
+//! builds a pipeline.
+//!
+//! A comparison still yields `OpTypeBool` here and is still materialised only
+//! where a position wants the scalar, but *which* scalar is the class's: the
+//! language's `1`/`0` is `1.0`/`0.0` over two floats, not an integer select.
 
 use std::collections::HashMap;
 use std::fmt;
 
-use lichen_kernel_ir::{KernelBin, KernelFragment, KernelInstr};
+use lichen_kernel_ir::{KernelBin, KernelFragment, KernelInstr, KernelShape, ScalarClass};
 
 /// SPIR-V opcodes.  Not from memory: these are the `SpvOp*` values in the
 /// Khronos `spirv.h` shipped with the Vulkan SDK.
@@ -78,6 +101,7 @@ mod op {
     pub const TYPE_VOID: u16 = 19;
     pub const TYPE_BOOL: u16 = 20;
     pub const TYPE_INT: u16 = 21;
+    pub const TYPE_FLOAT: u16 = 22;
     pub const TYPE_VECTOR: u16 = 23;
     pub const TYPE_RUNTIME_ARRAY: u16 = 29;
     pub const TYPE_POINTER: u16 = 32;
@@ -94,10 +118,17 @@ mod op {
     pub const LABEL: u16 = 248;
     pub const RETURN: u16 = 253;
     pub const U_CONVERT: u16 = 113;
+    /// The reinterpretation an integer constant and a float operand meet
+    /// through: same width, same bits, no conversion of the value.
+    pub const BITCAST: u16 = 124;
     pub const I_ADD: u16 = 128;
+    pub const F_ADD: u16 = 129;
     pub const I_SUB: u16 = 130;
+    pub const F_SUB: u16 = 131;
     pub const I_MUL: u16 = 132;
+    pub const F_MUL: u16 = 133;
     pub const U_DIV: u16 = 134;
+    pub const F_DIV: u16 = 136;
     pub const U_MOD: u16 = 137;
     pub const SELECT: u16 = 169;
     pub const I_EQUAL: u16 = 170;
@@ -106,6 +137,13 @@ mod op {
     pub const U_GREATER_THAN_EQUAL: u16 = 174;
     pub const U_LESS_THAN: u16 = 176;
     pub const U_LESS_THAN_EQUAL: u16 = 178;
+    /// The **ordered** float comparisons: false when either operand is `NaN`,
+    /// which is what Rust's operators and wasm's `f32.lt` and friends do, so the
+    /// two backends agree about a `NaN` operand.
+    pub const F_LESS_THAN: u16 = 184;
+    pub const F_GREATER_THAN: u16 = 186;
+    pub const F_LESS_THAN_EQUAL: u16 = 188;
+    pub const F_GREATER_THAN_EQUAL: u16 = 190;
     pub const BITWISE_OR: u16 = 197;
     pub const BITWISE_XOR: u16 = 198;
     pub const BITWISE_AND: u16 = 199;
@@ -149,10 +187,21 @@ const GENERATOR: u32 = 0x0030_0000;
 const SPIRV_VERSION: u32 = 0x0001_0300;
 const SPIRV_MAGIC: u32 = 0x0723_0203;
 
-/// The bytes one `i64` buffer element occupies: the array stride, and the same
-/// number the CPU path uses for its `Vec<i64>`.  That shared number is what makes
-/// the two backends' results comparable element for element.
-const ELEMENT_STRIDE: u32 = 8;
+/// The bytes one buffer element occupies, per class: the array stride of the
+/// module's runtime array.
+///
+/// **The integer size is shared with the CPU path.** The wasm backend's buffer
+/// is a `Vec<i64>` and the host hands this one `&[i64]`, so eight bytes is what
+/// makes the two backends' results comparable element for element. A float
+/// element is four, which is the whole of `f32` and the width the packed
+/// components a scene document carries already use
+/// (`docs/notes/floating-point.md` §4.1).
+fn element_stride(class: ScalarClass) -> u32 {
+    match class {
+        ScalarClass::Int => 8,
+        ScalarClass::Float => 4,
+    }
+}
 
 /// The local workgroup size.  A run of `count` indices is
 /// `ceil(count / LOCAL_SIZE_X)` workgroups; a workgroup that runs past the end
@@ -187,6 +236,23 @@ pub enum SpirvRefusal {
     },
     /// The fragment declares an integer width this target cannot represent.
     UnsupportedIntWidth { bits: u32 },
+    /// The fragment's declared positions are not all of one class, and a module
+    /// has one element type: one struct, one pointer into it, one array stride.
+    /// `Int` and `Float` do not convert (`docs/notes/floating-point.md` §4.2),
+    /// so there is no second element type to emit and nothing to choose between.
+    MixedElementClasses,
+    /// An operation over `Float` the language has no form for. A `Float` takes
+    /// `+ - * /` and the four order comparisons and nothing else
+    /// (`docs/notes/floating-point.md` §3.7), so `%` and the bitwise trio have
+    /// no opcode to reach here: the alternatives would be a different function
+    /// or a reinterpretation of a float's bits, and a kernel that runs but
+    /// computes something nobody wrote is worse than one that does not run.
+    UnsupportedFloatOperator { operator: &'static str, at: usize },
+    /// A value and a buffer index of different classes met in one operation.
+    /// `Int` and `Float` do not convert in either direction
+    /// (`docs/notes/floating-point.md` §4.2), so this is a malformed fragment
+    /// rather than a shape a conversion could serve.
+    MixedClasses { at: usize },
     /// The body does not leave exactly the one value a compute shader needs.
     ResultArity { results: usize, left: usize },
     /// The stack did not balance: an instruction popped more than it pushed.
@@ -227,6 +293,26 @@ impl fmt::Display for SpirvRefusal {
                 f,
                 "the fragment was lowered for {bits}-bit integers, which this target does not \
                  represent."
+            ),
+            SpirvRefusal::MixedElementClasses => write!(
+                f,
+                "the fragment's declared positions are not all of one class. A module's element \
+                 type, the pointer into it and its array stride are one decision baked into the \
+                 module, and `Int` and `Float` do not convert, so a fragment that declares both \
+                 has no module here."
+            ),
+            SpirvRefusal::UnsupportedFloatOperator { operator, at } => write!(
+                f,
+                "instruction {at} applies {operator} to floats, and the language gives a `Float` \
+                 `+ - * /` and the four comparisons and nothing else. There is no float operator \
+                 to emit for this, and emitting a different one would compute something the \
+                 program does not say."
+            ),
+            SpirvRefusal::MixedClasses { at } => write!(
+                f,
+                "instruction {at} mixed an integer and a float in one operation. `Int` and `Float` \
+                 do not convert in either direction, so nothing here can make the two operands \
+                 meet: this is a malformed fragment rather than an unsupported shape."
             ),
             SpirvRefusal::ResultArity { results, left } => write!(
                 f,
@@ -279,17 +365,18 @@ impl Inst {
     }
 }
 
-/// A stack operand: the SSA id of a value, the constant it denotes when the
-/// instruction that produced it was a `Const`, and whether its type is this
-/// target's `bool` rather than the fragment's 64-bit integer.
+/// A stack operand: the SSA id of a value, and which of the module's types that
+/// id has.
+#[derive(Debug, Clone, Copy)]
+struct Slot {
+    id: u32,
+    kind: Kind,
+}
+
+/// The type a slot's id has — and, for the one instruction whose class the IR
+/// does not fix, the value it holds.
 ///
-/// The constant is tracked beside the id because it serves a *different*
-/// purpose. A buffer operation's position selects **which** storage-buffer
-/// variable to reach — a compile-time choice, so it has to be read off the stack
-/// as a number. The element index is the other stack value and *is* dynamic, and
-/// goes to `OpAccessChain` as an id.
-///
-/// # Why the third field exists
+/// # Why the type has to ride on the slot
 ///
 /// **The IR is untyped and this target is not.** A comparison here yields
 /// `OpTypeBool` — the shape `OpSelect` wants, and the one place this backend
@@ -299,40 +386,157 @@ impl Inst {
 /// (`(a < b) == c`), a stored element, a `Select` arm. In every one of those
 /// positions a bool is the wrong type, and a module that mixed them would be
 /// rejected by the driver rather than compute something else. So each slot
-/// records which of the two it holds, and the two coercions
-/// ([`as_scalar`]/[`as_condition`]) are emitted exactly where a position demands
-/// the other — which for the common case (`if` over a comparison) is nowhere.
-type Slot = (u32, Option<i64>, bool);
+/// records what it holds, and the two coercions ([`as_class`]/[`as_condition`])
+/// are emitted exactly where a position demands the other — which for the common
+/// case (`if` over a comparison) is nowhere.
+#[derive(Debug, Clone, Copy)]
+enum Kind {
+    /// A value of the named class: the module's scalar, or the integer an access
+    /// chain's index takes, which is the same type as the scalar in an integer
+    /// module and a 32-bit one in a float module.
+    Scalar(ScalarClass),
+    /// A constant, and the `i64` the body pushed for it. **The class is not
+    /// fixed by the IR**: the same `Const(0)` is a buffer position in one place
+    /// (the integer `0`) and a float's bit pattern in another (the `f32` whose
+    /// bits are zero), and only the position it is consumed in decides. So the
+    /// payload rides here until a position reads it, and the constant is
+    /// materialised per class on demand — see [`Literals`].
+    Literal(i64),
+    /// The `OpTypeBool` a comparison yields.
+    Condition,
+}
 
-/// A slot holding the fragment's 64-bit scalar.
-const fn scalar(id: u32) -> Slot {
-    (id, None, false)
+/// A slot holding a value of `class`.
+const fn scalar(id: u32, class: ScalarClass) -> Slot {
+    Slot {
+        id,
+        kind: Kind::Scalar(class),
+    }
+}
+
+/// A slot holding a constant of a class the consuming position will decide.
+const fn literal(id: u32, value: i64) -> Slot {
+    Slot {
+        id,
+        kind: Kind::Literal(value),
+    }
 }
 
 /// A slot holding a comparison's `OpTypeBool`.
 const fn condition(id: u32) -> Slot {
-    (id, None, true)
+    Slot {
+        id,
+        kind: Kind::Condition,
+    }
+}
+
+/// The two scalar kinds, spelled once so the operator table reads as classes
+/// rather than as constructor calls.
+const INT_VALUE: Kind = Kind::Scalar(ScalarClass::Int);
+const FLOAT_VALUE: Kind = Kind::Scalar(ScalarClass::Float);
+
+impl Slot {
+    /// The compile-time constant this slot is, or `None` for a computed value.
+    ///
+    /// A buffer operation's *position* selects **which** storage-buffer variable
+    /// to reach — a compile-time choice — so it is read off the stack as a
+    /// number rather than as an id. A position is a `Const` pushed immediately
+    /// before the call: a value that was *computed* is not an ordinal however
+    /// constant its value happens to be, and reading one as a position would
+    /// address a buffer the caller never named.
+    fn constant(self) -> Option<i64> {
+        match self.kind {
+            Kind::Literal(value) => Some(value),
+            _ => None,
+        }
+    }
+}
+
+/// The module-scope constants the body's literals need, one pool per class a
+/// literal can be read as.
+///
+/// Keyed by class *and* value because the two readings of one `i64` are two
+/// different SPIR-V constants: a float value is its 32 bits, an integer is the
+/// number. The id in [`Slot`] is the reading the push assumed (the module's
+/// scalar); a position that wants the other class asks here again, and the
+/// constant is emitted once however many positions use it.
+#[derive(Default)]
+struct Literals {
+    /// The `OpConstant` declarations, emitted in the types-and-constants
+    /// section: a constant is module-scope, so nothing may put it in the body.
+    declarations: Vec<Inst>,
+    emitted: HashMap<(ScalarClass, i64), u32>,
+}
+
+impl Literals {
+    /// The id of a constant of `class` holding `value`, emitting it if this is
+    /// the first use.
+    fn get(&mut self, class: ScalarClass, value: i64, ids: &Ids, next: &mut u32) -> u32 {
+        if let Some(id) = self.emitted.get(&(class, value)) {
+            return *id;
+        }
+        let id = *next;
+        *next += 1;
+        let mut operands = vec![ids.type_of(class), id];
+        // The literal words are the **type's** width, which for the integer class
+        // is the module's integer width and not the language's: 64 bits in an
+        // integer module, 32 in a float one, where an integer is only ever an
+        // element index. `OpTypeInt 32` with two literal words is an invalid
+        // instruction, not merely a wide constant.
+        let wide = class == ScalarClass::Int && ids.class == ScalarClass::Int;
+        if wide {
+            // Low word, then high word.
+            operands.push(value as u32);
+            operands.push((value >> 32) as u32);
+        } else {
+            // A 32-bit type's literal is one word: the integer's low half, or the
+            // float's bits. Which way a producer widened a `u32` into the IR's
+            // `i64` — zero- or sign-extended — is not something the IR says, and
+            // `as u32` reads either the same way.
+            operands.push(value as u32);
+        }
+        self.declarations.push(Inst::new(op::CONSTANT, operands));
+        self.emitted.insert((class, value), id);
+        id
+    }
 }
 
 /// Every module-scope id, allocated before anything is emitted.
 struct Ids {
+    /// The class the module is built for, [`module_class`]'s answer. It decides
+    /// the scalar type, the buffer element type, the array stride, which
+    /// arithmetic opcodes a `Bin` reaches, and which capabilities are declared.
+    class: ScalarClass,
     main: u32,
     label: u32,
     void: u32,
     boolean: u32,
-    /// The fragment's own integer type: **unsigned** 64-bit, because the
-    /// language's `Int` is a machine-sized unsigned integer.  It is what every
-    /// value in the body has, what a buffer element holds, and the type the
-    /// unsigned opcodes (`OpUDiv`, `OpUMod`, `OpULessThan`, …) require — SPIR-V
-    /// checks that operand, so declaring this signed would make a kernel that
-    /// divides, takes a remainder or compares *invalid* rather than wrong.
-    /// `spirv-val` rules on that offline; see the module docs.
+    /// The fragment's own integer type, and the type every *integer* value in
+    /// the body has: **unsigned** 64-bit in an integer module, because the
+    /// language's `Int` is a machine-sized unsigned integer, so it is what a
+    /// buffer element holds and what the unsigned opcodes (`OpUDiv`, `OpUMod`,
+    /// `OpULessThan`, …) require — SPIR-V checks that operand, so declaring this
+    /// signed would make a kernel that divides, takes a remainder or compares
+    /// *invalid* rather than wrong.  `spirv-val` rules on that offline; see the
+    /// module docs.
+    ///
+    /// **A float module does not declare it.** Its integer values are 32-bit
+    /// element indices, and declaring a 64-bit integer would cost the `Int64`
+    /// capability — and, with it, a device feature a float kernel has no use for
+    /// (`docs/notes/floating-point.md` §4.4).
     ulong: u32,
-    /// The 32-bit unsigned type of an invocation id's component, and of an
-    /// access chain's member indices.
+    /// The 32-bit float: the scalar in a float module, and declared only there.
+    /// SPIR-V's `Float32` is core, so it carries no capability.
+    float: u32,
+    /// The 32-bit unsigned type. It is the type of an invocation id's component
+    /// and of an access chain's member indices in every module, and — in a float
+    /// module, where nothing is 64-bit — the type an element index has.
     uint: u32,
     v3uint: u32,
-    /// The single-member struct a storage buffer's element type must be.
+    /// The single-member struct a storage buffer's element type must be.  Its
+    /// member is the module's scalar, which is where "does this buffer hold
+    /// floats" is decided: the module bakes the element type in, and a caller's
+    /// [`Binding`] has nowhere to say it.
     ///
     /// Vulkan requires a `StorageBuffer` variable to be typed as a struct, or an
     /// array of one — a bare runtime array is the older `Uniform` + `BufferBlock`
@@ -347,18 +551,74 @@ struct Ids {
     ptr_in: u32,
     ptr_array: u32,
     /// A pointer to one element of a storage buffer, in the storage buffer
-    /// storage class — what an access chain produces.
-    ptr_ulong: u32,
+    /// storage class — what an access chain produces, and what `OpLoad` reads
+    /// and `OpStore` writes through.
+    ptr_elem: u32,
     fn_ty: u32,
-    /// The 32-bit `0` an access chain's member indices are built from.
+    /// The 32-bit `0` an access chain's member indices are built from, and the
+    /// integer zero a float module's conditions are compared against.
     zero: u32,
-    /// The 64-bit `1` and `0` a comparison is materialised into a scalar with —
-    /// the operands of the `OpSelect` [`as_scalar`] emits.
-    one_ulong: u32,
-    zero_ulong: u32,
+    /// The scalar `1` and `0` a comparison is materialised into — the operands
+    /// of the `OpSelect` [`as_class`] emits.  Their type is the module's scalar,
+    /// so they are `1.0`/`0.0` over two floats: the language's `1`/`0` *is* the
+    /// class's scalar (`docs/notes/floating-point.md` §4.4).
+    one_scalar: u32,
+    zero_scalar: u32,
+    /// The same materialisation where the position wants the *integer* class
+    /// instead.  Only a float module can tell the two apart — there the integer
+    /// type is 32-bit and is not the scalar — and in an integer module these are
+    /// [`Self::one_scalar`] and [`Self::zero_scalar`].
+    one_integer: u32,
+    zero_integer: u32,
     gid: u32,
     /// The first of `binding.total()` consecutive storage-buffer variables.
     buffers: u32,
+}
+
+impl Ids {
+    /// The module's scalar: the type of every value the body computes.
+    fn scalar(&self) -> u32 {
+        match self.class {
+            ScalarClass::Int => self.ulong,
+            ScalarClass::Float => self.float,
+        }
+    }
+
+    /// The type an integer value has — an element index, or an integer operand.
+    fn integer(&self) -> u32 {
+        match self.class {
+            ScalarClass::Int => self.ulong,
+            ScalarClass::Float => self.uint,
+        }
+    }
+
+    /// The type a value of `class` has.
+    fn type_of(&self, class: ScalarClass) -> u32 {
+        match class {
+            ScalarClass::Int => self.integer(),
+            ScalarClass::Float => self.float,
+        }
+    }
+
+    /// The scalar `1`/`0` of `class`, for materialising a comparison.
+    fn one_of(&self, class: ScalarClass) -> u32 {
+        match class {
+            ScalarClass::Int => self.one_integer,
+            ScalarClass::Float => self.one_scalar,
+        }
+    }
+
+    fn zero_of(&self, class: ScalarClass) -> u32 {
+        match class {
+            ScalarClass::Int => self.zero_integer,
+            ScalarClass::Float => self.zero_scalar,
+        }
+    }
+
+    /// The array stride, and so the bytes one buffer element occupies.
+    fn element_stride(&self) -> u32 {
+        element_stride(self.class)
+    }
 }
 
 /// A NUL-terminated, word-padded literal string, as SPIR-V packs them: four
@@ -387,6 +647,81 @@ fn index_local(fragment: &KernelFragment) -> Option<u32> {
     (arity > 0).then(|| (arity - 1) as u32)
 }
 
+/// Every parameter leaf's class, in flattening order — the order
+/// [`KernelShape::flat_arity`] counts and `LocalGet` indexes in.
+fn leaf_classes(shape: &KernelShape) -> Vec<ScalarClass> {
+    match shape {
+        KernelShape::Scalar(class) => vec![*class],
+        KernelShape::Tuple(items) => items.iter().flat_map(leaf_classes).collect(),
+    }
+}
+
+/// Take `class` as the one class seen so far, or refuse.
+fn record(seen: &mut Option<ScalarClass>, class: ScalarClass) -> Result<(), SpirvRefusal> {
+    match *seen {
+        Some(previous) if previous != class => Err(SpirvRefusal::MixedElementClasses),
+        _ => {
+            *seen = Some(class);
+            Ok(())
+        }
+    }
+}
+
+/// The class of the values a fragment's body computes — the class of the module
+/// [`compile`] builds for it.
+///
+/// # Where it is read from, and why that order
+///
+/// The **buffer element classes come first**: they are what the body reads and
+/// writes, and they are the positions data crosses the ABI at. A fragment with
+/// no declared buffer class at all — a body that only computes — is read off its
+/// parameter leaves **except the index**, because this target's index is the
+/// invocation id rather than a value of the fragment: a parallel fragment's
+/// `param_shape` is `(config, index)` and both leaves are integers whatever its
+/// buffers hold.
+///
+/// A fragment with neither (no buffers, one leaf, that leaf being the index) is
+/// an integer module, which is what every fragment was before a class existed.
+///
+/// A fragment whose declared positions disagree has no answer here and is
+/// refused by name: a module's element type, the pointer into it and its array
+/// stride are one decision, and `Int` and `Float` do not convert
+/// (`docs/notes/floating-point.md` §4.2).
+pub fn module_class(fragment: &KernelFragment) -> Result<ScalarClass, SpirvRefusal> {
+    let mut seen: Option<ScalarClass> = None;
+    for class in fragment
+        .input_classes
+        .iter()
+        .chain(fragment.output_classes.iter())
+        .copied()
+    {
+        record(&mut seen, class)?;
+    }
+    if seen.is_none() {
+        let leaves = leaf_classes(&fragment.param_shape);
+        let index = index_local(fragment);
+        for (offset, class) in leaves.iter().enumerate() {
+            if Some(offset as u32) == index {
+                continue;
+            }
+            record(&mut seen, *class)?;
+        }
+    }
+    Ok(seen.unwrap_or(ScalarClass::Int))
+}
+
+/// Whether a module for this fragment declares the 64-bit integer type, and so
+/// needs a device that offers `shaderInt64`.
+///
+/// **SPIR-V's `Float32` is core, so a float fragment needs no capability at
+/// all**: its index is 32-bit and no value in it is a 64-bit integer. This is
+/// the same derivation [`compile`] makes, read as the question a device chooser
+/// can ask — a caller and the module it builds cannot disagree about whether the
+/// feature is needed.
+pub fn needs_int64(fragment: &KernelFragment) -> Result<bool, SpirvRefusal> {
+    Ok(module_class(fragment)? == ScalarClass::Int)
+}
+
 /// Compile one fragment to SPIR-V words.
 pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, SpirvRefusal> {
     if fragment.int_width.bits() != 64 {
@@ -394,6 +729,11 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
             bits: fragment.int_width.bits(),
         });
     }
+    // The module's one numeric class, read off the fragment before anything is
+    // emitted: it decides the scalar type, the element type and stride, the
+    // arithmetic opcodes and the capability list, and [`needs_int64`] reads the
+    // same derivation, so a caller and this module cannot disagree about it.
+    let class = module_class(fragment)?;
     let index = index_local(fragment).ok_or(SpirvRefusal::ResultArity {
         results: fragment.results,
         left: 0,
@@ -402,137 +742,294 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
     // Pass 1 — allocate every module-scope id, then walk the body into an
     // instruction list. The function-local ids come from `next`, which starts
     // after the last module-scope id and ends as the module's id bound.
+    //
+    // A float module declares no 64-bit integer, so `ulong` is reserved and left
+    // undefined there; an integer module leaves `float` the same way. An id that
+    // nothing defines is legal: the id bound is an upper limit, not a count.
+    //
+    // The `1`/`0` a comparison materialises into are the *integer* pair in an
+    // integer module, where that class is the scalar; a float module declares a
+    // 32-bit pair beside them, and shares the module's `zero` for its integer
+    // zero.
+    let (one_integer, zero_integer) = match class {
+        ScalarClass::Int => (17, 18),
+        ScalarClass::Float => (19, 16),
+    };
     let ids = Ids {
+        class,
         main: 1,
         label: 2,
         void: 3,
         boolean: 4,
         ulong: 5,
-        uint: 6,
-        v3uint: 7,
-        elem: 8,
-        array: 9,
-        buffer_struct: 10,
-        ptr_in: 11,
-        ptr_array: 12,
-        ptr_ulong: 13,
-        fn_ty: 14,
-        zero: 15,
-        one_ulong: 16,
-        zero_ulong: 17,
-        gid: 18,
-        buffers: 19,
+        float: 6,
+        uint: 7,
+        v3uint: 8,
+        elem: 9,
+        array: 10,
+        buffer_struct: 11,
+        ptr_in: 12,
+        ptr_array: 13,
+        ptr_elem: 14,
+        fn_ty: 15,
+        zero: 16,
+        one_scalar: 17,
+        zero_scalar: 18,
+        one_integer,
+        zero_integer,
+        gid: 20,
+        buffers: 21,
     };
     let mut next = ids.buffers + binding.total() as u32;
-    let mut constants: HashMap<i64, u32> = HashMap::new();
     // `OpConstant` is a *module-scope* instruction, so the body's literals are
     // collected here and emitted with the types rather than inside the function.
-    let mut literal_decls: Vec<Inst> = Vec::new();
+    let mut literals = Literals::default();
     let mut code: Vec<Inst> = Vec::new();
     let mut stack: Vec<Slot> = Vec::new();
 
-    // The index value: the invocation id's x component, widened to the fragment's
-    // 64-bit integer. An index is never negative, so the widening is exact and
-    // the CPU path's index parameter is the same value.
-    let index_value = next;
+    // The index value: the invocation id's x component. It is an **integer**
+    // whatever the fragment's parameter leaves say, because this target's index
+    // is the invocation id rather than a value of the fragment's domain — a
+    // parallel fragment's leaves are `(config, index)` and both are integers
+    // however its buffers are classed.
+    //
+    // An integer module widens it to the fragment's 64-bit `Int`, which is the
+    // scalar a body may then use it as (`out[i] = i + i`); an index is never
+    // negative, so the widening is exact and the CPU path's index parameter is
+    // the same value. A float module leaves it 32-bit: that is all an access
+    // chain's index takes, and it keeps a 64-bit integer — and its capability —
+    // out of a module that has no other use for one.
+    let loaded = next;
     next += 1;
-    {
-        let loaded = next;
-        next += 1;
-        let component = next;
-        next += 1;
-        code.push(Inst::new(op::LOAD, vec![ids.v3uint, loaded, ids.gid]));
-        code.push(Inst::new(
-            op::COMPOSITE_EXTRACT,
-            vec![ids.uint, component, loaded, 0],
-        ));
-        code.push(Inst::new(
-            op::U_CONVERT,
-            vec![ids.ulong, index_value, component],
-        ));
-    }
+    let component = next;
+    next += 1;
+    code.push(Inst::new(op::LOAD, vec![ids.v3uint, loaded, ids.gid]));
+    code.push(Inst::new(
+        op::COMPOSITE_EXTRACT,
+        vec![ids.uint, component, loaded, 0],
+    ));
+    let index_value = match class {
+        ScalarClass::Int => {
+            let widened = next;
+            next += 1;
+            code.push(Inst::new(
+                op::U_CONVERT,
+                vec![ids.ulong, widened, component],
+            ));
+            widened
+        }
+        ScalarClass::Float => component,
+    };
 
     for (at, instruction) in fragment.body.iter().enumerate() {
         match instruction {
             KernelInstr::Const(value) => {
-                // A 64-bit constant is emitted once no matter how often the body
-                // pushes it: SPIR-V requires every id to be defined exactly once.
-                let id = if let Some(id) = constants.get(value) {
-                    *id
-                } else {
-                    let id = next;
-                    next += 1;
-                    literal_decls.push(Inst::new(
-                        op::CONSTANT,
-                        vec![ids.ulong, id, *value as u32, (*value >> 32) as u32],
-                    ));
-                    constants.insert(*value, id);
-                    id
-                };
-                stack.push((id, Some(*value), false));
+                // A constant is emitted once per (class, value) no matter how
+                // often the body pushes it: SPIR-V requires every id to be
+                // defined exactly once. The push takes the module's scalar,
+                // which is the reading a *value* position wants; a position that
+                // wants an integer asks the pool for that reading instead.
+                let id = literals.get(ids.class, *value, &ids, &mut next);
+                stack.push(literal(id, *value));
             }
             KernelInstr::Bin(operator) => {
                 let rhs = pop(&mut stack, at)?;
                 let lhs = pop(&mut stack, at)?;
+                let operand_class = bin_class(lhs.kind, rhs.kind, ids.class);
                 // A comparison is the one operator whose operands may not be
                 // scalars — `(a < b) == c` compares the *scalar* a comparison
-                // means — and the one whose result is not one.  Every other
-                // operator takes and produces the fragment's 64-bit integer.
-                let (lhs, rhs) = (
-                    as_scalar(lhs, &ids, &mut code, &mut next),
-                    as_scalar(rhs, &ids, &mut code, &mut next),
-                );
+                // means — and the one whose result is not one. Every other
+                // operator takes and produces a scalar of the class its operands
+                // are, which is the integer class when an index and a literal
+                // meet and the value class otherwise.
+                let lhs = as_class(
+                    lhs,
+                    operand_class,
+                    &ids,
+                    &mut literals,
+                    &mut code,
+                    &mut next,
+                    at,
+                )?;
+                let rhs = as_class(
+                    rhs,
+                    operand_class,
+                    &ids,
+                    &mut literals,
+                    &mut code,
+                    &mut next,
+                    at,
+                )?;
                 let result = next;
                 next += 1;
-                let (opcode, result_type, result_is_condition) = match operator {
-                    KernelBin::Add => (op::I_ADD, ids.ulong, false),
-                    KernelBin::Sub => (op::I_SUB, ids.ulong, false),
-                    KernelBin::Mul => (op::I_MUL, ids.ulong, false),
+                // The last element of each row says the operands are compared as
+                // **bit patterns**: the language's `==`/`!=` over two values
+                // route through `ValueExt::value_eq`, which for a float compares
+                // `to_bits`, so `0.0 == -0.0` is `0` and `NaN == NaN` is `1`
+                // (`docs/notes/floating-point.md` §3.7). `OpFOrdEqual` is the
+                // trap here — right for IEEE and wrong for this language — so a
+                // float equality reinterprets both operands and compares the
+                // integers, which is `to_bits` exactly.
+                let (opcode, result_type, result_kind, as_bits) = match (operand_class, operator) {
                     // An `Int` is unsigned: `OpSDiv`/`OpSRem` would agree below
-                    // 2^63 and differ above, silently.  `OpUMod` is the
-                    // remainder the language's `%` means (`OpSRem` rounds
-                    // toward zero, which is a different function altogether).
-                    KernelBin::Div => (op::U_DIV, ids.ulong, false),
-                    KernelBin::Rem => (op::U_MOD, ids.ulong, false),
+                    // 2^63 and differ above, silently.  `OpUMod` is the remainder
+                    // the language's `%` means (`OpSRem` rounds toward zero,
+                    // which is a different function altogether).
+                    (ScalarClass::Int, KernelBin::Add) => {
+                        (op::I_ADD, ids.integer(), INT_VALUE, false)
+                    }
+                    (ScalarClass::Int, KernelBin::Sub) => {
+                        (op::I_SUB, ids.integer(), INT_VALUE, false)
+                    }
+                    (ScalarClass::Int, KernelBin::Mul) => {
+                        (op::I_MUL, ids.integer(), INT_VALUE, false)
+                    }
+                    (ScalarClass::Int, KernelBin::Div) => {
+                        (op::U_DIV, ids.integer(), INT_VALUE, false)
+                    }
+                    (ScalarClass::Int, KernelBin::Rem) => {
+                        (op::U_MOD, ids.integer(), INT_VALUE, false)
+                    }
                     // A comparison yields a bool on this target, which is exactly
                     // what `Select` consumes — the wasm backend's widening to a
                     // scalar has no counterpart here, and no cost.
-                    KernelBin::Lt => (op::U_LESS_THAN, ids.boolean, true),
-                    KernelBin::Gt => (op::U_GREATER_THAN, ids.boolean, true),
-                    KernelBin::Leq => (op::U_LESS_THAN_EQUAL, ids.boolean, true),
-                    KernelBin::Geq => (op::U_GREATER_THAN_EQUAL, ids.boolean, true),
-                    KernelBin::Eq => (op::I_EQUAL, ids.boolean, true),
-                    KernelBin::Neq => (op::I_NOT_EQUAL, ids.boolean, true),
+                    (ScalarClass::Int, KernelBin::Lt) => {
+                        (op::U_LESS_THAN, ids.boolean, Kind::Condition, false)
+                    }
+                    (ScalarClass::Int, KernelBin::Gt) => {
+                        (op::U_GREATER_THAN, ids.boolean, Kind::Condition, false)
+                    }
+                    (ScalarClass::Int, KernelBin::Leq) => {
+                        (op::U_LESS_THAN_EQUAL, ids.boolean, Kind::Condition, false)
+                    }
+                    (ScalarClass::Int, KernelBin::Geq) => (
+                        op::U_GREATER_THAN_EQUAL,
+                        ids.boolean,
+                        Kind::Condition,
+                        false,
+                    ),
+                    (ScalarClass::Int, KernelBin::Eq) => {
+                        (op::I_EQUAL, ids.boolean, Kind::Condition, false)
+                    }
+                    (ScalarClass::Int, KernelBin::Neq) => {
+                        (op::I_NOT_EQUAL, ids.boolean, Kind::Condition, false)
+                    }
                     // The bitwise operators, which over two comparison results
                     // are the language's `and`/`xor`/`or` — the place a
                     // comparison's scalar materialisation is actually paid for.
-                    KernelBin::BitAnd => (op::BITWISE_AND, ids.ulong, false),
-                    KernelBin::BitOr => (op::BITWISE_OR, ids.ulong, false),
-                    KernelBin::BitXor => (op::BITWISE_XOR, ids.ulong, false),
+                    (ScalarClass::Int, KernelBin::BitAnd) => {
+                        (op::BITWISE_AND, ids.integer(), INT_VALUE, false)
+                    }
+                    (ScalarClass::Int, KernelBin::BitOr) => {
+                        (op::BITWISE_OR, ids.integer(), INT_VALUE, false)
+                    }
+                    (ScalarClass::Int, KernelBin::BitXor) => {
+                        (op::BITWISE_XOR, ids.integer(), INT_VALUE, false)
+                    }
+                    (ScalarClass::Float, KernelBin::Add) => {
+                        (op::F_ADD, ids.float, FLOAT_VALUE, false)
+                    }
+                    (ScalarClass::Float, KernelBin::Sub) => {
+                        (op::F_SUB, ids.float, FLOAT_VALUE, false)
+                    }
+                    (ScalarClass::Float, KernelBin::Mul) => {
+                        (op::F_MUL, ids.float, FLOAT_VALUE, false)
+                    }
+                    // **`OpFDiv` plainly, and no guard.** A zero divisor is
+                    // undefined here and IEEE on wasm, and that divergence is the
+                    // recorded price of admitting floats at all: the language does
+                    // not specify a kernel's float division and does not promise
+                    // one (`docs/notes/floating-point.md` §4.4).
+                    (ScalarClass::Float, KernelBin::Div) => {
+                        (op::F_DIV, ids.float, FLOAT_VALUE, false)
+                    }
+                    (ScalarClass::Float, KernelBin::Lt) => {
+                        (op::F_LESS_THAN, ids.boolean, Kind::Condition, false)
+                    }
+                    (ScalarClass::Float, KernelBin::Gt) => {
+                        (op::F_GREATER_THAN, ids.boolean, Kind::Condition, false)
+                    }
+                    (ScalarClass::Float, KernelBin::Leq) => {
+                        (op::F_LESS_THAN_EQUAL, ids.boolean, Kind::Condition, false)
+                    }
+                    (ScalarClass::Float, KernelBin::Geq) => (
+                        op::F_GREATER_THAN_EQUAL,
+                        ids.boolean,
+                        Kind::Condition,
+                        false,
+                    ),
+                    (ScalarClass::Float, KernelBin::Eq) => {
+                        (op::I_EQUAL, ids.boolean, Kind::Condition, true)
+                    }
+                    (ScalarClass::Float, KernelBin::Neq) => {
+                        (op::I_NOT_EQUAL, ids.boolean, Kind::Condition, true)
+                    }
+                    (ScalarClass::Float, KernelBin::Rem) => {
+                        return Err(SpirvRefusal::UnsupportedFloatOperator {
+                            operator: "% (remainder)",
+                            at,
+                        });
+                    }
+                    (ScalarClass::Float, KernelBin::BitAnd) => {
+                        return Err(SpirvRefusal::UnsupportedFloatOperator {
+                            operator: "& (bitwise and)",
+                            at,
+                        });
+                    }
+                    (ScalarClass::Float, KernelBin::BitOr) => {
+                        return Err(SpirvRefusal::UnsupportedFloatOperator {
+                            operator: "| (bitwise or)",
+                            at,
+                        });
+                    }
+                    (ScalarClass::Float, KernelBin::BitXor) => {
+                        return Err(SpirvRefusal::UnsupportedFloatOperator {
+                            operator: "^ (bitwise exclusive or)",
+                            at,
+                        });
+                    }
                 };
-                code.push(Inst::new(opcode, vec![result_type, result, lhs.0, rhs.0]));
-                stack.push(if result_is_condition {
-                    condition(result)
+                if as_bits {
+                    let left_bits = next;
+                    next += 1;
+                    let right_bits = next;
+                    next += 1;
+                    code.push(Inst::new(op::BITCAST, vec![ids.uint, left_bits, lhs.id]));
+                    code.push(Inst::new(op::BITCAST, vec![ids.uint, right_bits, rhs.id]));
+                    code.push(Inst::new(
+                        opcode,
+                        vec![result_type, result, left_bits, right_bits],
+                    ));
                 } else {
-                    scalar(result)
+                    code.push(Inst::new(opcode, vec![result_type, result, lhs.id, rhs.id]));
+                }
+                stack.push(Slot {
+                    id: result,
+                    kind: result_kind,
                 });
             }
             KernelInstr::LocalGet(local) => {
                 if *local != index {
                     return Err(SpirvRefusal::NonIndexParameter { local: *local, at });
                 }
-                stack.push(scalar(index_value));
+                stack.push(scalar(index_value, ScalarClass::Int));
             }
             // The condition a `select` needs.  **Not a no-op here**: wasm's
             // `i32.wrap_i64` narrows an `i64` condition to the `i32` its
             // `select` takes, and this target's `select` takes a *bool*, so the
-            // same instruction is where an `i64` condition becomes one.  When
-            // the condition is already a comparison's bool — which is what the
+            // same instruction is where a condition becomes one.  When the
+            // condition is already a comparison's bool — which is what the
             // emitter in `lichen-compute` produces for an `if` — it is a no-op,
             // and that is the case the module docs describe.
             KernelInstr::I32WrapI64 => {
                 let popped = pop(&mut stack, at)?;
-                stack.push(as_condition(popped, &ids, &mut code, &mut next));
+                stack.push(as_condition(
+                    popped,
+                    &ids,
+                    &mut literals,
+                    &mut code,
+                    &mut next,
+                ));
             }
             KernelInstr::Select => {
                 let selector = pop(&mut stack, at)?;
@@ -541,21 +1038,48 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                 // The arms are the language's scalars (a `select`'s result type
                 // is its arms' type, and a scalar is what a lichen value is),
                 // and the selector is the bool `select` takes.
-                let then = as_scalar(then, &ids, &mut code, &mut next);
-                let otherwise = as_scalar(otherwise, &ids, &mut code, &mut next);
-                let selector = as_condition(selector, &ids, &mut code, &mut next);
+                let then = as_class(
+                    then,
+                    ids.class,
+                    &ids,
+                    &mut literals,
+                    &mut code,
+                    &mut next,
+                    at,
+                )?;
+                let otherwise = as_class(
+                    otherwise,
+                    ids.class,
+                    &ids,
+                    &mut literals,
+                    &mut code,
+                    &mut next,
+                    at,
+                )?;
+                let selector = as_condition(selector, &ids, &mut literals, &mut code, &mut next);
                 let result = next;
                 next += 1;
                 code.push(Inst::new(
                     op::SELECT,
-                    vec![ids.ulong, result, selector.0, then.0, otherwise.0],
+                    vec![ids.scalar(), result, selector.id, then.id, otherwise.id],
                 ));
-                stack.push(scalar(result));
+                stack.push(scalar(result, ids.class));
             }
             KernelInstr::BufferReadCall => {
                 let element = pop(&mut stack, at)?;
                 let position = pop(&mut stack, at)?;
-                let element = as_scalar(element, &ids, &mut code, &mut next);
+                // An access chain's index is an **integer**, so a float in this
+                // position is a fragment asking for a conversion the language
+                // does not have, and `as_class` refuses it by name.
+                let element = as_class(
+                    element,
+                    ScalarClass::Int,
+                    &ids,
+                    &mut literals,
+                    &mut code,
+                    &mut next,
+                    at,
+                )?;
                 let slot = buffer_slot(position, at, 0, binding.inputs, "input")?;
                 let pointer = next;
                 next += 1;
@@ -566,40 +1090,58 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                 code.push(Inst::new(
                     op::ACCESS_CHAIN,
                     vec![
-                        ids.ptr_ulong,
+                        ids.ptr_elem,
                         pointer,
                         ids.buffers + slot as u32,
                         ids.zero,
-                        element.0,
+                        element.id,
                         ids.zero,
                     ],
                 ));
-                code.push(Inst::new(op::LOAD, vec![ids.ulong, loaded, pointer]));
-                stack.push(scalar(loaded));
+                code.push(Inst::new(op::LOAD, vec![ids.scalar(), loaded, pointer]));
+                stack.push(scalar(loaded, ids.class));
             }
             KernelInstr::BufferWriteCall => {
                 let value = pop(&mut stack, at)?;
                 let element = pop(&mut stack, at)?;
                 let position = pop(&mut stack, at)?;
-                // A buffer element is a 64-bit scalar whatever the body computed
-                // it as, so a comparison stored into one is materialised here.
-                let value = as_scalar(value, &ids, &mut code, &mut next);
-                let element = as_scalar(element, &ids, &mut code, &mut next);
+                // A buffer element is the module's scalar whatever the body
+                // computed the value as, so a comparison stored into one is
+                // materialised here — and a value of the *other* class is refused
+                // rather than converted.
+                let value = as_class(
+                    value,
+                    ids.class,
+                    &ids,
+                    &mut literals,
+                    &mut code,
+                    &mut next,
+                    at,
+                )?;
+                let element = as_class(
+                    element,
+                    ScalarClass::Int,
+                    &ids,
+                    &mut literals,
+                    &mut code,
+                    &mut next,
+                    at,
+                )?;
                 let slot = buffer_slot(position, at, binding.inputs, binding.outputs, "output")?;
                 let pointer = next;
                 next += 1;
                 code.push(Inst::new(
                     op::ACCESS_CHAIN,
                     vec![
-                        ids.ptr_ulong,
+                        ids.ptr_elem,
                         pointer,
                         ids.buffers + slot as u32,
                         ids.zero,
-                        element.0,
+                        element.id,
                         ids.zero,
                     ],
                 ));
-                code.push(Inst::new(op::STORE, vec![pointer, value.0]));
+                code.push(Inst::new(op::STORE, vec![pointer, value.id]));
             }
             KernelInstr::CallKernel(kernel) => {
                 return Err(SpirvRefusal::CrossKernelCall {
@@ -617,7 +1159,7 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
         });
     }
 
-    Ok(assemble(&ids, binding, &literal_decls, &code, next))
+    Ok(assemble(&ids, binding, &literals.declarations, &code, next))
 }
 
 /// Write the module in SPIR-V's required section order.
@@ -635,16 +1177,16 @@ fn assemble(ids: &Ids, binding: Binding, literals: &[Inst], code: &[Inst], bound
         }
     };
 
-    // 1. Capabilities. `Int64` is unconditional: this emitter's only numeric type
-    // is the fragment's 64-bit integer, and a fragment using it needs the
-    // capability whether or not the particular values happen to be small.
-    emit_all(
-        &mut out,
-        &[
-            Inst::new(op::CAPABILITY, vec![capability::SHADER]),
-            Inst::new(op::CAPABILITY, vec![capability::INT64]),
-        ],
-    );
+    // 1. Capabilities. `Int64` only where the module has a 64-bit integer: a
+    // float module's integers are 32-bit element indices and its scalar is
+    // `Float32`, which is core, so declaring the capability there would demand a
+    // device feature for a type the module never uses — and `needs_int64` says
+    // exactly what is declared here.
+    let mut capabilities = vec![Inst::new(op::CAPABILITY, vec![capability::SHADER])];
+    if ids.class == ScalarClass::Int {
+        capabilities.push(Inst::new(op::CAPABILITY, vec![capability::INT64]));
+    }
+    emit_all(&mut out, &capabilities);
 
     // 2. The single memory model.
     emit_all(
@@ -674,9 +1216,13 @@ fn assemble(ids: &Ids, binding: Binding, literals: &[Inst], code: &[Inst], bound
 
     // 4. Annotations. Decorating a type or variable declared in the *next*
     // section is legal, and is why `OpDecorate` is a separate section at all.
+    //
+    // The stride is the element class's width — eight bytes for the integer
+    // ABI's `i64`, four for an `f32` — and it is the *only* place the module
+    // states it: the runtime array it decorates is the buffer a dispatch binds.
     let mut annotations = vec![Inst::new(
         op::DECORATE,
-        vec![ids.array, decoration::ARRAY_STRIDE, ELEMENT_STRIDE],
+        vec![ids.array, decoration::ARRAY_STRIDE, ids.element_stride()],
     )];
     // A storage buffer's struct member needs its byte offset, and the sole
     // member sits at zero.
@@ -715,16 +1261,26 @@ fn assemble(ids: &Ids, binding: Binding, literals: &[Inst], code: &[Inst], bound
     // 5. Types, then the constants (module-scope, so the body's literals belong
     // here and not in the function), then the globals. The order within the
     // section is the spec's: types, constants, global variables.
-    let types = vec![
+    //
+    // The scalar type is the class's, and the element struct's only member is
+    // that same id — which is where "does this buffer hold floats" is decided.
+    let mut types = vec![
         Inst::new(op::TYPE_VOID, vec![ids.void]),
         Inst::new(op::TYPE_BOOL, vec![ids.boolean]),
+    ];
+    match ids.class {
         // The fragment's own 64-bit integer is **unsigned** (signedness `0`):
         // the language's `Int` is, and the unsigned opcodes a kernel divides,
         // takes a remainder and compares with require it. See [`Ids::ulong`].
-        Inst::new(op::TYPE_INT, vec![ids.ulong, 64, 0]),
+        ScalarClass::Int => types.push(Inst::new(op::TYPE_INT, vec![ids.ulong, 64, 0])),
+        // `OpTypeFloat 32`: the language's `Float` is `f32`
+        // (`docs/notes/floating-point.md` §4.1).
+        ScalarClass::Float => types.push(Inst::new(op::TYPE_FLOAT, vec![ids.float, 32])),
+    }
+    types.extend([
         Inst::new(op::TYPE_INT, vec![ids.uint, 32, 0]),
         Inst::new(op::TYPE_VECTOR, vec![ids.v3uint, ids.uint, 3]),
-        Inst::new(op::TYPE_STRUCT, vec![ids.elem, ids.ulong]),
+        Inst::new(op::TYPE_STRUCT, vec![ids.elem, ids.scalar()]),
         Inst::new(op::TYPE_RUNTIME_ARRAY, vec![ids.array, ids.elem]),
         Inst::new(op::TYPE_STRUCT, vec![ids.buffer_struct, ids.array]),
         Inst::new(
@@ -741,21 +1297,44 @@ fn assemble(ids: &Ids, binding: Binding, literals: &[Inst], code: &[Inst], bound
         ),
         Inst::new(
             op::TYPE_POINTER,
-            vec![ids.ptr_ulong, storage_class::STORAGE_BUFFER, ids.ulong],
+            vec![ids.ptr_elem, storage_class::STORAGE_BUFFER, ids.scalar()],
         ),
         Inst::new(op::TYPE_FUNCTION, vec![ids.fn_ty, ids.void]),
-    ];
+    ]);
     emit_all(&mut out, &types);
 
-    let mut constants = vec![
-        Inst::new(op::CONSTANT, vec![ids.uint, ids.zero, 0]),
-        // The i64 `1` and `0` a comparison is materialised into a scalar with.
-        // Declared unconditionally with the other constants — `OpConstant` is
-        // module-scope, and an unused constant is legal — because which body
-        // needs them is known only after the walk above.
-        Inst::new(op::CONSTANT, vec![ids.ulong, ids.one_ulong, 1, 0]),
-        Inst::new(op::CONSTANT, vec![ids.ulong, ids.zero_ulong, 0, 0]),
-    ];
+    let mut constants = vec![Inst::new(op::CONSTANT, vec![ids.uint, ids.zero, 0])];
+    // The scalar `1` and `0` a comparison is materialised into — `1.0`/`0.0`
+    // over two floats, the i64 pair over two integers. Declared unconditionally
+    // with the other constants — `OpConstant` is module-scope, and an unused
+    // constant is legal — because which body needs them is known only after the
+    // walk above.
+    match ids.class {
+        ScalarClass::Int => {
+            constants.push(Inst::new(
+                op::CONSTANT,
+                vec![ids.ulong, ids.one_scalar, 1, 0],
+            ));
+            constants.push(Inst::new(
+                op::CONSTANT,
+                vec![ids.ulong, ids.zero_scalar, 0, 0],
+            ));
+        }
+        ScalarClass::Float => {
+            constants.push(Inst::new(
+                op::CONSTANT,
+                vec![ids.float, ids.one_scalar, 1.0f32.to_bits()],
+            ));
+            constants.push(Inst::new(
+                op::CONSTANT,
+                vec![ids.float, ids.zero_scalar, 0.0f32.to_bits()],
+            ));
+            // The 32-bit `1` a comparison's bool is materialised into where the
+            // position wants the *integer* class. The integer `0` is the
+            // `ids.zero` above.
+            constants.push(Inst::new(op::CONSTANT, vec![ids.uint, ids.one_integer, 1]));
+        }
+    }
     constants.extend(literals.iter().map(|literal| Inst {
         opcode: literal.opcode,
         operands: literal.operands.clone(),
@@ -802,29 +1381,68 @@ fn pop(stack: &mut Vec<Slot>, at: usize) -> Result<Slot, SpirvRefusal> {
     stack.pop().ok_or(SpirvRefusal::UnbalancedStack { at })
 }
 
-/// The fragment's 64-bit scalar for `slot`, materialising a comparison's bool.
+/// The class a binary operator runs over, from its two operands.
 ///
-/// The language says a comparison yields `0`/`1`, so a bool that reaches a
-/// scalar position has to become that scalar — `OpSelect` over the two i64
-/// constants is the conversion (there is no `OpConvertBoolToInt`; a bool's
-/// stored form is not defined).
-///
-/// **A bool already popped as a scalar is not the same thing as one that never
-/// was**, which is why the flag rides on the slot rather than being re-derived:
-/// the IR is untyped, so "was this a comparison" is knowledge only this walk
-/// has.
-fn as_scalar(slot: Slot, ids: &Ids, code: &mut Vec<Inst>, next: &mut u32) -> Slot {
-    let (id, constant, is_condition) = slot;
-    if !is_condition {
-        return slot;
+/// A literal follows the other operand: `Const(1)` beside the index is the
+/// integer `1` and beside a float is the `f32` whose bits are `1`. With **both**
+/// operands literals nothing else can decide, so the module's own class does —
+/// which is what makes `2.0 * 3.0` float arithmetic in a float module. The price
+/// is that a *pure constant* expression used as an index (`1 + 2`, say) reads as
+/// arithmetic over two bit patterns and is refused at the position that wanted
+/// an index. Refusing beats the alternative: emitting integer arithmetic over
+/// the same payloads would silently be a different number in the other case.
+fn bin_class(lhs: Kind, rhs: Kind, module: ScalarClass) -> ScalarClass {
+    match (lhs, rhs) {
+        (Kind::Scalar(class), _) => class,
+        (_, Kind::Scalar(class)) => class,
+        _ => module,
     }
-    let result = *next;
-    *next += 1;
-    code.push(Inst::new(
-        op::SELECT,
-        vec![ids.ulong, result, id, ids.one_ulong, ids.zero_ulong],
-    ));
-    (result, constant, false)
+}
+
+/// `slot` as a value of `class`, emitting what the change needs.
+///
+/// Three cases, each a fact about the module rather than a preference:
+///
+/// * a [`Kind::Literal`] becomes a constant of `class` — `Const` is the one IR
+///   instruction whose class the position decides, and [`Literals`] emits each
+///   reading of it once;
+/// * a [`Kind::Condition`] becomes that class's `1`/`0`, through `OpSelect` over
+///   the two constants: there is no `OpConvertBoolToInt` (a bool's stored form
+///   is not defined), and over two floats the scalar the language means is
+///   `1.0`/`0.0` rather than an integer select;
+/// * a [`Kind::Scalar`] of the *other* class has no conversion at all. `Int` and
+///   `Float` do not convert in either direction
+///   (`docs/notes/floating-point.md` §4.2), so a fragment that asks for one is
+///   refused by name rather than turned into a different number.
+fn as_class(
+    slot: Slot,
+    class: ScalarClass,
+    ids: &Ids,
+    literals: &mut Literals,
+    code: &mut Vec<Inst>,
+    next: &mut u32,
+    at: usize,
+) -> Result<Slot, SpirvRefusal> {
+    match slot.kind {
+        Kind::Scalar(seen) if seen == class => Ok(slot),
+        Kind::Scalar(_) => Err(SpirvRefusal::MixedClasses { at }),
+        Kind::Literal(value) => Ok(scalar(literals.get(class, value, ids, next), class)),
+        Kind::Condition => {
+            let result = *next;
+            *next += 1;
+            code.push(Inst::new(
+                op::SELECT,
+                vec![
+                    ids.type_of(class),
+                    result,
+                    slot.id,
+                    ids.one_of(class),
+                    ids.zero_of(class),
+                ],
+            ));
+            Ok(scalar(result, class))
+        }
+    }
 }
 
 /// The `bool` a `select` takes for `slot`, converting a scalar.
@@ -832,18 +1450,59 @@ fn as_scalar(slot: Slot, ids: &Ids, code: &mut Vec<Inst>, next: &mut u32) -> Slo
 /// **Non-zero is true**, which is what wasm's `select` means by its `i32`
 /// condition — the instruction this one stands in for (`I32WrapI64`) narrows
 /// there and converts here, so the two targets agree on what a condition is.
-fn as_condition(slot: Slot, ids: &Ids, code: &mut Vec<Inst>, next: &mut u32) -> Slot {
-    let (id, constant, is_condition) = slot;
-    if is_condition {
-        return slot;
+///
+/// # For a float, the bit pattern is what is tested
+///
+/// "The bit pattern is non-zero" is **not** the same question as "the value is
+/// not zero": `-0.0` has a non-zero bit pattern, and a `NaN` — whose bit pattern
+/// is non-zero by definition — compares unequal to everything, so
+/// `OpFOrdNotEqual x, 0.0` answers *false* for it and would send a `NaN` selector
+/// down the else arm. So a float is **reinterpreted** as its 32 bits
+/// (`OpBitcast`: same width, the same bits, no conversion of the value) and
+/// compared as an integer, which is the bit pattern exactly. A literal's payload
+/// is already the pattern — it is the `f32`'s bits — so it is compared in its
+/// integer reading, with no instruction spent reinterpreting it.
+fn as_condition(
+    slot: Slot,
+    ids: &Ids,
+    literals: &mut Literals,
+    code: &mut Vec<Inst>,
+    next: &mut u32,
+) -> Slot {
+    match slot.kind {
+        Kind::Condition => slot,
+        Kind::Scalar(ScalarClass::Int) => {
+            let result = *next;
+            *next += 1;
+            code.push(Inst::new(
+                op::I_NOT_EQUAL,
+                vec![ids.boolean, result, slot.id, ids.zero_of(ScalarClass::Int)],
+            ));
+            condition(result)
+        }
+        Kind::Scalar(ScalarClass::Float) => {
+            let bits = *next;
+            *next += 1;
+            let result = *next;
+            *next += 1;
+            code.push(Inst::new(op::BITCAST, vec![ids.uint, bits, slot.id]));
+            code.push(Inst::new(
+                op::I_NOT_EQUAL,
+                vec![ids.boolean, result, bits, ids.zero_of(ScalarClass::Int)],
+            ));
+            condition(result)
+        }
+        Kind::Literal(value) => {
+            let bits = literals.get(ScalarClass::Int, value, ids, next);
+            let result = *next;
+            *next += 1;
+            code.push(Inst::new(
+                op::I_NOT_EQUAL,
+                vec![ids.boolean, result, bits, ids.zero_of(ScalarClass::Int)],
+            ));
+            condition(result)
+        }
     }
-    let result = *next;
-    *next += 1;
-    code.push(Inst::new(
-        op::I_NOT_EQUAL,
-        vec![ids.boolean, result, id, ids.zero_ulong],
-    ));
-    (result, constant, true)
 }
 
 /// Resolve a buffer position into a slot in the module's buffer list.
@@ -862,7 +1521,7 @@ fn buffer_slot(
     space: &'static str,
 ) -> Result<usize, SpirvRefusal> {
     let value = position
-        .1
+        .constant()
         .ok_or(SpirvRefusal::NonConstantBufferPosition { at })?;
     if value < 0 || value as usize >= count {
         return Err(SpirvRefusal::BufferPositionOutOfRange {
