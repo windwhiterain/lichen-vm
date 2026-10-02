@@ -88,7 +88,10 @@ languages = ["Lichen"]
 # `src/parser.c` need not be committed.  `0773b18` is the grammar update
 # that added the `return` keyword (and regenerated `src/parser.c`); the earlier
 # `9b23892` rev predates `return`, which made the extension's `highlights.scm`
-# fail on load with `Query error ... Invalid node type "return"`.
+# fail on load with `Query error ... Invalid node type "return"`.  The current
+# rev is the one that added the full operator set to the grammar and its
+# highlight queries, so a load before it would colour none of `* / % | ^ &` and
+# read `a < b` as an error node.
 #
 # The `repository` is the public HTTPS remote and `rev` is a commit pushed to
 # `origin/dev`, so a registry install (or any machine without a local clone) can
@@ -97,5 +100,5 @@ languages = ["Lichen"]
 # same `rev`.
 [grammars.lichen]
 repository = "https://github.com/windwhiterain/lichen-vm"
-rev = "d799ade783ca7a0424dd1ab26dda2fd680d0a11c"
+rev = "2d54f2aed408905a6ddf95e611065873d79ea56c"
 path = "tree-sitter-lichen"
