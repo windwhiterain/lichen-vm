@@ -54,10 +54,17 @@ pub struct LexDiag {
     pub message: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+// `Eq` deliberately absent: `Float` carries an `f32`, which is not `Eq` --
+// `NaN != NaN`, so a total equality cannot exist over the float class.  Nothing
+// here folds a token into a key: every consumer keeps tokens in a `Vec` and
+// compares them with `==`, so `PartialEq` is the whole requirement.
+#[derive(Clone, Debug, PartialEq)]
 pub enum TokenKind {
     /// An integer literal.
     Int(usize),
+    /// A float literal — one `f32`, the value [`raw_to_kind`] read from the
+    /// matched digits.
+    Float(f32),
     /// A string literal — the immutable builtin `string` value's content.
     Str(String),
     /// An identifier, never a keyword.
@@ -68,6 +75,9 @@ pub enum TokenKind {
     Placeholder,
     /// The Int type constant.
     KwInt,
+    /// The Float type constant -- the real-number kind marker, a keyword for
+    /// the same reason `Int` is (see `docs/notes/floating-point.md` §3.3).
+    KwFloat,
     /// The string type constant.
     KwString,
     /// The Type type constant -- the universe.
@@ -187,10 +197,12 @@ impl TokenKind {
     pub fn describe(&self) -> String {
         match self {
             TokenKind::Int(_) => "an integer literal".to_string(),
+            TokenKind::Float(_) => "a float literal".to_string(),
             TokenKind::Str(_) => "a string literal".to_string(),
             TokenKind::Name(_) => "a name".to_string(),
             TokenKind::Placeholder => "'_'".to_string(),
             TokenKind::KwInt => "'Int'".to_string(),
+            TokenKind::KwFloat => "'Float'".to_string(),
             TokenKind::KwString => "'string'".to_string(),
             TokenKind::KwType => "'Type'".to_string(),
             TokenKind::KwStruct => "'struct'".to_string(),
@@ -243,7 +255,8 @@ impl TokenKind {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+// Same reason as `TokenKind`: the float payload is `f32`, not `Eq`.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
     /// (line, column), 1-based -- the token's start.
@@ -268,13 +281,23 @@ pub struct Lexed {
 
 /// The token kinds logos recognizes.  Payloads are read from the matched
 /// slice in the loop so integer overflow can be its own error.
-#[derive(Logos, Clone, Debug, PartialEq, Eq)]
+// Same reason as `TokenKind`: the float payload is `f32`, not `Eq`.
+#[derive(Logos, Clone, Debug, PartialEq)]
 #[logos(skip r"[ \t\r]+")]
 enum RawToken {
     #[regex(r"\n|,|;")]
     Separator,
     #[regex(r"[0-9]+")]
     IntLit,
+    /// A float literal.  A digit is required **before** the dot as well as
+    /// after it, because a leading dot is already field access: with
+    /// `[0-9]*\.[0-9]+`, `.5` would lex as one float and `x.5`'s `x` would
+    /// still win by priority, but `.5` alone must not be a literal, and
+    /// requiring the leading digit states that in the pattern rather than in
+    /// the loop.  Longest-match then keeps `3.5` whole while `1.` and `x.5`
+    /// stay `Int`/`Name`, `Dot`, `Int`.
+    #[regex(r"[0-9]+\.[0-9]+")]
+    FloatLit,
     /// A `"..."` string literal (no escapes; may span newlines).  The trailing
     /// quote is optional so an unterminated string lexes as one unit and is
     /// diagnosed as a whole, rather than as a run of single-char errors.
@@ -282,6 +305,8 @@ enum RawToken {
     StrLit,
     #[token("Int")]
     KwInt,
+    #[token("Float")]
+    KwFloat,
     #[token("string")]
     KwString,
     #[token("Type")]
@@ -706,6 +731,18 @@ fn raw_to_kind(
             }
             Some(TokenKind::Int(value))
         }
+        RawToken::FloatLit => {
+            // The matched slice is digits, one dot, digits — never empty — so
+            // `from_str` is always `Ok` and its result is correctly rounded.
+            // A magnitude above `f32::MAX` parses to an infinity and is **not**
+            // a lex error: the `Int` arm's range check has no counterpart,
+            // because `f32::INFINITY` is a value the class admits (produced by
+            // the operators too, `docs/notes/floating-point.md` §4.2), while
+            // `usize` has no infinity for an overflowing `Int` to become.
+            Some(TokenKind::Float(
+                slice.parse::<f32>().unwrap_or(f32::INFINITY),
+            ))
+        }
         RawToken::StrLit => {
             // The matched text is `"…"` (or a bare `"` / an unterminated
             // `"…` when the closing quote is missing).  An unterminated
@@ -722,6 +759,7 @@ fn raw_to_kind(
         }
         RawToken::NameLit => Some(match slice {
             "Int" => TokenKind::KwInt,
+            "Float" => TokenKind::KwFloat,
             "string" => TokenKind::KwString,
             "Type" => TokenKind::KwType,
             "struct" => TokenKind::KwStruct,
@@ -762,6 +800,7 @@ fn raw_to_kind(
             Some(TokenKind::Tilde(n))
         }
         RawToken::KwInt => Some(TokenKind::KwInt),
+        RawToken::KwFloat => Some(TokenKind::KwFloat),
         RawToken::KwString => Some(TokenKind::KwString),
         RawToken::KwType => Some(TokenKind::KwType),
         RawToken::KwStruct => Some(TokenKind::KwStruct),
