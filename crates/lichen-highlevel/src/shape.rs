@@ -685,6 +685,15 @@ where
     if shape_value == P::Value::int_marker() {
         return LowShape::USize;
     }
+    if shape_value == P::Value::float_marker() {
+        // A float is a **decided** member of the low type vocabulary, so a
+        // declared `[float, K]` states it.  Answering `Unknown` here would make
+        // a declared float indistinguishable from an unbound cell, which is a
+        // different claim.  Whether a kernel can lower it is not this decoder's
+        // question (`lichen_compute::kernel_domain`,
+        // `docs/notes/floating-point.md` §3.8).
+        return LowShape::Float;
+    }
     if shape_value == P::Value::string_marker() || shape_value == P::Value::type_marker() {
         // A string is not a machine scalar, and a type is not a value at all.
         return LowShape::Unknown;

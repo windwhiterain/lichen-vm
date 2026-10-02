@@ -2131,10 +2131,69 @@ fn lower_body(
 const UNDECIDED_DOMAIN: &str = "the kernel parameter's type is not decided when the kernel is compiled; \
 annotate it (for example `p : <Int, Int>`) so its domain is known";
 
+/// The reason a `jit` reports when the parameter's domain **holds** a float —
+/// anywhere the domain walk reaches, not only when the parameter is one.  A
+/// float is a shape that **is** decided, so [`UNDECIDED_DOMAIN`] would
+/// misdescribe the program and ask for an annotation the author already wrote.
+/// A kernel's ABI is `i64` in five places at once (`lichen_kernel_ir`), so
+/// there is no float local to lower the position into
+/// (`docs/notes/floating-point.md` §3.8).
+const FLOAT_DOMAIN: &str = "the kernel parameter's type contains a float, which a kernel cannot take: \
+the kernel ABI is `i64`-only, so a float has no local to be lowered into";
+
+/// A position of a domain shape that the kernel ABI cannot lower to a decided
+/// `i64` local.
+///
+/// **The variant order is the report order**, strongest last, so `max` answers
+/// with the cause to name: a `Float` outranks an `Undecided` position because
+/// it is the one annotating cannot clear
+/// (`docs/notes/floating-point.md` §3.8, §5).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum DomainObstacle {
+    /// An `Unknown` leaf: the shape states nothing.
+    Undecided,
+    /// A `Float` leaf: decided, but the ABI has no local for it (`i64` in five
+    /// places, `lichen_kernel_ir`), so an arity read off it is a mis-encoding.
+    Float,
+}
+
+/// **The one walk over a domain shape**, read by the gate [`domain_is_known`]
+/// and by [`kernel_domain`] for the cause it names, so the two cannot disagree
+/// about a position.
+///
+/// It **recurses through every position**, and that is the load-bearing part: a
+/// compound shape reached through an accepted `Tuple` is walked too, because
+/// asking a compound shape's own `is_known` answers `true` for `Array(Float, _)`
+/// — a float is a decided shape — and `kernel_domain` accepts `Tuple(_)`
+/// without re-checking elements.  A function's codomain and a table's value
+/// position are walked as well, because they are decided independently of their
+/// sibling: a declared `Int -> Float` puts a float in exactly that position.
+fn domain_obstacle(shape: &LowShape) -> Option<DomainObstacle> {
+    match shape {
+        LowShape::Unknown => Some(DomainObstacle::Undecided),
+        LowShape::Float => Some(DomainObstacle::Float),
+        LowShape::USize => None,
+        LowShape::Tuple(items) => items.iter().filter_map(domain_obstacle).max(),
+        LowShape::Array(element, _) => domain_obstacle(element),
+        LowShape::Function(domain, codomain) => {
+            domain_obstacle(domain).max(domain_obstacle(codomain))
+        }
+        LowShape::Table(key, value) => domain_obstacle(key).max(domain_obstacle(value)),
+    }
+}
+
 /// A kernel domain must be a decided scalar or a tuple of decided scalars —
 /// everything else is a refusal, and each refusal names its own cause rather
 /// than falling back to a shape that would compile into a wrong signature.
+///
+/// A float is named **ahead of** the gate below, at any position the walk
+/// reaches: the gate answers `false` for a float because the ABI has no local
+/// for it, not because the shape is undecided, so a float reported there would
+/// be described as an undecided domain.
 fn kernel_domain(domain: LowShape) -> Result<LowShape, String> {
+    if let Some(DomainObstacle::Float) = domain_obstacle(&domain) {
+        return Err(FLOAT_DOMAIN.into());
+    }
     if !domain_is_known(&domain) {
         return Err(UNDECIDED_DOMAIN.into());
     }
@@ -2161,9 +2220,10 @@ fn kernel_shape(domain: &LowShape) -> KernelShape {
         // is the *shape* question ("one value, or a tuple of them"), not the
         // dispatchability one, and a float domain is one value.  The refusal
         // that keeps it out of an `i64` wasm signature is `kernel_domain`'s, and
-        // it has already run: `domain_is_known` rejects a float leaf, so this
-        // arm states the layout a float would have rather than one anything
-        // reaches (`docs/notes/floating-point.md` §3.8, §5).
+        // it has already run: `domain_obstacle` refuses a float at every
+        // position a domain can hold, so this arm states the layout a float
+        // would have rather than one anything reaches
+        // (`docs/notes/floating-point.md` §3.8, §5).
         LowShape::USize | LowShape::Float => KernelShape::Scalar,
         LowShape::Tuple(items) => KernelShape::Tuple(items.iter().map(kernel_shape).collect()),
         LowShape::Unknown
@@ -2175,37 +2235,15 @@ fn kernel_shape(domain: &LowShape) -> KernelShape {
 
 /// Whether a shape has no position anywhere in it that the kernel ABI cannot
 /// lower to a decided `i64` local — the gate [`kernel_domain`] reads before its
-/// own shape match.
+/// own shape match, answered from [`domain_obstacle`] so that there is one walk
+/// over a shape rather than two copies of it.
 ///
 /// A domain with a single `Unknown` leaf is as undecided as an all-`Unknown`
 /// one: the wasm arity comes from flattening, so one unknown leaf is one
 /// unknown local.  A **`Float` leaf gets the same answer for a different
-/// reason** — it is decided, but the ABI has no local for it (`i64` in five
-/// places, `lichen_kernel_ir`), so an arity read off it would be a
-/// mis-encoding.
+/// reason** — it is decided, but the ABI has no local for it.
 fn domain_is_known(shape: &LowShape) -> bool {
-    match shape {
-        LowShape::Unknown => false,
-        // The load-bearing arm, and the narrower of the two questions.  This is
-        // read *before* `kernel_domain`'s shape match, and that match accepts
-        // `Tuple(_)` without re-checking elements, so this is the only thing
-        // that can refuse `Tuple([Float, …])`.  Answering `true` would let a
-        // float reach `kernel_shape` and `flat_arity`, which have no refusal
-        // variant to answer with, and compile an `i64` wasm signature for it —
-        // the silent mis-encoding phase 0 forbids
-        // (`docs/notes/floating-point.md` §3.8, §5).
-        LowShape::Float => false,
-        LowShape::USize => true,
-        LowShape::Tuple(items) => items.iter().all(domain_is_known),
-        LowShape::Array(element, _)
-        | LowShape::Function(element, _)
-        | LowShape::Table(element, _) => {
-            // The second position of a function/table shape is deliberately
-            // not walked: only a scalar or tuple ever reaches a domain, and
-            // those two positions are decided together or not at all.
-            element.is_known()
-        }
-    }
+    domain_obstacle(shape).is_none()
 }
 
 /// The number of scalar `i64` locals a domain shape flattens to — the wasm
@@ -2225,10 +2263,11 @@ fn flat_arity(shape: &LowShape) -> usize {
         // is also one, so this stays consistent with `kernel_shape`, which is
         // what keeps a domain's locals contiguous.  No float reaches here —
         // every caller flattens a `ParamSlot`'s shape or a sub-shape of one,
-        // and `kernel_domain`/`domain_is_known` is the gate a float is refused
-        // at.  Zero would be a different claim (that a float occupies no local
-        // of the signature `KernelShape` sizes as one) and would put the two
-        // arities in disagreement.
+        // and `kernel_domain`'s gate reads `domain_obstacle`, which walks a
+        // compound shape's element too, so a float is refused at every position
+        // a domain can hold.  Zero would be a different claim (that a float
+        // occupies no local of the signature `KernelShape` sizes as one) and
+        // would put the two arities in disagreement.
         LowShape::Float => 1,
         LowShape::Tuple(items) => items.iter().map(flat_arity).sum(),
         LowShape::Array(_, _) | LowShape::Function(..) | LowShape::Table(..) => 1,
