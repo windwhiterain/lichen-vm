@@ -130,7 +130,9 @@ a time and has already lost the caller.
 4. **Emit.** The nest is a `while`-shaped loop per level, structurally the
    `scf.while` above. In the GPU's terms: `OpLabel` per block, `OpLoopMerge` at
    each header, `OpBranch`/`OpBranchConditional` between them, and `OpPhi` at
-   every merge point.
+   every merge point. **The carried state is what the `OpPhi` is for**, which is
+   why [§8](#8-the-order-of-the-work) makes it a Stage 1 requirement rather than a
+   Stage 2 one.
 
 The partial-inlining the deep pass already did is not in the way: a cycle the
 deep pass *could* reduce is not in the residual graph, and a cycle it could only
@@ -147,34 +149,42 @@ the two ceilings of §1 invisibly, which is the defect class
 | # | Rule | Why this one |
 |---|---|---|
 | 1 | Every recursive apply **in the cycle** is in **tail position** | a non-tail call forces a frame and poisons the whole nest's register allocation — measured, §2 |
-| 2 | Every carried value is a **kernel scalar** — `LowShape::USize` or `Float` | the carried value must live in a native local; a heap node cannot be a loop register. [`LowShape`](../../crates/lichen-lowlevel/src/lib.rs) already exists for exactly this read |
+| 2 | Every carried value is a **kernel scalar** — `LowShape::USize` or `Float` | the carried value must live in a native local; a heap node cannot be a loop register. [`LowShape`](../../crates/lichen-lowlevel/src/lib.rs) already exists for exactly this read. **This rule also discharges what a strictness rule would have said** — see §5 |
 | 3 | The closure's **captured environment is loop-invariant**, and is hoisted out of the nest | otherwise the nest is not single-entry and the "outermost level" has no meaning |
 | 4 | **Strict**: the header's test is a forced comparison, and no lazy `~` crosses an iteration | the deepest obstacle, and lichen-specific — see §5 |
 | 5 | The component's **size is capped** (a compile-time constant) | a device wants statically shaped control flow; the depth is a property of the program, not of the data |
 | 6 | Only the cycle is rewritten; a call leaving it stays a call | this is not full-function defunctionalization, and should not become one |
 
-## 5. Rule 4 is the hard one, and it is lichen's own
+## 5. There is no strictness rule, and finding that out changed the estimate
 
-`if c then a else b` **desugars to `Index([e, t], c)`** — a lazy branch index, not
-a control-flow branch ([the spec](../language-spec.md) §4). So the language's
-conditional is a **value-level select**, and the emitter compiles it to a
-branchless `Select` rather than a jump. Turning a select whose two arms are
-recursive calls into a `CondBr` is the *whole* of the conversion, and it is valid
-only where both arms are forced at that point.
+An earlier draft of this note carried a **rule 4**: both arms of a converted
+`Select` must be forced, because a thunk created in one iteration and forced in
+another would read a register that has since moved. **That rule was an artifact of
+the flat IR, not a property of lichen, and it is gone.**
 
-That makes the strictness obligation concrete, and it is not one predicate:
+The chain, in the order it had to be unwound:
 
-- the header's base test must be a **comparison**, forced, never a branch index;
-- neither arm of a converted select may leave an unforced thunk that is read on a
-  later iteration — a thunk created in iteration *i* and forced in iteration
-  *i + k* would read a register that has since moved;
-- a `~` **inside** the body but strictly contained in it is fine, and a lazy
-  value that leaves the nest as the result is fine; what is forbidden is a lazy
-  value that **survives across an iteration boundary**.
+- `if c then a else b` desugars to `Index([e, t], c)` — a *lazy branch index*
+  ([the spec](../language-spec.md) §4) — and the spec is explicit about what that
+  buys: "an integer index selects a branch, and **the untaken branch is never
+  evaluated** (the lowlevel `Index` stays lazy on it)".
+- **So the language's `if` is already a branch.** Only one arm is ever evaluated.
+  This is laziness giving it for free.
+- **The emitter is what destroys it.** A flat instruction stream has nowhere to
+  put two arms, so `emit_node` emits *both* into the body and finishes with a
+  `Select` to pick one ([compute.rs](../../crates/lichen-compute/src/compute.rs),
+  the `if c then … else …` arm). A `compute.read` in the untaken arm is still
+  emitted and still read.
 
-Failing this must be a refusal, because a program that gets it wrong does not
-compute the wrong number — it computes a number that depends on when forcing
-happened, which is the hardest class of defect this project has to avoid.
+**So adding `CondBr` does not add a semantics — it gives the source semantics
+back.** And with it the obligation disappears: the untaken arm does not exist, so
+there is nothing to force and no thunk to carry across an iteration boundary. The
+residue is rule 2, which already says the carried values are kernel scalars: a
+scalar on a register has no forcing time to get wrong.
+
+The cost of this finding is small and the benefit is large: the conversion's
+hardest-sounding rule was never a rule, and the flat IR — the thing Stage 1
+replaces anyway — was the only thing standing in the way.
 
 ## 6. What the raw write decision costs
 
@@ -197,19 +207,38 @@ because "the device's padding is the last value written"
 ([gpu-algorithms-ladder §6](gpu-algorithms-ladder.md)). So the loop case joins
 that family rather than inventing one, and the note that must travel with it is:
 
-> A body containing a loop or a branch makes the every-ordinal-written claim
-> void; an unwritten output slot is a fresh allocation on one backend and device
-> padding on the other.
+> A body containing a loop makes the every-ordinal-written claim void; an
+> unwritten output slot is a fresh allocation on one backend and device padding
+> on the other.
 
-Two consequences are worth stating plainly, because they are the price:
+**And the asymmetry is not a GPU rule — it is a rule we bought.** CUDA has no such
+premise at all: `cudaMalloc` leaves memory undefined, a kernel that never writes
+an element simply leaves it undefined, and every program is responsible for that
+itself. What makes it a premise *here* is that `dispatch` skips the zero-fill, and
+that skip is a lichen-specific optimisation that has no CUDA counterpart. So the
+loop is unremarkable on the device and load-bearing here, and the fix — if one is
+ever wanted — is to give the zero-fill back, not to constrain the loop.
 
-- **The scattered-histogram shape becomes expressible and silently wrong** — 64
-  elements into 3 buckets, last writer wins, on both backends, no diagnostic
-  ([gpu-algorithms-ladder §5](gpu-algorithms-ladder.md)). That is accepted.
-- **`CONDITIONAL_WRITE` stays exactly as it is, outside the loop.** A `write` in a
-  plain branch is still refused by name; only the loop is exempt. The two rules
-  must not be confused, because a loop is "a branch that repeats" and a reader
-  will assume the same rule covers it.
+**One consequence is worth stating plainly, because it is the price:** the
+scattered-histogram shape becomes expressible and silently wrong — 64 elements into
+3 buckets, last writer wins, on both backends, no diagnostic
+([gpu-algorithms-ladder §5](gpu-algorithms-ladder.md)). That is accepted.
+
+**And `CONDITIONAL_WRITE` is not merely left in place — Stage 1 should delete
+it.** An earlier draft of this section framed the two as separate rules that a
+reader might confuse. They are not separate, and the loop is not an exemption from
+a rule the branch somehow escapes. A `write` in a branch is refused *today* only
+because the flat IR forces both arms to be emitted, so the arm's `write` would run
+on every lane and overwrite the selected arm's own write
+([compute.rs](../../crates/lichen-compute/src/compute.rs) — the check is
+`then_body.contains(&BufferWriteCall) || else_body.contains(&BufferWriteCall)`,
+and it exists because a flat stream has nowhere to put a branch). Once the arm is
+a real `CondBr`, the arm's `write` runs on exactly the lanes that took it, and
+because a `write`'s buffer position is a compile-time constant while its index is
+the lane's own `i` ([kernel-ir](../../crates/lichen-kernel-ir/src/lib.rs)), the
+every-ordinal-written claim holds again. **A conditional write is not made legal by
+a decision; it becomes correct by construction.** What survives is only the
+zero-iteration case, which is the loop's own caveat above.
 
 What is *not* withdrawn: rule 6 above, and the fact that a converted loop is
 compiled against a **template** — so a body-local binding the loop would fill in
@@ -242,21 +271,64 @@ a change to one program. A silent fallback cannot offer either.
 
 ## 8. The order of the work
 
-**Stage 1 — the structured body.** `KernelFragment::body` becomes an arena of
-basic blocks with explicit terminators, and both backends are taught it: wasm
-gains `block`/`loop`/`br_if` and a label stack; the SPIR-V emitter gains one
-`OpLabel` per block and **replaces** the single-`OpLabel` invariant with a
-structural one (one label per block, one terminator per block, every merge block
-dominated by its header). This is the expensive half and it is not optional, so
-it goes first, alone, with a single-loop shape to prove the IR and the two
-emitters before any analysis exists on top of it. It also converts the emitter's
-**400-to-1000 hard overflow** into a named refusal, which is worth having even if
-nothing else lands.
+**Stage 1 — the structured body, and it must carry values, not just control
+flow.** `KernelFragment::body` becomes an arena of basic blocks with explicit
+terminators, and both backends are taught it: wasm gains `block`/`loop`/`br_if` and
+a label stack; the SPIR-V emitter gains one `OpLabel` per block and **replaces** the
+single-`OpLabel` invariant with a structural one (one label per block, one
+terminator per block, every merge block dominated by its header).
+
+**The correction: a CFG alone is not enough, and a Stage 1 without it is a Stage 1
+that cannot be used.** A loop needs two things and they are not the same thing:
+
+- **control flow** — a backedge, which is a branch;
+- **values that survive the backedge** — SPIR-V's `OpPhi` at the header, one
+  `(value, predecessor-label)` pair per incoming edge; wasm's `local.set`/`local.get`.
+
+An earlier draft of this section specified only the first, on the assumption that a
+loop could borrow a Function-storage-class `OpVariable` for its carried value. **It
+can, and it must not**: that is scratch memory rather than a register, and on a GPU
+it is the difference between a loop that runs and a loop that is memory-bound. The
+repository's own invariant already names both missing pieces in one sentence — "the
+emitter emits **no branch and no phi**"
+([spirv.rs](../../crates/lichen-compute-gpu/src/spirv.rs)) — and this stage has to
+answer both, because **the `phi` is the half that costs nothing to get right and
+everything to get wrong later.**
+
+This is the expensive half and it is not optional, so it goes first and alone,
+with a single-loop shape to prove the IR and the two emitters before any analysis
+exists on top of it. It also converts the emitter's **400-to-1000 hard overflow**
+into a named refusal, which is worth having even if nothing else lands, and it is
+what makes `CONDITIONAL_WRITE` deletable (§6).
+
+**The acceptance case is a dynamic reduction.** Everything above is argued; a
+reduction is where it is either true or not, because it is the one shape that has
+**an accumulator** — so it exercises the `phi` — and a trip count that is a
+**buffer's length at run time** — so it exercises the whole point. It is named as
+the missing operator in
+[gpu-algorithm-roadmap §4.1](gpu-algorithm-roadmap.md) ("a reduction needs an
+accumulator, and the one a GPU algorithm wants is a fold over a **buffer** whose
+trip count is the buffer's length"), and it is the shape a `T -> T` `loop` cannot
+express at all, which is the second reason §7 does not ship one.
+
+The reduction to be written and run on **both** backends, against a buffer filled
+by a seed kernel, at more than one length so that the trip count is demonstrably
+not a compile-time constant:
+
+```lichen
+@{ compute = import "compute.lichen" @}
+sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + compute.read [buf, s(0) - 1])
+p = compute.parallel (cfg => { ... sum_to (cfg(0), 0) ... }) "BACKEND"
+```
+
+Three things must be true of it, and each is a rule above being exercised: it runs
+at a length **past the 2000-apply budget** (rule set by Stage 1 removing the
+ceiling), its accumulator is a **carried value** (Stage 1's `phi`), and its
+trip count is **per-lane** (the performance model of §9, not a correctness one).
 
 **Stage 2 — the conversion.** Cycle extraction, defunctionalisation, nest
-construction, and rules 1, 2, 3, 5, 6. Rule 4 comes with it, because a conversion
-that silently changes when forcing happens is worse than a refusal. The probe
-grows two cases: `RECURSIVE_INLINE` and `LOOP_RUNTIME_COUNT` in
+construction, and rules 1, 2, 3, 5, 6. The probe grows two cases:
+`RECURSIVE_INLINE` and `LOOP_RUNTIME_COUNT` in
 `crates/lichen-language/examples/recursion.rs` are the programs this has to move
 from REFUSED to a number, on **both** backends.
 
@@ -269,4 +341,41 @@ around), and the ceilings of §1 re-measured to show they are gone.
 throughput, not capability: scan, sort, tiled matmul and sub-group reduction need
 **shared memory and a barrier** ([gpu-algorithm-roadmap §4.2](gpu-algorithm-roadmap.md)),
 and no loop provides them. A loop is the missing primitive *between* "one element
-per lane" and a workgroup; it is not a workgroup.
+per lane" and a workgroup; it is not a workgroup. §9 is why the reduction above is
+an *acceptance case* and not the finish line.
+
+## 9. The performance model a converted loop runs under
+
+A loop inside a parallel kernel is not a loop on a host, and nothing about it is
+neutral. Three facts, none of which is a correctness question:
+
+1. **The trip count is per-lane, and that is the default rather than the
+   exception.** A parallel kernel hands every lane one index
+   (`compute.range n`), and the count a converted loop runs on comes from that
+   lane's own value. So converted loops are **divergent** unless the author made
+   them otherwise.
+2. **Divergence costs `max`, not `sum`.** Under SIMT the warp runs until every
+   lane in it has exited, masking off the ones that finished. A warp with one lane
+   running 1 iteration and another running 1000 pays for 1000
+   ([PTX ISA §9.5, "Divergence of Threads in Control
+   Constructs"](https://docs.nvidia.com/cuda/parallel-thread-execution/index.html#divergence-of-threads-in-control-constructs)).
+3. **So the two count shapes are worth telling apart**, and the difference is
+   cheap to state: a count derived from a **uniform** value (`cfg(0)`, a buffer's
+   length) is warp-uniform and costs nothing; a count derived from the **lane's own
+   index** (a prefix sum's `N - i`) diverges and costs `max`.
+
+This is also the reason the uniform-count requirement exists at all, for a barrier
+inside such a loop: `bar.sync` / `__syncthreads()` requires every un-exited thread
+in the CTA to arrive, so a non-uniform count under a barrier is a hang, which is
+what the WGSL uniformity analysis is about
+([WGSL §15.2.10.4, "Uniformity in a Loop"](https://www.w3.org/TR/2025/CRD-WGSL-20251206/#25)).
+There is no barrier today, so this constrains nothing yet — it is recorded so that
+the day there is one, the rule is written down rather than rediscovered.
+
+> **Sources, honestly labelled.** Read this session: MLIR `scf`, V8 tail calls,
+> the `musttail` measurement, Truffle `LoopNode`, and the PTX ISA table of
+> contents (the section bodies were truncated by the fetch, so §9.1–3 above are
+> from knowledge, not from that read). Not readable this session: the SPIR-V
+> specification proper — `registry.khronos.org` answered 403 and the SPIRV-Registry
+> `adoc` source 404'd — so the `OpLoopMerge` placement rule is asserted from
+> knowledge and unchecked against the text.
