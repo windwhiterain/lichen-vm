@@ -228,7 +228,40 @@ and a chain only repays it from about four links at a million elements. What
 the ladder adds is that the alternative is not a good CPU loop: it is an
 interpreter.
 
-## Three defects the ladder found, and what became of them
+## A fourth thing this found, and it was already filed
+The probe was also asked whether **a `loop` operator** could serve as the unroll's
+surface, and the answer turned out to be **P1-33**, which
+[code-audit](code-audit.md) already carries as *todo*:
+
+```lichen
+loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
+-- expected Int -> Int, found Int -> Int
+```
+
+P1-33 is *"A self-recursive call in a conditional's branch is refused as
+`expected Int, found Int`"*, and its own narrowing table identifies the shape
+precisely — one-argument self-recursion in a branch **runs**, a self-reference
+with no conditional **runs**, a non-recursive two-argument callee in the branch
+**runs**; a self-referential two-argument one is the trigger. And it records the
+escape, which is the whole difference:
+
+```lichen
+loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x))
+     : (Int -> Int) -> Int -> Int -> Int
+inc = x => x + 1
+(loop inc 3 0, loop inc 10 5, loop inc 0 7)   -- (3, 15, 7): <Int, Int, Int>
+```
+
+**So the operator is one annotated line of lichen and works today** on the
+interpreter. In a *kernel* it is still refused, and that is the same missing
+**apply** as everything else here rather than a loop problem. The measured
+ceilings for the expanded form are in the proposal's §4.1.
+
+**The first explanation of the type error here was wrong**, and P1-33 corrected
+it: it is not a function argument threaded through a partial application
+comparing two function *kinds*. It is a VM **apply-time parameter check** whose
+two sides hold the call's argument *values* — so the message is comparing
+values and calling them types, which is why both sides render `Int`.
 
 The first two are silent-wrong-answer defects — a plausible answer that is not
 the right one — and both are **fixed** on `feature/gpu-algorithms`, each with a
@@ -237,6 +270,15 @@ test that fails without the fix. The third is a refusal that named nothing; its
 one missing *apply*. The proposal's
 [§8](gpu-algorithm-roadmap.md#8-the-defects-and-which-are-fixed) is the
 one-line version of all three.
+
+## Three defects the ladder found, and what became of them
+
+The first two are silent-wrong-answer defects — a plausible answer that is not
+the right one — and both are **fixed**, each with a test that fails without the
+fix. The third is a refusal that named nothing; its **message is fixed** and the
+three cases it names are not, because all three are one missing *apply*. The
+proposal's [§8](gpu-algorithm-roadmap.md#8-the-defects-and-which-are-fixed) is
+the one-line version of all three.
 
 ### The graph registry freezes the backend of the first graph of a shape
 
