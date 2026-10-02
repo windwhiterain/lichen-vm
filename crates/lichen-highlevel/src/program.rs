@@ -171,7 +171,7 @@ pub trait Ctx<P: Program> {
     /// every `Str` value and the pair of the `string` type constant.  Shared
     /// across occurrences like [`Self::int_type`].
     fn string_type(&self) -> NodeId;
-    // The 8 marker-node accessors (`int_marker_node`, `string_marker_node`,
+    // The 9 marker-node accessors (`int_marker_node`, `string_marker_node`,
     // `type_marker_node`, …) are registry-derived — one per kind marker.
     for_each_kind_marker!(define_ctx_marker_accessors);
     /// A checker-issued unification — an extension's type check, executed
@@ -349,7 +349,7 @@ where
     }
 }
 
-// The 8 kind-marker variants are generated from the registry
+// The 9 kind-marker variants are generated from the registry
 // ([`crate::shape::for_each_kind_marker`]) — adding or removing a marker
 // touches that one list.  `TypeId` is NOT a kind marker (it carries the
 // nominal id a struct marker references) and is spelled out below.
@@ -435,7 +435,7 @@ macro_rules! define_value_type_marker_methods {
 /// own [`HighProgramValue`] or an extended one — implements this; the
 /// checker is generic over it.
 ///
-/// The 8 kind-marker methods are registry-derived
+/// The 9 kind-marker methods are registry-derived
 /// ([`crate::shape::for_each_kind_marker`]) with default bodies over
 /// `From<TypeValue>`; an implementation spells only [`Self::type_id`] and
 /// [`Self::type_id_value`].
@@ -540,7 +540,9 @@ pub const DIVIDE_BY_ZERO: &str = "operator.divide_by_zero";
 // changes and a new marker takes the next unused tag, so the tags are
 // deliberately not the list positions (`TypeString` is `7`).  `TypeId` is not
 // a kind marker; it keeps tag 8, spelled here — a registry entry claiming 8
-// would collide with it as a duplicate match arm and fail to compile.
+// would shadow this read arm (`unreachable_patterns`, a warning rather than
+// the compile error it was believed to be) and silently decode every
+// persisted `TypeId` as that marker.
 macro_rules! define_type_value_codec {
     ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
         impl TypeValue {
