@@ -1,50 +1,85 @@
 # Deferred unification does not recognise every form of a type value
 
-> Status: **current — the defect is open.** Reproduced on `26d9ee4`.
-> §4 is measured; §5 names the one link I could **not** isolate, and nothing in
-> this note should be read as a cause for it. The line numbers are that
-> revision's.
+> Status: **current — the defect is open.** §1 is a minimal repro plus a
+> measured matrix, reproduced on `74bcfab` (first seen on `26d9ee4`); §5 names
+> the links I could **not** isolate, and nothing in this note should be read as
+> a cause for them. Line numbers are `74bcfab`'s.
 >
-> Companions: [checker-encoding-instability](checker-encoding-instability.md)
-> (the same "structural guess about an open encoding" weakness, at a different
-> site), [shape.rs](../../crates/lichen-highlevel/src/shape.rs)'s own
-> *Known weakness* notes.
+> Companions: [type-rendering-inconsistent](type-rendering-inconsistent.md)
+> (why no printed type name can decide any of this),
+> [checker-encoding-instability](checker-encoding-instability.md) (the same
+> "structural guess about an open encoding" weakness, at a different site), and
+> [shape.rs](../../crates/lichen-highlevel/src/shape.rs)'s own *Known weakness*
+> notes.
 
-## 1. The symptom
+## 1. The minimal repro
 
-A partially applied type function, instantiated at one field:
+Two field reads of one unbound placeholder, in one type expression:
 
 ```lichen
-P = ins => struct<.I type_of ins.I>
-y = (P _)(.I Int)
+P = ins => struct<.I ins.x, .O ins.y>
+y = (P _)(.I Int, .O Int)
 ```
 
-`y` builds as `struct<.I ?a>` — and **`?a` is never bound**. `?a` is not the
-unknown `?`: [`TypePrinter::class_name`](../../crates/lichen-render/src/render/type_printer.rs)
+```
+error: expected [[?a, ?b], [?c, ?d]], found TypeStruct
+```
+
+**Two reads is the minimum.** One read does not error at all — it merges and
+leaves the field type undecided:
+
+```lichen
+P = ins => struct<.I ins.x>
+y = (P _)(.I Int)          -- builds, struct<.I [?a, ?b]>
+```
+
+`?a` is not the unknown `?`:
+[`TypePrinter::class_name`](../../crates/lichen-render/src/render/type_printer.rs)
 (`:84`) names an *unbound cell's class*, so two cells of one class share a name
-and the type is a genuinely undecided, bindable one. `P _`'s field type and the
-argument's type were merged and nothing was written.
+and the type is a genuinely undecided, bindable one. The read and the argument's
+type were merged and **nothing was written**.
 
-Substituting what goes in the slot changes the outcome, and this is the whole
-discriminator:
+### The axis is the number of reads, not the number of fields
 
-| slot holds | outcome |
-|---|---|
-| `Int` | builds, `struct<.I ?a>` — field type **undecided** |
-| `array<Int, 3>` | builds, `struct<.I ?a>` — field type **undecided** |
-| `(Int, Int)` | builds, `struct<.I ?a>` — field type **undecided** |
-| `struct<.x _>` | **`error: expected [?a], found [TypeStruct]`** |
-| `struct<.x Int>` | **`error: expected [?a], found [TypeStruct]`** |
+A second read of the same placeholder is what turns the silent merge into a
+recorded error; fields that are not reads change nothing:
 
-The struct rows fail whether the struct type is concrete or carries a
-placeholder, and inlined (`(P _)(.I struct<.x Int>)`) as well as named. So the
-axis is the *kind* of type value in the slot, not its contents and not how it is
-spelled.
+| reads | fields | outcome |
+|---|---|---|
+| 1 | 1 | builds, `struct<.I [?a, ?b]>` — **undecided** |
+| 1 | 2 | builds, `struct<.I [?a, ?b], .O Int>` |
+| 1 | 3 | builds |
+| 2 | 2 | **`expected [[?a, ?b], [?c, ?d]], found TypeStruct`** |
+| 2 | 3 | **`expected [[?a, ?b], [?c, ?d], Int], found [Type, Type, Type]`** |
+| 3 | 3 | **`expected [[?a, ?b], [?c, ?d], [?e, ?f]], found [Type, Type, Type]`** |
 
-Each of these is a complete program; `P` is fixed and the slot is the only
-thing that varies.
+All three `found` sides are the same kind of argument, and two of them are
+spelled differently from the third — that is
+[type-rendering-inconsistent](type-rendering-inconsistent.md)'s subject, not
+this note's.
 
-## 2. Why none of the five should be an error
+### …and the argument's kind is a second one
+
+Holding the reads and varying what the slot receives gives a complete 2×4
+matrix — every cell below is measured:
+
+| slot holds | 1 read | 2 reads |
+|---|---|---|
+| `Int` | builds, `struct<.I [?a, ?b]>` | **error** |
+| `array<Int, 3>` | builds, `struct<.I [?a, ?b]>` | builds, `struct<.I [?a, ?b], .O [?c, ?d]>` |
+| `(Int, Type)` | builds, `struct<.I [?a, ?b]>` | builds, `struct<.I [?a, ?b], .O [?c, ?d]>` |
+| `struct<.a Int>` | **error** | **error** |
+
+Two things fall out of it. The declared field type is a `[value, type]` **pair**
+where the type position holds a field read — the error shows `[?a, ?b]` per
+field — which is why a pair- or array-shaped argument is accepted at either
+arity while an atomic one is accepted only at one read. And a struct type value
+is refused at every arity, which is the row §5 cannot yet account for.
+
+Every row is a complete program; `P` and the placeholder are fixed and the
+table's two columns are the only things that vary.
+
+## 2. Why none of these should be an error
 
 Three facts, each from the code's own documentation:
 
@@ -62,15 +97,16 @@ Three facts, each from the code's own documentation:
   that **holds a type**", on the grounds that *"the read resolves to its field's
   actual type once the container binds"*.
 
-So the intended reading of the struct rows is a deferral, and of the other three
-a bind. Neither happens: the struct rows error, and the other three merge
-without binding.
+So the intended reading of §1's rows is: a deferral wherever the argument is a
+struct type value, and a bind everywhere else. Neither happens — every row in
+which the argument is a struct type fails, every two-read row fails, and every
+one-read row merges without binding.
 
 ## 3. The code path that decides
 
-1. `type_of ins.I` is a read of an **unbound** container (`ins` is the `_`), so
-   its class is not a pure cell: `equality.rs:479`'s `class_is_pure_cell`
-   declines and `:494`'s block runs instead of a bind.
+1. The field read in §1's `P` is a read of an **unbound** container (`ins` is
+   the `_`), so its class is not a pure cell: `equality.rs:479`'s
+   `class_is_pure_cell` declines and `:494`'s block runs instead of a bind.
 2. The read cannot be forced and is not a resolvable `Index`, so
    `resolved_a`/`resolved_b` fail (`:502`, `:506`) and control reaches `:510`.
 3. The all-unbound-skeleton merge (`:519`) and the both-pending-reads merge
@@ -96,21 +132,36 @@ This is the same class of weakness the file already admits for
 
 ## 4. The two failures are different, and the silent one is worse
 
-- **The struct rows record a spurious error.** A round-trip the deferral
-  exists to permit is refused, and the user sees `expected [?a], found
-  [TypeStruct]` for a program that has no type error in it.
-- **The other three merge without binding.** The build succeeds and the field
-  type stays `?a` forever. Nothing later can recover it, and no diagnostic
-  points at it — this is the *silent* failure mode the project treats as the
-  more serious of the two.
+§1's matrix splits the rows into two outcomes, and they are two symptoms of one
+site:
 
-They are two symptoms of one site, and a fix has to address both: making the
-deferral fire for the struct rows alone would leave the silent half in place.
+- **Rows that record a diagnostic.** Every row whose argument is a struct type
+  value, and every row with two or more reads, prints `expected …, found …` for
+  a program that has no type error a reader could act on.
+- **Rows that merge without binding.** One read with an atomic, array or pair
+  argument: the build succeeds and the field type stays a pair of undecided
+  cells (`[?a, ?b]`) forever. Nothing later recovers it, and no diagnostic
+  points at it.
+
+The silent half is the worse one — a program that compiles while carrying an
+undecided field type where a caller is about to read a type. And the boundary
+between the halves is a **count of reads**: one merges, two error. No reader
+could anticipate that distinction, and it is not one a diagnostic should be
+drawing either.
+
+A fix has to address both. Making the deferral fire for the struct-argument rows
+alone leaves the silent half standing; making the two-read rows merge like the
+one-read rows leaves the undecided type standing.
 
 ## 5. What is not isolated
 
-**Why `array<Int, 3>` and `(Int, Int)` behave like `Int` rather than like
-`struct<…>` is unexplained.**
+**Why the outcome turns on the *number of reads* is unexplained.** One read
+merges silently and two record an error, from the same site, over the same
+operand kinds, differing only in how many reads the field-type list contains.
+Nothing in §3's path accounts for a count deciding which way the unify goes.
+
+**Why a struct type value is refused at one read, where an atomic, array or pair
+argument is not, is unexplained as well.**
 
 An earlier version of this section argued from two *printed* type names, and
 that argument is **withdrawn**. [type-rendering-inconsistent](type-rendering-inconsistent.md)
@@ -124,20 +175,19 @@ and the two measurements that used to stand here settled nothing:
 - the failing comparison printed `TypeStruct` where `type_of struct<.x Int>`
   printed `Type`.
 
-Neither says which node the unifier actually compared. The axis — the build
-outcome splitting by the form in the slot — is real and reproducible; the
-mechanism behind it is not known. Pinning it needs instrumentation: a probe
-inside `class_holds_type` printing the representative's value, `kind_of`'s
-answer, and the `is_self_referential` verdict, for each of the five rows of §1.
-A targeted unit test over `unify` would do as well. Neither is written.
-**Do not build a fix on §3 alone, and do not let a printed type name decide any
-of it.**
+Neither says which node the unifier actually compared. Pinning either link needs
+instrumentation: a probe inside `class_holds_type` printing the representative's
+value, `kind_of`'s answer, and the `is_self_referential` verdict, for each cell
+of §1's matrix. A targeted unit test over `unify` would do as well. Neither is
+written. **Do not build a fix on §3 alone, and do not let a printed type name
+decide any of it.**
 
 ## 6. Scope
 
 Reachable from plain lichen with no compute involvement, so it is a checker
-defect and not a consequence of any `lichen-compute` work. It is independent of
-[the compute kernel-parameter refactor](lichen-compute.md) — that refactor's
-`P` only meets this path if it keeps a `type_of` over an unbound container's
-field; taking the field's *value* instead (`struct<.I ins.I, …>`) does not
-traverse it.
+defect and not a consequence of any `lichen-compute` work. It is not, however,
+avoidable from the compute side by choosing one spelling over another: a
+partially applied `(P _)(…)` whose type positions hold **field reads of an
+unbound container** meets this path whether the read is spelled `ins.I` or
+`type_of ins.I` — both are reads, and §1's two-read rows fail either way. What
+the spelling decides is *which* of §4's two halves the row lands in.
