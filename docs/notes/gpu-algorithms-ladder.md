@@ -77,6 +77,20 @@ each other, a barrier, shared memory, and a sub-group reduction. None of those
 exist, and none of them can be built out of what is here — they are a different
 primitive, not a bigger version of this one.
 
+**Recursion is the other way to write a loop, and it is not available either.**
+A self-referential kernel is refused *by name* —
+
+> `compute.jit: cross-kernel call target is not a kernel value`
+
+— and that is not a missing feature but a **structural** one: a `KernelId` is
+assigned by `jit`/`parallel`, so a body that names its own kernel would need the
+id before the kernel exists. Mutual recursion fails the same way. **A cycle in
+the kernel registry is unwritable, not merely unsupported**, which means
+recursion can only ever be *expanded to a finite depth at compile time* — and
+that is unrolling under another name. See
+[gpu-algorithm-roadmap §4.1](gpu-algorithm-roadmap.md#41-axis-b-in-two-parts-unrolling-and-a-loop-that-runs)
+for what that buys and what it does not.
+
 ### 3. There is no way to get data in
 
 A `Buffer` is a handle to `[i64]` and the only producer is a kernel's output.
@@ -214,13 +228,14 @@ and a chain only repays it from about four links at a million elements. What
 the ladder adds is that the alternative is not a good CPU loop: it is an
 interpreter.
 
-## The two defects the ladder found, and what became of them
+## Three defects the ladder found, and what became of them
 
-Both were pre-existing on `dev`, and both are the class the repository cares most
-about — a plausible answer that is not the right one. **Both are now fixed** on
-`feature/gpu-algorithms`, each with a test that fails without the fix; the
-proposal's [§8](gpu-algorithm-roadmap.md#8-the-two-defects-fixed-on-the-way)
-records them. What follows is the record of how they were found.
+The first two are silent-wrong-answer defects — a plausible answer that is not
+the right one — and both are **fixed** on `feature/gpu-algorithms`, each with a
+test that fails without the fix. The third was found later, by the recursion
+probe, and is **not fixed**; it is the one on the critical path. The proposal's
+[§8](gpu-algorithm-roadmap.md#8-the-defects-and-which-are-fixed) is the
+one-line version of all three.
 
 ### The graph registry freezes the backend of the first graph of a shape
 
@@ -265,6 +280,51 @@ by name would turn a silent no-op into a diagnostic.
 launch site is the one the ladder actually reached, and it is the one that
 matters: a program that passed a plain array where a buffer belonged used to
 finish and print a type.
+
+### A cross-kernel call in a parallel body is refused without naming its cause
+
+Found later, by the recursion probe below, and **not yet fixed** — it is a third
+defect and a bigger one than the other two, because it is the seam a
+recursion-expansion feature would build on.
+
+```lichen
+k0 = compute.jit (v : Int => v + 1)
+p = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, compute.call k0 i]
+}) "gpu"
+```
+
+answers, on **both** backends:
+
+> `compute.parallel: kernel body hits a node with neither value nor operation
+> (node=NodeId(394v1))`
+
+Three facts make it worse than a missing feature.
+
+**It is an unnamed refusal.** Every other refusal in this file names its own
+cause — `INLINE_CALL`, `CONDITIONAL_WRITE`, `UNDECIDED_DOMAIN`, `SpirvRefusal`'s
+variants. This one is the emitter reaching a node it had no arm for, and
+reporting the node. A `NodeId` is a compiler-internal number, so the message
+tells a reader nothing they can act on.
+
+**The same call works in a scalar body.** `k1 = compute.jit (v : Int =>
+compute.call k0 v + 1)` compiles and runs, answering `5 : Int`. So "a kernel
+body calls another kernel" is solved in one of the two body shapes and not the
+other, and the difference is not named either.
+
+**It means the GPU has no working call at all.** Only `parallel` names a
+backend, so a cross-kernel call is reachable on a device *only* from inside a
+parallel body — and that path fails in the compiler, before any backend sees
+it. `SpirvRefusal::CrossKernelCall` is therefore never reached from a lichen
+program; the note describes a refusal no program can currently provoke.
+
+**The probe.** `crates/lichen-language/examples/recursion.rs`, run with no
+arguments. It asks the three questions in order — is a call expressible in each
+body shape, is recursion expressible at all, and what does an un-expanded
+`CallKernel` chain cost against the same arithmetic inlined — and prints a
+refusal or a number for each.
 
 ## What the ladder did not try
 
