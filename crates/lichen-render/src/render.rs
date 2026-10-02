@@ -39,7 +39,7 @@ type RenderExt<'a, V> = &'a dyn Fn(&V) -> Option<String>;
 /// type as its field tuple.  When the type chain is opaque (an unbound cell,
 /// an extension type), the value falls back to its raw layout — the old
 /// `[head, K]` reading of a recursive pair, with a list of cells spelled
-/// `raw<[…]>` so a raw reading never reads as a form the chain explained.
+/// `raw[…]` so a raw reading never reads as a form the chain explained.
 pub fn print_value<P: HighProgram>(module: &Module<P>, value: P::Value, ty: NodeId) -> String
 where
     P::Value: ValueType,
@@ -52,7 +52,7 @@ where
 /// `array<T, len>`, `struct<T1, ...>`.  Unbound cells get stable `?a`, `?b`, …
 /// names — cells in the same unification class share a name — so the type
 /// shows which parts are linked.  Cycles are cut at `…`; a node the walk
-/// cannot read as a form renders as its raw layout, marked `raw<[…]>`.
+/// cannot read as a form renders as its raw layout, marked `raw[…]`.
 pub fn print_type<P: HighProgram>(module: &Module<P>, root: NodeId) -> String
 where
     P::Value: ValueType,
@@ -120,7 +120,7 @@ where
     /// class whose representative is a bare `[in, out]` shape (no kind
     /// wrapper) renders as an arrow only if a member is registered here.
     /// The CLI output path has no registry and leaves such shapes raw, which
-    /// the `raw<[…]>` mark makes visible.
+    /// the `raw[…]` mark makes visible.
     arrows: Option<&'a HashSet<NodeId>>,
     /// Stable class names: representative → `?a`, `?b`, …, within one type
     /// (or one diagnostic report).

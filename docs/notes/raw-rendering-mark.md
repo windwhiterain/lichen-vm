@@ -12,7 +12,12 @@ A printer that cannot read a node as a **form** falls back to the node's *raw
 layout*. Before the mark that fallback was spelled exactly like a form the
 printer *did* recognise, so a reader could not tell `[?a, ?b]` — two cells the
 type chain never explained — from a list the printer had understood. The
-fallback is now spelled `raw<[…]>`.
+fallback is now spelled `raw[…]`.
+
+The mark is not a wrapper around a list: **every marked site renders a list**,
+so the mark fuses with the list's own brackets. A reading that is not a list
+therefore has no `raw` spelling at all, which is what keeps the exclusions in
+§2 structural rather than editorial.
 
 ## 1. Where the mark appears
 
@@ -28,22 +33,23 @@ y = (P _)(.I Int, .O Int)
 ```
 
 ```
-error: expected raw<[raw<[?a, ?b]>, raw<[?c, ?d]>]>, found TypeStruct
+error: expected raw[raw[?a, ?b], raw[?c, ?d]], found TypeStruct
 ```
 
-The mark nests: each node the printer gives up on carries its own `raw<…>`, so
+The mark nests: each node the printer gives up on carries its own `raw[…]`, so
 the outer list *and* each pair inside it are marked. The same branch is reached
 from a struct field — a kernel binding's `.native` artifact renders
-`struct<.native raw<[?a, ?b]>, .sig Int -> Int>` — and from the value side:
+`struct<.native raw[?a, ?b], .sig Int -> Int>` — and from the value side:
 `compute.call` on a tuple-codomain kernel types its result as a fresh cell, so
-the result prints `raw<[6, 14]>: ?a`. A bare `[in, out]` shape on the CLI output
+the result prints `raw[6, 14]: ?a`. A bare `[in, out]` shape on the CLI output
 path is a third entry, since that path carries no checker arrow registry to
 recognise it as an arrow.
 
 ## 2. What is deliberately not marked
 
 - A **scalar** reading (`5`, `"s"`, `1.5`): the raw layout of a scalar is its
-  own spelling, so `5` is not ambiguous and `raw<5>` would say nothing.
+  own spelling, so `5` is not ambiguous — and with the mark fused to the list's
+  brackets, a scalar has no `raw` spelling to confuse it with.
 - A **type pair read as its head** (`[head, K]` → `head`): the kind's tag
   (`TypeStruct`, `TypeArray`, `TypeFunction`) or an atomic type constant
   (`Int`). That reading is part of the encoding's surface rather than a

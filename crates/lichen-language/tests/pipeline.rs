@@ -2206,11 +2206,11 @@ fn a_tilde_n_wrap_marks_value_slots_shallow() {
     // are skipped), and the read gives the element's value with an
     // underdetermined type — the wrapped term is a lazy region, so its
     // reads never claim a concrete type that would silently mismatch it.  With
-    // no type to read the value against, the value is a raw dump (`raw<[…]>`).
+    // no type to read the value against, the value is a raw dump (`raw[…]`).
     let out = lichen_language::run::evaluate("([1, ~2 [2, 3]])(1)(0)")
         .expect("the marked array should check");
     assert!(
-        out.starts_with("raw<[2, 3]>: ?"),
+        out.starts_with("raw[2, 3]: ?"),
         "value concrete, type underdetermined, got {out:?}"
     );
 }

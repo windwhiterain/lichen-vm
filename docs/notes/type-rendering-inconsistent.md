@@ -44,7 +44,7 @@ vocabularies.
    optionally `#n` (`:186`);
 4. `[shape, [marker, K]]` → `in -> out` / `<T…>` / `array<T, len>` (`:205`);
 5. a checker-registered arrow shape (`:256`);
-6. **fallback: the raw elements**, spelled `raw<[a, b]>` — the raw mark
+6. **fallback: the raw elements**, spelled `raw[a, b]` — the raw mark
    (`:263`).
 
 So a tag, a structured form and a raw form are all reachable from the same
@@ -80,7 +80,7 @@ standing printing as `TypeStruct` and `<Type, Type>` means the message cannot be
 used to decide *what was compared* — which is exactly the mistake
 [defer-pending-type-forms](defer-pending-type-forms.md) §5 records, and the
 reason its argument is withdrawn there. A raw fallback is reachable in the same
-slot, but it is spelled `raw<[a, b]>`, so it no longer reads as a value list
+slot, but it is spelled `raw[a, b]`, so it no longer reads as a value list
 where a type is meant; what a reader still cannot separate is a **marker tag**
 from a **structured form** — the split §1 measures.
 

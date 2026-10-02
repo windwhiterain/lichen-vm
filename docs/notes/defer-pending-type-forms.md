@@ -2,14 +2,14 @@
 
 > Status: **current — the defect is open.** §1 is a minimal repro plus a
 > measured matrix, reproduced on `74bcfab` (first seen on `26d9ee4`); the raw
-> layouts it quotes carry the printer's `raw<[…]>` mark, a rendering-only
+> layouts it quotes carry the printer's `raw[…]` mark, a rendering-only
 > change — every row behaves as measured; §5 names
 > the links I could **not** isolate, and nothing in this note should be read as
 > a cause for them. Line numbers are `74bcfab`'s.
 >
 > Companions: [type-rendering-inconsistent](type-rendering-inconsistent.md)
 > (why no printed type name can decide any of this),
-> [raw-rendering-mark](raw-rendering-mark.md) (the `raw<…>` spelling this note's
+> [raw-rendering-mark](raw-rendering-mark.md) (the `raw[…]` spelling this note's
 > layouts now use),
 > [checker-encoding-instability](checker-encoding-instability.md) (the same
 > "structural guess about an open encoding" weakness, at a different site), and
@@ -26,7 +26,7 @@ y = (P _)(.I Int, .O Int)
 ```
 
 ```
-error: expected raw<[raw<[?a, ?b]>, raw<[?c, ?d]>]>, found TypeStruct
+error: expected raw[raw[?a, ?b], raw[?c, ?d]], found TypeStruct
 ```
 
 **Two reads is the minimum.** One read does not error at all — it merges and
@@ -34,7 +34,7 @@ leaves the field type undecided:
 
 ```lichen
 P = ins => struct<.I ins.x>
-y = (P _)(.I Int)          -- builds, struct<.I raw<[?a, ?b]>>
+y = (P _)(.I Int)          -- builds, struct<.I raw[?a, ?b]>
 ```
 
 `?a` is not the unknown `?`:
@@ -50,12 +50,12 @@ recorded error; fields that are not reads change nothing:
 
 | reads | fields | outcome |
 |---|---|---|
-| 1 | 1 | builds, `struct<.I raw<[?a, ?b]>>` — **undecided** |
-| 1 | 2 | builds, `struct<.I raw<[?a, ?b]>, .O Int>` |
+| 1 | 1 | builds, `struct<.I raw[?a, ?b]>` — **undecided** |
+| 1 | 2 | builds, `struct<.I raw[?a, ?b], .O Int>` |
 | 1 | 3 | builds |
-| 2 | 2 | **`expected raw<[raw<[?a, ?b]>, raw<[?c, ?d]>]>, found TypeStruct`** |
-| 2 | 3 | **`expected raw<[raw<[?a, ?b]>, raw<[?c, ?d]>, Int]>, found raw<[Type, Type, Type]>`** |
-| 3 | 3 | **`expected raw<[raw<[?a, ?b]>, raw<[?c, ?d]>, raw<[?e, ?f]>]>, found raw<[Type, Type, Type]>`** |
+| 2 | 2 | **`expected raw[raw[?a, ?b], raw[?c, ?d]], found TypeStruct`** |
+| 2 | 3 | **`expected raw[raw[?a, ?b], raw[?c, ?d], Int], found raw[Type, Type, Type]`** |
+| 3 | 3 | **`expected raw[raw[?a, ?b], raw[?c, ?d], raw[?e, ?f]], found raw[Type, Type, Type]`** |
 
 All three `found` sides are the same kind of argument, and two of them are
 spelled differently from the third — that is
@@ -69,13 +69,13 @@ matrix — every cell below is measured:
 
 | slot holds | 1 read | 2 reads |
 |---|---|---|
-| `Int` | builds, `struct<.I raw<[?a, ?b]>>` | **error** |
-| `array<Int, 3>` | builds, `struct<.I raw<[?a, ?b]>>` | builds, `struct<.I raw<[?a, ?b]>, .O raw<[?c, ?d]>>` |
-| `(Int, Type)` | builds, `struct<.I raw<[?a, ?b]>>` | builds, `struct<.I raw<[?a, ?b]>, .O raw<[?c, ?d]>>` |
+| `Int` | builds, `struct<.I raw[?a, ?b]>` | **error** |
+| `array<Int, 3>` | builds, `struct<.I raw[?a, ?b]>` | builds, `struct<.I raw[?a, ?b], .O raw[?c, ?d]>` |
+| `(Int, Type)` | builds, `struct<.I raw[?a, ?b]>` | builds, `struct<.I raw[?a, ?b], .O raw[?c, ?d]>` |
 | `struct<.a Int>` | **error** | **error** |
 
 Two things fall out of it. The declared field type is a `[value, type]` **pair**
-where the type position holds a field read — the error shows `raw<[?a, ?b]>` per
+where the type position holds a field read — the error shows `raw[?a, ?b]` per
 field — which is why a pair- or array-shaped argument is accepted at either
 arity while an atomic one is accepted only at one read. And a struct type value
 is refused at every arity, which is the row §5 cannot yet account for.
@@ -144,7 +144,7 @@ site:
   a program that has no type error a reader could act on.
 - **Rows that merge without binding.** One read with an atomic, array or pair
   argument: the build succeeds and the field type stays a pair of undecided
-  cells (`raw<[?a, ?b]>`) forever. Nothing later recovers it, and no diagnostic
+  cells (`raw[?a, ?b]`) forever. Nothing later recovers it, and no diagnostic
   points at it.
 
 The silent half is the worse one — a program that compiles while carrying an

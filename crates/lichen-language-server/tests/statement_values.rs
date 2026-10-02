@@ -100,7 +100,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
             sv.value
         );
         assert_eq!(
-            sv.ty, "struct<.native raw<[?a, ?b]>, .sig Int -> Int>",
+            sv.ty, "struct<.native raw[?a, ?b], .sig Int -> Int>",
             "type = {:?}",
             sv.ty
         );
@@ -115,7 +115,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
         .expect("hover on k_double");
     assert_eq!(
         hover,
-        "`k_double` — `(Kernel, parameterized) : struct<.native raw<[?a, ?b]>, .sig Int -> Int>`"
+        "`k_double` — `(Kernel, parameterized) : struct<.native raw[?a, ?b], .sig Int -> Int>`"
     );
 }
 
@@ -140,7 +140,7 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
         .expect("hover on `jit`");
     assert_eq!(
         hover,
-        "`.jit` — `Function : ?a -> ?b -> struct<.native raw<[?c, ?d]>, .sig ?a -> ?b>`"
+        "`.jit` — `Function : ?a -> ?b -> struct<.native raw[?c, ?d], .sig ?a -> ?b>`"
     );
 
     // `launch` at line 7 (0-based): "compute.launch k_outer 3" — char 9.  The

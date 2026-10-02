@@ -91,8 +91,8 @@ kernel by value lowers its call to a `CallKernel`, assembled at launch time.
 
 - `tests/compute.rs` renders kernels as `struct<.native <_>, .sig Int -> Int>` and `launch`
   results resolve their codomain lazily (`6 : Int`, `12 : Int`).
-- LSP renders a kernel binding as `(Kernel, parameterized) : struct<.native raw<[?a, ?b]>, .sig Int -> Int>`
-  (the `.native` artifact's own pair is a raw reading, so it is marked `raw<…>`) and the
+- LSP renders a kernel binding as `(Kernel, parameterized) : struct<.native raw[?a, ?b], .sig Int -> Int>`
+  (the `.native` artifact's own pair is a raw reading, so it is marked `raw[…]`) and the
   generic `compute.jit`/`compute.launch` wrappers as plain `Function` types.
 
 _Footnote: the earlier proposal split the invocation into `call`/`launch`/`run` (a `.kernel`

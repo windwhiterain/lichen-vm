@@ -265,7 +265,7 @@ where
             .iter()
             .map(|item| self.any_node(item.node))
             .collect();
-        format!("raw<[{}]>", parts.join(", "))
+        format!("raw[{}]", parts.join(", "))
     }
 
     /// Is `node`'s class a checker-registered arrow shape?  A class the walk
@@ -432,7 +432,7 @@ where
             .iter()
             .map(|item| self.static_any(item.node, visiting))
             .collect();
-        format!("raw<[{}]>", parts.join(", "))
+        format!("raw[{}]", parts.join(", "))
     }
 
     fn static_any(
