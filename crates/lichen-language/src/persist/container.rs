@@ -134,7 +134,8 @@ fn write_low_shape_opt(w: &mut Writer, shape: &Option<LowShape>) {
 
 /// The tags are the compatibility contract with already-persisted artifacts:
 /// `0`–`4` are the decided shapes and never change, and a new shape takes the
-/// next unused tag (`5` is `Unknown`, the lattice's bottom).
+/// next unused tag (`5` is `Unknown`, the lattice's bottom; `6` is `Float`, a
+/// decided shape added after the tag space was fixed).
 fn write_low_shape(w: &mut Writer, shape: &LowShape) {
     match shape {
         LowShape::USize => w.u8(0),
@@ -161,6 +162,7 @@ fn write_low_shape(w: &mut Writer, shape: &LowShape) {
             write_low_shape(w, value);
         }
         LowShape::Unknown => w.u8(5),
+        LowShape::Float => w.u8(6),
     }
 }
 
@@ -215,6 +217,7 @@ fn read_low_shape(r: &mut Reader<'_>, depth: usize) -> Result<LowShape, String> 
             Box::new(read_low_shape(r, depth + 1)?),
         )),
         5 => Ok(LowShape::Unknown),
+        6 => Ok(LowShape::Float),
         _ => Err("bad low_shape tag".into()),
     }
 }
