@@ -20,7 +20,7 @@ fn body_with(inputs: usize, tail: Vec<KernelInstr>) -> KernelFragment {
     body.extend(tail);
     KernelFragment {
         param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
-        body,
+        body: body.into(),
         inputs,
         outputs: 1,
         results: 1,
@@ -99,7 +99,8 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
             KernelInstr::BufferReadCall,
             KernelInstr::BufferWriteCall,
             KernelInstr::Const(0),
-        ],
+        ]
+        .into(),
         inputs: 2,
         outputs: 1,
         results: 1,
@@ -120,7 +121,8 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
             KernelInstr::Const(5),
             KernelInstr::BufferWriteCall,
             KernelInstr::Const(0),
-        ],
+        ]
+        .into(),
         ..fragment
     };
     let refusal = spirv::compile(&beyond, binding).expect_err("refused");
@@ -144,7 +146,8 @@ fn an_unbalanced_body_is_refused() {
         body: vec![
             KernelInstr::Bin(lichen_kernel_ir::KernelBin::Add),
             KernelInstr::Const(0),
-        ],
+        ]
+        .into(),
         inputs: 0,
         outputs: 1,
         results: 1,

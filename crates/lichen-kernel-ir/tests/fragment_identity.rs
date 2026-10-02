@@ -10,7 +10,7 @@ use lichen_kernel_ir::{IntWidth, KernelBin, KernelFragment, KernelInstr, KernelS
 fn fragment() -> KernelFragment {
     KernelFragment {
         param_shape: KernelShape::Scalar,
-        body: vec![KernelInstr::Const(1), KernelInstr::LocalGet(0)],
+        body: vec![KernelInstr::Const(1), KernelInstr::LocalGet(0)].into(),
         inputs: 0,
         outputs: 0,
         results: 1,
@@ -40,7 +40,7 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
         (
             "body",
             KernelFragment {
-                body: vec![KernelInstr::Const(2), KernelInstr::LocalGet(0)],
+                body: vec![KernelInstr::Const(2), KernelInstr::LocalGet(0)].into(),
                 ..base.clone()
             },
         ),
@@ -69,7 +69,7 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
     variants.push((
         "body instruction kind",
         KernelFragment {
-            body: vec![KernelInstr::Const(1), KernelInstr::Bin(KernelBin::Add)],
+            body: vec![KernelInstr::Const(1), KernelInstr::Bin(KernelBin::Add)].into(),
             ..base.clone()
         },
     ));

@@ -214,7 +214,7 @@ mod kernel_intern_tests {
     fn fragment(body: Vec<KernelInstr>) -> KernelFragment {
         KernelFragment {
             param_shape: KernelShape::Scalar,
-            body,
+            body: body.into(),
             inputs: 0,
             outputs: 0,
             results: 1,
@@ -1684,7 +1684,7 @@ where
 
     Ok(KernelFragment {
         param_shape: kernel_shape(&param_shape),
-        body,
+        body: body.into(),
         inputs: tally.reads,
         outputs: tally.writes,
         results: leaves.len(),
@@ -1866,7 +1866,7 @@ where
         // bound rather than passed, so this shape is the parallel signature and
         // says nothing about them. `tally.reads` is what says that.
         param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
-        body: body_instr,
+        body: body_instr.into(),
         inputs: tally.reads,
         outputs: tally.writes,
         results: 1,
@@ -1937,7 +1937,7 @@ fn assemble_module(
     // imports (function indices 0 and 1); the defined functions then start at
     // `base` (2).  A pure scalar kernel has no imports (base 0).
     let uses_imports = ordered.iter().any(|f| {
-        f.body.iter().any(|i| {
+        f.body.instrs().into_iter().any(|i| {
             matches!(
                 i,
                 KernelInstr::BufferReadCall | KernelInstr::BufferWriteCall
@@ -2011,12 +2011,34 @@ fn assemble_module(
     let mut code = CodeSection::new();
     for frag in ordered {
         let mut body = Function::new([]);
-        lower_body(&frag.body, index, base, &mut body)?;
+        let instrs = straight_line_body(frag)?;
+        lower_body(instrs, index, base, &mut body)?;
         body.instruction(&Instruction::End);
         code.function(&body);
     }
     wasm.section(&code);
     Ok(wasm.finish())
+}
+
+/// The straight-line instructions of a fragment's body, or a refusal.
+///
+/// **A body with a transfer is refused, never emitted straight-line.** The
+/// transfer is already in the IR, so this is the emitter's limit rather than
+/// something the program could not say — and dropping the branch would compile a
+/// fragment that computes a different program than it was lowered from. See
+/// `docs/notes/loop-conversion.md` §8.
+fn straight_line_body(fragment: &KernelFragment) -> Result<&[KernelInstr], String> {
+    fragment
+        .body
+        .validate()
+        .map_err(|broken| format!("compute.wasm: the kernel body is malformed: {broken}"))?;
+    fragment.body.straight_line_instrs().ok_or_else(|| {
+        format!(
+            "compute.wasm: the kernel body allocates {} label(s) and has a transfer, and this \
+                 emitter does not yet emit one",
+            fragment.body.labels
+        )
+    })
 }
 
 /// Lower a sequence of abstract [`KernelInstr`]s into a wasm function body.
@@ -4375,7 +4397,7 @@ fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
             .cloned()
             .ok_or_else(|| format!("kernel {k} is not registered"))?;
         index.insert(k, ordered.len() as u32);
-        for instr in &frag.body {
+        for instr in frag.body.instrs() {
             if let KernelInstr::CallKernel(kid) = instr {
                 let kid = *kid;
                 if seen.insert(kid) {
@@ -4973,7 +4995,8 @@ mod parallel_launch_tests {
                 KernelInstr::Bin(KernelBin::Add),
                 KernelInstr::BufferWriteCall,
                 KernelInstr::Const(0),
-            ],
+            ]
+            .into(),
             inputs: 0,
             outputs: 2,
             results: 1,

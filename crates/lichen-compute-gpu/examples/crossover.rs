@@ -40,7 +40,8 @@ fn fragment() -> KernelFragment {
             KernelInstr::Bin(KernelBin::Add),
             KernelInstr::BufferWriteCall,
             KernelInstr::Const(0),
-        ],
+        ]
+        .into(),
         inputs: 1,
         outputs: 1,
         results: 1,

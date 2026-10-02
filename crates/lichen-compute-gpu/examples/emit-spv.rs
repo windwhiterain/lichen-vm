@@ -38,7 +38,7 @@ fn main() {
 
     let fragment = KernelFragment {
         param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
-        body: count_prologue,
+        body: count_prologue.into(),
         inputs: 1,
         outputs: 1,
         results: 1,

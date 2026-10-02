@@ -3066,7 +3066,13 @@ terminate."** A budget that refuses must say which.
 emitter's own recursion, which **overflows the stack between 400 and 1000
 iterations with no diagnostic at all** — a crash rather than a refusal. Measured:
 100 iterations 4.4 ms, 400 iterations 11.6 ms for a four-element kernel (about
-29 µs of compile time per iteration), and a hard overflow at 1000. The fix shape
+29 µs of compile time per iteration), and a hard overflow at 1000. **Re-measured
+first-hand on this machine at 100**, on the main thread of a debug build, via
+`crates/lichen-language/examples/recursion.rs` — the probe completes trips 1 and 10
+and overflows on 100. So the figure above is the low end on a thread with a larger
+stack, and the low end is a property of the thread as much as of the walk, which
+is what makes "a depth limit that refuses by name" a small change with an
+environment-dependent symptom. The fix shape
 is the same as this item's: a depth limit that **refuses by name** rather than
 one that crashes. Both ceilings are why
 [`gpu-algorithm-roadmap.md`](gpu-algorithm-roadmap.md#41-axis-b-already-in-the-language-and-what-it-does-not-reach)

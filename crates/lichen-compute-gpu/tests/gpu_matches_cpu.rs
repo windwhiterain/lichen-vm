@@ -22,7 +22,7 @@ use lichen_kernel_ir::{
 fn fragment(body: Vec<KernelInstr>) -> KernelFragment {
     KernelFragment {
         param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
-        body,
+        body: body.into(),
         inputs: 1,
         outputs: 1,
         results: 1,
@@ -188,7 +188,7 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
     let mut output = vec![0i64; count];
     for element in 0..count {
         let mut stack: Vec<i64> = Vec::new();
-        for instruction in &fragment.body {
+        for instruction in fragment.body.instrs() {
             match instruction {
                 KernelInstr::Const(value) => stack.push(*value),
                 KernelInstr::LocalGet(local) => {

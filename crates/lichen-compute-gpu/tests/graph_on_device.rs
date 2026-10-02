@@ -35,7 +35,8 @@ fn adds() -> KernelFragment {
             KernelInstr::Bin(KernelBin::Add),
             KernelInstr::BufferWriteCall,
             KernelInstr::Const(0),
-        ],
+        ]
+        .into(),
         inputs: 1,
         outputs: 1,
         results: 1,
@@ -66,7 +67,8 @@ fn sums() -> KernelFragment {
             KernelInstr::Bin(KernelBin::Add),
             KernelInstr::BufferWriteCall,
             KernelInstr::Const(0),
-        ],
+        ]
+        .into(),
         inputs: 2,
         outputs: 1,
         results: 1,

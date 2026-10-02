@@ -261,7 +261,7 @@ independent limits**, both on the *host* side and neither on the device:
 | limit | where | what it does |
 |---|---|---|
 | **2000 applies** | the VM's own budget | *"this binding never terminates — it applied a function more than 2000 times"*, at 4000 iterations that terminate in 62 ms |
-| **stack, between 400 and 1000** | the emitter's walk | a **hard overflow**, not a diagnostic |
+| **stack, between 400 and 1000** | the emitter's walk | a **hard overflow**, not a diagnostic — **re-measured at 100**: a debug build on the main thread overflows there, so the low end of the range is a property of the thread's stack, not only of the walk |
 
 Cost is linear at about **29 µs of compile time per iteration** — 100 iterations
 4.4 ms, 400 iterations 11.6 ms, for a four-element kernel. So an expanded `loop`
