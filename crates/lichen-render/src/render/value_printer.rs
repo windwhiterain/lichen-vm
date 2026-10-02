@@ -304,6 +304,7 @@ where
         if let Some(structural) = value.as_enum() {
             return match structural {
                 LowValue::USize(n) => n.to_string(),
+                LowValue::Float(value) => float_literal(value),
                 LowValue::Str(s) => format!("\"{s}\""),
                 LowValue::Function(_) => "Function".to_string(),
                 LowValue::Table(_) => "Table".to_string(),

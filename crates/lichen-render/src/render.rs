@@ -191,6 +191,42 @@ fn letter_name(i: usize) -> String {
     }
 }
 
+/// The source spelling of a float value — the ONE place a float becomes text
+/// (`docs/notes/floating-point.md` §3.5).  Both printers reach it: a float is a
+/// structural value wherever it appears, so a type expression prints its digits
+/// exactly as a value does.
+///
+/// # The invariant: the spelling reads back as the same `f32`
+///
+/// The digits are `f32`'s own `Display`: the shortest decimal that parses back
+/// bit-identical, and positional — `{:?}` switches to an exponent (`1e38`) that
+/// the lexer's `[0-9]+\.[0-9]+` float literal has no syntax for.  A `.` is
+/// forced, because the same digits without one (`1`) read back as an `Int`: a
+/// different `LowValue`, and so a different type.
+///
+/// An infinity is spelled as a magnitude past the round-to-infinity threshold
+/// `(2 - 2^-24) * 2^127` — the only form the lexer reads back as an infinity,
+/// since `inf` is a name rather than a literal.  `NaN` has no spelling in the
+/// literal syntax at all and keeps Rust's own, so a reader refuses it instead
+/// of acquiring a different float.
+fn float_literal(value: f32) -> String {
+    if value.is_nan() {
+        return value.to_string();
+    }
+    if value.is_infinite() {
+        // `2 * f32::MAX` in `f64` is exact and past the threshold, and `f64`'s
+        // own `Display` spells that magnitude positionally.
+        let magnitude = f64::from(f32::MAX) * 2.0;
+        let sign = if value.is_sign_negative() { "-" } else { "" };
+        return format!("{sign}{magnitude}.0");
+    }
+    let mut text = value.to_string();
+    if !text.contains('.') {
+        text.push_str(".0");
+    }
+    text
+}
+
 /// Whether `node` is itself a struct kind `[id, [TypeStruct, K]]` (as opposed
 /// to a struct type term `[shape, kind]`, whose kind slot is such a node).
 fn is_struct_kind<P: HighProgram>(module: &Module<P>, node: NodeId) -> bool
