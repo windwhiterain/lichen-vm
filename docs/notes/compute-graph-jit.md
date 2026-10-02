@@ -1,4 +1,4 @@
-﻿# Graph JIT: a chain of dispatches as one submission
+# Graph JIT: a chain of dispatches as one submission
 
 > Status: **the IR and the seams are in and tested; the lowering is decided and
 > not written.** The two lowlevel seams, the graph IR crate, and the return
@@ -6,6 +6,16 @@
 > `compute.graph` operator, the `Graph` value, and the recording that fills
 > `Graph::push` — is designed below and unwritten. Branch `feature/graph-jit`,
 > not pushed.
+>
+> **Correction since the body below was written** (found by
+> [gpu-algorithms-ladder](gpu-algorithms-ladder.md), fixed on
+> `feature/gpu-algorithms`): the graph registry froze the backend of the first
+> graph of a shape. `graph_digest` deliberately omits the backend, but `intern`
+> stored the `BuiltGraph` — backend included — under the id that digest
+> produced, so a `"gpu"` program was handed a `"cpu"` entry and refused for a
+> backend it never named, across program boundaries. The backend now rides on
+> `ComputeValue::Graph` and the registry stores a graph and nothing else, which
+> is what the digest's reasoning already assumed; `BuiltGraph` is gone.
 >
 > This note exists so the next session does not re-derive any of it. Most of
 > what is here is a decision *and the alternative that was rejected*, because

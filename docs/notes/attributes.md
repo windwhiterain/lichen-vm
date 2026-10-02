@@ -131,7 +131,11 @@ lane group**, which is a different (and larger) win than parallelism. What
 `Perspective` would buy is the part a dispatch *cannot* give: hoisting a
 uniform (`#0`) subexpression out of a lane-varying body, and kernel fusion. So it is a
 real future feature and **not** a prerequisite for the GPU backend described in
-[compute-jit-low-types](compute-jit-low-types.md).
+[compute-jit-low-types](compute-jit-low-types.md). It is the first item on the C
+axis of [gpu-algorithm-roadmap](gpu-algorithm-roadmap.md#42-axis-c-lane-width-and-the-consumer-perspective-has-been-waiting-for),
+which also records a mismatch this lattice has and that axis would expose:
+**divisibility admits a width no device has** — `6` is a legal perspective, and
+no lane group is six wide.
 
 ## Subtyping: checking is a generalised unify
 

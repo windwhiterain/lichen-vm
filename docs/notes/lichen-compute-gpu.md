@@ -5,6 +5,13 @@
 > by name. What is *not* here is listed under [Not yet](#not-yet) rather than
 > left implied. Work on launching a chain as one submission is designed and
 > tracked in [compute-graph-jit.md](compute-graph-jit.md).
+>
+> **What the primitive cannot express**, as reached by writing algorithms
+> against it rather than by reading this note, is
+> [gpu-algorithm-roadmap.md](gpu-algorithm-roadmap.md); the evidence is
+> [gpu-algorithms-ladder.md](gpu-algorithms-ladder.md). The short version: one
+> element per lane, a straight-line body with no loop, no way to get data in,
+> and no float.
 
 This is the second consumer of the IR that
 [lichen-compute.md §4](lichen-compute.md#4-codegen-bytecode-fragments-not-a-module)
