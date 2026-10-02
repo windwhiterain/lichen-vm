@@ -1,12 +1,13 @@
 # Floating point: `Float` as a ninth kind marker
 
-> Status: **phase 0 landed; phase 1 and 2 proposed.** `LowValue::Float(f32)`,
+> Status: **phases 0 and 1 landed; phase 2 proposed.** `LowValue::Float(f32)`,
 > `LowShape::Float`, the `TypeFloat` kind marker, the `Float` keyword and its
-> literal, and the printer's round-tripping spelling are implemented and tested
-> — §3.1–§3.6 plus the four round trips §5 names. **§3.7 (the operators) and
-> §3.8 (the kernels) are not**, so a float is refused everywhere a kernel could
-> take it rather than lowered into one. Today the only numeric value the lowlevel
-> *offered* was `USize`; it now offers both, and they are unrelated types.
+> literal, the printer's round-tripping spelling, and `+ - * /` with the four
+> order comparisons are implemented and tested. `==`/`!=` over two floats route
+> through [`ValueExt::value_eq`], so they are the same relation unification uses.
+> **§3.8 (the kernels) is not**: a float is still refused everywhere a kernel
+> could take it, by name and at every position. Today the lowlevel *offered*
+> `USize` alone; it now offers both, and they are unrelated types.
 >
 > Points at: `crates/lichen-lowlevel/src/lib.rs` (`LowValue`, `LowShape`,
 > `ValueExt`), `crates/lichen-lowlevel/src/codec.rs` (the value tags),
@@ -269,8 +270,28 @@ Four traps in this table, each of which has already cost somebody something:
 
 [operators](operators.md) is the note that owns the operator set, and §4's
 second decision is what a float means *to* that set, so the two are read
-together. A float needs `+ - * /`; it does **not** need a conversion operator,
-and that is a consequence rather than an omission — see §4.2.
+together. A float takes `+ - * /` and the four order comparisons; it does **not**
+take `%`, the bitwise trio, or a conversion operator — the first two because
+they are not in its set, the third because §4.2 makes it a contradiction.
+
+**Which class an operation runs over is decided by its operands, and an operand
+that names no class leaves the operation where it was.** A concretely `Float`
+operand makes the whole operation `Float` and pins the other operand to it, so
+`x + 1.5` types `x` as a `Float`; with neither operand naming a class the
+operation stays `Int`, so `x + 1` is unchanged from what it always was. Pinning
+a free cell is this language's ordinary unification, and a concrete `Int`
+operand cannot be pinned — which is why `1.5 + 1` is a reported
+`expected Float, found Int` rather than a coercion.
+
+**Division by zero is IEEE for a float, and refused for an `Int`.** `1.0 / 0.0`
+is `+inf`, `0.0 / 0.0` is `NaN`, and no divisor is recorded. This is the only
+answer consistent with §3.3's value set — an overflowing literal is already an
+infinity and the printer already spells one — and with `operators.md` §6, which
+refused "zero is refused, except when it is not" for the JIT: wasm's float
+division by zero yields `inf` without a trap and SPIR-V's is undefined, so an
+interpreter refusal beside an IEEE kernel answer is a divergence that becomes
+visible the moment §3.8 lands. `operator.divide_by_zero` is therefore the
+**integer** `Div`/`Rem` category only.
 
 `==`/`!=` are the one place the decision has a visible edge, and it resolves the
 way the rest of the language resolves things: **by asking the value.** They are
@@ -293,6 +314,16 @@ language would have reintroduced exactly the divergence that one relation
 removes. IEEE was considered and declined: it is not an equivalence relation
 (`NaN != NaN`), so it could not live in [`ValueExt::value_eq`] without breaking
 the hash tables and the marker lookups that read it.
+
+**One behaviour moved as a consequence, and it is not float-specific.** `==`
+used the derived `PartialEq`, which compares a handle-carrying leaf by pointer;
+`value_eq`'s documented contract is identity **by content**. So two values of a
+leaf that answers `is_handle()` — today `ComputeValue::Buffer` is the only one —
+now compare by payload rather than by allocation. That is the relation
+unification and table keys have always used for the same leaf, and it is what
+"generalized equality over any two same-typed values" should have meant, so this
+is a correction rather than a regression. It is recorded because a `==` on two
+buffers is a thing someone can write and the answer changed.
 
 [`ValueExt::value_eq`]: crates/lichen-lowlevel/src/lib.rs
 
