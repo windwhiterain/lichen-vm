@@ -23,7 +23,7 @@ use lichen_lowlevel::{AnyNodeId, BudgetExhausted, EvalError, LowValue, NodeId, P
 
 use crate::{
     checker::Build,
-    ir::Loc,
+    ir::{ExprKind, Loc, LocStep},
     program::{HighProgram, ValueType},
 };
 
@@ -97,9 +97,20 @@ pub enum DiagKind {
     /// [`Self::IndexTarget`], which reports a *type* the checker refused to
     /// index and therefore names that type.
     RuntimeIndexTarget,
+    /// A raw read (`X<e>`, `X::a`) whose **element** turned out not to be a
+    /// pair at runtime, so the element's own type slot — the read's type — does
+    /// not exist.  The same lowlevel
+    /// [`EvalError::IndexTarget`](lichen_lowlevel::EvalError::IndexTarget) as
+    /// [`Self::RuntimeIndexTarget`], but the non-container is the element the
+    /// read just produced, not the container the user wrote: the container
+    /// (`[1, 2]`) was fine and the element (`1`) is a scalar.  Reached from
+    /// source, never statically — the raw read validates nothing, so only the
+    /// read itself can see it.  Distinct wording because the generic
+    /// "this value is not a container" blames the wrong side of the read.
+    RuntimeRawElement,
     /// An imported package whose export is not the `[value, type]` pair the
-    /// importer reads — a raw read (`[1, 2]<0>`) at a package's root compiles
-    /// to the read operation rather than to a pair.  Expected = a pair.
+    /// importer reads — an export that never evaluated to a pair at all.
+    /// Expected = a pair.
     ImportExport,
     /// A read whose **runtime subscript** turned out not to be an index — the
     /// lowlevel's [`EvalError::IndexSubscript`](lichen_lowlevel::EvalError::IndexSubscript)
@@ -377,11 +388,18 @@ where
                     self.node_loc(*key),
                 )),
                 // A read applied to a non-container: the value itself is the
-                // fact here, so this kind carries no type to print.
-                EvalError::IndexTarget { target } => out.push(Diag::factual(
-                    DiagKind::RuntimeIndexTarget,
-                    self.node_loc(*target),
-                )),
+                // fact here, so this kind carries no type to print.  A raw
+                // read's own slot reads target the element it produced rather
+                // than the container the user wrote, and read as their own kind
+                // for that reason.
+                EvalError::IndexTarget { target } => {
+                    let loc = self.node_loc(*target);
+                    let kind = match loc.as_ref() {
+                        Some(loc) if self.is_raw_read_element(loc) => DiagKind::RuntimeRawElement,
+                        _ => DiagKind::RuntimeIndexTarget,
+                    };
+                    out.push(Diag::factual(kind, loc))
+                }
                 // A read whose subscript is not an index: like the
                 // non-container target beside it, the value itself is the
                 // fact, so this kind carries no type to print.
@@ -463,6 +481,21 @@ where
             return None;
         };
         self.node_edges.get(&node).cloned()
+    }
+
+    /// Whether `loc` was registered by one of the raw reads for its
+    /// **element** — the node both of the read's slot reads target, so a
+    /// non-container there is a non-pair *element*, not a non-container
+    /// container.  Each raw read registers the element at the read's own type
+    /// slot (`loc(e, 1)`), which is what tells it apart from the edges every
+    /// other read registers; the IR kind is what keeps a typed read's own edges
+    /// out of it.
+    fn is_raw_read_element(&self, loc: &Loc) -> bool {
+        loc.path == [LocStep::Type]
+            && matches!(
+                self.ir[loc.expr].kind,
+                ExprKind::RawIndex { .. } | ExprKind::RawNamedField { .. }
+            )
     }
 
     /// One unification-failure diagnostic — the `unify_errors` entry at `i`,

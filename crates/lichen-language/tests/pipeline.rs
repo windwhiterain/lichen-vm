@@ -1087,6 +1087,70 @@ fn a_raw_named_read_requires_a_type_struct_container() {
 }
 
 #[test]
+fn a_raw_read_of_a_type_value_reads_the_components_pair() {
+    // The documented use: `X<e>` reads a component of a *type-as-value*, whose
+    // elements are themselves `[value, type]` pairs — so the read yields the
+    // element's value and its type.  Pinned on both halves: the value of
+    // `<Int, string><0>` is the `Int` type, and comparing it against `Int` is
+    // true (a `USize` answer here would print the same and compare false).
+    assert_eq!(
+        evaluate("<Int, string><0>"),
+        LangValue::TypeValue(TypeValue::TypeInt)
+    );
+    assert_eq!(usize_of(&evaluate("<Int, string><0> == Int")), 1);
+    assert_eq!(usize_of(&evaluate("struct<Int, string><1> == string")), 1);
+    // The element's own *value* slot, which is what a `Type`-valued element
+    // carries: `<Int, string><0> == Int` is the comparison of markers.
+    assert_eq!(usize_of(&evaluate("<Int, string><1> == string")), 1);
+    // An unbound container stays lazy and resolves at the apply.
+    assert_eq!(
+        usize_of(&evaluate("f = k => k<0>; f <Int, string> == Int")),
+        1
+    );
+}
+
+#[test]
+fn a_raw_read_of_a_runtime_container_reports_the_non_pair_element() {
+    // `X<e>` reads the element's own pair, so a container of scalars has no
+    // type slot to read.  It used to print `none: none` with no diagnostic at
+    // all: the read compiled to the bare read operation rather than to a pair,
+    // so the failing slot read happened after the build had decided `ok`.
+    let d = diags("[1, 2]<0>");
+    assert!(
+        d.iter()
+            .any(|diag| diag.message.contains("not a value/type pair")),
+        "the raw element failure must be reported: {d:?}"
+    );
+    // A span, too — the read is what the user wrote.
+    assert_eq!(d[0].span, Some((1, 1)));
+    // The same read through a bound name.
+    assert!(
+        diags("x = [1, 2]; x<0>")
+            .iter()
+            .any(|diag| diag.message.contains("not a value/type pair")),
+        "a bound container reports it too"
+    );
+    // …and through a deferred parameter, where it is reported with the generic
+    // wording and no caret: the failure lands on an apply clone, which has no
+    // expression of its own to blame — the same limitation `RuntimeApplyTarget`
+    // has.  It used to be silent (`none`), so the reporting is what is new.
+    let d = diags("f = k => k<0>; f [1, 2]");
+    assert!(
+        d.iter()
+            .any(|diag| diag.message.contains("not a container")),
+        "the cloned read is reported too: {d:?}"
+    );
+    // The generic message is still there for a container that is not a
+    // container at all — a different failure, blaming the other side.
+    let d = diags("5<0>");
+    assert!(
+        d.iter()
+            .any(|diag| diag.message.contains("not a container")),
+        "a non-container keeps its own wording: {d:?}"
+    );
+}
+
+#[test]
 fn a_raw_named_read_yields_the_field_type() {
     // `S::a` reads field `a`'s *type* (as a value) from the struct type value
     // `S`; `s.a` reads field `a`'s *value* from the struct instance `s`.

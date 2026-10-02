@@ -1402,15 +1402,14 @@ where
                 // then extract dynamic value/type leaves from its static
                 // items; the payloads stay in the package's static arena.
                 let pair = self.module.materialize_leaf(export, self.current_block);
-                // A `RawIndex` root compiles to the raw read operation, not to
-                // a pair: `[1, 2]<0>` exports an unevaluated op node, whose
-                // items are unavailable until something evaluates it.  A raw
-                // read *of* a raw read exports the inner array itself
-                // (`[[1]]<0>` evaluates to an array of one element).  The
-                // contract the importer needs is therefore a *checked* one —
-                // exactly the pair's two items — so a violated contract is an
-                // honest guard about the import rather than a panic inside the
-                // checker.
+                // The contract the importer needs is a *checked* one — exactly
+                // the pair's two items — so a violated contract is an honest
+                // guard about the import rather than a panic inside the
+                // checker.  Every expression's term is that pair, a raw read
+                // (`X<e>`) included now that it builds one (it used to compile
+                // to the bare read operation); what can still arrive is an
+                // export whose evaluation never produced a pair, and the
+                // package's own build rejects that case first.
                 // SAFETY: `pair` was just materialized into the current
                 // block, whose arena is alive.
                 let Some(items) =

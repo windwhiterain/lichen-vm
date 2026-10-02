@@ -160,26 +160,25 @@ fn a_failing_dependency_is_reported_at_the_import_directive() {
 }
 
 #[test]
-fn a_package_whose_last_statement_is_a_raw_read_reports_an_import_export_error() {
-    // A raw read (`[1, 2]<0>`) at a package's root compiles to the read
-    // operation rather than to the `[value, type]` pair the importer reads, so
-    // the export is not a value — an honest guard about the import, not a
-    // panic inside the checker.  The caret sits on the main file's directive.
+fn a_package_whose_last_statement_is_a_raw_read_reports_the_package_own_failure() {
+    // `[1, 2]<0>` is a raw read of a runtime array: the element is not a
+    // `[value, type]` pair, so the package's *own* build rejects it and the
+    // import reports that.  (The export used to reach the importer as a bare
+    // read operation instead of a pair and be refused there by the
+    // import-export guard; the read now builds the pair every expression's term
+    // is, so the failure is the honest one.)
     let dir = temp_dir("raw-export");
     write(&dir, "raw.lichen", "[1, 2]<0>\n");
     let main = "@{x = import \"raw.lichen\"@}x\n";
     let mut store = PackageStore::<LangProgram>::new();
     let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
-    let diag = err
-        .iter()
-        .find(|d| {
-            d.check
-                .as_ref()
-                .is_some_and(|c| c.kind == DiagKind::ImportExport)
-        })
-        .unwrap_or_else(|| panic!("the raw-read export must be guarded: {err:?}"));
+    assert!(
+        err.iter()
+            .any(|d| d.message.contains("cannot load package 'raw.lichen'")),
+        "the package's own failure is the one reported: {err:?}"
+    );
     assert_eq!(
-        diag.span,
+        err[0].span,
         Some((1, 3)),
         "the caret is on the @import directive"
     );
@@ -229,27 +228,23 @@ fn an_unattributable_failure_in_a_dependency_names_the_package() {
 }
 
 #[test]
-fn a_package_export_that_is_not_a_pair_reports_an_import_export_error() {
-    // A raw read of a raw read exports the inner array itself: `[[1]]<0>`
-    // evaluates to a one-element array, not the `[value, type]` pair the
-    // importer reads.  The guard covers the width as well as the kind, so this
-    // is the same honest diagnostic the non-array export gets rather than an
-    // index-out-of-bounds panic inside the checker.
+fn a_raw_read_of_a_one_element_array_reports_the_out_of_bounds_slot_read() {
+    // `[[1]]<0>` reads the inner `[1]` — a one-element array, so the read's
+    // *type slot* (element 1) is out of bounds.  The package's own build
+    // records it, and the import reports that: an honest refusal rather than an
+    // index-out-of-bounds panic inside the importer's checker.
     let dir = temp_dir("short-export");
     write(&dir, "short.lichen", "[[1]]<0>\n");
     let main = "@{x = import \"short.lichen\"@}x\n";
     let mut store = PackageStore::<LangProgram>::new();
     let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
-    let diag = err
-        .iter()
-        .find(|d| {
-            d.check
-                .as_ref()
-                .is_some_and(|c| c.kind == DiagKind::ImportExport)
-        })
-        .unwrap_or_else(|| panic!("the one-element export must be guarded: {err:?}"));
+    assert!(
+        err.iter()
+            .any(|d| d.message.contains("index 1 out of bounds (array length 1)")),
+        "the package's own failure is the one reported: {err:?}"
+    );
     assert_eq!(
-        diag.span,
+        err[0].span,
         Some((1, 3)),
         "the caret is on the @import directive"
     );

@@ -27,7 +27,15 @@ a concretely non-positional value (an atomic type, an `Int`) or an out-of-bounds
 a **runtime** lowlevel `Index` error, never a static diagnostic.
 
 The result is the element's own pair — value slot element 0, type slot element 1 — both
-read lazily.  An unbound container (a parameter, a call result) stays lazy and resolves at
+read lazily.  **The container may be any expression; its elements must be pairs.**  Every
+element of a type-as-value is one (a type constant *is* a `[value, type]` pair), which is
+what the form is for; a container of plain values — a runtime array or tuple — is not, and
+reading element 1 of an `Int` element is a runtime `Index` error, reported with its own
+wording ("this raw read found an element that is not a value/type pair", with the caret on
+the read).  A runtime array's element is read with `e[i]`; `X<e>` is not a second way to
+spell it.
+
+An unbound container (a parameter, a call result) stays lazy and resolves at
 the apply, which is what makes it usable generically: `f = k => k<0>` reads the first
 field of whatever type `k` is applied to, exactly the laziness the compute-wrapper field
 reads rely on (see [compute-kernel-struct.md](compute-kernel-struct.md)).

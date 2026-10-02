@@ -106,9 +106,9 @@ where
     /// which instead requires the container's **kind** to be TypeStruct (its
     /// table at `container_ty[1][0][1]`).
     ///
-    /// The value is the structural `Index` over the container's value at the
-    /// name table's resolved index (`TableGet(names, name)`); the type is
-    /// element 1 of the read — so `struct<.a Int, .b string>::a` is
+    /// The read is the element's own pair at the name table's resolved index
+    /// (`TableGet(names, name)`) — its slot 0 is the value and its slot 1 the
+    /// type — so `struct<.a Int, .b string>::a` is
     /// `Int : Type`, the field's *type* as a value (where `X<e>` reads a
     /// positional component, `X::a` reads a named one).
     pub(super) fn check_raw_named_field(
@@ -149,13 +149,17 @@ where
             Some(key_ops),
         );
         self.node_edges.insert(key, self.loc(e, 0));
-        // value = Index(container_value, key); type = Index(value, 1).
+        // The element's own pair, exactly as the positional raw read builds it
+        // (see [`Self::check_raw_index`] for why the *term* is that pair and
+        // not the bare element).
         let container_value = self.value_of(container);
-        let (value_node, ty_node) = self.element_read(container_value, key);
-        self.state[e].term = Some(value_node);
+        let (pair, element, ty_node) = self.element_read(container_value, key);
+        // As there: the element is the target of both slot reads.
+        self.node_edges.insert(element, self.loc(e, 1));
+        self.state[e].term = Some(pair);
         self.state[e].val = None;
         self.state[e].ty = Some(ty_node);
-        value_node
+        pair
     }
 
     /// A named field read `a.name`.  The field name is resolved against the
