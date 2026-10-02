@@ -12,7 +12,7 @@
 //! lichen-home compiler cache ([`compiler_cache`]) and drives that.
 //!
 //! The package manager depends only on the isolated [`lichen_preprocess`]
-//! crate for the `@{…@}` block grammar and its `Depend` import-path type (see
+//! crate for the `---…---` block grammar and its `Depend` import-path type (see
 //! [`preprocess`]); it never links the language or VM crates.  The binary is
 //! named `lichen` ([`main`]); the language compiler is the renamed
 //! `lichen-compiler` in `crates/lichen-compiler`.

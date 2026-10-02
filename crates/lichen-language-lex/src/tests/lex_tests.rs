@@ -494,7 +494,7 @@ fn incremental_resume_append_to_large_prefix() {
 }
 
 /// The same equivalence when the code is a **suffix** of a larger source (the
-/// text after a stripped `@{…@}` block): `base` is the offset it starts at, and
+/// text after a stripped `---…---` block): `base` is the offset it starts at, and
 /// every token range and span is absolute in the larger source.
 ///
 /// This is the shape the language server's session compiles, and the offset is
@@ -515,8 +515,8 @@ fn incremental_resume_matches_full_relex_with_a_base_offset() {
     // Two prefixes with different line structure, so the base is not a whole
     // number of lines in one of them.
     for prefix in [
-        "@{\n  math = import \"math.lichen\"\n@}\n",
-        "@{ math = 1 @}",
+        "---\n  math = import \"math.lichen\"\n---\n",
+        "--- math = 1 ---",
     ] {
         let base = prefix.len() as u32;
         let line_count = prefix.matches('\n').count();

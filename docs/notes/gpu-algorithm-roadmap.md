@@ -127,7 +127,7 @@ its body) — deferred"*. **That comment describes the unreduced case, and the
 reduced case already works.** Measured, on unmodified `dev`:
 
 ```lichen
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 square = x => x * x
 p = compute.parallel (cfg => {
   n = cfg(0)
@@ -195,6 +195,18 @@ and **2²⁰** is a scan, and both are past the 2000-apply budget and the ~400�
 emitter depth. A dynamic loop removes both by construction — which is the
 strongest single reason to make it a builtin rather than a function.
 
+> **Since this section: the surface argument held and the surface changed.** The
+> *builtin rather than a library function* conclusion below is kept verbatim — it
+> is the whole reason a dynamic loop exists. What is superseded is **which
+> builtin**: a `loop f n : T -> T` operator is a strict special case of a general
+> recursion-to-loop conversion, and the latter also reaches the natural
+> formulations this section does not (`mutual_recursion.lichen`'s two-node cycle
+> has no count parameter at all). The decided surface is a **compile-time marker
+> on the function** — see [loop-conversion §7](loop-conversion.md) for the three
+> reasons, and [§1](loop-conversion.md) for the `Style 1` seam the conversion
+> runs at. The IR work this section predicts is unchanged and is staged as
+> [§8](loop-conversion.md).
+
 **And it is not free of `P1-33` on the host side.** The operator's own *declaration*
 is the annotated one above, and that annotation is P1-33's escape, so a builtin
 fixes the surface and leaves the underlying closure-instantiation defect for
@@ -249,7 +261,7 @@ independent limits**, both on the *host* side and neither on the device:
 | limit | where | what it does |
 |---|---|---|
 | **2000 applies** | the VM's own budget | *"this binding never terminates — it applied a function more than 2000 times"*, at 4000 iterations that terminate in 62 ms |
-| **stack, between 400 and 1000** | the emitter's walk | a **hard overflow**, not a diagnostic |
+| **stack, between 400 and 1000** | the emitter's walk | a **hard overflow**, not a diagnostic — **re-measured at 100**: a debug build on the main thread overflows there, so the low end of the range is a property of the thread's stack, not only of the walk |
 
 Cost is linear at about **29 µs of compile time per iteration** — 100 iterations
 4.4 ms, 400 iterations 11.6 ms, for a four-element kernel. So an expanded `loop`
@@ -574,6 +586,15 @@ the honest classification: it is not a codegen task, so it does not belong in a
 roadmap about what a kernel can express. It decides two of the four axes' limits
 at once, which is why it is worth naming here even though it is not this
 document's to decide.
+
+**The next paragraph names the answer to the loop half, and the other half is
+still open.** A run-time trip count does *not* need an applied body — it needs a
+body that is left unreduced at exactly one call, and
+[loop-conversion](loop-conversion.md) is that: it converts a marked recursive
+function into a loop nest at the `Style 1` seam, so the count is a register the
+emitter reads rather than a call it must expand. **A body-local binding still
+needs the applied body**, so §4.5's narrowing and this are different answers to a
+question this document had bundled into one.
 
 **§4.5 may dissolve this fork rather than answer it**, and that is the one place
 where the two interact. A kernel loop needs a run-time count, so it needs the

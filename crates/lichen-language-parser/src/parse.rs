@@ -482,25 +482,32 @@ fn statement<'a>(
     ))
 }
 
-/// `['cache'] ['let'] name = expr` — a binding, with two independent marks:
-/// `cache` (whose value is a retained cell) and `let` (restrictive).
+/// `['@loop'] ['cache'] ['let'] name = expr` — a binding, with three independent
+/// marks: `@loop` (whose recursion **may become a loop**), `cache` (whose value
+/// is a retained cell) and `let` (restrictive).
 fn binding<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, Binding, E<'a>> + Clone {
-    let head = token(TokenKind::KwCache)
+    let head = token(TokenKind::KwLoop)
         .ignored()
         .or_not()
-        .then(choice((
-            token(TokenKind::KwLet)
-                .ignore_then(name())
-                .then_ignore(token(TokenKind::Equals))
-                .map(|n| (n, true)),
-            name()
-                .then_ignore(token(TokenKind::Equals))
-                .map(|n| (n, false)),
-        )))
-        .map(|(cached, (n, restrictive))| (n, restrictive, cached.is_some()));
+        .then(
+            token(TokenKind::KwCache)
+                .ignored()
+                .or_not()
+                .then(choice((
+                    token(TokenKind::KwLet)
+                        .ignore_then(name())
+                        .then_ignore(token(TokenKind::Equals))
+                        .map(|n| (n, true)),
+                    name()
+                        .then_ignore(token(TokenKind::Equals))
+                        .map(|n| (n, false)),
+                )))
+                .map(|(cached, (n, restrictive))| (n, restrictive, cached.is_some())),
+        )
+        .map(|(looping, (n, restrictive, cached))| (n, restrictive, cached, looping.is_some()));
     // A broken binding value is recovered, not fatal: skip the offending
     // tokens (stopping before the next separator *or the end of the input*,
     // which the program parser then consumes) and substitute an error node, so
@@ -514,15 +521,17 @@ fn binding<'a>(
             .repeated()
             .map_with(move |_, me| err_node(tokens, me.span())),
     ));
-    head.then(value)
-        .map(|(((name, span), restrictive, cached), value)| Binding {
+    head.then(value).map(
+        |(((name, span), restrictive, cached, looping), value)| Binding {
             name,
             span,
             binder: None,
             value,
             restrictive,
             cached,
-        })
+            looping,
+        },
+    )
 }
 
 /// A full expression in an operator's operand position — or, when the
@@ -1438,7 +1447,7 @@ fn block<'a>(
                         .map(|b| {
                             let public = b.public;
                             let span = b.stmt.span();
-                            let (name, value, field, cached) = match b.stmt {
+                            let (name, value, field, cached, looping) = match b.stmt {
                                 Stmt::Binding(binding) => (
                                     Some(binding.name),
                                     binding.value,
@@ -1446,8 +1455,9 @@ fn block<'a>(
                                     // struct field.
                                     !binding.restrictive,
                                     binding.cached,
+                                    binding.looping,
                                 ),
-                                Stmt::Expr(e) => (None, e, true, false),
+                                Stmt::Expr(e) => (None, e, true, false, false),
                             };
                             RecordField {
                                 name,
@@ -1456,6 +1466,7 @@ fn block<'a>(
                                 public,
                                 field,
                                 cached,
+                                looping,
                                 span,
                             }
                         })

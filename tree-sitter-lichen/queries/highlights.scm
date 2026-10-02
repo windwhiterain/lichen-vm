@@ -5,7 +5,7 @@
 ; queries from the extension's language directory, not from the grammar repo.
 ; Keep the two in sync.
 
-; The `@{ ... @}` preprocessor block is Lichen's only "prose" home (doc
+; The `--- ... ---` preprocessor block is Lichen's only "prose" home (doc
 ; strings, metadata); treat the whole block as a comment.
 (preprocess_block) @comment
 

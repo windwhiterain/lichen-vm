@@ -1,5 +1,5 @@
 //! The project: a directory of lichen programs whose dependencies are
-//! declared per-file as `name = depend "url"` directives in each `@{…@}` block.
+//! declared per-file as `name = depend "url"` directives in each `---…---` block.
 //!
 //! A [`Project`] is the unit the package manager operates on.  There is no
 //! project manifest: a file's `depend` directives name its git sources, the
@@ -28,7 +28,7 @@ impl Project {
     }
 
     /// The `depend "url"` / `name = plug "url"` directives declared in a
-    /// source's `@{…@}` block.
+    /// source's `---…---` block.
     pub fn depends(source: &str) -> Vec<Depend> {
         let (interior, _) = split_block(source);
         block_depends(interior.unwrap_or_default())
@@ -50,7 +50,7 @@ mod tests {
 
     #[test]
     fn depends_collects_depend_directives() {
-        let source = "@{\n  foo = depend \"https://example.com/foo.git\" rev = \"abc\"\n  math = import \"math.lichen\"\n@}\nfoo";
+        let source = "---\n  foo = depend \"https://example.com/foo.git\" rev = \"abc\"\n  math = import \"math.lichen\"\n---\nfoo";
         let deps = Project::depends(source);
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].url, "https://example.com/foo.git");
@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn plugin_depends_filters_plugin_only() {
-        let source = "@{\n  foo = depend \"https://example.com/foo.git\"\n  gpu = depend \"https://example.com/gpu.git\" plugin\n@}\nx";
+        let source = "---\n  foo = depend \"https://example.com/foo.git\"\n  gpu = depend \"https://example.com/gpu.git\" plugin\n---\nx";
         let plugins = Project::plugin_depends(source);
         assert_eq!(plugins.len(), 1);
         assert_eq!(plugins[0].url, "https://example.com/gpu.git");

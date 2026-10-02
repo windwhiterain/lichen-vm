@@ -3,9 +3,9 @@
 > Status: current
 > Points at: `crates/lichen-language/src/preprocess/` (the block scan + mini-frontend),
 > `package.rs` (the store), `persist.rs` (the device cache), `run.rs`, `main.rs` (the
-> CLI). The `@{…@}` block *syntax* is the spec's business: [language-spec.md §2.2](../language-spec.md).
+> CLI). The `---…---` block *syntax* is the spec's business: [language-spec.md §2.2](../language-spec.md).
 
-A program may open with a single `@{ … }@` **preprocessor block**. Inside it,
+A program may open with a single `--- … }@` **preprocessor block**. Inside it,
 `name = import "path"` loads a package bound to `name`, `name = "value"` defines a
 string metadata entry, and `name = depend "url"` declares a git dependency bound to
 `name` (fetched by the
@@ -15,7 +15,7 @@ never see it; the code to compile is everything after the block.
 
 ## Import
 
-- The block syntax is the only import form: `@{ _p = import "geometry.lichen" @}`.
+- The block syntax is the only import form: `--- _p = import "geometry.lichen" ---`.
 - A dependency is declared first (`geo = depend "url" sub = "lichen-std"`),
   fetched into the lichen-home source cache, and staged on the import path — then
   `_geo = import "geo"` resolves into it (into the repo's `sub` subdirectory when
@@ -25,7 +25,7 @@ never see it; the code to compile is everything after the block.
 - The preprocessor resolves each import through the shared store. A package's own
   imports resolve first (transitive dependencies load and freeze first); a cycle is a
   `cannot load package '…':` diagnostic anchored on the import that closes it.
-- Diagnostics are re-anchored to the importing file's `@{…@}` line.
+- Diagnostics are re-anchored to the importing file's `---…---` line.
 
 ## The store
 

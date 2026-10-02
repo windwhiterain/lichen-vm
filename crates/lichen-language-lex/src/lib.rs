@@ -10,7 +10,7 @@
 //!
 //! Whitespace (space/tab/cr) is trivia and never reaches the token stream.
 //! There are no comments at all in the language -- prose lives in the
-//! preprocessor's `@{...@}` block as metadata strings.  A newline, comma, or
+//! preprocessor's `---...---` block as metadata strings.  A newline, comma, or
 //! semicolon all lex as the same Separator token -- the language treats them
 //! uniformly as a boundary (statement or list-element separator), and the
 //! quantity never matters.
@@ -99,6 +99,9 @@ pub enum TokenKind {
     KwElse,
     /// The return keyword -- a block's explicit tail expression marker.
     KwReturn,
+    /// `@loop` -- a binding whose recursion may become a loop. The keyword
+    /// sigil is `@`; this is the first keyword to carry it.
+    KwLoop,
     /// The pub keyword -- a block statement marked as a struct field.
     KwPub,
     /// The cache keyword -- a binding whose value is a *retained cell*
@@ -215,6 +218,7 @@ impl TokenKind {
             TokenKind::KwThen => "'then'".to_string(),
             TokenKind::KwElse => "'else'".to_string(),
             TokenKind::KwReturn => "'return'".to_string(),
+            TokenKind::KwLoop => "'@loop'".to_string(),
             TokenKind::KwPub => "'pub'".to_string(),
             TokenKind::KwCache => "'cache'".to_string(),
             TokenKind::KwTypeOf => "'type_of'".to_string(),
@@ -332,6 +336,11 @@ enum RawToken {
     KwPub,
     #[token("cache")]
     KwCache,
+    /// A `@`-prefixed word. Only the keywords carry the sigil, so the word is
+    /// matched whole and resolved below: an unknown one is a lex error, which is
+    /// what reserves `@` for the keywords that follow.
+    #[regex(r"@[A-Za-z_][A-Za-z0-9_]*")]
+    AtNameLit,
     #[token("type_of")]
     KwTypeOf,
     #[token("array")]
@@ -428,7 +437,7 @@ pub fn lex(source: &str) -> Lexed {
 /// `line_starts`) beginning at byte `base` within it.  Token ranges and
 /// spans are absolute positions in the full source (`base + local`), so
 /// diagnostics and LSP positions point at the real source even when `code`
-/// is only a suffix of it (e.g. the code after a stripped `@{...@}`
+/// is only a suffix of it (e.g. the code after a stripped `---...---`
 /// preprocessor block).
 pub fn lex_with(code: &str, line_starts: &[usize], base: u32) -> Lexed {
     let mut tokens: Vec<Token> = Vec::new();
@@ -509,7 +518,7 @@ pub fn lex_with(code: &str, line_starts: &[usize], base: u32) -> Lexed {
 /// source coordinates.
 ///
 /// `old_source` and `new_source` are the **code** of a possibly larger source
-/// (the text after a stripped `@{…@}` block) beginning at byte `base` within it,
+/// (the text after a stripped `---…---` block) beginning at byte `base` within it,
 /// exactly as [`lex_with`] takes them; `a`, `b` and the token ranges are
 /// *absolute* positions in that larger source, so the two coordinate spaces are
 /// never mixed.  A whole-file caller passes `base = 0`, where the two coincide.
@@ -760,6 +769,19 @@ fn raw_to_kind(
             }
             Some(TokenKind::Str(slice[1..slice.len() - 1].to_string()))
         }
+        RawToken::AtNameLit => match &slice[1..] {
+            "loop" => Some(TokenKind::KwLoop),
+            other => {
+                errors.push(LexDiag {
+                    span: Some(lc),
+                    message: format!(
+                        "'@{other}' is not a keyword. `@` prefixes keywords, and `@loop` is the \
+                         only one so far"
+                    ),
+                });
+                None
+            }
+        },
         RawToken::NameLit => Some(match slice {
             "Int" => TokenKind::KwInt,
             "Float" => TokenKind::KwFloat,
@@ -773,6 +795,8 @@ fn raw_to_kind(
             "else" => TokenKind::KwElse,
             "return" => TokenKind::KwReturn,
             "pub" => TokenKind::KwPub,
+            "cache" => TokenKind::KwCache,
+            "array" => TokenKind::KwArray,
             "type_of" => TokenKind::KwTypeOf,
             "_" => TokenKind::Placeholder,
             _ => TokenKind::Name(slice.to_string()),

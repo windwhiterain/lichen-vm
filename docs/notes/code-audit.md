@@ -268,7 +268,7 @@ if let Some(rev) = rev { git_in(&dir_git, &["checkout", rev])?; }
 **no validation anywhere**. A source file containing
 
 ```lichen
-@{ x = depend "--upload-pack=<command>" @}
+--- x = depend "--upload-pack=<command>" ---
 x
 ```
 
@@ -911,7 +911,7 @@ should have had.
 
 *The premise held, and reachability is stronger than reported.* No artifact is
 needed. A package whose whole source is `[[1]]<0>` exports the inner array — a
-one-element array — and the importer `@{x = import "pkg.lichen"@}x` panicked at
+one-element array — and the importer `---x = import "pkg.lichen"---x` panicked at
 the unfixed `checker.rs:1280` with **"index out of bounds: the len is 1 but the
 index is 1"**. The neighbouring `[1, 2]<0>` case stays on the non-array side of
 the guard: its export is an unevaluated op node, so `array_items` answers
@@ -1202,7 +1202,7 @@ Both are load-bearing and were left untouched:
 
 *Reachability, and how `P1-14` widened it.* This is reachable from **ordinary
 source**, not a corrupt artifact: with `pkg.lichen` = `x => ! (x == 1)` and an
-importer `@{f = import "pkg.lichen"@}f 2`, the apply's assert clone fires in the
+importer `---f = import "pkg.lichen"---f 2`, the apply's assert clone fires in the
 *importer's* module with a `Static` template — measured: `build.ok == false`,
 `assert_errors == 1`, `eval_errors == 0`, `user_asserts == 0`, `diagnostics`
 empty. `ec9c4e4` (`P1-14`) is what puts `run` in this state: `evaluate`/
@@ -2627,8 +2627,14 @@ Its own status, and the two ceilings a static expansion runs into instead, are i
 [`gpu-algorithm-roadmap.md`](gpu-algorithm-roadmap.md#41-axis-b-already-in-the-language-and-what-it-does-not-reach)
 §4.1; `P1-39` is the other half, because in a kernel the operator also needs the
 body applied before it is lowered, and `P1-40` is what a *dynamic* loop removes by
-construction. Today the only working form is the annotation this entry records as
-the escape:
+construction. **[Loop conversion](loop-conversion.md) is the design that reaches
+the kernel case, and it supersedes the `loop f n` surface this entry names** — a
+`loop` is a one-node cycle in its general form, and the natural formulations this
+item would have to annotate (Euclid below, `mutual_recursion.lichen`) are not of
+the form `T -> T` repeated `n` times. It does not fix this item: the marker
+supplies no type, so the annotation is still the escape for a two-argument
+self-reference on the **host**. Today the only working form is the annotation this
+entry records as the escape:
 
 ```text
 loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x))
@@ -3060,14 +3066,24 @@ terminate."** A budget that refuses must say which.
 emitter's own recursion, which **overflows the stack between 400 and 1000
 iterations with no diagnostic at all** — a crash rather than a refusal. Measured:
 100 iterations 4.4 ms, 400 iterations 11.6 ms for a four-element kernel (about
-29 µs of compile time per iteration), and a hard overflow at 1000. The fix shape
+29 µs of compile time per iteration), and a hard overflow at 1000. **Re-measured
+first-hand on this machine at 100**, on the main thread of a debug build, via
+`crates/lichen-language/examples/recursion.rs` — the probe completes trips 1 and 10
+and overflows on 100. So the figure above is the low end on a thread with a larger
+stack, and the low end is a property of the thread as much as of the walk, which
+is what makes "a depth limit that refuses by name" a small change with an
+environment-dependent symptom. The fix shape
 is the same as this item's: a depth limit that **refuses by name** rather than
 one that crashes. Both ceilings are why
 [`gpu-algorithm-roadmap.md`](gpu-algorithm-roadmap.md#41-axis-b-already-in-the-language-and-what-it-does-not-reach)
 §4.1 measures an unrolled loop before recommending it. Note that a *dynamic* loop
 — one the JIT emits into the backend IR rather than expanding — removes both
 ceilings by construction, which is the argument for `P1-33`'s operator being a
-builtin rather than a library function.
+builtin rather than a library function. **[Loop conversion](loop-conversion.md)
+keeps that argument and changes the operator**, and its Stage 1 is also the fix
+shape for the second ceiling: the structured body is what turns the emitter's
+400-to-1000 **crash** into a named refusal, independently of whether any loop is
+ever written.
 
 ## P2 — architecture
 

@@ -196,9 +196,9 @@ fn the_dispatch(module: &Module<LangProgram>, fid: AnyFunctionId) -> Option<Node
 /// function always has exactly one parameter and a "free variable" is simply a
 /// name the body reads that is not that parameter. `unused` is therefore a
 /// parameter rather than a free variable, which is what makes `data` one.
-const CHAIN: &str = r#"@{
+const CHAIN: &str = r#"---
   compute = import "compute.lichen"
-@}
+---
 adder = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
@@ -364,9 +364,9 @@ fn index_position(module: &Module<LangProgram>, node: NodeId) -> Option<usize> {
 /// (`cfg(1)` is a tuple of `Buffer` values) and therefore the shape a source
 /// program has to write — `compute.plrun k (n, (buffer,))`, not
 /// `compute.plrun k (n, buffer)`.
-const FROM_PARAMETER: &str = r#"@{
+const FROM_PARAMETER: &str = r#"---
   compute = import "compute.lichen"
-@}
+---
 adder = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
@@ -469,9 +469,9 @@ fn a_parameter_read_is_a_bare_cell_and_the_arity_is_the_tuples_length() {
 
 /// A graph function that reads its parameter **back to front**, and then runs,
 /// which is the only way to tell position from order.
-const BACK_TO_FRONT: &str = r#"@{
+const BACK_TO_FRONT: &str = r#"---
   compute = import "compute.lichen"
-@}
+---
 adder = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n

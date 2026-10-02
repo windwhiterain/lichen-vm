@@ -26,7 +26,7 @@ index range `[0, n)`, collecting the `n` results into a host-owned **buffer** th
 you read element-wise or collect into a lichen array.
 
 ```
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 f = cfg => i => cfg + i              -- : Int -> Int -> Int  (?a -> USize -> ?b)
 k = compute.parallel f                -- a ParKernel
 p = compute.plrun k (10, 4)           -- run over i in [0,4) with cfg=10  → Buffer

@@ -1,7 +1,7 @@
-@{
+---
   order = "5"
   output = "(Int, Type, Int, array<Int, 2>, Type, 5): <Type, Type, Type, TypeArray, Type, Int>"
-@}
+---
 f = type_of
 g = x => type_of x
 n = 5 : type_of (1)

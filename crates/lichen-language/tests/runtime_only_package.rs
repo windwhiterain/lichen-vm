@@ -44,14 +44,14 @@ fn an_imported_package_that_jits_at_its_top_level_still_runs() {
     write(
         &dir,
         "kernels.lichen",
-        "@{\n  order = \"0\"\n  compute = import \"compute.lichen\"\n  output = \"Function\"\n@}\n\
+        "---\n  order = \"0\"\n  compute = import \"compute.lichen\"\n  output = \"Function\"\n---\n\
          k_double = compute.jit (y => y + y)\n",
     );
     let main = write(
         &dir,
         "_.lichen",
-        "@{\n  order = \"1\"\n  compute = import \"compute.lichen\"\n  \
-         kernels = import \"kernels.lichen\"\n  output = \"6: Int\"\n@}\n\
+        "---\n  order = \"1\"\n  compute = import \"compute.lichen\"\n  \
+         kernels = import \"kernels.lichen\"\n  output = \"6: Int\"\n---\n\
          compute.launch kernels.k_double 3\n",
     );
 

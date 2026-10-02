@@ -26,7 +26,7 @@
 //! # A caller's view
 //!
 //! A session over a **file** is not necessarily over a whole buffer: a real
-//! source begins with a `@{…@}` block whose `@import`s resolve through the
+//! source begins with a `---…---` block whose `@import`s resolve through the
 //! package store, so a caller that runs the preprocessor itself (the language
 //! server — it owns the store, and the block's directive spans) compiles the
 //! text *after* the block.  [`BufferSession::set_view`] is how that caller hands
@@ -137,7 +137,7 @@ where
     P::Value: ValueType,
 {
     /// The code compiled — the whole buffer, or the text after a stripped
-    /// `@{…@}` block ([`Self::set_view`]).  This is what an edit changes and what
+    /// `---…---` block ([`Self::set_view`]).  This is what an edit changes and what
     /// the diff, the re-lex and the window splice are all over.
     source: String,
     /// Where [`Self::source`] begins in the original file: `0` for a whole-file
@@ -436,7 +436,7 @@ where
     /// path from there on.
     ///
     /// It sets the **whole-file** view: base `0` and no imports, because a whole
-    /// file's imports are the ones its own `@{…@}` block resolves — which is the
+    /// file's imports are the ones its own `---…---` block resolves — which is the
     /// caller's stage, not the session's.  A caller that runs the preprocessor
     /// itself uses [`Self::set_view`] instead.
     pub fn set_source(&mut self, source: impl Into<String>) {
@@ -450,7 +450,7 @@ where
     /// where it begins in the original file, that file's line starts, and the
     /// imports resolved for it.
     ///
-    /// A real source begins with a `@{…@}` block whose `@import`s resolve through
+    /// A real source begins with a `---…---` block whose `@import`s resolve through
     /// the package store, so the caller that owns the store (the language server)
     /// runs the preprocessor and compiles what follows it.  `code` is that text,
     /// `base` is its byte offset in the original file, `line_starts` is the
@@ -513,7 +513,7 @@ where
         let line_starts = view_line_starts(&self.source, self.base, &self.line_starts);
 
         // Whether the previous snapshot is in the same coordinate space.  A view
-        // that moved (an edited `@{…@}` block) leaves every token range and span in
+        // that moved (an edited `---…---` block) leaves every token range and span in
         // the snapshot describing the old file, so neither the incremental lex nor
         // a reuse may read it — the cells are untouched either way, since a cell's
         // identity is a path, not a position.

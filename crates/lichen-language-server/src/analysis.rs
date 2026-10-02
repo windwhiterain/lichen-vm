@@ -134,7 +134,7 @@ pub struct DocIndex {
     /// Byte offset at which each line begins (line 1 = 0).
     pub line_starts: Vec<usize>,
     /// Byte offset where the compiled code begins within `source` — past the
-    /// leading `@{…@}` preprocessor block (0 when there is no block).  Everything
+    /// leading `---…---` preprocessor block (0 when there is no block).  Everything
     /// before it is the preprocessor/metadata block.
     pub code_base: u32,
     /// The token stream (with byte ranges) — the frontend's lexer output,
@@ -223,7 +223,7 @@ where
     P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
 {
     /// Parse, lower and check `source`, keeping the frontend artifacts and
-    /// indexing name resolution.  The leading `@{…@}` preprocessor block (with
+    /// indexing name resolution.  The leading `---…---` preprocessor block (with
     /// its `import`/metadata directives) is cut out and resolved first, so a
     /// real lichen file compiles on the code that follows the block, with spans
     /// still absolute in the original file.
@@ -336,7 +336,7 @@ where
     let source = source.into();
     let line_starts = lex::line_starts(&source);
 
-    // Cut the leading `@{…@}` block (metadata + imports) off the frontend
+    // Cut the leading `---…---` block (metadata + imports) off the frontend
     // input, resolving imports through the package store so the shared
     // registry can serve any loaded imports.  `base` lets the store resolve
     // relative `@import` paths against the file's directory.
@@ -1161,7 +1161,7 @@ impl DocIndex {
     /// Classify each source token into an LSP semantic token, driven by Lichen's
     /// own frontend (not a tree-sitter grammar): literals, keywords, operators,
     /// and — via the AST — names as declarations / parameters / function calls /
-    /// struct fields.  The leading `@{…@}` preprocessor block (if any) is
+    /// struct fields.  The leading `---…---` preprocessor block (if any) is
     /// highlighted as one comment span (it is the language's only prose-like
     /// construct).  This is the `grammar-optional` highlighting path.
     pub fn semantic_tokens(&self) -> Vec<SemanticTokenData> {
@@ -1382,6 +1382,7 @@ fn classify_token_kind(
         | TokenKind::KwReturn
         | TokenKind::KwPub
         | TokenKind::KwCache
+        | TokenKind::KwLoop
         | TokenKind::KwTypeOf
         // `_` — a placeholder is a reserved inference form, never a name.
         | TokenKind::Placeholder => Some((SemanticTokenType::KEYWORD, Vec::new())),
@@ -1882,6 +1883,7 @@ impl Walk {
                             span: f.span,
                             restrictive: !f.field,
                             cached: f.cached,
+                            looping: f.looping,
                         }),
                         None => Stmt::Expr(f.value.clone()),
                     })
@@ -2178,6 +2180,7 @@ impl<'a> ScopeCapture<'a> {
                             span: f.span,
                             restrictive: !f.field,
                             cached: f.cached,
+                            looping: f.looping,
                         }),
                         None => Stmt::Expr(f.value.clone()),
                     })
@@ -2400,7 +2403,7 @@ mod tests {
         let main_path = write(
             &dir,
             "main.lichen",
-            "@{\n  math = import \"math.lichen\"\n@}\nmath.s\n",
+            "---\n  math = import \"math.lichen\"\n---\nmath.s\n",
         );
         let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
             fs::read_to_string(&main_path).unwrap(),
@@ -2434,9 +2437,9 @@ mod tests {
 
     #[test]
     fn preprocessor_block_is_cut_out() {
-        // A real lichen file opens with an `@{…@}` metadata block; it must not
+        // A real lichen file opens with an `---…---` metadata block; it must not
         // leak into the lexer/parser as code, and the file after it compiles.
-        let d = doc("@{ order = \"1\"\noutput = \"3: Int\"\n@}\na = 1\nb = 2\na + b\n");
+        let d = doc("--- order = \"1\"\noutput = \"3: Int\"\n---\na = 1\nb = 2\na + b\n");
         assert!(d.diagnostics.is_empty(), "got {:?}", d.diagnostics);
         assert_eq!(d.defs.len(), 2, "two bindings (a, b)");
     }
@@ -2590,7 +2593,7 @@ mod tests {
 
     #[test]
     fn semantic_tokens_comment_the_preprocess_block() {
-        let d = doc("@{ order = \"1\"\noutput = \"3: Int\"\n@}\na = 1\nb = 2\na + b\n");
+        let d = doc("--- order = \"1\"\noutput = \"3: Int\"\n---\na = 1\nb = 2\na + b\n");
         let toks = d.semantic_tokens();
         let comments: Vec<_> = toks
             .iter()
@@ -2624,17 +2627,17 @@ mod tests {
         write(
             &dir,
             "math.lichen",
-            "@{output = \"(Function, Function): struct<.succ Int -> Int, .add Int -> Int -> Int>\"@}\n{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
+            "---output = \"(Function, Function): struct<.succ Int -> Int, .add Int -> Int -> Int>\"---\n{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
         );
         write(
             &dir,
             "geometry.lichen",
-            "@{math = import \"math.lichen\"\noutput = \"(Function, Function): struct<.double Int -> Int, .inc_twice Int -> Int>\"@}\n{\n  double = x => math.add x x\n  inc_twice = x => math.succ (math.succ x)\n}\n",
+            "---math = import \"math.lichen\"\noutput = \"(Function, Function): struct<.double Int -> Int, .inc_twice Int -> Int>\"---\n{\n  double = x => math.add x x\n  inc_twice = x => math.succ (math.succ x)\n}\n",
         );
         let main_path = write(
             &dir,
             "_.lichen",
-            "@{order = \"5\"\nmath = import \"math.lichen\"\ngeo = import \"geometry.lichen\"\noutput = \"(42, 10, 7): <Int, Int, Int>\"@}\n(math.succ 41, geo.double 5, geo.inc_twice 5)\n",
+            "---order = \"5\"\nmath = import \"math.lichen\"\ngeo = import \"geometry.lichen\"\noutput = \"(42, 10, 7): <Int, Int, Int>\"---\n(math.succ 41, geo.double 5, geo.inc_twice 5)\n",
         );
 
         let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
@@ -2659,7 +2662,7 @@ mod tests {
         let main_path = write(
             &dir,
             "main.lichen",
-            "@{\n  math = import \"math.lichen\"\n  output = \"(42): Int\"\n@}\nmath.succ 41\n",
+            "---\n  math = import \"math.lichen\"\n  output = \"(42): Int\"\n---\nmath.succ 41\n",
         );
         let cache = temp_dir("cachehome");
 
@@ -2703,7 +2706,7 @@ mod tests {
         let main_path = write(
             &dir,
             "main.lichen",
-            "@{\n  math = import \"math.lichen\"\n@}\nmath.succ 41\n",
+            "---\n  math = import \"math.lichen\"\n---\nmath.succ 41\n",
         );
         let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
             fs::read_to_string(&main_path).unwrap(),
@@ -2732,7 +2735,7 @@ mod tests {
         assert!(!msg.contains("unresolved"), "field hover msg = {msg}");
 
         // Go-to-definition on the module use jumps to the import directive
-        // (`math` in `@{`...` math = import ...` at line 1, char 2).
+        // (`math` in `---`...` math = import ...` at line 1, char 2).
         let def = d
             .definition_at(Position {
                 line: 3,
@@ -2858,7 +2861,7 @@ mod tests {
         // The pre-fix behaviour: with `base = None` the same relative imports
         // resolve against the process CWD, which is almost never the file's
         // directory, so they fail — this documents why the LSP must pass a base.
-        let d = doc("@{math = import \"math.lichen\"@}math\n");
+        let d = doc("---math = import \"math.lichen\"---math\n");
         assert!(
             d.diagnostics
                 .iter()

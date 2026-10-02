@@ -1,4 +1,4 @@
-@{
+---
   order = "4"
   doc = "A struct constructor is generic: `Box t` (juxtaposition — a space, not a
 parenthesized argument) builds the *same* nominal type for every field
@@ -7,6 +7,6 @@ type — the `Fresh` id is per occurrence and shared, so `Box Int` and
 their type (the shared kind).  They therefore coexist in one homogeneous
 tuple."
   output = "(struct<Int>, struct<Type>, struct<Int>): <TypeStruct, TypeStruct, TypeStruct>"
-@}
+---
 Box = t => struct<t>
 (Box Int, Box Type, Box Int)

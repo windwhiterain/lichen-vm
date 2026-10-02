@@ -6,10 +6,10 @@
 //! the directory's `_.lichen` program, followed by the files it contains,
 //! with nested directories rendering the same way to any depth, one heading
 //! level deeper each time.  Every program is rendered as its whole source
-//! file, `@{...@}` block included; the block's `output = "..."` metadata is
+//! file, `---...---` block included; the block's `output = "..."` metadata is
 //! the file's actual output, kept current by [`sync_output_comments`], so
 //! the README never relies on a hand-written promise in the file.
-//! Placement is declared in each file's opening `@{...@}` block as
+//! Placement is declared in each file's opening `---...---` block as
 //! `order = "N"`: a file's order places it among its siblings, and a
 //! directory's is the one in its `_.lichen`, whose program also always shows
 //! first inside the directory; undeclared entries sort last, ties by name.
@@ -211,7 +211,7 @@ pub fn program_output(file: &Path, source: &str) -> String {
     })
 }
 
-/// One program's markdown body: the whole source file, `@{...@}` block
+/// One program's markdown body: the whole source file, `---...---` block
 /// included, shown as-is.  The block's `output = "..."` metadata is the
 /// file's actual output, checked against it by `tests/examples.rs`, so the
 /// README shows the file exactly as it is in the repo.
@@ -351,12 +351,12 @@ pub fn sync_output_comments() -> ReadmeResult<bool> {
 
 /// Replace the `output = "..."` metadata entry in `source` with `comment`;
 /// append it (inside the block) when there is none.  The result always ends
-/// with a newline; the block is normalized to the `@{` … `@}` form, one
+/// with a newline; the block is normalized to the `---` … `---` form, one
 /// directive per line, two-space indented.
 fn replace_output_comment(source: &str, output: &str) -> String {
     let (interior, code) = split_block(source);
     let mut out = String::with_capacity(source.len() + output.len() + 16);
-    out.push_str("@{\n");
+    out.push_str("---\n");
     let mut has_output = false;
     if let Some(interior) = interior {
         for dir in block_directives(interior) {
@@ -445,7 +445,7 @@ fn replace_output_comment(source: &str, output: &str) -> String {
         out.push_str(&format!("output = \"{output}\""));
         out.push('\n');
     }
-    out.push_str("@}\n");
+    out.push_str("---\n");
     out.push_str(code.trim_start_matches('\n'));
     if !out.ends_with('\n') {
         out.push('\n');

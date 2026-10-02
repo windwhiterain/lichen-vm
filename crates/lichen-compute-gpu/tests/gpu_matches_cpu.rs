@@ -31,7 +31,7 @@ fn fragment(body: Vec<KernelInstr>) -> KernelFragment {
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
         ]),
-        body,
+        body: body.into(),
         inputs: 1,
         outputs: 1,
         input_classes: vec![ScalarClass::Int],
@@ -297,7 +297,7 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
     let mut output = vec![0i64; count];
     for element in 0..count {
         let mut stack: Vec<Scalar> = Vec::new();
-        for instruction in &fragment.body {
+        for instruction in fragment.body.instrs() {
             match instruction {
                 KernelInstr::Const(value) => stack.push(Scalar::Literal(*value)),
                 KernelInstr::LocalGet(local) => {

@@ -11,7 +11,7 @@ bracket-matching, not semantic correctness.  It:
 
 - accepts more than the strict parser (the whitespace "Glue" distinction is
   glossed over — the same delimiter may be read as postfix or as a fresh atom);
-- models the `@{ ... @}` preprocessor block, Lichen's only "prose" home, as a
+- models the `--- ... ---` preprocessor block, Lichen's only "prose" home, as a
   node so doc strings can be highlighted;
 - keeps a light operator-precedence ladder for readable trees, in the language's
   own order (see [docs/notes/operators.md](../docs/notes/operators.md) §3), with

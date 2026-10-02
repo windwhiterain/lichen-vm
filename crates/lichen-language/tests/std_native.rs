@@ -142,9 +142,9 @@ fn fail(source: &str) -> Vec<String> {
 #[test]
 fn std_sort_sorts_a_usize_array() {
     let out = run(r#"
-@{
+---
   std = import "std.lichen"
-@}
+---
 std.sort [3, 1, 2]
 "#);
     assert_eq!(
@@ -159,9 +159,9 @@ fn std_sort_is_reusable_and_length_preserving() {
     // times over arrays of different lengths is fine (the length is a fresh
     // cell bound at each apply), and the result keeps the length.
     let out = run(r#"
-@{
+---
   std = import "std.lichen"
-@}
+---
 (std.sort [4, 1, 3, 2], std.sort [9, 7])
 "#);
     assert_eq!(
@@ -175,9 +175,9 @@ fn std_sort_rejects_a_non_array() {
     // The array gate pins the argument to `[Int, len]`; a scalar fails.
     let diags = fail(
         r#"
-@{
+---
   std = import "std.lichen"
-@}
+---
 std.sort 5
 "#,
     );
@@ -192,9 +192,9 @@ fn std_sort_rejects_a_non_int_array() {
     // A `[string]` array is not a `[usize]` array, so the gate rejects it.
     let diags = fail(
         r#"
-@{
+---
   std = import "std.lichen"
-@}
+---
 std.sort ["a", "b"]
 "#,
     );

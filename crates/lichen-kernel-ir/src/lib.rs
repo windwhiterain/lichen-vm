@@ -28,6 +28,11 @@
 //! buffer"; how that becomes a host call, a memory load, or something else is
 //! not in the IR.
 //!
+//! The body is **structured control flow**, not a flat instruction list: a loop
+//! needs a backedge *and* a value that survives it, and a fragment that could
+//! only express straight-line code could express neither. See [`KernelBody`] and
+//! `docs/notes/loop-conversion.md` §3.
+//!
 //! See `docs/notes/compute-jit-low-types.md` for how the domain half of a
 //! fragment is decided, and `docs/notes/lichen-compute.md` for the wasm backend
 //! that consumes it.
@@ -42,6 +47,10 @@
 //! backend depend on that backend.
 
 use std::sync::{Arc, Mutex, OnceLock};
+
+mod body;
+
+pub use body::{BlockId, Flow, KernelBody, Terminator};
 
 /// Which scalar class a value, a parameter leaf or a buffer element is.
 ///
@@ -541,8 +550,14 @@ pub struct KernelFragment {
     /// The parameter domain, flattened by [`KernelShape::flat_arity`] into the
     /// backend's parameter list.
     pub param_shape: KernelShape,
-    /// The lowered body, in emission order.
-    pub body: Vec<KernelInstr>,
+    /// The lowered body, as structured control flow.
+    ///
+    /// **A backend must call [`KernelBody::validate`] before reading it.** That
+    /// is what lets a transfer be added to this IR ahead of the backends that
+    /// emit it: a backend that has not learned one is refused by name rather
+    /// than quietly dropping a branch, and a dropped branch is a fragment that
+    /// computes a different program than it was lowered from.
+    pub body: KernelBody,
     /// How many input buffers this fragment reads — `0` for a scalar fragment
     /// and for a parallel fragment that reads none, otherwise one past the
     /// highest position any `compute.read` names. The twin of [`Self::outputs`],

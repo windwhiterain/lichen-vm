@@ -1,11 +1,11 @@
 //! The preprocessor's block-interior lexer.
 //!
-//! The `@{...@}` block at the top of a file holds a set of statements, one
+//! The `---...---` block at the top of a file holds a set of statements, one
 //! per line (Separator-separated): `name = import "path"` binds an import,
 //! `name = depend "url"` declares a git dependency, and `name = "value"`
 //! defines a string metadata entry.  The block is cut
 //! out of the source by a pure byte scan (see [super]) before this lexer
-//! runs, so it only ever sees the block's interior -- no `@{` / `@}` and no
+//! runs, so it only ever sees the block's interior -- no `---` / `---` and no
 //! `@` at all (`@` is reserved for the block delimiters, so it cannot appear
 //! here or inside a string).
 //!
@@ -40,8 +40,12 @@ pub enum TokenKind {
     #[token("plug")]
     KwPlug,
     /// A string literal (quotes stripped); no escapes, may be multiline.
-    /// `@` is reserved, so it is excluded from the content.
-    #[regex(r#""[^"@]*""#, |lex| {
+    ///
+    /// **Any character but `"`**, where this used to exclude `@` as well because
+    /// `@` delimited the block. It is the keyword prefix now, and a `@` inside a
+    /// string is ordinary content — a `depend`/`plug` URL is exactly where one
+    /// turns up (`https://user@host/repo.git`).
+    #[regex(r#""[^"]*""#, |lex| {
         let s = lex.slice();
         s[1..s.len() - 1].to_string()
     })]
@@ -94,7 +98,7 @@ pub struct Lexed {
     pub errors: Vec<LexError>,
 }
 
-/// Tokenize a block interior (the bytes between `@{` and `@}`, no
+/// Tokenize a block interior (the bytes between `---` and `---`, no
 /// delimiters).  An unexpected character makes the block unusable, so the
 /// first one is reported and lexing stops -- the caller blanks/ignores the
 /// whole preprocessor block.
@@ -207,12 +211,20 @@ mod tests {
     }
 
     #[test]
-    fn an_at_sign_is_rejected_even_inside_a_string() {
-        // `@` is excluded from string content, so a string containing it
-        // cannot lex as a string -- logos errors instead of matching it.
-        let lexed = tokenize("title = \"has @ inside\"");
-        assert_eq!(lexed.tokens.len(), 2, "string token is not produced");
-        assert!(!lexed.errors.is_empty(), "at least one error");
+    fn an_at_sign_is_ordinary_string_content() {
+        // `@` was the block delimiter and so was excluded from string content.
+        // It is the keyword prefix now, and a `depend` URL is where a `@`
+        // actually turns up.
+        let lexed = tokenize("git = \"https://user@host/repo.git\"");
+        assert!(lexed.errors.is_empty(), "{:?}", lexed.errors);
+        assert_eq!(
+            kinds("git = \"https://user@host/repo.git\""),
+            vec![
+                TokenKind::Name("git".to_string()),
+                TokenKind::Equals,
+                TokenKind::String("https://user@host/repo.git".to_string()),
+            ]
+        );
     }
 
     #[test]

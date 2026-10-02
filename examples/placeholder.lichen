@@ -1,7 +1,7 @@
-@{
+---
   order = "3"
   output = "Function: <Type, Int> -> Int"
-@}
+---
 f1 = x => x : Int
 f2 = x => {
     x: <Type, _>

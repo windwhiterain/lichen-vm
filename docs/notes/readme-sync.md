@@ -4,13 +4,13 @@
 > Points at: `crates/lichen-tools/src/readme.rs` (the renderer),
 > `crates/lichen-tools/src/bin/sync-readme.rs` (the on-demand command),
 > `crates/lichen-language/tests/readme.rs` (the self-healing check), and the
-> `examples/` tree itself. The `@{…@}` block *syntax* is the spec's business:
+> `examples/` tree itself. The `---…---` block *syntax* is the spec's business:
 > [language-spec.md §2.2](../language-spec.md).
 
 The top-level README's **Examples** section is not hand-written: it is rendered from
 `examples/` — the **living spec** — so it cannot silently
 drift from what the language actually prints. Each example is shown as its whole source
-file, `@{…@}` block and all; the block's `output = "…"` metadata is the program's *real*
+file, `---…---` block and all; the block's `output = "…"` metadata is the program's *real*
 output, so the README carries verifiable truth rather than a promise, and each program's
 own file documents exactly what it evaluates to.
 

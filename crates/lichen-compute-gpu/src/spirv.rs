@@ -257,6 +257,13 @@ pub enum SpirvRefusal {
     ResultArity { results: usize, left: usize },
     /// The stack did not balance: an instruction popped more than it pushed.
     UnbalancedStack { at: usize },
+    /// A body whose structure the target has not been taught to emit.
+    ///
+    /// **Refused rather than emitted straight-line**, because a dropped branch is
+    /// a fragment that computes a different program than it was lowered from —
+    /// and because the transfer is already in the IR, so this refusal is about the
+    /// *emitter*, not about what the language can say.
+    ControlFlow { detail: String },
 }
 
 impl fmt::Display for SpirvRefusal {
@@ -324,6 +331,12 @@ impl fmt::Display for SpirvRefusal {
                 f,
                 "instruction {at} popped from an empty stack; the lowered body is not a balanced \
                  stack program."
+            ),
+            SpirvRefusal::ControlFlow { detail } => write!(
+                f,
+                "this emitter does not yet emit a body with control flow: {detail}. The transfer is \
+                 in the kernel IR, so this is the emitter's limit rather than something the program \
+                 could not say — see `docs/notes/loop-conversion.md` §8."
             ),
         }
     }
@@ -724,6 +737,21 @@ pub fn needs_int64(fragment: &KernelFragment) -> Result<bool, SpirvRefusal> {
 
 /// Compile one fragment to SPIR-V words.
 pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, SpirvRefusal> {
+    if let Err(broken) = fragment.body.validate() {
+        return Err(SpirvRefusal::ControlFlow { detail: broken });
+    }
+    // Until this emitter learns `OpLoopMerge` / `OpBranch` / `OpPhi`, a body with
+    // a transfer is refused rather than emitted straight-line.  See
+    // `SpirvRefusal::ControlFlow` for why that is the only safe answer.
+    let instrs = fragment
+        .body
+        .straight_line_instrs()
+        .ok_or_else(|| SpirvRefusal::ControlFlow {
+            detail: format!(
+                "the body allocates {} label(s) and has a transfer",
+                fragment.body.labels
+            ),
+        })?;
     if fragment.int_width.bits() != 64 {
         return Err(SpirvRefusal::UnsupportedIntWidth {
             bits: fragment.int_width.bits(),
@@ -821,7 +849,7 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
         ScalarClass::Float => component,
     };
 
-    for (at, instruction) in fragment.body.iter().enumerate() {
+    for (at, instruction) in instrs.iter().enumerate() {
         match instruction {
             KernelInstr::Const(value) => {
                 // A constant is emitted once per (class, value) no matter how

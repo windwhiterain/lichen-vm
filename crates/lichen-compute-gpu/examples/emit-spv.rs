@@ -43,7 +43,7 @@ fn main() {
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
         ]),
-        body: count_prologue,
+        body: count_prologue.into(),
         inputs: 1,
         outputs: 1,
         input_classes: vec![ScalarClass::Int],

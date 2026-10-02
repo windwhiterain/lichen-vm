@@ -38,7 +38,7 @@ fn every_example_runs_and_prints_what_it_declares() {
         let source = readme::read_normalized(&file);
         let declared = readme::declared_output(&source).unwrap_or_else(|| {
             panic!(
-                "{}: declares no `output = \"...\"` in its @{{...@}} block, so nothing \
+                "{}: declares no `output = \"...\"` in its ---...--- block, so nothing \
                  states what it prints",
                 file.display()
             )

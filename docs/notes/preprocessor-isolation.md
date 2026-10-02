@@ -1,7 +1,7 @@
 # Isolating the preprocessor into its own crate
 
 > Status: current
-> Points at: `crates/lichen-preprocess` (the isolated preprocessor: the `@{…@}`
+> Points at: `crates/lichen-preprocess` (the isolated preprocessor: the `---…---`
 > block scanner, `lex.rs`/`parse.rs`, `Directive`, `Depend`, `Preprocessed`,
 > `ResolvedImport`, `PreprocessDiag`, the `ImportResolver` trait, and the
 > preprocessor import path `lichendir`/`sources_root`),

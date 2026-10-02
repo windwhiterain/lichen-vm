@@ -264,7 +264,7 @@ public `lichen_language::diag::{Diag, Stage}` contract is unchanged. Bonus: the 
 worker no longer needs a `!Send`-diag workaround (the old `(Span, String, Stage)` tuple
 was only because `Diag` was `!Send`); the parser returns `ParseDiag` directly.
 
-### 5. The `@{…@}` preprocessor block
+### 5. The `---…---` preprocessor block
 
 The block *body* is checker-free and byte-range-typed, and it is **now isolated**
 in the [`lichen-preprocess`](../../crates/lichen-preprocess/) crate:

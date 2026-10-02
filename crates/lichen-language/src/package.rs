@@ -750,7 +750,7 @@ where
     /// stays program-generic and the caller names only the crate and its
     /// program marker.
     ///
-    /// The embedded source is a complete package (no `@{…@}` block, no
+    /// The embedded source is a complete package (no `---…---` block, no
     /// imports), so it compiles directly against the registry rather than
     /// through [`preprocess`](crate::preprocess::preprocess) — which is
     /// compute-bounded and would force a non-compute host to carry

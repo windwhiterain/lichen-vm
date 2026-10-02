@@ -18,7 +18,7 @@ const PROGRAMS: &[(&str, &str)] = &[
     (
         "1. fill — write a constant per index",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 f = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -32,7 +32,7 @@ compute.collect b
     (
         "2. axpy — y = a*x + y, two inputs one output",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 mk = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -57,7 +57,7 @@ compute.collect out
     (
         "3. transpose — gather, write index is not the read index",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -79,7 +79,7 @@ compute.collect out
     (
         "4. stencil — a neighbour read at a computed, clamped index",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -102,7 +102,7 @@ compute.collect out
     (
         "5. select-into-read — clamp by arithmetic, no conditional",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -125,7 +125,7 @@ compute.collect out
     (
         "6. dot4 — an unrolled 4-term reduction, fixed length",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -150,7 +150,7 @@ compute.read [out, 0]
     (
         "7. mat2 — a correct 2x2 multiply",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -180,7 +180,7 @@ outs = compute.plrun km (4, (src, src))
     (
         "8. reduction — a sum, the classic cross-index algorithm",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -202,7 +202,7 @@ compute.read [out, 3]
     (
         "9. two-buffer contraction — does a write and a read share an index space?",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -225,7 +225,7 @@ compute.read [out, 3]
     (
         "8b. tree reduction — halve the length, four levels",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -251,7 +251,7 @@ compute.read [e, 0]
     (
         "8c. prefix sum — a scan, one write per index from many reads",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -276,7 +276,7 @@ compute.collect out
     (
         "8d. out-of-range read — is a bad index refused?",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -298,7 +298,7 @@ compute.collect out
     (
         "8e. scalar kernel parameter — is anything but a buffer allowed?",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -320,7 +320,7 @@ compute.collect out
     (
         "9. cross-kernel call — a shared helper inside a parallel body",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 helper = compute.jit (v : Int => v * v : Int)
 n0 = cfg => {
   n = cfg(0)
@@ -343,7 +343,7 @@ compute.collect out
     (
         "9b. histogram — a scatter-accumulate into a shared slot",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
@@ -365,7 +365,7 @@ out = compute.plrun kh (64, (src,))
     (
         "10. host data in — an input array the program owns",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 data = [3, 1, 4, 1, 5, 9, 2, 6]
 k = cfg => {
   n = cfg(0)
@@ -388,7 +388,7 @@ x + 1
     (
         "12. graph — one submission for a two-link chain",
         r#"
-@{ compute = import "compute.lichen" @}
+--- compute = import "compute.lichen" ---
 f1 = cfg => {
   n = cfg(0)
   i = compute.range n

@@ -1,6 +1,6 @@
-//! The preprocessor for the `@{...@}` directive block.
+//! The preprocessor for the `---...---` directive block.
 //!
-//! A file may open with a single `@{...@}` block (once, before any code; a
+//! A file may open with a single `---...---` block (once, before any code; a
 //! non-`@` prefix is allowed and ignored).  Inside the block is a set of
 //! statements, Separator-separated: `name = import "path"` loads a package
 //! bound to `name`, `name = depend "url"` declares a git dependency bound to
@@ -214,7 +214,7 @@ fn sanitize_alias(alias: &str) -> String {
 /// resolved imports, the block's string metadata, and its git dependency set.
 #[derive(Clone, Debug)]
 pub struct Preprocessed<'a, E> {
-    /// The code to compile: the source after the `@{...@}` block (or the
+    /// The code to compile: the source after the `---...---` block (or the
     /// whole source when there is no block).  Borrowed, never copied.
     pub code: &'a str,
     /// The byte offset of `code` within the original source.
@@ -227,7 +227,7 @@ pub struct Preprocessed<'a, E> {
     pub depends: Vec<Depend>,
 }
 
-/// Preprocess: cut out the leading `@{...@}` block (if any), resolve its
+/// Preprocess: cut out the leading `---...---` block (if any), resolve its
 /// import bindings through `resolver`, and collect its metadata.  The code to
 /// compile is the source after the block.  Diagnostics (lex/parse/resolve)
 /// are reported with spans against the original file.
@@ -329,7 +329,7 @@ where
     )
 }
 
-/// Split a source into its leading `@{...@}` interior (if any) and the code
+/// Split a source into its leading `---...---` interior (if any) and the code
 /// after it.  Never resolves imports -- for tooling (readme, sync) that reads
 /// a block's metadata without a package store.
 pub fn split_block(source: &str) -> (Option<&str>, &str) {
@@ -459,21 +459,28 @@ where
     diags
 }
 
-/// Locate the leading `@{...@}` block in `raw` by a pure byte scan.  Returns
+/// Locate the leading `---...---` block in `raw` by a pure byte scan.  Returns
 /// the byte ranges of the interior and the start of the code that follows the
-/// block.  `None` when there is no `@` (no block).  `@` is reserved, so the
-/// first `@` is the block open and the first `@}` is its close -- it cannot
-/// appear inside a string or in code.
+/// block.  `None` when there is no `---` (no block).
+///
+/// **The delimiter is `---`, and the reason is a reserved sigil.** This block
+/// used to be `---...---`; `@` is now the prefix every keyword carries
+/// (`@loop`, and every keyword after it), so the block moved rather than
+/// competing for it. `---` was free because **the language has no comments at
+/// all** — prose lives in this block — so the dashes cannot collide with a
+/// line comment the way a punctuation reuse would.
+///
+/// A block is found by its first `---`, wherever that is, so a markdown header
+/// may precede it; and the first `---` is the open, the second the close. That
+/// is the same rule the `---` form used, and it carries the same obligation:
+/// `---` is reserved and cannot appear in code or in a string before the block.
 fn scan_block(raw: &str) -> Option<(usize, usize, usize)> {
-    let at = raw.find('@')?;
-    if !raw[at..].starts_with("@{") {
-        return None;
-    }
-    let rest = &raw[at + 2..];
-    let close = rest.find("@}")?;
-    let interior_start = at + 2;
-    let interior_end = at + 2 + close;
-    let mut code_start = at + 2 + close + 2;
+    let at = raw.find("---")?;
+    let rest = &raw[at + 3..];
+    let close = rest.find("---")?;
+    let interior_start = at + 3;
+    let interior_end = at + 3 + close;
+    let mut code_start = at + 3 + close + 3;
     // Skip the newline (or CRLF) that terminates the block line, so the code
     // begins at its first real character (a leading Separator would be
     // harmless, but this keeps the code text and rendered output tidy).
@@ -521,19 +528,23 @@ mod tests {
 
     #[test]
     fn a_leading_block_is_located() {
-        assert_eq!(scan_block("@{order = \"3\"@}\na = 1"), Some((2, 13, 16)));
+        assert_eq!(scan_block("---order = \"3\"---\na = 1"), Some((3, 14, 18)));
     }
 
     #[test]
-    fn a_non_at_prefix_is_ignored() {
-        // The prefix may be any non-@ bytes; the block is still located.
-        assert_eq!(scan_block("# header\n@{x = \"1\"@}\na"), Some((11, 18, 21)));
+    fn a_prose_prefix_before_the_block_is_allowed() {
+        // The block is located by its first `---`, wherever that is, so a
+        // markdown header may precede it — the same rule the `---` form used.
+        assert_eq!(
+            scan_block("# header\n---x = \"1\"---\na"),
+            Some((12, 19, 23))
+        );
     }
 
     #[test]
     fn a_multiline_interior_is_cut_correctly() {
-        let (s, e, c) = scan_block("@{a = \"1\"\nb = \"2\"@}\na").expect("block");
-        let raw = "@{a = \"1\"\nb = \"2\"@}\na";
+        let (s, e, c) = scan_block("---a = \"1\"\nb = \"2\"---\na").expect("block");
+        let raw = "---a = \"1\"\nb = \"2\"---\na";
         assert_eq!(&raw[s..e], "a = \"1\"\nb = \"2\"");
         assert_eq!(&raw[c..], "a");
     }

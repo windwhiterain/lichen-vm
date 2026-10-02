@@ -54,7 +54,8 @@ fn adds_one() -> KernelFragment {
             KernelInstr::Bin(KernelBin::Add), // in[i] + 1
             KernelInstr::BufferWriteCall,
             KernelInstr::Const(0),
-        ],
+        ]
+        .into(),
         inputs: 1,
         outputs: 1,
         input_classes: vec![ScalarClass::Int],
@@ -120,7 +121,7 @@ fn scales_a_float() -> KernelFragment {
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
         ]),
-        body,
+        body: body.into(),
         inputs: 1,
         outputs: 1,
         input_classes: vec![ScalarClass::Float],

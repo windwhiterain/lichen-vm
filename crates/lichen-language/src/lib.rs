@@ -253,7 +253,7 @@ pub fn compile_with_imports_in(
 /// The program is a slice of a larger source starting at byte `base`, whose line
 /// starts are `line_starts`.  Token spans are absolute positions in that
 /// larger source, so diagnostics point at the real file even when `code` is
-/// only a suffix of it (the code after a stripped `@{...@}` block).
+/// only a suffix of it (the code after a stripped `---...---` block).
 pub fn compile_with_imports_at<P>(
     code: &str,
     imports: &[ResolvedImport],

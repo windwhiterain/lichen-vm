@@ -41,7 +41,8 @@ fn adds() -> KernelFragment {
             KernelInstr::Bin(KernelBin::Add),
             KernelInstr::BufferWriteCall,
             KernelInstr::Const(0),
-        ],
+        ]
+        .into(),
         inputs: 1,
         outputs: 1,
         input_classes: vec![ScalarClass::Int],
@@ -74,7 +75,8 @@ fn sums() -> KernelFragment {
             KernelInstr::Bin(KernelBin::Add),
             KernelInstr::BufferWriteCall,
             KernelInstr::Const(0),
-        ],
+        ]
+        .into(),
         inputs: 2,
         outputs: 1,
         input_classes: vec![ScalarClass::Int, ScalarClass::Int],
