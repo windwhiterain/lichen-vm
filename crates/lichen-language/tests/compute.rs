@@ -1083,6 +1083,97 @@ compute.collect (compute.plrun k (8, (data,)))
     );
 }
 
+/// A float anywhere in a kernel's parameter domain is refused by name.
+///
+/// The positions below are answers of **one** walk, not four code paths, and the
+/// last two are the compound ones a first-position-only walk would miss: an
+/// `array<Float, 3>` nested in a tuple, and a function codomain.  A float is a
+/// *decided* shape, so describing it as an undecided domain would ask for an
+/// annotation the author already wrote
+/// (`docs/notes/floating-point.md` §3.8, §5).
+#[test]
+fn jit_refuses_a_float_domain_at_every_position_by_its_own_reason() {
+    // Every case ends in a launch, because a runtime refusal is surfaced only
+    // when the root produced nothing (`render_build`); the `jit` has already
+    // recorded it by then, and the launch argument is written to match the
+    // kernel's own signature so the checker adds no diagnostic of its own.
+    for (position, source) in [
+        (
+            "the parameter itself",
+            r#"
+@{ compute = import "compute.lichen" @}
+k = compute.jit (x : Float => x + 1.0)
+compute.launch k 1.5
+"#,
+        ),
+        (
+            "a tuple element",
+            r#"
+@{ compute = import "compute.lichen" @}
+k = compute.jit (p : <Int, Float> => p(0))
+compute.launch k (1, 1.5)
+"#,
+        ),
+        (
+            "an array element inside a tuple",
+            r#"
+@{ compute = import "compute.lichen" @}
+k = compute.jit (p : <Int, array<Float, 3>> => p(0))
+compute.launch k (1, [1.5, 2.5, 3.5])
+"#,
+        ),
+        (
+            "a function codomain",
+            r#"
+@{ compute = import "compute.lichen" @}
+k = compute.jit (p : Int -> Float => 1)
+compute.launch k (y => 1.0)
+"#,
+        ),
+    ] {
+        let messages = fail(source);
+        assert_eq!(
+            messages.len(),
+            1,
+            "a float at {position} is one refusal: {messages:?}"
+        );
+        assert_eq!(
+            messages[0],
+            "compute.jit: the kernel parameter's type contains a float, which a kernel cannot \
+             take: the kernel ABI is `i64`-only, so a float has no local to be lowered into",
+            "a float at {position} must be refused as a float, not as an undecided domain"
+        );
+    }
+}
+
+/// A float launch argument is refused by name, not by the "no value" catch-all.
+///
+/// `argument_kind` feeds this wording for both run operators, and the `call` form
+/// is the one that reaches it: `launch` reads the kernel's signature, so a float
+/// against a decided `Int` domain is refused by the checker before the run
+/// (`docs/notes/floating-point.md` §3.8).
+#[test]
+fn a_float_launch_argument_is_refused_by_name() {
+    let messages = fail(
+        r#"
+@{ compute = import "compute.lichen" @}
+k = compute.jit (x => x + 1)
+compute.call k 1.5
+"#,
+    );
+    assert_eq!(
+        messages.len(),
+        1,
+        "one refusal is one diagnostic: {messages:?}"
+    );
+    assert_eq!(
+        messages[0],
+        "compute.kernel_launch: the argument must be a concrete Int or a tuple of them (the \
+         kernel's parameter domain), but this one is a float",
+        "the refusal must name what the user wrote"
+    );
+}
+
 /// The seam: a real lichen program, dispatching to a real device.
 ///
 /// Everything below this line is tested somewhere else and none of it together.
