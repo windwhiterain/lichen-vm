@@ -168,6 +168,16 @@ pub struct ResidentId(pub u64);
 /// whole use is naming a buffer cheaply.  A resident slot's class is the
 /// resident value's, where it is genuinely per-buffer and not derivable from an
 /// ordinal — see `ResidentBuffer` in `lichen-compute`.
+///
+/// **That is a deferral, not a closed question**, because a `Host` slot is a
+/// slice of the ABI's own element type rather than of [`ScalarData`]: when a
+/// float producer exists its elements have to reach [`ParallelBackend::run`]
+/// somehow, and there are exactly two routes — the host reinterprets the `f32`
+/// bytes as `i64` words, or this type gains a class-carrying variant after all.
+/// The reinterpretation is sound only while nothing reads two slots as one
+/// value, and it is worth naming what it costs: the slot's `len()` would then
+/// count `i64` words while the fragment's count counts `f32` elements, so the
+/// two numbers a caller compares are no longer the same quantity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferSlot<'a> {
     /// Data the host already holds, at least `count` elements long, read as the
@@ -570,6 +580,10 @@ pub struct KernelFragment {
     /// The length is the **declared** [`Self::inputs`], including positions a
     /// body never read but which the count still covers (read positions are a
     /// sparse space, so the highest one read sizes the list).
+    ///
+    /// **This is the list a host slot is matched against**, because a dispatch's
+    /// slots are ordered to match it — so position *is* the ordinal a slot would
+    /// need, and the slot's own carrier is the deferral [`BufferSlot`] records.
     pub input_classes: Vec<ScalarClass>,
     /// The element class of each output buffer, **one entry per write ordinal**,
     /// in ordinal order — so the length is [`Self::outputs`].
