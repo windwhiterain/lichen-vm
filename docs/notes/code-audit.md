@@ -2551,6 +2551,70 @@ skeleton and the per-apply parameter clones (`lowlevel::function`, and
 `checker/operators.rs`'s pin of an `Int` operand to `self.int_type`). Nothing here
 has read that path; this is a starting point, not a diagnosis.
 
+**Located, not fixed — re-measured at `dev@cbf4fcc`, and the lead above was
+wrong about which side is at fault.** It is not the checker's cells at all: the
+diagnostic is `DiagKind::Runtime` with `loc: None` — an **apply-time parameter
+check in the VM**, not a checker's pin. The two sides it compares evaluate to
+`USize(48)` and `USize(18)`, i.e. the *values* the two arguments were given at
+the call site, and they print as `Int` only because a `Type`-typed value is
+rendered by its type.
+
+The trigger, narrowed first-hand (the earlier table above all holds; `if c then
+t else e` lowers to `[e, t][c]` — the branches are swapped, `compile.rs:754` —
+so "the array index" and "the `if`" are one form):
+
+| shape | result |
+|---|---|
+| `f = a => b => [f b a, 0][b == 0]` | **refused** — the minimal form |
+| `f = a => b => [0, f b a][b == 0]` | runs — same call, other element, so the *branch* is never taken |
+| `f = a => b => [f b a, 0][0]` | recurses (budget) — a literal index does not trigger it |
+| `f = a => b => [f b a, 0][c]`, `c = 0` | recurses — nor does a constant index |
+| `f = a => b => [f b a, 0][b - b]` | **refused** — any computation over the parameter does |
+| `f = a => b => [f b a, 0][b == b]` | runs — that one evaluates to 1, so the other branch is taken |
+| `f = a => b => [f a b, 0][b == 0]` | recurses — passing the parameter to the *second* argument is fine |
+| `f = a => b => [f b, 0][b == 0]` | **refused** — one curried apply is enough |
+| `f = a => b => [a, 0][b == 0]` | runs — no recursive call |
+
+So: the index expression must **read a parameter**, the selected element must be
+a **self-recursive apply passing that same parameter to the function's first
+parameter**, and the function's type must be unwritten. Everything else in the
+report above is downstream of that.
+
+**Where it goes wrong, traced.** Instrumenting `apply_parameter_check`
+(temporary, reverted) on `f = a => b => [f b a, 0][b == 0]; f 48 18` shows
+three applies, and the third is the wrong one:
+
+```
+APPLY fn=1v1 … template_param=19v1 leaf=Parameterized   argument leaf=USize(48)
+APPLY fn=3v1 … template_param=96v1 leaf=Parameterized   argument leaf=USize(18)
+APPLY fn=5v1 … template_param=162v1 leaf=USize(48)      argument leaf=USize(18)   <- refused
+```
+
+`1v1` is `f` and `3v1` the inner `b => …`; **`5v1` is a fresh closure clone**,
+and *its declared parameter already holds 48* — the first argument of the
+enclosing call, not the 18 this apply is checking. The unify is
+`unify(cloned_param, argument)` at the pair's leaf: 48 against 18. So the
+statement to take forward is: **when an apply instantiates the curried closure
+that `f`'s body will apply again, the clone's parameter is seeded with the
+enclosing apply's argument**, which is exactly the class of defect the note's
+lead guessed at, one level down from where it guessed. The candidate sites are
+`function.rs`'s closure branch in `value_apply` (`:464-562`: the fresh id is
+registered with the *source* parameter at `:485-492` and re-pointed at the
+remapped clone at `:517`/`:558`) and `regroup_clones` re-establishing the
+template's class topology among the clones (`function.rs:179-187`) — both of
+which can seed a fresh parameter from a source that is already bound.
+
+**Why this is recorded and not fixed.** The two candidate sites are the VM's
+closure-instantiation and class-regrouping paths, where a wrong answer is a
+silently wrong *value* rather than a crash; the audit has no `lowlevel` test
+that pins a curried closure's per-call parameter (`tests/basic/evaluation.rs`
+covers recursion, not this), and this item's own scope is the queue's. A fix
+here is its own item with its own regression test, and the diagnosis above is
+what that item needs to start from. The lead paragraph's guess — the checker's
+skeleton and `check_binop`'s pin — is refuted: nothing the checker does is
+involved, and the parameter annotation's only effect is which argument the
+definition pass happens to be holding.
+
 ### P1-34 — The spec and `check_index` disagree about `e[i]` on a tuple or a struct `verified`
 
 **The code says `[i]` is arrays only, deliberately.** `check_index`
