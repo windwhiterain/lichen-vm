@@ -432,13 +432,16 @@ span back to the original file.
   an `if`.  An `Int` is a machine-sized **unsigned** integer, so `+ - *` wrap,
   `/` and `%` are the unsigned division and remainder, the four order
   comparisons are unsigned (`0 - 1 > 1` is `1`), and every implementation —
-  interpreter, CPU-JIT, GPU-JIT — reads them the same way.  **No operator
-   accepts or produces a `Float`.**  A `Float` is a value and a type today and
-   nothing more: `1.5 + 1.5` does not check, `1 == 1.0` does not check, and
-   there is no conversion in either direction — `Int` and `Float` are unrelated
-   types, not one of which widens into the other.  See
-   [notes/floating-point](notes/floating-point.md) for what a float does and
-   does not yet do.  A **zero divisor**
+  interpreter, CPU-JIT, GPU-JIT — reads them the same way.  A `Float` takes
+   `+ - * /` and the four order comparisons, and **no `%`**.  Each yields a
+   `Float` except a comparison, which yields an `Int` like every other.  `Int`
+   and `Float` are **unrelated types**: there is no conversion in either
+   direction and no operator mixes them, so `1.5 + 1` and `1 == 1.5` do not
+   check.  `==` / `!=` over two `Float`s are the generalized equality — which is
+   the same relation the rest of the language uses for "these are one value" —
+   so they compare a float by its bits: `0.0 == -0.0` is `0` and
+   `NaN == NaN` is `1`.  See [notes/floating-point](notes/floating-point.md) for
+   why there is one relation rather than two.  A **zero divisor**
   has no value: the interpreter records `operator.divide_by_zero` and answers
   the lazy marker, as it does for every other refused computation, while inside
   a jitted kernel it stays the author's responsibility (the CPU kernel's wasm
