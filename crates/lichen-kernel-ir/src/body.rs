@@ -89,6 +89,16 @@ pub enum Terminator {
 pub enum Flow {
     /// Straight-line instructions, then a transfer.
     Block {
+        /// The label control arrives at to run these instructions, if any.
+        ///
+        /// **A `While` names this label as its `header`**, and that pairing is
+        /// what makes a zero-trip loop correct: the header's own instructions
+        /// compute the condition, so the test happens on *every* entry including
+        /// the first. Without the field a backend could not tell which block a
+        /// loop re-enters, and would have to hoist the test out of it — which is
+        /// the off-by-one-iteration bug. [`KernelBody::validate`] checks the
+        /// pairing.
+        entry: Option<BlockId>,
         /// The instructions, in emission order, consuming the stack from the top.
         instrs: Vec<KernelInstr>,
         /// Where control goes when they have run.
@@ -104,14 +114,27 @@ pub enum Flow {
 }
 
 impl Flow {
+    /// A straight-line run of instructions that ends in `terminator`.
+    pub fn block(instrs: Vec<KernelInstr>, terminator: Terminator) -> Self {
+        Flow::Block {
+            entry: None,
+            instrs,
+            terminator: Box::new(terminator),
+        }
+    }
+
     /// The labels this flow mentions, in visit order, including nested ones.
     ///
     /// The depth is a flow's own nesting, so it is bounded by the structure the
     /// fragment was built with rather than by how much graph the lowering read.
     pub fn labels(&self, out: &mut Vec<BlockId>) {
         match self {
-            Flow::Block { instrs, terminator } => {
-                let _ = instrs;
+            Flow::Block {
+                entry, terminator, ..
+            } => {
+                if let Some(entry) = entry {
+                    out.push(*entry);
+                }
                 terminator_labels(terminator, out);
             }
             Flow::Jump { target, .. } => out.push(*target),
@@ -168,6 +191,7 @@ impl KernelBody {
     pub fn straight_line(instrs: Vec<KernelInstr>) -> Self {
         KernelBody {
             entry: Flow::Block {
+                entry: None,
                 instrs,
                 terminator: Box::new(Terminator::Return),
             },
@@ -197,11 +221,15 @@ impl KernelBody {
     /// backend learns to emit the structure.
     pub fn straight_line_instrs(&self) -> Option<&[KernelInstr]> {
         match &self.entry {
-            Flow::Block { instrs, terminator } => match &**terminator {
+            Flow::Block {
+                entry: None,
+                instrs,
+                terminator,
+            } => match &**terminator {
                 Terminator::Return => Some(instrs),
                 _ => None,
             },
-            Flow::Jump { .. } => None,
+            _ => None,
         }
     }
 
@@ -232,7 +260,57 @@ impl KernelBody {
                 self.labels
             ));
         }
+        let mut defined = Vec::new();
+        collect_entries(&self.entry, &mut defined);
+        for (at, id) in defined.iter().enumerate() {
+            if defined[..at].contains(id) {
+                return Err(format!(
+                    "block {} is defined twice; a label names one arrival point and a backend \
+                     resolves every transfer to exactly one",
+                    id.0
+                ));
+            }
+        }
+        for arrived in &named {
+            if !defined.contains(arrived) {
+                return Err(format!(
+                    "block {} is arrived at but nothing defines it; a transfer with no \
+                     definition is a block a backend cannot emit",
+                    arrived.0
+                ));
+            }
+        }
         validate_flow(&self.entry, None)
+    }
+}
+
+/// The labels this body defines, i.e. the ones a [`Flow::Block`] is entered at.
+fn collect_entries(flow: &Flow, out: &mut Vec<BlockId>) {
+    match flow {
+        Flow::Jump { .. } => {}
+        Flow::Block {
+            entry, terminator, ..
+        } => {
+            if let Some(entry) = entry {
+                out.push(*entry);
+            }
+            terminator_entries(terminator, out);
+        }
+    }
+}
+
+fn terminator_entries(terminator: &Terminator, out: &mut Vec<BlockId>) {
+    match terminator {
+        Terminator::Return => {}
+        Terminator::If {
+            on_one, on_zero, ..
+        } => {
+            collect_entries(on_one, out);
+            if let Some(on_zero) = on_zero {
+                collect_entries(on_zero, out);
+            }
+        }
+        Terminator::While { body, .. } => collect_entries(body, out),
     }
 }
 
@@ -240,7 +318,9 @@ impl KernelBody {
 fn collect_instrs<'a>(flow: &'a Flow, out: &mut Vec<&'a KernelInstr>) {
     match flow {
         Flow::Jump { .. } => {}
-        Flow::Block { instrs, terminator } => {
+        Flow::Block {
+            instrs, terminator, ..
+        } => {
             out.extend(instrs.iter());
             match &**terminator {
                 Terminator::Return => {}
@@ -269,29 +349,52 @@ fn validate_flow(flow: &Flow, header: Option<BlockId>) -> Result<(), String> {
             )),
             _ => Ok(()),
         },
-        Flow::Block { terminator, .. } => match &**terminator {
-            Terminator::Return => match header {
-                Some(_) => Err(
-                    "a loop body returns instead of arriving back at its header; the loop has no backedge"
-                        .to_string(),
-                ),
-                None => Ok(()),
-            },
-            Terminator::If {
-                on_one,
-                on_zero,
-                ..
-            } => {
-                validate_flow(on_one, header)?;
-                match on_zero {
-                    Some(on_zero) => validate_flow(on_zero, header),
-                    None => Ok(()),
+        Flow::Block {
+            entry, terminator, ..
+        } => {
+            if let (Some(entry), Some(header)) = (entry, header) {
+                if *entry != header {
+                    return Err(format!(
+                        "a loop body arrives back at block {}, but its own block is entered at block {} — \
+                         the backedge and the header disagree, so the loop would re-enter the wrong code",
+                        header.0, entry.0
+                    ));
                 }
             }
-            Terminator::While {
-                header, body, ..
-            } => validate_flow(body, Some(*header)),
-        },
+            match &**terminator {
+                Terminator::Return => match header {
+                    Some(_) => Err(
+                        "a loop body returns instead of arriving back at its header; the loop has no backedge"
+                            .to_string(),
+                    ),
+                    None => Ok(()),
+                },
+                Terminator::If {
+                    on_one,
+                    on_zero,
+                    ..
+                } => {
+                    validate_flow(on_one, header)?;
+                    match on_zero {
+                        Some(on_zero) => validate_flow(on_zero, header),
+                        None => Ok(()),
+                    }
+                }
+                Terminator::While { header, body, .. } => {
+                    validate_flow(body, Some(*header))?;
+                    if entry.is_some_and(|entry| entry != *header) {
+                        return Err(format!(
+                            "a loop declares its header at block {} but the block holding the loop is \
+                             entered at block {} — a backend would re-enter the loop's test from the \
+                             wrong place",
+                            header.0,
+                            entry.expect("checked just above").0
+                        ));
+                    }
+                    Ok(())
+                }
+            }
+        }
     }
 }
 
