@@ -149,7 +149,7 @@ diff`.
 
 So: **the document is written, not inserted.**
 
-## 5. The conversion, and the one contract that is not verified
+## 5. The conversion
 
 The conversion is one function, `lichen value → definition::Value`, and it is
 where every real difficulty lives. The rules are short; the two that are not
@@ -189,27 +189,20 @@ The conversion walks arena handles, so it is `unsafe` in the way `SortOp::run`
 is — `lichen-std-native` is the worked example of reading a nested lichen value
 from Rust. That is the only unsafe the integration adds; whiting has none.
 
-**The unverified contract is the text format.** `whiting-definition` has no text
-I/O: it depends on `facet` and `thiserror`, and `Value` merely *derives* `Facet`.
-The workspace's only reader and writer are in
-`crates/device/src/snapshot.rs`, via `facet_json` over a `Snapshot` envelope — not
-over a bare `Value`. And there is **no worked JSON example of a `Value`
-anywhere in whiting**; the only spelling of one is the Rust literal in the
-`device` doctest. So the encoding on the wire is facet's derived encoding of the
-enum, and a client has to produce JSON that facet accepts.
+**The text format has now been measured, and it is the constraint that decides
+how this integration is shaped.** §4's handoff assumed a document lichen writes
+and whiting reads. That much holds: `PUT /definition/{name}` takes
+`{ schema, value }`, `POST /reload/{name}` compiles it, and
+`POST /render/{name}/png` returns the frame, so **phase one needs no new whiting
+code on the read side**. What a probe established — see §6 — is that the encoding
+is workable for a document and **not workable for a mesh**.
 
-**That has to be established empirically before anything else in this note is
-worth building**, and it is cheap to establish: round-trip one known scene
-through `facet_json` on both sides of the boundary and compare. It is also a
-version risk rather than a design question — whiting's own workspace manifest
-records having been bitten by a facade/core split in that stack, and the pin
-has to be made deliberately on this side too.
-
-A corollary: if the document is written rather than inserted, the reading side
-already exists. `PUT /definition/{name}` takes `{ schema, value }`,
-`POST /reload/{name}` compiles it, and `POST /render/{name}/png` returns the
-frame — so **phase one needs no new whiting code at all**, only a document that
-facet accepts.
+Two things follow for this side. The writer is version-coupled, so **pin
+`facet`/`facet-core` to `0.45.0` and `facet-json` to `0.44.7` deliberately**,
+and depend on `whiting-definition` rather than re-spelling `Value` in lichen —
+the text is produced by `facet-json`, not by the type, so a copy of the enum
+drifts silently. And the round trip is not universal, so a writer here is a
+writer of a format with **named, silent failure modes** (§6).
 
 ## 6. The obstacles, named
 
@@ -218,9 +211,62 @@ facet accepts.
 without it, and §2's arithmetic cannot be shown without it. This is the critical
 path.
 
-**The text format is a contract, not a given.** §5. A writer here becomes a
-writer of whiting's document format, with a version pin that has to be chosen
-rather than inherited.
+**A packed run cannot go through the text format.** This is the finding that
+reshapes the handoff, and it is measured rather than estimated. `PackedList`
+derives `Facet` as a struct of `layout` plus `Vec<u8>`, and `facet-json` writes a
+`Vec<u8>` as a JSON array of decimal `0`–`255`. For a 20,000-point mesh at a
+24-byte stride:
+
+| | bytes | factor | time |
+|---|---|---|---|
+| the run itself | 480,000 | — | — |
+| `to_string` | 1,262,205 | ×2.63 | 63.5 ms |
+| `to_string_pretty` | 1,262,325 | ×2.63 | 64.2 ms |
+| `from_str` | 1,262,205 | ×2.63 | **599.5 ms** |
+| the same data expanded as a `Value::List` | 2,746,680 | ×5.72 | — |
+
+A 100,000-point mesh is ≈2.4 MB of run, ≈6 MB of JSON, and ≈3 s of parsing — per
+mesh, on every read and every write. `Bytes` behaves identically, and
+`to_string_pretty` does not indent the byte array, so there is no pretty form to
+fall back on.
+
+There is a compact spelling in the library —
+`SerializeOptions::default().bytes_as_hex()` writes `{"Bytes":"0x00017fff"}` —
+and **the default reader cannot read it back**, so it is write-only and unusable
+for any route the device must accept. There is no base64.
+
+**Consequence for this design: phase one ships no mesh, and that is the honest
+scope.** A scene of lights, materials, cameras and shaders is a few kilobytes and
+round-trips fine; a mesh is not. Three ways out exist and none of them is a
+lichen-side decision:
+
+- **A binary sidecar.** whiting's `Reference::File` already resolves a slot to
+  bytes or to a nested document, so the run could be named rather than spelled.
+  It needs a custom `Store` — `RegistryStore::file` always errors by design — so
+  it is whiting-side work, small and in the right place.
+- **A mesh as its own definition.** whiting's own proposal names this route:
+  `meshes` is already a reference slot, so a mesh can live in a definition of its
+  own and be named by any number of scenes. It solves the *re-derivation* half and
+  **not** the byte count.
+- **A bytes format that is not decimal.** This is the actual fix, and it belongs
+  to whiting: make the hex form readable, or add base64. Until one of those
+  lands, no amount of care on this side makes a large mesh cheap.
+
+**The float round trip is not universal, and three of its failures are silent.**
+Measured on the same facet-json: `-0.0` writes as `-0` and reads back `+0.0`; any
+`f64` whose shortest form is a bare integer of 40 or more digits — that is
+`|x| ≥ 1e39`, which includes `f64::MAX` — **fails to parse**; and `NaN` and `±inf`
+write as `null` and read back as `0.0` **with no error at all**.
+
+The last one is the dangerous one, and it meets
+[floating-point](floating-point.md) §4.3 directly: that decision lets the lexer
+produce an infinity, and an infinity in a scene document now loads as `0.0`. A
+document format that turns a value into a different value without complaining is
+the failure class §4.3's invariant is written against.
+
+`Unit` is the bare JSON string `"Unit"` while every other variant is an object,
+so a guessed encoding is wrong; `Enum` is a two-field struct variant, so it
+encodes as `{"Enum": {"tag": …, "fields": {…}}}` rather than as a tagged union.
 
 **A reference is not a value.** whiting's reference slots are marked by the
 schema and resolved at load; a scene that names a mesh defined in another
@@ -250,6 +296,14 @@ validated scene `Value`, the document is written, whiting's own harness reads it
 and compiles it, and the reported delta's operation count is **O(1) in the size of
 the document** for a one-field edit. No GPU, no device, no wgpu, no RPC.
 
+**Phase one ships no mesh**, and §6 is the reason rather than an omission: a
+packed run is six megabytes of decimal and three seconds of parse at a hundred
+thousand points, and that number does not improve by anything this side does. A
+scene of lights, cameras, materials and shaders is kilobytes and exercises the
+whole conversion — including the struct-field-names rule and the `Enum` tag — so
+the phase proves what it is meant to prove without a problem it cannot solve. The
+mesh path is §8's open question, with real numbers behind it.
+
 That claim is checkable without a picture, which is the point of doing it this
 way: the assertion is on the operation count and on the unchanged slots being
 byte-identical, not on "the render looks right". A probe that lies — because the
@@ -258,9 +312,9 @@ most expensive failure mode in whiting's agent notes, where the framework had th
 answer (an empty delta) and did not print it. `ReloadReport` reports the
 operation count, so the answer is available to whoever runs it.
 
-The dependency set for this phase is `whiting-definition` plus a serialiser. That
-is `facet` and `thiserror` — a light enough addition that the phase does not have
-to argue about the GPU-loader discipline at all.
+The dependency set for this phase is `whiting-definition` plus `facet-json`,
+pinned as §5 says. That is `facet`, `thiserror` and a serialiser — light enough
+that the phase does not have to argue about the GPU-loader discipline at all.
 
 ## 8. Not decided
 
