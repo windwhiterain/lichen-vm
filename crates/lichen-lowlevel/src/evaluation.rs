@@ -320,6 +320,7 @@ impl<P: Program> Module<P> {
                             // nothing.
                             Some(
                                 LowValue::USize(_)
+                                | LowValue::Float(_)
                                 | LowValue::Str(_)
                                 | LowValue::Table(_)
                                 | LowValue::None,
