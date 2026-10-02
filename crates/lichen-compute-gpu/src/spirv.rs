@@ -190,17 +190,17 @@ const SPIRV_MAGIC: u32 = 0x0723_0203;
 /// The bytes one buffer element occupies, per class: the array stride of the
 /// module's runtime array.
 ///
-/// **The integer size is shared with the CPU path.** The wasm backend's buffer
-/// is a `Vec<i64>` and the host hands this one `&[i64]`, so eight bytes is what
-/// makes the two backends' results comparable element for element. A float
-/// element is four, which is the whole of `f32` and the width the packed
-/// components a scene document carries already use
-/// (`docs/notes/floating-point.md` §4.1).
+/// **Derived, not decided here.**  What an element occupies is a fact about the
+/// class ([`ScalarClass::byte_width`]) and this is the target's spelling of it,
+/// so a module's `ArrayStride` and the host that hands the buffer over cannot
+/// disagree: the wasm backend packs at the same width, and the host's byte
+/// arithmetic is that width too (`docs/notes/floating-point.md` §4.1).  A literal
+/// here would be a second copy of the rule, and it is exactly the drift that one
+/// produced: this target read a float buffer at four bytes while the host wrote
+/// it at eight, and a float fragment was undispatchable until the width moved
+/// onto the class.
 fn element_stride(class: ScalarClass) -> u32 {
-    match class {
-        ScalarClass::Int => 8,
-        ScalarClass::Float => 4,
-    }
+    class.byte_width() as u32
 }
 
 /// The local workgroup size.  A run of `count` indices is

@@ -493,15 +493,19 @@ step (4, data)
 "#;
 
 /// The `i64`s behind a buffer value.
-fn buffer_data(handle: &lichen_lowlevel::AnyHandle<[i64]>) -> Vec<i64> {
-    let pointer = match handle {
-        lichen_lowlevel::AnyHandle::Dynamic(dynamic) => dynamic.as_ptr(),
-        lichen_lowlevel::AnyHandle::Static(statics) => statics.as_ptr(),
-    };
-    let length = <*const [i64]>::len(pointer);
+///
+/// The payload is the class's packed elements — eight bytes each for an `Int`
+/// buffer ([`lichen_kernel_ir::ScalarClass::byte_width`]) — so the words are
+/// decoded rather than viewed: a payload is bytes, and a `&[i64]` view of it would
+/// be the old word-per-element layout the ABI no longer has.
+fn buffer_data(handle: &lichen_lowlevel::AnyHandle<[u8]>) -> Vec<i64> {
     // SAFETY: the handle is the value's own arena payload, its home block is the
     // live one the evaluation just ran in, and nothing has dropped it.
-    unsafe { std::slice::from_raw_parts(pointer as *const i64, length) }.to_vec()
+    let bytes = unsafe { std::slice::from_raw_parts(handle.as_ptr(), handle.len()) };
+    bytes
+        .chunks_exact(std::mem::size_of::<i64>())
+        .map(|word| i64::from_le_bytes(word.try_into().unwrap_or_default()))
+        .collect()
 }
 
 /// **`ins(i)` is the `i`-th argument, and the only way to know that is to apply

@@ -65,17 +65,45 @@ pub use body::{BlockId, Flow, KernelBody, Terminator};
 ///
 /// # Fieldless on purpose
 ///
-/// The class is a tag, and the payload's representation belongs to whoever
-/// holds the payload ([`ScalarData`] for a fetched buffer). A fieldless enum
-/// derives `Eq`, which the value-carrying carriers beside it need: a resident
-/// buffer's class travels in a struct that *is* `Eq` because a device buffer's
-/// identity and count are, and an `f32` payload is not `Eq` at all.
+/// The class is a tag: it says *what an element is*, and the one representation
+/// fact that follows from that — its width — is [`Self::byte_width`] rather than
+/// a field, because a field would be a second place the same number could be
+/// written down wrong. A fieldless enum derives `Eq`, which the value-carrying
+/// carriers beside it need: a resident buffer's class travels in a struct that
+/// *is* `Eq` because a device buffer's identity and count are, and an `f32`
+/// payload is not `Eq` at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScalarClass {
     /// An unsigned machine-sized integer — the language's `Int`.
     Int,
     /// A 32-bit float — the language's `Float`.
     Float,
+}
+
+impl ScalarClass {
+    /// The bytes one buffer element of this class occupies.
+    ///
+    /// **This is the one answer, and it is on the class because the class is the
+    /// only thing that knows it.** What a buffer element occupies is a fact about
+    /// the element, so a backend that answered it for itself would be holding a
+    /// second copy of this rule — and two copies of a rule is how the wasm
+    /// backend came to lay a float element out at eight bytes while the SPIR-V
+    /// backend read it at four, with nothing in the tree able to notice
+    /// (`docs/notes/floating-point.md` §5.1). Every width — the host's byte
+    /// arithmetic, a module's `ArrayStride`, a dispatch's padding — is derived
+    /// from here, so the question "how wide is this element" cannot be asked of
+    /// anything else.
+    ///
+    /// An `Int` is a machine-sized unsigned integer, which is `i64` in every
+    /// representation the tree has ([`IntWidth::I64`] is the only variant); a
+    /// `Float` is `f32` and nothing else, which is why this is a method on the
+    /// class rather than a second per-class width table.
+    pub fn byte_width(self) -> usize {
+        match self {
+            ScalarClass::Int => 8,
+            ScalarClass::Float => 4,
+        }
+    }
 }
 
 /// The elements of a buffer a backend has handed back, with the class they are
@@ -168,33 +196,40 @@ pub struct ResidentId(pub u64);
 ///
 /// # The class of a slot is the fragment's, not the slot's
 ///
-/// A host slot is a raw bit payload, and the class it is to be read as is a fact
+/// A host slot is a raw byte payload, and the class it is to be read as is a fact
 /// of the *dispatch*: [`KernelFragment::input_classes`] says what each position
 /// holds, and a caller that agrees with the fragment it named has said
 /// everything there is to say about the slot.  So this type carries no class of
-/// its own, and it stays `Eq`: a typed `&[f32]` variant would duplicate the
-/// fragment's list, and would put a payload that is not `Eq` into a type whose
-/// whole use is naming a buffer cheaply.  A resident slot's class is the
-/// resident value's, where it is genuinely per-buffer and not derivable from an
-/// ordinal — see `ResidentBuffer` in `lichen-compute`.
+/// its own.  A resident slot's class is the resident value's, where it is
+/// genuinely per-buffer and not derivable from an ordinal — see `ResidentBuffer`
+/// in `lichen-compute`.
 ///
-/// # One word per element, for both classes
+/// # The payload is bytes, and the width is the class's
 ///
-/// A host payload holds **one `i64` word per element**: an `Int` element is its
-/// value, and a `Float` element is an `f32`'s bits in the low 32 bits — the
-/// element size a float position is read at is the class's business, decided by
-/// the reader, and the words themselves are the same shape either way.  The
-/// alternative considered was to widen this type with a typed `HostF32(&[f32])`
-/// variant; it was declined because it gives up `Eq` and forces an arm into
-/// every implementor's match, and it buys nothing the raw payload plus the
-/// fragment's declared class does not already say — a backend still has to
-/// consult `input_classes` to know which positions are floats, because a
-/// fragment's buffers may be either class while the slot is one type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A host payload is the buffer's **packed elements**, one after another at
+/// [`ScalarClass::byte_width`] bytes each: an `Int` element is its `i64`, a
+/// `Float` element its `f32`.  A byte view is what makes this type the same type
+/// for every class — the payload needs no reinterpretation when a backend reads
+/// it, because a backend reads bytes out of a mapping in any case — and it needs
+/// no new variant the day the language has a third element class, which a typed
+/// `HostF32(&[f32])` variant would: a variant per class is a list of the classes
+/// in a second place, and that list would have to be extended in step with this
+/// one or a position could be read at the wrong width.
+///
+/// The type is **not** `Eq`, and that is the price of the bytes: `Eq` here meant
+/// "the same elements", and an element is only an element once a width is fixed.
+/// Two byte slices of equal length can hold different element counts — eight
+/// bytes are one `Int` or two `Float`s — so equality of the payload is not
+/// equality of the buffer, and a type that cannot see the fragment cannot answer
+/// the second question.  It derives `PartialEq` instead, which compares the bytes
+/// and therefore says the weaker, honest thing, and every slot site compares
+/// within one position where the class is fixed and not two.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BufferSlot<'a> {
-    /// Data the host already holds, at least `count` elements long, read as the
-    /// class [`KernelFragment::input_classes`] declares for this position.
-    Host(&'a [i64]),
+    /// Data the host already holds: at least `count` elements of
+    /// [`ScalarClass::byte_width`] bytes each, read as the class
+    /// [`KernelFragment::input_classes`] declares for this position.
+    Host(&'a [u8]),
     /// A buffer the backend is already holding, from an earlier [`ParallelBackend::run`].
     Resident(ResidentId),
 }
@@ -283,7 +318,9 @@ pub trait ParallelBackend: Send + Sync {
     /// Run `fragment` over the index range `[0, count)`.
     ///
     /// `inputs` holds one slot per read position; a [`BufferSlot::Host`] must be
-    /// at least `count` long. The result is one [`ResidentId`] per
+    /// at least `count` elements long, each element [`ScalarClass::byte_width`]
+    /// bytes wide for the class the fragment declares at that position. The
+    /// result is one [`ResidentId`] per
     /// [`KernelFragment::outputs`], each holding at least `count` elements, owned
     /// by the host until it [`Self::release`]s it.
     fn run(

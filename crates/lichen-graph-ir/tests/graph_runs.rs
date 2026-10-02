@@ -75,7 +75,16 @@ impl Stub {
         let mut columns = Vec::with_capacity(inputs.len());
         for slot in inputs {
             match slot {
-                BufferSlot::Host(data) => columns.push(data.to_vec()),
+                // A host slot is packed bytes, so the elements are decoded as the
+                // `Int` words every fragment in this file declares rather than
+                // taken as bytes.
+                BufferSlot::Host(data) => {
+                    columns.push(
+                        data.chunks_exact(8)
+                            .map(|word| i64::from_le_bytes(word.try_into().unwrap_or_default()))
+                            .collect(),
+                    );
+                }
                 BufferSlot::Resident(id) => {
                     columns.push(self.data.lock().unwrap()[id.0 as usize - 1].clone())
                 }

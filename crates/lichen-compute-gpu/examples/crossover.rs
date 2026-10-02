@@ -20,8 +20,28 @@ use std::time::Instant;
 use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X};
 use lichen_kernel_ir::BufferSlot;
 use lichen_kernel_ir::{
-    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, Pending, ScalarClass,
+    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, Pending, ScalarClass, ScalarData,
 };
+
+/// The **packed** bytes of `words`, one `i64` each — the host payload an integer
+/// fragment reads.  Packed rather than reinterpreted, because the ABI's element
+/// width is the class's ([`ScalarClass::byte_width`]) and not `i64`'s.
+fn pack(words: &[i64]) -> Vec<u8> {
+    words.iter().flat_map(|word| word.to_le_bytes()).collect()
+}
+
+/// A fetched payload as the `i64` elements these integer fragments produce.
+fn words(data: ScalarData) -> Vec<i64> {
+    match data {
+        ScalarData::Int(elements) => elements,
+        ScalarData::Float(elements) => {
+            panic!(
+                "an integer run's result came back as {} float element(s)",
+                elements.len()
+            )
+        }
+    }
+}
 
 /// `out[i] = in[i] + in[i] + 1` — enough arithmetic that the run is not purely
 /// launch overhead, and the same shape the acceptance tests use.
@@ -76,8 +96,9 @@ fn fixed_cost(context: &GpuContext) -> (f64, f64) {
     const REPEATS: usize = 200;
     let count = 64usize;
     let input: Vec<i64> = (0..count as i64).collect();
+    let packed = pack(&input);
     let warm = context
-        .run(&fragment(), &[BufferSlot::Host(&input)], count)
+        .run(&fragment(), &[BufferSlot::Host(&packed)], count)
         .expect("the warm-up run completes");
     for id in &warm {
         context.release(*id);
@@ -87,7 +108,7 @@ fn fixed_cost(context: &GpuContext) -> (f64, f64) {
     for _ in 0..REPEATS {
         let started = Instant::now();
         let resident = context
-            .run(&fragment(), &[BufferSlot::Host(&input)], count)
+            .run(&fragment(), &[BufferSlot::Host(&packed)], count)
             .expect("a probe run completes");
         let elapsed = started.elapsed().as_secs_f64() * 1e3;
         for id in &resident {
@@ -113,8 +134,9 @@ fn resident_cost(context: &GpuContext) -> (f64, f64) {
     const REPEATS: usize = 200;
     let count = 64usize;
     let input: Vec<i64> = (0..count as i64).collect();
+    let packed = pack(&input);
     let seed = context
-        .run(&fragment(), &[BufferSlot::Host(&input)], count)
+        .run(&fragment(), &[BufferSlot::Host(&packed)], count)
         .expect("the seeding run completes");
 
     let mut samples = Vec::with_capacity(REPEATS);
@@ -136,7 +158,7 @@ fn resident_cost(context: &GpuContext) -> (f64, f64) {
 
 /// One chain of `links` dispatches, each its own submission, in milliseconds
 /// with the trailing readback counted.
-fn time_chain(context: &GpuContext, input: &[i64], count: usize, links: usize) -> f64 {
+fn time_chain(context: &GpuContext, input: &[u8], count: usize, links: usize) -> f64 {
     let started = Instant::now();
     let mut current = context
         .run(&fragment(), &[BufferSlot::Host(input)], count)
@@ -159,7 +181,7 @@ fn time_chain(context: &GpuContext, input: &[i64], count: usize, links: usize) -
 
 /// One fused chain of `links` dispatches in a single submission, in
 /// milliseconds, with the trailing readback counted so the two are comparable.
-fn time_fused_chain(context: &GpuContext, input: &[i64], count: usize, links: usize) -> f64 {
+fn time_fused_chain(context: &GpuContext, input: &[u8], count: usize, links: usize) -> f64 {
     let started = Instant::now();
     let id = context
         .run_chain(&fragment(), input, count, links)
@@ -188,11 +210,13 @@ fn time_fused_chain(context: &GpuContext, input: &[i64], count: usize, links: us
 fn check_fused(context: &GpuContext, count: usize, links: usize) {
     let input: Vec<i64> = (0..count as i64).collect();
     let id = context
-        .run_chain(&fragment(), &input, count, links)
+        .run_chain(&fragment(), &pack(&input), count, links)
         .expect("the chain under test records");
-    let answer = context
-        .fetch(id, count)
-        .expect("the chain under test comes home");
+    let answer = words(
+        context
+            .fetch(id, count)
+            .expect("the chain under test comes home"),
+    );
     context.release(id);
 
     let factor = 1i64 << links;
@@ -253,7 +277,7 @@ fn host_passes(data: &mut [i64], passes: usize) {
 /// other.
 fn time_split(
     context: &GpuContext,
-    input: &[i64],
+    input: &[u8],
     count: usize,
     overlap: Overlap,
     host: &mut [i64],
@@ -306,7 +330,7 @@ fn time_split(
 /// the tell: a hidden amount cannot exceed the work that hid it.
 fn best_split(
     context: &GpuContext,
-    input: &[i64],
+    input: &[u8],
     count: usize,
     host: &mut [i64],
     passes: usize,
@@ -372,6 +396,7 @@ fn main() {
         64usize, 256, 1_024, 4_096, 16_384, 65_536, 262_144, 1_048_576,
     ] {
         let input: Vec<i64> = (0..count).map(|value| value as i64).collect();
+        let packed = pack(&input);
         let mut expected = vec![0i64; count];
         sequential(&input, &mut expected);
 
@@ -380,7 +405,7 @@ fn main() {
         // Its result is released rather than kept: the ids are what a program
         // releases, and this example is also where that path gets exercised.
         let warm = context
-            .run(&fragment(), &[BufferSlot::Host(&input)], count)
+            .run(&fragment(), &[BufferSlot::Host(&packed)], count)
             .expect("the warm-up run completes");
         for id in &warm {
             context.release(*id);
@@ -391,14 +416,16 @@ fn main() {
         // kernels pays the first and not the second.
         let started = Instant::now();
         let resident = context
-            .run(&fragment(), &[BufferSlot::Host(&input)], count)
+            .run(&fragment(), &[BufferSlot::Host(&packed)], count)
             .expect("the timed run completes");
         let dispatch = started.elapsed();
 
         let started = Instant::now();
-        let from_gpu = context
-            .fetch(resident[0], count)
-            .expect("the result comes back off the device");
+        let from_gpu = words(
+            context
+                .fetch(resident[0], count)
+                .expect("the result comes back off the device"),
+        );
         let fetch = started.elapsed();
         for id in &resident {
             context.release(*id);
@@ -434,8 +461,9 @@ fn main() {
 
     for count in [65_536usize, 262_144, 1_048_576] {
         let input: Vec<i64> = (0..count).map(|value| value as i64).collect();
+        let packed = pack(&input);
         let warm = context
-            .run(&fragment(), &[BufferSlot::Host(&input)], count)
+            .run(&fragment(), &[BufferSlot::Host(&packed)], count)
             .expect("the warm-up run completes");
         for id in &warm {
             context.release(*id);
@@ -444,7 +472,7 @@ fn main() {
         for links in [1usize, 2, 4, 8, 16] {
             let started = Instant::now();
             let mut current = context
-                .run(&fragment(), &[BufferSlot::Host(&input)], count)
+                .run(&fragment(), &[BufferSlot::Host(&packed)], count)
                 .expect("the chain's first link uploads");
             for _ in 1..links {
                 // Each link is handed the previous one's id and never sees its data.
@@ -508,8 +536,9 @@ fn main() {
 
     for count in [1_024usize, 4_096, 16_384, 65_536, 262_144, 1_048_576] {
         let input: Vec<i64> = (0..count).map(|value| value as i64).collect();
+        let packed = pack(&input);
         let warm = context
-            .run(&fragment(), &[BufferSlot::Host(&input)], count)
+            .run(&fragment(), &[BufferSlot::Host(&packed)], count)
             .expect("the warm-up run completes");
         for id in &warm {
             context.release(*id);
@@ -519,9 +548,9 @@ fn main() {
         let mut serial = f64::MAX;
         let mut fused = f64::MAX;
         for _ in 0..REPEATS {
-            single = single.min(time_chain(&context, &input, count, 1));
-            serial = serial.min(time_chain(&context, &input, count, LINKS));
-            fused = fused.min(time_fused_chain(&context, &input, count, LINKS));
+            single = single.min(time_chain(&context, &packed, count, 1));
+            serial = serial.min(time_chain(&context, &packed, count, LINKS));
+            fused = fused.min(time_fused_chain(&context, &packed, count, LINKS));
         }
 
         // A per-link cost at or below zero would mean the long chain beat the
@@ -586,8 +615,9 @@ fn main() {
         // beside. That is not a tuning choice: it is what a graph looks like when
         // one node is compiled and the next is written in lichen.
         let mut host: Vec<i64> = (0..count).map(|value| value as i64).collect();
+        let packed = pack(&input);
         let warm = context
-            .run(&fragment(), &[BufferSlot::Host(&input)], count)
+            .run(&fragment(), &[BufferSlot::Host(&packed)], count)
             .expect("the warm-up run completes");
         for id in &warm {
             context.release(*id);
@@ -595,7 +625,7 @@ fn main() {
 
         for passes in [0usize, 1, 2, 4, 8] {
             let (before, after) =
-                best_split(&context, &input, count, &mut host, passes, SPLIT_REPEATS);
+                best_split(&context, &packed, count, &mut host, passes, SPLIT_REPEATS);
             // Reported from the *after* schedule: with nothing to hide behind,
             // that wait is the device's time, and it is the ceiling on how much
             // the other one can be cut by.  The host figure is the *before*

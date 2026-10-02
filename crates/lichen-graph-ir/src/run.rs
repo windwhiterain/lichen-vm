@@ -229,21 +229,27 @@ impl<'backend> Runner<'backend> {
     }
 }
 
-/// Two host inputs of different lengths, if the slots have any.
+/// Two host inputs of different payload lengths, if the slots have any.
 ///
 /// A resident slot has no length to disagree with — its own run's business — so
 /// this can only ever be about the host slots, and it is checked here so the
 /// refusal can name both lengths rather than leaving the backend to say
 /// "input 1 is shorter than the count".
+///
+/// The comparison is on the **payload bytes**, which is the one length a slot can
+/// answer without the fragment: a slot carries no class, so how many elements its
+/// bytes hold is not a question it can be asked.  Two slots of different classes
+/// with their width ratio between them would therefore compare equal here — and
+/// that is a shape the class check refuses before a dispatch, which is where the
+/// class is known.
 fn ragged_host(slots: &[lichen_kernel_ir::BufferSlot<'_>]) -> Option<(usize, usize)> {
-    let first = slots.iter().find_map(|slot| match slot {
+    let length = |slot: &lichen_kernel_ir::BufferSlot<'_>| match slot {
         lichen_kernel_ir::BufferSlot::Host(data) => Some(data.len()),
         lichen_kernel_ir::BufferSlot::Resident(_) => None,
-    })?;
-    slots.iter().find_map(|slot| match slot {
-        lichen_kernel_ir::BufferSlot::Host(data) if data.len() != first => {
-            Some((first, data.len()))
-        }
+    };
+    let first = slots.iter().find_map(length)?;
+    slots.iter().find_map(|slot| match length(slot) {
+        Some(length) if length != first => Some((first, length)),
         _ => None,
     })
 }

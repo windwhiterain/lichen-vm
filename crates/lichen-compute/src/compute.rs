@@ -66,9 +66,8 @@ use lichen_kernel_ir::{
 };
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, Handle, LowOperator, LowShape,
-    LowValue, Module, ModuleKey, NodeId, Operation, OperatorExt, Program, Release, StaticHandle,
-    StaticModule, ValueExt,
+    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, LowOperator, LowShape, LowValue,
+    Module, ModuleKey, NodeId, Operation, OperatorExt, Program, Release, StaticModule, ValueExt,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -135,7 +134,7 @@ thread_local! {
 pub use lichen_kernel_ir::KernelId;
 
 /// A runtime parallel-buffer artifact's payload: the `n` collected element
-/// results, held **in the block arena** as an `i64` slice rather than in a
+/// results, held **in the block arena** as a packed byte slice rather than in a
 /// process registry (`D15`) — see [`ComputeValue::Buffer`].
 ///
 /// The value is a `Copy` handle, exactly like the lowlevel's own array/table
@@ -143,15 +142,19 @@ pub use lichen_kernel_ir::KernelId;
 /// relocates it like any other payload.  There is no id, no registry and no
 /// eviction: the arena's block lifetime *is* the ownership.
 ///
-/// **One `i64` word per element, for both classes.**  An `Int` element is its
-/// value; a `Float` element is an `f32`'s bits in the low 32 bits of the word.
-/// That is what keeps the payload's length equal to the element count — the
-/// count `collect`/`read` index by — and what keeps [`ValueExt`]'s byte
-/// arithmetic ([`std::mem::size_of::<i64>()`] per element) the same for a float
-/// buffer as for an integer one.  A packed representation (two `f32` per word)
-/// would make the payload's length and the element count disagree for an odd
-/// count and would truncate the last element through the copy path's byte view.
-pub type BufferPayload = AnyHandle<[i64]>;
+/// **The payload is the class's elements packed at
+/// [`ScalarClass::byte_width`] bytes each** — an `Int` element is its `i64`, a
+/// `Float` element its `f32`, and the class that says which travels beside the
+/// handle ([`ComputeValue::Buffer`]).  The width is the class's and is not
+/// restated here, so a host float buffer is literally the bytes a device module
+/// reads: `count * ScalarClass::Float.byte_width()` of them, which is what makes
+/// one buffer able to feed either backend.
+///
+/// A byte payload is the same type for every class, so the arena, the copy path
+/// and the codec move it without knowing what is in it.  What it must not do is
+/// assume the length is the element count: it is the length in *bytes*, and an
+/// element count is that over the class's width.
+pub type BufferPayload = AnyHandle<[u8]>;
 
 /// The process kernel registry: compiled kernel **fragments** (bytecode units),
 /// keyed by [`KernelId`].  Kernels are immutable artifacts shared across
@@ -352,7 +355,7 @@ mod kernel_intern_tests {
 /// The caller must hold the value the handle came from on a borrow of its
 /// module, so the payload's home block is alive — the same obligation every
 /// reader of an arena payload carries (`lichen_lowlevel::Handle::from_raw`).
-fn buffer_items(payload: &BufferPayload) -> Option<&[i64]> {
+fn buffer_items(payload: &BufferPayload) -> Option<&[u8]> {
     match payload {
         // SAFETY: the caller holds the value on a module borrow, so the
         // payload's home block — and therefore this slice — is alive.
@@ -363,22 +366,85 @@ fn buffer_items(payload: &BufferPayload) -> Option<&[i64]> {
     }
 }
 
-/// One buffer element as the class says it is: an `Int` is the word's value, a
-/// `Float` is the `f32` its low 32 bits spell.
+/// How many elements a packed payload of `bytes` bytes holds at `class`'s width.
 ///
-/// The two are the same 64 bits, which is why the class has to travel beside
-/// the payload rather than be recovered from it
+/// The payload holds whole elements and nothing else, so this is exact: the
+/// width comes from the class ([`ScalarClass::byte_width`]) and never from a
+/// constant here.
+fn element_count(class: ScalarClass, bytes: usize) -> usize {
+    bytes / class.byte_width()
+}
+
+/// The bytes of element `index` in a packed payload, or `None` past the end.
+fn element_bytes(class: ScalarClass, payload: &[u8], index: usize) -> Option<&[u8]> {
+    let width = class.byte_width();
+    payload.get(index * width..(index + 1) * width)
+}
+
+/// One buffer element as the class says it is, from the packed bytes it occupies.
+///
+/// The encoding is the element's own: an `Int` is the eight bytes of its `i64`,
+/// a `Float` the four bytes of its `f32`.  The class has to travel beside the
+/// payload because it is what says how many bytes an element is — the width is a
+/// method on the class and not a fact the bytes can answer
 /// (`docs/notes/floating-point.md` §4.4).
-fn element_value(class: ScalarClass, word: i64) -> LowValue {
+fn element_value(class: ScalarClass, bytes: &[u8]) -> Option<LowValue> {
     match class {
-        ScalarClass::Int => LowValue::USize(word as usize),
-        ScalarClass::Float => LowValue::Float(f32::from_bits(word as u32)),
+        ScalarClass::Int => {
+            let word = i64::from_le_bytes(bytes.try_into().ok()?);
+            Some(LowValue::USize(word as usize))
+        }
+        ScalarClass::Float => {
+            let bits = u32::from_le_bytes(bytes.try_into().ok()?);
+            Some(LowValue::Float(f32::from_bits(bits)))
+        }
     }
 }
 
-/// One `f32` element as the word a buffer payload holds.
-fn float_word(value: f32) -> i64 {
-    value.to_bits() as i64
+/// The packed payload of `words` at `class`'s width — the encoding side of
+/// [`element_value`], and the only place a value's payload is built.
+///
+/// Each element is written as exactly its own width, so a float buffer's payload
+/// is `count * 4` bytes: what a device module's declared `ArrayStride` reads.
+fn pack_elements(class: ScalarClass, words: &[i64]) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(words.len() * class.byte_width());
+    for word in words {
+        match class {
+            ScalarClass::Int => payload.extend_from_slice(&word.to_le_bytes()),
+            ScalarClass::Float => payload.extend_from_slice(&(*word as u32).to_le_bytes()),
+        }
+    }
+    payload
+}
+
+/// The words an interpreter's state holds for `class`, from a packed payload —
+/// the decoding side of [`pack_elements`].
+///
+/// The parallel interpreter's own state is word-per-element for both classes (an
+/// `f32` rides its bits in the low 32 of a word), which is a fact about that
+/// interpreter and not about the ABI: this is the boundary where the packed
+/// payload becomes the words it runs on, and [`pack_elements`] is the boundary
+/// back.
+fn unpack_elements(class: ScalarClass, payload: &[u8]) -> Vec<i64> {
+    (0..element_count(class, payload.len()))
+        .map(|index| match class {
+            ScalarClass::Int => i64::from_le_bytes(
+                payload[index * 8..index * 8 + 8]
+                    .try_into()
+                    .unwrap_or_default(),
+            ),
+            ScalarClass::Float => i64::from(u32::from_le_bytes(
+                payload[index * 4..index * 4 + 4]
+                    .try_into()
+                    .unwrap_or_default(),
+            )),
+        })
+        .collect()
+}
+
+/// The bits of one `f32`, as the `i64` word the kernel IR's constants carry.
+fn float_bits(value: f32) -> i64 {
+    i64::from(value.to_bits())
 }
 
 // The lowered-kernel IR — `KernelBin`, `KernelInstr`, `KernelFragment`,
@@ -608,21 +674,22 @@ pub enum ComputeValue {
     /// A runtime results **buffer**: `plrun` ran the parallel kernel over the
     /// index range `[0, n)` and collected the `n` `?b` results here.
     ///
-    /// The payload is an `i64` slice **in the block arena** — a `Copy` handle,
-    /// like the lowlevel's own array/table payloads — so a buffer is owned by
-    /// the block it was created in and dies with it rather than living in a
-    /// process registry that nothing can bound (`D15`, and see
+    /// The payload is a **packed byte slice** in the block arena — a `Copy`
+    /// handle, like the lowlevel's own array/table payloads — so a buffer is
+    /// owned by the block it was created in and dies with it rather than living
+    /// in a process registry that nothing can bound (`D15`, and see
     /// [`Self::is_handle`]).  `reads`/`collect`s therefore dereference the
     /// arena, and the crate's copy path relocates the payload when the value is
-    /// copied into another block.
+    /// copied into another block.  Its elements are [`ScalarClass::byte_width`]
+    /// bytes each — four for a float — so one buffer can feed either backend.
     ///
     /// **The element class rides on the value**, because the payload alone
-    /// cannot say it: a float element is an `f32`'s bits in a word and an `Int`
-    /// element is the value, and the two are the same 64 bits.  It is read off
-    /// the producing fragment's [`KernelFragment::output_classes`] at the
-    /// ordinal the buffer was produced at (or, for a `"gpu"` result, off the
-    /// [`ResidentBuffer`] the backend issued), so a buffer names what its
-    /// elements are without anyone having to still hold the fragment.
+    /// cannot say it: the bytes of an `f32` and the bytes of an `i64` are not
+    /// distinguishable by length alone.  It is read off the producing fragment's
+    /// [`KernelFragment::output_classes`] at the ordinal the buffer was produced
+    /// at (or, for a `"gpu"` result, off the [`ResidentBuffer`] the backend
+    /// issued), so a buffer names what its elements are without anyone having to
+    /// still hold the fragment.
     Buffer(BufferPayload, ScalarClass),
     /// A run's results, still **on the device**.
     ///
@@ -716,17 +783,19 @@ pub struct ResidentBuffer {
     pub class: ScalarClass,
 }
 
-/// One host buffer's payload: the class its elements are, and **one `i64` word
-/// per element** — an `Int` element is its value, a `Float` element is an
-/// `f32`'s bits in the low 32 bits.
+/// One host buffer's payload as the interpreter holds it: the class its elements
+/// are, and **one `i64` word per element** — an `Int` element is its value, a
+/// `Float` element is an `f32`'s bits in the low 32 bits.
 ///
-/// The word-per-element representation is the host half of the same convention
-/// [`BufferSlot`] states for a backend: it keeps the payload's length equal to
-/// the element count, which is what every read and write index is, and it keeps
-/// the bytes 8-aligned for the `i64` view the arena and the copy path take.  A
-/// backend reads the class from the fragment's
+/// The word-per-element shape is the **parallel interpreter's own state**, not
+/// the ABI's: its `read`/`write` imports are typed in the fragment's class, so a
+/// float run hands its bits over in a word and the imports read them.  What
+/// crosses the boundary — an arena payload, a graph argument, a [`BufferSlot`] —
+/// is packed at [`ScalarClass::byte_width`] bytes per element, and
+/// [`pack_elements`]/[`unpack_elements`] are the two places the two shapes are
+/// converted.  A backend reads the class from the fragment's
 /// [`KernelFragment::input_classes`]/[`KernelFragment::output_classes`], which
-/// is the only thing that can say what a raw word means.
+/// is the only thing that can say what a raw byte means.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BufferWords {
     class: ScalarClass,
@@ -740,6 +809,11 @@ impl BufferWords {
             class: ScalarClass::Int,
             words,
         }
+    }
+
+    /// This buffer as the packed bytes the ABI carries.
+    fn packed(&self) -> Vec<u8> {
+        pack_elements(self.class, &self.words)
     }
 }
 
@@ -787,34 +861,15 @@ impl ValueExt for ComputeValue {
         matches!(self, ComputeValue::Buffer(..))
     }
 
-    /// The buffer's payload viewed as bytes — one `i64` word per element, eight
-    /// bytes each whatever the class, which is how the crate's copy path and the
-    /// codec move it.
+    /// The buffer's payload viewed as bytes — the class's elements packed at
+    /// [`ScalarClass::byte_width`] bytes each, which is how the crate's copy path
+    /// and the codec move it.
+    ///
+    /// The payload is already a byte handle, so this is the value's own view of
+    /// itself and the byte count is exactly the payload's length.
     fn handle(&self) -> AnyHandle<[u8]> {
         match self {
-            ComputeValue::Buffer(AnyHandle::Dynamic(handle), _) => {
-                // SAFETY: `handle` points at a live `[i64]` payload (the value's
-                // handle), and re-viewing those bytes as `u8` neither moves nor
-                // invalidates anything.
-                AnyHandle::Dynamic(unsafe {
-                    Handle::from_raw(std::ptr::slice_from_raw_parts(
-                        handle.as_ptr() as *const u8,
-                        buffer_byte_len(handle),
-                    ))
-                })
-            }
-            ComputeValue::Buffer(AnyHandle::Static(handle), _) => {
-                // SAFETY: as above, for a payload in a static module's arena.
-                AnyHandle::Static(unsafe {
-                    StaticHandle::from_raw(
-                        handle.module,
-                        std::ptr::slice_from_raw_parts(
-                            handle.as_ptr() as *const u8,
-                            static_buffer_byte_len(handle),
-                        ),
-                    )
-                })
-            }
+            ComputeValue::Buffer(handle, _) => *handle,
             _ => unreachable!("only Buffer carries a payload"),
         }
     }
@@ -822,42 +877,23 @@ impl ValueExt for ComputeValue {
     fn set_handle(&mut self, payload: AnyHandle<[u8]>) {
         match self {
             ComputeValue::Buffer(slot, _) => {
-                *slot = match payload {
-                    // The payload is the same allocation, re-viewed as `i64`
-                    // elements: the copy path allocated `len` bytes for this
-                    // value's payload, so the element count is that over eight.
-                    // **Both classes take this branch**: a float element is one
-                    // word too, so the class never changes the arithmetic.
-                    AnyHandle::Dynamic(handle) => {
-                        let elements = handle.as_ptr().len() / std::mem::size_of::<i64>();
-                        AnyHandle::Dynamic(unsafe {
-                            Handle::from_raw(std::ptr::slice_from_raw_parts(
-                                handle.as_ptr() as *const i64,
-                                elements,
-                            ))
-                        })
-                    }
-                    AnyHandle::Static(handle) => {
-                        let elements = handle.as_ptr().len() / std::mem::size_of::<i64>();
-                        AnyHandle::Static(unsafe {
-                            StaticHandle::from_raw(
-                                handle.module,
-                                std::ptr::slice_from_raw_parts(
-                                    handle.as_ptr() as *const i64,
-                                    elements,
-                                ),
-                            )
-                        })
-                    }
-                };
+                // The payload is the same allocation, re-viewed as bytes: the
+                // copy path allocated exactly `len` bytes for this value's
+                // payload, and a byte handle is what that length means.  **No
+                // class is consulted**, because none is needed: the width states
+                // how many bytes one element is, and the payload's length is
+                // what it is either way.
+                *slot = payload;
             }
             _ => unreachable!("only Buffer carries a payload"),
         }
     }
 
-    /// `i64` elements need 8-byte alignment.  The composition takes the
-    /// strictest alignment over its leaves, so this raises the vocabulary's
-    /// payload alignment and the freeze layout follows it.
+    /// A packed element needs no more than `i64`'s alignment to be read
+    /// (`docs/notes/floating-point.md` §4.4: every element access goes through a
+    /// decoded copy, never through a `&[i64]` view of the payload).  The
+    /// composition takes the strictest alignment over its leaves, so this is what
+    /// the freeze layout follows too.
     fn alignment() -> usize {
         std::mem::align_of::<i64>()
     }
@@ -895,17 +931,6 @@ impl Release for ReleaseResident {
     fn release(self: Box<Self>) {
         self.backend.release(self.id);
     }
-}
-
-/// The byte length of a dynamic `[i64]` payload, read from the fat pointer's
-/// metadata without forming a reference.
-fn buffer_byte_len(handle: &Handle<[i64]>) -> usize {
-    handle.as_ptr().len() * std::mem::size_of::<i64>()
-}
-
-/// The byte length of a static `[i64]` payload.
-fn static_buffer_byte_len(handle: &StaticHandle<[i64]>) -> usize {
-    handle.as_ptr().len() * std::mem::size_of::<i64>()
 }
 
 /// The compute operator vocabulary — the `Jit`/`Launch` operations dispatched
@@ -1354,11 +1379,11 @@ where
                                 if let Some(data) = buffer_items(&payload) {
                                     // The buffer's class travels with the words:
                                     // a run reads a float input as `f32`s and an
-                                    // integer one as `Int`s, and the raw words
-                                    // are the same either way.
+                                    // integer one as `Int`s, and the payload it
+                                    // came from is packed at that class's width.
                                     inputs.push(RunInput::Host(BufferWords {
                                         class,
-                                        words: data.to_vec(),
+                                        words: unpack_elements(class, data),
                                     }));
                                 } else {
                                     return <P::Value as From<LowValue>>::from(
@@ -1411,7 +1436,7 @@ where
                                         None,
                                         Some(<P::Value as From<ComputeValue>>::from(
                                             ComputeValue::Buffer(
-                                                module.alloc_payload(&result.words, block),
+                                                module.alloc_payload(&result.packed(), block),
                                                 result.class,
                                             ),
                                         )),
@@ -1428,7 +1453,7 @@ where
                         // with it (`D15`) — the same bump allocation every other
                         // payload uses.
                         <P::Value as From<ComputeValue>>::from(ComputeValue::Buffer(
-                            module.alloc_payload(&results[0].words, block),
+                            module.alloc_payload(&results[0].packed(), block),
                             results[0].class,
                         ))
                     }
@@ -1497,13 +1522,21 @@ where
                     Some(ComputeValue::Buffer(payload, class)) => {
                         // SAFETY: the buffer value was just read out of `module`, so its
                         // payload's home block is alive for this read.
-                        match buffer_items(&payload).and_then(|items| items.get(index)) {
+                        match buffer_items(&payload)
+                            .and_then(|items| element_bytes(class, items, index))
+                        {
                             // The element becomes the value its class says it is
-                            // — the buffer's own class, which is what says
-                            // whether the word is an `Int` or an `f32`'s bits.
-                            Some(&value) => {
-                                <P::Value as From<LowValue>>::from(element_value(class, value))
-                            }
+                            // — the buffer's own class, which is what says how
+                            // many bytes the element occupies and how to read
+                            // them.
+                            Some(bytes) => match element_value(class, bytes) {
+                                Some(value) => <P::Value as From<LowValue>>::from(value),
+                                None => {
+                                    return <P::Value as From<LowValue>>::from(
+                                        LowValue::Parameterized,
+                                    );
+                                }
+                            },
                             None => {
                                 return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                             }
@@ -1591,14 +1624,15 @@ where
                         let Some(items) = buffer_items(&payload) else {
                             return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                         };
-                        // The buffer's own class says how each word is read:
-                        // an integer value, or an `f32`'s bits.
+                        // The buffer's own class says how each element is read:
+                        // an integer value, or an `f32`'s bits — and, through
+                        // its width, how many bytes each element occupies.
                         match class {
-                            ScalarClass::Int => ScalarData::Int(items.to_vec()),
+                            ScalarClass::Int => ScalarData::Int(unpack_elements(class, items)),
                             ScalarClass::Float => ScalarData::Float(
-                                items
-                                    .iter()
-                                    .map(|word| f32::from_bits(*word as u32))
+                                unpack_elements(class, items)
+                                    .into_iter()
+                                    .map(|word| f32::from_bits(word as u32))
                                     .collect(),
                             ),
                         }
@@ -3196,7 +3230,7 @@ fn const_bits(class: ScalarClass, value: i64) -> i64 {
         // Exact for every value a fragment carries as an integer: buffer
         // positions are ordinals and the loop index is bounded by
         // `MAX_PARALLEL_ELEMENTS`, both far below 2^24.
-        ScalarClass::Float => float_word(value as f32),
+        ScalarClass::Float => float_bits(value as f32),
     }
 }
 
@@ -3318,7 +3352,7 @@ where
             // same `Const`, because the fragment's class is what says how the
             // opcode reads them (`docs/notes/floating-point.md` §3.4, §4.4).
             Some(LowValue::Float(f)) => {
-                body.push(KernelInstr::Const(float_word(f)));
+                body.push(KernelInstr::Const(float_bits(f)));
                 return Ok(());
             }
             _ => {}
@@ -4297,7 +4331,16 @@ impl ScalarValue {
     fn float(value: f32) -> Self {
         ScalarValue {
             class: ScalarClass::Float,
-            bits: float_word(value),
+            bits: float_bits(value),
+        }
+    }
+
+    /// The value as the language's own scalar: an integer is the `USize` it
+    /// always was, an `f32` its `Float`.
+    fn low(self) -> LowValue {
+        match self.class {
+            ScalarClass::Int => LowValue::USize(self.bits as usize),
+            ScalarClass::Float => LowValue::Float(f32::from_bits(self.bits as u32)),
         }
     }
 
@@ -4557,9 +4600,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let scalar = |value: &ScalarValue| {
-        <P::Value as From<LowValue>>::from(element_value(value.class, value.bits))
-    };
+    let scalar = |value: &ScalarValue| <P::Value as From<LowValue>>::from(value.low());
     let Some((first, rest)) = results.split_first() else {
         // A fragment always leaves at least one value, so an empty run is not
         // reachable; stay lazy rather than fabricating a value for it.
@@ -5594,15 +5635,28 @@ fn run_on_installed_backend(
     // has, so a chain of kernels pays one upload for the whole chain rather than
     // one per link.
     //
-    // **The host slot is the buffer's words, and its class is the fragment's.**
-    // `BufferSlot` carries a raw bit payload and no class of its own (staying
-    // `Eq`, and staying one variant for every backend), so the class a backend
-    // reads a host slot as is the one the fragment declares for that position —
-    // which is exactly why [`Self::check_input_classes`] runs first.
+    // **The host slot is the buffer's packed elements, and its class is the
+    // fragment's.** `BufferSlot` carries a raw byte payload and no class of its
+    // own, so the bytes a backend reads a host slot as are the ones the class's
+    // width packs — which is exactly why [`check_input_classes`] runs first.
+    // The packed payloads are named first rather than built in the slot
+    // expression: a slot borrows its bytes, so they have to outlive it.
+    let payloads: Vec<Vec<u8>> = inputs
+        .iter()
+        .filter_map(|input| match input {
+            RunInput::Host(buffer) => Some(buffer.packed()),
+            RunInput::Resident(_) => None,
+        })
+        .collect();
+    let mut host = 0;
     let slots: Vec<BufferSlot> = inputs
         .iter()
         .map(|input| match input {
-            RunInput::Host(buffer) => BufferSlot::Host(&buffer.words),
+            RunInput::Host(_) => {
+                let slot = BufferSlot::Host(&payloads[host]);
+                host += 1;
+                slot
+            }
             RunInput::Resident(resident) => BufferSlot::Resident(resident.id),
         })
         .collect();
@@ -5825,7 +5879,7 @@ fn run_parallel_kernel(
                     ScalarData::Int(elements) => host_inputs.push(BufferWords::ints(elements)),
                     ScalarData::Float(elements) => host_inputs.push(BufferWords {
                         class,
-                        words: elements.into_iter().map(float_word).collect(),
+                        words: elements.into_iter().map(float_bits).collect(),
                     }),
                 }
             }
@@ -6178,7 +6232,7 @@ fn import_index(class: ScalarClass, value: &wasmi::Val) -> usize {
 fn value_word(class: ScalarClass, value: &wasmi::Val) -> i64 {
     match class {
         ScalarClass::Int => value.i64().unwrap_or(0),
-        ScalarClass::Float => float_word(value.f32().map_or(0.0, |bits| bits.to_float())),
+        ScalarClass::Float => float_bits(value.f32().map_or(0.0, |bits| bits.to_float())),
     }
 }
 
@@ -6329,6 +6383,10 @@ mod parallel_launch_tests {
     }
 
     /// What one input slot was, as the backend was handed it.
+    ///
+    /// A host slot records its **elements**, which is the payload over the
+    /// class's width ([`ScalarClass::byte_width`]) — a host slot is bytes, and a
+    /// count of bytes is not a count of the elements a run reads.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Slot {
         Host(usize),
@@ -6349,7 +6407,9 @@ mod parallel_launch_tests {
                 inputs
                     .iter()
                     .map(|slot| match slot {
-                        BufferSlot::Host(data) => Slot::Host(data.len()),
+                        BufferSlot::Host(data) => {
+                            Slot::Host(data.len() / ScalarClass::Int.byte_width())
+                        }
                         BufferSlot::Resident(id) => Slot::Resident(id.0),
                     })
                     .collect(),

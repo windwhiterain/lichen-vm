@@ -541,10 +541,10 @@ pub enum RunArgument {
     /// alternative is a borrow that would make every refusal in the calling loop
     /// unreachable to write.
     ///
-    /// **The class travels with the words**, because a float buffer's payload is
-    /// `f32` bits in the same `i64` words an integer one uses: a run that dropped
-    /// the class would hand a device integers where the program computed floats.
-    Buffer { class: ScalarClass, data: Vec<i64> },
+    /// **The class travels with the bytes**, because what an element occupies is
+    /// [`ScalarClass::byte_width`] and not a constant: a run that dropped the
+    /// class would hand a device integers where the program computed floats.
+    Buffer { class: ScalarClass, data: Vec<u8> },
     /// A buffer a previous run left on a device, handed over as the id it is.
     Resident(ResidentBuffer),
     /// A number, which a dispatch may read as its extent.
@@ -677,8 +677,9 @@ fn returned_role(value: &Value<'_>) -> Result<RunResult, GraphRefusal> {
 /// A returned value, already separated by the role it is in.
 pub enum RunResult {
     /// Data on the host, which becomes an arena buffer — with the class its
-    /// elements are, so the buffer the caller builds says what it holds.
-    Buffer { class: ScalarClass, data: Vec<i64> },
+    /// elements are, so the buffer the caller builds says what it holds, and the
+    /// bytes its class's width packs.
+    Buffer { class: ScalarClass, data: Vec<u8> },
     /// A buffer still on a device, which stays a resident id.
     Resident(ResidentBuffer),
     /// A number, which a function is allowed to have returned — its own extent,
