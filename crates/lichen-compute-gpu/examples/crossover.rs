@@ -19,13 +19,18 @@ use std::time::Instant;
 
 use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X};
 use lichen_kernel_ir::BufferSlot;
-use lichen_kernel_ir::{IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, Pending};
+use lichen_kernel_ir::{
+    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, Pending, ScalarClass,
+};
 
 /// `out[i] = in[i] + in[i] + 1` — enough arithmetic that the run is not purely
 /// launch overhead, and the same shape the acceptance tests use.
 fn fragment() -> KernelFragment {
     KernelFragment {
-        param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
         body: vec![
             KernelInstr::Const(0),
             KernelInstr::LocalGet(1),
@@ -43,6 +48,8 @@ fn fragment() -> KernelFragment {
         ],
         inputs: 1,
         outputs: 1,
+        input_classes: vec![ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
         results: 1,
         int_width: IntWidth::I64,
     }

@@ -5,14 +5,18 @@
 //! that they exercise the crate exactly as a backend would: through its public
 //! surface only.
 
-use lichen_kernel_ir::{IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape};
+use lichen_kernel_ir::{
+    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ScalarClass,
+};
 
 fn fragment() -> KernelFragment {
     KernelFragment {
-        param_shape: KernelShape::Scalar,
+        param_shape: KernelShape::Scalar(ScalarClass::Int),
         body: vec![KernelInstr::Const(1), KernelInstr::LocalGet(0)],
         inputs: 0,
         outputs: 0,
+        input_classes: Vec::new(),
+        output_classes: Vec::new(),
         results: 1,
         int_width: IntWidth::I64,
     }
@@ -29,11 +33,19 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
     // be constructed, and this test cannot reach that cell.  The invariant it
     // guards is the reason the field is hashed at all — see the `IntWidth` docs
     // for why the width has to be declared rather than assumed.
+    //
+    // A leaf's class needs no cell of its own here: it rides on `param_shape`,
+    // which is hashed whole, and the fragment-wide `IntWidth` gap above is the
+    // one this list cannot reach.  The two buffer-class lists are their own
+    // fields, so each gets one.
     let mut variants: Vec<(&str, KernelFragment)> = vec![
         (
             "param_shape",
             KernelFragment {
-                param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
+                param_shape: KernelShape::Tuple(vec![
+                    KernelShape::Scalar(ScalarClass::Int),
+                    KernelShape::Scalar(ScalarClass::Int),
+                ]),
                 ..base.clone()
             },
         ),
@@ -55,6 +67,20 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
             "outputs",
             KernelFragment {
                 outputs: 1,
+                ..base.clone()
+            },
+        ),
+        (
+            "input_classes",
+            KernelFragment {
+                input_classes: vec![ScalarClass::Int],
+                ..base.clone()
+            },
+        ),
+        (
+            "output_classes",
+            KernelFragment {
+                output_classes: vec![ScalarClass::Float],
                 ..base.clone()
             },
         ),
@@ -99,18 +125,23 @@ fn the_digest_is_a_function_of_the_fragment_alone() {
 fn a_domain_flattens_to_exactly_its_leaf_count() {
     // Load-bearing for every backend: the parameter list is built from this
     // count, so a backend that flattened differently would call one kernel with
-    // another's arguments.
-    assert_eq!(KernelShape::Scalar.flat_arity(), 1);
+    // another's arguments.  A leaf's class does not move the count: a float
+    // local and an integer local are one local each.
+    assert_eq!(KernelShape::Scalar(ScalarClass::Int).flat_arity(), 1);
+    assert_eq!(KernelShape::Scalar(ScalarClass::Float).flat_arity(), 1);
     assert_eq!(KernelShape::Tuple(vec![]).flat_arity(), 0);
     assert_eq!(
-        KernelShape::Tuple(vec![KernelShape::Scalar; 3]).flat_arity(),
+        KernelShape::Tuple(vec![KernelShape::Scalar(ScalarClass::Int); 3]).flat_arity(),
         3
     );
     // A nested domain, which a `jit` of a `((Int, Int), Int)` produces.
     assert_eq!(
         KernelShape::Tuple(vec![
-            KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
-            KernelShape::Scalar,
+            KernelShape::Tuple(vec![
+                KernelShape::Scalar(ScalarClass::Int),
+                KernelShape::Scalar(ScalarClass::Int),
+            ]),
+            KernelShape::Scalar(ScalarClass::Int),
         ])
         .flat_arity(),
         3

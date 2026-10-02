@@ -40,7 +40,7 @@ use std::sync::{Mutex, OnceLock};
 use lichen_graph_ir::{
     Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Value, ValueId,
 };
-use lichen_kernel_ir::KernelFragment;
+use lichen_kernel_ir::{KernelFragment, ScalarClass};
 
 use super::{Backend, ComputeValue, ResidentBuffer};
 
@@ -646,9 +646,17 @@ fn returned_role(value: &Value<'_>) -> Result<RunResult, GraphRefusal> {
         // and means a readback that somehow met a submission would name the
         // buffer rather than disagree with the runner about what it is.
         Value::Device { id, count } | Value::Pending { id, count, .. } => {
+            // A graph's own value table carries no class — a `Value` is an id, a
+            // count, host data or a number, and the buffers a graph produces are
+            // the `i64` buffers its fragments declare. So an integer is the
+            // answer the table can support, and it is the same one every
+            // fragment in this ABI declares today
+            // (`docs/notes/floating-point.md` §3.8, §4.4). A class-carrying
+            // device value is what would move this.
             RunResult::Resident(ResidentBuffer {
                 id: *id,
                 count: *count,
+                class: ScalarClass::Int,
             })
         }
         Value::Int(number) => usize::try_from(*number)

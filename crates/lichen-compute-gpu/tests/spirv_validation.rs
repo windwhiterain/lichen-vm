@@ -17,7 +17,9 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use lichen_compute_gpu::spirv::{self, Binding};
-use lichen_kernel_ir::{IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape};
+use lichen_kernel_ir::{
+    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ScalarClass,
+};
 
 /// The validator, spelled the way it is installed on `PATH`.
 const VALIDATOR: &str = "spirv-val";
@@ -31,7 +33,10 @@ const VALIDATOR: &str = "spirv-val";
 /// pushed before it.
 fn adds_one() -> KernelFragment {
     KernelFragment {
-        param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
         body: vec![
             KernelInstr::Const(0),       // out_pos, in the *output* space
             KernelInstr::LocalGet(1),    // the index
@@ -45,6 +50,8 @@ fn adds_one() -> KernelFragment {
         ],
         inputs: 1,
         outputs: 1,
+        input_classes: vec![ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
         results: 1,
         int_width: IntWidth::I64,
     }

@@ -17,12 +17,16 @@ use lichen_compute_gpu::GpuContext;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
+    ScalarClass,
 };
 
 /// `out[i] = in[i] + in[i] + 1`.
 fn adds() -> KernelFragment {
     KernelFragment {
-        param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
         body: vec![
             KernelInstr::Const(0),
             KernelInstr::LocalGet(1),
@@ -40,6 +44,8 @@ fn adds() -> KernelFragment {
         ],
         inputs: 1,
         outputs: 1,
+        input_classes: vec![ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
         results: 1,
         int_width: IntWidth::I64,
     }
@@ -50,9 +56,9 @@ fn adds() -> KernelFragment {
 fn sums() -> KernelFragment {
     KernelFragment {
         param_shape: KernelShape::Tuple(vec![
-            KernelShape::Scalar,
-            KernelShape::Scalar,
-            KernelShape::Scalar,
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
         ]),
         body: vec![
             KernelInstr::Const(0),    // out_pos
@@ -71,6 +77,8 @@ fn sums() -> KernelFragment {
         ],
         inputs: 2,
         outputs: 1,
+        input_classes: vec![ScalarClass::Int, ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
         results: 1,
         int_width: IntWidth::I64,
     }

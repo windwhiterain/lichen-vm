@@ -5,13 +5,15 @@
 //! a machine without one.
 
 use lichen_compute_gpu::spirv::{self, Binding, SpirvRefusal};
-use lichen_kernel_ir::{IntWidth, KernelFragment, KernelInstr, KernelShape};
+use lichen_kernel_ir::{IntWidth, KernelFragment, KernelInstr, KernelShape, ScalarClass};
 
 /// A one-output fragment over `(input, index)`.
 ///
 /// `inputs` is taken rather than assumed because the tail decides it — a tail
 /// that reads position 0 needs one buffer and a tail that reads nothing needs
-/// none — and these tests exist precisely to be about the tail.
+/// none — and these tests exist precisely to be about the tail. The classes are
+/// the only class this ABI has: an `i64` buffer element
+/// (`docs/notes/floating-point.md` §3.8).
 fn body_with(inputs: usize, tail: Vec<KernelInstr>) -> KernelFragment {
     let mut body = vec![
         KernelInstr::Const(0),    // out_pos, in the *output* space
@@ -19,10 +21,15 @@ fn body_with(inputs: usize, tail: Vec<KernelInstr>) -> KernelFragment {
     ];
     body.extend(tail);
     KernelFragment {
-        param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
         body,
         inputs,
         outputs: 1,
+        input_classes: vec![ScalarClass::Int; inputs],
+        output_classes: vec![ScalarClass::Int],
         results: 1,
         int_width: IntWidth::I64,
     }
@@ -90,7 +97,10 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
     // Read input 1, write output 0. With the position spaces collapsed, that
     // write would land on input 0 and the output would stay zero.
     let fragment = KernelFragment {
-        param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
         body: vec![
             KernelInstr::Const(0),    // out_pos, in the *output* space
             KernelInstr::LocalGet(1), // idx
@@ -102,6 +112,8 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
         ],
         inputs: 2,
         outputs: 1,
+        input_classes: vec![ScalarClass::Int, ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
         results: 1,
         int_width: IntWidth::I64,
     };
@@ -140,13 +152,18 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
 fn an_unbalanced_body_is_refused() {
     // No operands pushed before the operator, so it pops from an empty stack.
     let fragment = KernelFragment {
-        param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
         body: vec![
             KernelInstr::Bin(lichen_kernel_ir::KernelBin::Add),
             KernelInstr::Const(0),
         ],
         inputs: 0,
         outputs: 1,
+        input_classes: Vec::new(),
+        output_classes: vec![ScalarClass::Int],
         results: 1,
         int_width: IntWidth::I64,
     };

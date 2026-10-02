@@ -12,7 +12,7 @@ mod common;
 
 use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X, RunError};
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, Pending,
+    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, Pending, ScalarClass,
 };
 
 /// A fragment over `(input, index)` — the shape a single-input parallel kernel has.
@@ -23,10 +23,15 @@ use lichen_kernel_ir::{
 /// the one a reader has to be able to check against the body by eye.
 fn fragment(body: Vec<KernelInstr>) -> KernelFragment {
     KernelFragment {
-        param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
         body,
         inputs: 1,
         outputs: 1,
+        input_classes: vec![ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
         results: 1,
         int_width: IntWidth::I64,
     }
