@@ -314,6 +314,27 @@ a change to one program. A silent fallback cannot offer either.
 
 ## 8. The order of the work
 
+**Where this stands.** The decisions and the shape are settled and the pieces are
+being built in the order §8 gives. Landed so far:
+
+- **The IR** — `KernelBody` with structured transfers over the same pure stack
+  machine, and a validator that a backend calls before it reads one. A label
+  defined twice, arrived at but never defined, or shared as two loops' exit is
+  refused, and a loop's declared header must be the entry of the block holding
+  it — which is what makes a zero-trip loop correct rather than a dropped
+  branch.
+- **The wasm backend** — it walks the structure and emits it. An `if` frame is
+  the join, a `while` is a `loop` wrapped in a `block` (so its two exits agree),
+  and a loop-carried value is a local, because a `br` to a loop label takes no
+  operands. The straight-line path is byte-identical to `dev`.
+- **The `@loop` keyword** — through the lexer, parser, AST and frontend, with
+  `@` reserved as the sigil so the next keyword is free. The absence of it is
+  still the unroll, and that is unchanged.
+
+Not written: the evaluator's loop recording (Stage 0b) and the SPIR-V emitter
+(Stage 1c). The SPIR-V half is where the `single-`invariant actually has to be
+replaced, and it is the largest single piece left.
+
 **Stage 0 — the `loop` keyword and the evaluator's choice.** The surface lands
 first, and it is the smallest thing that can be observed working: a `loop` keyword
 on a binding, carried from the lexer to the highlevel IR, so the evaluator can
