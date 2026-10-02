@@ -40,7 +40,7 @@ Every note opens with a `> Status:` line:
 | [Architecture overview](notes/overview.md) | — | current |
 | [Lowlevel VM](notes/lowlevel-vm.md) | `lichen-lowlevel` | current |
 | [Floating point](notes/floating-point.md) | `lichen-lowlevel` (`LowValue`/`LowShape`/`codec`), `lichen-highlevel` (`shape`/`program`), `lichen-language-lex`/`-parser`, `lichen-render`, `lichen-kernel-ir` | proposed (a ninth kind marker; a compiler plugin, not a native one) |
-| [A lichen program as a whiting scene](notes/whiting-scene-compiler.md) | `lichen-language` (`session`/`compile`), `lichen-lowlevel`, external `whiting-definition`/`-scene` | proposed (phase one is document-to-delta, with no device) |
+| [A lichen program as a whiting scene](notes/whiting-scene-document.md) | `lichen-language` (`session`/`compile`), `lichen-lowlevel`, external `whiting-definition` | proposed (the seam is one scene document; no compiler impl, no device) |
 | [Static modules & registry](notes/static-modules.md) | `lichen-lowlevel`, `lichen-language` (`persist`) | current |
 | [The computational operators](notes/operators.md) | `lichen-language-lex`/`-parser`/`-language`, `lichen-highlevel` (`ir`/`program`/`checker`), `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu` | current |
 | [The compute JIT on low types](notes/compute-jit-low-types.md) | `lichen-compute` | current |

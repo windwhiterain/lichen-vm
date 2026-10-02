@@ -12,7 +12,7 @@
 > `crates/lichen-language-parser/src/`, `crates/lichen-render/src/render/`
 > (`struct_field_names`), `crates/lichen-kernel-ir/src/lib.rs` (`KernelBin`,
 > `IntWidth`), and [language-spec](../language-spec.md) for the syntax.
-> The demand is recorded in [whiting-scene-compiler](whiting-scene-compiler.md);
+> The demand is recorded in [whiting-scene-document](whiting-scene-document.md);
 > the decision rule this has to be argued against is
 > [plugin-taxonomy](plugin-taxonomy.md).
 
@@ -36,7 +36,7 @@ So a program cannot write a real number: `1.5` lexes as `IntLit(1)`, `Dot`,
 `crates/lichen-language-lex/src/lib.rs:276`), and `Dot` is field access.
 
 The first consumer that needs this is a scene document for
-[whiting-scene-compiler](whiting-scene-compiler.md), where every visually
+[whiting-scene-document](whiting-scene-document.md), where every visually
 meaningful number — a position, a colour, an intensity, a radius — is a float,
 and where a mesh is a flat run of four-byte components. That note is the demand;
 this note is the change.
@@ -216,7 +216,7 @@ no handle has to survive being filed under an occurrence path.
 
 ## See also
 
-- [whiting-scene-compiler](whiting-scene-compiler.md) — the demand for this
+- [whiting-scene-document](whiting-scene-document.md) — the demand for this
 - [plugin-taxonomy](plugin-taxonomy.md) — why this is a compiler plugin
 - [operators](operators.md) — the operator set §3.7 edits
 - [lowlevel-low-types](lowlevel-low-types.md) — `LowShape` and what a backend traces
