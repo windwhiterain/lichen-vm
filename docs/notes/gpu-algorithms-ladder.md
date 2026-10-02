@@ -378,6 +378,14 @@ is a call expressible in each body shape; what does an un-expanded `CallKernel`
 chain cost against the same arithmetic inlined — and prints a refusal or a
 number for each.
 
+**And the probe's four cases are the acceptance suite of the thing that answers
+it.** The decidable cases (`RECURSIVE_LITERAL`, `HELPER_INDEX_ARG`) pass today
+because the deep pass expands them. The two that decide gap 2's ceiling —
+`RECURSIVE_INLINE` and `LOOP_RUNTIME_COUNT`, both a trip count the kernel's own
+index supplies — are refused, and moving them to a number on **both** backends is
+how [loop conversion](loop-conversion.md) would be known to have landed. That
+note is where the design is; nothing here needs to change for it.
+
 ## What the ladder did not try
 
 Sorting, atomics, and anything with a data-dependent trip count — all three are

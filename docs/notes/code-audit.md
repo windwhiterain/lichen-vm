@@ -2627,8 +2627,14 @@ Its own status, and the two ceilings a static expansion runs into instead, are i
 [`gpu-algorithm-roadmap.md`](gpu-algorithm-roadmap.md#41-axis-b-already-in-the-language-and-what-it-does-not-reach)
 §4.1; `P1-39` is the other half, because in a kernel the operator also needs the
 body applied before it is lowered, and `P1-40` is what a *dynamic* loop removes by
-construction. Today the only working form is the annotation this entry records as
-the escape:
+construction. **[Loop conversion](loop-conversion.md) is the design that reaches
+the kernel case, and it supersedes the `loop f n` surface this entry names** — a
+`loop` is a one-node cycle in its general form, and the natural formulations this
+item would have to annotate (Euclid below, `mutual_recursion.lichen`) are not of
+the form `T -> T` repeated `n` times. It does not fix this item: the marker
+supplies no type, so the annotation is still the escape for a two-argument
+self-reference on the **host**. Today the only working form is the annotation this
+entry records as the escape:
 
 ```text
 loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x))
@@ -3067,7 +3073,11 @@ one that crashes. Both ceilings are why
 §4.1 measures an unrolled loop before recommending it. Note that a *dynamic* loop
 — one the JIT emits into the backend IR rather than expanding — removes both
 ceilings by construction, which is the argument for `P1-33`'s operator being a
-builtin rather than a library function.
+builtin rather than a library function. **[Loop conversion](loop-conversion.md)
+keeps that argument and changes the operator**, and its Stage 1 is also the fix
+shape for the second ceiling: the structured body is what turns the emitter's
+400-to-1000 **crash** into a named refusal, independently of whether any loop is
+ever written.
 
 ## P2 — architecture
 
