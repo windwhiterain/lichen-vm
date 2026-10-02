@@ -110,24 +110,28 @@ deferral fire for the struct rows alone would leave the silent half in place.
 ## 5. What is not isolated
 
 **Why `array<Int, 3>` and `(Int, Int)` behave like `Int` rather than like
-`struct<…>` is unexplained.** The obvious account — "the deferral fires for the
-universe and declines for every other bare marker" — does not survive two
-measurements:
+`struct<…>` is unexplained.**
 
-- `type_of` over the four kinds gives `<Type, Type, TypeTuple, Type>` for
-  `(Int, array<Int, 3>, (Int, Int), struct<.x Int>)`. So three of them report
-  the *same* type (`Type`), yet one of those three fails.
-- The failing comparison names `TypeStruct` as the found side, and
-  `type_of struct<.x Int>` is `Type` — so the found side is **not**
-  `type_of` of the value the slot holds, and the marker I assumed was being
-  compared is not the one in play.
+An earlier version of this section argued from two *printed* type names, and
+that argument is **withdrawn**. [type-rendering-inconsistent](type-rendering-inconsistent.md)
+shows a type value's spelling depends on its form: in one and the same
+diagnostic slot, `struct<.a Int>`, `array<Int, 3>` and `Int -> Int` print the
+bare tags `TypeStruct`, `TypeArray` and `TypeFunction`, while `(Int, Int)` prints
+the structured `<Type, Type>`. A printed name is therefore not an identity test,
+and the two measurements that used to stand here settled nothing:
 
-So the axis is real and reproducible but the mechanism behind it is not yet
-known. Pinning it needs instrumentation — a probe inside `class_holds_type`
-printing the representative's value, `kind_of`'s answer, and the
-`is_self_referential` verdict, for each of the five rows — or a targeted unit
-test over `unify`, neither of which has been written. **Do not build a fix on
-§3 alone.**
+- `type_of` over the four kinds printed `<Type, Type, TypeTuple, Type>`; and
+- the failing comparison printed `TypeStruct` where `type_of struct<.x Int>`
+  printed `Type`.
+
+Neither says which node the unifier actually compared. The axis — the build
+outcome splitting by the form in the slot — is real and reproducible; the
+mechanism behind it is not known. Pinning it needs instrumentation: a probe
+inside `class_holds_type` printing the representative's value, `kind_of`'s
+answer, and the `is_self_referential` verdict, for each of the five rows of §1.
+A targeted unit test over `unify` would do as well. Neither is written.
+**Do not build a fix on §3 alone, and do not let a printed type name decide any
+of it.**
 
 ## 6. Scope
 

@@ -48,6 +48,7 @@ Every note opens with a `> Status:` line:
 | [Type-system cleanup plan](notes/type-system-cleanup-plan.md) | `lichen-lowlevel`, `lichen-highlevel`, `lichen-compute` | current (Phases 0–5 complete) |
 | [Checker encoding: unstable at the `lichen-compute` boundary](notes/checker-encoding-instability.md) | `lichen-highlevel` (`shape`), `lichen-compute` | current (narrowed: the domain read is on low types; the body walk is the residue) |
 | [Deferred unification does not recognise every form of a type value](notes/defer-pending-type-forms.md) | `lichen-lowlevel` (`equality`), `lichen-highlevel` (`shape`) | current — **defect open**; the split outcome is measured, the mechanism behind it is not isolated |
+| [A type value's rendering depends on its form](notes/type-rendering-inconsistent.md) | `lichen-render` (`render/type_printer`), `lichen-language` (`render`) | current — **defect open**; the four-way split is measured, which path fires for each row is not traced |
 | [Extensible attributes](notes/attributes.md) | `lichen-highlevel` (`attr`/`shape`/`ir`/`checker`), `lichen-language` (`program`/`compile`) | current |
 | [Doc attribute rework plan](notes/doc-attribute-rework-plan.md) | `lichen-language`, `lichen-highlevel` (`attr`), `lichen-language-server` (`analysis`) | current |
 | [The compiler-plugin model](notes/compiler-plugin.md) | `lichen-utils` (`extend`), `lichen-lowlevel`, `lichen-highlevel` (`program`/`native`), `lichen-compute` | current |
