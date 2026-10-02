@@ -7090,19 +7090,28 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
-    /// `$range(n)` — the loop index of the current parallel invocation.  Gate
-    /// `n` as `Int`; the operation is kernel-only (lowers to the index param),
-    /// so the result type is `Int`.
+    /// `$range(n)` — the loop index of the current parallel invocation.
+    ///
+    /// **The index is the class the body computes in, and so is the count it
+    /// is taken over.**  A parallel fragment's two scalar parameters are both
+    /// that class — `compile_parallel_fragment` writes its `param_shape` as
+    /// `[Scalar(class), Scalar(class)]` — the emitter pushes the index local
+    /// unchanged, and the host converts both roles back to ordinals
+    /// (`const_bits(class, …)`, `run_parallel_range`).  Unifying the index with
+    /// the count states that once, where a committed `Int` would state the
+    /// opposite of what the fragment's own ABI carries
+    /// (`docs/notes/floating-point.md` §4.2, §4.4).
     fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let n = &args[0];
-        ctx.check_unify(n.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
+        let class = ctx.fresh();
+        ctx.check_unify(n.ty, class, loc.clone(), DiagKind::Guard);
         let operands = ctx.array_node(&[n.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Range), Some(operands));
-        let pair = ctx.array_node(&[op, ctx.int_type()]);
+        let pair = ctx.array_node(&[op, class]);
         NativeApply {
             node: pair,
             val: None,
-            ty: ctx.int_type(),
+            ty: class,
         }
     }
 }
@@ -7114,9 +7123,10 @@ where
     P::Operator: From<ComputeOperator>,
 {
     /// `$read(buf, i)` — read one buffer element.  Buffer gate
-    /// `buf : [?b, [TypeBuffer, Type]]` (binding the element type), index gate
-    /// `Int`; the result is the element type `?b`.  In-kernel this lowers to the
-    /// host `read` import; at the VM it reads a buffer value's element.
+    /// `buf : [?b, [TypeBuffer, Type]]` (binding the element type); the result
+    /// is the element type `?b`, and **the index takes that same class**.  In
+    /// a kernel body this lowers to the host `read` import; at the VM it reads
+    /// a buffer value's element.
     ///
     /// **The wrapper is not annotated, and that is what makes a `buffer<Float>`
     /// readable.**  A buffer's element class is a fact of the *value* — the
@@ -7127,6 +7137,13 @@ where
     /// which is why a program that only forwards a buffer prints its element as
     /// `?a` rather than as the class the value turns out to be
     /// (`docs/notes/floating-point.md` §3.7, §4.2, §4.4).
+    ///
+    /// **The index is that same cell rather than a committed `Int`.**  The ABI's
+    /// `read` import is `(class, class) -> class` — the buffer ordinal, the
+    /// index and the element are one class — so the host converts the two
+    /// ordinal roles back from it (`import_index`).  An `Int` here would pin
+    /// every cell the index shares a container with, the written value
+    /// included, which is what refused a float kernel's index.
     fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let b = &args[0];
         let i = &args[1];
@@ -7137,7 +7154,7 @@ where
         let buf_kind = ctx.kind_expr(buf_marker);
         let buf_ty = ctx.array_node(&[elem, buf_kind]);
         ctx.check_unify(b.ty, buf_ty, loc.clone(), DiagKind::Guard);
-        ctx.check_unify(i.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
+        ctx.check_unify(i.ty, elem, loc.clone(), DiagKind::Guard);
         let operands = ctx.array_node(&[b.value, i.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Read), Some(operands));
         let pair = ctx.array_node(&[op, elem]);
@@ -7156,29 +7173,37 @@ where
     P::Operator: From<ComputeOperator>,
 {
     /// `$write(n, i, val)` — a pending parallel write into the output buffer at
-    /// index `i` (length `n`).  Gate `n` and `i` as `Int`, and `val` as the
-    /// element type `?b`; the result is a `Write` type `[?b, [TypeWrite, Type]]`.
+    /// index `i` (length `n`).  The length, the index and the value are **one
+    /// class**, and the result is a `Write` type `[?b, [TypeWrite, Type]]`.
     /// Kernel-only (lowers to the host `write` import).
+    ///
+    /// **The `Write`'s element type is the written value's own**, so a
+    /// `buffer<Float>` is expressible and a `buffer<Int>` is unchanged: the
+    /// written value's type is the buffer's element type, with nothing to
+    /// choose between them (`docs/notes/floating-point.md` §3.7, §4.2).
+    ///
+    /// It is a *fresh cell* rather than a fixed `Int` because a float write
+    /// has to be able to name its class, and the cell is what the run
+    /// resolves from the value it produces when nothing pins it — the same
+    /// mechanism `plrun`'s result type already relies on.  A `val` whose own
+    /// type is undecided leaves the cell undecided, which is why an index
+    /// function that only forwards a buffer read keeps working: its element
+    /// class is read off the buffer at run time, and its emission defaults to
+    /// `Int` exactly as it always did.
+    ///
+    /// **The length and the index take that same cell rather than `Int`.**  The
+    /// ABI's `write` import is `(class, class, class)`, the length is the count
+    /// and the index the loop index, and the host converts both back from the
+    /// class (`const_bits`, `import_index`); a committed `Int` here would pin
+    /// the written value's cell with it, which is what refused a float write
+    /// (`docs/notes/floating-point.md` §4.2, §4.4).
     fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let n = &args[0];
         let i = &args[1];
         let val = &args[2];
-        ctx.check_unify(n.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
-        ctx.check_unify(i.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
-        // **The `Write`'s element type is the written value's own**, so a
-        // `buffer<Float>` is expressible and a `buffer<Int>` is unchanged: the
-        // written value's type is the buffer's element type, with nothing to
-        // choose between them (`docs/notes/floating-point.md` §3.7, §4.2).
-        //
-        // It is a *fresh cell* rather than a fixed `Int` because a float write
-        // has to be able to name its class, and the cell is what the run
-        // resolves from the value it produces when nothing pins it — the same
-        // mechanism `plrun`'s result type already relies on.  A `val` whose own
-        // type is undecided leaves the cell undecided, which is why an index
-        // function that only forwards a buffer read keeps working: its element
-        // class is read off the buffer at run time, and its emission defaults to
-        // `Int` exactly as it always did.
         let elem = ctx.fresh();
+        ctx.check_unify(n.ty, elem, loc.clone(), DiagKind::Guard);
+        ctx.check_unify(i.ty, elem, loc.clone(), DiagKind::Guard);
         ctx.check_unify(val.ty, elem, loc.clone(), DiagKind::Guard);
         let write_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
             ComputeValue::TypeWrite,
