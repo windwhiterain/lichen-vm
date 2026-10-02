@@ -60,7 +60,11 @@ The samples test runs by default when testing the grammar crate directly; it can
 ## State in this branch
 
 - `tree-sitter-lichen/grammar.js` is the source of truth (updated for the `==>` table
-  separator and the `X::a` raw named read).
+  separator, the `X::a` raw named read, and the full operator set — see
+  [operators §9](operators.md#9-the-editor-grammar), which is where the `<`/`>`
+  two-token decision and its two consequences are written down).
+- `tree-sitter-lichen/queries/highlights.scm` colours every operator in that set,
+  and is mirrored in `lichen-language-zed/languages/lichen/highlights.scm`.
 - The generated `src/parser.c` etc. are **not** committed; they are regenerated on demand
   when the grammar is built.
 - The default workspace build/test and the Zed WASM build have **no** grammar/CLI coupling.

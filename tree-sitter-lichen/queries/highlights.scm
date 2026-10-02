@@ -42,7 +42,8 @@
 "cache" @keyword
 (type_of) @keyword
 
-; operators (anonymous)
+; operators (anonymous).  The full set is the language's, docs/notes/operators.md
+; §1: `+ - * / %`, the six comparisons, and `& | ^`.
 "->" @operator
 "=>" @operator
 "::" @operator
@@ -51,9 +52,25 @@
 "?" @operator
 "!" @operator
 "$" @operator
-"==" @operator
 "<=" @operator
+">=" @operator
+"==" @operator
+"!=" @operator
+"|" @operator
+"^" @operator
+"&" @operator
 "+" @operator
 "-" @operator
+"*" @operator
+"/" @operator
+"%" @operator
 "=" @operator
 "." @operator
+
+; `<` and `>` are the one pair this grammar cannot list by name: the same two
+; characters open and close every angle form (`<a, b>`, `struct<…>`, `X<e>`)
+; and are the order comparisons.  Capturing them through the comparison's
+; `operator` field is what keeps a type's own brackets out of the operator
+; colour — `x : <Int, Int>` has no operator in it.
+(binary_comparison operator: "<" @operator)
+(binary_comparison operator: ">" @operator)

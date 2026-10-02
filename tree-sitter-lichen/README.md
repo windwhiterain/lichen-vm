@@ -13,7 +13,14 @@ bracket-matching, not semantic correctness.  It:
   glossed over — the same delimiter may be read as postfix or as a fresh atom);
 - models the `@{ ... @}` preprocessor block, Lichen's only "prose" home, as a
   node so doc strings can be highlighted;
-- keeps a light operator-precedence ladder for readable trees.
+- keeps a light operator-precedence ladder for readable trees, in the language's
+  own order (see [docs/notes/operators.md](../docs/notes/operators.md) §3), with
+  one rule per level;
+- keeps `<` and `>` as **two** tokens — a glued one that opens an angle form and
+  a spaced one that is the order comparison — because the real language's rule
+  for telling them apart is the adjacency, and an LR table has no lookahead to
+  spend. That one rule is written up in
+  [operators §9](../docs/notes/operators.md#9-the-editor-grammar).
 
 ## Usage
 
