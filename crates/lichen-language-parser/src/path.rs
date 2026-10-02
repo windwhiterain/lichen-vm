@@ -114,6 +114,7 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
     match expr {
         // Leaves: no position below them.
         Expr::Int(..)
+        | Expr::Float(..)
         | Expr::Str(..)
         | Expr::TypeConst(..)
         | Expr::TypeOf(..)

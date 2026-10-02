@@ -284,6 +284,9 @@ where
     markers: Markers,
     /// The shared `[int, Type]` type expression every literal's pair carries.
     int_type: NodeId,
+    /// The shared `[float, Type]` type expression every `Float` literal's pair
+    /// (and the `Float` type constant) carries.
+    float_type: NodeId,
     /// The shared `[string, Type]` type expression every `Str` literal's pair
     /// (and the `string` type constant) carries.
     string_type: NodeId,
@@ -431,6 +434,8 @@ where
     pub type_marker: NodeId,
     /// The shared `[int, Type]` type expression.
     pub int_type: NodeId,
+    /// The shared `[float, Type]` type expression.
+    pub float_type: NodeId,
     /// The shared `[string, Type]` type expression.
     pub string_type: NodeId,
     /// The canonical universe `[Type, ↺]`.
@@ -616,6 +621,7 @@ where
             force_failed: false,
             markers: Markers::default(),
             int_type: NodeId::default(),
+            float_type: NodeId::default(),
             string_type: NodeId::default(),
             type_expr: NodeId::default(),
             zero_value: NodeId::default(),
@@ -632,6 +638,7 @@ where
         // conflict).
         checker.module.evaluate_node_deep(checker.type_expr, None);
         checker.module.evaluate_node_deep(checker.int_type, None);
+        checker.module.evaluate_node_deep(checker.float_type, None);
         checker.module.evaluate_node_deep(checker.string_type, None);
         let root = checker.ir.root;
         // Option B: the top-level statements are the "stack of user-written
@@ -792,6 +799,7 @@ where
             string_marker: checker.markers.string_marker,
             type_marker: checker.markers.type_marker,
             int_type: checker.int_type,
+            float_type: checker.float_type,
             string_type: checker.string_type,
             type_expr: checker.type_expr,
             diary: checker.diary,
@@ -854,6 +862,7 @@ where
         );
         self.type_expr = universe;
         self.int_type = self.array_node(root, &[self.markers.int_marker, self.type_expr]);
+        self.float_type = self.array_node(root, &[self.markers.float_marker, self.type_expr]);
         self.string_type = self.array_node(root, &[self.markers.string_marker, self.type_expr]);
         // The two positional-read constants, `Index(pair, 0)` and
         // `Index(pair, 1)`'s subscripts.  Allocated here, before any
@@ -1497,6 +1506,10 @@ where
 
     fn int_type(&self) -> NodeId {
         self.int_type
+    }
+
+    fn float_type(&self) -> NodeId {
+        self.float_type
     }
 
     fn string_type(&self) -> NodeId {

@@ -27,7 +27,7 @@ pub use attr::{AttrExt, AttrSet, AttrSpec, NoAttr};
 pub use native::{NativeApply, NativeArg, NativeOp, NativeOps, no_native_ops};
 pub use plugin::NativePlugin;
 pub use program::{
-    Ctx, HighGlobal, HighGlobalExt, HighProgram, HighProgramLiteral, HighProgramOperator,
-    HighProgramValue, IntLit, IntTypeLit, LiteralBuild, LiteralExt, ProgramImpl, TypeOperator,
-    TypeTypeLit, TypeValue, ValueType,
+    Ctx, FloatLit, FloatTypeLit, HighGlobal, HighGlobalExt, HighProgram, HighProgramLiteral,
+    HighProgramOperator, HighProgramValue, IntLit, IntTypeLit, LiteralBuild, LiteralExt,
+    ProgramImpl, TypeOperator, TypeTypeLit, TypeValue, ValueType,
 };
