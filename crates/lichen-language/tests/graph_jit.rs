@@ -598,3 +598,76 @@ out = compute.collect (compute.graphrun built (3,))
          {plain:?}"
     );
 }
+
+/// The registry must not answer "which backend" for a graph it did not record.
+///
+/// **The two graphs below are the same shape, and that is the point.** A graph is
+/// content-addressed on its shape and the backend is deliberately not part of
+/// that — it is a property of the *run*, not of what the graph computes. So the
+/// cpu recording and the gpu recording intern to one id, and it is the registry
+/// entry that must not then carry the first one's backend: a `"gpu"` program
+/// would be refused with a message naming `"cpu"`, for a program that never says
+/// it. The registries are process-global, so this crossed program boundaries
+/// before the fix — a process that had ever built a cpu graph of a shape could
+/// never run a gpu graph of it.
+///
+/// The stub is what makes this observable without a device: the refusal arrives
+/// *before* any dispatch, so a run that reaches the stub at all is the proof.
+#[test]
+fn a_graph_recorded_for_one_backend_runs_on_another() {
+    let (_guard, stub) = stub();
+    let program = |backend: &str| {
+        format!(
+            r#"@{{
+  compute = import "compute.lichen"
+@}}
+f1 = cfg => {{
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + 10]
+}}
+k1 = compute.parallel f1 "{backend}"
+f2 = cfg => {{
+  n = cfg(0)
+  i = compute.range n
+  a = compute.read [cfg(1)(0), i]
+  compute.write [n, i, a + a]
+}}
+k2 = compute.parallel f2 "{backend}"
+step = ins => {{
+  first = compute.plrun k1 (ins(0),)
+  compute.plrun k2 (ins(0), (first,))
+}}
+built = compute.graph step
+compute.collect (compute.graphrun built (3,))
+"#
+        )
+    };
+
+    // The cpu recording first, and it reaches no backend — a cpu graph is
+    // refused by the contract, which is a separate refusal and says so.
+    let cpu = fail(&program("cpu"));
+    assert!(
+        cpu.iter()
+            .any(|message| message.contains("\"cpu\"") && message.contains("ParallelBackend")),
+        "the cpu graph is refused on its own terms, and that is not what this test is about: {cpu:?}"
+    );
+
+    // The same shape, now for "gpu". This is the run the fix is about, and the
+    // numbers are the stub's rather than the kernels': `k1` reads no buffer, so
+    // the stub answers `0 + 1` at every index, and `k2` reading that answers
+    // `1 + 1`. What is being checked is that a run happened at all.
+    let gpu = run(&program("gpu"));
+    assert!(
+        gpu.starts_with("[2, 2, 2]"),
+        "a gpu graph of a shape a cpu graph already interned must run and answer, and it \
+         answered {gpu:?}"
+    );
+    assert_eq!(
+        stub.saw().len(),
+        2,
+        "and the two dispatches it recorded are the two the body dispatches, so the cpu \
+         recording contributed nothing to it: {:?}",
+        stub.saw()
+    );
+}
