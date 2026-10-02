@@ -75,7 +75,7 @@ queue's order is deliberate.
 | P1-29 | medium | compute, registry | A compute value reaching the artifact codec panics | done |
 | P1-30 | low | compute | A refused `plrun` count is silent | done |
 | P1-31 | medium | lowlevel | The deep-pass verdict conflates "never ran" with "in progress" | done |
-| P1-32 | medium | language-parser | A run of separators is refused inside every list form | todo |
+| P1-32 | medium | language-parser | A run of separators is refused inside every list form | done |
 | P1-33 | medium | highlevel, language | A self-recursive call in a conditional's branch is refused as "expected Int, found Int" | todo |
 | P1-34 | medium | highlevel, language, docs | The spec and `check_index` disagree about `e[i]` on a tuple or a struct | blocked:D16 |
 | P1-35 | medium | language, highlevel, lowlevel | A raw read `X<e>` of a runtime container yields `none` with no diagnostic | todo |
@@ -2442,6 +2442,65 @@ after the last (`Separator.repeated()`). `repeated()` rewinds a failed iteration
 so the optional trailing run still leaves the enclosing closer to match. `needs-test`:
 a multi-line tuple and a multi-line `array<…>` (the exactly-one site) are the
 narrowest proof.
+
+**Outcome.** Every list form takes the statement level's treatment, through one
+pair of combinators — `separator_run` (`Separator.repeated()`) and
+`separators_between` (`Separator.repeated().at_least(1)`), `parse.rs:378-393` —
+which replaced the six hand-written shapes *and* the two local `seps`/`seps1`
+copies the statement forms already had (`region_inner`'s `:305-306`,
+`block_body`'s `:1484-1485`), so the rule now has one implementation in the
+crate rather than eight spellings of it. The sites: `comma_list` (`:1121`,
+which `$f(…)`, `A(…)` and `table { … }` share), `paren` (`:1176`),
+`array_literal` (`:1226`), `angle_tuple` (`:1312`), `struct_type` (`:1356`) and
+`array_type` (`:1387`, the exactly-one site). All six reproductions above are
+first-hand fixed on this tree: `(1,\n2)` is `(1, 2): <Int, Int>`, `[1,\n2]` is
+`[1, 2]: array<Int, 2>`, `array<Int,\n2>` is `array<Int, 2>: TypeArray`,
+`struct<Int,\nstring>(1,\n"a")` is `(1, "a"): struct<Int, string>`,
+`A = struct<.x Int,\n.y Type>` instantiates as `A(.x 1,\n.y Int)`, and
+`table { 1 ==> 2,\n3 ==> 4 }` reads back `4`.
+
+**The discriminator had to move with the grammar.** `comma_list`'s
+`saw_comma` — what splits the single-argument positional slot read `A(1)` from
+the instantiation `A(1,)` — counted a *trailing token*, so it became a trailing
+*run*: `!trailing.is_empty()` instead of `trailing.is_some()` (`parse.rs:1139`).
+`paren`'s grouping-vs-tuple test moved the same way (`:1194`). That is what
+keeps `A(1,\n)` an instantiation and `(1,\n)` a tuple, both pinned below. No
+leading-run term was needed for either: the loop pairs every run with the item
+that follows it, so a run can never be left over at the front — which is also
+why `A(\n1, 2)` parses as an instantiation (`comma_list`'s first item is
+optional, so a leading run is consumed by the loop) while `[\n1, 2]` does not
+parse at all.
+
+**The flip side is untouched, deliberately.** `1 +\n2`, `table { 1 ==>\n2 }` and
+`x =>\n x + 1` are still parse errors, re-measured on this tree: a run *inside*
+a list is a separator between items, and the "an expression cannot continue
+across a separator" rule is a different rule. The parser's module doc now says
+both, so the next reader does not take the first for the second.
+
+**Tests** (`crates/lichen-language-parser/src/tests/parse_tests.rs`):
+`a_run_of_separators_inside_a_list_form_is_tolerated` walks all six sites —
+including the two the item named as the narrowest proof, the multi-line tuple
+and the multi-line `array<…>` — plus the trailing-run half of the
+discriminator. It was **watched to go red**: with the fix stashed it fails at
+`parse_tests.rs:9`, *"unexpected parse errors"*. `an_expression_cannot_continue_across_a_separator`
+is the negative guard, and it passes before *and* after by construction — its
+job is to catch a later widening of the list forms, not this fix.
+`lichen-language-parser` is 47/47 (45 before this item, plus these two);
+`lichen-language`'s `pipeline` (127),
+`examples` (all 23), `readme` and `preprocess`, and the four
+`lichen-language-server` suites are unchanged.
+
+**A leading run is still refused, and that is the note's own boundary.**
+`[\n1, 2]`, `struct<\nInt, string>` and `array<\nInt, 2>` do not parse, while
+`A(\n1, 2)` does — not by a decision but because `comma_list`'s first item is
+optional and the other five require one. The fix direction above prescribes a
+run *between* items and *after* the last, and the repro table is entirely
+between-item runs, so leading tolerance was not added: it is a grammar widening
+the audit never claimed, and the statement level needs it for a reason that has
+no analogue inside a bracket the user is in the middle of typing (a file may
+open with a blank line). Adding it is one `separator_run()` per site if a later
+pass decides the pretty-printed form `[` newline `1,` newline `2` newline `]`
+should work.
 
 ### P1-33 — A self-recursive call in a conditional's branch is refused `reported`
 
