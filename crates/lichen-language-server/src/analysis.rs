@@ -1513,6 +1513,7 @@ impl<'a> NameClass<'a> {
                 self.expr(argument);
             }
             Expr::Int(..)
+            | Expr::Float(..)
             | Expr::Str(..)
             | Expr::TypeConst(..)
             | Expr::Name(..)
@@ -1732,6 +1733,7 @@ impl Walk {
     fn expr(&mut self, e: &Expr) {
         match e {
             Expr::Int(..)
+            | Expr::Float(..)
             | Expr::Str(..)
             | Expr::TypeConst(..)
             | Expr::Placeholder(..)
@@ -2036,6 +2038,7 @@ impl<'a> ScopeCapture<'a> {
         }
         match e {
             Expr::Int(..)
+            | Expr::Float(..)
             | Expr::Str(..)
             | Expr::TypeConst(..)
             | Expr::Placeholder(..)

@@ -47,7 +47,8 @@ use stacksafe::stacksafe;
 use lichen_highlevel::attr::AttrSet;
 use lichen_highlevel::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Schema};
 use lichen_highlevel::program::{
-    HighProgramLiteral, IntLit, IntTypeLit, StrLit, StringTypeLit, TypeTypeLit,
+    FloatLit, FloatTypeLit, HighProgramLiteral, IntLit, IntTypeLit, StrLit, StringTypeLit,
+    TypeTypeLit,
 };
 use lichen_language_lex::Span;
 
@@ -540,6 +541,10 @@ impl Compiler {
                 ExprKind::Literal(HighProgramLiteral::from(IntLit(*n))),
                 span,
             ),
+            Expr::Float(n, span) => self.alloc(
+                ExprKind::Literal(HighProgramLiteral::from(FloatLit(*n))),
+                span,
+            ),
             // A string literal: the content is leaked once to a `&'static str`
             // (the value node holds a `Copy` `LowValue::Str`), exactly as the
             // native-operator names are interned — and, unlike those, with no
@@ -555,6 +560,10 @@ impl Compiler {
             ),
             Expr::TypeConst(TypeConst::Int, span) => self.alloc(
                 ExprKind::Literal(HighProgramLiteral::from(IntTypeLit)),
+                span,
+            ),
+            Expr::TypeConst(TypeConst::Float, span) => self.alloc(
+                ExprKind::Literal(HighProgramLiteral::from(FloatTypeLit)),
                 span,
             ),
             Expr::TypeConst(TypeConst::String, span) => self.alloc(
@@ -924,6 +933,7 @@ impl Compiler {
                         // to be classified here instead of silently taking the
                         // `~`-free path.
                         Expr::Int(..)
+                        | Expr::Float(..)
                         | Expr::Str(..)
                         | Expr::TypeConst(..)
                         | Expr::TypeOf(..)
