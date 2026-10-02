@@ -1252,8 +1252,11 @@ out = compute.plrun k2 (3, (inbuf,))
     // leaving it to process exit.
     lichen_compute_gpu::uninstall();
 
+    // The collected array's element type decides (`Int`): the deferred
+    // unification the write's element class goes through now commits the type
+    // value instead of merging silently (docs/notes/defer-pending-type-forms.md).
     assert_eq!(
-        out, "(20, 22, 24, [20, 22, 24]): <?a, ?b, ?c, array<?d, ?e>>",
+        out, "(20, 22, 24, [20, 22, 24]): <?a, ?b, ?c, array<Int, ?d>>",
         "a two-kernel \"gpu\" chain produced"
     );
     assert_eq!(

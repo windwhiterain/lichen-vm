@@ -58,7 +58,7 @@ use lichen_graph_ir::Policy;
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
-use lichen_highlevel::program::{Ctx, HighProgram, TypeOperator, ValueType};
+use lichen_highlevel::program::{Ctx, HighProgram, LeafKindMarkers, TypeOperator, ValueType};
 use lichen_highlevel::shape::{PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, low_type_of_slot};
 use lichen_kernel_ir::{
     BufferSlot, Flow, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
@@ -761,6 +761,17 @@ enum RunInput {
     Host(BufferWords),
     /// Results a previous run left on the device.
     Resident(ResidentBuffer),
+}
+
+/// The compute leaf's kind markers: `TypeBuffer`/`TypeWrite` are its type
+/// constants — every other variant is a runtime value (a kernel, a buffer, a
+/// graph), never a marker a kind slot could hold.  A composed vocabulary's
+/// `ValueType::is_kind_marker` consults this for the leaf
+/// ([`LeafKindMarkers`]).
+impl LeafKindMarkers for ComputeValue {
+    fn is_kind_marker(&self) -> bool {
+        matches!(self, ComputeValue::TypeBuffer | ComputeValue::TypeWrite)
+    }
 }
 
 /// The compute leaf's payload contract: only [`ComputeValue::Buffer`] carries

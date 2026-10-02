@@ -480,7 +480,30 @@ macro_rules! define_value_type_marker_methods {
                 Self::from(TypeValue::$variant)
             }
         )*
+        /// Whether this value is one of the registry's kind markers — the
+        /// honest tag test behind "is this atom a type-level marker", as
+        /// opposed to a structural guess (an array of the right arity).
+        /// `TypeId` is not a kind marker; it is tested through
+        /// [`Self::type_id`].
+        fn is_kind_marker(&self) -> bool {
+            $( if *self == Self::$marker_fn() { return true; } )*
+            false
+        }
     };
+}
+
+/// An extension value leaf's contribution to the **open** kind-marker set:
+/// the leaf's own type-constant atoms (compute's `TypeBuffer`/`TypeWrite`).
+///
+/// The highlevel's 9 kind markers are closed ([`crate::shape::for_each_kind_marker`]),
+/// but the marker *concept* is open: any plugin composing its own value leaf
+/// into a language vocabulary (`lang_compose_vocabulary!`) may add type
+/// constants, and the composed `ValueType::is_kind_marker` consults this
+/// trait for each extra leaf.  A leaf with no type constants implements it
+/// returning `false` for everything.
+pub trait LeafKindMarkers {
+    /// Whether this value is one of the leaf's kind markers.
+    fn is_kind_marker(&self) -> bool;
 }
 
 /// The value→type contract a value vocabulary must satisfy to flow through

@@ -538,6 +538,7 @@ impl<P: Program> Module<P> {
                         representative: ra,
                         pending: pending_a,
                         pending_index_read: pending_a && self.is_pending_index_read(ra),
+                        pending_apply: pending_a && self.is_pending_apply(ra),
                         skeleton: self.class_is_skeleton(ra),
                         pure_cell: self.class_is_pure_cell(ra),
                     },
@@ -545,6 +546,7 @@ impl<P: Program> Module<P> {
                         representative: rb,
                         pending: pending_b,
                         pending_index_read: pending_b && self.is_pending_index_read(rb),
+                        pending_apply: pending_b && self.is_pending_apply(rb),
                         skeleton: self.class_is_skeleton(rb),
                         pure_cell: self.class_is_pure_cell(rb),
                     },
@@ -552,7 +554,8 @@ impl<P: Program> Module<P> {
                 if let Some(verdict) = P::defer_pending(self, &sides)
                     && verdict == Deferral::Merge
                 {
-                    self.add_equality(ra, rb);
+                    let rep = self.add_equality(ra, rb);
+                    self.pin_committed_value(rep);
                     return true;
                 }
                 // A pending *field/positional read* unified against another
@@ -706,6 +709,11 @@ impl<P: Program> Module<P> {
     /// such a class without erasing anything; a class that holds any
     /// concrete value or operation is not a skeleton, and binding a
     /// computation onto it would corrupt it.
+    ///
+    /// "No concrete value" is judged on the node's **value slot**, never on
+    /// the [`LowValue`] projection: an extension atom (a value `as_enum`
+    /// cannot see) is a decided value the lowlevel cannot read, and treating
+    /// it as absent would merge a computation onto a class that holds one.
     fn class_is_skeleton(&self, rep: NodeId) -> bool {
         // One resolution cache for the whole class walk: an array member's
         // static elements usually name one module.
@@ -715,22 +723,26 @@ impl<P: Program> Module<P> {
             if self.nodes[member].operation.is_some() {
                 return false;
             }
-            match self.nodes[member].value.and_then(|value| value.as_enum()) {
+            match self.nodes[member].value {
                 None => {}
-                Some(LowValue::Parameterized) => {}
-                Some(LowValue::Array(array)) => {
-                    // SAFETY: `array` is the payload of `member`, a live node
-                    // of this module, so its home block has not been dropped.
-                    let items = unsafe { array.items() };
-                    let mut seen = HashSet::new();
-                    if items
-                        .iter()
-                        .any(|item| !self.value_is_skeleton(&mut cache, item.node, &mut seen))
-                    {
-                        return false;
+                Some(value) => match value.as_enum() {
+                    Some(LowValue::Parameterized) => {}
+                    Some(LowValue::Array(array)) => {
+                        // SAFETY: `array` is the payload of `member`, a live node
+                        // of this module, so its home block has not been dropped.
+                        let items = unsafe { array.items() };
+                        let mut seen = HashSet::new();
+                        if items
+                            .iter()
+                            .any(|item| !self.value_is_skeleton(&mut cache, item.node, &mut seen))
+                        {
+                            return false;
+                        }
                     }
-                }
-                _ => return false,
+                    // Any other decided value — a structural scalar or an
+                    // extension atom — is concrete content.
+                    _ => return false,
+                },
             }
             let Some(next) = self.nodes[member].meta().next() else {
                 return true;
@@ -743,8 +755,10 @@ impl<P: Program> Module<P> {
     /// skeletons; `seen` cuts the cycle of a self-referential structure
     /// (which is a skeleton only if its own elements are).  A static ref is
     /// a decided leaf: its solved flag says whether it reads `Parameterized`
-    /// (a skeleton position) or concrete (not).  `cache` is the enclosing
-    /// walk's static-module resolution cache.
+    /// (a skeleton position) or concrete (not).  An extension atom — a value
+    /// the [`LowValue`] projection cannot see — is decided content, never an
+    /// empty position.  `cache` is the enclosing walk's static-module
+    /// resolution cache.
     fn value_is_skeleton(
         &self,
         cache: &mut StaticModuleCache<P>,
@@ -758,16 +772,21 @@ impl<P: Program> Module<P> {
             AnyNodeId::Static(sref) => cache.node_parameterized(self, sref),
             Dyn(node) => {
                 self.nodes[node].operation.is_none()
-                    && match self.nodes[node].value.and_then(|value| value.as_enum()) {
+                    && match self.nodes[node].value {
                         None => true,
-                        Some(LowValue::Parameterized) => true,
-                        // SAFETY: `array` is the payload of `node`, a live node
-                        // of this module, so its home block has not been
-                        // dropped.
-                        Some(LowValue::Array(array)) => unsafe { array.items() }
-                            .iter()
-                            .all(|item| self.value_is_skeleton(cache, item.node, seen)),
-                        _ => false,
+                        Some(value) => match value.as_enum() {
+                            Some(LowValue::Parameterized) => true,
+                            // SAFETY: `array` is the payload of `node`, a live node
+                            // of this module, so its home block has not been
+                            // dropped.
+                            Some(LowValue::Array(array)) => unsafe { array.items() }
+                                .iter()
+                                .all(|item| self.value_is_skeleton(cache, item.node, seen)),
+                            // Any other decided value — a structural scalar or
+                            // an extension atom — is concrete content, not an
+                            // empty position.
+                            _ => false,
+                        },
                     }
             }
         };
@@ -847,6 +866,54 @@ impl<P: Program> Module<P> {
             return false;
         }
         self.index_target(op).is_none()
+    }
+
+    /// Commit the class's decided value (if any) onto its pending operations'
+    /// own slots and onto the representative: a deferred unification the
+    /// program's policy accepted is a bet that the computation resolves to
+    /// that value, so the class reads as decided now rather than after a
+    /// resolution that may never run (an unbound placeholder never binds).
+    ///
+    /// The operations keep their operation: the operand edge stays live for
+    /// the apply's clone machinery, which drops a cached value on an
+    /// operation node and recomputes against the real argument
+    /// ([`crate::function`]) — the deferred check surfacing at that point, the
+    /// same reconcile [`Self::force_pending`] performs against
+    /// [`Self::class_committed_value`].  A class with nothing committed pins
+    /// nothing.
+    fn pin_committed_value(&mut self, rep: NodeId) {
+        let Some(value) = self.class_committed_value(rep) else {
+            return;
+        };
+        let mut ops = Vec::new();
+        let mut member = rep;
+        loop {
+            if self.nodes[member].operation.is_some() && is_unbound(self.nodes[member].value) {
+                ops.push(member);
+            }
+            let Some(next) = self.nodes[member].meta().next() else {
+                break;
+            };
+            member = next;
+        }
+        for op in ops {
+            self.write_node_value(op, Some(value));
+        }
+        self.write_node_value(rep, Some(value));
+    }
+
+    /// Whether `rep`'s class holds a *pending call*: an `Apply` operation
+    /// whose value is still unbound.  The apply stays lazy while its argument
+    /// is undecided; like a pending `Index` read it is a suspended reference
+    /// rather than an arithmetic computation.
+    fn is_pending_apply(&self, rep: NodeId) -> bool {
+        let Some(op) = self.pending_op(rep) else {
+            return false;
+        };
+        let Some(Operation { operator, .. }) = self.nodes[op].operation else {
+            return false;
+        };
+        matches!(operator.as_enum(), Some(LowOperator::Apply))
     }
 
     /// The first pending operation node in `rep`'s class, if any.
@@ -936,13 +1003,29 @@ impl<P: Program> Module<P> {
         true
     }
 
+    /// The class member carrying the committed value, if any — the same walk
+    /// [`Self::class_committed_value`] performs, but naming the node so a
+    /// caller can read the encoding behind the value (an array's element
+    /// nodes are reachable only from a node, not from the value alone).
+    pub fn class_committed_node(&self, rep: NodeId) -> Option<NodeId> {
+        let mut member = rep;
+        loop {
+            if let Some(value) = self.nodes[member].value
+                && !is_unbound(Some(value))
+            {
+                return Some(member);
+            }
+            member = self.nodes[member].meta().next()?;
+        }
+    }
+
     /// The concrete value `rep`'s class has already committed, if any — the
     /// side of a deferred unification that is not the pending computation
     /// itself.  Scans the member list rather than reading only the
     /// representative's slot, because a bare [`Self::add_equality`] merge
     /// leaves the committed value where it was (the representative may be the
     /// value-less pending op node).
-    fn class_committed_value(&self, rep: NodeId) -> Option<P::Value> {
+    pub(crate) fn class_committed_value(&self, rep: NodeId) -> Option<P::Value> {
         let mut member = rep;
         loop {
             if let Some(value) = self.nodes[member].value

@@ -313,58 +313,170 @@ where
 
 // --- unification policy ---------------------------------------------------------
 
-/// Whether `node`'s class holds a **type value**: a kinded type expression
-/// `[shape, [marker, universe]]` — an arrow, tuple, array, struct, table, or
-/// atomic type.  This is the highlevel half of what the lowlevel used to
-/// know: "does this class hold a type" is meaningless without the encoding,
-/// so it lives here, in the module that owns the encoding.
+/// Whether `node`'s class holds a **type value**: a type-level value in the
+/// pair/type encoding — the universe `K = [Type, ↺]`, an atomic type or kind
+/// `[marker, K]`, a struct marker `[TypeId, names]`, a bare kind-marker atom,
+/// or a kinded type expression `[shape, [marker, K]]`.  This is the
+/// highlevel half of what the lowlevel used to know: "does this class hold a
+/// type" is meaningless without the encoding, so it lives here, in the
+/// module that owns the encoding.
 ///
 /// It is what makes [`defer_pending`] sound: a field/positional read's own
-/// *type* is such a pair, so unifying a pending read against a type value is
-/// a type round-trip rather than a value comparison.  A scalar — an `Int`
-/// *value* as opposed to its type — is not a type value, and unifying a read
-/// against one is left to fail.
+/// *type* is such a value, so unifying a pending read against one is a type
+/// round-trip rather than a value comparison.  A scalar — an `Int` *value*
+/// as opposed to its type — is not a type value, and unifying a read against
+/// one is left to fail.
+///
+/// The recognition is by **tag**, not by silhouette: atoms are tested against
+/// the kind-marker registry ([`ValueType::is_kind_marker`]) and `TypeId`, and
+/// the only structural fact used is the universe's self-referential cycle
+/// ([`Module::is_self_referential`]) — an honest graph property, not an arity
+/// guess.  A marker slot that is still unbound is accepted (a type whose kind
+/// is not decided yet is still a type being built); any other undecided or
+/// off-shape position is not a type value.
 pub fn class_holds_type<P: Program>(module: &mut Module<P>, node: NodeId) -> bool
 where
-    P::Value: AsEnum<LowValue>,
+    P::Value: ValueType,
 {
     let rep = module.equality_representative(node);
-    let Some(kind) = kind_of(module, AnyNodeId::Dynamic(rep)) else {
+    // A bare merge can leave the class's decided value on a member other
+    // than the representative, so read the committed carrier, not one slot.
+    let Some(carrier) = module.class_committed_node(rep) else {
         return false;
     };
-    // SAFETY: `kind` is a live node of `module`; nothing in this crate calls
+    node_holds_type(module, AnyNodeId::Dynamic(carrier))
+}
+
+/// The value-level test behind [`class_holds_type`], over a dynamic node or
+/// a static ref alike.  See that function for the recognised forms.
+fn node_holds_type<P: Program>(module: &mut Module<P>, node: AnyNodeId) -> bool
+where
+    P::Value: ValueType,
+{
+    let Some(value) = module.node_value(node) else {
+        return false;
+    };
+    // A bare kind-marker atom or a nominal id is a type-level value.
+    if value.is_kind_marker() || value.type_id().is_some() {
+        return true;
+    }
+    // SAFETY: `node` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
-    let Some(kind_items) = (unsafe { array_items(module, kind) }) else {
+    let Some(items) = (unsafe { array_items(module, node) }) else {
         return false;
     };
-    // The kind's second slot is the universe — the self-referential cycle
-    // every type chain bottoms out at (`K = [Type, ↺]`), recognised by its
-    // cycle shape; see [`Module::is_self_referential`].
-    module.is_self_referential(kind_items[KIND_UNIVERSE_SLOT].node)
+    if items.len() != 2 {
+        return false;
+    }
+    // The universe itself (`K = [Type, ↺]`).
+    if module.is_self_referential(node) {
+        return true;
+    }
+    let first = items[0].node;
+    let second = items[1].node;
+    // An atomic type or a kind: `[marker, K]`.
+    if node_is_marker(module, first) && module.is_self_referential(second) {
+        return true;
+    }
+    // A struct marker `[TypeId, names]` — the nominal id is its tag.  The id
+    // cell may still be unbound while the marker is being built, so the
+    // honest signal is the pair's *shape*: an id slot (id or unbound) and a
+    // names slot (a name table, `Void` for an anonymous struct, or unbound).
+    let first_is_id = match module.node_value(first) {
+        None => true,
+        Some(first_value) => first_value.type_id().is_some(),
+    };
+    if first_is_id && node_is_names_table(module, second) {
+        return true;
+    }
+    // A kinded type expression `[shape, [marker, K]]` — the shape is not
+    // inspected: a type whose field types are still being built is a type.
+    // SAFETY: `second` is a live node of `module`; nothing in this crate
+    // calls `Module::drop_block`.
+    let Some(kind_items) = (unsafe { array_items(module, second) }) else {
+        return false;
+    };
+    kind_items.len() == 2
+        && node_is_marker_open(module, kind_items[KIND_MARKER_SLOT].node)
+        && module.is_self_referential(kind_items[KIND_UNIVERSE_SLOT].node)
+}
+
+/// Whether `node` is a **kind marker**: a registry marker atom, a nominal
+/// `TypeId`, or a struct marker `[TypeId, names]` (the one marker that is an
+/// array — recognised by its id-and-names shape, closing the
+/// `is_struct_marker_any` arity guess at this site).
+fn node_is_marker<P: Program>(module: &mut Module<P>, node: AnyNodeId) -> bool
+where
+    P::Value: ValueType,
+{
+    let Some(value) = module.node_value(node) else {
+        return false;
+    };
+    if value.is_kind_marker() || value.type_id().is_some() {
+        return true;
+    }
+    // SAFETY: `node` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let Some(items) = (unsafe { array_items(module, node) }) else {
+        return false;
+    };
+    if items.len() != STRUCT_MARKER_LEN {
+        return false;
+    }
+    let id_is_id = match module.node_value(items[STRUCT_MARKER_ID_SLOT].node) {
+        None => true,
+        Some(id) => id.type_id().is_some(),
+    };
+    id_is_id && node_is_names_table(module, items[STRUCT_MARKER_NAMES_SLOT].node)
+}
+
+/// [`node_is_marker`], additionally accepting an unbound cell: a kind whose
+/// marker is not decided yet is a kind being built, not evidence against.
+fn node_is_marker_open<P: Program>(module: &mut Module<P>, node: AnyNodeId) -> bool
+where
+    P::Value: ValueType,
+{
+    module.node_value(node).is_none() || node_is_marker(module, node)
+}
+
+/// Whether `node` reads as a struct marker's **names slot**: a name→index
+/// table, `Void` (an anonymous positional struct), or a still-unbound cell.
+/// A `TypeId` slot alone cannot tag a struct marker honestly (it is unbound
+/// while the marker is being built), so the names slot carries the signal.
+fn node_is_names_table<P: Program>(module: &mut Module<P>, node: AnyNodeId) -> bool
+where
+    P::Value: ValueType,
+{
+    let Some(value) = module.node_value(node) else {
+        return true;
+    };
+    matches!(value.as_enum(), Some(LowValue::Table(_) | LowValue::Void))
 }
 
 /// The highlevel's [`Program::defer_pending`] policy: merge a pending
-/// field/positional **read** with a class that **holds a type**, and nothing
-/// else.
+/// **type-level computation** — a field/positional **read** or a lazy
+/// **call** (a type function applied to an undecided argument) — with a
+/// class that **holds a type**, and nothing else.
 ///
-/// The merge is sound because neither side can be compared yet: the read
-/// resolves to its field's actual type once the container binds, and a
-/// genuine mismatch then surfaces at apply time against the real container
-/// (the computation, when it runs, must reconcile with the value the other
-/// side carried).  The deferral stays deliberately narrow — only an
-/// *unresolvable* `Index` qualifies, never a resolved read nor arithmetic
-/// nor a dependent-type branch — so an unresolvable real computation still
-/// records an error.  Every other case returns `None` and falls through to
-/// the lowlevel's generic rules.
+/// The merge is sound because neither side can be compared yet: the
+/// computation resolves to its actual type once what it depends on binds,
+/// and a genuine mismatch then surfaces against the resolved value (the
+/// lowlevel commits the type value onto the class — `Module::unify`'s pin —
+/// and reconciles it with the computation's outcome when that runs).  The
+/// deferral stays deliberately narrow — only an unresolvable `Index` or a
+/// lazy `Apply` qualifies, never a resolved read nor arithmetic nor a
+/// dependent-type branch — so an unresolvable real computation still records
+/// an error.  Every other case returns `None` and falls through to the
+/// lowlevel's generic rules.
 pub fn defer_pending<P: Program>(module: &mut Module<P>, sides: &PendingSides) -> Option<Deferral>
 where
-    P::Value: AsEnum<LowValue>,
+    P::Value: ValueType,
 {
     let read_against_type = (sides.a.pending
-        && sides.a.pending_index_read
+        && (sides.a.pending_index_read || sides.a.pending_apply)
         && class_holds_type(module, sides.b.representative))
         || (sides.b.pending
-            && sides.b.pending_index_read
+            && (sides.b.pending_index_read || sides.b.pending_apply)
             && class_holds_type(module, sides.a.representative));
     read_against_type.then_some(Deferral::Merge)
 }

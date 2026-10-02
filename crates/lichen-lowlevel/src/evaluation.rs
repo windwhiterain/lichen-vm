@@ -218,7 +218,36 @@ impl<P: Program> Module<P> {
                                             match element {
                                                 Dyn(element) => {
                                                     self.alias_read(node, element);
-                                                    self.evaluate_node(Dyn(element), Some(block))
+                                                    // A read whose element is
+                                                    // its own class — the
+                                                    // literal self-read of a
+                                                    // lazy type slot, or a
+                                                    // class `alias_read` just
+                                                    // joined — never re-enters
+                                                    // the evaluation: the
+                                                    // class's committed value
+                                                    // answers it, and an
+                                                    // undecided class stays
+                                                    // lazy (the read resolves
+                                                    // through replication when
+                                                    // the class binds).
+                                                    if self.equality_representative(element)
+                                                        == self.equality_representative(node)
+                                                    {
+                                                        let rep =
+                                                            self.equality_representative(node);
+                                                        self.class_committed_value(rep)
+                                                            .unwrap_or_else(|| {
+                                                                P::Value::from(
+                                                                    LowValue::Parameterized,
+                                                                )
+                                                            })
+                                                    } else {
+                                                        self.evaluate_node(
+                                                            Dyn(element),
+                                                            Some(block),
+                                                        )
+                                                    }
                                                 }
                                                 // A static element is
                                                 // immutable — no class to

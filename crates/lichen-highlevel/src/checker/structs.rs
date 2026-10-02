@@ -427,13 +427,12 @@ where
                         }
                     }
                 }
-                // Lazy shape read: `Index(type_pair, 0)`.  Known limitation: the
-                // deferred unify below resolves through the lowlevel's
-                // pending-`Index` deferral, which accepts only a 2-element
-                // concrete other side (`class_holds_type`) — a param-dependent
-                // call-result callee whose struct has ≠2 fields reports the
-                // field-list mismatch at check time instead of at the apply.
-                // Phase 2's unification-hook extraction (D1) subsumes that rule.
+                // Lazy shape read: `Index(type_pair, 0)`.  The deferred unify
+                // below resolves through the lowlevel's pending-`Index`
+                // deferral: a pending read against a class that holds a type
+                // value merges and commits the type value
+                // ([`shape::defer_pending`]), so a param-dependent call-result
+                // callee checks against the real fields at the apply.
                 _ => {
                     let ops = self.array_node(self.current_block, &[type_pair, self.zero()]);
                     self.op_node(
