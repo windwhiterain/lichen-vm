@@ -249,6 +249,28 @@ fn host_program(trip: usize) -> String {
     )
 }
 
+/// The proposed operator **with its type written out** — the escape P1-33 names
+/// as "the whole difference" for the two-argument curried self-reference.
+const LOOP_ANNOTATED: &str = r#"
+@{ compute = import "compute.lichen" @}
+loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x)) : (Int -> Int) -> Int -> Int -> Int
+inc = x => x + 1
+p = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, loop inc 3 i]
+}) "BACKEND"
+compute.collect (compute.plrun p (4,))
+"#;
+
+/// The annotated operator, with **no kernel** — which separates "the annotation
+/// fixed the type" from "the annotation plus a kernel works".
+const LOOP_ANNOTATED_HOST: &str = r#"
+loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x)) : (Int -> Int) -> Int -> Int -> Int
+inc = x => x + 1
+(loop inc 3 0, loop inc 10 5, loop inc 0 7)
+"#;
+
 /// A `jit` chain `k0 → k1 → … → k{N-1}`, each adding one, plus a parallel kernel
 /// that calls the last. **The hand-written, un-expanded form of a loop.**
 fn chain(depth: usize) -> String {
@@ -339,6 +361,14 @@ fn main() {
         };
 
         println!("  -- the `loop` operator, as a lichen function --");
+        probe(
+            "loop annotated, no kernel",
+            &LOOP_ANNOTATED_HOST.to_string(),
+        );
+        probe(
+            "loop, its type written out",
+            &LOOP_ANNOTATED.replace("BACKEND", backend),
+        );
         probe(
             "loop, decidable trip count",
             &LOOP_IN_LICHEN.replace("BACKEND", backend),

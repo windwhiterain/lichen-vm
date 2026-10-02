@@ -172,30 +172,54 @@ no persist discriminator — a **native plugin** at worst, and a library functio
 at best. It is also the answer the roadmap's original §7 wanted: a loop that is
 *asked for* rather than a syntax the compiler invents.
 
-**The signature as proposed does not check, and the reason is worth stating
-precisely**, because it is a type-system fact and not a codegen one. A recursive
-binding cannot receive a function argument through a partial application: `loop
-f` is a *function value*, and unifying it against the binding's own type cell
-compares two function **kinds** — which lichen refuses, because a compound type
-is typed by its kind and there is no subtyping. Measured:
+**The signature as proposed does not check — and the reason is already filed, as
+[P1-33](code-audit.md#p1-33--a-self-recursive-call-in-a-conditionals-branch-is-refused-reported).**
+`loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)` answers
 
-| shape | result |
-|---|---|
-| `sum_to n x = … sum_to (n - 1) (x + 1)` — two-stage curried | `expected Int, found Int` |
-| `loop f s = … loop f (… , f …)` — the step threaded through | `expected ?c -> Int, found ?c -> Int` |
-| `sum_to s = … sum_to (s(0) - 1, s(1) + 1)` — **one tuple argument** | **`[3, 4, 5, 6]`** |
+> `expected Int -> Int, found Int -> Int`
 
-So the shape that works is a **specialised** loop: the step is baked into the
-binding and the recursive call is a single application of one tuple. That is
-exactly the `dot4`/`mat2` shape the ladder already wrote by hand — and it is one
-definition per step, which is what the operator was meant to remove.
+and that is the audit's P1-33 verbatim: *"A self-recursive call in a
+conditional's branch is refused as `expected Int, found Int`"*, status **todo**.
+P1-33's own narrowing table is what identifies it, and it corrects the first
+guess made here — this is **not** about a function argument threaded through a
+partial application:
 
-**The error messages are themselves a defect, and worth fixing whatever is
-decided here.** `expected Int, found Int` renders two *incompatible* types
-identically, so the reader is told nothing at all. Every other refusal in the
-compute surface names its own cause; these two name a type the reader cannot
-distinguish from the one it was expected to be. That is the same class as the
-`NodeId` refusal §8 fixed.
+| shape | result | so |
+|---|---|---|
+| `f = x => if x == 0 then x else f (x - 1)` | **runs** | one-argument self-recursion in a branch is fine |
+| `f = a => b => f b (a - b)` | **runs** | a self-reference with no conditional is fine |
+| `g = a => b => a - b; f = a => b => if b == 0 then a else g b (a - b)` | **runs** | a non-recursive two-argument callee in the branch is fine |
+| `f = a => b => if b == 0 then a else f b (a - b)` | refused | a **self-referential** two-argument call in the branch is the trigger |
+
+**And the escape is the one P1-33 names: write the function's type out.** Which
+makes the whole proposal *one annotated line of lichen, working today* — no IR
+form, no backend change, no persist discriminator, no new operator in Rust:
+
+```lichen
+loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x))
+     : (Int -> Int) -> Int -> Int -> Int
+inc = x => x + 1
+(loop inc 3 0, loop inc 10 5, loop inc 0 7)   -- (3, 15, 7): <Int, Int, Int>
+```
+
+All three, including the zero-trip case, on the interpreter. So the operator is
+**not** a roadmap item: it is a library function the day P1-33 is worked around,
+and the annotation is a real cost that a `#[loop]`-shaped compiler form would
+remove.
+
+**In a kernel it is still refused**, and that is the *same* missing **apply** this
+section is about rather than a loop problem: `loop inc 3 i` inside a parallel
+body reaches an unresolvable node, because the kernel is lowered from the
+template and `loop inc 3` has not been reduced to its nested applies when the
+emitter walks the body. Nothing about a loop changes that.
+
+**The error messages remain a defect, and P1-33 makes that sharper rather than
+softer.** `expected Int -> Int, found Int -> Int` renders two *incompatible*
+types identically, and the audit has already located the mechanism: it is not a
+checker's pin at all but *"a parameter check the VM runs at the apply"*, whose
+two sides hold the call's argument **values**. So the message is comparing
+values and calling them types — the same class as the `NodeId` refusal §8 fixed,
+and the same fix: name what was compared.
 
 **And the ceiling decides the usefulness, and it is small.** An unrolled loop is
 `n` copies of the step's body, and it runs into **two independent limits**:
@@ -428,9 +452,23 @@ Named so they are decisions rather than omissions.
 
 There is no float. `1.5` does not lex; `LowValue`'s only number is `USize`;
 `KernelBin` is integer-only; the fragment ABI is `i64` in and `i64` out. It is
-designed in [floating-point](floating-point.md), whose phase 0 is a kind marker,
-a literal, a printer and a codec, and whose kernel widening is explicitly a
-later, larger decision.
+designed in [floating-point](floating-point.md), whose status on `dev` is still
+**"proposed. Nothing here is implemented"** — and re-read at merge time, with
+**ten float worktrees in flight** (`float-lowlevel`, `float-marker`,
+`float-lexer`, `float-literal`, `float-printer`, `float-shape-tag`,
+`float-wiring`, `float-compute`, `float-integrate`), that is no longer "not
+started". The note's *decisions* are taken where they were open before: `f32`
+width, the relation to `Int`, and where a conversion is allowed to happen, plus
+the lexing (leading digit required, overflow to infinity, no scientific
+notation), the printer's round-trip (with the `1.0` → `1` trap recorded against
+a real consumer, and `NaN`/`±inf` failing its document format silently), and
+`Eq` coming off the token payload.
+
+**So "deferred" here means *not this roadmap's*, not *not happening*.** Nothing in
+§4 conflicts with it, and the two do not compete for the same sites — a float
+reaches a kernel through the `i64` fragment ABI, which is
+[compute-jit-low-types](compute-jit-low-types.md)'s business and larger than a
+kind marker.
 
 **The uncomfortable version, which this roadmap should not hide:** matrix
 multiply, convolution, FFT, a physics step, a gradient — every algorithm people
@@ -442,7 +480,9 @@ matmul and a tree reduction.
 So float is not on the critical path *of this roadmap* — A through D are worth
 doing without it, and the backend's advantage over an interpreter does not
 depend on it. Float is the critical path *for the subject matter*. Both are
-true, and the second is the one that decides when to start it.
+true, and the second is the one that decides when to start it — and with ten
+worktrees already on it, that is now somebody else's sequencing decision rather
+than this document's.
 
 ## 7. What this does not decide
 
