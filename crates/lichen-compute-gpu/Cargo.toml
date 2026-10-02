@@ -11,7 +11,11 @@ edition.workspace = true
 #
 # This crate is not a workspace dependency of anything else in the workspace.  It
 # is a member so `cargo test --workspace` exercises it, which means the GPU
-# tests need a device; they skip by name when there is none rather than failing.
+# tests need a device.  Where there is no adapter carrying `shaderInt64` they do
+# not fail: each one returns early and writes the reason it skipped to stderr,
+# which libtest captures for a passing test, so `--nocapture` is how the skip is
+# read.  The emitter's tests need no device, except that the one shelling out to
+# `spirv-val` skips on the same terms when the tool is not on `PATH`.
 [dependencies]
 ash = "0.38.0"
 lichen-kernel-ir.workspace = true

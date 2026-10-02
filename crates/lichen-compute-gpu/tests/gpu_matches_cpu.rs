@@ -8,6 +8,8 @@
 //! lanes of the last workgroup are covered too: those lanes address padding, and
 //! if that padding were not allocated the run would scribble past the buffers.
 
+mod common;
+
 use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X, RunError};
 use lichen_kernel_ir::{
     BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, Pending,
@@ -266,8 +268,16 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
 /// The run hands back a resident id and the data only comes home on the `fetch`,
 /// so this also pins the split itself: if the run leaked results to the host, or
 /// the fetch read something the dispatch did not write, these would differ.
-fn check(fragment: &KernelFragment, input: &[i64], expected: &[i64]) -> String {
-    let context = GpuContext::new().expect("a Vulkan device with shaderInt64 is available");
+///
+/// The context is the caller's rather than opened here, because the caller is
+/// what can name itself when there is no device to open one on: see
+/// [`common::context`].
+fn check(
+    context: &GpuContext,
+    fragment: &KernelFragment,
+    input: &[i64],
+    expected: &[i64],
+) -> String {
     let count = input.len();
     let resident = context
         .run(fragment, &[BufferSlot::Host(input)], count)
@@ -312,20 +322,26 @@ fn check(fragment: &KernelFragment, input: &[i64], expected: &[i64]) -> String {
 fn an_arithmetic_map_matches_the_cpu_bit_for_bit() {
     // 100 is not a multiple of 64, so the last workgroup overruns `count` and
     // the padding is what the surplus lanes touch.
+    let Some(context) = common::context("an_arithmetic_map_matches_the_cpu_bit_for_bit") else {
+        return;
+    };
     let input: Vec<i64> = (0..100).map(|value| value - 40).collect();
     let expected: Vec<i64> = input.iter().map(|value| value + value + 1).collect();
-    let device = check(&adds(), &input, &expected);
+    let device = check(&context, &adds(), &input, &expected);
     println!("ran on {device}");
 }
 
 #[test]
 fn a_conditional_write_matches_the_cpu_bit_for_bit() {
+    let Some(context) = common::context("a_conditional_write_matches_the_cpu_bit_for_bit") else {
+        return;
+    };
     let input: Vec<i64> = (0..100).collect();
     let expected: Vec<i64> = input
         .iter()
         .map(|value| if *value <= 3 { 7 } else { *value })
         .collect();
-    let device = check(&conditional(), &input, &expected);
+    let device = check(&context, &conditional(), &input, &expected);
     println!("ran on {device}");
 }
 
@@ -338,7 +354,11 @@ fn a_conditional_write_matches_the_cpu_bit_for_bit() {
 /// is never what made it correct.
 #[test]
 fn a_second_run_consumes_the_first_runs_id_without_a_round_trip() {
-    let context = GpuContext::new().expect("a Vulkan device with shaderInt64 is available");
+    let Some(context) =
+        common::context("a_second_run_consumes_the_first_runs_id_without_a_round_trip")
+    else {
+        return;
+    };
     let count = 100;
     let input: Vec<i64> = (0..count as i64).collect();
 
@@ -384,7 +404,11 @@ fn a_second_run_consumes_the_first_runs_id_without_a_round_trip() {
 /// fresh context, so nothing else would notice a stale byte reaching a result.
 #[test]
 fn a_recycled_buffer_never_shows_the_previous_run_its_contents() {
-    let context = GpuContext::new().expect("a Vulkan device with shaderInt64 is available");
+    let Some(context) =
+        common::context("a_recycled_buffer_never_shows_the_previous_run_its_contents")
+    else {
+        return;
+    };
     let count = 100;
     let input: Vec<i64> = (0..count as i64).collect();
     let adds_expected: Vec<i64> = input.iter().map(|v| v + v + 1).collect();
@@ -420,33 +444,44 @@ fn a_recycled_buffer_never_shows_the_previous_run_its_contents() {
 /// *not* exercised — the complement of the tests above, which pin both ends.
 #[test]
 fn an_exact_workgroup_multiple_matches_too() {
+    let Some(context) = common::context("an_exact_workgroup_multiple_matches_too") else {
+        return;
+    };
     let input: Vec<i64> = (0..(LOCAL_SIZE_X as usize * 2))
         .map(|value| value as i64)
         .collect();
     let expected: Vec<i64> = input.iter().map(|value| value + value + 1).collect();
-    let device = check(&adds(), &input, &expected);
+    let device = check(&context, &adds(), &input, &expected);
     println!("ran on {device}");
 }
 
 #[test]
 fn multiplication_division_and_remainder_match_the_cpu_bit_for_bit() {
+    let Some(context) =
+        common::context("multiplication_division_and_remainder_match_the_cpu_bit_for_bit")
+    else {
+        return;
+    };
     let input: Vec<i64> = (0..100).collect();
     let expected: Vec<i64> = input
         .iter()
         .map(|value| (value * 3) % 7 + value / 5)
         .collect();
-    let device = check(&arithmetic(), &input, &expected);
+    let device = check(&context, &arithmetic(), &input, &expected);
     println!("ran on {device}");
 }
 
 #[test]
 fn a_stored_predicate_matches_the_cpu_bit_for_bit() {
+    let Some(context) = common::context("a_stored_predicate_matches_the_cpu_bit_for_bit") else {
+        return;
+    };
     let input: Vec<i64> = (0..100).collect();
     let expected: Vec<i64> = input
         .iter()
         .map(|value| i64::from((*value < 3 && *value > 0) || *value == 50))
         .collect();
-    let device = check(&predicates(), &input, &expected);
+    let device = check(&context, &predicates(), &input, &expected);
     println!("ran on {device}");
 }
 
@@ -457,6 +492,9 @@ fn an_unsigned_reading_is_what_the_language_means() {
     // Every one of these is `2^63` or above as an unsigned 64-bit value, which
     // is a *negative* `i64` — the host writes the same bits either way, so the
     // two readings differ only in what the shader does with them.
+    let Some(context) = common::context("an_unsigned_reading_is_what_the_language_means") else {
+        return;
+    };
     let input: Vec<i64> = vec![-1, -2, i64::MIN, 5, -100];
     let expected: Vec<i64> = input
         .iter()
@@ -474,7 +512,7 @@ fn an_unsigned_reading_is_what_the_language_means() {
         vec![1, 0, 0, 2, 0],
         "the expectation itself is the unsigned reading, written out"
     );
-    let device = check(&unsigned_reading(), &input, &expected);
+    let device = check(&context, &unsigned_reading(), &input, &expected);
     println!("ran on {device}");
 }
 
@@ -489,7 +527,10 @@ fn an_unsigned_reading_is_what_the_language_means() {
 /// does order two submissions rather than two dispatches in one recording.
 #[test]
 fn a_submission_can_be_fed_to_one_that_is_still_in_flight() {
-    let context = GpuContext::new().expect("a Vulkan device with shaderInt64 is available");
+    let Some(context) = common::context("a_submission_can_be_fed_to_one_that_is_still_in_flight")
+    else {
+        return;
+    };
     let count = 100;
     let input: Vec<i64> = (0..count as i64).collect();
 
@@ -546,7 +587,10 @@ fn a_submission_can_be_fed_to_one_that_is_still_in_flight() {
 /// rather than slow.
 #[test]
 fn dropping_a_submission_nobody_waited_for_still_frees_it() {
-    let context = GpuContext::new().expect("a Vulkan device with shaderInt64 is available");
+    let Some(context) = common::context("dropping_a_submission_nobody_waited_for_still_frees_it")
+    else {
+        return;
+    };
     let count = 100;
     let input: Vec<i64> = (0..count as i64).collect();
 

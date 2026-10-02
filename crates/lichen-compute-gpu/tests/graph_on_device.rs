@@ -11,6 +11,8 @@
 //! graph that read it early would be a wrong answer rather than a slow one, which
 //! is why the schedule is asserted in the stub and only the arithmetic is here.
 
+mod common;
+
 use lichen_compute_gpu::GpuContext;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
@@ -123,7 +125,9 @@ fn chained(count: usize) -> Graph {
 
 #[test]
 fn a_graph_of_dispatches_computes_the_same_numbers() {
-    let context = GpuContext::new().expect("a Vulkan device with shaderInt64 is available");
+    let Some(context) = common::context("a_graph_of_dispatches_computes_the_same_numbers") else {
+        return;
+    };
     let count = 100;
     let data: Vec<i64> = (0..count as i64).collect();
     let other: Vec<i64> = (0..count as i64).map(|value| value % 7).collect();
@@ -170,7 +174,11 @@ fn a_graph_of_dispatches_computes_the_same_numbers() {
 /// number.
 #[test]
 fn an_extent_that_is_one_of_the_graphs_own_values_runs_at_that_extent() {
-    let context = GpuContext::new().expect("a Vulkan device with shaderInt64 is available");
+    let Some(context) =
+        common::context("an_extent_that_is_one_of_the_graphs_own_values_runs_at_that_extent")
+    else {
+        return;
+    };
 
     let mut graph = Graph::with_inputs(2);
     let node = graph
