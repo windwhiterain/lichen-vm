@@ -78,7 +78,7 @@ queue's order is deliberate.
 | P1-32 | medium | language-parser | A run of separators is refused inside every list form | done |
 | P1-33 | medium | highlevel, language | A self-recursive call in a conditional's branch is refused as "expected Int, found Int" | todo |
 | P1-34 | medium | highlevel, language, docs | The spec and `check_index` disagree about `e[i]` on a tuple or a struct | blocked:D16 |
-| P1-35 | medium | language, highlevel, lowlevel | A raw read `X<e>` of a runtime container yields `none` with no diagnostic | todo |
+| P1-35 | medium | language, highlevel, lowlevel | A raw read `X<e>` of a runtime container yields `none` with no diagnostic | done |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | done (wired: the server's compile worker, `incremental-update.md` §7.6) |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | done |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | done |
@@ -2588,9 +2588,11 @@ not this note's to do.
 
 **The raw form is not an available substitute, and that is its own item.** The
 tempting answer — "spell it `s<0>`" — does not work on a runtime container: see
-`P1-35`, where `[1, 2]<0>` and `(1, 2)<0>` evaluate to `none: none`. `X<e>` reads
-a component of a *type-as-value* (`<Int, string><0>` is `Int : Type`); over a
-runtime array or tuple it produces nothing.
+`P1-35`, where `[1, 2]<0>` and `(1, 2)<0>` read a container whose elements are
+not value/type pairs and are therefore a **reported** runtime error (they used
+to print `none: none` silently; see that item's Outcome). `X<e>` reads a
+component of a *type-as-value* (`<Int, string><0>` is `Int : Type`); over a
+runtime array or tuple it produces no value.
 
 ### P1-35 — A raw read `X<e>` of a runtime container yields `none`, silently `reported`
 
@@ -2630,6 +2632,87 @@ check has not been run.
 `needs-test`: whichever mechanism it is, the smallest falsifier is a program whose
 value is `[1, 2]<0>` and whose output is `1: Int` — or, if the intended answer is a
 refusal, one that reports *something* rather than printing `none`.
+
+**Outcome — located, and it is the second candidate.** `Module::eval_errors` is
+empty at the end of a `[1, 2]<0>` build, `ok` is `true`, and the recorded
+`IndexTarget` only appears when the *host* then reads `Build::root_val` — i.e.
+after the build has already decided it was fine. The cause is
+`check_raw_index` (`checker/indexing.rs:110`): it stored the **raw read
+operation** as the expression's `term` instead of a `[value, type]` pair, and
+left `val` to be derived. Two consequences, both measured:
+
+- `Checker::value_of` derived the value as element 0 of that term, so the read's
+  *value* was the element's own value slot — right exactly when the element is
+  itself a pair, which is why the type-as-value form worked and
+  `[1, 2]<0>`, whose element is an `Int`, read element 0 of a scalar.
+- the definition pass evaluates `root_term` (`checker.rs:741`), so with a bare
+  read operation as the term it evaluated **only the element** and never the
+  type slot read. That failure was recorded, but outside the window
+  `Build::ok` is decided in (`checker.rs:770-773`, and `root_val` is computed
+  at `:774`, after it) — hence `none: none` with nothing reported.
+
+**The fix is the pair every other expression's term is.** `element_read`
+(`:145`) now builds the element, its two slot reads, and the pair of them, and
+returns that pair plus the element; both raw reads — `check_raw_index`
+(`:110`) and `check_raw_named_field` (`checker/structs.rs:114`), which had the
+identical shape — store it. The build therefore evaluates both slot reads, the
+recorded failure lands inside `ok`'s window, and `[1, 2]<0>`, `x = [1, 2]; x<0>`
+and `(1, 2)<0>` are reported instead of printed.
+
+**One shape was tried and reverted, and the measurement is why.** Making the
+read's *value* the element itself (rather than the element's value slot) also
+gives `[1, 2]<0>` a value, but it changes the documented reading:
+`<Int, string><0> == Int` answered `1` before it and `0` after, and
+`f = x => x<1>; f <Int, string> == string` went from `1: Int` to `0: Int`. The
+contract in [raw-index.md](raw-index.md) is the element's *pair*, both slots
+read lazily, and that is what now ships; the four such comparisons are pinned.
+
+**The message had to name the right side of the read.** The generic
+`RuntimeIndexTarget` wording ("this value is not a container") blames the
+container the user wrote, but `[1, 2]` *is* a container — the element `1` is
+not. The new `DiagKind::RuntimeRawElement` (`diagnostic.rs:110`, rendered at
+`language/src/render.rs:190`) reads *"this raw read found an element that is not
+a value/type pair — `X<e>` reads the element's own pair, so the container holds
+pairs (a type value); a runtime array's element is read with `e[i]`"*. It is
+picked by `is_raw_read_element` (`diagnostic.rs:492`): the raw reads register an
+edge for the *element* node at the read's type slot, so a non-container there is
+the element and anywhere else is still the container's own failure.
+
+**Tests.** `crates/lichen-language/tests/pipeline.rs` adds
+`a_raw_read_of_a_runtime_container_reports_the_non_pair_element` (the failure, its
+span, the bound-name form, the deferred form, and the untouched generic wording
+for `5<0>`) — **watched to go red**, failing at `pipeline.rs:62` (*"should
+fail"*) with the fix stashed — and
+`a_raw_read_of_a_type_value_reads_the_components_pair`, which passes before and
+after by construction: it is the guard on the four comparisons above, which the
+reverted shape broke. Two `registry.rs` tests that pinned the *old* behaviour
+are re-pinned, both watched to fail before: a package exporting `[1, 2]<0>` now
+fails in **its own** build (`cannot load package 'raw.lichen': …`) rather than
+reaching the importer and tripping the `ImportExport` guard, and `[[1]]<0>`
+reports its out-of-bounds type slot (`index 1 out of bounds (array length 1)`).
+`<Int, string><0>` as a package export imports as `Int : Type` on both trees, so
+the fix buys no new capability there — only the honest diagnostic. The stale
+comments that credited the raw read's missing pair as the `ImportExport`
+guard's reason (`checker.rs`'s `Static` arm, `DiagKind::ImportExport`) were
+corrected; the guard itself stays. `lichen-highlevel`, `lichen-language`,
+`lichen-compute`, `lichen-lowlevel` and `lichen-language-server` are green.
+
+**Residual — attribution only.** Through a *deferred* container
+(`f = k => k<0>; f [1, 2]`) the failure is reported but with the generic wording
+and no caret: it lands on an apply clone, which has no expression of its own to
+blame — the same limitation `RuntimeApplyTarget` has (`P1-6`). It used to be
+silent, so what is new is that it is reported at all.
+
+**The fork this item does not close.** The audit's preferred falsifier was
+`1: Int`. That answer is *not derivable* under the raw form's contract: the
+element's type comes from reading its type slot, and `1` has none. Producing it
+would mean deriving the result's type from the container's array type instead —
+the validated `e[i]`'s derivation, with its bounds assert — which is the
+language change `D16` declined to make for `e[i]`, not a fix. The queue takes
+the contract as it is written: the container may be any expression, its elements
+must be pairs, and anything else is a reported runtime error. `raw-index.md` and
+the spec (§2.1 and §3) now say exactly that, replacing the claim that `X<e>`
+reads "a component … of any expression's value".
 
 ## P2 — architecture
 

@@ -90,11 +90,23 @@ where
     /// stays lazy — the lowlevel `Index` defers — and resolves at the apply,
     /// exactly the laziness the wrapper field reads rely on.
     ///
-    /// The result is the element's own pair: `term[e]` is the raw read
-    /// `Index(container_value, index)`; the value is element 0 of that pair
-    /// and the type element 1, both read lazily.  An out-of-bounds index or a
-    /// non-array container is a runtime `Index` evaluation error (never a
-    /// static diagnostic), per the no-validation contract.
+    /// The result is **the element's own pair**: the element is
+    /// `Index(container_value, index)`, the value is its slot 0 and the type its
+    /// slot 1, all three read lazily.  The *term* is therefore that
+    /// `[value, type]` pair, not the bare element: every expression's term is a
+    /// pair, and a raw read that stored the element instead left the build
+    /// evaluating only the element — so a failure in either slot read landed
+    /// after the build had decided `ok`, and a container whose elements are not
+    /// pairs printed a silent `none` where the value should be.  See the
+    /// item's Outcome in [code-audit.md].
+    ///
+    /// An out-of-bounds index, a non-container, or a container whose element is
+    /// not a pair at all are runtime `Index` evaluation errors — recorded
+    /// during the definition pass, so the build is rejected.  A *static*
+    /// diagnostic would contradict the no-validation contract; the element
+    /// case gets its own wording ([`DiagKind::RuntimeRawElement`]) because the
+    /// generic one blames the container the user wrote rather than the element
+    /// the read produced.
     pub(super) fn check_raw_index(
         &mut self,
         e: ExprId,
@@ -106,36 +118,54 @@ where
         let container_value = self.value_of(container);
         let index_value = self.value_of(index);
         self.node_edges.insert(index_value, self.loc(index, 0));
-        let (value_node, ty_node) = self.element_read(container_value, index_value);
-        self.state[e].term = Some(value_node);
+        let (pair, element, ty_node) = self.element_read(container_value, index_value);
+        // The element is the target of both slot reads, so this edge is what
+        // gives a failed one a span — and what tells the diagnostics builder
+        // that a non-container there is the element, not the container.
+        self.node_edges.insert(element, self.loc(e, 1));
+        self.state[e].term = Some(pair);
+        // Left to [`Super::value_of`], which reads the pair's value slot — the
+        // same node [`Self::element_read`] built, memoized here.
         self.state[e].val = None;
         self.state[e].ty = Some(ty_node);
-        value_node
+        pair
     }
 
-    /// The structural element read shared by the raw positional form `X<e>`
-    /// and the raw named form `X::a`: `value = Index(container_value,
-    /// subscript)`, `type = Index(value, 1)` — the element's own pair, both
-    /// read lazily, with no type validation.  `subscript` is already the
-    /// resolved slot: the caller's index value, or a name table's read.
+    /// The element read shared by the raw positional form `X<e>` and the raw
+    /// named form `X::a`: `element = Index(container_value, subscript)`, then
+    /// the element's own pair — `Index(element, 0)` for the value and
+    /// `Index(element, 1)` for the type — both read lazily, with no type
+    /// validation.  `subscript` is already the resolved slot: the caller's
+    /// index value, or a name table's read.
+    ///
+    /// Returns the read's `(pair, element, type)`: the pair is the term, the
+    /// element is what a failed slot read is attributed to, and the type slot
+    /// read is the expression's own type.  The value slot read is left to
+    /// [`Super::value_of`], which derives the same node from the pair.
     pub(super) fn element_read(
         &mut self,
         container_value: NodeId,
         subscript: NodeId,
-    ) -> (NodeId, NodeId) {
-        let value_ops = self.array_node(self.current_block, &[container_value, subscript]);
+    ) -> (NodeId, NodeId, NodeId) {
+        let element_ops = self.array_node(self.current_block, &[container_value, subscript]);
+        let element = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(element_ops),
+        );
+        let value_ops = self.array_node(self.current_block, &[element, self.zero()]);
         let value_node = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
             Some(value_ops),
         );
-        let ty_ops = self.array_node(self.current_block, &[value_node, self.one()]);
+        let ty_ops = self.array_node(self.current_block, &[element, self.one()]);
         let ty_node = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
             Some(ty_ops),
         );
-        (value_node, ty_node)
+        (self.pair_of(value_node, ty_node), element, ty_node)
     }
 
     /// A table lookup `t{k}`: the lowlevel `TableGet` reads the entry whose

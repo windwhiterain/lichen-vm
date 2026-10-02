@@ -187,6 +187,12 @@ where
         DiagKind::RuntimeIndexTarget => {
             "this value is not a container — it has no element to read".to_string()
         }
+        DiagKind::RuntimeRawElement => {
+            "this raw read found an element that is not a value/type pair — \
+             `X<e>` reads the element's own pair, so the container holds pairs \
+             (a type value); a runtime array's element is read with `e[i]`"
+                .to_string()
+        }
         DiagKind::RuntimeIndexSubscript => {
             "this value is not an index — an element can only be read by position".to_string()
         }

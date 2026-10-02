@@ -236,8 +236,10 @@ delimiter is a fresh atom — an argument of an application:
   `f ([1, 2])` applies `f` to the array.
 - `X<e>` (glued `<`) is a **raw index**: element `e` of `X`'s *value*, read
   with **no type validation** (see §3).  It reads a component of a type-as-value
-  (`<Int, string><0>`, `struct<Int, string><1>`) or of any expression's value,
-  and stays lazy on an unbound container.  A spaced `<` is a fresh tuple-type
+  (`<Int, string><0>`, `struct<Int, string><1>`) — any expression may be the
+  container, and it stays lazy on an unbound one, but the element it reads must
+  itself be a value/type pair, which is what every element of a type-as-value
+  is.  A spaced `<` is a fresh tuple-type
   atom — an application argument (`f <3>` is a parse error, a single-element
   tuple type; a two-element one, `f <Int, Type>`, applies `f` to it).  A type
   tuple in argument position is parenthesized: `f (<Int, Type>)`.  The array
@@ -454,10 +456,18 @@ span back to the original file.
   a *type-as-value* directly: `<Int, string><0>` is the `Int` type (the tuple
   type's first element), `struct<Int, string><1>` the `string` type, and any
   expression may be the container (a bound name, a parameter, a call result).
-  Because it is unvalidated, an index into a concretely non-positional value
-  (an atomic type, an `Int`) or an out-of-bounds index is a **runtime**
-  lowlevel `Index` evaluation error, never a static diagnostic; an unbound
-  container stays lazy and resolves at the apply.  This is the syntax the
+  The read's result is **the element's own pair**, its value in the value slot
+  and its type in the type slot, both read lazily.  Because it is unvalidated,
+  an index into a concretely non-positional value (an atomic type, an `Int`) or
+  an out-of-bounds index is a **runtime** lowlevel `Index` evaluation error,
+  never a static diagnostic; an unbound container stays lazy and resolves at the
+  apply.  That includes the element's own type slot: the *container* may be any
+  expression, but its elements must be value/type pairs — which is what every
+  element of a type-as-value is, and what a plain runtime array or tuple is
+  not.  `[1, 2]<0>` therefore reads an `Int` element whose type slot does not
+  exist and is a runtime error (*"this raw read found an element that is not a
+  value/type pair"*), not a silent `none`; `e[i]` is how a runtime array's
+  element is read.  This is the syntax the
   array type used to occupy — the array type is now the keyword-led
   `array<T, n>`.
 - **The raw named read `X::a`.**  The glued `::` postfix reads field `a` from a
