@@ -12,13 +12,16 @@ use std::sync::{Arc, Mutex};
 use lichen_graph_ir::{Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ParallelBackend,
-    Pending, ResidentId,
+    Pending, ResidentId, ScalarClass, ScalarData,
 };
 
 /// `out[i] = in[i] + in[i] + 1`, which is `adds` everywhere else in this tree.
 fn fragment() -> KernelFragment {
     KernelFragment {
-        param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
         body: vec![
             KernelInstr::Const(0),
             KernelInstr::LocalGet(1),
@@ -36,6 +39,8 @@ fn fragment() -> KernelFragment {
         ],
         inputs: 1,
         outputs: 1,
+        input_classes: vec![ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
         results: 1,
         int_width: IntWidth::I64,
     }
@@ -131,9 +136,14 @@ impl ParallelBackend for Stub {
         }))
     }
 
-    fn fetch(&self, id: ResidentId, count: usize) -> Result<Vec<i64>, String> {
+    /// A host stub's buffers hold integers, so it answers with the class it
+    /// holds them as — the fetch's own class, which is what a real backend
+    /// takes from the buffer it was asked about.
+    fn fetch(&self, id: ResidentId, count: usize) -> Result<ScalarData, String> {
         self.asked.lock().unwrap().push("fetch");
-        Ok(self.data.lock().unwrap()[id.0 as usize - 1][..count].to_vec())
+        Ok(ScalarData::Int(
+            self.data.lock().unwrap()[id.0 as usize - 1][..count].to_vec(),
+        ))
     }
 
     fn release(&self, _id: ResidentId) {}
@@ -212,7 +222,7 @@ fn a_chain_computes_the_same_thing_under_both_policies() {
         let id = resident(out.last().expect("the last node produced one"));
         assert_eq!(
             stub.fetch(id, count).expect("the answer comes back"),
-            expected(count),
+            ScalarData::Int(expected(count)),
             "{policy:?}: adds, then adds"
         );
     }
@@ -389,7 +399,7 @@ fn a_dead_tail_still_returns_whatever_the_source_function_returned() {
     assert_eq!(
         stub.fetch(resident(&out[returned[0]]), count)
             .expect("the returned value comes back"),
-        (0..count as i64).map(|x| 2 * x + 1).collect::<Vec<i64>>(),
+        ScalarData::Int((0..count as i64).map(|x| 2 * x + 1).collect::<Vec<i64>>()),
         "which is the first node's answer and not the tail's"
     );
 }
@@ -466,7 +476,7 @@ fn a_count_can_be_one_of_the_graphs_own_values() {
         let computed = stub.fetch(id, count as usize).expect("a resident buffer");
         assert_eq!(
             computed,
-            (0..count).map(|x| 2 * x + 1).collect::<Vec<i64>>(),
+            ScalarData::Int((0..count).map(|x| 2 * x + 1).collect::<Vec<i64>>()),
             "the dispatch covered [0, {count}) because the count was the graph's second argument"
         );
     }

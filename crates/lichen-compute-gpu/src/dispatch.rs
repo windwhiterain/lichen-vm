@@ -55,7 +55,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use ash::vk;
-use lichen_kernel_ir::{BufferSlot, KernelFragment, ResidentId, fragment_digest};
+use lichen_kernel_ir::{BufferSlot, KernelFragment, ResidentId, ScalarData, fragment_digest};
 
 use crate::spirv::{self, Binding, LOCAL_SIZE_X, SpirvRefusal};
 
@@ -1590,8 +1590,18 @@ impl lichen_kernel_ir::ParallelBackend for GpuContext {
         ))
     }
 
-    fn fetch(&self, id: ResidentId, count: usize) -> Result<Vec<i64>, String> {
-        GpuContext::fetch(self, id, count).map_err(|error| error.to_string())
+    /// The inherent fetch returns integers because every buffer this context
+    /// allocates is `i64`: the emitter declares and emits one 64-bit unsigned
+    /// integer type, so there is no float buffer on the device to bring home.
+    /// The class the value carries is therefore `Int`, stated here rather than
+    /// derived, because the device has nothing to derive it from — the buffer a
+    /// resident id names does not record a class of its own.  A float element
+    /// type is the emitter's step, and this is where it will be read
+    /// (`docs/notes/floating-point.md` §3.8, §4.4).
+    fn fetch(&self, id: ResidentId, count: usize) -> Result<ScalarData, String> {
+        GpuContext::fetch(self, id, count)
+            .map(ScalarData::Int)
+            .map_err(|error| error.to_string())
     }
 
     fn release(&self, id: ResidentId) {

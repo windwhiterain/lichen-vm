@@ -43,6 +43,104 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
+/// Which scalar class a value, a parameter leaf or a buffer element is.
+///
+/// # Why this is beside [`IntWidth`] rather than inside it
+///
+/// The two answer different questions and only one of them has a width. An
+/// `Int`'s width is a compiler decision `IntWidth` names; a `Float`'s width is
+/// `f32` and is fixed, so a single variant space covering both would give
+/// `bits()` two ways to answer `32` and no way to tell which class it was
+/// describing — and every `bits() != 64` check in a backend would then accept a
+/// float fragment as an integer one (`docs/notes/floating-point.md` §4.4).
+///
+/// # Fieldless on purpose
+///
+/// The class is a tag, and the payload's representation belongs to whoever
+/// holds the payload ([`ScalarData`] for a fetched buffer). A fieldless enum
+/// derives `Eq`, which the value-carrying carriers beside it need: a resident
+/// buffer's class travels in a struct that *is* `Eq` because a device buffer's
+/// identity and count are, and an `f32` payload is not `Eq` at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ScalarClass {
+    /// An unsigned machine-sized integer — the language's `Int`.
+    Int,
+    /// A 32-bit float — the language's `Float`.
+    Float,
+}
+
+/// The elements of a buffer a backend has handed back, with the class they are
+/// to be read as.
+///
+/// # Why the class rides in the value rather than in a parameter
+///
+/// [`ParallelBackend::fetch`] is the read-back, and its implementor has no
+/// fragment to consult: the only thing the caller holds is a
+/// [`ResidentId`] and the count it was issued with. So the class has to be
+/// **forced onto the value** at the one point where the data crosses back —
+/// which is what this type is. Its two variants make the class and the
+/// representation inseparable, so a payload cannot be read as the wrong class:
+/// a `Float` buffer cannot be handed over as a bare `Vec<i64>` that a reader
+/// would take for integers.
+///
+/// # The bits, not a conversion
+///
+/// The payload is the buffer's bytes, and the variant says how to read them.
+/// No conversion happens here: this is the ABI's carrier, not a lowerer. The
+/// one conversion the design has is a **boundary** conversion a lowering
+/// chooses later, at a place nothing above the backend decided
+/// (`docs/notes/floating-point.md` §4.3).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScalarData {
+    /// `Int` elements, one machine-sized unsigned integer each.
+    Int(Vec<i64>),
+    /// `Float` elements, one `f32` each.
+    Float(Vec<f32>),
+}
+
+impl ScalarData {
+    /// The class this payload is to be read as.
+    pub fn class(&self) -> ScalarClass {
+        match self {
+            ScalarData::Int(_) => ScalarClass::Int,
+            ScalarData::Float(_) => ScalarClass::Float,
+        }
+    }
+
+    /// How many elements the payload holds.
+    pub fn len(&self) -> usize {
+        match self {
+            ScalarData::Int(elements) => elements.len(),
+            ScalarData::Float(elements) => elements.len(),
+        }
+    }
+
+    /// Whether the payload holds no elements.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The elements as an integer payload, or `None` for a float one.
+    ///
+    /// A total accessor rather than an `unwrap`: a caller that has already
+    /// matched the class would otherwise be re-deciding it, and one that has
+    /// not gets to name the mismatch instead of panicking.
+    pub fn as_ints(&self) -> Option<&[i64]> {
+        match self {
+            ScalarData::Int(elements) => Some(elements),
+            ScalarData::Float(_) => None,
+        }
+    }
+
+    /// The elements as a float payload, or `None` for an integer one.
+    pub fn as_floats(&self) -> Option<&[f32]> {
+        match self {
+            ScalarData::Float(elements) => Some(elements),
+            ScalarData::Int(_) => None,
+        }
+    }
+}
+
 /// A backend's own name for a buffer it is holding.
 ///
 /// **Opaque on purpose, and backend-scoped:** this is whatever the backend calls
@@ -58,9 +156,22 @@ pub struct ResidentId(pub u64);
 /// nothing to use again**: handing back a [`Self::Resident`] instead of its
 /// contents is what lets a chain of kernels run without the intermediate results
 /// ever reaching the host.
+///
+/// # The class of a slot is the fragment's, not the slot's
+///
+/// A host slot is a raw bit payload, and the class it is to be read as is a fact
+/// of the *dispatch*: [`KernelFragment::input_classes`] says what each position
+/// holds, and a caller that agrees with the fragment it named has said
+/// everything there is to say about the slot.  So this type carries no class of
+/// its own, and it stays `Eq`: a typed `&[f32]` variant would duplicate the
+/// fragment's list, and would put a payload that is not `Eq` into a type whose
+/// whole use is naming a buffer cheaply.  A resident slot's class is the
+/// resident value's, where it is genuinely per-buffer and not derivable from an
+/// ordinal — see `ResidentBuffer` in `lichen-compute`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferSlot<'a> {
-    /// Data the host already holds, at least `count` elements long.
+    /// Data the host already holds, at least `count` elements long, read as the
+    /// class [`KernelFragment::input_classes`] declares for this position.
     Host(&'a [i64]),
     /// A buffer the backend is already holding, from an earlier [`ParallelBackend::run`].
     Resident(ResidentId),
@@ -185,11 +296,17 @@ pub trait ParallelBackend: Send + Sync {
     /// and so the point that costs: a run whose results are never fetched never
     /// pays for them.
     ///
+    /// **The elements come back as [`ScalarData`], and that is where the class
+    /// is forced onto the value.** An implementor has no fragment to read a
+    /// class off — the caller holds a [`ResidentId`] and a count and nothing
+    /// else — so the data itself has to say what it is, or a float result
+    /// buffer would come back as `i64` and be read as integers.
+    ///
     /// **The buffer must have been waited for.** That is automatic for anything
     /// from [`Self::run`], and for anything from [`Pending::wait`] — but not for
     /// an id read off [`Pending::outputs`] before the wait, and the difference is
     /// not a slow read: it is whatever the device happened to have written.
-    fn fetch(&self, id: ResidentId, count: usize) -> Result<Vec<i64>, String>;
+    fn fetch(&self, id: ResidentId, count: usize) -> Result<ScalarData, String>;
 
     /// Release a resident buffer. Idempotent on an id already released.
     fn release(&self, id: ResidentId);
@@ -290,10 +407,18 @@ impl IntWidth {
 /// host IR: a backend needs the domain's *structure* (to flatten it into a
 /// parameter list) and nothing else, and every shape it could encounter is one
 /// of these two variants.
+///
+/// # The leaf carries its class
+///
+/// A parameter's scalar class is a property of its leaf, not of the fragment:
+/// a tuple domain's elements may be classes of their own, and the class of a
+/// value the body computes is the class of the leaf it lands in. Carrying it
+/// here is also what makes the digest cover it for free —
+/// [`fragment_digest`] hashes `param_shape` whole.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KernelShape {
-    /// One scalar leaf.
-    Scalar,
+    /// One scalar leaf, of the class it names.
+    Scalar(ScalarClass),
     /// A tuple, flattened in order into scalar leaves.
     Tuple(Vec<KernelShape>),
 }
@@ -305,9 +430,13 @@ impl KernelShape {
     /// This is the count a backend's parameter list is built from, so it is
     /// load-bearing: a backend that flattened the same shape differently would
     /// call one kernel with another's arguments.
+    ///
+    /// The count is a function of the *structure* alone, so a leaf's class does
+    /// not change it: a float local and an integer local are one local each,
+    /// which is what the compiler's own arity filler states on the host side.
     pub fn flat_arity(&self) -> usize {
         match self {
-            KernelShape::Scalar => 1,
+            KernelShape::Scalar(_) => 1,
             KernelShape::Tuple(items) => items.iter().map(KernelShape::flat_arity).sum(),
         }
     }
@@ -426,6 +555,31 @@ pub struct KernelFragment {
     /// exactly this many buffers and never discovers at run time which ones were
     /// written.
     pub outputs: usize,
+    /// The element class of each input buffer, **one entry per read position**,
+    /// in position order — so the length is [`Self::inputs`].
+    ///
+    /// # Why this is beside `inputs` rather than in `param_shape`
+    ///
+    /// The reason `inputs` itself is not in `param_shape` applies verbatim: a
+    /// parallel fragment's shape is `(config, index)` — integers — however many
+    /// float buffers it reads, because the buffers are bound as storage buffers
+    /// and reached through a read's position rather than through a further
+    /// parameter. A class that only lived on the parameter leaves would
+    /// therefore have nothing to say about a buffer at all.
+    ///
+    /// The length is the **declared** [`Self::inputs`], including positions a
+    /// body never read but which the count still covers (read positions are a
+    /// sparse space, so the highest one read sizes the list).
+    pub input_classes: Vec<ScalarClass>,
+    /// The element class of each output buffer, **one entry per write ordinal**,
+    /// in ordinal order — so the length is [`Self::outputs`].
+    ///
+    /// The ordinal/write-position correspondence is the same compile-time
+    /// constant [`KernelInstr::BufferWriteCall`] is fed, so a caller reading
+    /// element `k` of this list is reading the class of the buffer write `k`
+    /// filled. A backend reads it where it prepares a buffer; a host reads it
+    /// when a resident buffer has to say what its elements are.
+    pub output_classes: Vec<ScalarClass>,
     /// How many values the body leaves on the stack: the function's result
     /// arity. `1` for a scalar body, and one per leaf for a tuple codomain.
     pub results: usize,
@@ -450,6 +604,15 @@ pub struct KernelFragment {
 /// The `Debug` rendering is the canonical form because it is a total,
 /// deterministic function of each field, and this runs once per `jit` against a
 /// compile it exists to avoid repeating.
+///
+/// # The class-carrying fields are hashed here, and that is not optional
+///
+/// `param_shape` is hashed whole, so a leaf's class rides along with it. The two
+/// buffer-class lists do not: they are separate fields, and a field left out of
+/// this function is exactly the silent fragment-sharing failure the paragraph
+/// above names — two fragments that read buffers of different classes would
+/// intern to one identity, and one kernel's compiled form would be served for
+/// the other's.
 pub fn fragment_digest(fragment: &KernelFragment) -> u64 {
     use std::hash::{Hash as _, Hasher as _};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -457,6 +620,8 @@ pub fn fragment_digest(fragment: &KernelFragment) -> u64 {
     format!("{:?}", fragment.body).hash(&mut hasher);
     fragment.inputs.hash(&mut hasher);
     fragment.outputs.hash(&mut hasher);
+    format!("{:?}", fragment.input_classes).hash(&mut hasher);
+    format!("{:?}", fragment.output_classes).hash(&mut hasher);
     fragment.results.hash(&mut hasher);
     format!("{:?}", fragment.int_width).hash(&mut hasher);
     hasher.finish()

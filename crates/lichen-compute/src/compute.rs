@@ -62,7 +62,7 @@ use lichen_highlevel::program::{Ctx, HighProgram, TypeOperator, ValueType};
 use lichen_highlevel::shape::{PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, low_type_of_slot};
 use lichen_kernel_ir::{
     BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
-    fragment_digest,
+    ScalarClass, ScalarData, fragment_digest,
 };
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
@@ -213,10 +213,12 @@ mod kernel_intern_tests {
 
     fn fragment(body: Vec<KernelInstr>) -> KernelFragment {
         KernelFragment {
-            param_shape: KernelShape::Scalar,
+            param_shape: KernelShape::Scalar(ScalarClass::Int),
             body,
             inputs: 0,
             outputs: 0,
+            input_classes: Vec::new(),
+            output_classes: Vec::new(),
             results: 1,
             int_width: IntWidth::I64,
         }
@@ -570,6 +572,21 @@ pub enum ComputeValue {
 /// the value rather than in a side table so that an id cannot outlive the length
 /// it was issued with, and so two backends' ids can never be confused for one
 /// another's by a lookup.
+///
+/// # The element class travels here too, and for the same reason
+///
+/// It is a fact about *this buffer* that is not recoverable from the id, and the
+/// id is all a fetch is given. It is taken from the producing fragment's
+/// [`KernelFragment::output_classes`] at the ordinal the buffer was produced at,
+/// so a value that stays on a device names what its elements are without anyone
+/// having to still hold the fragment it came from — and a later run can check
+/// its own declared input class against it rather than reading a float buffer as
+/// integers (`docs/notes/floating-point.md` §3.8, §4.4).
+///
+/// The class is a fieldless tag, so this struct stays `Eq` and a resident value
+/// stays comparable: an `f32` *payload* is not `Eq`, and it is deliberately not
+/// here — the elements are on the device and are handed over, classed, only by
+/// [`lichen_kernel_ir::ParallelBackend::fetch`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResidentBuffer {
     /// The backend's own name for the buffer. Meaningless outside its issuer,
@@ -577,6 +594,8 @@ pub struct ResidentBuffer {
     pub id: ResidentId,
     /// How many elements the run produced — the count, not the padded length.
     pub count: usize,
+    /// The class the elements are to be read as.
+    pub class: ScalarClass,
 }
 
 /// What one parallel run produced: host data, or results left on the device.
@@ -1371,12 +1390,20 @@ where
                             ResidentBuffer {
                                 id: resident.id,
                                 count: index + 1,
+                                class: resident.class,
                             },
                             0,
                         ) {
-                            Ok(data) => <P::Value as From<LowValue>>::from(LowValue::USize(
-                                data[index] as usize,
-                            )),
+                            // The element becomes the value its class says it
+                            // is: an integer element is the scalar it always
+                            // was, and a float element is the language's own
+                            // `Float` — not an integer it was never computed as.
+                            Ok(ScalarData::Int(elements)) => <P::Value as From<LowValue>>::from(
+                                LowValue::USize(elements[index] as usize),
+                            ),
+                            Ok(ScalarData::Float(elements)) => {
+                                <P::Value as From<LowValue>>::from(LowValue::Float(elements[index]))
+                            }
                             Err(err) => {
                                 module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
                                 <P::Value as From<LowValue>>::from(LowValue::Parameterized)
@@ -1416,7 +1443,7 @@ where
                 // A resident buffer is fetched here, in full: `collect` is the
                 // operation that says "give me these as host values", so this is
                 // the one point at which a `"gpu"` chain's results cross the bus.
-                let results: Vec<i64> = match module
+                let results: ScalarData = match module
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
                 {
@@ -1427,7 +1454,7 @@ where
                         let Some(items) = buffer_items(&payload) else {
                             return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                         };
-                        items.to_vec()
+                        ScalarData::Int(items.to_vec())
                     }
                     Some(ComputeValue::DeviceBuffer(resident)) => {
                         match fetch_resident(resident, 0) {
@@ -1449,20 +1476,22 @@ where
                 };
                 // Materialize each element as a fresh scalar node and build a
                 // real lichen array value over them, so `collect` yields an
-                // ordinary array the user can index/treat as `array<Int, n>`.
-                let items: Vec<ArrayItem> = results
-                    .iter()
-                    .map(|value| {
-                        let node = module.add_node(
-                            block,
-                            None,
-                            Some(<P::Value as From<LowValue>>::from(LowValue::USize(
-                                *value as usize,
-                            ))),
-                        );
-                        ArrayItem::new(AnyNodeId::Dynamic(node))
-                    })
-                    .collect();
+                // ordinary array the user can index/treat as `array<Int, n>` —
+                // or, for a float buffer, as the array of `Float` it is. The
+                // element's class is the buffer's, so an array collected from a
+                // float buffer holds floats rather than their bit patterns.
+                let items: Vec<ArrayItem> = match results {
+                    ScalarData::Int(values) => values
+                        .into_iter()
+                        .map(|value| {
+                            scalar_item::<P>(module, block, LowValue::USize(value as usize))
+                        })
+                        .collect(),
+                    ScalarData::Float(values) => values
+                        .into_iter()
+                        .map(|value| scalar_item::<P>(module, block, LowValue::Float(value)))
+                        .collect(),
+                };
                 let handle = module.alloc_array(&items, block);
                 <P::Value as From<LowValue>>::from(LowValue::Array(handle))
             }
@@ -1687,6 +1716,8 @@ where
         body,
         inputs: tally.reads,
         outputs: tally.writes,
+        input_classes: tally.input_classes(),
+        output_classes: tally.output_classes(),
         results: leaves.len(),
         int_width: IntWidth::I64,
     })
@@ -1865,10 +1896,15 @@ where
         // `(config, index)` however many buffers the body reads: the buffers are
         // bound rather than passed, so this shape is the parallel signature and
         // says nothing about them. `tally.reads` is what says that.
-        param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
         body: body_instr,
         inputs: tally.reads,
         outputs: tally.writes,
+        input_classes: tally.input_classes(),
+        output_classes: tally.output_classes(),
         results: 1,
         int_width: IntWidth::I64,
     })
@@ -2210,26 +2246,27 @@ fn kernel_domain(domain: LowShape) -> Result<LowShape, String> {
 /// **Total, on purpose, and it preserves the arity convention.** A domain
 /// `kernel_domain` accepted is a scalar or a tuple, but a tuple's *element* is
 /// not itself re-checked, so a shape with no IR counterpart can still arrive
-/// here; those fold to [`KernelShape::Scalar`], which flattens to one leaf
-/// exactly as the `flat_arity` filler arms do for the same shapes.  A separate
-/// refusal arm would be a second failure mode for a case the parameter-count
-/// path already tolerates, and would change behaviour rather than preserve it.
+/// here; those fold to [`KernelShape::Scalar`] with [`ScalarClass::Int`], which
+/// flattens to one leaf exactly as the `flat_arity` filler arms do for the same
+/// shapes.  A separate refusal arm would be a second failure mode for a case
+/// the parameter-count path already tolerates, and would change behaviour
+/// rather than preserve it.
+///
+/// **The class is read off the leaf, and a float leaf is answered as `Float`.**
+/// This is the *shape* question ("one value, or a tuple of them, of what
+/// class"), not the dispatchability one; the refusal that keeps a float out of
+/// an `i64` wasm signature is `kernel_domain`'s and has already run, so a float
+/// answer here states the class a float parameter would have rather than one
+/// anything reaches today (`docs/notes/floating-point.md` §3.8, §4.4, §5).
 fn kernel_shape(domain: &LowShape) -> KernelShape {
     match domain {
-        // A float is a **decided scalar shape**, so it is answered as one: this
-        // is the *shape* question ("one value, or a tuple of them"), not the
-        // dispatchability one, and a float domain is one value.  The refusal
-        // that keeps it out of an `i64` wasm signature is `kernel_domain`'s, and
-        // it has already run: `domain_obstacle` refuses a float at every
-        // position a domain can hold, so this arm states the layout a float
-        // would have rather than one anything reaches
-        // (`docs/notes/floating-point.md` §3.8, §5).
-        LowShape::USize | LowShape::Float => KernelShape::Scalar,
+        LowShape::USize => KernelShape::Scalar(ScalarClass::Int),
+        LowShape::Float => KernelShape::Scalar(ScalarClass::Float),
         LowShape::Tuple(items) => KernelShape::Tuple(items.iter().map(kernel_shape).collect()),
         LowShape::Unknown
         | LowShape::Array(_, _)
         | LowShape::Function(..)
-        | LowShape::Table(..) => KernelShape::Scalar,
+        | LowShape::Table(..) => KernelShape::Scalar(ScalarClass::Int),
     }
 }
 
@@ -2344,7 +2381,7 @@ const CONDITIONAL_WRITE: &str = "a `compute.write` inside a conditional is not s
 /// discover them is what makes the two numbers impossible to disagree with the
 /// body: a caller that is handed the wrong number is refused rather than given a
 /// shader that reads a binding nobody bound.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 struct Positions {
     /// The `out_pos` the next `compute.write` is given, and the number of
     /// writes emitted so far once the walk returns — the write's position in
@@ -2355,6 +2392,52 @@ struct Positions {
     /// read positions are a sparse space: a body reading only `cfg(1)(1)` still
     /// needs two buffers, or the one at position 1 was never bound.
     reads: usize,
+    /// The element class of each write ordinal emitted, in ordinal order — the
+    /// class half of the same fact [`Self::writes`] counts, filled at the same
+    /// site so the two cannot disagree.
+    write_classes: Vec<ScalarClass>,
+    /// The element class of each input position read, in read order — the class
+    /// half of the same fact [`Self::reads`] bounds. A body that never reads a
+    /// buffer leaves this empty, exactly as a body that reads one leaves `0` in
+    /// the other.
+    ///
+    /// **This is a list of the reads, not of the positions**, and the two are not
+    /// the same list: [`Self::reads`] is a *max* over a sparse position space, so
+    /// a body that reads position 1 and not position 0 has one entry here and a
+    /// count of two. [`Self::input_classes`] is what reconciles them, and the
+    /// reconciliation is decided in one place rather than left to each caller.
+    read_classes: Vec<ScalarClass>,
+}
+
+impl Positions {
+    /// The class to record for one buffer element the body reads or writes.
+    ///
+    /// **`Int` is the whole of today's answer, and the ABI is where that lives
+    /// rather than here.** Every buffer a kernel can read today is produced by
+    /// an `i64` source and every write is emitted as an `i64` value, because
+    /// `assemble_module` types both the body and the buffers at `ValType::I64`
+    /// and no float ever reaches an emit site. Reading the class off the
+    /// *shape* of the value instead would be a second answer to a question the
+    /// emitter has already answered once, at the point the module's signature is
+    /// built — and it is the step that gives a float a `ValType::F32` which
+    /// turns both of these into the value's real class
+    /// (`docs/notes/floating-point.md` §3.8, §4.4, §5).
+    const BUFFER_ELEMENT: ScalarClass = ScalarClass::Int;
+
+    /// The declared class of every input position, one per position, at least
+    /// [`Self::reads`] long: a position a body never read is still a position a
+    /// caller binds, and it takes the default above for the same reason the
+    /// default is the default.
+    fn input_classes(&self) -> Vec<ScalarClass> {
+        let mut classes = self.read_classes.clone();
+        classes.resize(self.reads.max(classes.len()), Self::BUFFER_ELEMENT);
+        classes
+    }
+    /// The declared class of every write ordinal, one per ordinal — this is the
+    /// list the entries were pushed in.
+    fn output_classes(&self) -> Vec<ScalarClass> {
+        self.write_classes.clone()
+    }
 }
 
 /// The kernel-safe reading of a highlevel binary operator — the one conversion
@@ -2644,6 +2727,7 @@ where
                 // a sparse space, and a body that reads only `cfg(1)(1)` still
                 // needs two buffers bound or the one it read was never bound.
                 tally.reads = tally.reads.max(pos + 1);
+                tally.read_classes.push(Positions::BUFFER_ELEMENT);
                 body.push(KernelInstr::Const(pos as i64));
                 emit_node(module, params, idx, body, tally)?;
                 body.push(KernelInstr::BufferReadCall);
@@ -2666,6 +2750,7 @@ where
                 let val = dyn_node(items[2].node)?;
                 let out_pos = tally.writes;
                 tally.writes += 1;
+                tally.write_classes.push(Positions::BUFFER_ELEMENT);
                 body.push(KernelInstr::Const(out_pos as i64));
                 emit_node(module, params, idx, body, tally)?;
                 emit_node(module, params, val, body, tally)?;
@@ -2846,7 +2931,7 @@ where
         // Each candidate is emitted from the same `tally` counts, so a failed
         // attempt cannot leave the position counters advanced by instructions
         // that are then thrown away.
-        let mut candidate_tally = *tally;
+        let mut candidate_tally = tally.clone();
         match emit_tuple_leaves(
             module,
             params,
@@ -2950,7 +3035,7 @@ scalar(s)",
             KernelShape::Tuple(nested) => {
                 emit_tuple_leaves(module, params, *element, nested, out, tally)?
             }
-            KernelShape::Scalar => emit_node(module, params, *element, out, tally)?,
+            KernelShape::Scalar(_) => emit_node(module, params, *element, out, tally)?,
         }
     }
     Ok(())
@@ -3429,6 +3514,27 @@ where
             LowValue::USize(_) => "a number",
             other => argument_kind(Some(other)),
         })
+}
+
+/// One collected element, materialized as a fresh scalar node of `block` and
+/// wrapped as an array item.
+///
+/// A buffer's elements all have the buffer's class, so a collected array is
+/// homogeneous — but an integer element and a float element are two different
+/// [`LowValue`] variants, and the class is only known at run time.  This is the
+/// one place that turns one element into one node, so the two classes cannot
+/// drift into two slightly different constructions.
+fn scalar_item<P>(module: &mut Module<P>, block: BlockId, element: LowValue) -> ArrayItem
+where
+    P: Program,
+    P::Value: From<LowValue>,
+{
+    let node = module.add_node(
+        block,
+        None,
+        Some(<P::Value as From<LowValue>>::from(element)),
+    );
+    ArrayItem::new(AnyNodeId::Dynamic(node))
 }
 
 /// A buffer position holding something that is not a buffer.
@@ -4491,10 +4597,23 @@ fn run_on_installed_backend(
     // remove; releasing here would free buffers the caller is about to hand to the
     // next kernel.  Both happen at the point the language actually wants host
     // data — `collect` and `read` — and the ids live as long as the values do.
+    //
+    // Each id's class is the producing fragment's declared class for that output
+    // ordinal, read here because this is the one place that holds both the
+    // fragment and the id it produced.  A fragment that declared fewer classes
+    // than outputs would be a fragment whose class list disagrees with its own
+    // count, so the fallback is the ABI's integer default rather than a panic in
+    // a run's result path.
+    let classes = &fragment.output_classes;
     Ok(RunOutcome::Resident(
         resident
             .into_iter()
-            .map(|id| ResidentBuffer { id, count })
+            .enumerate()
+            .map(|(ordinal, id)| ResidentBuffer {
+                id,
+                count,
+                class: classes.get(ordinal).copied().unwrap_or(ScalarClass::Int),
+            })
             .collect(),
     ))
 }
@@ -4671,7 +4790,23 @@ fn run_parallel_kernel(
         match input {
             RunInput::Host(data) => host_inputs.push(data),
             RunInput::Resident(resident) => {
-                host_inputs.push(fetch_resident(resident, position)?);
+                // A `"cpu"` run's own buffers are `i64`, so a float an earlier
+                // `"gpu"` run left on the device has no host form to be brought
+                // home into.  Named rather than reinterpreted: this is the same
+                // boundary a wrong class is refused at inside `fetch_resident`,
+                // seen from the side that knows what it was going to do with the
+                // values (`docs/notes/floating-point.md` §3.8, §4.3).
+                let data = fetch_resident(resident, position)?;
+                match data {
+                    ScalarData::Int(elements) => host_inputs.push(elements),
+                    ScalarData::Float(_) => {
+                        return Err(format!(
+                            "input buffer {position} of this run holds Float elements on the \
+                             device, and a \"cpu\" run has no float local to bring them home \
+                             into: the kernel ABI is `i64`-only"
+                        ));
+                    }
+                }
             }
         }
     }
@@ -4750,15 +4885,19 @@ fn run_parallel_kernel(
 /// Bring one resident buffer home, naming the position it was read at.
 ///
 /// The count the buffer holds travels with the value, so a fetch asks for what
-/// the run actually produced rather than for the device's padded allocation.
-fn fetch_resident(resident: ResidentBuffer, position: usize) -> Result<Vec<i64>, String> {
+/// the run actually produced rather than for the device's padded allocation.  The
+/// class travels with it too, which is what makes the answer's own class the
+/// value's rather than a guess: a fetch has no fragment to consult, so the only
+/// thing that can say whether these elements are integers or floats is the
+/// resident value it was asked about.
+fn fetch_resident(resident: ResidentBuffer, position: usize) -> Result<ScalarData, String> {
     let Some(backend) = lichen_kernel_ir::parallel_backend() else {
         return Err(format!(
             "input buffer {position} of this run is still on a device, but no compute backend \
              is installed any more, so there is nothing left that can bring it back"
         ));
     };
-    backend
+    let data = backend
         .fetch(resident.id, resident.count)
         .map_err(|reason| {
             format!(
@@ -4766,7 +4905,22 @@ fn fetch_resident(resident: ResidentBuffer, position: usize) -> Result<Vec<i64>,
                 backend.name(),
                 resident.id.0
             )
-        })
+        })?;
+    match data.class() == resident.class {
+        true => Ok(data),
+        // The device's answer and the class this value was issued with disagree,
+        // and the fetch is the only thing that can see both.  Refused by name
+        // rather than reinterpreted: reading an `f32` payload as `i64` (or the
+        // reverse) is not a wrong shape, it is a wrong number, and it would
+        // check perfectly (`docs/notes/floating-point.md` §4.3).
+        false => Err(format!(
+            "input buffer {position} (buffer {}) was issued as a {:?} buffer but the backend \
+             returned {:?} elements",
+            resident.id.0,
+            resident.class,
+            data.class()
+        )),
+    }
 }
 
 /// The chunk end of each of `workers` contiguous chunks of `count` indices, so
@@ -4958,7 +5112,10 @@ mod parallel_launch_tests {
     /// signature needs one value left on the stack.
     fn two_outputs() -> KernelFragment {
         KernelFragment {
-            param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
+            param_shape: KernelShape::Tuple(vec![
+                KernelShape::Scalar(ScalarClass::Int),
+                KernelShape::Scalar(ScalarClass::Int),
+            ]),
             body: vec![
                 KernelInstr::Const(0),
                 KernelInstr::LocalGet(1),
@@ -4976,6 +5133,8 @@ mod parallel_launch_tests {
             ],
             inputs: 0,
             outputs: 2,
+            input_classes: Vec::new(),
+            output_classes: vec![ScalarClass::Int, ScalarClass::Int],
             results: 1,
             int_width: IntWidth::I64,
         }
@@ -5020,9 +5179,9 @@ mod parallel_launch_tests {
                 self.seen.fetch_add(1, Ordering::SeqCst);
                 Ok(vec![ResidentId(41)])
             }
-            fn fetch(&self, _id: ResidentId, count: usize) -> Result<Vec<i64>, String> {
+            fn fetch(&self, _id: ResidentId, count: usize) -> Result<ScalarData, String> {
                 self.fetched.fetch_add(1, Ordering::SeqCst);
-                Ok(vec![7; count])
+                Ok(ScalarData::Int(vec![7; count]))
             }
             fn release(&self, id: ResidentId) {
                 self.released.lock().unwrap().push(id.0);
@@ -5045,6 +5204,7 @@ mod parallel_launch_tests {
             RunOutcome::Resident(vec![ResidentBuffer {
                 id: ResidentId(41),
                 count: 8,
+                class: ScalarClass::Int,
             }]),
             "a \"gpu\" run hands back a resident id per output, and the count travels with it \
              so a later fetch knows what to ask for"
@@ -5102,9 +5262,9 @@ mod parallel_launch_tests {
             );
             Ok(vec![ResidentId(41)])
         }
-        fn fetch(&self, _id: ResidentId, count: usize) -> Result<Vec<i64>, String> {
+        fn fetch(&self, _id: ResidentId, count: usize) -> Result<ScalarData, String> {
             self.fetched.fetch_add(1, Ordering::SeqCst);
-            Ok(vec![0; count])
+            Ok(ScalarData::Int(vec![0; count]))
         }
         fn release(&self, _id: ResidentId) {}
     }
@@ -5179,6 +5339,7 @@ mod parallel_launch_tests {
             vec![RunInput::Resident(ResidentBuffer {
                 id: ResidentId(41),
                 count,
+                class: ScalarClass::Int,
             })],
         )
         .expect("the run succeeds — the input is on the device, not lost");
@@ -5227,7 +5388,7 @@ mod parallel_launch_tests {
                 Err("this device has no compute queue".to_string())
             }
 
-            fn fetch(&self, _id: ResidentId, _count: usize) -> Result<Vec<i64>, String> {
+            fn fetch(&self, _id: ResidentId, _count: usize) -> Result<ScalarData, String> {
                 unreachable!("a run that declined never hands back an id to fetch")
             }
 

@@ -12,7 +12,9 @@
 //! spirv-dis target/spirv-dump.spv
 //! ```
 
-use lichen_kernel_ir::{IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape};
+use lichen_kernel_ir::{
+    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ScalarClass,
+};
 
 fn main() {
     // `out[i] = in[i] + 1` over `count` indices, the shape a single-input
@@ -37,10 +39,15 @@ fn main() {
     ];
 
     let fragment = KernelFragment {
-        param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
         body: count_prologue,
         inputs: 1,
         outputs: 1,
+        input_classes: vec![ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
         results: 1,
         int_width: IntWidth::I64,
     };

@@ -32,7 +32,8 @@
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use lichen_kernel_ir::{
-    BufferSlot, KernelFragment, ParallelBackend, Pending, ResidentId, install_parallel_backend,
+    BufferSlot, KernelFragment, ParallelBackend, Pending, ResidentId, ScalarData,
+    install_parallel_backend,
 };
 use lichen_language::package::PackageStore;
 use lichen_language::program::LangProgram;
@@ -104,8 +105,12 @@ impl ParallelBackend for Stub {
         Ok(Box::new(StubPending { id }))
     }
 
-    fn fetch(&self, id: ResidentId, count: usize) -> Result<Vec<i64>, String> {
-        Ok(self.data.lock().unwrap()[id.0 as usize - 1][..count].to_vec())
+    /// A host stub's buffers hold integers, so it answers with the class it
+    /// holds them as.
+    fn fetch(&self, id: ResidentId, count: usize) -> Result<ScalarData, String> {
+        Ok(ScalarData::Int(
+            self.data.lock().unwrap()[id.0 as usize - 1][..count].to_vec(),
+        ))
     }
 
     fn release(&self, _id: ResidentId) {}
