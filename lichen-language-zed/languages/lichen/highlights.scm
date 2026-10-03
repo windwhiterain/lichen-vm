@@ -38,7 +38,6 @@
 "return" @keyword
 "pub" @keyword
 "cache" @keyword
-(type_of) @keyword
 
 ; operators.  The full set is the language's, docs/notes/operators.md §1:
 ; `+ - * / %`, the six comparisons, and `& | ^`.

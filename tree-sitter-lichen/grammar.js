@@ -204,7 +204,6 @@ module.exports = grammar({
       $.string_literal,
       $.placeholder,
       $.type_constant,
-      $.type_of,
       $.parenthesized,
       $.array,
       $.angle_tuple,
@@ -229,11 +228,6 @@ module.exports = grammar({
     placeholder: $ => '_',
 
     type_constant: $ => choice('Int', 'string', 'Type'),
-
-    // `type_of` — an ordinary first-class function value applied by
-    // juxtaposition (`type_of e`); kept as its own atom so it highlights as a
-    // keyword rather than a variable.
-    type_of: $ => 'type_of',
 
     // `( e )` grouping / `(e1, e2, ...)` tuple.  An element may be a named
     // struct-field argument `.field value` (struct instantiation / field

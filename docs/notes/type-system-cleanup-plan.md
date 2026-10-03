@@ -321,7 +321,7 @@ Either way, independent of D1:
   | `checker.rs` | frontend-only | every `check_term` arm sets `ty[root]`; the root is a compiled statement or a literal pair by construction |
   | `checker.rs` | frontend-only | `range_children`/`range_depths` are called only from the arm that matched the same `ExprKind`; `check_record`'s and `named_instantiate`'s `value` is always an `alloc_tuple` (frontend contract) |
   | `checker.rs` | frontend-only | `check_expr` immediately precedes both, and every arm sets `term` |
-  | `checker.rs` | frontend-only | B1's `block_roots`-only skeleton gate is exhaustive by construction; all 26 self-referential root shapes (`a = a.x`, `a(0)`, `a[0]`, `a::x`, `a{0}`, `a<0>`, `type_of a`, `a # 2`, `a ? "d"`, …) compile clean |
+  | `checker.rs` | frontend-only | B1's `block_roots`-only skeleton gate is exhaustive by construction; all 26 self-referential root shapes (`a = a.x`, `a(0)`, `a[0]`, `a::x`, `a{0}`, `a<0>`, `a # 2`, `a ? "d"`, …) compile clean |
   | `checker.rs` | frontend-only | the `NativeCall` registry is validated against the frontend before the build; a name cannot reach here unregistered |
   | `checker.rs` | frontend-only | each follows a `check_expr` of its operand, which sets `ty`/`term` |
   | `checker.rs` | frontend-only | every `Parameter` use is compiled inside `check_lam` after the scope push (line 131), including `parameter_type`/`parameter_attribute` |

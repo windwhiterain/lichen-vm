@@ -71,10 +71,11 @@ not callee-type dispatch:
 
 ```
 {
+  let type_of = x => {t = _; x: t; t}
   jit      = f => (struct<.native _, .sig (type_of f)>)(.native $jit(f), .sig _)
   launch   = k => a => $launch(k.native, k.sig, a)
   call     = k => a => $call(k.native, a)
-  parallel = f => (struct<.native _, .sig (type_of f)>)(.native $parallel(f), .sig _)
+  parallel = f => (struct<.native _, .sig (type_of f)>)(.native $parallel(f, b), .sig _)
   plrun    = k => a => $plrun(k.native, k.sig, a)
   range    = x => $range(x)
   read     = x => $read(x(0), x(1)) : Int
@@ -83,7 +84,12 @@ not callee-type dispatch:
 }
 ```
 
-(The listing is `crates/lichen-compute/src/compute.lichen` verbatim.  `read`
+(The listing is `crates/lichen-compute/src/compute.lichen` — its `type_of`
+helper is the standard library's definition
+([lichen-std/_.lichen](../../lichen-std/_.lichen)), repeated here because an
+embedded native source cannot depend on a package; it is a `let` binding, so it
+adds no field to the exported struct.  The later `graph`/`graphrun` entries are
+elided.  `read`
 destructures its single array argument with positional slot reads, because the
 parser's `f [a, b]` is one array argument rather than a curried two-arg call.)
 

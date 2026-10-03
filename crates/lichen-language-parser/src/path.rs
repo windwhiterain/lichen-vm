@@ -117,7 +117,6 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
         | Expr::Float(..)
         | Expr::Str(..)
         | Expr::TypeConst(..)
-        | Expr::TypeOf(..)
         | Expr::Name(..)
         | Expr::Placeholder(..)
         | Expr::Err { .. } => {}

@@ -900,7 +900,6 @@ fn starts_an_expression(kind: &TokenKind) -> bool {
             | TokenKind::KwStruct
             | TokenKind::KwTable
             | TokenKind::KwIf
-            | TokenKind::KwTypeOf
             | TokenKind::KwArray
             | TokenKind::Bang
             | TokenKind::Dollar
@@ -970,11 +969,6 @@ fn atom_parser<'a>(
             token(TokenKind::KwFloat).map(|t| Expr::TypeConst(TypeConst::Float, t.span)),
             token(TokenKind::KwString).map(|t| Expr::TypeConst(TypeConst::String, t.span)),
             token(TokenKind::KwType).map(|t| Expr::TypeConst(TypeConst::Type, t.span)),
-            // The bare `type_of` atom: an ordinary function value applied by
-            // juxtaposition (`type_of e`, `type_of (e)`).  No paren is
-            // consumed here — an adjacent `(` falls to the postfix chain
-            // (a slot read) exactly as after any name.
-            token(TokenKind::KwTypeOf).map(|t| Expr::TypeOf(t.span)),
             // `_` — an inference placeholder in any position (type or value).
             // It is its own token, never a name, so it can appear as a value
             // expression too (`f _`, `(1, _)`, `_ : Int`) but cannot be bound

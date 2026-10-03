@@ -7500,4 +7500,11 @@ where
 /// [`include_str!`].  It defines the user-facing `jit`/`launch` functions as
 /// ordinary typed lichen (whose bodies call the native `$jit`/`$launch`), and
 /// exports them as a **named struct** (`compute.jit`, `compute.launch`).
+///
+/// Its `type_of` helper is a private `let` binding — not a field of the
+/// exported struct — and repeats [`lichen-std`]'s definition, because an
+/// embedded native source is compiled against this plugin's private native
+/// registry and cannot depend on a package.
+///
+/// [`lichen-std`]: https://github.com/windwhiterain/lichen-vm/tree/dev/lichen-std
 pub const WRAPPER_SOURCE: &str = include_str!("compute.lichen");

@@ -204,16 +204,27 @@ fn a_function_value_prints_function() {
     assert_eq!(output("f = x => x\nf"), "Function: ?a -> ?a");
 }
 
-// --- the first-class `type_of` function ----------------------------------
+// --- `type_of` as an ordinary lichen function ----------------------------
+
+// `type_of` is no longer a language form: it is the standard library's
+// `x => {t = _; x: t; t}` (`lichen-std/_.lichen`) — the placeholder binds the
+// cell, the annotation unifies it with the argument's type, and the body
+// returns it, so a type read is an ordinary application.  The definition is
+// spelled locally because `output` compiles a bare source with no package
+// store to import from.
+
+/// `source` with the standard library's `type_of` bound ahead of it.
+fn with_type_of(source: &str) -> String {
+    output(&format!("type_of = x => {{t = _; x: t; t}}\n{source}"))
+}
 
 #[test]
 fn type_of_reads_the_operands_type() {
-    // The spaced and juxtaposed spellings are ordinary application; the
-    // read is element 1 of the operand's pair.
-    assert_eq!(output("type_of (1)"), "Int: Type");
-    assert_eq!(output("type_of 1"), "Int: Type");
+    // The spaced and juxtaposed spellings are ordinary application.
+    assert_eq!(with_type_of("type_of (1)"), "Int: Type");
+    assert_eq!(with_type_of("type_of 1"), "Int: Type");
     assert_eq!(
-        output("(type_of (1), type_of Int, type_of Type)"),
+        with_type_of("(type_of (1), type_of Int, type_of Type)"),
         "(Int, Type, Type): <Type, Type, Type>"
     );
 }
@@ -221,24 +232,24 @@ fn type_of_reads_the_operands_type() {
 #[test]
 fn type_of_is_first_class() {
     // Bindable, passable — application is the whole story.
-    assert_eq!(output("f = type_of\nf 1"), "Int: Type");
-    assert_eq!(output("g = x => type_of x\ng 2"), "Int: Type");
-    assert_eq!(output("type_of (x => x)"), "?a -> ?a: TypeFunction");
+    assert_eq!(with_type_of("f = type_of\nf 1"), "Int: Type");
+    assert_eq!(with_type_of("g = x => type_of x\ng 2"), "Int: Type");
+    assert_eq!(with_type_of("type_of (x => x)"), "?a -> ?a: TypeFunction");
 }
 
 #[test]
 fn type_of_reads_compound_types() {
-    assert_eq!(output("type_of [1, 2]"), "array<Int, 2>: TypeArray");
-    assert_eq!(output("type_of (1, Int)"), "<Int, Type>: TypeTuple");
-    assert_eq!(output("type_of (type_of (1))"), "Type: Type");
+    assert_eq!(with_type_of("type_of [1, 2]"), "array<Int, 2>: TypeArray");
+    assert_eq!(with_type_of("type_of (1, Int)"), "<Int, Type>: TypeTuple");
+    assert_eq!(with_type_of("type_of (type_of (1))"), "Type: Type");
 }
 
 #[test]
 fn a_value_annotates_against_its_own_type_of() {
     // `type_of e` in a type position IS the operand's type expression, so
     // the annotation unifies exactly as the spelled-out type would.
-    assert_eq!(output("5 : type_of (5)"), "5: Int");
-    assert_eq!(output("type_of (1) : Type"), "Int: Type");
+    assert_eq!(with_type_of("5 : type_of (5)"), "5: Int");
+    assert_eq!(with_type_of("type_of (1) : Type"), "Int: Type");
 }
 
 // --- the extended vocabulary --------------------------------------------

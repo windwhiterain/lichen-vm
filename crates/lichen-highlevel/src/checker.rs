@@ -1118,7 +1118,6 @@ where
             | ExprKind::Instantiate { .. }
             | ExprKind::Record { .. }
             | ExprKind::Assert { .. }
-            | ExprKind::TypeOf { .. }
             | ExprKind::Index { .. }
             | ExprKind::RawIndex { .. }
             | ExprKind::Field { .. }
@@ -1164,39 +1163,6 @@ where
         );
         self.state[e].val = Some(index);
         index
-    }
-
-    /// `type_of e` — the operand's type expression, read lazily: the term
-    /// IS element 1 of the operand's `[value, type]` pair, extracted with
-    /// the raw lowlevel `Index` op (the mirror of [`Self::value_of`],
-    /// element 0).  The expression's own halves are the type expression's —
-    /// the value is its shape (element 0, left to the lazy `value_of` memo
-    /// like a parameter use) and the type its kind (element 1) — so
-    /// `type_of e` in a type position is exactly the operand's type, and
-    /// `e : type_of e` unifies elementwise like `e : T`.  Nothing is forced
-    /// here: a read over an unbound parameter resolves at the apply (the
-    /// clone rewrites the parameter pair to the argument's).
-    fn check_type_of(&mut self, e: ExprId, value: ExprId) -> NodeId {
-        self.check_expr(value);
-        let operands = self.array_node(
-            self.current_block,
-            &[self.state[value].term.unwrap(), self.one()],
-        );
-        let pair = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(operands),
-        );
-        let ty_operands = self.array_node(self.current_block, &[pair, self.one()]);
-        let ty = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(ty_operands),
-        );
-        self.state[e].term = Some(pair);
-        self.state[e].val = None;
-        self.state[e].ty = Some(ty);
-        pair
     }
 
     /// The value currently held by `node`'s equality class — the
@@ -1404,7 +1370,6 @@ where
                 element_type,
                 length,
             } => self.check_array_type(e, element_type, length),
-            ExprKind::TypeOf { value } => self.check_type_of(e, value),
             ExprKind::Static { export } => {
                 // Imported package export: the static ref names the package's
                 // final `[value, type]` pair.  Materialize that pair leaf,

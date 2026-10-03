@@ -576,35 +576,6 @@ impl Compiler {
                 ExprKind::Literal(HighProgramLiteral::from(TypeTypeLit)),
                 span,
             ),
-            // The bare `type_of` atom: an ordinary generic function — the
-            // parameter's pair `[value, type]` is the argument's pair at each
-            // apply, and the body reads element 1 of it (the argument's
-            // type).  No scope is pushed: the parameter has no name, its
-            // single use is the body's `TypeOf` itself.  Like a lambda, it is
-            // reserved before its body compiles and pushed as the enclosing
-            // `fn_parents` entry (see [`Self::fn_parents`]).
-            Expr::TypeOf(span) => {
-                let parent = self.fn_parents.last().copied();
-                let id = self.alloc(ExprKind::Placeholder, span);
-                let parameter = self.alloc(ExprKind::Parameter, span);
-                let body = {
-                    self.fn_parents.push(id);
-                    let body = self.alloc(ExprKind::TypeOf { value: parameter }, span);
-                    self.fn_parents.pop();
-                    body
-                };
-                self.ir.set_kind(
-                    id,
-                    ExprKind::Function {
-                        parameter,
-                        parameter_type: None,
-                        parameter_attribute: None,
-                        r#return: body,
-                        parent,
-                    },
-                );
-                id
-            }
             Expr::Name(name, span, binder) => match binder {
                 Some(id) => self.binder(*id),
                 None => {
@@ -938,7 +909,6 @@ impl Compiler {
                         | Expr::Float(..)
                         | Expr::Str(..)
                         | Expr::TypeConst(..)
-                        | Expr::TypeOf(..)
                         | Expr::Name(..)
                         | Expr::Placeholder(..)
                         | Expr::Lambda { .. }

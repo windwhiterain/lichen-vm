@@ -1383,7 +1383,6 @@ fn classify_token_kind(
         | TokenKind::KwPub
         | TokenKind::KwCache
         | TokenKind::KwLoop
-        | TokenKind::KwTypeOf
         // `_` — a placeholder is a reserved inference form, never a name.
         | TokenKind::Placeholder => Some((SemanticTokenType::KEYWORD, Vec::new())),
         // A `Name` is resolved by `classify_names` (or the `.` heuristic).
@@ -1519,8 +1518,7 @@ impl<'a> NameClass<'a> {
             | Expr::TypeConst(..)
             | Expr::Name(..)
             | Expr::Placeholder(..)
-            | Expr::Err { .. }
-            | Expr::TypeOf(..) => {}
+            | Expr::Err { .. } => {}
             Expr::BinOp { left, right, .. } => {
                 self.expr(left);
                 self.expr(right);
@@ -1738,8 +1736,7 @@ impl Walk {
             | Expr::Str(..)
             | Expr::TypeConst(..)
             | Expr::Placeholder(..)
-            | Expr::Err { .. }
-            | Expr::TypeOf(..) => {}
+            | Expr::Err { .. } => {}
             Expr::Name(name, span, _) => {
                 if let Some(idx) = self.lookup(name) {
                     self.resolve.insert(*span, idx);
@@ -2045,7 +2042,6 @@ impl<'a> ScopeCapture<'a> {
             | Expr::TypeConst(..)
             | Expr::Placeholder(..)
             | Expr::Err { .. }
-            | Expr::TypeOf(..)
             | Expr::Name(..) => {}
             Expr::Lambda {
                 parameter,

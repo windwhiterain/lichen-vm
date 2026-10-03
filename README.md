@@ -332,12 +332,13 @@ inc_twice = x => math.succ (math.succ x)
 ```text
 ---
   order = "5"
+  std = import "../lichen-std/_.lichen"
   output = "(Int, Type, Int, array<Int, 2>, Type, 5): <Type, Type, Type, TypeArray, Type, Int>"
 ---
-f = type_of
-g = x => type_of x
-n = 5 : type_of (1)
-(type_of (1), f Int, g 2, type_of [1, 2], type_of Type, n)
+f = std.type_of
+g = x => std.type_of x
+n = 5 : std.type_of (1)
+(std.type_of (1), f Int, g 2, std.type_of [1, 2], std.type_of Type, n)
 ```
 
 ### `perspective.lichen`

@@ -37,7 +37,6 @@ pub(crate) fn shift_expr(
         | Expr::Float(_, span)
         | Expr::Str(_, span)
         | Expr::TypeConst(_, span)
-        | Expr::TypeOf(span)
         | Expr::Name(_, span, _)
         | Expr::Placeholder(span) => shift(span, old_starts, new_starts, delta),
         // A recovered-error region: the mask is a **byte** range (what a diff

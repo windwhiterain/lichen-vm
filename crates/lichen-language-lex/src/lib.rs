@@ -29,7 +29,7 @@
 //! original file via a base offset and the source's line starts.
 //!
 //! Int, Float, string, Type, struct, table, let, if, then, else, return, pub,
-//! cache, type_of, and array lex as keywords.  A float literal is
+//! cache, and array lex as keywords.  A float literal is
 //! `[0-9]+\.[0-9]+`: a digit is required before the dot, so `.5` is a dot then
 //! an integer and `x.5` is a field read, and there is no exponent form --
 //! `1.5e3` is a float then the name `e3`.  '->'
@@ -110,9 +110,6 @@ pub enum TokenKind {
     /// (`lichen_language::compile_with_cells`); no production path calls it yet
     /// -- see `docs/notes/incremental-update.md` §12.
     KwCache,
-    /// The type_of keyword -- an ordinary first-class function value whose
-    /// application reads its argument's type (`type_of e`, `type_of (e)`).
-    KwTypeOf,
     /// The array keyword -- a keyword-led array type, `array<T, n>`.  This
     /// replaces the old `T<e>` array-type postfix, which is now the raw
     /// type-component read (`X<e>`).
@@ -221,7 +218,6 @@ impl TokenKind {
             TokenKind::KwLoop => "'@loop'".to_string(),
             TokenKind::KwPub => "'pub'".to_string(),
             TokenKind::KwCache => "'cache'".to_string(),
-            TokenKind::KwTypeOf => "'type_of'".to_string(),
             TokenKind::KwArray => "'array'".to_string(),
             TokenKind::Arrow => "'->'".to_string(),
             TokenKind::FatArrow => "'=>'".to_string(),
@@ -341,8 +337,6 @@ enum RawToken {
     /// what reserves `@` for the keywords that follow.
     #[regex(r"@[A-Za-z_][A-Za-z0-9_]*")]
     AtNameLit,
-    #[token("type_of")]
-    KwTypeOf,
     #[token("array")]
     KwArray,
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
@@ -797,7 +791,6 @@ fn raw_to_kind(
             "pub" => TokenKind::KwPub,
             "cache" => TokenKind::KwCache,
             "array" => TokenKind::KwArray,
-            "type_of" => TokenKind::KwTypeOf,
             "_" => TokenKind::Placeholder,
             _ => TokenKind::Name(slice.to_string()),
         }),
@@ -839,7 +832,6 @@ fn raw_to_kind(
         RawToken::KwReturn => Some(TokenKind::KwReturn),
         RawToken::KwPub => Some(TokenKind::KwPub),
         RawToken::KwCache => Some(TokenKind::KwCache),
-        RawToken::KwTypeOf => Some(TokenKind::KwTypeOf),
         RawToken::KwArray => Some(TokenKind::KwArray),
         RawToken::Arrow => Some(TokenKind::Arrow),
         RawToken::FatArrow => Some(TokenKind::FatArrow),

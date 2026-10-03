@@ -35,6 +35,7 @@ struct: a `jit` result reads `struct<.native <_>, .sig Int -> Int>` (signature v
 
 ```
 {
+  let type_of = x => {t = _; x: t; t}
   jit      = f => (struct<.native _, .sig (type_of f)>)(.native $jit(f), .sig _)
   launch   = k => a => $launch(k.native, k.sig, a)
   call     = k => a => $call(k.native, a)
@@ -44,6 +45,10 @@ struct: a `jit` result reads `struct<.native <_>, .sig Int -> Int>` (signature v
   pcollect = b => $pcollect(b)
 }
 ```
+
+`type_of` is the standard library's type read (`lichen-std/_.lichen`), repeated
+here because an embedded native source cannot depend on a package; the `let`
+keeps it out of the exported struct's fields.
 
 **Native ops operate on the native pieces**; the lichen wrapper parses the struct. So the
 native op never sees the struct — `$jit(f)` returns the bare artifact, `$launch(native, sig, a)`

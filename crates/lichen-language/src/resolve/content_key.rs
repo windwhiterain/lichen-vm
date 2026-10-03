@@ -162,7 +162,6 @@ impl KeyWriter {
             // The recovered-error region / an unresolved name: content-free,
             // position-only.
             Expr::Err { .. } => self.u(4),
-            Expr::TypeOf(_) => self.u(26),
             Expr::Lambda {
                 parameter_binder,
                 parameter_type,

@@ -61,13 +61,6 @@ pub enum Expr {
     Str(String, Span),
     /// One of the type constants `Int` / `Float` / `string` / `Type`.
     TypeConst(TypeConst, Span),
-    /// The bare `type_of` atom — an ordinary first-class function value:
-    /// its application (`type_of e`, `type_of (e)`) reads the argument's
-    /// type.  Compiles to a generic lambda whose body is the highlevel
-    /// `ExprKind::TypeOf` (element 1 of the argument's pair), so juxtaposed
-    /// application is the whole story — no special grammar, and the bare
-    /// atom is bindable and passable like any function (`f = type_of`).
-    TypeOf(Span),
     /// A use of a name — resolved by [`crate::resolve::Resolver`] to the
     /// binder's id.  The third field is the `BinderId` the use resolves to
     /// (`Some`) or `None` when the name does not resolve (an unresolved name
@@ -450,7 +443,6 @@ impl Expr {
             Expr::Float(_, s) => *s,
             Expr::Str(_, s) => *s,
             Expr::TypeConst(_, s) => *s,
-            Expr::TypeOf(s) => *s,
             Expr::Name(_, s, _) => *s,
             Expr::Placeholder(s) => *s,
             Expr::Lambda { span, .. } => *span,

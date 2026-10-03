@@ -11,6 +11,12 @@
 > Companion: [type-rendering-inconsistent](type-rendering-inconsistent.md)
 > (a separate, still-open spelling defect — no printed type name decided any
 > of this either).
+>
+> **Open remainder in this machinery**: a *call-result* type read is still not
+> usable as a type expression the way the removed builtin's raw `Index` read
+> was — a library `type_of` in a struct field's declared type resolves to the
+> enclosing struct kind.  Reproducer, mechanism and what was already ruled out:
+> [`type-of-in-std` § *Open defect*](type-of-in-std.md#open-defect-a-library-read-is-not-the-builtin-read-in-a-field-type-position).
 
 ## 1. The repro
 
@@ -45,9 +51,10 @@ since removed) showed three links, none of them the one the earlier reading
 had guessed:
 
 1. **The pending side is not always an `Index`.** `type_of` is an ordinary
-   generic function (`x => Index(pair, 1)`), so `type_of ins.I` compiles to a
-   lazy **`Apply`**, which the deferral's `pending_index_read` guard never
-   matched. The bare `ins.x` spelling does produce a pending `Index` read.
+   function (`x => {t = _; x: t; t}`, `lichen-std/_.lichen`), so
+   `type_of ins.I` compiles to a lazy **`Apply`**, which the deferral's
+   `pending_index_read` guard never matched. The bare `ins.x` spelling does
+   produce a pending `Index` read.
    Both spellings stalled at the same place: the struct construction unifies
    the declared field type against the argument field's type.
 2. **The silent half was an unsound skeleton merge.**

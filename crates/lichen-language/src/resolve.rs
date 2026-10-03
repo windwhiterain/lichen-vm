@@ -386,7 +386,6 @@ impl Resolver {
             | Expr::Float(..)
             | Expr::Str(..)
             | Expr::TypeConst(..)
-            | Expr::TypeOf(..)
             | Expr::Placeholder(..)
             | Expr::Err { .. } => {}
         }

@@ -11,6 +11,11 @@ use lichen_lowlevel::{LowValue, Module, NodeId};
 use lichen_language::compile;
 use lichen_language::program::{LangProgram, LangValue};
 
+/// The standard library's `type_of` (`lichen-std/_.lichen`), bound ahead of
+/// every probed program: `compile` takes a bare source with no package store
+/// to import from.
+const TYPE_OF: &str = "type_of = x => {t = _; x: t; t}\n";
+
 /// Compile and run a program, asserting it checks; returns the module and the
 /// root value node.
 fn run(source: &str) -> (Module<LangProgram>, NodeId) {
@@ -43,14 +48,15 @@ fn usize_of(value: &LangValue) -> usize {
 #[test]
 fn a_deferred_field_read_binds_the_type_value() {
     assert_eq!(
-        usize_of(&evaluate(
+        usize_of(&evaluate(&format!(
+            "{TYPE_OF}{}",
             r#"
 P = ins => struct<.I ins.x>
 y = (P _)(.I Int)
 T = type_of y
 T::I == Type
 "#
-        )),
+        ))),
         1
     );
 }
@@ -61,12 +67,12 @@ T::I == Type
 fn two_deferred_field_reads_both_bind() {
     let source = |field: &str| {
         format!(
-            r#"
+            "{TYPE_OF}
 P = ins => struct<.I ins.x, .O ins.y>
 y = (P _)(.I Int, .O Int)
 T = type_of y
 T::{field} == Type
-"#
+"
         )
     };
     assert_eq!(usize_of(&evaluate(&source("I"))), 1);
@@ -80,7 +86,8 @@ T::{field} == Type
 #[test]
 fn a_deferred_field_read_binds_a_struct_type_value() {
     assert_eq!(
-        usize_of(&evaluate(
+        usize_of(&evaluate(&format!(
+            "{TYPE_OF}{}",
             r#"
 S1 = struct<.a Int>
 P = ins => struct<.I ins.x>
@@ -88,19 +95,20 @@ y = (P _)(.I S1)
 T = type_of y
 T::I == type_of S1
 "#
-        )),
+        ))),
         1
     );
 }
 
-/// The `type_of` spelling: `type_of` is an ordinary generic function, so the
-/// pending side of the stall is a lazy Apply, not an Index read — the
-/// deferral gate must cover calls too.  Same pinned type as the read
-/// spelling.
+/// The `type_of` spelling: `type_of` is the standard library's ordinary
+/// lambda, so the pending side of the stall is a lazy Apply, not an Index
+/// read — the deferral gate must cover calls too.  Same pinned type as the
+/// read spelling.
 #[test]
 fn a_deferred_type_of_call_binds_the_type_value() {
     assert_eq!(
-        usize_of(&evaluate(
+        usize_of(&evaluate(&format!(
+            "{TYPE_OF}{}",
             r#"
 S1 = struct<.a Int>
 P = ins => struct<.I type_of ins.x>
@@ -108,7 +116,7 @@ y = (P _)(.I S1)
 T = type_of y
 T::I == type_of S1
 "#
-        )),
+        ))),
         1
     );
 }

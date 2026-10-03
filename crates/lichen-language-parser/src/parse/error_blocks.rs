@@ -27,8 +27,7 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
             | Expr::Str(..)
             | Expr::TypeConst(..)
             | Expr::Name(..)
-            | Expr::Placeholder(..)
-            | Expr::TypeOf(..) => {}
+            | Expr::Placeholder(..) => {}
             Expr::Lambda {
                 parameter_type,
                 parameter_perspective,

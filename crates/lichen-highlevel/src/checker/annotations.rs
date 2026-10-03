@@ -116,9 +116,6 @@ where
             // A lambda is a leaf for stage 1 (its own `# p` binds a slot).
             ExprKind::Function { .. } => Vec::new(),
             ExprKind::Assert { .. } => Vec::new(),
-            // A `type_of` read is a leaf: the type it yields is its own
-            // value, carrying nothing of the operand's value-attribute.
-            ExprKind::TypeOf { .. } => Vec::new(),
             ExprKind::NativeCall { .. } => self.range_children(e),
         }
     }

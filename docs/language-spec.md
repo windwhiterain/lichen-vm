@@ -59,7 +59,6 @@ atom     := primary postfix*                        -- a primary, then glued pos
 primary  := int_literal
           | str_literal                           -- "…" (no escapes; the builtin `string` value)
           | 'Int' | 'string' | 'Type'             -- the three type constants
-          | 'type_of'                             -- first-class function: reads its argument's type
           | '_'                                     -- inference placeholder (any position)
           | name
           | '$' name '(' expr (sep expr)* sep? ')'  -- native-operator call  $name(args…)
@@ -91,7 +90,7 @@ farg     := '.' name expr                         -- named instantiation argumen
 ```
 
 - **Keywords:** `Int`, `Float`, `string`, `Type`, `struct`, `array`, `table`, `let`, `if`, `then`,
-  `else`, `return`, `pub`, `cache`, `type_of`, `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `?`,
+  `else`, `return`, `pub`, `cache`, `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `?`,
   `$`, `::`, `==>`,
   `~`, `!`, and the
   operators `+ - * / % < > <= >= == != & | ^` are punctuation.  A binding is **block-wide** by
@@ -120,7 +119,7 @@ farg     := '.' name expr                         -- named instantiation argumen
   broken across lines without parens.
 - **Names:** lowercase or mixed-case identifiers (`x`, `id`, `n2`).  The keywords
   (`Int`, `Float`, `string`, `Type`, `struct`, `array`, `table`, `let`, `if`, `then`,
-  `else`, `return`, `pub`, `type_of`) are reserved — they cannot be bound or used
+  `else`, `return`, `pub`) are reserved — they cannot be bound or used
   as names.
 - **The `_` placeholder.**  `_` is an inference placeholder hole in *any*
   position — type and value alike.  In type position (the right side of `:`,
@@ -585,19 +584,18 @@ maps every span back to the original file.
   never raises a kinding error; a `_` that never binds leaves the type
   underdetermined — not an error — and a mismatch against a
   partial type is still an error (`5 : Int -> _` fails).
-- **`type_of`.**  `type_of` is a keyword but an *ordinary first-class
-  function value* — bindable and passable like any other (`f = type_of`),
-  with no special grammar: juxtaposed application is the whole story.
-  `type_of e` reads its argument's **type**: the bare atom compiles to a
-  generic lambda whose body is the highlevel `TypeOf` — element 1 of the
-  argument's `[value, type]` pair, read lazily through the raw lowlevel
-  `Index` (the mirror of the checker's own `value_of`, element 0).  Nothing
-  is forced: a type read of an unbound parameter resolves at the apply.
-  The expression's own halves are the type expression's — the value is its
-  shape, the type its kind — so `type_of e` in a type position is exactly
-  the operand's type: `type_of (1)` is `Int : Type`, `type_of [1, 2]` is
-  `array<Int, 2>`, `type_of Type` is `Type`, and `5 : type_of (1)` checks
-  (see `examples/type_of.lichen`).
+- **Reading a value's type.**  There is no `type_of` form — a type read is an
+  ordinary function built from the placeholder and an annotation:
+  `type_of = x => {t = _; x: t; t}`.  The placeholder binds a fresh cell, the
+  annotation `x : t` unifies that cell with the argument's type, and the body
+  returns it, so the call's value *is* the operand's type expression: the value
+  is its shape and the type its kind.  Everything a builtin read would give
+  follows from that unification, with nothing forced (a read of an unbound
+  parameter resolves at the apply): `type_of (1)` is `Int : Type`,
+  `type_of [1, 2]` is `array<Int, 2>`, `type_of Type` is `Type`, and in a type
+  position it is exactly the operand's type, so `5 : type_of (1)` checks.  The
+  standard library ships it (`std.type_of`, `lichen-std/_.lichen`) and
+  `examples/type_of.lichen` uses it.
 
 ## 4. Compilation: source → IR
 
@@ -621,7 +619,6 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `e1 e2` | `Apply { function, argument }` |
 | `a op b` (`+`, `-`, `*`, `/`, `%`, `<`, `>`, `<=`, `>=`, `==`, `!=`, `&`, `\|`, `^`) | `BinOp { operator, left, right }` |
 | `!e` | `Assert { condition }` — a side constraint: the expression's pair is the condition's own; the condition's value node registers as an assert point the checker force-evaluates to `USize(1)` |
-| `type_of` | a generic `Function { parameter, … }` whose body is `TypeOf { value: parameter }` — element 1 of the argument's `[value, type]` pair, read lazily |
 | `if c then t else e` | `Index { array: [e, t], index: c }` — desugared to the lazy branch index; there is no `If` kind |
 | `e[i]` | `Index { array, index }` |
 | `a(k)` | `Field { container, key }` — the adjacent single-expression paren form; a positional slot read over a tuple element or struct field |
