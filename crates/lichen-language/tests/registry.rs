@@ -193,7 +193,7 @@ fn a_failure_inside_the_prelude_is_attributed_to_its_own_file() {
     // (`docs/notes/core-prelude.md`).  The module is materialized on disk when a
     // store has a cache root, and named by its own path when it has none.
     let mut store = PackageStore::<LangProgram>::new();
-    let err = evaluate_raw("add \"a\" \"b\"\n", None, &mut store).unwrap_err();
+    let err = evaluate_raw("add [\"a\", \"b\"]\n", None, &mut store).unwrap_err();
     let attributed: Vec<_> = err.iter().filter(|d| d.file.is_some()).collect();
     assert!(
         !attributed.is_empty(),

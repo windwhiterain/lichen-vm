@@ -468,10 +468,13 @@ where
         self.check_expr(element_type);
         self.check_expr(length);
         let length_value = self.value_of(length);
-        let shape = self.array_node(
-            self.current_block,
-            &[self.state[element_type].term.unwrap(), length_value],
-        );
+        // The element's **denotation**, like every other type position: an element
+        // that carries attributes (`array<(_ ! in_num), 2>`) names the annotated
+        // value's term, not the `[type, …, attribute]` group whose registration
+        // enforces the attribute ([`Checker::type_denotation`],
+        // `docs/notes/operator-polymorphism.md` §3).
+        let element = self.type_denotation(element_type);
+        let shape = self.array_node(self.current_block, &[element, length_value]);
         let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
         let pair = self.array_node(self.current_block, &[shape, kind]);
         self.state[e].term = Some(pair);

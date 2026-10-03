@@ -283,28 +283,34 @@ add  = x => y => { x : ?a{in_num}; y : ?a{in_num}      -- the contract
 ```
 
 `Num` is writable, and so is the predicate — and the predicate goes **on the
-type**, which is what makes it a class contract:
+type**, which is what makes it a class contract.  The contract takes **one
+argument — the operand group, a 2-wide array** — because an array's elements are
+one type (the operand *tie*), its length is the operator's *arity*, and its
+element type is where the refinement goes:
 
 ```lichen
-Num    = set{Int, Float}
-in_num = t => t @in Num              -- t is a *type value*
-add    = x => y => { x : (_ ! in_num); y : (_ ! in_num); x + y }
+Num     = set{Int, Float}
+in_num  = t => t @in Num             -- t is a *type value*
+add     = operands => { operands : array<(_ ! in_num), 2>; operands[0] + operands[1] }
 ```
 
-`x : (_ ! in_num)` is the annotation chain with the refinement written **inside
-the type position**: the checker applies the predicate to the type expression's
-value — the class — instead of to the operand's value, so `in_num` receives a
-type value and needs no type read of its own (§9 Phase 3 settled this; the
-`type_of v @in Num` spelling of the first draft needs the read, and a read inside
-a predicate is monomorphic, [type-of-in-std](type-of-in-std.md)).  Measured:
-`(add 1 2, add 1.5 2.5)` is `(3, 4.0)`, `add "a" "b"` is refused by the class
-refinement *and* by the builtin's domain assert, and the printed signature is
-`raw[?a, ?b] -> raw[?a, ?b] -> raw[?a, ?b]` — an open class's annotated type is
-the placeholder's `[shape, kind]` pair of cells, which the printer marks raw
-([raw-rendering-mark](raw-rendering-mark.md)); a *concrete* class refinement
-(`x : (Int ! in_num)`) prints `Int -> …`.
+`(_ ! in_num)` inside the array type is the annotation chain with the refinement
+written **on the type**: the checker applies the predicate to the type expression's
+value — the class — instead of to the operand's value, so `in_num` receives a type
+value and needs no type read of its own (§9 Phase 3 settled this; the
+`type_of v @in Num` spelling of the first draft needs the read, and a read inside a
+predicate is monomorphic, [type-of-in-std](type-of-in-std.md)).  Measured, with
+exactly that `add`:
 
-Two mechanism points fell out of the measurement, and both are load-bearing:
+| program | result |
+|---|---|
+| `(add [1, 2], add [1.5, 2.5])` | `(3, 4.0)` — one argument, polymorphic across calls |
+| `add [1, 1.5]` | refused, `expected Int, found Float` — the **tie**, from the array's element type |
+| `add [1, 2, 3]` | refused, `expected array<…, 2>, found array<Int, 3>` — the **arity**, from the length |
+| `add ["a", "b"]` | refused inside `core.lichen` — the **class** |
+| `add` | `array<raw[?a, ?b], 2> -> raw[?a, ?b]` — the result's class is the operands' |
+
+Three mechanism points fell out of the measurement, and all three are load-bearing:
 
 - **The annotation names a type expression's *denotation*.**  An attribute-carrying
   type expression's term is the `[type, …, attribute]` group the attributes live
@@ -314,19 +320,32 @@ Two mechanism points fell out of the measurement, and both are load-bearing:
   `expected raw[?a, ?b, raw[Function, ?c -> Int]], found Int`), and binding it to
   the group's first slot alone loses the per-call re-check (measured: `f "a"` was
   then *accepted* — the class cell must stay reachable from the parameter pair for
-  the apply clone to re-instantiate the condition).
+  the apply clone to re-instantiate the condition).  The rule holds in *every* type
+  position, which only became visible once a refinement sat inside a compound type:
+  the tuple-type element / struct field / function-type side
+  (`Checker::check_type_element`) and the array type's element
+  (`Checker::check_array_type`) both took the expression's term as-is and leaked the
+  group — `f = x : <(_ ! in_num), (_ ! in_num)> => x; f (1, 2)` was
+  `expected <raw[?a, ?b, …], …>, found <Int, Int>`.
 - **The refinement is enforced where it was written,** so a class refinement on a
-  parameter rides the enclosing function and is re-checked per application
-  (`(f 5, f 1.5)` both pass, `f "a"` is refused), exactly as the value form is.
+  parameter rides the enclosing function and is re-checked per application, exactly
+  as the value form is.
+- **A hole bound at the top level is one cell for the whole program; a hole bound
+  inside the function body is per call.**  `T = _` outside a lambda is shared, so
+  `x : (T ! in_num); y : (T ! in_num)` ties every call together and the second
+  `add 1 2` / `add 1.5 2.5` pair fails with `expected Int, found Float` — while the
+  same tie written as an array element (or a body-local binding) re-instantiates per
+  call.  That is why the contract is one parameter and not a shared top-level hole.
 
 `@in` **landed** in Phase 3 as a keyword operator at the comparison level —
 infix and left-associative, joining `@loop` and `@assert` at the `@` sigil
 ([operators](operators.md) §3; the language spec's *Membership*).  What is left
 of Phase 3 is the leaf selection and the routing (§8.7, §9).
 
-`x : ?a{in_num}` puts the predicate in the parameter's attribute slot and leaves
-its *type* cell open — that is the polymorphism. `add`'s printed type is
-`?a -> ?a -> ?a` with the refinement shown beside it (spelling in §8.1).
+The refinement is an **attribute** on the type, so it is *shown* wherever the
+annotated value is printed (`! in_num` beside the type — the spelling is §8.1) and
+the parameter's own type cell stays the ordinary inference cell — that is the
+polymorphism.
 
 ## 4. The dispatch: a hand-written dependent read
 
