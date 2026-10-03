@@ -178,23 +178,21 @@ both are the reason the record exists:
   virtual module (`persist::virtual_file_id`), compiled fresh in memory like
   `compute`; its values are ordinary (functions and a set of type values), so
   caching it is *possible* and simply not done.
-- **The surface operators do not route here yet.**  `core`'s bindings are the
-  contract, and the *checker's* builtin still implements the surface operators
-  (routing R3, [operator-polymorphism](operator-polymorphism.md) §7).  Routing them
-  onto these bindings has been implemented and withdrawn twice: first because an
-  apply of a *static* function did not instantiate its signature per call — a root
-  since **fixed** (`6e9c409`; a static apply's residual clones now belong to the
-  caller's template) — and second because the routed form is a *call*, and the
-  binding's operand-group element is the placeholder's `[class, kind]` pair, so an
-  arithmetic result's type surfaces that pair (`(43, 44): <raw[Int, Type],
-  raw[Int, Type]>`) and a statement's concrete-value snapshot disappears.  The
-  recommended form is therefore an *expansion of the binding's body* at the call
-  site, which keeps the builtin operator in the caller's body — no representation
-  cost, no lost folding, and nothing for the kernel path to learn
-  ([operator-polymorphism](operator-polymorphism.md) §7.1).
-- **A kernel body cannot call into a built-in.**  A routed operator *as a call* is
-  an apply of a static function and the kernel path refuses it
-  (`compute.jit: static refs are not kernel-compilable v1`), so the call form would
-  leave `examples/compute_jit.lichen` (whose `y + y` is that shape) red until the
-  kernel workstream's specialize-before-JIT pass folds the apply back to a machine
-  leaf.  An expanded body has no such cost: it *is* the machine-leaf shape.
+- **The surface operators route here.**  `+`, `-`, `*`, `/` and the four order
+  comparisons lower onto this module's bindings — the resolver hands out the
+  prelude's binders and the lowering applies one to the operand group — so `1 + 1.5`
+  is refused by *this file's* tie and `1 + 2` is this file's `add`, with no builtin
+  contract restated in Rust.  `==`/`!=` (unconstrained), `%` and the bitwise trio
+  (`Int`-only, a single class the checker pins) are deliberately not routed.  The
+  built-in module's **own** body keeps the machine operators — it has no prelude,
+  since the prelude is what it is — which is what makes the module the
+  implementation rather than a caller of itself.  The routing was blocked until
+  `6e9c409` (an apply of a *static* function did not instantiate its signature per
+  call, so the first call pinned an open class); what it costs now is measured in
+  [operator-polymorphism](operator-polymorphism.md) §7.1.
+- **A kernel body cannot call a binding.**  A routed operator *is* an apply of a
+  static function, and the kernel path refuses it
+  (`compute.jit: static refs are not kernel-compilable v1`), so
+  `examples/compute_jit.lichen` — whose `y + y` is exactly that shape — is red until
+  the kernel workstream's specialize-before-JIT pass folds the apply back to a
+  machine leaf.

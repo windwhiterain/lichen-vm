@@ -49,6 +49,17 @@ pub struct Resolved {
     /// The import (and direct-export) binders in `BinderId` order — the compiler
     /// emits a `Static` node for each, keyed by its id.
     pub import_binders: Vec<ImportBinder>,
+    /// The **prelude**'s bindings, by name: the base-scope binders the built-in
+    /// `core` module was seeded under ([core-prelude](../docs/notes/core-prelude.md)).
+    /// The compiler routes the surface operators (`+`, `-`, `*`, `/` and the four
+    /// order comparisons) onto these binders, so the contract a program meets is
+    /// the module's rather than a built-in's
+    /// ([operator-polymorphism](../docs/notes/operator-polymorphism.md) §7).
+    ///
+    /// Empty when the source has no prelude — which is exactly the built-in
+    /// module's own compilation, and what keeps the module's body on the machine
+    /// operators.
+    pub prelude: Vec<(String, BinderId)>,
     /// The resolve-layer diagnostics (unresolved names).
     pub diagnostics: Vec<Diag<LangProgram>>,
 }
@@ -61,6 +72,7 @@ pub fn resolve(program: &mut Program, imports: &[ResolvedImport]) -> Resolved {
         scopes: Vec::new(),
         next_binder: 0,
         diagnostics: Vec::new(),
+        prelude: Vec::new(),
     };
     let import_binders = resolver.seed_imports(imports);
     // The whole program is one scope: block-wide bindings are entered before any
@@ -73,6 +85,7 @@ pub fn resolve(program: &mut Program, imports: &[ResolvedImport]) -> Resolved {
     }
     Resolved {
         import_binders,
+        prelude: resolver.prelude,
         diagnostics: resolver.diagnostics,
     }
 }
@@ -94,6 +107,9 @@ struct Resolver {
     scopes: Vec<HashMap<String, BinderId>>,
     next_binder: BinderId,
     diagnostics: Vec<Diag<LangProgram>>,
+    /// The prelude's own binders, recorded as they are seeded (see
+    /// [`Resolved::prelude`]).
+    prelude: Vec<(String, BinderId)>,
 }
 
 impl Resolver {
@@ -124,6 +140,10 @@ impl Resolver {
                 export: import.export,
                 span: import.span,
             });
+            // The prelude's names are recorded as well as seeded: the compiler
+            // routes the surface operators onto them
+            // ([`Resolved::prelude`]).
+            let prelude = crate::package::is_prelude_import(import);
             for (name, export) in &import.direct {
                 let id = self.next_binder;
                 self.next_binder += 1;
@@ -133,6 +153,9 @@ impl Resolver {
                     export: *export,
                     span: import.span,
                 });
+                if prelude {
+                    self.prelude.push((name.clone(), id));
+                }
             }
         }
         self.scopes.push(frame);

@@ -274,16 +274,21 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
    - the **call site**: the diagnostic names the built-in's line, not the
      application that failed it (`AssertError` records its template, not the
      apply that cloned it).
-2. **Phase 3, Stage 3 — the routing (R3 → R2/R1): implemented, withdrawn, with a
-   recommended form.**  The surface operator resolving to the `core` binding was
-   measured on top of the static-signature instantiation fix (`6e9c409`, §7): `1 + 2` = `3`, `1 + 1.5` refused by the
-   contract's tie, `f = x => x + x` polymorphic — but as a *call* it moves the
-   `raw` mark into values and editor snapshots (the binding's operand-group element
-   is the placeholder's `[class, kind]` pair), and a kernel body cannot compile it
-   at all (`static refs are not kernel-compilable v1`).  Recommended instead:
-   expand *the binding's body* at the call site, which keeps the builtin operator
-   in the caller's body and was measured kernel-clean
-   ([operator-polymorphism](operator-polymorphism.md) §7.1).
+2. **Phase 3, Stage 3 — the routing (R3 → R2/R1): landed as the call form.**  The
+   surface operator lowers onto the `core` binding applied to the operand group, so
+   the operator *is* the binding (contract and body); the checker's builtin remains
+   only inside the built-in module's own source.  Measured: `1 + 2` = `3`,
+   `1 + 1.5` refused by the contract's tie, `f = x => x + x` polymorphic
+   (`(2, 3.0)`), `array<Int, add [1, 2]>` = `array<Int, 3>`.  It needed the
+   static-signature instantiation first (`6e9c409`) and it carries three measured
+   costs: a kernel body (`static refs are not kernel-compilable v1` — the kernel
+   workstream's specialize pass, and this apply is the shape it specializes); an
+   open class rendering `raw[?a, ?b]` (the printer's honest mark on the
+   placeholder's pair — the expectations that pinned `?a -> ?a` are
+   printer-dependent tests, being converted separately); and a routed statement's
+   value snapshot reading `None` (the builtin folded it eagerly, a call stays
+   lazy — the body-expansion form recorded in
+   [operator-polymorphism](operator-polymorphism.md) §7.1 is the alternative).
 3. **The read's monomorphism is off the contract's path, and stays a separate
    fix.**  `in_num = v => type_of v @in Num` is monomorphic (measured: `(in_num 1,
    in_num 1.5)` refused with `expected Int, found Float`) — which is why the class

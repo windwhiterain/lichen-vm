@@ -270,16 +270,17 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
   polymorphic now — `+ - * /` and the four order comparisons accept either scalar
   class and never mix them, with the operand tie and a refinement condition
   ([operator-polymorphism](operator-polymorphism.md) §3, §9 Phase 1) — and the
-  library form is **landed**: the built-in [prelude `core`](core-prelude.md)
-  carries `Num`, `in_num` and one binding per polymorphic operator (`add`, `sub`,
-  `mul`, `div`, `less`, `greater`, `less_or_equal`, `greater_or_equal`), each
-  taking the **operand group** and refining its elements' **classes**
-  (`array<(_ ! in_num), 2>` — the array's homogeneity is the operand tie and its
-  length the arity).  The *routing* — the surface operator resolving to a binding
-  instead of the checker's builtin — is implemented and **withdrawn**: as a call it
-  moves the `raw` mark into values and snapshots, so the recommended form expands
-  the binding's body at the call site instead
-  ([operator-polymorphism](operator-polymorphism.md) §7.1).
+  library form is **landed and routed**: the built-in
+  [prelude `core`](core-prelude.md) carries `Num`, `in_num` and one binding per
+  polymorphic operator (`add`, `sub`, `mul`, `div`, `less`, `greater`,
+  `less_or_equal`, `greater_or_equal`), each taking the **operand group** and
+  refining its elements' **classes** (`array<(_ ! in_num), 2>` — the array's
+  homogeneity is the operand tie and its length the arity), and the *surface*
+  operators lower onto those bindings, so `1 + 1.5` is refused by the prelude's own
+  tie.  The costs that routing carries — kernel bodies until the kernel
+  workstream's specialize pass, an open class's honest `raw[?a, ?b]` rendering, and
+  a routed statement's missing value snapshot — are measured in
+  [operator-polymorphism](operator-polymorphism.md) §7.1.
 - **Shifts (`<<`, `>>`).** A `>>` token swallows the adjacent closers of nested
   angle types — `array<array<Int, 2>, 3>` ends `3>>` — and a `logos` lexer cannot
   split it back; the fix is parser-level token splitting, which is a change to
