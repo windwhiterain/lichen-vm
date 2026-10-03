@@ -204,6 +204,12 @@ fn completion(uri: &str, id: u32, line: u32, character: u32) -> String {
     )
 }
 
+fn goto_definition(uri: &str, id: u32, line: u32, character: u32) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":{line},"character":{character}}}}}}}"#
+    )
+}
+
 /// A burst of keystrokes must collapse to one frontend run — and the diagnostics
 /// that arrive must be the *last* edit's.
 ///
@@ -286,6 +292,64 @@ fn an_edit_to_an_imported_file_refreshes_the_answer() {
         after.contains("\"label\":\"extra\""),
         "the cached analysis was keyed without the import's bytes, so the newly \
          exported field is missing: {after}"
+    );
+    server.shutdown();
+}
+
+/// A jump to a **prelude** name lands in the built-in's own file, and a failure
+/// inside that file is published against *it* rather than blamed on the document
+/// (`docs/notes/core-prelude.md` §4).
+///
+/// This is the on-disk half of the feature, and the reason it is an integration
+/// test: the server runs over a Lichen Home cache root, so the store materializes
+/// `core.lichen` under it — the file the jump names has to be a path
+/// `Url::from_file_path` can turn into a URI the client can open.  The in-memory
+/// store the unit tests use names the same file relatively.
+#[test]
+fn a_prelude_name_jumps_into_the_materialized_builtin_file() {
+    let dir = temp_dir("prelude");
+    let main = write(&dir, "main.lichen", "add [\"a\", \"b\"]\n");
+    let uri = Url::from_file_path(&main).unwrap().to_string();
+
+    let mut server = Server::start();
+    let text = fs::read_to_string(&main).unwrap();
+    server.send(&did_open(&uri, &text));
+
+    // The document's own set is published against the document: the built-in's
+    // failure must not appear on it.
+    let document = server.next_publish();
+    assert!(
+        document.contains(&uri),
+        "the first publish is the document's, got {document}"
+    );
+    assert!(
+        !document.contains("assertion failed"),
+        "the built-in's failure must not be published against the document: {document}"
+    );
+
+    // The built-in's failure is published against the built-in's file, whose
+    // path is the one the store materialized under the cache root — the file a
+    // jump opens.
+    let builtin = server.next_publish();
+    assert!(
+        builtin.contains("core.lichen"),
+        "the built-in's failure is published against its own file, got {builtin}"
+    );
+    assert!(
+        builtin.contains("assertion failed"),
+        "the failure inside the built-in should be reported there, got {builtin}"
+    );
+
+    // Go to definition on the prelude's `add`: a Location in the built-in's
+    // file, not a position in the document.
+    let definition = server.request(2, &goto_definition(&uri, 2, 0, 1));
+    assert!(
+        definition.contains("core.lichen"),
+        "the jump should name the built-in's file, got {definition}"
+    );
+    assert!(
+        !definition.contains(&format!("\"uri\":\"{uri}\"")),
+        "the jump must not answer with the document's own URI, got {definition}"
     );
     server.shutdown();
 }

@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 use std::ops::Deref;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use stacksafe::stacksafe;
@@ -36,7 +36,7 @@ use stacksafe::stacksafe;
 use lichen_compute::{ComputeOperator, ComputeValue};
 use lichen_highlevel::ir::ExprId;
 use lichen_highlevel::no_native_ops;
-use lichen_highlevel::program::{TypeOperator, ValueType};
+use lichen_highlevel::program::{PackageSource, TypeOperator, ValueType};
 use lichen_language::LangProgramShape;
 use lichen_language::ast::{Binding, Expr, Program, Stmt};
 use lichen_language::diag::{Diag, Stage};
@@ -62,11 +62,47 @@ use crate::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionTextEdit, InsertTextFormat, TextEdit,
 };
 
-/// A definition site: a binding name or a lambda parameter.
+/// A definition site: a binding name, a lambda parameter, or — for a name a
+/// **built-in** module exposes (`add` from the `core` prelude) — the binding's
+/// position in that module's own file.
 #[derive(Clone, Debug)]
 pub struct Definition {
     pub name: String,
     pub span: Span,
+    /// The other file `span` is a position in, when this definition is not this
+    /// document's: a built-in package's source record, whose file exists on disk
+    /// so an editor can open it (`docs/notes/core-prelude.md` §4).  `None` means
+    /// the document this analysis was built for.
+    pub file: Option<Arc<PackageSource>>,
+}
+
+/// One name a **built-in** module exposes, as a definition *in that module*: the
+/// name, its position and text in the built-in's file, and the export it is bound
+/// to.  A document's own binding of the same name shadows it (the built-in frame
+/// sits below every frame of the document), which is the language's rule — the
+/// prelude is shadowable, not reserved.
+///
+/// These are seeded into the base scope so a *use* resolves; they are deliberately
+/// kept out of every document-keyed table ([`DocIndex::defs`], `def_index`), since
+/// their span is a position in the built-in's file and would collide with a
+/// position in the document (both start at line 1).
+#[derive(Clone, Debug)]
+pub struct BuiltinName {
+    pub name: String,
+    /// The definition site: the built-in's file and the export's position in it.
+    pub def: Definition,
+}
+
+/// One *other* file's diagnostics, rendered for the protocol: the file they are a
+/// property of, and the LSP diagnostics on its own positions.  A failure inside a
+/// built-in module is one of these, never part of the document's own set
+/// (`docs/notes/core-prelude.md` §4).
+#[derive(Clone, Debug)]
+pub struct FileDiagnostics {
+    /// The file the diagnostics belong to — its path on disk, which the client
+    /// opens (`Url::from_file_path`).
+    pub path: PathBuf,
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// An imported binding, indexed for the editor: the name it is bound to, the
@@ -143,14 +179,30 @@ pub struct DocIndex {
     pub tokens: Arc<Vec<Token>>,
     /// The parsed AST — the frontend's parser output, shared for the same reason.
     pub program: Arc<Program>,
-    /// Every definition site, in declaration order.
+    /// Every definition site **in this document**, in declaration order.  A
+    /// built-in's definition is not one of these (see
+    /// [`DocIndex::builtin_names`]): its span is a position in another file.
     pub defs: Vec<Definition>,
+    /// The definitions a **built-in** module exposes that this document can use
+    /// without an import — the `core` prelude's bindings.  Each carries the
+    /// built-in's file and the binding's position in it, so a use resolves to a
+    /// jump into that file (`docs/notes/core-prelude.md` §4).  Kept apart from
+    /// [`DocIndex::defs`] because a definition *in this document* is what the
+    /// editor's own name tables (statement spans, document symbols) key on.
+    pub builtin_names: Vec<BuiltinName>,
     /// The full diagnostic set (lex + parse + resolve + check), rendered for
     /// the protocol.  Carries the same message and severity as the checker's
     /// own diagnostics, minus their arena-bound structured facts.
     lsp_diagnostics: Vec<Diagnostic>,
-    /// Span of a name *use* → index into [`DocIndex::defs`].
-    resolve: HashMap<Span, usize>,
+    /// The rendered diagnostics that belong to **another file** — a failure
+    /// inside a built-in package's source, which is a property of *that* file
+    /// and must not be published against the document.
+    file_diagnostics: Vec<FileDiagnostics>,
+    /// Span of a name *use* → the definition it resolves to.  A built-in's
+    /// definition is stored by index into [`DocIndex::builtin_names`], never as
+    /// an index into [`DocIndex::defs`] — the two lists have different
+    /// coordinates.
+    resolve: HashMap<Span, ScopeValue>,
     /// Span of a definition site → index into [`DocIndex::defs`].
     def_index: HashMap<Span, usize>,
     /// Span of a binding name → index into [`DocIndex::statements`] for the
@@ -378,7 +430,7 @@ where
         build,
         diagnostics: report.diagnostics,
     };
-    index::<P>(&source, line_starts, &pre, artifacts)
+    index::<P>(&source, line_starts, &pre, artifacts, store)
 }
 
 /// The editor index over frontend artifacts, plus the pipeline diagnostics.
@@ -388,11 +440,17 @@ where
 /// [`BufferSession`](lichen_language::session::BufferSession) produced — the one
 /// place the editor's view of a program is derived, so the incremental path and
 /// the one-shot path cannot drift apart.
+///
+/// `store` is where the built-in packages' **source records** are read from
+/// ([`PackageStore::package_source`]): an import whose package is a built-in
+/// exposes names a use can jump to, and the record is the only thing that knows
+/// where in that file a name was written.
 pub fn index<P>(
     source: &str,
     line_starts: Vec<usize>,
     pre: &preprocess::Preprocessed<'_>,
     artifacts: Artifacts<P>,
+    store: &PackageStore<P>,
 ) -> (DocIndex, Vec<Diag<P>>)
 where
     P: LangProgramShape,
@@ -647,7 +705,24 @@ where
             ),
         };
 
-    let (defs, resolve, def_index) = index_names(&program, &pre.imports);
+    // The names a **built-in** module exposes as bare names — the `core`
+    // prelude's bindings — with the definition site in the built-in's own file.
+    // Seeded into the base scope below, so a use resolves and can jump there.
+    let builtin_names = builtin_names(&pre.imports, store);
+    // The **prelude** import is not part of this document's own names: its
+    // bindings are the `builtin_names` above, defined in the built-in's file, and
+    // the import itself has no directive — its span is the synthetic `(1, 1)` a
+    // seeded import carries, which every document position would collide with.  It
+    // must not enter any table keyed by a *document* span, nor be entered as a
+    // definition of this document (`index_names` below is given only the imports
+    // the program wrote — an explicit `import "compute"` stays one of them, and
+    // its binding hovers as the imported module it is).
+    let written_imports: Vec<&ResolvedImport> = pre
+        .imports
+        .iter()
+        .filter(|imp| !lichen_language::package::is_prelude_import(imp))
+        .collect();
+    let (defs, resolve, def_index) = index_names(&program, &written_imports, &builtin_names);
     // Map each statement's span (a binding's name span, or an
     // expression's start span) to its statement index, so a name
     // (resolved to a binding) can reach the binding's value/type.
@@ -658,8 +733,7 @@ where
         .collect();
     // The imported bindings and their type (for the hover).  `imp.path` is
     // the canonical resolved path; display its file name (`math.lichen`).
-    let imports: Vec<ImportBinding> = pre
-        .imports
+    let imports: Vec<ImportBinding> = written_imports
         .iter()
         .map(|imp| ImportBinding {
             name: imp.name.clone(),
@@ -678,6 +752,11 @@ where
         .map(|(i, b)| (b.span, i))
         .collect();
     let lsp_diagnostics = render_diagnostics(&diagnostics, source, &line_starts);
+    // A failure inside a built-in module is a property of *its* file, not of the
+    // document (`Diag::file`): rendered on the built-in's own positions and
+    // published separately, so the document is never blamed for a line it does
+    // not contain.
+    let file_diagnostics = file_diagnostics(&diagnostics);
 
     (
         DocIndex {
@@ -687,7 +766,9 @@ where
             tokens,
             program,
             defs,
+            builtin_names,
             lsp_diagnostics,
+            file_diagnostics,
             resolve,
             def_index,
             stmt_by_span,
@@ -704,7 +785,90 @@ where
     )
 }
 
-/// The pipeline diagnostics as LSP [`Diagnostic`]s.
+/// The names the built-in packages in `imports` expose as bare names, in import
+/// order: for each import whose package carries a **source record** (a built-in
+/// package, `docs/notes/core-prelude.md` §4), one entry per `(name, export)` of
+/// its `direct` list, positioned by the name's own binding in *that* file.
+///
+/// A package with no source record — an ordinary imported module, whose names are
+/// reached through its binding, never bare — contributes nothing, and neither
+/// does a built-in the program imported explicitly: only the seeded **prelude**
+/// is in scope with no import.
+fn builtin_names<P>(imports: &[ResolvedImport], store: &PackageStore<P>) -> Vec<BuiltinName>
+where
+    P: LangProgramShape,
+    P::Value: ValueType + From<ComputeValue> + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+{
+    let mut names = Vec::new();
+    for import in imports {
+        // The package source is keyed by the module the import's export lives in
+        // — a built-in is registered under its own key rather than loaded from
+        // the path cache, so this reads it wherever the store filed it.
+        let Some(source) = store.package_source(import.export.module) else {
+            continue;
+        };
+        // Only a **seeded** built-in contributes bare names: its module is the
+        // prelude, in scope with no import.  A built-in a program imported
+        // explicitly (`compute = import "compute"`) exposes its names through its
+        // binding, exactly as an ordinary package does.
+        if !source
+            .path
+            .file_name()
+            .is_some_and(|name| import.path.file_name() == Some(name))
+        {
+            continue;
+        }
+        let source = Arc::new(source);
+        // The built-in's own top-level bindings, by name: where each is written
+        // in its file.  The record's `spans` hold only the frozen nodes a
+        // *failure* can name, which is not every binding's export node (a
+        // lambda's export is a node no assert clones), so the text is what the
+        // definition site is read from — it is the same text the record keeps.
+        let positions = definition_spans(&source.code);
+        for (name, _export) in &import.direct {
+            let Some(span) = positions.iter().find(|(n, _)| n == name).map(|(_, s)| *s) else {
+                continue;
+            };
+            names.push(BuiltinName {
+                name: name.clone(),
+                def: Definition {
+                    name: name.clone(),
+                    span,
+                    file: Some(Arc::clone(&source)),
+                },
+            });
+        }
+    }
+    names
+}
+
+/// The position of every top-level **binding** in a package's source text, in
+/// source order: the pairs `(name, position)` that make a built-in's exported
+/// names jumpable.
+///
+/// Read from the text rather than from the source record's frozen-node positions
+/// because those cover the nodes a *failure* can name, which is not every
+/// binding: a binding whose value is a lambda freezes as a node no assert clones,
+/// and its position is exactly what a jump needs.
+fn definition_spans(code: &str) -> Vec<(String, Span)> {
+    let tokens = lex::lex(code).tokens;
+    let parsed = parse::parse(&tokens);
+    parsed
+        .program
+        .statements
+        .iter()
+        .filter_map(|block| match &block.stmt {
+            Stmt::Binding(binding) => Some((binding.name.clone(), binding.span)),
+            Stmt::Expr(_) => None,
+        })
+        .collect()
+}
+
+/// The pipeline diagnostics **of this document**, as LSP [`Diagnostic`]s.  A
+/// diagnostic that names another file (`Diag::file`) belongs to that file and is
+/// rendered for it by [`file_diagnostics`] instead — the document must never be
+/// blamed for a position it does not contain.
 fn render_diagnostics<P: LangProgramShape>(
     diagnostics: &[Diag<P>],
     source: &str,
@@ -712,6 +876,7 @@ fn render_diagnostics<P: LangProgramShape>(
 ) -> Vec<Diagnostic> {
     diagnostics
         .iter()
+        .filter(|d| d.file.is_none())
         .map(|d| {
             let range = d
                 .span
@@ -741,10 +906,57 @@ fn render_diagnostics<P: LangProgramShape>(
         .collect()
 }
 
+/// The pipeline diagnostics that belong to **another file**, grouped by that
+/// file: the same message and span as the document's own rendering, but on the
+/// built-in's positions and text — so a client publishing them against
+/// `Url::from_file_path(path)` puts the error on the line that wrote it
+/// (`docs/notes/core-prelude.md` §4).
+///
+/// A diagnostic with a `file` but no `span` has no position to render; it is
+/// dropped here rather than given one, since the document's coordinates are
+/// exactly what it must not be given.
+fn file_diagnostics<P: LangProgramShape>(diagnostics: &[Diag<P>]) -> Vec<FileDiagnostics> {
+    let mut out: Vec<FileDiagnostics> = Vec::new();
+    for d in diagnostics {
+        let (Some(file), Some(span)) = (&d.file, d.span) else {
+            continue;
+        };
+        let line_starts = lex::line_starts(&file.code);
+        let rendered = Diagnostic {
+            range: lsp::range_from_span(&file.code, &line_starts, span),
+            severity: Some(severity_for(d.stage)),
+            code: None,
+            code_description: None,
+            source: Some("lichen".to_string()),
+            message: d.message.clone(),
+            tags: None,
+            related_information: None,
+            data: None,
+        };
+        match out.iter_mut().find(|f| f.path == file.path) {
+            Some(existing) => existing.diagnostics.push(rendered),
+            None => out.push(FileDiagnostics {
+                path: file.path.clone(),
+                diagnostics: vec![rendered],
+            }),
+        }
+    }
+    out
+}
+
 impl DocIndex {
-    /// The pipeline diagnostics as LSP [`Diagnostic`]s.
+    /// The pipeline diagnostics **of this document** as LSP [`Diagnostic`]s.
+    /// A diagnostic inside a built-in module is not one of these; it is
+    /// [`DocIndex::file_diagnostics`].
     pub fn lsp_diagnostics(&self) -> Vec<Diagnostic> {
         self.lsp_diagnostics.clone()
+    }
+
+    /// The diagnostics of every **other file** this analysis reported — a
+    /// failure inside a built-in package's source, to be published against that
+    /// file's own URI (`docs/notes/core-prelude.md` §4).
+    pub fn file_diagnostics(&self) -> &[FileDiagnostics] {
+        &self.file_diagnostics
     }
 
     /// The token at byte offset `offset`, if any.
@@ -799,16 +1011,22 @@ impl DocIndex {
         let kind = &token.kind;
         if let TokenKind::Name(name) = kind {
             // Resolve the hovered name: a use to its binding, or the binding's
-            // own definition site.  Then, if it is a top-level binding, render
-            // the bound expression's `value : type` from the checked snapshot
-            // (the read-only `StatementValue` for that statement).
+            // own definition site.  A name that resolves to a *built-in*'s file
+            // has no position in this document at all, so it is described by the
+            // file it is defined in, never by a document line.
+            let builtin = self
+                .resolve
+                .get(&token.span)
+                .and_then(|def| def.builtin())
+                .map(|i| &self.builtin_names[i].def);
             let def_idx = self
                 .resolve
                 .get(&token.span)
-                .or_else(|| self.def_index.get(&token.span))
-                .copied();
-            let msg = match def_idx {
-                Some(i) => {
+                .and_then(|def| def.document())
+                .or_else(|| self.def_index.get(&token.span).copied());
+            let msg = match (builtin, def_idx) {
+                (Some(def), _) => builtin_hover(name, def),
+                (None, Some(i)) => {
                     let def = &self.defs[i];
                     // An imported module: the use resolves to its `@import`
                     // directive, so render the imported module's type rather
@@ -837,7 +1055,7 @@ impl DocIndex {
                         },
                     }
                 }
-                None => {
+                (None, None) => {
                     // A field access (`math.succ`, `point.x`): the field belongs
                     // to its container — an imported module or a local struct —
                     // so it is not unresolved.  The hover renders the field's
@@ -855,20 +1073,28 @@ impl DocIndex {
         Some((msg, range))
     }
 
-    /// Go to definition for a cursor position on a name *use*: the definition's
-    /// byte range, if it resolves.
-    pub fn definition_at(&self, position: Position) -> Option<Range> {
+    /// The LSP byte range a definition spans **in its own file**: the document's
+    /// coordinates for one of the document's definitions, and the built-in's own
+    /// text and coordinates for a built-in's — which is what a go-to answer must
+    /// return, since the definition is on the built-in's line, not this file's.
+    pub fn definition_range(&self, def: &Definition) -> Range {
+        match &def.file {
+            Some(file) => lsp::range_from_span(&file.code, &lex::line_starts(&file.code), def.span),
+            None => lsp::range_from_span(&self.source, &self.line_starts, def.span),
+        }
+    }
+
+    /// Go to definition for a cursor position on a name *use*: the definition it
+    /// resolves to, if any.  Read [`Definition::file`] to tell a definition in
+    /// this document from one in a built-in's file — the caller turns it into the
+    /// file's URI with `Url::from_file_path`.
+    pub fn definition_at(&self, position: Position) -> Option<Definition> {
         let offset = self.offset_of(position)?;
         let token = self.token_at(offset)?;
         if let TokenKind::Name(_) = &token.kind
-            && let Some(idx) = self.resolve.get(&token.span)
+            && let Some(def) = self.resolve.get(&token.span).copied()
         {
-            let def = &self.defs[*idx];
-            return Some(lsp::range_from_span(
-                &self.source,
-                &self.line_starts,
-                def.span,
-            ));
+            return Some(def.definition(self));
         }
         None
     }
@@ -902,11 +1128,12 @@ impl DocIndex {
             .iter()
             .map(|i| (i.name.clone(), i.span))
             .collect();
-        let in_scope = scope_names_at(&self.program, &imports, &self.line_starts, offset);
+        let builtin: Vec<String> = self.builtin_names.iter().map(|b| b.name.clone()).collect();
+        let in_scope = scope_names_at(&self.program, &imports, &builtin, &self.line_starts, offset);
         in_scope
             .into_iter()
-            .filter(|(name, _)| name.starts_with(&prefix))
-            .map(|(name, span)| self.completion_item(name, span, replace))
+            .filter(|name| name.name.starts_with(&prefix))
+            .map(|name| self.completion_item(&name, replace))
             .collect()
     }
 
@@ -959,10 +1186,19 @@ impl DocIndex {
     /// fields (keyed by statement index).  Empty when the container is not a
     /// knowable struct.
     fn container_field_names(&self, container_span: Span) -> Vec<String> {
-        let Some(def_idx) = self.resolve.get(&container_span).copied() else {
+        let Some(def) = self
+            .resolve
+            .get(&container_span)
+            .copied()
+            .and_then(|def| match def {
+                // A built-in's container has no fields this document knows: its
+                // definition is in another file and no struct type was read for it.
+                ScopeValue::Builtin(_) => None,
+                ScopeValue::Document(i) => Some(&self.defs[i]),
+            })
+        else {
             return Vec::new();
         };
-        let def = &self.defs[def_idx];
         if let Some(import_i) = self.import_by_span.get(&def.span).copied() {
             let module = &self.imports[import_i].name;
             return self.module_fields.get(module).cloned().unwrap_or_default();
@@ -980,7 +1216,7 @@ impl DocIndex {
     /// A completion item for one struct field of a `container.…` access: a
     /// FIELD kind, with the field's `value : type` (where the build produced
     /// one) as `detail`.  Field names are not bindings, so the detail comes from
-    /// the field tables, not [`DocIndex::def_detail`].  An imported module's field
+    /// the field tables, not [`DocIndex::doc_detail`].  An imported module's field
     /// resolves through [`DocIndex::module_field_types`]; a local struct field
     /// through [`DocIndex::field_types`].
     fn field_completion_item(
@@ -1068,10 +1304,20 @@ impl DocIndex {
 
     /// A completion item for one in-scope name: a module for an imported
     /// binding, a function when its checked type is an arrow, else a variable.
-    /// `detail` carries the name's checked type or module path.
-    fn completion_item(&self, name: String, span: Span, replace: (u32, u32)) -> CompletionItem {
-        let detail = self.def_detail(span);
-        let kind = if self.import_by_span.contains_key(&span) {
+    /// `detail` carries the name's checked type or module path.  A name a
+    /// **built-in** exposes (`add` from the `core` prelude) has no binding in
+    /// this document, so its `detail` names the built-in's file instead of a
+    /// checked type.
+    fn completion_item(&self, scoped: &ScopedName, replace: (u32, u32)) -> CompletionItem {
+        let name = &scoped.name;
+        let detail = match scoped.document {
+            Some(span) => self.doc_detail(span),
+            None => self.builtin_detail(name),
+        };
+        let kind = if scoped
+            .document
+            .is_some_and(|span| self.import_by_span.contains_key(&span))
+        {
             Some(CompletionItemKind::MODULE)
         } else if detail.as_deref().is_some_and(|d| d.contains("->")) {
             Some(CompletionItemKind::FUNCTION)
@@ -1092,11 +1338,22 @@ impl DocIndex {
         }
     }
 
-    /// The informational `detail` for a completion (an in-scope name identified
-    /// by its definition `span`): an imported module's path/type, or a binding's
-    /// checked type from the read-only statement snapshot.  `None` when the
-    /// build computed neither (a lambda parameter, an unresolved import).
-    fn def_detail(&self, span: Span) -> Option<String> {
+    /// The informational `detail` for a **built-in** name: the built-in's own
+    /// file (its text and spans are not this document's, so no checked type is
+    /// available here).
+    fn builtin_detail(&self, name: &str) -> Option<String> {
+        let def = &self.builtin_names.iter().find(|b| b.name == name)?.def;
+        Some(match &def.file {
+            Some(file) => format!("built-in (from `{}`)", source_name(file)),
+            None => "built-in".to_string(),
+        })
+    }
+
+    /// The informational `detail` for a name the **document** binds, identified
+    /// by its definition `span`: an imported module's path/type, or a binding's
+    /// checked type from the read-only statement snapshot.  `None` when the build
+    /// computed neither (a lambda parameter, an unresolved import).
+    fn doc_detail(&self, span: Span) -> Option<String> {
         if let Some(i) = self.import_by_span.get(&span) {
             let imp = &self.imports[*i];
             return Some(match &imp.ty {
@@ -1129,9 +1386,11 @@ impl DocIndex {
         let container_def = self.resolve.get(&container_span).copied();
 
         // An imported-module container (`math.succ`): look the field up in the
-        // module's field table.
+        // module's field table.  A built-in container has no directive to key on
+        // (its definition is in another file), so it never takes this branch.
         if let Some(d) = container_def
-            && let Some(import_i) = self.import_by_span.get(&self.defs[d].span).copied()
+            && let Some(doc_index) = d.document()
+            && let Some(import_i) = self.import_by_span.get(&self.defs[doc_index].span).copied()
         {
             let module = &self.imports[import_i].name;
             let fallback = format!("`.{name}` — field of imported module `{module}`");
@@ -1274,6 +1533,32 @@ fn import_hover(name: &str, imp: &ImportBinding) -> String {
         Some(ty) => format!("`{name}` — imported module : {ty}"),
         None => format!("`{name}` — imported module (from `{}`)", imp.path),
     }
+}
+
+/// The hover text for a name that resolves to a **built-in** module's file: the
+/// name, and the line in that file it is defined at.  No `value : type` is
+/// rendered — the statement's checked snapshot is *that module's* build, which
+/// this analysis does not hold (the record keeps positions, not checker facts,
+/// `docs/notes/core-prelude.md` §5).
+fn builtin_hover(name: &str, def: &Definition) -> String {
+    match &def.file {
+        Some(file) => format!(
+            "`{name}` — defined at line `{}` of `{}`",
+            def.span.0,
+            source_name(file)
+        ),
+        None => format!("`{name}` — defined at line `{}`", def.span.0),
+    }
+}
+
+/// A file's display name for a hover or a completion `detail`: its file name
+/// (`core.lichen`), falling back to the whole path.
+fn source_name(source: &PackageSource) -> String {
+    source
+        .path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| source.path.display().to_string())
 }
 
 /// The type of the named field `field` inside a rendered `struct<...>` type
@@ -1652,36 +1937,40 @@ impl<'a> NameClass<'a> {
 
 fn index_names(
     program: &Program,
-    imports: &[ResolvedImport],
-) -> (Vec<Definition>, HashMap<Span, usize>, HashMap<Span, usize>) {
+    imports: &[&ResolvedImport],
+    builtins: &[BuiltinName],
+) -> (
+    Vec<Definition>,
+    HashMap<Span, ScopeValue>,
+    HashMap<Span, usize>,
+) {
     let mut walk = Walk {
         defs: Vec::new(),
         scopes: Vec::new(),
         resolve: HashMap::new(),
         def_index: HashMap::new(),
     };
-    // Seed the imported bindings into a base scope frame, mirroring the
-    // compiler's import frame below the block-wide binding frames: a use of an
-    // imported module resolves to its `@import` directive, and a local binding
-    // may shadow an imported name (the local frame sits above the import one).
+    // Seed the base scope frames, mirroring the compiler's import frame below the
+    // block-wide binding frames: a use of an imported module resolves to its
+    // `@import` directive, a local binding may shadow either (the local frame
+    // sits above), and the **built-ins** — the `core` prelude's names, in scope
+    // with no import — sit below them all.
     //
-    // The built-in **prelude** is skipped: every source is seeded with it
-    // (`lichen_language::package::is_prelude_import`), but it is not *this
-    // document's* — its entries have no directive and no span in the file, so a
-    // definition, a document symbol, or a completion item for one would be a
-    // location that does not exist.  Names it provides simply stay unresolved
-    // here; the compiler, which does see it, reports nothing about them.
-    if imports
-        .iter()
-        .any(|import| !lichen_language::package::is_prelude_import(import))
-    {
-        walk.scopes.push(HashMap::new());
-        for imp in imports {
-            if lichen_language::package::is_prelude_import(imp) {
-                continue;
-            }
-            walk.enter(&imp.name, imp.span);
-        }
+    // The built-ins' definitions are positions in *their own* file, so they are
+    // kept out of `def_index` (which is keyed by a document span and read by
+    // every consumer of a definition *site*): a document binding at the same
+    // `(line, column)` must never have its span answer with a built-in's
+    // definition.  Only a *use* resolves to one, through the scope frame.
+    walk.scopes.push(HashMap::new());
+    for imp in imports {
+        walk.enter(&imp.name, imp.span);
+    }
+    walk.scopes.push(HashMap::new());
+    for (index, builtin) in builtins.iter().enumerate() {
+        walk.scopes
+            .last_mut()
+            .expect("a scope frame is pushed")
+            .insert(builtin.name.clone(), ScopeValue::Builtin(index));
     }
     // The top level is a block; `pub` is irrelevant to name resolution, so the
     // statements are walked as plain statements (their `.stmt`).
@@ -1694,29 +1983,72 @@ fn index_names(
     (walk.defs, walk.resolve, walk.def_index)
 }
 
+/// What a name in scope resolves to: a definition **in this document** (an index
+/// into [`DocIndex::defs`]) or one a **built-in** module exposes (an index into
+/// [`DocIndex::builtin_names`]).  The distinction is the whole point — the two
+/// have different coordinates, and a built-in definition must never be read as a
+/// document index.
+#[derive(Clone, Copy, Debug)]
+enum ScopeValue {
+    Document(usize),
+    Builtin(usize),
+}
+
+impl ScopeValue {
+    /// The index into [`DocIndex::defs`], when this is a definition **in this
+    /// document** — the only case a document-span-keyed table may be read with.
+    fn document(self) -> Option<usize> {
+        match self {
+            ScopeValue::Document(i) => Some(i),
+            ScopeValue::Builtin(_) => None,
+        }
+    }
+
+    /// The index into [`DocIndex::builtin_names`], when this is a name a
+    /// **built-in** module exposes.
+    fn builtin(self) -> Option<usize> {
+        match self {
+            ScopeValue::Builtin(i) => Some(i),
+            ScopeValue::Document(_) => None,
+        }
+    }
+
+    /// The definition itself, read from the document it belongs to.
+    fn definition(self, index: &DocIndex) -> Definition {
+        match self {
+            ScopeValue::Document(i) => index.defs[i].clone(),
+            ScopeValue::Builtin(i) => index.builtin_names[i].def.clone(),
+        }
+    }
+}
+
 struct Walk {
     defs: Vec<Definition>,
-    scopes: Vec<HashMap<String, usize>>,
-    resolve: HashMap<Span, usize>,
+    scopes: Vec<HashMap<String, ScopeValue>>,
+    resolve: HashMap<Span, ScopeValue>,
     def_index: HashMap<Span, usize>,
 }
 
 impl Walk {
+    /// Enter a definition **of this document** at `span`: it is pushed onto
+    /// [`DocIndex::defs`], and its span — a position in this file — is what the
+    /// definition-site consumers read.
     fn enter(&mut self, name: &str, span: Span) -> usize {
         let idx = self.defs.len();
         self.defs.push(Definition {
             name: name.to_string(),
             span,
+            file: None,
         });
         self.def_index.insert(span, idx);
         self.scopes
             .last_mut()
             .expect("a scope frame is pushed")
-            .insert(name.to_string(), idx);
+            .insert(name.to_string(), ScopeValue::Document(idx));
         idx
     }
 
-    fn lookup(&self, name: &str) -> Option<usize> {
+    fn lookup(&self, name: &str) -> Option<ScopeValue> {
         self.scopes.iter().rev().find_map(|f| f.get(name).copied())
     }
 
@@ -1934,28 +2266,64 @@ impl Walk {
 // order, snapshots the scope stack at the point it crosses the cursor.  That is
 // exactly the name set both the diagnostic suggestion and the completion use.
 
-/// The names in scope at byte `offset`: `(name, definition-span)` pairs,
-/// innermost scope first, deduplicated (a name shadowing an outer one is listed
-/// once).  See [`ScopeCapture`] for the traversal contract.
+/// One name in scope at the cursor, as the completion needs it: the name and the
+/// definition **span** when this document binds it.  A name a built-in module
+/// exposes (`add` from the `core` prelude) has no document span at all — its
+/// definition is a position in another file — so `None` marks it as the
+/// built-in's, and a document binding of the same name shadows it (the walk
+/// enters the document's frames above the built-in's, and only the innermost
+/// entry of a name is captured).
+#[derive(Clone, Debug)]
+struct ScopedName {
+    name: String,
+    /// The document definition site's span, or `None` for a built-in's name.
+    document: Option<Span>,
+}
+
+/// The names in scope at byte `offset`, innermost scope first, deduplicated (a
+/// name shadowing an outer one is listed once).  See [`ScopeCapture`] for the
+/// traversal contract.
 fn scope_names_at(
     program: &Program,
     imports: &[(String, Span)],
+    builtins: &[String],
     line_starts: &[usize],
     offset: usize,
-) -> Vec<(String, Span)> {
+) -> Vec<ScopedName> {
     let mut w = ScopeCapture {
         scopes: Vec::new(),
         line_starts,
         offset,
         result: None,
     };
-    // Seed the imported bindings into a base frame, mirroring [`index`].
-    if !imports.is_empty() {
-        let mut frame = HashMap::new();
-        for (name, span) in imports {
-            frame.insert(name.clone(), *span);
-        }
-        w.scopes.push(frame);
+    // Seed the base scope frames, mirroring [`index`]: the imported bindings,
+    // then the built-ins the imports expose as bare names.  The document's own
+    // bindings are entered above them by the walk, so they shadow both.
+    w.scopes.push(HashMap::new());
+    for (name, span) in imports {
+        w.scopes
+            .last_mut()
+            .expect("a scope frame is pushed")
+            .insert(
+                name.clone(),
+                ScopedName {
+                    name: name.clone(),
+                    document: Some(*span),
+                },
+            );
+    }
+    w.scopes.push(HashMap::new());
+    for name in builtins {
+        w.scopes
+            .last_mut()
+            .expect("a scope frame is pushed")
+            .insert(
+                name.clone(),
+                ScopedName {
+                    name: name.clone(),
+                    document: None,
+                },
+            );
     }
     let top_stmts: Vec<Stmt> = program
         .statements
@@ -1968,12 +2336,12 @@ fn scope_names_at(
 
 /// The scope-stack snapshot used by [`scope_names_at`].
 struct ScopeCapture<'a> {
-    /// The active scope frames, innermost last; each frame is name → def span.
-    scopes: Vec<HashMap<String, Span>>,
+    /// The active scope frames, innermost last; each frame is name → name.
+    scopes: Vec<HashMap<String, ScopedName>>,
     line_starts: &'a [usize],
     offset: usize,
     /// The captured in-scope names, once the walk reaches the offset.
-    result: Option<Vec<(String, Span)>>,
+    result: Option<Vec<ScopedName>>,
 }
 
 impl<'a> ScopeCapture<'a> {
@@ -1981,7 +2349,13 @@ impl<'a> ScopeCapture<'a> {
         self.scopes
             .last_mut()
             .expect("a scope frame is pushed")
-            .insert(name.to_string(), span);
+            .insert(
+                name.to_string(),
+                ScopedName {
+                    name: name.to_string(),
+                    document: Some(span),
+                },
+            );
     }
 
     /// At the first node whose start is at/past the cursor, snapshot the scope.
@@ -1998,11 +2372,11 @@ impl<'a> ScopeCapture<'a> {
         if self.result.is_some() {
             return;
         }
-        let mut out: Vec<(String, Span)> = Vec::new();
+        let mut out: Vec<ScopedName> = Vec::new();
         for frame in self.scopes.iter().rev() {
-            for (name, span) in frame {
-                if !out.iter().any(|(n, _)| n == name) {
-                    out.push((name.clone(), *span));
+            for (name, entry) in frame {
+                if !out.iter().any(|existing| existing.name == *name) {
+                    out.push(entry.clone());
                 }
             }
         }
@@ -2465,6 +2839,71 @@ mod tests {
         let d = doc("a = 1\n(a, a)");
         assert!(d.diagnostics.is_empty(), "got {:?}", d.diagnostics);
         assert_eq!(d.defs.len(), 1, "one binding");
+        // The prelude's names are in scope (a use resolves, below) but are **not**
+        // this document's bindings: they are defined in `core.lichen`'s file, so
+        // they live apart from `defs` — the one list a position in this document
+        // is read from.
+        assert!(
+            d.builtin_names.iter().any(|b| b.name == "add"),
+            "the prelude's `add` should be seeded, got {:?}",
+            d.builtin_names
+                .iter()
+                .map(|b| b.name.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_prelude_name_use_jumps_into_the_builtins_own_file() {
+        // `add` has no binding in the document and no import: the prelude is
+        // seeded into every source.  A use of it resolves to the binding in the
+        // built-in's *own* file, which the store materializes on disk — so the
+        // jump names that file, not a position in this one.
+        let d = doc("add [1, 2]\n");
+        let def = d
+            .definition_at(Position {
+                line: 0,
+                character: 0,
+            })
+            .expect("definition for the prelude's `add`");
+        let file = def
+            .file
+            .as_ref()
+            .expect("`add` is defined in a built-in file");
+        assert_eq!(
+            file.path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned()),
+            Some("core.lichen".to_string()),
+            "the jump should land in the built-in's file"
+        );
+        assert!(
+            file.code.contains("add = operands"),
+            "the built-in's text is the record's: got {:?}",
+            file.code
+        );
+        // The position is the built-in's own: `add` is defined on line 3 of
+        // `core.lichen`, and the range is rendered in the built-in's
+        // coordinates, not the document's.
+        let range = d.definition_range(&def);
+        assert_eq!(range.start.line, 2, "`add` is on line 3 of core.lichen");
+
+        // A failure *inside* the built-in is a property of its file, not of the
+        // document: it is rendered on the built-in's own line and published
+        // apart, so the document is never blamed for a position it does not
+        // contain (`docs/notes/core-prelude.md` §4).
+        let failing = doc("add [\"a\", \"b\"]\n");
+        let files = failing.file_diagnostics();
+        assert!(
+            files.iter().any(|file| {
+                file.path.file_name().is_some_and(|n| n == "core.lichen")
+                    && file
+                        .diagnostics
+                        .iter()
+                        .any(|d| d.message.contains("assertion failed"))
+            }),
+            "expected the built-in's failure on the built-in's file, got {files:?}"
+        );
     }
 
     #[test]
@@ -2543,12 +2982,14 @@ mod tests {
     #[test]
     fn definition_jumps_to_the_binding() {
         let d = doc("a = 1\nb = a + 1\nb");
-        let range = d
+        let def = d
             .definition_at(Position {
                 line: 2,
                 character: 0,
             })
             .expect("definition for the final `b`");
+        assert!(def.file.is_none(), "`b` is this document's binding");
+        let range = d.definition_range(&def);
         assert_eq!(
             range.start,
             Position {
@@ -2774,8 +3215,9 @@ mod tests {
                 character: 0,
             })
             .expect("def on `math`");
+        assert!(def.file.is_none(), "`math` is this document's import");
         assert_eq!(
-            def.start,
+            d.definition_range(&def).start,
             Position {
                 line: 1,
                 character: 2
