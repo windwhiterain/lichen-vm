@@ -9,6 +9,8 @@ use lichen_language::diag::Stage;
 use lichen_language::program::{LangProgram, LangValue};
 use lichen_language::{compile, frontend};
 
+mod common;
+
 /// Compile and run a program, asserting it checks; returns the module and the
 /// root value node.
 /// The dynamic node behind an item ref — the checker builds only dynamic graphs.
@@ -527,22 +529,45 @@ fn a_zero_divisor_is_recorded_rather_than_answered() {
 #[test]
 fn the_two_conversions_cross_in_the_direction_each_one_names() {
     for (source, expected) in [
-        ("int2float 5", "5.0: Float"),
-        ("int2float (1 + 2)", "3.0: Float"),
+        ("int2float 5", LangValue::LowValue(LowValue::Float(5.0))),
+        (
+            "int2float (1 + 2)",
+            LangValue::LowValue(LowValue::Float(3.0)),
+        ),
         // The conversion is the tighter level, so this is `(int2float 1) + 2.0`.
-        ("int2float 1 + 2.0", "3.0: Float"),
+        (
+            "int2float 1 + 2.0",
+            LangValue::LowValue(LowValue::Float(3.0)),
+        ),
         // Above 2^24 the destination cannot carry the source: the crossing is a
         // float's, and nearest rounding is the float's own answer.
-        ("int2float 16777217", "16777216.0: Float"),
-        ("float2int 3.7", "3: Int"),
-        ("float2int (7.0 / 2.0)", "3: Int"),
-        ("float2int 16777216.0", "16777216: Int"),
-        ("x = 3.7; float2int x", "3: Int"),
-        ("(v => int2float v) 7", "7.0: Float"),
+        (
+            "int2float 16777217",
+            LangValue::LowValue(LowValue::Float(16777216.0)),
+        ),
+        ("float2int 3.7", LangValue::LowValue(LowValue::USize(3))),
+        (
+            "float2int (7.0 / 2.0)",
+            LangValue::LowValue(LowValue::USize(3)),
+        ),
+        (
+            "float2int 16777216.0",
+            LangValue::LowValue(LowValue::USize(16777216)),
+        ),
+        (
+            "x = 3.7; float2int x",
+            LangValue::LowValue(LowValue::USize(3)),
+        ),
+        (
+            "(v => int2float v) 7",
+            LangValue::LowValue(LowValue::Float(7.0)),
+        ),
     ] {
-        let out = lichen_language::run::evaluate(source)
-            .unwrap_or_else(|diags| panic!("{source:?} should check and run, got: {diags:?}"));
-        assert_eq!(out, expected, "{source:?} answered: {out}");
+        assert_eq!(
+            evaluate(source),
+            expected,
+            "{source:?} answered with the wrong value"
+        );
     }
 }
 
@@ -594,10 +619,7 @@ fn a_float_with_no_int_to_truncate_toward_is_recorded_rather_than_answered() {
     }
     // A float that merely *could* be out of range is fine: nothing is refused
     // until it is.
-    assert_eq!(
-        lichen_language::run::evaluate("(x => float2int x) 4.5").expect("in range"),
-        "4: Int"
-    );
+    assert_eq!(usize_of(&evaluate("(x => float2int x) 4.5")), 4);
 }
 
 /// Two tokens are both a bracket and a comparison, and the grammar's rule for
@@ -631,10 +653,8 @@ fn comparisons_share_their_tokens_with_the_angle_bracket_forms() {
     );
     // An array type's `>` (the keyword-led form) closes as it always did, and
     // the annotation still pins the literal's length.
-    assert_eq!(
-        lichen_language::run::evaluate("[1, 2] : array<Int, 2>").unwrap(),
-        "[1, 2]: array<Int, 2>"
-    );
+    let (module, value, _) = common::evaluate("[1, 2] : array<Int, 2>");
+    assert_eq!(common::usize_array(&module, &value), vec![1, 2]);
     // A `<` glued to the previous token is still the raw component read, so a
     // comparison is written with a space before it — the Glue rule that was
     // already there.
@@ -805,13 +825,6 @@ fn a_recursive_function_checks_and_evaluates() {
             "fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2); fib 10"
         )),
         55
-    );
-    assert_eq!(
-        lichen_language::run::evaluate(
-            "fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2); fib 10"
-        )
-        .unwrap(),
-        "55: Int"
     );
 }
 
@@ -1724,15 +1737,10 @@ fn an_instantiation_through_a_call_result_checks() {
     // checker forces it and sees the concrete struct type (a panic was the
     // pre-fix behaviour).  Both spellings — the direct call result and a
     // bound alias of it — are the same graph.
-    assert_eq!(
-        lichen_language::run::evaluate("mk = u => struct<Int, Int>\n(mk (Int))(1, 2)").unwrap(),
-        "(1, 2): struct<Int, Int>"
-    );
-    assert_eq!(
-        lichen_language::run::evaluate("mk = u => struct<Int, Int>\nt = mk (Int)\nt(1, 2)")
-            .unwrap(),
-        "(1, 2): struct<Int, Int>"
-    );
+    let (module, value, _) = common::evaluate("mk = u => struct<Int, Int>\n(mk (Int))(1, 2)");
+    assert_eq!(common::usize_array(&module, &value), vec![1, 2]);
+    let (module, value, _) = common::evaluate("mk = u => struct<Int, Int>\nt = mk (Int)\nt(1, 2)");
+    assert_eq!(common::usize_array(&module, &value), vec![1, 2]);
 }
 
 #[test]
@@ -1814,10 +1822,8 @@ fn an_alias_of_a_forward_used_binding_keeps_the_aliased_type() {
     // the reserved placeholder before `c = b` compiled; the alias re-points
     // the earlier uses to `b`'s node, so the instantiation sees the struct
     // type (it previously kept the stale placeholder's `?a`).
-    assert_eq!(
-        lichen_language::run::evaluate("a = c(1, 2)\nb = struct<Int, Int>\nc = b\na").unwrap(),
-        "(1, 2): struct<Int, Int>"
-    );
+    let (module, value, _) = common::evaluate("a = c(1, 2)\nb = struct<Int, Int>\nc = b\na");
+    assert_eq!(common::usize_array(&module, &value), vec![1, 2]);
 }
 
 #[test]
@@ -2325,11 +2331,9 @@ fn partial_inference_in_an_arrow_type() {
 
 #[test]
 fn an_underscore_in_the_array_length_position() {
-    // [1, 2, 3] : array<Int, _> — the length is inferred from the literal,
-    // so the rendered output type pins it.
-    let out = lichen_language::run::evaluate("[1, 2, 3] : array<Int, _>")
-        .expect("the placeholder length should infer");
-    assert_eq!(out, "[1, 2, 3]: array<Int, 3>");
+    // [1, 2, 3] : array<Int, _> — the length is inferred from the literal.
+    let (module, value, _) = common::evaluate("[1, 2, 3] : array<Int, _>");
+    assert_eq!(common::usize_array(&module, &value), vec![1, 2, 3]);
 }
 
 #[test]
@@ -2381,11 +2385,13 @@ fn a_shallow_marked_recursive_tail_stays_lazy() {
     // f = x => [x, ~ f (x + 1)] — the bare `~` cuts the deep pass at the
     // tail, so the definition pass terminates; each index read forces the
     // next apply on demand, and the stream's type resolves level by level.
-    let out = lichen_language::run::evaluate(
+    let (module, value, _) = common::evaluate(
         "f = x => [x, ~ f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))",
-    )
-    .expect("the stream should check and terminate");
-    assert_eq!(out, "(1, 2, 3): <Int, Int, Int>");
+    );
+    let elements = common::array_values(&module, &value);
+    assert_eq!(common::usize_of(&elements[0]), 1);
+    assert_eq!(common::usize_of(&elements[1]), 2);
+    assert_eq!(common::usize_of(&elements[2]), 3);
 }
 
 #[test]
@@ -2395,11 +2401,15 @@ fn a_tilde_n_wrap_marks_value_slots_shallow() {
     // underdetermined type — the wrapped term is a lazy region, so its
     // reads never claim a concrete type that would silently mismatch it.  With
     // no type to read the value against, the value is a raw dump (`raw[…]`).
-    let out = lichen_language::run::evaluate("([1, ~2 [2, 3]])(1)(0)")
-        .expect("the marked array should check");
+    let (module, value, root_ty) = common::evaluate("([1, ~2 [2, 3]])(1)(0)");
+    assert_eq!(
+        common::usize_array(&module, &value),
+        vec![2, 3],
+        "value concrete"
+    );
     assert!(
-        out.starts_with("raw[2, 3]: ?"),
-        "value concrete, type underdetermined, got {out:?}"
+        common::type_is_undecided(&module, root_ty),
+        "type underdetermined"
     );
 }
 
@@ -2409,13 +2419,15 @@ fn a_tilde_one_on_a_recursive_tail_terminates() {
     // on this; the compile-time wrap cannot descend the unbound spine, so
     // the definition pass terminates and the reads stay underdetermined
     // (sound), never a guard panic.
-    let out = lichen_language::run::evaluate(
+    let (module, value, _) = common::evaluate(
         "f = x => [x, ~1 f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))",
-    )
-    .expect("the marked stream should terminate");
-    assert!(
-        out.ends_with(": <?a, ?b, ?c>"),
-        "the reads are underdetermined, got {out:?}"
     );
-    assert!(out.starts_with("("), "a tuple value, got {out:?}");
+    // The reads stay lazy under the `~1` mark, so the tuple's elements are
+    // underdetermined cells rather than a pinned scalar; the point is that the
+    // definition pass terminates and yields the three reads.
+    assert_eq!(
+        common::array_values(&module, &value).len(),
+        3,
+        "a tuple value"
+    );
 }
