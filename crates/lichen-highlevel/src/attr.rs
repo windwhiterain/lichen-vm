@@ -239,6 +239,22 @@ where
         None
     }
 
+    /// The **label** this attribute gives the value it attaches to — the name
+    /// the value reads as, or `None` when the attribute names nothing.
+    ///
+    /// This is the general answer to "how is a value printed" for a value that
+    /// cannot print itself: a refinement's slot holds a *function*, and a
+    /// function has no source spelling in the graph, so a predicate that carries
+    /// a naming doc is spelled by that name
+    /// (`docs/notes/operator-polymorphism.md` §8.1).  A *describing* attribute
+    /// (a struct doc, a perspective) answers `None` and spells through
+    /// [`Self::render`] as before.
+    ///
+    /// Default `None`.
+    fn label(&self, _module: &Module<P>, _slot: NodeId) -> Option<String> {
+        None
+    }
+
     /// Render this attribute's slot value in the language's own syntax
     /// (`# 4`, `? name = "five"`), or `None` when it cannot be spelled (an
     /// unbound or runtime-dependent value, or an attribute with no display).

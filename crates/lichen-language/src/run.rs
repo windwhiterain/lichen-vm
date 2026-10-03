@@ -20,7 +20,7 @@ use crate::preprocess::preprocess;
 use crate::program::{GcdOp, LangProgram};
 pub use crate::render::print_type;
 pub use crate::render::print_value;
-use crate::render::{print_type_lang, print_value_lang, render_attributes};
+use crate::render::{print_type_lang, print_value_lang, render_attributes, value_label};
 
 use lichen_highlevel::checker::Build;
 use lichen_highlevel::program::ValueType;
@@ -77,13 +77,24 @@ where
             })
             .collect());
     }
+    // Render only the attributes the root expression actually carries.
+    let attr_ext = lang_attr_ext::<P>();
+    let tail = &build.root_schema_tail;
+    // A value one of whose attributes **names** it reads as that name: the
+    // override is the general one (`docs/notes/operator-polymorphism.md` §8.1),
+    // not a rule about a particular attribute, and it is what lets a value with
+    // no spelling of its own — a refinement's predicate, a function — be shown
+    // at all.
+    if let Some(label) = value_label::<P>(&module, build.root_term, tail, &*attr_ext) {
+        return Ok(format!(
+            "{label}: {}",
+            print_type_lang::<P>(&module, build.root_ty)
+        ));
+    }
     Ok(format!(
         "{}{}: {}",
         print_value_lang::<P>(&module, value, build.root_ty),
         {
-            // Render only the attributes the root expression actually carries.
-            let attr_ext = lang_attr_ext::<P>();
-            let tail = &build.root_schema_tail;
             let attrs = render_attributes(&module, build.root_term, tail, &*attr_ext);
             if attrs.is_empty() {
                 String::new()

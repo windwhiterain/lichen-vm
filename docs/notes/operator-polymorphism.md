@@ -458,12 +458,27 @@ answered.
    refinement** here: the slot holds a *function value*, which is not printable
    on its own (the graph keeps a lambda as an opaque function, and a binding's
    name is resolved away), so the refinement is spelled through the general
-   answer to "how is a value printed" — the **doc attribute overriding the
-   value's print**, so that `f ? "fibo" = x => …` prints `f` as `?fibo`.  A
-   predicate carrying a doc therefore prints as that doc, and until the override
-   exists `AttrExt::render` should say nothing rather than print a raw handle.
-   Implementing the override is its own change, and it is what makes the
-   refinement visible in a hover at all.
+   answer to "how is a value printed" — an attribute **naming** the value.
+
+   *Landed:* that general mechanism.  [`AttrExt::label`](../../crates/lichen-highlevel/src/attr.rs)
+   (default `None`) is "the name this attribute gives the value it attaches to";
+   `Doc` implements it for a **string** doc, so `f = (x => x) ? "fibo"; f` prints
+   `?fibo: ?a -> ?a` — the value replaced by its label, the type unchanged.  A
+   *struct* doc still describes through `render`, and the shared reader is
+   `render::value_label` (schema tail + pair, exactly like `render_attributes`),
+   which is what a future spelling of the refinement must go through too.
+
+   *Remaining, and the obstacle is a signature:* spelling the refinement as
+   `! <the predicate's name>` means reading the **doc slot of the predicate's own
+   pair** — the slot this attribute holds *is* that pair — and locating a slot
+   needs that pair's **schema tail**, which [`AttrExt::render`](../../crates/lichen-highlevel/src/attr.rs)
+   does not carry: it receives a module and one slot node, and a pair's arity is
+   in the graph while *which* attributes its tail lists is not (a one-entry tail
+   is `[Doc]` or `[Perspective]` and both are three elements long).  The lead is
+   that the tail *is* known where the slot is built — `Checker::check_ann`
+   compiles the predicate expression and has its schema — so either the render
+   hook gains the slot's tail, or the annotation records the predicate's name
+   beside the slot.  Neither is a big change; neither is this phase's.
 2. **`Num`'s home**: std binding (the `type_of` precedent) vs keyword.
 3. **The panic arm's spelling**: the recorded-refusal channel needs a
    value-level form a library function can write; today only builtins record.

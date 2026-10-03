@@ -32,7 +32,7 @@ use crate::diag::Diag;
 
 pub use lichen_render::{
     TypePrinter, ValuePrinter, print_type, print_value, render_attributes,
-    render_struct_fields_named, struct_type_named_fields,
+    render_struct_fields_named, struct_type_named_fields, value_label,
 };
 
 // --- the extension-vocabulary render hooks ---------------------------------

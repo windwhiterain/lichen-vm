@@ -114,4 +114,25 @@ where
         let fields = render_struct_fields_named(module, value, ty)?;
         Some(format!("? {fields}"))
     }
+
+    /// A **string** doc *names* the value it attaches to: `in_num ? "in_num" =
+    /// v => …` gives the predicate the name `?in_num`, and that name is the one
+    /// thing a value that cannot print itself — a function — can be spelled by
+    /// (`docs/notes/operator-polymorphism.md` §8.1).  A struct doc describes
+    /// instead of naming, so it answers `None` here and spells through
+    /// [`Self::render`].
+    fn label(&self, module: &Module<P>, slot: NodeId) -> Option<String> {
+        let pair = self.slot_value(module, slot)?;
+        let LowValue::Array(items) = pair else {
+            return None;
+        };
+        // SAFETY: `items` is the payload of the value read from the live node
+        // `slot` of `module`.
+        let items = unsafe { items.items() };
+        let value = items.first()?.node;
+        match module.node_value(value).and_then(|v| v.as_enum()) {
+            Some(LowValue::Str(name)) => Some(format!("?{name}")),
+            _ => None,
+        }
+    }
 }
