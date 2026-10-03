@@ -581,12 +581,21 @@ pub enum KernelInstr {
     /// callee's own domain, not known here.
     CallKernel(KernelId),
     /// Read one element of one input buffer: the stack holds
-    /// `[buffer_position, index]`.
-    BufferReadCall,
+    /// `[buffer_position, index]`, and the value pushed is of the class named
+    /// here — the buffer's **element** class.
+    ///
+    /// The position and the index are `Int` regardless: a position is a
+    /// compile-time ordinal and an index is a lane number, and neither is ever
+    /// the data.  So this instruction is the one place a body names two classes
+    /// at once, and the class named here is the one the *import* is typed by.
+    BufferReadCall(ScalarClass),
     /// Write one element of one output buffer: the stack holds
     /// `[buffer_position, index, value]`. The buffer position is a
     /// compile-time constant pushed immediately before the call.
-    BufferWriteCall,
+    ///
+    /// The class is the element class, as in [`Self::BufferReadCall`]; the
+    /// position and the index are `Int`.
+    BufferWriteCall(ScalarClass),
 }
 
 /// A compiled kernel-callable unit: a lowered function body plus the facts a
@@ -651,25 +660,32 @@ pub struct KernelFragment {
     /// slots are ordered to match it — so position *is* the ordinal a slot would
     /// need, and a slot carries no class of its own to be read from instead.
     pub input_classes: Vec<ScalarClass>,
-    /// The element class of each value the fragment hands out.
-    ///
-    /// **For a parallel fragment: one entry per write ordinal**, in ordinal
-    /// order, so the length is [`Self::outputs`].  For a fragment that writes no
-    /// buffers — a scalar kernel, whose results are its wasm return values — the
-    /// list is **one entry per wasm result**, in source order, so the length is
-    /// [`Self::results`]: one field holds both because both are "the class of a
-    /// value this fragment produces", and the fragment's single class is its
-    /// first entry either way.
+    /// The element class of each output buffer the fragment writes — **one
+    /// entry per write ordinal**, in ordinal order, so the length is
+    /// [`Self::outputs`].
     ///
     /// The ordinal/write-position correspondence is the same compile-time
     /// constant [`KernelInstr::BufferWriteCall`] is fed, so a caller reading
     /// element `k` of this list is reading the class of the buffer write `k`
     /// filled. A backend reads it where it prepares a buffer; a host reads it
     /// when a resident buffer has to say what its elements are.
+    ///
+    /// **A scalar fragment's results are not here**, they are
+    /// [`Self::result_classes`].  The two were one field while a fragment had
+    /// one class — both are "the class of a value this fragment produces" — and
+    /// they separate once a body may produce values of more than one class,
+    /// because a write ordinal and a wasm result are positions in different
+    /// spaces.
     pub output_classes: Vec<ScalarClass>,
-    /// How many values the body leaves on the stack: the function's result
-    /// arity. `1` for a scalar body, and one per leaf for a tuple codomain.
-    pub results: usize,
+    /// The class of each value the body leaves on the stack, **one entry per
+    /// result**, in source order — the function's result arity, typed.
+    ///
+    /// A count alone is not enough once a body may compute in more than one
+    /// class: the emitted function's result list is typed per position, so a
+    /// body returning `(Int, Float)` and one returning `(Float, Int)` have the
+    /// same arity and different signatures, and a backend that typed both from
+    /// one class would emit a function the module cannot validate.
+    pub result_classes: Vec<ScalarClass>,
     /// The integer width the body was lowered to mean. A backend whose target
     /// cannot represent it refuses the fragment rather than narrowing.
     pub int_width: IntWidth,
@@ -709,7 +725,7 @@ pub fn fragment_digest(fragment: &KernelFragment) -> u64 {
     fragment.outputs.hash(&mut hasher);
     format!("{:?}", fragment.input_classes).hash(&mut hasher);
     format!("{:?}", fragment.output_classes).hash(&mut hasher);
-    fragment.results.hash(&mut hasher);
+    fragment.result_classes.hash(&mut hasher);
     format!("{:?}", fragment.int_width).hash(&mut hasher);
     hasher.finish()
 }

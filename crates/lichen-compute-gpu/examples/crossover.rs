@@ -56,14 +56,14 @@ fn fragment() -> KernelFragment {
             KernelInstr::LocalGet(1),
             KernelInstr::Const(ScalarClass::Int, 0),
             KernelInstr::LocalGet(1),
-            KernelInstr::BufferReadCall,
+            KernelInstr::BufferReadCall(ScalarClass::Int),
             KernelInstr::Const(ScalarClass::Int, 0),
             KernelInstr::LocalGet(1),
-            KernelInstr::BufferReadCall,
+            KernelInstr::BufferReadCall(ScalarClass::Int),
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
             KernelInstr::Const(ScalarClass::Int, 1),
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
-            KernelInstr::BufferWriteCall,
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
             KernelInstr::Const(ScalarClass::Int, 0),
         ]
         .into(),
@@ -71,7 +71,7 @@ fn fragment() -> KernelFragment {
         outputs: 1,
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
-        results: 1,
+        result_classes: vec![ScalarClass::Int],
         int_width: IntWidth::I64,
     }
 }

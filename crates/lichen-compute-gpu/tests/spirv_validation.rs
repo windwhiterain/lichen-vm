@@ -49,10 +49,10 @@ fn adds_one() -> KernelFragment {
             KernelInstr::LocalGet(1),                // the index
             KernelInstr::Const(ScalarClass::Int, 0), // cfg_pos, in the *input* space
             KernelInstr::LocalGet(1),                // the index
-            KernelInstr::BufferReadCall,             // in[i]
+            KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
             KernelInstr::Const(ScalarClass::Int, 1),
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Add), // in[i] + 1
-            KernelInstr::BufferWriteCall,
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
             KernelInstr::Const(ScalarClass::Int, 0),
         ]
         .into(),
@@ -60,7 +60,7 @@ fn adds_one() -> KernelFragment {
         outputs: 1,
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
-        results: 1,
+        result_classes: vec![ScalarClass::Int],
         int_width: IntWidth::I64,
     }
 }
@@ -86,7 +86,7 @@ fn scales_a_float() -> KernelFragment {
     let read = |body: &mut Vec<KernelInstr>| {
         body.push(KernelInstr::Const(ScalarClass::Int, 0));
         body.push(KernelInstr::LocalGet(1));
-        body.push(KernelInstr::BufferReadCall);
+        body.push(KernelInstr::BufferReadCall(ScalarClass::Float));
     };
     // out_pos, then the index: the [position, index] a write takes.
     let mut body = vec![
@@ -113,9 +113,9 @@ fn scales_a_float() -> KernelFragment {
     // a constant index
     body.push(KernelInstr::Const(ScalarClass::Int, 0));
     body.push(KernelInstr::Const(ScalarClass::Int, 0));
-    body.push(KernelInstr::BufferReadCall);
+    body.push(KernelInstr::BufferReadCall(ScalarClass::Float));
     body.push(KernelInstr::Select);
-    body.push(KernelInstr::BufferWriteCall);
+    body.push(KernelInstr::BufferWriteCall(ScalarClass::Float));
     body.push(KernelInstr::Const(ScalarClass::Int, 0));
     KernelFragment {
         // `(config, index)`, integers, however the buffers are classed: this
@@ -129,7 +129,7 @@ fn scales_a_float() -> KernelFragment {
         outputs: 1,
         input_classes: vec![ScalarClass::Float],
         output_classes: vec![ScalarClass::Float],
-        results: 1,
+        result_classes: vec![ScalarClass::Float],
         int_width: IntWidth::I64,
     }
 }

@@ -763,7 +763,7 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
     // same derivation, so a caller and this module cannot disagree about it.
     let class = module_class(fragment)?;
     let index = index_local(fragment).ok_or(SpirvRefusal::ResultArity {
-        results: fragment.results,
+        results: fragment.result_classes.len(),
         left: 0,
     })?;
 
@@ -1094,7 +1094,7 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                 ));
                 stack.push(scalar(result, ids.class));
             }
-            KernelInstr::BufferReadCall => {
+            KernelInstr::BufferReadCall(_) => {
                 let element = pop(&mut stack, at)?;
                 let position = pop(&mut stack, at)?;
                 // An access chain's index is an **integer**, so a float in this
@@ -1130,7 +1130,7 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                 code.push(Inst::new(op::LOAD, vec![ids.scalar(), loaded, pointer]));
                 stack.push(scalar(loaded, ids.class));
             }
-            KernelInstr::BufferWriteCall => {
+            KernelInstr::BufferWriteCall(_) => {
                 let value = pop(&mut stack, at)?;
                 let element = pop(&mut stack, at)?;
                 let position = pop(&mut stack, at)?;
@@ -1183,7 +1183,7 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
 
     if stack.len() != 1 {
         return Err(SpirvRefusal::ResultArity {
-            results: fragment.results,
+            results: fragment.result_classes.len(),
             left: stack.len(),
         });
     }

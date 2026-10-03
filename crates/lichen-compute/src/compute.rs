@@ -237,7 +237,7 @@ mod kernel_intern_tests {
             outputs: 0,
             input_classes: Vec::new(),
             output_classes: Vec::new(),
-            results: 1,
+            result_classes: vec![ScalarClass::Int],
             int_width: IntWidth::I64,
         }
     }
@@ -2135,14 +2135,13 @@ where
         inputs: tally.reads,
         outputs: tally.writes,
         input_classes: tally.input_classes(class),
-        // **A scalar fragment has no buffer ordinals, so this is its result
-        // classes** — one entry per wasm result, in source order, which is the
-        // same carrier a parallel fragment uses for its write ordinals.  It is
-        // what makes the fragment's class recoverable at assembly and at the
-        // host boundary without a second field
-        // (`docs/notes/floating-point.md` §4.4).
-        output_classes: result_classes,
-        results: leaves.len(),
+        // A scalar fragment has no output buffers, so this is empty: the values
+        // it produces are its **wasm results**, which is `result_classes` below.
+        // The two were one field while a fragment had one class, and they
+        // separate because a write ordinal and a wasm result are positions in
+        // different spaces.
+        output_classes: Vec::new(),
+        result_classes,
         int_width: IntWidth::I64,
     })
 }
@@ -2394,7 +2393,9 @@ where
         outputs: tally.writes,
         input_classes: tally.input_classes(class),
         output_classes: tally.output_classes(),
-        results: 1,
+        // The dummy scalar the write-only body leaves on the stack, in the
+        // fragment's class like every other value it computes.
+        result_classes: vec![class],
         int_width: IntWidth::I64,
     })
 }
@@ -2669,7 +2670,11 @@ fn assemble_module(
     let mut func_types: Vec<u32> = Vec::with_capacity(ordered.len());
     for frag in ordered {
         let params = param_classes(frag);
-        let results = vec![fragment_class(frag); frag.results];
+        // **The results are typed per position**, not one class repeated: a body
+        // returning `(Int, Float)` and one returning `(Float, Int)` have the same
+        // arity and different signatures, and wasm function types are indexed by
+        // type rather than by arity.
+        let results = frag.result_classes.clone();
         let ti = type_index_by_signature
             .entry((params, results))
             .or_insert_with_key(|(params, results)| {
@@ -3366,7 +3371,7 @@ fn buffered_class(ordered: &[KernelFragment]) -> Result<Option<ScalarClass>, Str
         let buffered = fragment.body.instrs().into_iter().any(|instruction| {
             matches!(
                 instruction,
-                KernelInstr::BufferReadCall | KernelInstr::BufferWriteCall
+                KernelInstr::BufferReadCall(_) | KernelInstr::BufferWriteCall(_)
             )
         });
         if !buffered {
@@ -3504,11 +3509,11 @@ fn lower_instrs(
                 })?;
                 out.instruction(&Instruction::Call(base + target));
             }
-            KernelInstr::BufferReadCall => {
+            KernelInstr::BufferReadCall(_) => {
                 // The host `read(cfg_pos, idx)` import — function index 0.
                 out.instruction(&Instruction::Call(0));
             }
-            KernelInstr::BufferWriteCall => {
+            KernelInstr::BufferWriteCall(_) => {
                 // The host `write(out_pos, idx, val)` import — function index 1.
                 out.instruction(&Instruction::Call(1));
             }
@@ -3904,6 +3909,7 @@ fn fragment_class(fragment: &KernelFragment) -> ScalarClass {
     fragment
         .output_classes
         .first()
+        .or_else(|| fragment.result_classes.first())
         .copied()
         .unwrap_or(ScalarClass::Int)
 }
@@ -4197,8 +4203,10 @@ where
                             &mut else_body,
                             tally,
                         )?;
-                        if then_body.contains(&KernelInstr::BufferWriteCall)
-                            || else_body.contains(&KernelInstr::BufferWriteCall)
+                        if then_body
+                            .iter()
+                            .chain(else_body.iter())
+                            .any(|instr| matches!(instr, KernelInstr::BufferWriteCall(_)))
                         {
                             return Err(CONDITIONAL_WRITE.into());
                         }
@@ -4357,7 +4365,7 @@ where
                 tally.read_classes.push(class);
                 body.push(KernelInstr::Const(class, const_bits(class, pos as i64)));
                 emit_node(module, params, idx, depth + 1, class, body, tally)?;
-                body.push(KernelInstr::BufferReadCall);
+                body.push(KernelInstr::BufferReadCall(class));
                 return Ok(());
             }
             // A pending write: `write [n, idx, val]` → the host
@@ -4378,14 +4386,14 @@ where
                 let out_pos = tally.writes;
                 tally.writes += 1;
                 // The element a write fills is the class of the value written —
-                // the same class the read positions take, because a body is
-                // written in one class and the write's ordinal is one of the
-                // buffers that class is the element type of.
-                tally.write_classes.push(node_class(module, val));
+                // the same class the write's ordinal is declared with, and the
+                // one the buffer call names.
+                let element = node_class(module, val);
+                tally.write_classes.push(element);
                 body.push(KernelInstr::Const(class, const_bits(class, out_pos as i64)));
                 emit_node(module, params, idx, depth + 1, class, body, tally)?;
                 emit_node(module, params, val, depth + 1, class, body, tally)?;
-                body.push(KernelInstr::BufferWriteCall);
+                body.push(KernelInstr::BufferWriteCall(element));
                 return Ok(());
             }
             // Jitting another function from *inside* a kernel body is not a v1
@@ -4504,7 +4512,7 @@ where
             .ok_or_else(|| "cross-kernel callee is not a registered kernel".to_string())?;
         (
             fragment.param_shape.clone(),
-            fragment.results,
+            fragment.result_classes.len(),
             fragment_class(fragment),
         )
     };
@@ -6215,7 +6223,7 @@ fn run_kernel(id: KernelId, args: &[ScalarValue]) -> Result<Vec<ScalarValue>, St
             .ok_or_else(|| format!("kernel {id} is not registered"))?;
         (
             param_classes(fragment),
-            fragment.results,
+            fragment.result_classes.len(),
             fragment_class(fragment),
         )
     };
@@ -7035,13 +7043,13 @@ mod parallel_launch_tests {
                 KernelInstr::LocalGet(1),
                 KernelInstr::Const(ScalarClass::Int, 1),
                 KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
-                KernelInstr::BufferWriteCall,
+                KernelInstr::BufferWriteCall(ScalarClass::Int),
                 KernelInstr::Const(ScalarClass::Int, 1),
                 KernelInstr::LocalGet(1),
                 KernelInstr::LocalGet(1),
                 KernelInstr::LocalGet(1),
                 KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
-                KernelInstr::BufferWriteCall,
+                KernelInstr::BufferWriteCall(ScalarClass::Int),
                 KernelInstr::Const(ScalarClass::Int, 0),
             ]
             .into(),
@@ -7049,7 +7057,7 @@ mod parallel_launch_tests {
             outputs: 2,
             input_classes: Vec::new(),
             output_classes: vec![ScalarClass::Int, ScalarClass::Int],
-            results: 1,
+            result_classes: vec![ScalarClass::Int],
             int_width: IntWidth::I64,
         }
     }

@@ -21,7 +21,7 @@ fn fragment() -> KernelFragment {
         outputs: 0,
         input_classes: Vec::new(),
         output_classes: Vec::new(),
-        results: 1,
+        result_classes: vec![ScalarClass::Int],
         int_width: IntWidth::I64,
     }
 }
@@ -93,9 +93,9 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
             },
         ),
         (
-            "results",
+            "result_classes",
             KernelFragment {
-                results: 2,
+                result_classes: vec![ScalarClass::Int, ScalarClass::Int],
                 ..base.clone()
             },
         ),

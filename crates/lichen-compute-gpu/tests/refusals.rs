@@ -30,7 +30,7 @@ fn body_with(inputs: usize, tail: Vec<KernelInstr>) -> KernelFragment {
         outputs: 1,
         input_classes: vec![ScalarClass::Int; inputs],
         output_classes: vec![ScalarClass::Int],
-        results: 1,
+        result_classes: vec![ScalarClass::Int],
         int_width: IntWidth::I64,
     }
 }
@@ -47,9 +47,9 @@ fn a_cross_kernel_call_is_refused_by_name() {
         vec![
             KernelInstr::Const(ScalarClass::Int, 0),
             KernelInstr::LocalGet(1),
-            KernelInstr::BufferReadCall,
+            KernelInstr::BufferReadCall(ScalarClass::Int),
             KernelInstr::CallKernel(7),
-            KernelInstr::BufferWriteCall,
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
             KernelInstr::Const(ScalarClass::Int, 0),
         ],
     );
@@ -71,7 +71,7 @@ fn reading_a_non_index_parameter_is_refused_by_name() {
         0,
         vec![
             KernelInstr::LocalGet(0),
-            KernelInstr::BufferWriteCall,
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
             KernelInstr::Const(ScalarClass::Int, 0),
         ],
     );
@@ -106,8 +106,8 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
             KernelInstr::LocalGet(1),                // idx
             KernelInstr::Const(ScalarClass::Int, 1), // cfg_pos, in the *input* space
             KernelInstr::LocalGet(1),
-            KernelInstr::BufferReadCall,
-            KernelInstr::BufferWriteCall,
+            KernelInstr::BufferReadCall(ScalarClass::Int),
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
             KernelInstr::Const(ScalarClass::Int, 0),
         ]
         .into(),
@@ -115,7 +115,7 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
         outputs: 1,
         input_classes: vec![ScalarClass::Int, ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
-        results: 1,
+        result_classes: vec![ScalarClass::Int],
         int_width: IntWidth::I64,
     };
     let binding = Binding {
@@ -131,7 +131,7 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
             KernelInstr::Const(ScalarClass::Int, 1), // out_pos 1, but there is one output
             KernelInstr::LocalGet(1),
             KernelInstr::Const(ScalarClass::Int, 5),
-            KernelInstr::BufferWriteCall,
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
             KernelInstr::Const(ScalarClass::Int, 0),
         ]
         .into(),
@@ -167,7 +167,7 @@ fn an_unbalanced_body_is_refused() {
         outputs: 1,
         input_classes: Vec::new(),
         output_classes: vec![ScalarClass::Int],
-        results: 1,
+        result_classes: vec![ScalarClass::Int],
         int_width: IntWidth::I64,
     };
     let refusal = spirv::compile(&fragment, ONE_IN_ONE_OUT).expect_err("refused");
