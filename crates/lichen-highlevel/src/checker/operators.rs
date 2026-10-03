@@ -190,15 +190,14 @@ where
     /// construct crosses).
     ///
     /// **Only a class the operand already states is unified.**  A unify binds
-    /// every cell the operand's class shares, and a kernel body's
-    /// `compute.write [n, i, int2float i]` is one array literal whose integer
-    /// positions and float value hold *one* element-type cell: pinning the index
-    /// to `Int` there would bind the float written beside it and refuse the very
-    /// program these two words exist to write.  So an undecided operand stays
-    /// undecided, and the value that arrives at the other class answers the lazy
-    /// marker in [`crate::program::TypeOperator::run`] rather than a guess here —
-    /// a weaker message than a parameter pinned at its apply, paid for by the
-    /// conversion being usable where the classes are not yet decided.
+    /// every cell the operand's class shares, and the operand's class may be one
+    /// a kernel body's other cells read: pinning the index a float is written
+    /// beside to `Int` here would refuse the very program these two words exist
+    /// to write.  So an undecided operand stays undecided, and the value that
+    /// arrives at the other class answers the lazy marker in
+    /// [`crate::program::TypeOperator::run`] rather than a guess here — a weaker
+    /// message than a parameter pinned at its apply, paid for by the conversion
+    /// being usable where the classes are not yet decided.
     ///
     /// `float2int`'s partiality is not checked here: in range is a fact about
     /// the value, not about its type, so the interpreter records

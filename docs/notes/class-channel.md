@@ -9,7 +9,13 @@
 > that first reading got wrong.
 > Worktree `.worktrees/kernel-param-struct`, branch `feature/kernel-param-struct`.
 > §5.1 (the class a lowering runs in) and §5.3 (the wrapper owning its signature
-> arrow) are landed; §5.4 is the statement itself.
+> arrow) are landed.  The remaining half — §5.2's statement and §5.4's carrier —
+> is the **open class** itself, which is the operator-polymorphism workstream's to
+> decide ([operator-polymorphism](operator-polymorphism.md) §8.4,
+> [operator-polymorphism-handoff](operator-polymorphism-handoff.md) §5: the class
+> domain is that workstream's value, and its reader is what commits to a member).
+> This worktree therefore proceeds with §4, the struct-argument migration, whose
+> 57-of-58 acceptance leaves exactly the element cell the two red targets want.
 > Companions: [compute-runtime-scalars](compute-runtime-scalars.md) (the measured
 > case that exposed this — its §4.4 is the symptom, this note is the fix),
 > [lowlevel-low-types](lowlevel-low-types.md) (the seed → pass → read chain),
@@ -201,15 +207,19 @@ with call sites `compute.read ((compute.Read _)(.from buf, .at i))` and
 213 scripted call sites give **57 of 58** `--test compute` green, the frozen-module
 panic gone and the `raw[…]` field-type leak gone (fields render concretely).
 
-**Order**: §5 → this.  The one remaining failure after the migration is the
-element cell that §3 could not state (§3 above) and that §5 states, so the
-migration's 57 becomes 58 with §5, not before it — and until then the honest
-answer for the struct spelling is `array<?d, ?e>`, which is *more* correct than
-the array spelling's accidental `Int`.
+**Order**: §5 → this.  **Landed**: the wrappers are the recipe above and all 247
+call sites in the tree (tests, examples, the documentation's code blocks, and one
+parenthesized site a bracket-shaped script could not see) use the struct spelling
+([compute-runtime-scalars](compute-runtime-scalars.md) §4.3 records the measured
+result and the refuted `_` spelling).  The one remaining failure after the
+migration is the element cell that §3 could not state and that §5.2's statement
+owns — so the migration's acceptance is 57 of 58, with the honest answer for the
+struct spelling being `array<?d, ?e>`, which is *more* correct than the array
+spelling's accidental `Int`.
 
 **Not to forget**: the migration touches `crates/lichen-language/tests/*`,
 `crates/lichen-language/examples/*`, and the docs' code blocks; the script must
-handle nested occurrences innermost-first (`compute.write [a, b, compute.read [c, d]]`).
+handle nested occurrences innermost-first (`compute.write ((compute.Write _)(.to a, .at b, .value compute.read ((compute.Read _)(.from c, .at d))))`).
 
 ## 5. The structural removal, and why it is now the first step
 
@@ -381,6 +391,11 @@ The probes that pin the rest (scratch files, not committed):
 - **§5's own probe** (the decided element cell, stated where types are stated): a
   single-kernel `plrun` + `collect` must print `array<Int, ?b>`; today it prints
   `array<?a, ?b>` on the array API and on every other spelling.
-- **§4's assertion**: `a_gpu_program_chains_two_kernels_on_a_device`
-  (`crates/lichen-language/tests/compute.rs:1308-1345`) must keep its
-  `array<Int, ?d>` with the struct spelling.
+- **§4's own assertion, measured and corrected**:
+  `a_gpu_program_chains_two_kernels_on_a_device`
+  (`crates/lichen-language/tests/compute.rs:1308-1345`) does **not** keep its
+  `array<Int, ?d>` under the struct spelling — it renders `array<?d, ?e>` with the
+  same values, which is the element cell §5.2 states and the same commit path
+  [compute-runtime-scalars](compute-runtime-scalars.md) §4.4 measures.  The earlier
+  reading of this bullet as "must keep" was written before §1's measurement showed
+  the `Int` arriving only where a consumer's array literal is present.

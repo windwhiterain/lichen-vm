@@ -56,9 +56,9 @@ k0 = compute.jit (v : Int => v + 1)
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, compute.call k0 i]
+  compute.write ((compute.Write _)(.to n, .at i, .value compute.call k0 i))
 }) "BACKEND"
-compute.read [compute.plrun p (8,), 3]
+compute.read ((compute.Read _)(.from compute.plrun p (8,), .at 3))
 "#;
 
 /// A **module-level** helper called from inside a parallel body — the
@@ -69,13 +69,13 @@ square = x => x * x
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  v = compute.read [cfg(1)(0), i]
-  compute.write [n, i, square v]
+  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value square v))
 }) "BACKEND"
 seed = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 1]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 1))
 }) "BACKEND"
 s = compute.plrun seed (8,)
 compute.collect (compute.plrun p (8, (s,)))
@@ -90,9 +90,9 @@ steps = k => if k == 0 then 0 else steps (k - 1) + 1
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, steps 4 + compute.range n * 0]
+  compute.write ((compute.Write _)(.to n, .at i, .value steps 4 + compute.range n * 0))
 }) "BACKEND"
-compute.read [compute.plrun p (8,), 3]
+compute.read ((compute.Read _)(.from compute.plrun p (8,), .at 3))
 "#;
 
 /// A **body-local alias** and no call at all. This is the control for the two
@@ -103,13 +103,13 @@ const BODY_LOCAL_ALIAS: &str = r#"
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  v = compute.read [cfg(1)(0), i]
-  compute.write [n, i, v]
+  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value v))
 }) "BACKEND"
 seed = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 1]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 1))
 }) "BACKEND"
 s = compute.plrun seed (8,)
 compute.collect (compute.plrun p (8, (s,)))
@@ -124,7 +124,7 @@ square = x => x * x
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, square 3]
+  compute.write ((compute.Write _)(.to n, .at i, .value square 3))
 }) "BACKEND"
 compute.collect (compute.plrun p (4,))
 "#;
@@ -138,7 +138,7 @@ square = x => x * x
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, square (i + 1)]
+  compute.write ((compute.Write _)(.to n, .at i, .value square (i + 1)))
 }) "BACKEND"
 compute.collect (compute.plrun p (4,))
 "#;
@@ -160,7 +160,7 @@ inc = x => x + 1
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, loop inc 3 i]
+  compute.write ((compute.Write _)(.to n, .at i, .value loop inc 3 i))
 }) "BACKEND"
 compute.collect (compute.plrun p (4,))
 "#;
@@ -175,9 +175,9 @@ inc = x => x + 1
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, loop inc n i]
+  compute.write ((compute.Write _)(.to n, .at i, .value loop inc n i))
 }) "BACKEND"
-compute.read [compute.plrun p (4,), 3]
+compute.read ((compute.Read _)(.from compute.plrun p (4,), .at 3))
 "#;
 
 /// Two-stage **curried** recursion — `sum_to (n - 1) (x + 1)` is *two*
@@ -189,7 +189,7 @@ sum_to = n => x => if n == 0 then x else sum_to (n - 1) (x + 1)
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, sum_to 3 i]
+  compute.write ((compute.Write _)(.to n, .at i, .value sum_to 3 i))
 }) "BACKEND"
 compute.collect (compute.plrun p (4,))
 "#;
@@ -202,7 +202,7 @@ sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, sum_to (3, i)]
+  compute.write ((compute.Write _)(.to n, .at i, .value sum_to (3, i)))
 }) "BACKEND"
 compute.collect (compute.plrun p (4,))
 "#;
@@ -216,7 +216,7 @@ inc = x => x + 1
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, loop inc (3, i)]
+  compute.write ((compute.Write _)(.to n, .at i, .value loop inc (3, i)))
 }) "BACKEND"
 compute.collect (compute.plrun p (4,))
 "#;
@@ -232,9 +232,9 @@ sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)
 p = compute.parallel (cfg => {{
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, sum_to ({trip}, i)]
+  compute.write ((compute.Write _)(.to n, .at i, .value sum_to ({trip}, i)))
 }}) "BACKEND"
-compute.read [compute.plrun p (4,), 3]
+compute.read ((compute.Read _)(.from compute.plrun p (4,), .at 3))
 "#
     )
 }
@@ -258,7 +258,7 @@ inc = x => x + 1
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, loop inc 3 i]
+  compute.write ((compute.Write _)(.to n, .at i, .value loop inc 3 i))
 }) "BACKEND"
 compute.collect (compute.plrun p (4,))
 "#;
@@ -286,8 +286,8 @@ fn chain(depth: usize) -> String {
         "p = compute.parallel (cfg => {{
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, compute.call k{last} i]
-}}) \"BACKEND\"\ncompute.read [compute.plrun p (COUNT,), 3]\n",
+  compute.write ((compute.Write _)(.to n, .at i, .value compute.call k{last} i))
+}}) \"BACKEND\"\ncompute.read ((compute.Read _)(.from compute.plrun p (COUNT,), .at 3))\n",
         last = depth - 1
     ));
     source
@@ -303,9 +303,9 @@ fn unrolled(depth: usize) -> String {
         "{HEADER}p = compute.parallel (cfg => {{
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, {body}]
+  compute.write ((compute.Write _)(.to n, .at i, .value {body}))
 }}) \"BACKEND\"
-compute.read [compute.plrun p (COUNT,), 3]\n"
+compute.read ((compute.Read _)(.from compute.plrun p (COUNT,), .at 3))\n"
     )
 }
 
@@ -316,9 +316,9 @@ p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
   count_up = s => k => if k == 0 then s else count_up (s + 1) (k - 1)
-  compute.write [n, i, count_up 0 i]
+  compute.write ((compute.Write _)(.to n, .at i, .value count_up 0 i))
 }) "BACKEND"
-compute.read [compute.plrun p (8,), 3]
+compute.read ((compute.Read _)(.from compute.plrun p (8,), .at 3))
 "#;
 
 /// A kernel whose own body names the kernel it is being compiled into.

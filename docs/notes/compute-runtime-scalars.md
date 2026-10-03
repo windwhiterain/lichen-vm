@@ -82,7 +82,9 @@ and the program checks — that is how
 
 An **annotated** parameter decides those cells, and then the same program is
 refused.  Measured (before §4.2 landed), plain lichen, `Par =
-struct<.n Int, .alpha Float, .in In, .out Out>`:
+struct<.n Int, .alpha Float, .in In, .out Out>` — all three rows are the **array
+spelling**, which §4.3's migration has since removed from the tree; they are kept
+as the measurement that made the migration necessary:
 
 | Body | Result |
 |---|---|
@@ -145,6 +147,22 @@ scripted call sites: **57 of 58** `--test compute` green, the panic gone, and th
 `struct<.to Int, .at Int, .value Float>`, i.e. fresh cells per application and
 **concrete** field types.
 
+**Landed.**  The wrappers are that recipe and every call site in the tree is the
+struct spelling — 247 sites across tests, examples and the documentation's code
+blocks, plus one parenthesized site (`compute.read (compute.plrun …, 0)`) the
+bracket-shaped script could not see.  Measured after it: `--test pipeline` 134,
+`--test examples`, `--test graph_jit`, `--test graph_structure`,
+`--test defer_pending`, `--test compute`'s 58 and both library suites are green
+except the two reds §4.4 and [class-channel](class-channel.md) §5.3 own — and one
+long-standing oddity is gone with the array: the write's fields have *independent*
+type cells, so `.at Int` no longer shares a cell with `.value Float`.
+
+**The `_` spelling is refuted** (superior's suggestion, measured): writing the
+argument as `_(.from buf, .at i)` instead of `(compute.Read _)(…)` is refused with
+`named arguments require a statically known struct type` — a named-argument
+construction needs the struct's name table resolved at check time, and an
+instantiation with nothing to instantiate from has none.
+
 ### 4.4 What one test still loses, and why it is not the struct
 
 `a_gpu_program_chains_two_kernels_on_a_device` is the single failure: the values
@@ -170,7 +188,11 @@ rather than through the result's own type cell (`ParLaunchOp::build`'s `out_ty`)
 Re-establishing it there is the honest fix and would make the three scalar reads
 in that test decided too — they are `?a, ?b, ?c` in both spellings.  Until it
 lands, the choice is between the array (precision, homogeneity) and the
-struct/tuple (no homogeneity, one undecided element type).
+struct/tuple (no homogeneity, one undecided element type).  The migration took
+the struct — the precision it gives up was a *coincidence of the argument's shape*
+([class-channel](class-channel.md) §1 measures it arriving only where a consumer's
+array literal is present), and the three scalar reads in this very test are
+`?a, ?b, ?c` in both spellings.
 
 **The fix is planned, with its reasoning, in
 [class-channel](class-channel.md)**: this is the symptom of one fact having a
@@ -221,7 +243,7 @@ Scratch file, not to be committed (the example harness runs every file in
 g = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 10]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
 }
 kg = compute.parallel g "cpu"
 inbuf = compute.plrun kg (3,)
@@ -231,12 +253,12 @@ Sig = compute.S (compute.KT _)(.I In, .O Out)
 Par = struct<.n Int, .alpha Float, .in In, .out Out>
 f = (k : Par) => {
   i = compute.range k.n
-  v = compute.read [k.in.a, i]
-  compute.write [k.out.z, i, float2int (int2float v + k.alpha)]
+  v = compute.read ((compute.Read _)(.from k.in.a, .at i))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value float2int (int2float v + k.alpha)))
 }
 k = compute.parallel_sig f "cpu" Sig
 out = compute.plrun k ((compute.A In)(.n 3, .I In(.a inbuf)))
-compute.read [out, 1]
+compute.read ((compute.Read _)(.from out, .at 1))
 ```
 
 ```bash

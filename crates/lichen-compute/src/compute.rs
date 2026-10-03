@@ -45,7 +45,8 @@
 //!   parallel kernel struct (`cfg = (n, (buffer…))` — the count is `cfg(0)`,
 //!   the input buffers a tuple at `cfg(1)`); `plrun k cfg` runs it over
 //!   `[0, cfg(0))`, the index function reading inputs via
-//!   `compute.read [cfg(1)(k), i]` and writing via `compute.write [n, i, val]`.
+//!   `compute.read ((compute.Read _)(.from cfg(1)(k), .at i))` and writing via
+//!   `compute.write ((compute.Write _)(.to n, .at i, .value val))`.
 //!   A **tuple** codomain of `Write`s is the multi-output form: the `k`-th write
 //!   is output buffer `k`, and `plrun` returns the buffers as a tuple.
 
@@ -6245,11 +6246,11 @@ where
 /// no-op.** The lazy cell is what makes a kernel's own read deferrable and what
 /// makes an undecided argument stay undecided — but a program array *is*
 /// decided, it is an ordinary lichen value with ordinary elements, and
-/// answering `parameterized` for it made `compute.read [data, i]` a
-/// plausible-looking program that computed nothing while still printing
-/// `array<?a, ?b>`. There is no way to make a buffer out of a program value, so
-/// the honest answer names that rather than waiting for a buffer that will not
-/// arrive.
+/// answering `parameterized` for it made `compute.read ((compute.Read _)(.from
+/// data, .at i))` a plausible-looking program that computed nothing while still
+/// printing `array<?a, ?b>`. There is no way to make a buffer out of a program
+/// value, so the honest answer names that rather than waiting for a buffer that
+/// will not arrive.
 ///
 /// `subject` says what the position is *for* and `at` names it, so the three
 /// sites that reach this describe their own mistake rather than sharing one
@@ -7502,7 +7503,8 @@ pub fn parallel_launch_workers() -> usize {
 /// for an index function that writes its own slot, which is what the primitive
 /// is a map over.  The general statement is narrower: the result equals the
 /// sequential loop's **iff no two indices write the same slot**, and a kernel
-/// that writes a slot that is not its own (`compute.write [n, i - i, v]`,
+/// that writes a slot that is not its own
+/// (`compute.write ((compute.Write _)(.to n, .at i - i, .value v))`,
 /// whose index is `0` for every `i`, so all of them collide) already had an
 /// order-dependent winner sequentially — the partition, not the launch, is then
 /// what decides it.

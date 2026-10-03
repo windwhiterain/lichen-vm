@@ -35,11 +35,11 @@ fn parallel_rejects_an_unknown_backend_name() {
 f = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + i]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + i))
 }
 k = compute.parallel f "Gpu"
 out = compute.plrun k (4,)
-compute.read [out, 0]
+compute.read ((compute.Read _)(.from out, .at 0))
 "#,
     );
     let all: Vec<&str> = diags.iter().map(String::as_str).collect();
@@ -64,11 +64,11 @@ fn parallel_rejects_a_non_string_backend() {
 f = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + i]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + i))
 }
 k = compute.parallel f 4
 out = compute.plrun k (4,)
-compute.read [out, 0]
+compute.read ((compute.Read _)(.from out, .at 0))
 "#,
     );
     assert!(
@@ -655,11 +655,11 @@ fn parallel_range_write_is_map() {
 f = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + i]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + i))
 }
 k = compute.parallel f "cpu"
 out = compute.plrun k (4,)
-compute.read [out, 2]
+compute.read ((compute.Read _)(.from out, .at 2))
 "#);
     assert_eq!(out, "4: ?a", "parallel range/write map produced: {out:?}");
     // The element type renders as an unbound cell, and that is the honest
@@ -683,19 +683,19 @@ fn parallel_read_input_buffer() {
 f1 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 10]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
 }
 k1 = compute.parallel f1 "cpu"
 inbuf = compute.plrun k1 (3,)
 f2 = cfg => {
   n = cfg(0)
   i = compute.range n
-  a = compute.read [cfg(1)(0), i]
-  compute.write [n, i, a + a]
+  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value a + a))
 }
 k2 = compute.parallel f2 "cpu"
 out = compute.plrun k2 (3, (inbuf,))
-compute.read [out, 1]
+compute.read ((compute.Read _)(.from out, .at 1))
 "#);
     assert!(
         out.starts_with("22:"),
@@ -713,7 +713,7 @@ fn parallel_write_only_collects_whole_buffer() {
 f = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 1]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 1))
 }
 k = compute.parallel f "cpu"
 out = compute.plrun k (3,)
@@ -741,11 +741,11 @@ fn a_refused_plrun_count_says_why() {
 f = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + i]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + i))
 }
 k = compute.parallel f "cpu"
 out = compute.plrun k (2000000,)
-compute.read [out, 2]
+compute.read ((compute.Read _)(.from out, .at 2))
 "#,
     );
     assert_eq!(
@@ -860,11 +860,11 @@ fn parallel_multi_output_writes_every_output_in_one_pass() {
 f = cfg => {
   n = cfg(0)
   i = compute.range n
-  (compute.write [n, i, i], compute.write [n, i, i + i])
+  (compute.write ((compute.Write _)(.to n, .at i, .value i)), compute.write ((compute.Write _)(.to n, .at i, .value i + i)))
 }
 k = compute.parallel f "cpu"
 outs = compute.plrun k (3,)
-(compute.read [outs(0), 2], compute.read [outs(1), 2])
+(compute.read ((compute.Read _)(.from outs(0), .at 2)), compute.read ((compute.Read _)(.from outs(1), .at 2)))
 "#);
     assert_eq!(
         out, "(2, 4): <?a, ?b>",
@@ -882,15 +882,15 @@ fn parallel_multi_output_collects_each_output() {
 f1 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 10]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
 }
 k1 = compute.parallel f1 "cpu"
 inbuf = compute.plrun k1 (3,)
 f2 = cfg => {
   n = cfg(0)
   i = compute.range n
-  a = compute.read [cfg(1)(0), i]
-  (compute.write [n, i, a], compute.write [n, i, a + a], compute.write [n, i, i])
+  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  (compute.write ((compute.Write _)(.to n, .at i, .value a)), compute.write ((compute.Write _)(.to n, .at i, .value a + a)), compute.write ((compute.Write _)(.to n, .at i, .value i)))
 }
 k2 = compute.parallel f2 "cpu"
 outs = compute.plrun k2 (3, (inbuf,))
@@ -924,7 +924,7 @@ fn a_multi_output_parallel_run_is_identical_sequential_and_parallel() {
 f = cfg => {
   n = cfg(0)
   i = compute.range n
-  (compute.write [n, i, i + 3], compute.write [n, i, i + i])
+  (compute.write ((compute.Write _)(.to n, .at i, .value i + 3)), compute.write ((compute.Write _)(.to n, .at i, .value i + i)))
 }
 k = compute.parallel f "cpu"
 outs = compute.plrun k (4,)
@@ -939,7 +939,7 @@ outs = compute.plrun k (4,)
 f = cfg => {
   n = cfg(0)
   i = compute.range n
-  (compute.write [n, i, i + 3], compute.write [n, i, i + i])
+  (compute.write ((compute.Write _)(.to n, .at i, .value i + 3)), compute.write ((compute.Write _)(.to n, .at i, .value i + i)))
 }
 k = compute.parallel f "cpu"
 outs = compute.plrun k (4096,)
@@ -968,11 +968,11 @@ fn a_parallel_run_over_the_threshold_covers_every_index() {
 f = cfg => {
   n = cfg(0)
   i = compute.range n
-  (compute.write [n, i, i + 3], compute.write [n, i, i + i])
+  (compute.write ((compute.Write _)(.to n, .at i, .value i + 3)), compute.write ((compute.Write _)(.to n, .at i, .value i + i)))
 }
 k = compute.parallel f "cpu"
 outs = compute.plrun k (4096,)
-(compute.read [outs(0), 0], compute.read [outs(0), 2048], compute.read [outs(0), 4095], compute.read [outs(1), 0], compute.read [outs(1), 2048], compute.read [outs(1), 4095])
+(compute.read ((compute.Read _)(.from outs(0), .at 0)), compute.read ((compute.Read _)(.from outs(0), .at 2048)), compute.read ((compute.Read _)(.from outs(0), .at 4095)), compute.read ((compute.Read _)(.from outs(1), .at 0)), compute.read ((compute.Read _)(.from outs(1), .at 2048)), compute.read ((compute.Read _)(.from outs(1), .at 4095)))
 "#);
     assert_eq!(
         out, "(3, 2051, 4098, 0, 4096, 8190): <?a, ?b, ?c, ?d, ?e, ?f>",
@@ -999,7 +999,7 @@ type_of = x => {t = _; x: t; t}
 f = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 1]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 1))
 }
 k = compute.parallel_sig f "cpu" (type_of f)
 out = compute.plrun k (4,)
@@ -1035,7 +1035,7 @@ fn a_struct_parameter_kernel_runs_through_the_signature_carrying_wrapper() {
 g = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 10]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
 }
 kg = compute.parallel g "cpu"
 inbuf = compute.plrun kg (3,)
@@ -1045,12 +1045,12 @@ Par = compute.P (compute.KT _)(.I In, .O Out)
 Sig = compute.S (compute.KT _)(.I In, .O Out)
 f = (k : Par) => {
   i = compute.range k.n
-  v = compute.read [k.in.a, i]
-  compute.write [k.out.z, i, v * 2]
+  v = compute.read ((compute.Read _)(.from k.in.a, .at i))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value v * 2))
 }
 k = compute.parallel_sig f "cpu" Sig
 out = compute.plrun k ((compute.A In)(.n 3, .I In(.a inbuf)))
-compute.read [out, 1]
+compute.read ((compute.Read _)(.from out, .at 1))
 "#);
     assert_eq!(
         out, "22: ?a",
@@ -1077,11 +1077,11 @@ fn a_write_inside_a_conditional_is_refused() {
 f = cfg => {
   n = cfg(0)
   i = compute.range n
-  (compute.write [n, i, i], (if i <= 1 then compute.write [n, i, 1] else compute.write [n, i, 2]))
+  (compute.write ((compute.Write _)(.to n, .at i, .value i)), (if i <= 1 then compute.write ((compute.Write _)(.to n, .at i, .value 1)) else compute.write ((compute.Write _)(.to n, .at i, .value 2))))
 }
 k = compute.parallel f "cpu"
 outs = compute.plrun k (3,)
-compute.read [outs(0), 2]
+compute.read ((compute.Read _)(.from outs(0), .at 2))
 "#,
     );
     assert_eq!(
@@ -1107,11 +1107,11 @@ fn an_output_position_that_is_not_a_write_is_refused() {
 f = cfg => {
   n = cfg(0)
   i = compute.range n
-  (compute.write [n, i, i], i)
+  (compute.write ((compute.Write _)(.to n, .at i, .value i)), i)
 }
 k = compute.parallel f "cpu"
 outs = compute.plrun k (3,)
-compute.read [outs(0), 2]
+compute.read ((compute.Read _)(.from outs(0), .at 2))
 "#,
     );
     assert_eq!(
@@ -1146,8 +1146,8 @@ data = [3, 1, 4, 1, 5, 9, 2, 6]
 f = cfg => {
   n = cfg(0)
   i = compute.range n
-  v = compute.read [cfg(1)(0), i]
-  compute.write [n, i, v + 1]
+  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value v + 1))
 }
 k = compute.parallel f "cpu"
 compute.collect (compute.plrun k (8, (data,)))
@@ -1310,19 +1310,19 @@ fn a_gpu_program_chains_two_kernels_on_a_device() {
 f1 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 10]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
 }
 k1 = compute.parallel f1 "gpu"
 inbuf = compute.plrun k1 (3,)
 f2 = cfg => {
   n = cfg(0)
   i = compute.range n
-  a = compute.read [cfg(1)(0), i]
-  compute.write [n, i, a + a]
+  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value a + a))
 }
 k2 = compute.parallel f2 "gpu"
 out = compute.plrun k2 (3, (inbuf,))
-(compute.read [out, 0], compute.read [out, 1], compute.read [out, 2], compute.collect out)
+(compute.read ((compute.Read _)(.from out, .at 0)), compute.read ((compute.Read _)(.from out, .at 1)), compute.read ((compute.Read _)(.from out, .at 2)), compute.collect out)
 "#;
     let out = run(source);
     // Uninstalling drops the context, so every device buffer it was holding goes
@@ -1430,19 +1430,19 @@ fn a_float_fragment_agrees_across_the_two_backends() {
 f1 = cfg => {{
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, 1.5]
+  compute.write ((compute.Write _)(.to n, .at i, .value 1.5))
 }}
 k1 = compute.parallel f1 "{BACKEND}"
 inbuf = compute.plrun k1 ({ELEMENT_COUNT},)
 f2 = cfg => {{
   n = cfg(0)
   i = compute.range n
-  a = compute.read [cfg(1)(0), i]
-  compute.write [n, i, 0.0 + a + a]
+  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value 0.0 + a + a))
 }}
 k2 = compute.parallel f2 "{BACKEND}"
 out = compute.plrun k2 ({ELEMENT_COUNT}, (inbuf,))
-(compute.read [out, 0], compute.read [out, {last}], compute.collect out)
+(compute.read ((compute.Read _)(.from out, .at 0)), compute.read ((compute.Read _)(.from out, .at {last})), compute.collect out)
 "#,
         last = ELEMENT_COUNT - 1,
     );
@@ -1471,19 +1471,19 @@ fn an_integer_fragment_agrees_across_the_two_backends() {
 f1 = cfg => {{
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 10]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
 }}
 k1 = compute.parallel f1 "{BACKEND}"
 inbuf = compute.plrun k1 ({ELEMENT_COUNT},)
 f2 = cfg => {{
   n = cfg(0)
   i = compute.range n
-  a = compute.read [cfg(1)(0), i]
-  compute.write [n, i, a + a]
+  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value a + a))
 }}
 k2 = compute.parallel f2 "{BACKEND}"
 out = compute.plrun k2 ({ELEMENT_COUNT}, (inbuf,))
-(compute.read [out, 0], compute.read [out, {last}], compute.collect out)
+(compute.read ((compute.Read _)(.from out, .at 0)), compute.read ((compute.Read _)(.from out, .at {last})), compute.collect out)
 "#,
         last = ELEMENT_COUNT - 1,
     );
@@ -1518,11 +1518,11 @@ fn a_varying_float_element_is_seeded_from_the_index() {
 f = cfg => {{
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, int2float i + 0.5]
+  compute.write ((compute.Write _)(.to n, .at i, .value int2float i + 0.5))
 }}
 k = compute.parallel f "{BACKEND}"
 out = compute.plrun k ({ELEMENT_COUNT},)
-(compute.read [out, 0], compute.read [out, 1], compute.read [out, {last}], compute.collect out)
+(compute.read ((compute.Read _)(.from out, .at 0)), compute.read ((compute.Read _)(.from out, .at 1)), compute.read ((compute.Read _)(.from out, .at {last})), compute.collect out)
 "#,
         last = ELEMENT_COUNT - 1,
     );
@@ -1639,11 +1639,11 @@ compute.launch k 5
 f = cfg => {{
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, float2int (int2float i + 0.5)]
+  compute.write ((compute.Write _)(.to n, .at i, .value float2int (int2float i + 0.5)))
 }}
 k = compute.parallel f "{BACKEND}"
 out = compute.plrun k ({ELEMENT_COUNT},)
-(compute.read [out, 0], compute.read [out, 1], compute.read [out, {last}], compute.collect out)
+(compute.read ((compute.Read _)(.from out, .at 0)), compute.read ((compute.Read _)(.from out, .at 1)), compute.read ((compute.Read _)(.from out, .at {last})), compute.collect out)
 "#,
         last = ELEMENT_COUNT - 1,
     );

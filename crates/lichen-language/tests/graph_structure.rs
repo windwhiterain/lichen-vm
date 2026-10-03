@@ -202,13 +202,13 @@ const CHAIN: &str = r#"---
 adder = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 3]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 3))
 }) "Cpu"
 doubler = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  j = compute.read [cfg(1), i]
-  compute.write [n, i, j + j]
+  j = compute.read ((compute.Read _)(.from cfg(1), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value j + j))
 }) "Cpu"
 data = compute.plrun adder (4,)
 step = unused => {
@@ -370,7 +370,7 @@ const FROM_PARAMETER: &str = r#"---
 adder = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 3]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 3))
 }) "Cpu"
 step = ins => {
   out = compute.plrun adder (ins(0), (ins(1),))
@@ -475,13 +475,13 @@ const BACK_TO_FRONT: &str = r#"---
 adder = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 3]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 3))
 }) "cpu"
 doubler = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  j = compute.read [cfg(1)(0), i]
-  compute.write [n, i, j + j]
+  j = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value j + j))
 }) "cpu"
 data = compute.plrun adder (4,)
 step = ins => {

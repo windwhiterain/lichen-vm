@@ -18,21 +18,21 @@
 f = cfg => {
   n = cfg(0)                       -- the count, fixed at cfg position 0
   i = compute.range n              -- current index, i ∈ [0, n)
-  a = compute.read [cfg(1)(0), i]  -- input buffer 0 (the tuple at cfg(1))
-  compute.write [n, i, a + 1]      -- write output buffer (length n) at i
+  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))  -- input buffer 0 (the tuple at cfg(1))
+  compute.write ((compute.Write _)(.to n, .at i, .value a + 1))      -- write output buffer (length n) at i
 }
 k = compute.parallel f             -- single-arg `cfg -> ..` index function
 out = compute.plrun k (4, (inbuf,))-- cfg = (n, (buffer…)); runs over [0,4)
-compute.read [out, 2]
+compute.read ((compute.Read _)(.from out, .at 2))
 ```
 
 - **`cfg = (n, (buffer…))`** — `n` is always `cfg(0)`; the input buffers are a
   **tuple** at `cfg(1)`, read as `cfg(1)(k)` for buffer `k`.
 - **`compute.range n`** — a `Int -> Int` op; in the kernel it lowers to the
   loop-index param, and its argument `n` (fixed at `cfg(0)`) is the count.
-- **`compute.read [buf, idx]`** — inside the kernel → host import
+- **`compute.read ((compute.Read _)(.from buf, .at idx))`** — inside the kernel → host import
   `read(cfg_pos_const, idx)`; after `plrun` → read the output buffer element.
-- **`compute.write [n, idx, val]`** — inside the kernel → host import
+- **`compute.write ((compute.Write _)(.to n, .at idx, .value val))`** — inside the kernel → host import
   `write(out_pos_const, idx, val)`; `n` is the output length (used by the
   runner to allocate).  Returns a `Write`.  The index function's **codomain is a
   `Write` or a tuple of `Write`s** — one per output buffer (below).
@@ -46,13 +46,13 @@ produces:
 f = cfg => {
   n = cfg(0)
   i = compute.range n
-  a = compute.read [cfg(1)(0), i]
-  (compute.write [n, i, a],        -- output 0
-   compute.write [n, i, a + a])    -- output 1
+  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  (compute.write ((compute.Write _)(.to n, .at i, .value a)),        -- output 0
+   compute.write ((compute.Write _)(.to n, .at i, .value a + a)))    -- output 1
 }
 k = compute.parallel f
 outs = compute.plrun k (4, (inbuf,))   -- a tuple of two buffers
-(compute.read [outs(0), 1], compute.collect outs(1))
+(compute.read ((compute.Read _)(.from outs(0), .at 1)), compute.collect outs(1))
 ```
 
 - **The count is the codomain's arity**, read at *compile* time: a bare `Write`
@@ -168,11 +168,11 @@ one as a bare `Buffer`).
 ## Scope
 
 - **Implemented (runtime)**: the parallel buffer map — `compute.range n`
-  supplies the loop index, `compute.write [n, i, val]` writes into an output
+  supplies the loop index, `compute.write ((compute.Write _)(.to n, .at i, .value val))` writes into an output
   buffer, the kernel lowers to a wasm function with host `read`/`write`
   imports, `plrun k cfg` allocates the buffers, runs over `[0, cfg(0))`, and
   `compute.read`/`compute.collect` consume them.  A dependent index function
-  (`a = compute.read [cfg(1)(0), i]` then `a + a`) **typechecks**: a lazy
+  (`a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))` then `a + a`) **typechecks**: a lazy
   `Index` cfg slot-read type unified against a concrete type is **unified by
   joining the classes** (the read *is* the type it reads) rather than
   hard-erroring; the mismatch check is deferred to when the computation runs
@@ -188,7 +188,7 @@ one as a bare `Buffer`).
   whose write index is not its own makes two indices collide on a slot, and the
   winner is then decided by the partition rather than by the loop — so the same
   program can answer differently on a machine with a different core count.  A
-  kernel that writes at its own index (`compute.write [n, i, v]`, which is what
+  kernel that writes at its own index (`compute.write ((compute.Write _)(.to n, .at i, .value v))`, which is what
   a mapping kernel is) is unaffected.  See "The run is parallel" below.
   **This is reachable from ordinary-looking code, and it was reached:**
   [gpu-algorithms-ladder](gpu-algorithms-ladder.md) histograms 64 elements into
@@ -240,7 +240,7 @@ no reduction, no accumulation and no order to depend on.
 
 The general statement is narrower, and worth stating precisely: the result equals
 the sequential loop's **iff no two indices write the same output slot**.  A
-kernel that writes a slot that is not its own — `compute.write [n, i - i, v]`
+kernel that writes a slot that is not its own — `compute.write ((compute.Write _)(.to n, .at i - i, .value v))`
 has the index `0` for every `i`, so all of them collide on one slot — already
 had an order-dependent winner sequentially; "last write to a slot wins" is an
 artefact of loop order, not a designed semantic — so the partition, rather than
