@@ -3,9 +3,13 @@
 > Status: **in progress.** The design below is settled, and the parts [§8.2](#82-landed-on-dev)
 > lists are landed on `dev` — the `KernelBody` IR with `Flow::Seq`, the validator,
 > the `@loop` keyword, the wasm emitter, and the depth refusal. **The conversion
-> itself is not written**: [§8.3](#83-known-broken-and-by-whom) is what is known
-> broken and by whom, [§8.4](#84-unmerged-branches-and-exactly-what-each-needs) is
-> what the two unmerged branches need, and [§8.5](#85-the-critical-path-to-the-acceptance-case)
+> itself is not written.** Two of [§8.3](#83-known-broken-and-by-whom)'s items are now
+> **closed** — the `passed_out` contract, and the wasm `While` that never tested its
+> condition — and closing them surfaced a third that **blocks**: a loop body cannot
+> compute its state and reach the backedge, so **no terminating loop is
+> representable yet** ([loop-body-expressiveness](loop-body-expressiveness.md), and
+> §8.3 item 4). [§8.4](#84-unmerged-branches-and-exactly-what-each-needs) is what the
+> two unmerged branches need, and [§8.5](#85-the-critical-path-to-the-acceptance-case)
 > is the critical path to the acceptance case.
 >
 > **Four decisions are closed** and are not to be re-opened without a new
@@ -375,29 +379,28 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
 
 ### 8.3 Known broken, and by whom
 
-1. **The wasm `While` never tests its condition.** `lower_terminator`'s `While`
-   arm emits the enclosing block's instructions and *then* the `loop` opcode, so
-   the condition is computed once before the loop and never re-tested: the loop
-   only ends if its body branches out. `Instruction::BrIf` appears nowhere in
-   `crates/lichen-compute/src/compute.rs`. This contradicts this note's contract
-   ("the condition is re-evaluated at `header` on every entry including the
-   first") **and the SPIR-V emitter**, which does it correctly — so the two
-   backends currently give one fragment two meanings. It is latent only because
-   nothing can yet *produce* a loop. Fixing it needs the emission **reordered**:
-   the `Block`/`Loop` must open *before* the header's instructions, which means
-   `lower_flow`'s `Block` arm has to recognise a `While` terminator rather than
-   letting `lower_terminator` do it after the fact.
-2. **`passed_out` is under-specified, and this blocks the reduction.** §3 says a
-   zero condition leaves to `exit` "with `passed_out` values" — a bare count that
-   never says **which** values. In wasm the `Block` needs concrete values at its
-   `End`, and if the carried values live in locals the emitter must `local.get`
-   specific ones; `passed_out: usize` does not name them. **The natural reading,
-   which is not yet written into the IR**, is the discipline the IR already uses:
-   entry takes the top `carried` values, so exit hands out the top `passed_out`
-   values sitting beneath the condition. That makes a reduction work — the
-   header's `local.get`s leave the accumulator on the stack with the condition
-   above it. **Decide this before writing either emitter's fix**, or the emitters
-   will disagree again.
+1. **The wasm `While` never tested its condition — CLOSED.** `lower_terminator`'s
+   `While` arm used to emit the enclosing block's instructions and *then* the
+   `loop` opcode, so the condition was computed once before the loop and never
+   re-tested: the loop only ended if its body branched out. The emission is now
+   **ordered by the emitter**: the `Block`/`Loop` pair opens *before* the header's
+   instructions run, the state tuple is re-read with `local.get` on every entry,
+   the condition is narrowed and `BrIf`-ed back to the loop label, and a false
+   condition falls out of the `block` with the top `passed_out` of the tuple. The
+   carried values are locals because a `br` to a `loop` label takes no operands
+   (`crates/lichen-compute/src/compute.rs`, `lower_terminator`'s `While` arm and
+   `WasmState::loop_locals`/`get_locals`/`set_locals`).
+   **The execution test this deserves cannot be written yet** — see item 4.
+2. **`passed_out` is under-specified — CLOSED.** The contract is now stated in the
+   IR's own doc (`crates/lichen-kernel-ir/src/body.rs`, `Terminator::While`): the
+   loop's whole state is the tuple of `carried` values the header's instructions
+   start from, both counts are read off *that* stack after the condition is popped,
+   and **the exit receives the header's own top `passed_out` values**. The exit's
+   values are the header's rather than the body's because a zero trip count never
+   runs the body, so a `passed_out` the body had to compute would have no source on
+   that path; `passed_out ≤ carried` therefore holds, and `validate()` refuses a
+   loop that breaks it by name. This is what the parked SPIR-V emitter already
+   implements, so the fix was to the **documentation**, not to that emitter.
 3. **`sums()` in `graph_on_device.rs` could not be dispatched on the GPU**, which
    is `dispatch.rs`'s documented refusal (a dispatch pushes the launch extent
    alone; a runtime scalar needs the leaf list only the CPU path passes). The test
@@ -406,6 +409,17 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
    chain test runs, while a fragment that *does* declare a runtime scalar is
    refused by name in `a_parameter_with_a_runtime_scalar_is_refused_by_name`. Not
    this feature's work, and no longer open.
+4. **A loop body cannot compute its state and reach the backedge — NEW, and
+   blocking.** `Flow::Seq`'s terminator is a `Box<Terminator>`, and a plain transfer
+   is `Flow::Jump`, a variant of `Flow` — so the shape `Seq`'s own doc names ("run
+   these instructions, then perform this **plain** transfer") **cannot be built**,
+   and with it **no terminating loop is representable at all**: the only body that
+   type-checks is a bare jump back to the header, which passes the header's own
+   values, so the state never changes and a pure condition over it never turns. See
+   [loop-body-expressiveness](loop-body-expressiveness.md) §2 for the table and §4
+   for the two-part fix. **This is the new first step of §8.5**: nothing can produce
+   a loop until it lands, and the wasm execution test above is blocked on it.
+
 
 ### 8.4 Unmerged branches, and exactly what each needs
 
@@ -451,16 +465,32 @@ not ship one.
 p = compute.parallel (cfg => { ... sum_to (cfg(0), 0) ... }) "BACKEND"
 ```
 
-In order, and the order is forced:
+In order, and the order is forced. **Items 1 and 2 are done; item 1b is what the
+list now turns on** — it was found by trying to write item 5's program against the
+IR that items 1 and 2 left behind, exactly as this section predicted would happen:
 
-1. **Settle `passed_out`** (§8.3 item 2) in the IR's doc and, if it needs more
-   than a count, in the type.
-2. **Fix the wasm `While`** (§8.3 item 1) — the reorder above — and emit `Seq`.
-3. **Rebase and extend `feature/spirv-loop-emitter`** for `Seq`.
+1. ~~**Settle `passed_out`** (§8.3 item 2) in the IR's doc and, if it needs more than
+   a count, in the type.~~ **Done** — the exit reads the header's own top
+   `passed_out` values, it is stated in `body.rs`'s `Terminator::While`, and
+   `validate()` refuses `passed_out > carried` by name.
+1b. **Make a loop body expressible** (§8.3 item 4). `Flow::Seq`'s terminator must be
+   the plain transfer its own doc names, and `validate_flow` must let a body's `If`
+   leave for the loop's `exit`. Until this lands, **no terminating loop can be built
+   at all**, so nothing can produce one and no execution test can observe one. See
+   [loop-body-expressiveness](loop-body-expressiveness.md) §4 for the fix and what it
+   touches.
+2. ~~**Fix the wasm `While`** (§8.3 item 1) — the reorder above — and emit `Seq`.~~
+   **Done** — the reorder, the state tuple in locals, and the false edge's
+   `passed_out`; the execution test is blocked on item 1b.
+3. **Rebase and extend `feature/spirv-loop-emitter`** for `Seq` — and it also
+   inherits item 1b: its own refusal of a body that is "only a transfer" is the
+   SPIR-V emitter saying there is no block for `OpLoopMerge`'s continue target,
+   which the real backedge resolves.
 4. **Delete `value_decided`** in `feature/eval-loop-recording` and make the
    evaluator *record* a loop rather than refuse. This is the biggest remaining
    piece and the one no branch has started: the recorded structure itself, the
-   defunctionalisation §3 step 2, and §4's shape rules.
+   defunctionalisation §3 step 2, and §4's shape rules. It cannot be validated
+   against a backend until item 1b lands.
 5. **Run the reduction on both backends**, past the 2000-apply budget and the 512
    level ceiling, at more than one length so the count is demonstrably not a
    compile-time constant.
