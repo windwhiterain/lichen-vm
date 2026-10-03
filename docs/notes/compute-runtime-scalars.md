@@ -110,46 +110,67 @@ the argument is an array.  Two layers, and they are different fixes:
   changed is that an `Int` count no longer drags the written value's cell with
   it, so what remains is a class question about the *container*.
 
-### 4.3 The struct-argument API: what landed, and what it met
+### 4.3 The struct-argument API: the recipe, verified
 
-Approved direction: `compute.read`/`compute.write` take a **struct instance**
-built with an explicit constructor —
-`compute.write (compute.Write(.to b, .at i, .value v))` — so the elements are
-named fields with independent types.
+Approved direction: `compute.read`/`compute.write` take a **struct instance** built
+with an explicit constructor, so the elements are named fields with independent
+types.
 
-**Landed**: a named field read on a **concrete** container now folds to its
+**Landed for it**: a named field read on a **concrete** container folds to its
 constant position (`Checker::check_named_field`, `f51e4eb`) — the other half of
 `slot_read`'s decided type read, and the property a lowering needs to walk a
 struct argument's fields as positions (`Index(value, k)`).  An unbound container
 keeps the lazy `TableGet`, which is the case the two-pass `param_path` exists for.
-All suites green.
 
-**Met, measured, and not yet resolved.**  With `Read = struct<.from _, .at _>` /
-`Write = struct<.to _, .at _, .value _>` in the frozen `compute.lichen` and the
-wrappers annotated (`read = (x : Read) => $read(x.from, x.at)`):
+**The types must be lambdas, not type values** (superior's diagnosis, measured).
+`Read = struct<.from _, .at _>` is a *value*: one occurrence, one pair of `_`
+cells, and the first instantiation specializes them — the next one fails, and the
+frozen-module path panicked outright (`invalid SlotMap key` through
+`record_unify` → `tag_descent` → `slot0_is_shape`).  `KT = _x => struct<.I _, .O _>`
+is a *function*, so every `(KT _)` clones its inner `_`.  Written that way,
+everything works:
 
-1. **Instantiating** such a type is fine: `compute.Read(.from 1, .at 0)` checks
-   and evaluates to `(1, 0) : struct<.from raw[?a, ?b], .at raw[?c, ?d]>`.
-2. **The field of a `_` is the placeholder's pair**, so a read whose element type
-   comes from a `_` field renders `raw[?a, ?b]` where it used to render `?a`.
-   That is a second, independent problem in the same convention
-   (`check_type_element` puts the field expression's *term* in the shape, and a
-   `_`'s term is a two-cell pair) — 5 of the 6 failures below are this.
-3. **Applying a frozen wrapper whose parameter is annotated with such a type
-   panics the checker**: `invalid SlotMap key` at `lichen-lowlevel/src/utils.rs:24`,
-   through `checker::record_unify` → `shape::tag_descent` → `slot0_is_shape` →
-   `array_items`.  A *dynamic* program's annotated struct parameter applied to an
-   instance is fine (`S = struct<.a _>; f = (x : S) => x.a; f (S(.a 1))` answers
-   `1: Int`), so the panic is specific to the frozen-module path.
-4. Migrating the call sites (213 of them, scripted) with that spelling leaves
-   **52 of 58** `--test compute` green, one hard failure
-   (`expected raw[?a, ?b], found ?c`) and the five renderings of (2).
+```lichen
+Read  = _x => struct<.from _, .at _>
+Write = _x => struct<.to _, .at _, .value _>
+read  = (x : Read _)  => $read(x.from, x.at)
+write = (x : Write _) => $write(x.to, x.at, x.value)
+```
 
-So the struct spelling is blocked on (2) and (3), and the **tuple** spelling
-(`compute.write (b, i, v)`) removes layer 4.1 without either: the wrapper stays
-unannotated and positional (`x(0)`), a tuple's element types are independent, and
-nothing static is instantiated with a `_` field.  It is not the named API, but it
-is the same de-arraying.
+with the call sites spelled `compute.read ((compute.Read _)(.from buf, .at i))` and
+`compute.write ((compute.Write _)(.to n, .at i, .value v))`.  Measured on the 213
+scripted call sites: **57 of 58** `--test compute` green, the panic gone, and the
+`_`-pair leak gone — three applications in one program render
+`struct<.from Int, .at Int>`, `struct<.from Float, .at Int>`,
+`struct<.to Int, .at Int, .value Float>`, i.e. fresh cells per application and
+**concrete** field types.
+
+### 4.4 What one test still loses, and why it is not the struct
+
+`a_gpu_program_chains_two_kernels_on_a_device` is the single failure: the values
+are identical (`(20, 22, 24, [20, 22, 24])`) but the collected array's element
+type is `?d` where the test pins `Int`.  Measured, so that the next reader does
+not re-derive it:
+
+- **Not the struct argument.** The same test with the positional **tuple**
+  spelling (`compute.read (out, 0)`, `compute.write (n, i, …)`) loses the `Int`
+  the same way.
+- **Not §4.2's ordinals.**  That landed and all suites but this one are green.
+- **Not `slot_read`'s eager field type.**  Forcing the lazy `Index` back leaves
+  the answer unchanged.
+- **The array itself.**  The old argument was `[out, 0]` — a *homogeneous* array
+  whose element cell was unified with the buffer's class; `collect`'s element cell
+  shared that class, and the deferred commit of the runtime class landed there.
+  A tuple's element types are independent and carry no such shared cell, so the
+  path the commit rode on is gone.
+
+So the loss is a **commit path**, not a class rule: a `plrun` result's class
+currently reaches the type graph through the *read argument's array element cell*
+rather than through the result's own type cell (`ParLaunchOp::build`'s `out_ty`).
+Re-establishing it there is the honest fix and would make the three scalar reads
+in that test decided too — they are `?a, ?b, ?c` in both spellings.  Until it
+lands, the choice is between the array (precision, homogeneity) and the
+struct/tuple (no homogeneity, one undecided element type).
 
 ## 5. Blocker B: only the shipped lambdas can spell a JIT'd signature
 
