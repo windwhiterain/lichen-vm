@@ -7,25 +7,32 @@ it.
 
 ## 1. Where things are
 
-- Worktree `.worktrees/operator-polymorphism`, branch `feature/operator-polymorphism`.
-- **`dev` is synced to this branch** (fast-forwarded at every checkpoint, most
-  recently `cf652e6`), so all the work below is already on the mainline.  The
-  worktree and branch are kept because Phase 3 and §8.1's second half remain.
+- **The branch is closed.**  Every commit below is on **`dev`** (the mainline —
+  this repository has no `main`); the worktree `.worktrees/operator-polymorphism`
+  and the branch `feature/operator-polymorphism` were deleted once the agreed
+  scope (Phases 0–2) plus the two extras that followed it (the set value and
+  §8.1) were landed and synced.  Phase 3 is a **new workstream**: open a fresh
+  worktree for it — the decisions it needs are already recorded (the set value it
+  must write, the `@in` keyword it must implement, and the R2/R1 routing fork of
+  §7 of the plan note).
 - Commit trail (oldest first): `674d048` operand tie · `9a3983d` the class domain
   as a value + `InDomain` + the condition · `7e33938` kernel-boundary record +
   example declarations · `78fa33e` `@assert` frees `!` · `ec480fc` the
   attribute's shape · `e92a75f` the refinement attribute · `d910f49` the
   single-constraint-slot record · `27cfc27` static class naming · `debbdef` the
   diagnostic flavour · `f253724` an attribute naming a value · `d6ebe8f` the
-  `if` desugar reverted · `5d0d213` the set value · `c8cdd2a` the refinement's
-  spelling.
-- Scratch samples used for every measurement are in `.scratch-poly/` (excluded
-  through the repository's local `info/exclude`, never committed): operators
-  (`a_ints` … `f_both_sites`), refinement attribute (`g_refinement_ok`,
+  `if` desugar reverted · `5d0d213` the set value · `1c291a1` its documentation ·
+  `c8cdd2a` the refinement's spelling · `bc0c4d4` §8.1's documentation.
+- The scratch samples every measurement below was taken with lived in the closed
+  worktree's `.scratch-poly/` (excluded through the repository's local
+  `info/exclude`, never committed) and went with it.  §3's table **is** the
+  record: each row is a whole program, so recreate the ones a successor needs —
+  operators (`a_ints` … `f_both_sites`), refinement attribute (`g_refinement_ok`,
   `h_refinement_refused`), the doc label (`i_label`), the `if` measurements
-  (`j_if_hetero`, `k_if_lazy`, `l_tuple_if`), and the set measurements
-  (`n_set`, `o_set_types`, `p_set_index`, `q_set_hetero`, `r_set_empty`,
-  `s_set_eq`, `t_set_sig`).
+  (`j_if_hetero`, `k_if_lazy`, `l_tuple_if`), the set measurements (`n_set` …
+  `t_set_sig`), the refinement's spelling (`u_refinement_name`,
+  `v_refinement_unnamed`), and the two rendering regressions (`w_perspective`,
+  `aa_struct_doc`).
 
 ## 2. What is landed
 
@@ -236,8 +243,9 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
   the two `examples/import/*.lichen` `output =` declarations (via the repo's own
   `sync-readme`, which mirrors them into `README.md`) and
   `imported_field_access_hovers_with_value_and_type` (asserted per field now).
-- `cargo fix --allow-dirty` + `cargo fmt` before committing; the worktree's `.git`
-  is a pointer file — never append to it.
+- `cargo fix --allow-dirty` + `cargo fmt` before committing.  (In the closed
+  worktree the `.git` file was a pointer — never append to it; a fresh worktree
+  has the same shape.)
 
 ## 8. Verification, in commands
 
@@ -249,6 +257,8 @@ cargo check --workspace --exclude lichen-compute-gpu
 # §5 kernel targets red, and nothing else.
 cargo test --workspace --exclude lichen-compute-gpu --no-fail-fast
 
-# The acceptance table of §3 above, one line per sample.
-cargo run -q -p lichen-compiler -- .scratch-poly
+# The acceptance table of §3.  The samples went with the worktree, so first
+# write each row's program into its own file (one program per file — that is
+# where the `n: T` line comes from) and run the directory:
+cargo run -q -p lichen-compiler -- <the directory>
 ```
