@@ -703,15 +703,23 @@ where
     is_positional_type_any(module, universe, AnyNodeId::Dynamic(ty))
 }
 
-/// The struct's name→index table (the `struct<.a T, …>` names) from a
-/// struct type value, or `None` when it is an anonymous struct (no names)
-/// or not a struct type at all.  The table is reached through the kind:
-/// `[shape, [marker, K]]` → the marker's [`STRUCT_MARKER_NAMES_SLOT`].
-pub fn struct_names_any<P: Program>(
-    module: &mut Module<P>,
-    universe: NodeId,
+/// The pieces of a struct **type term** `[shape, kind]` that every reader of it
+/// needs: the kind's universe slot — the node a caller checks to be sure the
+/// term really is a kinded type — the term's field-type list, and the marker's
+/// name table.
+///
+/// The universe *gate* is deliberately the caller's: the two readers below
+/// recognise the universe differently (one by class equality against a
+/// caller-supplied node, one by its self-referential cycle), and that
+/// difference is the whole reason both exist.  Walking the encoding lives here
+/// so the two cannot drift.
+///
+/// `None` when the node is not a two-slot term whose kind is a two-slot pair
+/// with a table at the marker's [`STRUCT_MARKER_NAMES_SLOT`].
+fn struct_term_parts<P: Program>(
+    module: &Module<P>,
     ty: AnyNodeId,
-) -> Option<AnyHandle<[TableItem]>>
+) -> Option<(AnyNodeId, AnyNodeId, AnyHandle<[TableItem]>)>
 where
     P::Value: ValueType,
 {
@@ -721,23 +729,102 @@ where
     if items.len() != 2 {
         return None;
     }
-    // SAFETY: `items[TYPE_KIND_SLOT].node` is a live node of `module`; nothing
-    // in this crate calls `Module::drop_block`.
+    let shape = items[TYPE_SHAPE_SLOT].node;
+    // SAFETY: `items[TYPE_KIND_SLOT].node` is a live node of `module`.
     let kind_items = unsafe { array_items(module, items[TYPE_KIND_SLOT].node) }?;
-    if kind_items.len() != 2
-        || !is_universe_any(module, universe, kind_items[KIND_UNIVERSE_SLOT].node)
-    {
+    if kind_items.len() != 2 {
         return None;
     }
     // The struct marker `[id, names]`; its second field is the name table.
-    // SAFETY: `kind_items[KIND_MARKER_SLOT].node` is a live node of `module`;
-    // nothing in this crate calls `Module::drop_block`.
+    // SAFETY: `kind_items[KIND_MARKER_SLOT].node` is a live node of `module`.
     let marker_items = unsafe { array_items(module, kind_items[KIND_MARKER_SLOT].node) }?;
     let names_item = marker_items.get(STRUCT_MARKER_NAMES_SLOT)?;
     match module.node_value(names_item.node).and_then(|v| v.as_enum()) {
-        Some(LowValue::Table(table)) => Some(table),
+        Some(LowValue::Table(table)) => Some((kind_items[KIND_UNIVERSE_SLOT].node, shape, table)),
         _ => None,
     }
+}
+
+/// The struct's name→index table (the `struct<.a T, …>` names) from a
+/// struct type value, or `None` when it is an anonymous struct (no names)
+/// or not a struct type at all.  The table is reached through the kind:
+/// `[shape, [marker, K]]` → the marker's [`STRUCT_MARKER_NAMES_SLOT`].
+///
+/// **The universe is supplied by the caller.**  A checker has it; a lowering
+/// does not, and [`struct_fields_by_shape`] is this reader for that side.
+pub fn struct_names_any<P: Program>(
+    module: &mut Module<P>,
+    universe: NodeId,
+    ty: AnyNodeId,
+) -> Option<AnyHandle<[TableItem]>>
+where
+    P::Value: ValueType,
+{
+    let (universe_slot, _, table) = struct_term_parts(module, ty)?;
+    is_universe_any(module, universe, universe_slot).then_some(table)
+}
+
+/// The fields of a struct **type term** `[shape, kind]`, in field order, plus
+/// the term's field-type list node — read **without a universe handle**.
+///
+/// # Why this exists beside [`struct_names_any`]
+///
+/// `compile_parallel_fragment` runs on a [`Module`] and has no universe node:
+/// the universe is a `Ctx` fact, and the lowering is below the checker.  A
+/// kernel's parameter struct is a named struct type term, so the lowering needs
+/// this reader and cannot call the one above.
+///
+/// # The gate is the cycle, not a second structural guess
+///
+/// The universe slot is recognised by [`Module::is_self_referential`] — the
+/// `[Type, ↺]` cycle.  That is the same test the renderer
+/// (`is_universe`) and `class_holds_type` already use, so this reader adds no
+/// new guess about the encoding; it chooses the one the modules that have no
+/// universe handle already had to use.
+///
+/// `None` when `ty` is not a named struct type term.  A `None` entry is a
+/// positional field; a `Some(name)` entry is a `.name T` field.
+pub fn struct_fields_by_shape<P: Program>(
+    module: &mut Module<P>,
+    ty: AnyNodeId,
+) -> Option<(Vec<Option<&'static str>>, AnyNodeId)>
+where
+    P::Value: ValueType,
+{
+    let (universe_slot, shape, table) = struct_term_parts(module, ty)?;
+    if !module.is_self_referential(universe_slot) {
+        return None;
+    }
+    // The field count is the shape's own length: the names are sized to the
+    // term, not to the table, so a name whose index maps outside the field list
+    // is dropped rather than growing it.
+    // SAFETY: `shape` is a live node of `module`.
+    let field_count = unsafe { array_items(module, shape) }?.len();
+    let mut names: Vec<Option<&'static str>> = vec![None; field_count];
+    // SAFETY: `table` is the payload of the value read from the live node
+    // named by the marker's name slot.
+    for item in unsafe { table.items() } {
+        let name = module
+            .node_value(item.key)
+            .and_then(|v| v.as_enum())
+            .and_then(|v| match v {
+                LowValue::Str(s) => Some(s),
+                _ => None,
+            });
+        let index = module
+            .node_value(item.value)
+            .and_then(|v| v.as_enum())
+            .and_then(|v| match v {
+                LowValue::USize(n) => Some(n),
+                _ => None,
+            });
+        if let (Some(name), Some(index)) = (name, index)
+            && index < field_count
+        {
+            names[index] = Some(name);
+        }
+    }
+    Some((names, shape))
 }
 
 // --- low types -----------------------------------------------------------------
