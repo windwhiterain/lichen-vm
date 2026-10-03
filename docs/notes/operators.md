@@ -265,7 +265,8 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
   ([operator-polymorphism](operator-polymorphism.md) §3, §9 Phase 1). What is not
   here is the *end state*: `+` is still the checker's special case (routing R3)
   rather than a binding in `lichen-std`, and a library cannot yet write the
-  predicate's membership test (no source form for `∈`).
+  predicate's membership test (the `@in` keyword is decided, not yet
+  implemented).
 - **Shifts (`<<`, `>>`).** A `>>` token swallows the adjacent closers of nested
   angle types — `array<array<Int, 2>, 3>` ends `3>>` — and a `logos` lexer cannot
   split it back; the fix is parser-level token splitting, which is a change to

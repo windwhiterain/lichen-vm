@@ -17,7 +17,8 @@ it.
   attribute's shape · `e92a75f` the refinement attribute · `d910f49` the
   single-constraint-slot record · `27cfc27` static class naming · `debbdef` the
   diagnostic flavour · `f253724` an attribute naming a value · `d6ebe8f` the
-  `if` desugar reverted · `5d0d213` the set value.
+  `if` desugar reverted · `5d0d213` the set value · `c8cdd2a` the refinement's
+  spelling.
 - Scratch samples used for every measurement are in `.scratch-poly/` (excluded
   through the repository's local `info/exclude`, never committed): operators
   (`a_ints` … `f_both_sites`), refinement attribute (`g_refinement_ok`,
@@ -64,9 +65,18 @@ it.
 - The assert spelling: `@assert e` (the `@` keyword sigil), freeing `!` for the
   refinement; `AssertSpelling` + `Diag::refinement_domain` make a refinement
   failure read `does not satisfy {Int, Float}`.
-- An attribute can **name** the value it attaches to (`AttrExt::label`;
-  `Doc` for a string doc; `render::value_label`), so `f = (x => x) ? "fibo"; f`
-  prints `?fibo: ?a -> ?a`.
+- An attribute can **name** the value it attaches to (`AttrExt::label` → the bare
+  **name**; `Doc` for a string doc; `render::value_label` spells a labelled value
+  `?name`), so `f = (x => x) ? "fibo"; f` prints `?fibo: ?a -> ?a`.
+- A refinement **spells itself**: `Refinement::render` is `! ` plus the
+  predicate's name, found by [`attr::pair_label`](../../crates/lichen-highlevel/src/attr.rs)
+  — the general
+  "a nested pair's name" search, which needs no schema tail because it asks
+  **every** attribute of the composed set whether it names each of the pair's
+  tail slots (canonical order, first answer wins).  The hook therefore carries
+  one more parameter: `AttrExt::render(module, slot, attrs)`, `attrs` being the
+  composed registry.  Measured: `in_num = (v => v > 0) ? "in_num"; 5 : Int !
+  in_num` → `5 ! in_num: Int`; an unlabelled predicate spells nothing.
 - Fixed on the way, and useful beyond this feature: **a static (frozen) cell is
   now named by its equality class**, not by its ref
   (`Module::static_equality_representative` + the type printer).  The operator
@@ -96,6 +106,11 @@ it.
 | `s = set{}` | — | `set{}: set<?a>` |
 | `a = set{1, 2}; b = set{1, 2}; (a == b, a == a)` | — | `(0, 1)` — membership is handle identity, the array rule |
 | `f = x => set{1, 2}; f` | — | `?a -> set<Int>` (the type prints; it has no source spelling) |
+| `in_num = (v => v > 0) ? "in_num"; 5 : Int ! in_num` | — | `5 ! in_num: Int` (the refinement's spelling) |
+| the same with the predicate unlabelled | — | `5: Int` (nothing invented) |
+| `always = (v => 1) ? "always"; (x => x) : _ ! always` | — | `Function ! always: ?a -> ?a` |
+| `5 ? {name = "five"}` | `5 ? name = "five": Int` | identical (a struct doc still describes) |
+| `5 # 4` | `5 # 4: Int` | identical (the render hook's new parameter changed nothing) |
 
 Two mechanism facts that came out of measuring, and both are load-bearing:
 
@@ -155,22 +170,22 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
    routing-agnostic, and the domain's surface form is landed: `Num = set{Int,
    Float}` is an ordinary binding.  Two things Phase 3 still needs, and both are
    decisions, not work:
-   - **A membership spelling for the predicate.**  `in_num = v => type_of v ∈ Num`
-     needs `∈` (or a *native* leaf, the way §6 makes the arithmetic leaves
-     native) — `TypeOperator::InDomain` has no source form today, and `$` is the
-     plugin-private sigil, so it cannot carry a user-writable std.
+   - **A membership spelling for the predicate.**  Decided: the `@`-keyword
+     **`@in`** (`in_num = v => type_of v @in Num`), joining `@loop` and `@assert`
+     — not a new binary operator, and not a `$` native (that sigil is
+     plugin-private, so it cannot carry a user-writable std).  `@in`'s arity and
+     level are settled with the implementation.
    - **How std reaches a program at all** (R2's intrinsic registry vs R1's
      implicit prelude import).  This is the real fork: R1 is the principled end
      state and needs the language's first implicit import.
-2. **§8.1's second half**: spell a refinement as `! <the predicate's name>`.
-   The obstacle is a *signature*: the slot this attribute holds **is** the
-   predicate's pair, and locating a slot needs that pair's **schema tail**, which
-   `AttrExt::render` does not carry (a pair's arity is in the graph, but *which*
-   attributes its tail lists is not — a one-entry tail is `[Doc]` or
-   `[Perspective]`, and both are three elements long).  The tail is known where
-   the slot is built (`Checker::check_ann` has the predicate expression's
-   schema), so either hand the render hook the slot's tail or record the
-   predicate's name beside the slot.
+2. **A refinement in a *type* string is not reachable, and this is understood,
+   not pending.**  `f = x : _ ! in_num => x` prints `Int -> Int`: a refinement is
+   the attribute of the parameter *expression* inside the lambda, and a function
+   type is just `[domain, codomain]`, so `?a ! in_num -> ?a` cannot be built from
+   the type.  Printing it needs the *lambda's* own rendering (the parameter's
+   attribute lives in the template), which is a separate piece of work.  The
+   refinement **is** shown wherever the annotated *value* is printed (§3's
+   `Function ! always: ?a -> ?a`), which is the operator's own end state.
 3. Then §8.2 (`Num`'s home), §8.3 (the panic arm's spelling), §8.6
    (generalising the single constraint slot to a per-marker set).
 4. **Set follow-ups, none of them needed by this feature** (recorded so a

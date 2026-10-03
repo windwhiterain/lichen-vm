@@ -255,7 +255,7 @@ membership test reads the set. Nothing unifies against either, `+ : ?a -> ?a ->
 ```lichen
 -- lichen-std, end state
 Num  = set{Int, Float}                  -- the domain VALUE: a set of type values
-in_num = v => type_of v ∈ Num           -- one predicate, consulting the domain
+in_num = v => type_of v @in Num           -- one predicate, consulting the domain
 is_int = v => type_of v == Int
 iadd = …                                -- the machine leaves, today's TypeOperator
 fadd = …                                --   split per class (see §6)
@@ -264,8 +264,9 @@ add  = x => y => { x : ?a{in_num}; y : ?a{in_num}      -- the contract
 ```
 
 `Num` is writable today (`set{Int, Float}` is an ordinary binding); what the
-snippet still needs is the *membership* spelling `∈` and the leaf selection, both
-of which are Phase 3's (§8.7, §9).
+snippet still needs is the *membership* spelling — the `@`-keyword **`@in`**,
+joining `@loop` and `@assert` (its arity and level are settled with the
+implementation) — and the leaf selection, both of which are Phase 3's (§8.7, §9).
 
 `x : ?a{in_num}` puts the predicate in the parameter's attribute slot and leaves
 its *type* cell open — that is the polymorphism. `add`'s printed type is
@@ -487,33 +488,49 @@ answered.
 
 ## 8. Open questions
 
-1. **The printer's spelling** of a refined cell.  The surface sigil is `!`
-   (§3), so the readable form is `x : Int ! in_num` and the contract's is
-   `?a ! in_num -> ?a`.  There is deliberately **no rule special to the
-   refinement** here: the slot holds a *function value*, which is not printable
-   on its own (the graph keeps a lambda as an opaque function, and a binding's
-   name is resolved away), so the refinement is spelled through the general
-   answer to "how is a value printed" — an attribute **naming** the value.
+1. *(Closed — **landed**.)* **The printer's spelling** of a refined cell.  The
+   surface sigil is `!` (§3), so the readable form is `x : Int ! in_num`.  There
+   is deliberately **no rule special to the refinement** here: the slot holds a
+   *function value*, which is not printable on its own (the graph keeps a lambda
+   as an opaque function, and a binding's name is resolved away), so the
+   refinement is spelled through the general answer to "how is a value printed" —
+   an attribute **naming** the value.
 
-   *Landed:* that general mechanism.  [`AttrExt::label`](../../crates/lichen-highlevel/src/attr.rs)
-   (default `None`) is "the name this attribute gives the value it attaches to";
-   `Doc` implements it for a **string** doc, so `f = (x => x) ? "fibo"; f` prints
-   `?fibo: ?a -> ?a` — the value replaced by its label, the type unchanged.  A
-   *struct* doc still describes through `render`, and the shared reader is
-   `render::value_label` (schema tail + pair, exactly like `render_attributes`),
-   which is what a future spelling of the refinement must go through too.
+   Two general pieces, both landed:
 
-   *Remaining, and the obstacle is a signature:* spelling the refinement as
-   `! <the predicate's name>` means reading the **doc slot of the predicate's own
-   pair** — the slot this attribute holds *is* that pair — and locating a slot
-   needs that pair's **schema tail**, which [`AttrExt::render`](../../crates/lichen-highlevel/src/attr.rs)
-   does not carry: it receives a module and one slot node, and a pair's arity is
-   in the graph while *which* attributes its tail lists is not (a one-entry tail
-   is `[Doc]` or `[Perspective]` and both are three elements long).  The lead is
-   that the tail *is* known where the slot is built — `Checker::check_ann`
-   compiles the predicate expression and has its schema — so either the render
-   hook gains the slot's tail, or the annotation records the predicate's name
-   beside the slot.  Neither is a big change; neither is this phase's.
+   - [`AttrExt::label`](../../crates/lichen-highlevel/src/attr.rs) (default
+     `None`) is "the **name** this attribute gives the value it attaches to", and
+     `Doc` implements it for a **string** doc.  The name is bare; a labelled value
+     *reads* as `?name` (the doc sigil), which is `render::value_label`'s
+     spelling — so `f = (x => x) ? "fibo"; f` still prints `?fibo: ?a -> ?a`.  A
+     *struct* doc describes instead, through `render`.
+   - The obstacle to using that name *inside* an attribute's slot was the hook's
+     **own signature**, and the fix is one parameter:
+     `AttrExt::render(module, slot, attrs)` now receives the composed extension
+     registry.  [`attr::pair_label`](../../crates/lichen-highlevel/src/attr.rs)
+     is the shared reader: a pair's **arity** is in the graph but *which*
+     attribute each of its tail slots belongs to is not (a one-entry tail is
+     `[Doc]` or `[Perspective]`, and both are three elements long), so it asks
+     **every** attribute of the composed set whether it names that slot, in
+     canonical order, first answer wins — the same rule `render_attributes` uses,
+     and sound because an attribute answers only about content it recognises as
+     its own.
+
+   `Refinement::render` is then three lines: `! ` plus the predicate's name.
+   Measured — `in_num = (v => v > 0) ? "in_num"; 5 : Int ! in_num` prints
+   `5 ! in_num: Int`; an unnamed predicate prints nothing (honest: a function
+   value has no source form, and a made-up one could not be spelled back); a
+   refinement on a *function* value prints `Function ! always: ?a -> ?a`.
+
+   **What this does *not* reach, and why.**  The contract's `?a ! in_num -> ?a` is
+   a *type* string, and a refinement is not in the type: it is the attribute of the
+   *parameter expression* inside the lambda, so `f = x : _ ! in_num => x` prints
+   `Int -> Int` with no refinement.  Showing it there needs the *lambda's* own
+   rendering (its parameter's attribute is reachable in the template, not in the
+   function type), which is a separate piece of work and no part of Phase 3.  The
+   refinement **is** shown beside the type wherever the annotated *value* is what
+   is printed, which is the operator's own end state (`add`'s body is refined, its
+   *signature* is `?a -> ?a`).
 2. **`Num`'s home**: std binding (the `type_of` precedent) vs keyword.
 3. **The panic arm's spelling**: the recorded-refusal channel needs a
    value-level form a library function can write; today only builtins record.
@@ -644,6 +661,6 @@ than budgeting for it.)
   renders `"ten": string`.
 - **Phase 3 — the implementation moves to std.** The leaf-selection dispatch, the
   split leaves, `Num` and the operator bindings in `lichen-std`; routing R3 →
-  R2/R1.  `Num = set{Int, Float}` is writable now; what Phase 3 still needs is a
-  *membership* spelling for the predicate (`∈`, or a native leaf, as the
-  arithmetic leaves are per §6).
+  R2/R1.  `Num = set{Int, Float}` is writable now; what Phase 3 still needs is the
+  *membership* spelling for the predicate — the keyword **`@in`**, decided, with
+  its arity and level to settle at the implementation.

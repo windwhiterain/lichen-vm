@@ -86,11 +86,21 @@ that defines the attribute; highlevel ships the inert `NoAttr` marker.
 AttrSpec     marker bound (Copy + PartialEq + Eq + Debug)
 AttrSet      the composed set: ORDER + order_index() — the slot layout
 AttrExt<P>   missing_value() / missing_slot() / combine() / unify_slots() /
-             is_subtype() / is_label() / render()
+             is_subtype() / is_label() / constraint() / label() / render()
 ```
 
 `AttrExt` carries **no layout**: "which slot" is the set's order, "what the value
 means" is the extension's.
+
+Three of the hooks are for a *value* rather than for a slot: `constraint()` is the
+condition the attribute imposes on the annotated expression's own value (registered
+through the assert channel), `label()` is the **name** it gives that value (a
+labelled value *reads* as `?name`), and `render()` spells the attribute in a
+signature. `render()` receives the composed extension registry as well as the slot,
+because an attribute whose slot holds a **nested pair** — a refinement's slot *is*
+its predicate's pair — must look for a name inside it, and which attributes that
+pair carries is not in the graph (`attr::pair_label`; see
+[operator-polymorphism](operator-polymorphism.md) §8.1).
 
 ## Perspective
 
