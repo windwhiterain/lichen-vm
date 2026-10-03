@@ -70,6 +70,11 @@ pub enum Terminator {
     /// to `exit` with `passed_out` values. **Testing before the first iteration
     /// is what makes a zero-trip loop correct**, so the condition is never hoisted
     /// out of the header.
+    ///
+    /// **The body must be able to compute its carried values**, which is what
+    /// [`Flow::Seq`] is for: without it a body can only hand back the header's
+    /// own values, and a reduction — the one shape with an accumulator — has no
+    /// representation. See [`Flow::Seq`].
     While {
         /// The label re-entered on every iteration; a backend's loop header.
         header: BlockId,
@@ -102,6 +107,34 @@ pub enum Flow {
         /// The instructions, in emission order, consuming the stack from the top.
         instrs: Vec<KernelInstr>,
         /// Where control goes when they have run.
+        terminator: Box<Terminator>,
+    },
+    /// Instructions, then a transfer that is **not** a conditional branch.
+    ///
+    /// # Why this shape exists
+    ///
+    /// A loop body that only produces values and then leaves has nothing to do
+    /// with those values *except* hand them somewhere, and before this shape
+    /// there was no way to say "compute these, then go back to the header" that
+    /// was not also a branch on a condition. `Block` could not do it: a loop
+    /// body's last act must arrive back at the header, and `Block`'s terminator
+    /// is a `Terminator`, which means an `If` — and a selection's merge must be
+    /// dominated by *its* header, which the loop header is not.
+    ///
+    /// So the only expressible body was a bare [`Flow::Jump`] back to the
+    /// header, which can pass the header's *own* values and nothing else. That
+    /// makes the header's `OpPhi` self-referential, and leaves a reduction — the
+    /// acceptance case in `docs/notes/loop-conversion.md` §8 — with no
+    /// representation at all.
+    ///
+    /// `Seq` is that missing half: run these instructions, then perform this
+    /// **plain** transfer. [`Terminator::While`]'s `body` must be a `Seq`, so the
+    /// carried values are computed rather than forwarded.
+    Seq {
+        /// The instructions, in emission order, consuming the stack from the top.
+        instrs: Vec<KernelInstr>,
+        /// Where control goes afterwards — a jump back to the loop header, or a
+        /// branch out of the loop to its `exit`.
         terminator: Box<Terminator>,
     },
     /// Leave this flow by arriving at `target` with the top `passes` values.
@@ -137,6 +170,7 @@ impl Flow {
                 }
                 terminator_labels(terminator, out);
             }
+            Flow::Seq { terminator, .. } => terminator_labels(terminator, out),
             Flow::Jump { target, .. } => out.push(*target),
         }
     }
@@ -207,6 +241,7 @@ impl KernelBody {
         fn straight(flow: &Flow) -> bool {
             match flow {
                 Flow::Jump { .. } => false,
+                Flow::Seq { .. } => false,
                 Flow::Block { terminator, .. } => matches!(&**terminator, Terminator::Return),
             }
         }
@@ -303,6 +338,7 @@ impl KernelBody {
 fn collect_exits(flow: &Flow, out: &mut Vec<BlockId>) {
     match flow {
         Flow::Jump { .. } => {}
+        Flow::Seq { terminator, .. } => terminator_exits(terminator, out),
         Flow::Block { terminator, .. } => terminator_exits(terminator, out),
     }
 }
@@ -329,6 +365,7 @@ fn terminator_exits(terminator: &Terminator, out: &mut Vec<BlockId>) {
 fn collect_entries(flow: &Flow, out: &mut Vec<BlockId>) {
     match flow {
         Flow::Jump { .. } => {}
+        Flow::Seq { terminator, .. } => terminator_entries(terminator, out),
         Flow::Block {
             entry, terminator, ..
         } => {
@@ -359,23 +396,34 @@ fn terminator_entries(terminator: &Terminator, out: &mut Vec<BlockId>) {
 fn collect_instrs<'a>(flow: &'a Flow, out: &mut Vec<&'a KernelInstr>) {
     match flow {
         Flow::Jump { .. } => {}
+        Flow::Seq {
+            instrs, terminator, ..
+        } => {
+            out.extend(instrs.iter());
+            collect_terminator_instrs(terminator, out);
+        }
         Flow::Block {
             instrs, terminator, ..
         } => {
             out.extend(instrs.iter());
-            match &**terminator {
-                Terminator::Return => {}
-                Terminator::If {
-                    on_one, on_zero, ..
-                } => {
-                    collect_instrs(on_one, out);
-                    if let Some(on_zero) = on_zero {
-                        collect_instrs(on_zero, out);
-                    }
-                }
-                Terminator::While { body, .. } => collect_instrs(body, out),
+            collect_terminator_instrs(terminator, out);
+        }
+    }
+}
+
+/// Every instruction a terminator's nested flows hold.
+fn collect_terminator_instrs<'a>(terminator: &'a Terminator, out: &mut Vec<&'a KernelInstr>) {
+    match terminator {
+        Terminator::Return => {}
+        Terminator::If {
+            on_one, on_zero, ..
+        } => {
+            collect_instrs(on_one, out);
+            if let Some(on_zero) = on_zero {
+                collect_instrs(on_zero, out);
             }
         }
+        Terminator::While { body, .. } => collect_instrs(body, out),
     }
 }
 
@@ -389,6 +437,48 @@ fn validate_flow(flow: &Flow, header: Option<BlockId>) -> Result<(), String> {
                 header.0, target.0
             )),
             _ => Ok(()),
+        },
+        // A `Seq` inside a loop must leave for the header, and the check is the
+        // same one a bare jump gets: the obligation is on the *transfer*, so both
+        // shapes answer it identically.
+        Flow::Seq { terminator, .. } => match header {
+            Some(_) => match &**terminator {
+                Terminator::Return => Err(
+                    "a loop body returns instead of arriving back at its header; the loop has no \
+                     backedge"
+                        .to_string(),
+                ),
+                Terminator::If {
+                    on_one,
+                    on_zero,
+                    join,
+                    passes,
+                } => {
+                    if join.0 == header.expect("checked just above").0 {
+                        validate_flow(on_one, header)?;
+                        if let Some(on_zero) = on_zero {
+                            validate_flow(on_zero, header)?;
+                        }
+                        // Both arms hand the header its carried values, and the
+                        // arms' own arms still owe the header the backedge.
+                        let _ = passes;
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "a loop body's sequence leaves for block {} through a selection, but a loop \
+                             body must arrive back at its header block {}",
+                            join.0,
+                            header.expect("checked just above").0
+                        ))
+                    }
+                }
+                Terminator::While { header: inner, .. } => Err(format!(
+                    "a loop body nests another loop, whose header is block {}; a backend has no way \
+                     to close both with one backedge",
+                    inner.0
+                )),
+            },
+            None => validate_terminator(terminator),
         },
         Flow::Block {
             entry, terminator, ..
@@ -436,6 +526,23 @@ fn validate_flow(flow: &Flow, header: Option<BlockId>) -> Result<(), String> {
                 }
             }
         }
+    }
+}
+
+/// Validate a terminator with no loop-header obligation in force.
+fn validate_terminator(terminator: &Terminator) -> Result<(), String> {
+    match terminator {
+        Terminator::Return => Ok(()),
+        Terminator::If {
+            on_one, on_zero, ..
+        } => {
+            validate_flow(on_one, None)?;
+            match on_zero {
+                Some(on_zero) => validate_flow(on_zero, None),
+                None => Ok(()),
+            }
+        }
+        Terminator::While { body, .. } => validate_flow(body, None),
     }
 }
 

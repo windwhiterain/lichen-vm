@@ -980,6 +980,84 @@ outs = compute.plrun k (4096,)
     );
 }
 
+/// The signature-carrying wrapper over the ordinary tuple-shaped parameter.
+///
+/// What this pins is the wrapper's **third currying layer**, not the struct
+/// parameter: `parallel_sig = f => b => s => …$parallel(f, b)` used to leave
+/// `$parallel`'s operand `Parameterized`, because the innermost closure of a
+/// frozen template was handed on without being re-instantiated per call — a
+/// nested static closure's captures were invisible to the re-home check, and
+/// its parent chain reached no dynamic ancestor, so the body kept reading a
+/// previous apply's generation of the backend cell (`docs/notes/`
+/// `compute-param-struct-handoff.md` §5). The tuple shape keeps the failure
+/// surface on the wrapper mechanics alone.
+#[test]
+fn a_tuple_kernel_runs_through_the_signature_carrying_wrapper() {
+    let out = run(r#"
+--- compute = import "compute.lichen" ---
+type_of = x => {t = _; x: t; t}
+f = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + 1]
+}
+k = compute.parallel_sig f "cpu" (type_of f)
+out = compute.plrun k (4,)
+compute.collect out
+"#);
+    assert_eq!(
+        out, "[1, 2, 3, 4]: array<?a, ?b>",
+        "parallel_sig over a tuple-shaped kernel produced: {out:?}"
+    );
+}
+
+/// The named struct parameter end to end: a producer kernel fills an input
+/// buffer, the consumer's parameter is `struct<.n Int, .in …, .out …>`, its
+/// reads name their buffers (`k.in.a`), and the launch goes through
+/// `parallel_sig` with the JIT'd signature.
+///
+/// This is the probe `docs/notes/compute-param-struct-handoff.md` §2 was
+/// written around — blocker 1 (a named read resolves to its position in the
+/// parameter **type's** field order) and blocker 2 (the wrapper above) meet in
+/// one program. The spelling of the signature argument is load-bearing: the
+/// type lambdas take an *instantiated* pair (`P (KT _)(.I In, .O Out)`), and
+/// `.out` moves from the parameter to the result — the host fills
+/// `struct<.n Int, .I In>`, which is what `compute.A` builds.
+///
+/// The `?a` in the answer is not a defect: it is the documented limit of
+/// `plrun`'s result type — the element class of a value read back from a
+/// buffer stays undecided (`docs/notes/compute-kernel-struct.md` §"Runtime /
+/// codegen").
+#[test]
+fn a_struct_parameter_kernel_runs_through_the_signature_carrying_wrapper() {
+    let out = run(r#"
+--- compute = import "compute.lichen" ---
+g = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + 10]
+}
+kg = compute.parallel g "cpu"
+inbuf = compute.plrun kg (3,)
+In  = struct<.a _>
+Out = struct<.z _>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+Sig = compute.S (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {
+  i = compute.range k.n
+  v = compute.read [k.in.a, i]
+  compute.write [k.out.z, i, v * 2]
+}
+k = compute.parallel_sig f "cpu" Sig
+out = compute.plrun k ((compute.A In)(.n 3, .I In(.a inbuf)))
+compute.read [out, 1]
+"#);
+    assert_eq!(
+        out, "22: ?a",
+        "the struct-parameter kernel produced: {out:?}"
+    );
+}
+
 #[test]
 fn a_write_inside_a_conditional_is_refused() {
     // The every-ordinal-written invariant: output ordinal `k` must be written
@@ -1530,56 +1608,56 @@ compute.launch k 3.0
     }
 }
 
-/// The one crossing a kernel cannot be given: an operand the body would have to
-/// compute in a class it does not hold.
+/// A body may compute in one class and cross to the other, and the crossing is
+/// spelled — `int2float`/`float2int` are the only way between the two.
 ///
-/// **A fragment has one representation for its whole body** — every constant is
-/// read in it and every operator's opcode is picked from it — so a
-/// `Float`-returning kernel whose parameter is an `Int` can cross that parameter
-/// (`int2float x`, `int2float (x > 1.0)`, both above) but cannot *add* it as an
-/// integer first.  The refusal is the shared emitter's, so one program gets one
-/// answer whichever backend it is then handed to, and it names the shape rather
-/// than leaving the module to fail validation.
+/// **This is what per-value classes bought**: a fragment is no longer one
+/// representation for its whole body, so an `Int` parameter may be added as an
+/// integer and only then crossed (`int2float (x + 1)`), where the earlier
+/// fragment-wide rule refused it. The price is recorded in
+/// `docs/notes/floating-point.md`: in a float fragment `Int` data is 32-bit on
+/// the GPU and 64-bit on the CPU, so the two targets diverge past 2³².
+///
+/// The parallel half is the same decision inside an **integer** fragment: its
+/// buffers are integers, and the body crosses up to `Float` to compute and back
+/// down to store. That is the case both element types have to be declared for in
+/// one SPIR-V module (`crates/lichen-compute-gpu/src/spirv.rs`).
 #[test]
-fn a_conversion_the_body_cannot_hold_is_refused_by_name() {
-    let diags = fail(
-        r#"
+fn a_body_may_compute_in_one_class_and_cross() {
+    let out = run(r#"
 ---
   compute = import "compute.lichen"
 ---
 k = compute.jit (x : Int => int2float (x + 1))
 compute.launch k 5
-"#,
-    );
-    assert!(
-        diags
-            .iter()
-            .any(|message| message.contains("one fragment has one representation")),
-        "an integer add inside a float kernel is refused for what it is: {diags:?}"
-    );
+"#);
+    assert_eq!(out, "6.0: Float", "the integer add stays an integer's");
 
-    // The mirror, in a parallel fragment: the buffer's class is the body's, so a
-    // float computed in order to be written as an integer has no form there
-    // either, and the refusal names the literal the body cannot spell.
-    let diags = fail(
+    let source = format!(
         r#"
----
-  compute = import "compute.lichen"
----
-f = cfg => {
+--- compute = import "compute.lichen" ---
+f = cfg => {{
   n = cfg(0)
   i = compute.range n
   compute.write [n, i, float2int (int2float i + 0.5)]
-}
-k = compute.parallel f "cpu"
-out = compute.plrun k (5,)
-compute.collect out
+}}
+k = compute.parallel f "{BACKEND}"
+out = compute.plrun k ({ELEMENT_COUNT},)
+(compute.read [out, 0], compute.read [out, 1], compute.read [out, {last}], compute.collect out)
 "#,
+        last = ELEMENT_COUNT - 1,
     );
+    let Some((cpu, gpu)) = answer_from_each_backend(&source) else {
+        return;
+    };
+    println!("crossing  cpu: {cpu}\ncrossing  gpu: {gpu}");
     assert!(
-        diags
-            .iter()
-            .any(|message| message.contains("no form in an Int kernel body")),
-        "a float literal in an integer fragment is refused by name: {diags:?}"
+        cpu.starts_with(&format!("(0, 1, {}, [0, 1, 2,", ELEMENT_COUNT - 1)),
+        "the truncation of the index plus a half is the index, so every element \
+         differs from its neighbour: {cpu:?}"
+    );
+    assert_eq!(
+        gpu, cpu,
+        "the two backends answered one class crossing differently"
     );
 }

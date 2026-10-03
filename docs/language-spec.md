@@ -520,18 +520,13 @@ maps every span back to the original file.
   marker** (`TypeStruct{id, names}`, the kind's marker slot), which lets a
   `a.name` read resolve a field by name.  Its kind is a standard `[marker, K]`
   pair whose marker is that two-field value.  The kind also holds a **fresh
-  nominal id** — each *written occurrence* of the syntax allocates one id, so
-  two occurrences never unify and a struct never unifies with a same-shape tuple
-  type (nominal identity).  One occurrence is one type however many times it is
-  evaluated, so a struct type written in a function body stays that one type
-  across the function's applications: `s = struct<Int>; [s, s]` and
-  `A = t => struct<t>; [A Int, A Int]` are homogeneous arrays, while
-  `[struct<Int>, struct<Int>]` (two source occurrences) is a nominal conflict.
-  The **field types are not part of the id** — they are the type's shape — so
-  one occurrence applied to different field types names different types
-  (`A Int` and `A Float` do not unify) even though the two *values* share the
-  occurrence's kind: `[A Int, A Float]` is a homogeneous array of two distinct
-  struct types.  See [applied-struct-nominal-id](notes/applied-struct-nominal-id.md).
+  nominal id** — each occurrence of the syntax allocates a new id, so two
+  occurrences never unify and a struct never unifies with a same-shape tuple
+  type (nominal identity).  Bind one occurrence and it is reusable: the
+  checker compiles each expression once, so a bound or parameter-passed
+  struct type used many times is the *same* type — `s = struct<Int>; [s, s]`
+  is a homogeneous array, while `[struct<Int>, struct<Int>]` (two
+  source occurrences) is a nominal conflict.
 - **Struct instantiation.**  `s(1, 2)` — an application whose callee is a
   struct type — wraps the positional tuple in the nominal type: it compiles
   to the dedicated `Instantiate` expression, whose element types are checked

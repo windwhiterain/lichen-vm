@@ -1147,10 +1147,10 @@ where
             | ExprKind::Function { .. }
             | ExprKind::Apply { .. }
             | ExprKind::BinOp { .. }
+            | ExprKind::Convert { .. }
             | ExprKind::Instantiate { .. }
             | ExprKind::Record { .. }
             | ExprKind::Assert { .. }
-            | ExprKind::Convert { .. }
             | ExprKind::Index { .. }
             | ExprKind::RawIndex { .. }
             | ExprKind::Field { .. }
@@ -1318,6 +1318,7 @@ where
                 left,
                 right,
             } => self.check_binop(e, operator, left, right),
+            ExprKind::Convert { operator, value } => self.check_convert(e, operator, value),
             ExprKind::Instantiate {
                 type_expr,
                 value,
@@ -1333,7 +1334,6 @@ where
                 self.check_record(e, value, &field_names)
             }
             ExprKind::Assert { condition } => self.check_assert(e, condition),
-            ExprKind::Convert { operator, value } => self.check_convert(e, operator, value),
             ExprKind::Index { array, index } => self.check_index(e, array, index),
             ExprKind::RawIndex { container, index } => self.check_raw_index(e, container, index),
             ExprKind::Field { container, key } => self.check_field(e, container, key),

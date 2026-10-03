@@ -28,26 +28,24 @@ fn adds() -> KernelFragment {
             KernelShape::Scalar(ScalarClass::Int),
         ]),
         body: vec![
-            KernelInstr::Const(0),
+            KernelInstr::Const(ScalarClass::Int, 0),
             KernelInstr::LocalGet(1),
-            KernelInstr::Const(0),
+            KernelInstr::BufferReadCall(ScalarClass::Int),
+            KernelInstr::Const(ScalarClass::Int, 0),
             KernelInstr::LocalGet(1),
-            KernelInstr::BufferReadCall,
-            KernelInstr::Const(0),
-            KernelInstr::LocalGet(1),
-            KernelInstr::BufferReadCall,
-            KernelInstr::Bin(KernelBin::Add),
-            KernelInstr::Const(1),
-            KernelInstr::Bin(KernelBin::Add),
-            KernelInstr::BufferWriteCall,
-            KernelInstr::Const(0),
+            KernelInstr::BufferReadCall(ScalarClass::Int),
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+            KernelInstr::Const(ScalarClass::Int, 1),
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
+            KernelInstr::Const(ScalarClass::Int, 0),
         ]
         .into(),
         inputs: 1,
         outputs: 1,
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
-        results: 1,
+        result_classes: vec![ScalarClass::Int],
         int_width: IntWidth::I64,
     }
 }
@@ -62,26 +60,26 @@ fn sums() -> KernelFragment {
             KernelShape::Scalar(ScalarClass::Int),
         ]),
         body: vec![
-            KernelInstr::Const(0),    // out_pos
-            KernelInstr::LocalGet(2), // idx
-            KernelInstr::Const(0),
+            KernelInstr::Const(ScalarClass::Int, 0), // out_pos
+            KernelInstr::LocalGet(2),                // idx
+            KernelInstr::Const(ScalarClass::Int, 0),
             KernelInstr::LocalGet(2),
-            KernelInstr::BufferReadCall, // a[i]
-            KernelInstr::Const(1),
+            KernelInstr::BufferReadCall(ScalarClass::Int), // a[i]
+            KernelInstr::Const(ScalarClass::Int, 1),
             KernelInstr::LocalGet(2),
-            KernelInstr::BufferReadCall, // b[i]
-            KernelInstr::Bin(KernelBin::Add),
-            KernelInstr::Const(1),
-            KernelInstr::Bin(KernelBin::Add),
-            KernelInstr::BufferWriteCall,
-            KernelInstr::Const(0),
+            KernelInstr::BufferReadCall(ScalarClass::Int), // b[i]
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+            KernelInstr::Const(ScalarClass::Int, 1),
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
+            KernelInstr::Const(ScalarClass::Int, 0),
         ]
         .into(),
         inputs: 2,
         outputs: 1,
         input_classes: vec![ScalarClass::Int, ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
-        results: 1,
+        result_classes: vec![ScalarClass::Int],
         int_width: IntWidth::I64,
     }
 }

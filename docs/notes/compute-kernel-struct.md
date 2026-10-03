@@ -100,6 +100,22 @@ kernel by value lowers its call to a `CallKernel`, assembled at launch time.
   (the `.native` artifact's own pair is a raw reading, so it is marked `raw[…]`) and the
   generic `compute.jit`/`compute.launch` wrappers as plain `Function` types.
 
+## The parallel parameter struct
+
+A parallel kernel's parameter is being moved from `cfg = (n, (buffers…))` to a named
+struct, so that a read names its buffer (`k.in.x`) instead of counting a position and
+the kernel can take runtime scalars (`k.alpha`) beside its count. The two shapes are
+decoded by a **role table** read from the parameter's type (`parallel_roles`), and the
+author's type lambdas (`KT`/`A`/`P`/`S`) plus the signature-carrying entries
+(`jit_sig`/`parallel_sig`) are in `compute.lichen`. The JIT'd signature has to come
+from the author, because a struct type's identity is the occurrence it is written at
+([applied-struct-nominal-id](applied-struct-nominal-id.md)).
+
+**It does not run yet.** The current state, the two measured blockers, the
+reproduction and the orientation map are in
+[compute-param-struct-handoff](compute-param-struct-handoff.md) — that note is the one
+to read; this section is the pointer.
+
 _Footnote: the earlier proposal split the invocation into `call`/`launch`/`run` (a `.kernel`
 field-based 3-field struct). The shipped v1 keeps `launch`/`plrun` two-step and uses the
 smaller 2-field `.native`/`.sig` struct; `call` remains the cross-kernel-body form, applied
