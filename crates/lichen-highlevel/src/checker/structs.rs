@@ -211,24 +211,19 @@ where
     ) -> NodeId {
         self.check_expr(container);
         let container_ty = self.state[container].ty.unwrap();
-        let concrete = self.type_is_concrete(container_ty);
-        if concrete
-            && !shape::is_type_struct_kind_any(
-                &mut self.module,
-                self.type_expr,
-                AnyNodeId::Dynamic(container_ty),
-            )
-        {
-            // A concretely non-struct-kind container: the guard refuses the
-            // read — reported, never a runtime panic.
-            self.record_guard(
-                container_ty,
-                container_ty,
-                self.loc(container, 1),
-                DiagKind::IndexTarget,
-                None,
-            );
-        }
+        // The requirement, stated as a unify for **both** tiers: the container's
+        // type must be a struct kind.  A decided container is judged where it is,
+        // an undecided one is pinned, and the diagnostic names the same
+        // requirement either way (`expected TypeStruct, found …`) — the
+        // struct-kind sibling of the positional read's tuple pin, and the same
+        // pin [`Super::check_instantiate`] makes for an undecided callee.  The
+        // marker is the two-field identity a `struct<…>` builds; its cells stay
+        // open, so the pin states the kind, not the identity or the names.
+        let id = self.fresh_cell();
+        let names = self.fresh_cell();
+        let marker = self.struct_marker_node(id, names);
+        let kind = self.kind_expr(self.current_block, marker);
+        self.check_unify(container_ty, kind, self.loc(container, 1), DiagKind::Guard);
         // names — the struct marker's name table, read directly from the
         // container's *type* (a TypeStruct kind: marker at [0], names at [1]).
         let names_node = self.lazy_index_path(container_ty, &shape::STRUCT_KIND_NAMES_PATH);
@@ -282,31 +277,77 @@ where
         let position = concrete
             .then(|| self.named_field_index_any(AnyNodeId::Dynamic(container_ty), name))
             .flatten();
+        // The requirement is the container's **kind** — the corresponding slot of
+        // the `[shape, kind]` term — and it is stated as a unify, so both tiers
+        // say it once: a decided container is judged where it is, an undecided
+        // one is pinned by the term below, and the apply that binds the container
+        // reconciles it per call (`docs/notes/eval-before-unify.md` §2.4).  The
+        // marker is the two-field identity a `struct<…>` builds; its cells stay
+        // open, so the requirement is the kind, not the identity or the names.
+        let id = self.fresh_cell();
+        let names = self.fresh_cell();
+        let marker = self.struct_marker_node(id, names);
+        let kind = self.kind_expr(self.current_block, marker);
         if concrete {
-            if !shape::is_struct_type_any(
+            // Judged on the kind slot alone.  The *term*-shaped pin below would
+            // descend the shape slot first and bind the pinned shape cell to the
+            // decided container's field list, echoing it back as the expected
+            // fields (`expected struct<Int, 2>`) — the slot states the same
+            // requirement without that.
+            let container_kind = self.lazy_index_path(container_ty, &[shape::TYPE_KIND_SLOT]);
+            self.check_unify(
+                container_kind,
+                kind,
+                self.loc(container, 1),
+                DiagKind::Guard,
+            );
+        } else {
+            // An undecided container (a parameter, a call result): pin the whole
+            // term to a fresh struct type, so the apply that binds it refuses a
+            // wrong-kind actual per call — and so the read's own structure
+            // resolves with it.  The guard this replaces was asked once, while
+            // the container was still a cell, and never again.
+            let shape_cell = self.fresh_cell();
+            let struct_ty = self.array_node(self.current_block, &[shape_cell, kind]);
+            self.check_unify(
+                container_ty,
+                struct_ty,
+                self.loc(container, 1),
+                DiagKind::Guard,
+            );
+        }
+        if concrete
+            && shape::is_struct_type_any(
                 &mut self.module,
                 self.type_expr,
                 AnyNodeId::Dynamic(container_ty),
-            ) {
-                self.record_guard(
-                    container_ty,
-                    container_ty,
-                    self.loc(container, 1),
-                    DiagKind::IndexTarget,
-                    None,
-                );
-            } else if position.is_none() {
-                // The container is a struct but has no field of this name: the
-                // offending name rides in the entry, so the language layer can
-                // append a did-you-mean clause.
-                self.record_guard(
-                    container_ty,
-                    container_ty,
-                    self.loc(container, 1),
-                    DiagKind::NamedField,
-                    Some(name),
-                );
-            }
+            )
+            && position.is_none()
+            // ... and its **name table is readable**.  A table that is readable
+            // and lacks this name is a genuine miss; one that is still unbound is
+            // only undecided, and the read stays lazy.  Without this distinction
+            // a *second* `k.name` on the same undecided container is refused
+            // falsely: the first read's pin is an array value, so the container
+            // now looks decided while the pin's name table is a fresh cell.
+            && shape::struct_names_any(
+                &mut self.module,
+                self.type_expr,
+                AnyNodeId::Dynamic(container_ty),
+            )
+            .is_some()
+        {
+            // The container is a struct but has no field of this name: the
+            // offending name rides in the entry, so the language layer can
+            // append a did-you-mean clause.  Only reached for a struct — a
+            // non-struct already failed the unify above, and a second
+            // diagnostic would only cascade.
+            self.record_guard(
+                container_ty,
+                container_ty,
+                self.loc(container, 1),
+                DiagKind::NamedField,
+                Some(name),
+            );
         }
         // The field's **subscript**: a constant position when the container type
         // is concrete and states it, and otherwise the lazy

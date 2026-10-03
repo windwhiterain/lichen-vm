@@ -82,14 +82,19 @@ where
 
     /// A **raw** positional read `X<e>` (the glued `<` postfix) — element
     /// `index` of the container's **value**, read structurally through the
-    /// lowlevel `Index` **without type validation**.  There is no array-type
-    /// pinning (unlike [`Self::check_index`]), no `IndexTarget` guard and no
-    /// shape-derived type (unlike [`Self::check_field`]): the container is
-    /// read by value whatever its type, so it reads a component of a
-    /// type-as-value (`<Int, string><0>`, `struct<.f Int, .g string><1>`) or of any
-    /// expression's value.  An unbound container (a parameter, a call result)
-    /// stays lazy — the lowlevel `Index` defers — and resolves at the apply,
-    /// exactly the laziness the wrapper field reads rely on.
+    /// lowlevel `Index`.  The container must be a **tuple type value**: `X<e>`
+    /// reads a component of a type-as-value (`` `<Int, string><0>` `` is `Int`)
+    /// and a component list is a tuple's, so the requirement is stated as a
+    /// unify against the tuple **kind** — `[TypeTuple, K]`, which *is* a type
+    /// value's type — pinned when the container is undecided and refused here
+    /// when it is decided and different.  A struct type value reads its fields
+    /// by name (`X::a`, [`Self::check_raw_named_field`]), and an ordinary value
+    /// (a tuple, an array, a scalar) is not readable this way at all.
+    ///
+    /// Beyond the container-kind check the read validates nothing: an unbound
+    /// container (a parameter, a call result) stays lazy — the lowlevel `Index`
+    /// defers — and resolves at the apply, exactly the laziness the wrapper
+    /// field reads rely on.
     ///
     /// The result is **the element's own pair**: the element is
     /// `Index(container_value, index)`, the value is its slot 0 and the type its
@@ -103,11 +108,10 @@ where
     ///
     /// An out-of-bounds index, a non-container, or a container whose element is
     /// not a pair at all are runtime `Index` evaluation errors — recorded
-    /// during the definition pass, so the build is rejected.  A *static*
-    /// diagnostic would contradict the no-validation contract; the element
-    /// case gets its own wording ([`DiagKind::RuntimeRawElement`]) because the
-    /// generic one blames the container the user wrote rather than the element
-    /// the read produced.
+    /// during the definition pass, so the build is rejected; only the container
+    /// *kind* is checked statically.  The element case gets its own wording
+    /// ([`DiagKind::RuntimeRawElement`]) because the generic one blames the
+    /// container the user wrote rather than the element the read produced.
     pub(super) fn check_raw_index(
         &mut self,
         e: ExprId,
@@ -116,6 +120,13 @@ where
     ) -> NodeId {
         self.check_expr(container);
         self.check_expr(index);
+        // The tuple-kind requirement, on the container's own kind — a type
+        // value's type *is* its kind, so this is the corresponding slot — as a
+        // unify: a decided container is judged where it is, an undecided one
+        // defers and is reconciled by the apply that binds it, per call.
+        let container_ty = self.state[container].ty.unwrap();
+        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
+        self.check_unify(container_ty, kind, self.loc(container, 1), DiagKind::Guard);
         let container_value = self.value_of(container);
         let index_value = self.value_of(index);
         self.node_edges.insert(index_value, self.loc(index, 0));

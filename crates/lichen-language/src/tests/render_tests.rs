@@ -167,12 +167,12 @@ fn a_compound_type_value_renders_in_type_syntax() {
 
 #[test]
 fn a_raw_index_reads_a_type_component() {
-    // `X<e>` reads element `e` of `X`'s VALUE with no type validation, so it
-    // reads a component of a type-as-value — a tuple type or a struct type —
-    // and yields that component type.
+    // `X<e>` reads component `e` of a **tuple type value**'s component list,
+    // yielding that component type: the container's kind must be the tuple kind
+    // (`TypeTuple`), refused here when it is not.  A struct type value reads by
+    // name instead (`X::a`, the sibling test below).
     assert_eq!(output("<Int, string><0>"), "Int: Type");
     assert_eq!(output("<Int, string><1>"), "string: Type");
-    assert_eq!(output("struct<.a Int, .b string><1>"), "string: Type");
     assert_eq!(output("<Int, string, Type><0>"), "Int: Type");
 }
 
