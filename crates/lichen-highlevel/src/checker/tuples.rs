@@ -53,8 +53,14 @@ where
     /// subsequent unification fails (a term's value pair does not unify
     /// with its own type) — `struct<Int, b>` with `b : B` fails, while
     /// `struct<Int, B>` works.
+    /// An expression that **carries attributes** denotes the annotated value's
+    /// term instead, not the `[type, …, attribute]` group the attribute lives in:
+    /// a refinement may be written on a type inside a compound
+    /// (`<(T ! in_num), U>`), and the attribute's own registration is what
+    /// enforces it ([`Checker::type_denotation`],
+    /// `docs/notes/operator-polymorphism.md` §3).
     pub(super) fn check_type_element(&mut self, el: ExprId) -> NodeId {
         self.check_expr(el);
-        self.state[el].term.unwrap()
+        self.type_denotation(el)
     }
 }

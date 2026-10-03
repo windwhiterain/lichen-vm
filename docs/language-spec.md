@@ -184,10 +184,14 @@ farg     := '.' name expr                         -- named instantiation argumen
   predicate may instead be written **on a type**, inside the type position:
   `x : (T ! p)` makes `T`'s own value — the *type* — the predicate's argument, so
   `x : (_ ! in_num)` refines the **class** a parameter is used at, with `p`
-  receiving the type value and no type read of the value needed.  That is where a
-  *class* contract belongs (`Num = set{Int, Float}; in_num = t => t @in Num`),
-  and the type it names is the type expression's **denotation** — the annotated
-  expression's own term — so the annotation binds the parameter's type slot to
+  receiving the type value and no type read of the value needed.  A refinement
+  written on a type survives **anywhere a type expression is consumed** — the
+  annotation chain, an annotated parameter, and a compound type's element, field,
+  or function-type side — so `x : <(_ ! in_num), (_ ! in_num)>` refines both
+  components of a 2-tuple, and each is enforced (`f ("a", 2)` is refused).  That is
+  where a *class* contract belongs (`Num = set{Int, Float}; in_num = t => t @in
+  Num`), and the type it names is the type expression's **denotation** — the
+  annotated expression's own term — so the annotation binds the position's type to
   the type, not to the `[type, …, attribute]` group the attribute lives in.  The
   refinement is enforced where it was written: the type expression's own assert
   rides the enclosing function, so an *open* class is re-checked per application
@@ -380,14 +384,27 @@ maps every span back to the original file.
   ([core-prelude](notes/core-prelude.md)), whose names are in scope with no
   import: the class domain `Num`, the predicate `in_num`, and one binding per
   polymorphic operator — `add`, `sub`, `mul`, `div`, `less`, `greater`,
-  `less_or_equal`, `greater_or_equal`.  Each is an ordinary lichen function whose
-  operands carry the **class** refinement `x : (_ ! in_num)`, so `add 1.5 2.5` is
-  `4.0` and `add "a" "b"` is refused, in an otherwise empty file.  The prelude is
+  `less_or_equal`, `greater_or_equal`.  Each takes **one argument — the operand
+  group, a 2-wide array** — and its element type carries the **class** refinement,
+  so the contract is the whole of it: the elements' shared class is the operand
+  *tie* (an `array<T, n>`'s elements are one type), the length is the operator's
+  *arity*, and the class is the refinement:
+
+  ```lichen
+  add = operands => { operands : array<(_ ! in_num), 2>; operands[0] + operands[1] }
+  ```
+
+  `add [1, 2]` is `3`, `add [1.5, 2.5]` is `4.0`, `add [1, 1.5]` is refused by the
+  tie, `add [1, 2, 3]` by the length, `add ["a", "b"]` by the class.  The group is
+  one argument rather than a curried pair because lichen has no multi-parameter
+  lambda (`(a, b) => e` does not parse — `(a, b)` is always a tuple *value*), and
+  the group's elements are read with the ordinary index (`operands[i]`; `X<e>` reads
+  a *type value*'s pair, not a runtime array's element).  The prelude is
   **shadowable, not reserved**: it is seeded *before* a program's own imports and
   bindings, so a program that binds `add` gets its own.  The module is also
   reachable as a value (`core = import "core"`, then `core.add`), and it is a
   **file**: the toolchain materializes its source under its cache root and blames
-  a contract violation on the line that wrote it (`…/builtin/core.lichen:3:24:
+  a contract violation on the line that wrote it (`…/builtin/core.lichen:3:39:
   assertion failed: expected 1, found 0`), rather than reporting a failure with
   no position.
 - **Statements and bindings.**  A program is a **block body**: a list of
