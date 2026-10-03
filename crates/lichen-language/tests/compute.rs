@@ -980,6 +980,84 @@ outs = compute.plrun k (4096,)
     );
 }
 
+/// The signature-carrying wrapper over the ordinary tuple-shaped parameter.
+///
+/// What this pins is the wrapper's **third currying layer**, not the struct
+/// parameter: `parallel_sig = f => b => s => …$parallel(f, b)` used to leave
+/// `$parallel`'s operand `Parameterized`, because the innermost closure of a
+/// frozen template was handed on without being re-instantiated per call — a
+/// nested static closure's captures were invisible to the re-home check, and
+/// its parent chain reached no dynamic ancestor, so the body kept reading a
+/// previous apply's generation of the backend cell (`docs/notes/`
+/// `compute-param-struct-handoff.md` §5). The tuple shape keeps the failure
+/// surface on the wrapper mechanics alone.
+#[test]
+fn a_tuple_kernel_runs_through_the_signature_carrying_wrapper() {
+    let out = run(r#"
+--- compute = import "compute.lichen" ---
+type_of = x => {t = _; x: t; t}
+f = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + 1]
+}
+k = compute.parallel_sig f "cpu" (type_of f)
+out = compute.plrun k (4,)
+compute.collect out
+"#);
+    assert_eq!(
+        out, "[1, 2, 3, 4]: array<?a, ?b>",
+        "parallel_sig over a tuple-shaped kernel produced: {out:?}"
+    );
+}
+
+/// The named struct parameter end to end: a producer kernel fills an input
+/// buffer, the consumer's parameter is `struct<.n Int, .in …, .out …>`, its
+/// reads name their buffers (`k.in.a`), and the launch goes through
+/// `parallel_sig` with the JIT'd signature.
+///
+/// This is the probe `docs/notes/compute-param-struct-handoff.md` §2 was
+/// written around — blocker 1 (a named read resolves to its position in the
+/// parameter **type's** field order) and blocker 2 (the wrapper above) meet in
+/// one program. The spelling of the signature argument is load-bearing: the
+/// type lambdas take an *instantiated* pair (`P (KT _)(.I In, .O Out)`), and
+/// `.out` moves from the parameter to the result — the host fills
+/// `struct<.n Int, .I In>`, which is what `compute.A` builds.
+///
+/// The `?a` in the answer is not a defect: it is the documented limit of
+/// `plrun`'s result type — the element class of a value read back from a
+/// buffer stays undecided (`docs/notes/compute-kernel-struct.md` §"Runtime /
+/// codegen").
+#[test]
+fn a_struct_parameter_kernel_runs_through_the_signature_carrying_wrapper() {
+    let out = run(r#"
+--- compute = import "compute.lichen" ---
+g = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + 10]
+}
+kg = compute.parallel g "cpu"
+inbuf = compute.plrun kg (3,)
+In  = struct<.a _>
+Out = struct<.z _>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+Sig = compute.S (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {
+  i = compute.range k.n
+  v = compute.read [k.in.a, i]
+  compute.write [k.out.z, i, v * 2]
+}
+k = compute.parallel_sig f "cpu" Sig
+out = compute.plrun k ((compute.A In)(.n 3, .I In(.a inbuf)))
+compute.read [out, 1]
+"#);
+    assert_eq!(
+        out, "22: ?a",
+        "the struct-parameter kernel produced: {out:?}"
+    );
+}
+
 #[test]
 fn a_write_inside_a_conditional_is_refused() {
     // The every-ordinal-written invariant: output ordinal `k` must be written

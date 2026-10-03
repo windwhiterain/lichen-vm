@@ -1,9 +1,9 @@
 # Handoff: running a parallel kernel whose parameter is a struct
 
-> Status: **open — one blocker left.** Blocker 1 (the named-read path) is
-> **fixed** and verified; blocker 2 (`parallel_sig`'s extra currying layer) is
-> still open, and a fresh session can start at §5 without re-deriving anything
-> above it.
+> Status: **resolved — both blockers fixed and verified.** Blocker 1 (the
+> named-read path) and blocker 2 (`parallel_sig`'s extra currying layer) are
+> fixed; §5 records what blocker 2 turned out to be. A fresh session can pick
+> up any remaining work from §7 without re-deriving anything above it.
 > Companion: [compute-kernel-struct](compute-kernel-struct.md) (the kernel
 > struct itself), [applied-struct-nominal-id](applied-struct-nominal-id.md) (the
 > identity property the design rests on), [floating-point](floating-point.md)
@@ -67,12 +67,11 @@ Run it with:
 cargo test -q -p lichen-language --test examples
 ```
 
-The harness prints `actual:` for the failing file. Today it prints
-`parameterized: ?a`, and the module carries the refusal named in §5.
-
-**Blocker 1 is no longer reachable through this file**, because `parallel_sig`
-fails first (§5). To exercise the fixed path on its own, drop the `Sig`
-declaration and use the plain wrapper:
+**Both blockers are fixed**: this file now runs and prints `22: ?a` — the only
+unresolved cell is the element class of a value read back from a buffer, the
+documented limit of `plrun`'s result type (`compute-kernel-struct.md`
+§"Runtime / codegen"), not a defect. The plain-wrapper variant below exercises
+the same kernel without the `Sig` declaration:
 
 ```lichen
 k = compute.parallel f "cpu"
@@ -207,60 +206,62 @@ implemented, in the two-pass form described above.**
   emit; it is the apply that makes it concrete, which is why the resolution
   belongs to the lowering.
 
-## 5. Blocker 2: `parallel_sig`'s extra parameter makes the operand `Parameterized`
+## 5. Blocker 2, resolved: nested static closures lost their captures' bindings
 
-**Symptom.** `compute.parallel_sig f "cpu" Sig` with a struct-shaped `f` fails
-*before* the lowering, at the operand check in `ComputeOperator::Parallel`'s run
-(`compute.rs:1283`):
+**Symptom (as it was).** `compute.parallel_sig f "cpu" Sig` failed *before* the
+lowering, at the operand check in `ComputeOperator::Parallel`'s run: the
+`[f, backend]` array stayed `Parameterized`. `compute.parallel f "cpu"` with the
+*same* `f` passed; a tuple-shaped `f` through `parallel_sig` failed the same
+way — so the extra currying layer was the cause, not the parameter shape, and
+not `.sig s` (reverting it to `.sig (type_of f)` did not move the failure).
 
-```rust
-ComputeOperator::Parallel => {
-    if matches!(AsEnum::<LowValue>::as_enum(&operand), Some(LowValue::Parameterized)) {
-        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-    }
-```
+**Diagnosis, measured.** Instrumenting the operand element by element (a
+minimal tuple-shaped `parallel_sig` probe, plus the `$parallel` op node's clone
+chain) showed the unbound element was the **backend**: the innermost closure's
+body read the *first* apply's generation of the backend cell — a fresh clone no
+unify ever bound — while the second apply's unify had bound a *different*
+clone. Two defects in the static-module apply
+(`crates/lichen-lowlevel/src/static_module/apply.rs`), both about **nested**
+closures:
 
-The operand here is the `[f, backend]` array `ParallelOp::build` allocates.
+1. **`static_function_captures` was not transitive.** The walk that decides
+   whether a same-module static closure must be re-homed as a dynamic one
+   followed operation operands and array items but stopped at function values,
+   so a capture one closure layer down (`f`, read inside `s => …`'s body) was
+   invisible: the middle closure (`b => s => …`) was **baked** as a frozen
+   static ref instead of re-homed. Its later apply then materialized the body
+   fresh from the static template, where `f`'s cell is unbound and nothing can
+   bind it. Fixed by descending into same-module static function values' entry
+   points — a nested closure's captures are the enclosing closure's captures.
+2. **`static_clone_function` hung every re-home under `parent: None`.** Sound
+   while re-homes never nested; with (1) fixed they do (the middle re-home
+   walks the inner one during its own scope walk). `parent: None` made the
+   inner closure's nodes invisible to the middle closure's later **dynamic**
+   apply (the membership chain reached no dynamic ancestor), so that apply
+   handed the inner closure on **uncloned** — its body kept reading the
+   previous generation of the backend cell, which the apply's own unify bound
+   only a clone of. Fixed by threading a `branch_top` through
+   `StaticApplyCtx` — the static mirror of the dynamic path's
+   `ApplyCtx::branch_top` — so a nested re-home's `parent` is the enclosing
+   fresh closure and every later apply re-instantiates it per call.
 
-**What is ruled out, measured.** `compute.parallel f "cpu"` with the *same*
-struct-shaped `f` passes this check and reaches the lowering — and, now that §4
-is fixed, **runs**. The third curried parameter is the only difference between
-the two wrappers. Reverting `parallel_sig`'s `.sig s` to `.sig (type_of f)` —
-i.e. making the signature declaration identical to the plain wrapper's — **does
-not move the failure**, so `.sig s` is not the cause. `f` alone evaluates
-concretely (`Function: struct<.n Int, .in struct<.a …>, .out struct<.z …>> ->
-raw[…]`), so the argument is not the `Parameterized` one either.
-
-**The wrapper is not alone in this.** A *tuple*-shaped `f` through
-`compute.parallel_sig` fails the same way, so the extra currying layer is the
-cause rather than the parameter shape — which is what makes this a wrapper
-question and not a struct question.
-
-**Where.** `compute.lichen`'s `parallel_sig` (line 11) and
-`ComputeOperator::Parallel`'s run (`compute.rs:1283`).
-
-**Candidate lines of attack.** The check is a *laziness* guard — an unevaluated
-program is not a mistake, which is why it stays silent rather than recording a
-diagnostic — so the question is **which of the two array elements is unevaluated
-and why the extra currying layer changes it**. Instrumenting the element (rather
-than the whole operand) is the first step, and it is not yet done. Note that the
-wrapper's `s` is *not* an operand of `$parallel` (only `f` and `b` are), so `s`
-cannot be it directly; the likely mechanism is in how the apply binds the
-wrapper's parameters across three currying layers. Instrument at
-`ComputeOperator::Parallel`'s `Parameterized` branch: print
-`module.node_value` of the operand array's two elements and
-`module.node_evaluated_deep` of the operand node, then compare the two wrappers.
+**Verified.** §2's probe runs and prints `22: ?a`; the minimal tuple-shaped
+variant runs and prints `[1, 2, 3, 4]`. Both are committed as regression
+tests: `a_tuple_kernel_runs_through_the_signature_carrying_wrapper` and
+`a_struct_parameter_kernel_runs_through_the_signature_carrying_wrapper`
+(`crates/lichen-language/tests/compute.rs`). `cargo test -p lichen-lowlevel`,
+`-p lichen-compute`, `-p lichen-kernel-ir`, `-p lichen-graph-ir`, and
+`-p lichen-language --test compute --test pipeline --test examples` all pass.
 
 ## 6. What must not break
 
 - **The tuple shape keeps working.** `compute.parallel`/`compute.jit` (no
   signature) are unchanged, and the existing tests exercise them heavily.
-- The suites that cover this work, all green after §4's fix:
-  `cargo test -p lichen-compute` (17), `cargo test -p lichen-kernel-ir` (14),
-  `cargo test -p lichen-graph-ir` (3),
-  `cargo test -p lichen-language --test compute` (51),
-  `--test pipeline` (131), `--test examples` (the scratch probe is not committed,
-  so this suite passes; with the probe present, only its §5 failure shows).
+- The suites that cover this work, all green after §5's fix:
+  `cargo test -p lichen-lowlevel`, `cargo test -p lichen-compute`,
+  `cargo test -p lichen-kernel-ir`, `cargo test -p lichen-graph-ir`,
+  `cargo test -p lichen-language --test compute`, `--test pipeline`,
+  `--test examples`.
 - The one pre-existing warning is `WasmState.at` being never read
   (`compute.rs:3104`); it is not related.
 
