@@ -259,9 +259,9 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
 
 - **Class-polymorphic arithmetic.** Today an operation with no concretely
   `Float` operand pins both operands to `Int` (`check_binop`), so
-  `x => y => x + y` is `Int -> Int -> Int`. The proposed fix — the class
-  constraint as a first-class set type value, with the kernel as the only
-  defaulting point — has its own note:
+  `x => y => x + y` is `Int -> Int -> Int`. The proposed design separates the
+  operator's type contract (a class-set value) from its implementation (a
+  lichen `if`-chain dispatch under a dependent-if rule):
   [operator-polymorphism](operator-polymorphism.md).
 - **Shifts (`<<`, `>>`).** A `>>` token swallows the adjacent closers of nested
   angle types — `array<array<Int, 2>, 3>` ends `3>>` — and a `logos` lexer cannot

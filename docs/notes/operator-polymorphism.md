@@ -1,33 +1,36 @@
-# Operator polymorphism: `+ - * /` over a finite class set
+# Operator polymorphism: a strict type contract over a lichen dispatch
 
-> Status: **proposed** — nothing here is implemented. The design was settled in
-> discussion before any code: the constraint is a **first-class set type value**
-> (§2), narrowing is not subtyping (§3), the only defaulting point is kernel
-> lowering (§4), and a surface operator is *routed* to a library function rather
-> than hardwired to an IR node — but only in phases, because the routing crosses
-> the kernel lowering (§6).
+> Status: **proposed** — nothing here is implemented. The architecture was
+> settled in discussion before any code: **the type and the implementation of
+> an operator are separate, and the type is allowed to be stricter than the
+> implementation** (§2). The type contract is a first-class class-set value
+> (§3); the implementation is an ordinary lichen function that dispatches with
+> `if t == Int then … else if t == Float then … else panic`, checked under a
+> new dependent-if rule (§4); the panic arm is dead by construction (§5).
 >
 > Points at: `crates/lichen-highlevel/src/checker/operators.rs` (`check_binop`,
-> the pin this removes), `crates/lichen-highlevel/src/program.rs`
-> (`TypeOperator::run`, the dispatch that is already polymorphic),
-> `crates/lichen-lowlevel/src/equality.rs` (`unify_inner`, where the narrowing
-> rule would live), `crates/lichen-highlevel/src/shape.rs`
-> (`for_each_kind_marker!`, the likely encoding), `crates/lichen-compute` (the
-> defaulting point), and `lichen-std/_.lichen` (where the operators' signatures
-> would live at the end state).
+> the pin this removes), `crates/lichen-language/src/compile.rs` (the
+> homogeneous branch-array desugar §4 replaces), `crates/lichen-highlevel/src/
+> checker/indexing.rs` (`check_index`, the lazy `Index` the dependent if
+> reuses), `crates/lichen-lowlevel/src/equality.rs` (`unify_inner`, where the
+> narrowing rule lives), `crates/lichen-highlevel/src/shape.rs`
+> (`for_each_kind_marker!`, the set value's encoding), `crates/lichen-compute`
+> (the defaulting point), and `lichen-std/_.lichen` (the operators' end-state
+> home).
 >
 > Companions: [operators](operators.md) (the operator set this edits),
-> [floating-point](floating-point.md) §4.2 (the no-conversion rule this must not
-> weaken), [type-of-in-std](type-of-in-std.md) (the precedent for moving a
-> language form into the library).
+> [floating-point](floating-point.md) §4.2 (the no-conversion rule this must
+> not weaken), [type-of-in-std](type-of-in-std.md) (the precedent for moving a
+> language form into the library),
+> [defer-pending-type-forms](defer-pending-type-forms.md) (the deferred
+> unification machinery the dependent if builds on).
 
 ## 1. What is missing
 
-`check_binop` decides the class of an arithmetic operation once, at check time:
-a concretely `Float` operand selects `Float`, and **every other operand — an
-`Int`, an undecided parameter — pins the whole operation to `Int`**
-(`checker/operators.rs`: the `names_float_class` default). The pin is what kills
-polymorphism:
+`check_binop` decides the class of an arithmetic operation once, at check
+time: a concretely `Float` operand selects `Float`, and **every other operand —
+an `Int`, an undecided parameter — pins the whole operation to `Int`**. The
+pin is what kills polymorphism:
 
 ```lichen
 add = x => y => x + y   -- today: Int -> Int -> Int
@@ -35,257 +38,231 @@ add 1.5 2.5             -- today: expected Int, found Float
 ```
 
 The language's let-polymorphism is structural — every application clones the
-parameter cells fresh (spec: "every lambda is automatically let-polymorphic") —
-so `x => x` is polymorphic precisely because nothing ever binds its type cell.
-The operator pin binds it early. The fix is not to make the operator
-"multi-typed"; it is to let the cell stay **free but constrained**: free enough
-to clone, constrained enough that `add "a" "b"` is still a check error.
+parameter cells fresh — so `x => x` is polymorphic precisely because nothing
+ever binds its type cell. The operator pin binds it early. The goal: `+ - * /`
+are polymorphic over the two scalar classes in a type-system-standard way,
+**every instantiated use is class-concrete**, and a wrong-class use is a check
+error, not a runtime accident.
 
-In type-system terms the target is a textbook one — bounded quantification over
-a **finite, closed domain**, `+ : ∀a ∈ {Int, Float}. a → a → a`. This is SML's
-equality-type-variable trick (`''a`) generalised from "equality" to "numeric",
-or equivalently Haskell's `Num` with the class, the instances, and the
-dictionary all built in and closed. It is deliberately **not** user-extensible
-type classes (§7 names what that would cost).
+## 2. The separation principle
 
-## 2. The constraint is a value: the class-set node
+The design's load-bearing idea, stated plainly because everything else follows
+from it:
 
-The one architectural decision everything else follows from. A constraint on a
-type cell has to survive three journeys the graph takes without the checker:
+> **An operator's type and its implementation are separate artifacts, and the
+> type may be stricter than the implementation.**
 
-- **apply-time cloning** — the lowlevel apply machinery clones parameter cells
-  per call site; a checker side-table keyed by node id does not come along, and
-  an unconstrained clone is `add "a" "b"` passing again;
-- **persistence** — a frozen artifact round-trips values, not checker state;
-- **incremental retention** — the resolver keys expressions by content, not by
-  checker tables.
+- The **type** is a contract: `+ : ∀a ∈ {Int, Float}. a → a → a`. It is what
+  rejects `add "a" "b"` at check time, what every instantiated use commits to
+  a concrete class with, and what a kernel reads to pick a machine op.
+- The **implementation** is a dispatch: an ordinary lichen function that asks
+  the type value which machine op to run. It is written for *every* type
+  value, including the ones the contract excludes — its last arm is a panic
+  the contract proves unreachable.
 
-So the constraint lives **in the graph, as a value**: a *class-set type* whose
-members are ordinary type values. This is the same move the language has already
-made three times — the universe is a value (`K = [Type, ↺]`), a recursive struct
-is a cyclic value, a type is a value — and it is what "a type is just a value"
-means when the type you need is "one of these two".
+This is the standard shape of a bounded-polymorphic builtin: Haskell's
+`Num a => a -> a -> a` is a contract over a dictionary the class system
+supplies; here the contract is a set type (§3) and the dictionary is the
+operand's own type value read by an `if` chain (§4). The separation is what
+lets each half be simple: the type layer never sees the dispatch, the dispatch
+never restates the contract, and the "impossible" arm needs no clever type —
+it needs a proof it is never taken, which the contract *is*.
 
-**Encoding: a tenth kind marker, not a new `LowValue` variant.** The set is a
-compound type value `[members, [TypeSet, K]]` whose members slot holds the
-element type values. `for_each_kind_marker!` exists precisely so that a new type
-form derives its `TypeValue` variant, `Ctx` accessor, checker dispatch, printer
-arm and artifact codec from one line (`floating-point.md` §3.2 is the field
-guide, including the codec-tag trap: `TypeId` holds `8`, so the next marker is
-`10`). A `LowValue` variant would instead buy the three-tag-space dance
-(`floating-point.md` §3.6) for a form that is never a *runtime* value — no
-runtime value is "an Int or a Float, not yet decided"; the set is a static
-over-approximation that only ever sits in *type* position. The kind-marker
-encoding states that in the representation.
+Two measured facts bound what the implementation can look like:
 
-**The unify rule is additive and lives in the lowlevel.** One new case in
-`unify_inner`, beside the existing structural arms:
+- **The runtime dispatch already exists.** `TypeOperator::run` picks integer
+  or IEEE arithmetic from the operand *values*. An `if` chain over
+  `type_of x` is the same dispatch written in the language, one level up —
+  which is the point: the semantics of `+` becomes library code, the same
+  trajectory `type_of` took ([type-of-in-std](type-of-in-std.md)).
+- **A homogeneous container cannot hold the dispatch.** `if` desugars to a
+  branch array whose element type is one cell (`compile.rs`: "the branch
+  array is homogeneous"), and a table literal unifies every entry's value
+  into one cell (`check_table_term`). `if t == Int then $iadd x y else
+  $fadd x y` puts an `Int` and a `Float` in that cell — and worse, the two
+  branches share `x`/`y`, so even the operands cannot satisfy both branches
+  in one definition. §4 is the rule that loosens exactly this.
+
+## 3. The type contract: a class-set value
+
+The constraint `a ∈ {Int, Float}` must survive the three journeys the graph
+takes without the checker — apply-time cloning, persistence, incremental
+retention — so it lives **in the graph, as a value**: a *class-set type* whose
+members are ordinary type values, encoded as a tenth kind marker
+`[members, [TypeSet, K]]` so the printer, codec, and checker dispatch derive
+from `for_each_kind_marker!` (`floating-point.md` §3.2 is the field guide;
+`TypeId` holds codec tag `8`, so the next marker is `10`). A set is never a
+runtime value — no runtime value is "an Int or a Float, not yet decided" — it
+only ever sits in *type* position, which the kind-marker encoding states in
+the representation.
+
+One additive rule in `unify_inner`, matched on the `TypeSet` marker:
 
 | unify | rule |
 |---|---|
-| set ∩ concrete member type | membership check; commit the concrete type |
+| set ∩ concrete member | membership check; commit the concrete type |
 | set ∩ concrete non-member | the ordinary unify error — `add "a" "b"` fails at check |
 | set ∩ set | intersect; empty is the error, singleton commits |
 | set ∩ unbound cell | the cell commits to the set |
 
-No existing arm changes: no program today contains a set node, so every old
-unify path runs verbatim. The delicacy of touching `unify_inner` is on record
-([universe-containment](universe-containment.md) §3) — the mitigation is that
-this rule only *adds* a branch matched on the `TypeSet` marker, it never edits
-one.
+No existing arm changes; no program today contains a set node, so every old
+path runs verbatim. Narrowing is **not** subtyping: a set cell that narrows
+commits to the member, there is no widening and no value conversion —
+`1 + 1.5` still fails exactly as `floating-point.md` §4.2 demands.
 
-## 3. Narrowing is not subtyping, and nothing converts
+The contract attaches to the implementation as an ordinary annotation, because
+a type is a value and an annotation is a unify:
 
-Two lines the design must not cross, both already on the books:
+```lichen
+-- lichen-std, end state
+Num  = …                        -- the {Int, Float} set value
+iadd = …                        -- the machine leaves, today's TypeOperator
+fadd = …                        --   split per class (see §6)
+add  = x => y => {
+  x: Num                                    -- the contract
+  t = type_of x
+  if t == Int then iadd x y else if t == Float then fadd x y else panic
+}
+```
 
-- **No subtyping.** A set cell that narrows to `Float` *commits* to `Float` —
-  the cell's value becomes the member type, exactly as if it had unified with a
-  literal's type all along. There is no "is-a" relation, no widening, and no
-  value whose runtime representation the set describes. `1 : {Int, Float}`
-  leaves the pair's type slot `Int`; the set only ever constrains cells that
-  are not yet concrete.
-- **No conversion.** `floating-point.md` §4.2 is untouched: `1 + 1.5` still
-  fails, now as "set ∩ concrete non-member" — `1` commits the shared cell to
-  `Int`, `1.5` is not a member of `{Int}`, the diagnostic is the same
-  `expected Int, found Float` a user sees today. The two class crossings remain
-  the only doors between the classes.
+`x: Num` constrains the parameter's cell through the existing annotation
+machinery; `y` and the result share that cell through the dispatch's applies
+and the signature. `add`'s printed type is the contract, not the dispatch:
+`?a -> ?a -> ?a where ?a ∈ Num` (spelling bikeshed in §8).
 
-## 4. Which operators, which domain, and the one defaulting point
+## 4. The implementation: a dependent if
 
-| operators | domain | result |
-|---|---|---|
-| `+ - * /` | `{Int, Float}` | the shared cell |
-| `< > <= >=` | `{Int, Float}` | `Int` (the `0`/`1` scalar, as today) |
-| `% & \| ^` | `{Int}` | `Int` — behaviour identical to today's direct pin; the mechanism is now uniform |
-| `== !=` | unconstrained | unchanged — the generalized equality already unifies any two same-typed values |
+The one new checking rule. Today `if c then a else b` is `[b, a][c]` with a
+homogeneous element cell. The dependent reading keeps the **value** exactly as
+it is — the lazy `Index` already evaluates only the taken branch — and changes
+only the **type slot**: the branch array's element *type* is itself the lazy
+read
 
-`{Int}` deserves one sentence: giving the `Int`-only operators the singleton
-domain is not a nicety, it is what keeps *one* rule in `check_binop` — "build
-the domain set, share one cell across operands, unify each operand against it"
-— with no second code path that can drift.
+```text
+elem_ty = Index([type_of b, type_of a], c)
+```
 
-**The interpreter never defaults.** `TypeOperator::run` already dispatches on
-the operand *values* (`program.rs`: two `USize`s go to wrapping arithmetic, two
-`Float`s to IEEE), and `low_type` already transfers `Float` if any argument is a
-float, `USize` otherwise. A polymorphic `add` applied at floats needs nothing
-new at run time — this is the measured fact the whole design stands on.
+i.e. the type of `if c then a else b` is `if c then type_of a else type_of b`
+— the same `Index`, one level up. This is the dependent-types answer to a
+conditional (Bool elimination with the motive computed from the scrutinee),
+and it is cheap here precisely because types are values computed by the same
+lazy machinery the values use.
 
-**The kernel is the only defaulting point.** A JIT'd kernel must commit a class
-per fragment. Today's behaviour is the default already: `compute.jit (y => y +
-y)` checks its body as `Int` and lowers `I64` arithmetic. Under the set design
-the body's cell is `{Int, Float}` when lowering reads it, and the lowering
-answers an undecided-or-set domain with `Int` — the same answer, arrived at
-honestly (the low-type channel already seeds this; see
-[compute-jit-low-types](compute-jit-low-types.md)). An author who wants the
-float kernel writes the annotation, exactly as today. **No program that runs
-today changes its kernel.**
+Its two consequences, each load-bearing:
 
-**Printing needs no default either.** A still-constrained cell prints as what it
-is: `add` renders `?a -> ?a -> ?a where ?a ∈ {Int, Float}` (spelling bikeshed in
-§8, but the constraint is *shown*, not silently defaulted — the Haskell wart
-this avoids is defaulting that changes meaning at an invisible boundary; here
-the only boundary that defaults is the one that must commit machine code).
+- **Branch types may differ.** The `Int` branch and the `Float` branch no
+  longer meet in one cell; per instantiation `c` is concrete, the `Index`
+  resolves, and the result's type is the taken branch's.
+- **An untaken branch's constraints do not fire.** Both branches are still
+  *built* (the checker walks them), but a unify that only the untaken branch
+  demands — `$fadd x y` with `x` an `Int` — must defer, and fire only if its
+  branch is ever taken. This is the deferred-unification machinery of
+  [defer-pending-type-forms](defer-pending-type-forms.md) given one more
+  deferral cause: *branch-pending*. The existing apply-clone re-check then
+  gives the right behaviour per call site: for `add 1.5 2.5` the `Int` arm's
+  constraints never fire; for `add 1 1.5` the taken arm's operand unify fires
+  and reports `expected Int, found Float` — the same refusal as today, at the
+  same concreteness.
+
+And the exhaustiveness arm: `panic` (the language's recorded-refusal channel,
+the same one `operator.divide_by_zero` uses) has a free type cell that unifies
+with anything, so the chain always has a last arm. Under the §3 contract that
+arm is dead — see §5.
+
+What the dependent if does **not** do: it does not constrain `?a` to numerics.
+`if t == Int then … else …` on a `string` operand still *checks* — the type
+layer's job is §3's, and this is the separation principle again: the if rule
+makes the dispatch expressible, the set value makes it safe.
 
 ## 5. The worked example
 
 ```lichen
-add = x => y => x + y
+add = x => y => { x: Num; t = type_of x
+                  if t == Int then iadd x y else if t == Float then fadd x y else panic }
 ```
 
-Checking: `x` and `y` share one fresh cell through the operator; the cell
-commits to the set value `[<Int, Float>, [TypeSet, K]]`. The lambda's type is
-`?a -> ?a -> ?a` with `?a`'s representative the set.
+- **Definition.** The contract commits `x`'s cell to the set; the signature is
+  `?a -> ?a -> ?a where ?a ∈ Num`. Both real arms build; their branch-pending
+  unifies wait. The panic arm's free cell closes the chain.
+- **`add 1 2`.** Apply clones; `1` narrows the clone to `Int`; `t` evaluates to
+  the `Int` type constant; the `Index` takes arm 1; `iadd 1 2` is `2: Int`.
+  The float arm's unifies never fire.
+- **`add 1.5 2.5`.** The clone narrows to `Float`; arm 2 runs; `3.0: Float`.
+- **`add "a" "b"`.** The argument's type meets the contract's set: non-member —
+  **a check error naming the domain** (`expected a numeric class (Int or
+  Float), found string`). The dispatch never runs; the panic arm is
+  unreachable for any use the contract admits. *This is "the type is stricter
+  than the implementation" made concrete.*
+- **`add 1 1.5`.** Contract admits both operands one at a time, but they share
+  one cell: `1` commits it to `Int`, `1.5` is then a non-member — the same
+  refusal as today.
+- **`compute.jit (y => y + y)`.** At lowering the body's class is the set, and
+  the kernel answers an undecided-or-set domain with `Int` — today's default,
+  arrived at honestly. With the class concrete the condition `t == Int` is a
+  constant, the if folds to arm 1, and `iadd` lowers to `KernelBin::Add`:
+  byte-identical kernels, no new optimizer — the fold is the class read the
+  lowering already does ([compute-jit-low-types](compute-jit-low-types.md)),
+  applied to a constant condition.
 
-- `add 1 2` — apply clones the cells; `1` narrows the clone to `Int`; the
-  result pair is `2: Int`.
-- `add 1.5 2.5` — the clone narrows to `Float`; `run` dispatches on the float
-  values. `3.0: Float`.
-- `add "a" "b"` — set ∩ `string` is the unify error, at check time, naming the
-  domain: `expected a numeric class (Int or Float), found string`.
-- `compute.jit (y => y + y)` — body cell is the set at lowering; the lowering
-  defaults `Int`; the wasm/SPIR-V output is byte-identical to today's.
+## 6. The leaves
 
-## 6. Routing: a surface operator is a library function
+The dispatch's arms call per-class machine leaves. Today's `TypeOperator::Add`
+is *already* class-polymorphic at run time (it reads the operand values), so
+two shapes work:
 
-The end state, and the question that shapes the phases: **how does `a + b`
-reach a function defined in lichen-std?** The demand is the same one that moved
-`type_of` into the library ([type-of-in-std](type-of-in-std.md)): *a form the
-language can express has no business in the language definition*. Two facts
-bound what "express" can mean here.
+- **Keep the unified leaf**: `iadd` and `fadd` are both the existing operator;
+  the `if` chain is then the *specification* of the dispatch (and the place a
+  future class plugs in), while `run` keeps doing what it does. Zero lowlevel
+  change.
+- **Split the leaf per class**: each arm names its machine op, the `run` arm
+  for a wrong-class leaf records a refusal, and the dispatch is load-bearing
+  all the way down. Cleaner failure isolation, one more `TypeOperator`
+  variant per operator per class (codec tags append-only, as ever).
 
-**The dispatch itself does not need re-expressing.** A natural first sketch is
-a type-keyed table in std:
+Either satisfies the design; the split is the honest end state because it
+makes the arms' types (`Int -> Int -> Int`, `Float -> Float -> Float`)
+concrete and independent, which is what lets an untaken arm's unify be
+*wrong* and deferred rather than accidentally right. `%` and the bitwise trio
+keep the singleton contract `{Int}` — behaviour identical to today's pin, one
+uniform mechanism. `==`/`!=` stay unconstrained (the generalized equality).
 
-```lichen
--- does NOT check, and the reason is measured, not stylistic
-add = x => y => table{ Int ==> $iadd, Float ==> $fadd }{ type_of x } x y
-```
+## 7. Routing a surface operator to the function
 
-`check_table_term` unifies every entry's value into **one** value-type cell
-(`checker/indexing.rs`): `Int -> Int -> Int` and `Float -> Float -> Float`
-conflict, and making them not conflict needs a *dependent* table type — the
-entry's type as a function of its key — which the table type
-`[[key, value], [TypeTable, K]]` has no slot for. The same wall stops the
-`[$iadd, $fadd][type_of x == Int]` spelling (arrays are homogeneous too). But
-the wall does not matter, because the dispatch it would express **already
-exists**: `TypeOperator::run` is the class dispatch, keyed by the operand
-values, one layer down. The primitive leaf is the machine op; the library
-function's job is the *signature*, not the dispatch:
-
-```lichen
--- lichen-std, end state
-Num = …                        -- the {Int, Float} set value
-add = x => y => {x: Num; $add x y}   -- $add is today's TypeOperator::Add
-```
-
-The annotation `x: Num` attaches the set through the ordinary annotation
-machinery; `$add`'s `run` picks the machine arithmetic from the values, as it
-does today. The lichen function is thin on purpose: all the semantics live in
-the set's unify rule (one place) and the leaf's `run` (one place).
-
-**What remains genuinely hard is the routing**, and it has a real blocker on
-each route:
-
-- **R1 — desugar to a prelude name.** `a + b` parses as an application of a
-  well-known binding. Blocks on two things the language deliberately does not
-  have: an *implicit prelude* (today every program imports std explicitly; a
-  program with no imports would have no `+`, which is unacceptable, so the
-  prelude must be implicit — a new language concept), and *kernel recognition*:
-  `compute.jit (y => y + y)` must still lower to one `KernelBin::Add`, so the
-  lowering must inline the prelude function and re-recognise the leaf — a
-  bounded, special-cased inline, but an optimizer where none exists.
-- **R2 — intrinsic registry.** Keep `ir::BinOp`; the checker resolves the
-  operator to a *function value* from an intrinsic module compiled at startup
-  (the way `compute.lichen` is embedded with its private native registry), and
-  checks the expression as an ordinary apply of that function — cloning,
-  narrowing and polymorphism all inherited from the apply machinery. The
-  emitter still special-cases "apply of intrinsic whose body is one native op"
-  to the op node, so kernels see exactly what they see today. No prelude, one
-  bounded recognition rule; the cost is a new compiler concept (the intrinsic
-  module) rather than a new language one.
-- **R3 — signature in std, special case stays.** `check_binop` keeps emitting
-  the op node but *reads the constraint from the intrinsic function's type*
-  instead of restating `{Int, Float}` in Rust. Minimal machinery, zero kernel
-  work; the cost is the checker still knowing which operators exist (the
-  five-layer story of [operators](operators.md) §2 is untouched).
-
-The honest statement: R1 is the principled end state and the largest change;
-R2 gets the semantic benefits (one source of truth for operator signatures,
-written in lichen) without the prelude; R3 is a waypoint that is strictly
-better than today and on the way to either.
-
-## 7. What is deliberately not here
-
-- **User-defined instances / type classes.** A class a user can extend wants
-  instance resolution, dictionaries (or monomorphisation), and a coherence
-  rule — a language feature, not an operator feature. The set domain is closed
-  and built in. If user classes ever arrive, the set node is *not* wasted work:
-  it is the finite case of "a variable with a constraint", which is the
-  machinery any class system also needs.
-- **Mixed-class arithmetic.** §3. `1 + 1.5` is an error by design, forever.
-- **Literal polymorphism.** A literal's type is its own class
-  (`floating-point.md` §4.2); `1` is an `Int` even where a `Float` would fit.
-  Haskell's overloaded literals were considered and declined for the same
-  reason the classes do not convert.
-- **Surface syntax for set types.** The set value is built by the compiler (or
-  bound in std as `Num`); whether a user can *write* `{Int, Float}` as a type
-  expression is a separate question with its own grammar cost, deferred until a
-  second consumer exists.
+How `a + b` reaches the std function, unchanged from the earlier analysis and
+still phased: **R1** a prelude desugar (principled end state; needs the
+language's first implicit import), **R2** an intrinsic registry (the checker
+resolves `ir::BinOp` to the registered function value and checks an ordinary
+apply; the emitter recognises "apply of an intrinsic whose dispatch folds to
+one leaf" so kernels see `KernelBin` as today), **R3** the checker's special
+case stays but *reads the contract from the std binding's type* instead of
+restating `{Int, Float}` in Rust (waypoint). The dependent if and the set
+value are routing-agnostic: phases 0–2 below land the semantics under R3, and
+R2/R1 are the "operators are library functions" end state whenever the prelude
+question is answered.
 
 ## 8. Open questions
 
-1. **The printer's spelling.** `?a -> ?a -> ?a where ?a ∈ {Int, Float}` vs
-   `{Int, Float} -> {Int, Float} -> {Int, Float}` vs `Num -> Num -> Num` when
-   the set is the std binding. The first is the most honest at the REPL; the
-   third reads best once `Num` is a name the user can import.
-2. **`Num`'s home and name.** A std binding (`std.Num`) keeps the language
-   small; a keyword makes the error messages shorter. Leaning std binding, per
-   the `type_of` precedent.
-3. **A set-typed value at an observation.** A parameter that is only ever
-   added and never applied prints with the constraint (fine); a `cache` cell or
-   an artifact whose persisted type is a set needs the codec to round-trip it
-   (free under the kind-marker encoding, but needs a test).
-4. **The `==` future.** The set mechanism is the same one an `Eq` constraint
-   over type values would use if `==` ever grows a static domain; not in scope,
-   recorded so the generalisation is not designed away.
+1. **The printer's spelling** of a constrained cell: `?a ∈ Num` vs
+   `Num -> Num -> Num` once `Num` is importable.
+2. **`Num`'s home**: std binding (the `type_of` precedent) vs keyword.
+3. **The panic arm's spelling**: the recorded-refusal channel needs a
+   value-level form a library function can write; today only builtins record.
+   A `$panic` leaf with a free type cell is the minimal answer.
+4. **Deferral budget.** Branch-pending unifies defer work the checker today
+   does eagerly; a deeply nested `if` chain (three or more classes, one day)
+   composes deferrals, and the error a user sees must still name the arm that
+   fired.
 
 ## 9. Phases
 
-Each phase is independently landable and independently useful:
-
-- **Phase 0 — the set node.** The `TypeSet` kind marker, the lowlevel narrowing
-  rule, `low_type_of_slot`/shape decode treating a set as undecided, the
-  printer spelling, the persist round-trip. No operator changes; nothing
-  user-visible.
-- **Phase 1 — the operators.** `check_binop` builds domains per §4 (R3: the
-  constraint stated in the checker); the kernel default at lowering; the
-  diagnostics. This is the whole user-visible feature: `add` is polymorphic.
-- **Phase 2 — the signature moves to std.** `Num` and the operator signatures
-  become lichen-std bindings; the checker reads the constraint from the
-  intrinsic type (R3 complete, or R2 if the intrinsic module lands here).
-- **Phase 3 — routing.** R2's intrinsic registry or R1's prelude, with kernel
-  recognition. Only this phase deletes `ir::BinOp`, and only if the kernel
-  story stays byte-identical.
-
-Phase 1 is the brainstorm's promise; phases 2–3 are the "operators are library
-functions" end state and can wait for a second consumer of the machinery.
+- **Phase 0 — the set value.** The `TypeSet` marker, the narrowing rule, shape
+  decode treating a set as undecided, printer spelling, persist round-trip.
+  Nothing user-visible.
+- **Phase 1 — the contract on the builtin operators.** `check_binop` builds
+  the §3/§6 domains (R3); the kernel default. `add` is polymorphic; wrong
+  classes are check errors. *This is the user-visible feature.*
+- **Phase 2 — the dependent if.** The type-slot `Index` and branch-pending
+  deferral. Unlocks user-written generic numeric functions.
+- **Phase 3 — the implementation moves to std.** The `if`-chain dispatch, the
+  split leaves, `Num` and the operator bindings in `lichen-std`; routing R3 →
+  R2/R1.
