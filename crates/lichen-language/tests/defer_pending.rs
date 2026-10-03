@@ -1,74 +1,122 @@
 //! End-to-end tests for the deferred unification a type read goes through
 //! when a struct type is built from a partially applied type function
-//! (docs/notes/defer-pending-type-forms.md): the read resolves against the
-//! argument's field type, the merge pins the type value, and the field type
-//! prints decided instead of leaking an undecided layout.
+//! (docs/notes/defer-pending-type-forms.md).  Every assertion is a VM-level
+//! value comparison: the pinned field type is read back as a value
+//! (`T::I`) and compared against the type constant the deferral merged it
+//! with — no rendered type string is inspected.
 
-use lichen_language::package::PackageStore;
-use lichen_language::program::LangProgram;
+use lichen_highlevel::program::TypeValue;
+use lichen_lowlevel::{LowValue, Module, NodeId};
 
-/// Compile and run `source`, returning the rendered `value: type` output.
-fn run(source: &str) -> String {
-    let mut store = PackageStore::<LangProgram>::new();
-    lichen_language::run::evaluate_raw(source, None, &mut store)
-        .unwrap_or_else(|diags| panic!("expected {source:?} to check and run, got: {diags:?}"))
+use lichen_language::compile;
+use lichen_language::program::{LangProgram, LangValue};
+
+/// Compile and run a program, asserting it checks; returns the module and the
+/// root value node.
+fn run(source: &str) -> (Module<LangProgram>, NodeId) {
+    let report = compile(source);
+    assert!(
+        report.ok(),
+        "expected {source:?} to check, got: {:?}",
+        report.diagnostics
+    );
+    let build = report.build.unwrap();
+    (build.module, build.root_val)
+}
+
+fn evaluate(source: &str) -> LangValue {
+    let (mut module, root) = run(source);
+    module.evaluate_node_deep(root, None)
+}
+
+fn usize_of(value: &LangValue) -> usize {
+    let LangValue::LowValue(LowValue::USize(n)) = value else {
+        panic!("expected a usize value, got {value:?}");
+    };
+    *n
 }
 
 /// A single field read (the silent half of the defect): the field type used
-/// to merge against the argument's type and stay undecided (`?a`); the pin
-/// commits the type value now.
+/// to merge against the argument's type and stay undecided, reading back as
+/// a raw layout.  The pin commits the type value, so the field type *is*
+/// `Type` (the argument field holds the `Int` type constant).
 #[test]
 fn a_deferred_field_read_binds_the_type_value() {
-    let out = run(r#"
+    assert_eq!(
+        usize_of(&evaluate(
+            r#"
 P = ins => struct<.I ins.x>
 y = (P _)(.I Int)
-"#);
-    assert!(
-        out.ends_with("struct<.I Type>>"),
-        "the field type decides to Type: {out}"
+T = type_of y
+T::I == Type
+"#
+        )),
+        1
     );
 }
 
 /// Two reads of one unbound placeholder (the error half of the defect): both
-/// reads defer against the same argument field types and both decide.
+/// used to fail the struct construction; both field types decide now.
 #[test]
 fn two_deferred_field_reads_both_bind() {
-    let out = run(r#"
+    let source = |field: &str| {
+        format!(
+            r#"
 P = ins => struct<.I ins.x, .O ins.y>
 y = (P _)(.I Int, .O Int)
-"#);
-    assert!(
-        out.ends_with("struct<.I Type, .O Type>>"),
-        "both field types decide to Type: {out}"
-    );
+T = type_of y
+T::{field} == Type
+"#
+        )
+    };
+    assert_eq!(usize_of(&evaluate(&source("I"))), 1);
+    assert_eq!(usize_of(&evaluate(&source("O"))), 1);
 }
 
 /// A struct type value in the slot: its kind carries a names table, so the
 /// class is never a skeleton — this row used to reach the spurious
-/// `expected [?a], found TypeStruct` error at every arity.
+/// `expected [?a], found TypeStruct` error at every arity.  The pinned field
+/// type is exactly `type_of S1`, the kind of the struct type constant.
 #[test]
 fn a_deferred_field_read_binds_a_struct_type_value() {
-    let out = run(r#"
+    assert_eq!(
+        usize_of(&evaluate(
+            r#"
+S1 = struct<.a Int>
 P = ins => struct<.I ins.x>
-y = (P _)(.I struct<.a Int>)
-"#);
-    assert!(
-        out.ends_with("struct<.I TypeStruct>>"),
-        "the field type decides to TypeStruct: {out}"
+y = (P _)(.I S1)
+T = type_of y
+T::I == type_of S1
+"#
+        )),
+        1
     );
 }
 
 /// The `type_of` spelling: `type_of` is an ordinary generic function, so the
 /// pending side of the stall is a lazy Apply, not an Index read — the
-/// deferral gate must cover calls too.
+/// deferral gate must cover calls too.  Same pinned type as the read
+/// spelling.
 #[test]
 fn a_deferred_type_of_call_binds_the_type_value() {
-    let out = run(r#"
+    assert_eq!(
+        usize_of(&evaluate(
+            r#"
+S1 = struct<.a Int>
 P = ins => struct<.I type_of ins.x>
-y = (P _)(.I struct<.a Int>)
-"#);
-    assert!(
-        out.ends_with("struct<.I TypeStruct>>"),
-        "the field type decides to TypeStruct through the lazy call: {out}"
+y = (P _)(.I S1)
+T = type_of y
+T::I == type_of S1
+"#
+        )),
+        1
     );
+}
+
+/// The comparison constants above are `Type`-typed values; this test only
+/// documents that the marker vocabulary used across this file is the one the
+/// assertions assume (`Type` is the universe marker).
+#[test]
+fn the_type_constant_is_the_universe_marker() {
+    assert_eq!(evaluate("Type"), LangValue::TypeValue(TypeValue::TypeType));
 }
