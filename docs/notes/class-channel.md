@@ -332,8 +332,17 @@ mixed an integer and a float").  `node_class_in` is now the one reader: the
 emission's own order — a parameter read resolved through its slot's shape, the
 same peel `node_class` makes, a whole-parameter read matched by equality class,
 and an arithmetic operator's class taken from its operands with a comparison's
-`0`/`1` the one exception.  `--test compute` went 12 of 60 (after the routing) to
-**57 of 60** with the other suites unchanged.
+`0`/`1` the one exception.
+
+**The same reader had a third site, and it was the one that mattered for a
+*chain*.**  `compile_parallel_fragment`'s pre-scan — the class a buffer **read**
+is declared in (`Positions::element_class`) — still used `node_class`, so a
+routed `0.0 + a + a` was declared `Int` there while the write itself was emitted
+in `Float`: the consumer's read of that buffer then declared the wrong class and
+the chain's value stayed `Parameterized` (measured through the new structural
+comparison: a whole two-kernel float chain, both sides, every element `false`).
+Read through the slots, the chain computes.  `--test compute` went 12 of 60
+(after the routing) to **58 of 60** with the other suites unchanged.
 
 ### 5.2 Open: the signature the wrapper publishes
 
@@ -451,8 +460,8 @@ cargo test -q -p lichen-language --test compute --test pipeline --test graph_jit
 pass.  The two reds are one shape each, and neither is a printer:
 | case | what it needs |
 |---|---|
-| `jit_cross_kernel_call`, `jit_cross_kernel_wrapper` | a cross-kernel call or `compute.launch` whose **argument** is a routed operator (`k0 (x + 1)`): the emitter reaches the argument's cell and its equality class holds a *bare cell*, not a computation, so there is nothing to emit.  Measured why: **an apply's value is its result cell, not the apply node** — before the routing `x + 1` *was* an `Add` operation node, so `class_computation_node` found the computation in the class; now the class holds the routed apply's result cell (and the wrapper's), both bare, while the clone's `Add` residual exists in the module with **no graph edge** to either.  Annotating the parameter does not help — the routed apply is there either way.  The fix belongs where the clone is made: the lowlevel's static apply would have to leave the residual as (or unify it with) the apply's **value**, not only write it into the result cell at run time |
-| `examples/compute_jit.lichen` (`--test examples`) | the same shape through a `compute.launch` argument; it fails on the *unmodified* merge too |
+| `jit_cross_kernel_call`, `jit_cross_kernel_wrapper` | a cross-kernel call or `compute.launch` whose **argument** is a routed operator (`k0 (x + 1)`): the emitter reaches the argument's cell and its equality class holds a *bare cell*, not a computation, so there is nothing to emit.  **Measured root**: the routed apply inside a kernel **template is never evaluated** — `wire_apply_result` (the lowlevel's own wiring, whose doc says "the apply node *is* the return pair") is never called for it, so no edge exists between the apply and the residual its clone computed.  Three things were tried and measured: (a) reading the residual from the apply's own value — nothing is written there for a template apply; (b) merging the apply with the applied body in `wire_apply_result`'s scalar/undecided arm — **breaks** `lichen-highlevel --test dependent` (`dependent_type_resolves_per_argument_via_laziness`), so it cannot be unconditional; (c) forcing the body once at `jit` time (`evaluate_node_deep(ret_value)`) — the class still does not hold the residual.  The fix is the specialize pass itself: apply the function at `jit`/`parallel` time to a placeholder typed by the **stated** class, so every routed apply inside it is evaluated and its residual aliased, which is §6's direction |
+| `examples/compute_jit.lichen` (`--test examples`) | the same shape through a `compute.launch` argument |
 
 The `jit_cross_kernel_*` cases and the example are annotated as the rule requires;
 their remaining failure is the residual edge above, not the class.  Both

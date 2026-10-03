@@ -2427,10 +2427,16 @@ where
     // [`Positions::element_class`].  It is the *first* write's class, which is the
     // fallback declaration and not a claim that the others agree: each write's own
     // ordinal carries its own value's class (`Positions::write_classes`).
+    //
+    // **Read through the slots, like the emission** ([`node_class_in`]): the value
+    // channel declines through this body's parameter reads, so a routed
+    // `0.0 + a + a` would be declared `Int` here while the write itself is
+    // emitted in `Float` — and a *consumer's* read would then declare the wrong
+    // class for the buffer and refuse the chain it is part of.
     let class = outputs
         .iter()
         .filter_map(|output| {
-            write_value_node(module, *output).map(|value| node_class(module, value))
+            write_value_node(module, *output).map(|value| node_class_in(module, &params, value))
         })
         .next()
         .unwrap_or(ScalarClass::Int);

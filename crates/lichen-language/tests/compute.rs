@@ -1816,9 +1816,11 @@ out = compute.plrun k ({ELEMENT_COUNT},)
     let elements = common::array_values(&cpu_module, &cpu);
     assert_eq!(common::float_of(&elements[0]), 0.5, "the first element");
     assert_eq!(common::float_of(&elements[1]), 1.5, "the second element");
+    // The element at `last` is that index **plus a half**, like every other one:
+    // the body writes `int2float i + 0.5`.
     assert_eq!(
         common::float_of(&elements[2]),
-        ELEMENT_COUNT as f32 - 1.0,
+        (ELEMENT_COUNT - 1) as f32 + 0.5,
         "the last element"
     );
     assert_eq!(
