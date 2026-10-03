@@ -1930,21 +1930,6 @@ const PARALLEL_PARAM_FIELDS: &str = "a parallel kernel's parameter is \
      `struct<.n Int, .in <inputs>, .out <outputs>>`, and this one is a struct \
      without both `.in` and `.out`";
 
-/// A parallel kernel whose parameter is the named struct term, which the
-/// lowering reads and the launch cannot yet decode.
-///
-/// The two halves of the shape are the *lowering's* and the *launch's*: the
-/// lowering reads `.in` for a read's position, the scalar fields for the
-/// signature, and `.out` for the declared counts, and all of that is written.
-/// `ParLaunch`'s host-side walk still reads `cfg = (n, (buffers…))`, so a launch
-/// cannot decode the argument — and a launch that cannot read its argument
-/// answers `parameterized`, which is exactly the answer that channel exists to
-/// stop giving.  Refused by name rather than left to it.
-const PARALLEL_PARAM_LAUNCH: &str = "a parallel kernel's parameter is a named \
-     struct (`struct<.n Int, .in …, .out …>`), and launching one is not written \
-     yet: the lowering reads its fields and the host-side argument walk still \
-     reads `cfg = (n, (buffers…))`";
-
 /// A parameter slot in a kernel's wasm signature.
 ///
 /// A scalar `jit` kernel has one slot (its single parameter).  A **parallel**
@@ -2252,15 +2237,6 @@ where
     // struct has no low shape (`lichen_highlevel::shape`) — so the struct half
     // cannot go through the seed → pass → read chain below.
     let roles = parallel_roles(module, cfg_pair)?;
-    if roles.is_some() {
-        // **Recognised, and not yet runnable.**  The lowering below reads the
-        // role table (a read's position from `.in`, the scalar parameters, the
-        // declared counts), and the *launch* does not: `ParLaunch`'s host-side
-        // walk still reads `cfg = (n, (buffers…))`, and a launch that cannot read
-        // its argument answers `parameterized` — the one answer that channel
-        // exists to stop giving.  Refused by name until that walk lands.
-        return Err(PARALLEL_PARAM_LAUNCH.into());
-    }
     // A struct parameter's scalar parameters are its fields other than `.in` and
     // `.out`; a tuple parameter's one scalar is the count `n`.  The output count
     // is the **codomain's arity** for both — a bare value is one output, a
@@ -4358,8 +4334,17 @@ where
                 // `Index` emitter peels a constant array element.
                 let buf = peeled_argument(module, buf)?;
                 let pos = parallel_buffer_pos(module, params, buf).ok_or_else(|| {
-                    "read's buffer argument is not an input buffer of the parallel parameter"
-                        .to_string()
+                    // The path is named in the refusal: a struct parameter's
+                    // positions are *paths*, so what the body spelled and what
+                    // the role table holds are the two halves a reader needs.
+                    let seen = match params.first().and_then(|slot| slot.roles.as_ref()) {
+                        Some(roles) => format!("the parameter's inputs are {:?}", roles.inputs),
+                        None => "the parameter declares no inputs".to_string(),
+                    };
+                    format!(
+                        "read's buffer argument is not an input buffer of the parallel parameter \
+                         ({seen})"
+                    )
                 })?;
                 // The input count is a **max**, not a tally: the read positions are
                 // a sparse space, and a body that reads only `cfg(1)(1)` still
