@@ -250,11 +250,11 @@ it, and state it as the kernel's signature** — not a new lowering path.
 ### 5.1 Landed: the class the lowering runs in
 
 `open_class_of` (`compute.rs`) walks the function's own `asserts` for the
-`InDomain(cell, domain)` condition `check_binop` registers, and
-`class_set::default_class` reads the domain's `default` member — the canonical
+`InDomain(cell, set)` condition `check_binop` registers, and `set::members` reads
+the set's members — the **first** is the class a reader commits to, the canonical
 `int_type` node.  `compile_fragment` takes it as `open_class` and uses it as the
 **seed** when the parameter's type slot states no class, refusing by name for a
-domain that defaults to anything but `Int` (the emitter's class-free default).
+domain that commits to anything but `Int` (the emitter's class-free default).
 
 The seed is a *low-type* write on the class, never a write into a type cell, so
 the function stays polymorphic for its other uses.  Measured: `compute.jit

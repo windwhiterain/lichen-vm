@@ -4314,19 +4314,20 @@ fn const_bits(class: ScalarClass, value: i64) -> i64 {
     }
 }
 
-/// The class an **open** kernel body is lowered in — the `default` member of the
-/// class domain the body's own polymorphic operator carries, or `None` when
+/// The class an **open** kernel body is lowered in — the first member of the
+/// class **set** the body's own polymorphic operator carries, or `None` when
 /// nothing in the body left a class open.
 ///
 /// A parameter whose type states a class needs nothing: [`low_type_of_slot`]
 /// answers for it.  An *open* one — `y => y + y`, where `+` keeps its operands on
 /// one undecided cell — is the case the class domain exists for.  `check_binop`
-/// registers `InDomain(cell, domain)` as an assert on the enclosing function
-/// (`checker/operators.rs`), and the domain's `default` member is "what the
-/// specialize pass types its placeholder with and what a kernel picks"
-/// (`class_set`, `docs/notes/operator-polymorphism.md` §8.4).
+/// registers `InDomain(cell, set)` as an assert on the enclosing function
+/// (`checker/operators.rs`), and "a reader that must commit to one class takes
+/// the **first member**" — `set{Int, Float}` prefers `Int`, the arithmetic
+/// operators' historical default (`lichen_highlevel::set`,
+/// `docs/notes/operator-polymorphism.md` §8.4).
 ///
-/// The answer is a **type value node** — the canonical marker node the domain was
+/// The answer is a **type value node** — the canonical marker node the set was
 /// built from — so it is what [`low_type_of`] reads a class from, and what a
 /// signature can name.
 fn open_class_of<P>(module: &Module<P>, function: FunctionId) -> Option<AnyNodeId>
@@ -4350,12 +4351,15 @@ where
         let Some(items) = (unsafe { module.array_items(operand) }) else {
             continue;
         };
-        // `InDomain(class, domain)`: the domain is the second operand.
-        let Some(domain) = items.get(1).map(|item| item.node) else {
+        // `InDomain(class, set)`: the set's value is the second operand, and its
+        // value *is* its members.
+        let Some(set) = items.get(1).map(|item| item.node) else {
             continue;
         };
-        if let Some(default) = lichen_highlevel::class_set::default_class(module, domain) {
-            return Some(default);
+        if let Some(first) = lichen_highlevel::set::members(module, set)
+            .and_then(|members| members.into_iter().next())
+        {
+            return Some(first);
         }
     }
     None
