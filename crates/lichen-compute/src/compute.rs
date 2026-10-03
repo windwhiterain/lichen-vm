@@ -60,8 +60,8 @@ use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram, LeafKindMarkers, TypeOperator, ValueType};
 use lichen_highlevel::shape::{
-    PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, array_items as array_items_any, low_type_of_slot,
-    struct_fields_by_shape,
+    PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, array_items as array_items_any,
+    low_type_of_slot, struct_fields_by_shape,
 };
 use lichen_kernel_ir::{
     BufferSlot, Flow, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
@@ -2787,12 +2787,8 @@ fn assemble_module(
 /// remove.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OperandClass {
-    /// A `Const`: **the IR does not fix its class**, and the position that
-    /// consumes it decides — the same `Const(0)` is a buffer position in one
-    /// place and a float's bit pattern in another.
-    Literal,
-    /// A value of the class it was computed in, read from a buffer, or read from
-    /// a parameter.
+    /// A value of the class it was computed in — a literal's own, a buffer
+    /// element's, a parameter leaf's, or an operator's.
     Scalar(ScalarClass),
     /// A comparison's `0`/`1` scalar, which is `1`/`0` in either class.
     Condition,
@@ -2808,17 +2804,17 @@ enum OperandClass {
 
 /// The class a binary operator runs over, from its two operands.
 ///
-/// **A literal follows the other operand** — `Const(1)` beside the index is the
-/// integer `1` and beside a float is the `f32` whose bits are `1` — and with
-/// neither operand stating a class the fragment's own is what there is.  This is
-/// the SPIR-V emitter's `bin_class`, term for term, and it is why `1.0 + i`
-/// computes in the *index's* class: the `1.0` is the operand that moves, and the
-/// index is the one that fixes it.
-fn operand_class(lhs: OperandClass, rhs: OperandClass, module: ScalarClass) -> ScalarClass {
+/// **One operand is enough to state it**, because an operator's operands are one
+/// class by construction — the emitter reads the class off the instruction, and
+/// the language refuses `(x : Float) => x * 2` before any of this.  Two operands
+/// that disagree are therefore not a case to resolve here but the case the caller
+/// refuses ([`as_operand_class`]), so the second is only consulted when the first
+/// says nothing.
+fn operand_class(lhs: OperandClass, rhs: OperandClass) -> Option<ScalarClass> {
     match (lhs, rhs) {
-        (OperandClass::Scalar(class), _) => class,
-        (_, OperandClass::Scalar(class)) => class,
-        _ => module,
+        (OperandClass::Scalar(class), _) => Some(class),
+        (_, OperandClass::Scalar(class)) => Some(class),
+        _ => None,
     }
 }
 
@@ -2835,10 +2831,10 @@ fn as_operand_class(
     at: usize,
 ) -> Result<OperandClass, String> {
     match operand {
-        // A constant is materialised in the class its position wants and a
-        // comparison's `0`/`1` is `1`/`0` in it: the two cases the IR leaves open
-        // on purpose, and the two the other emitter converts rather than refuses.
-        OperandClass::Literal | OperandClass::Condition => Ok(OperandClass::Scalar(want)),
+        // A comparison's `0`/`1` is `1`/`0` in either class, so a position that
+        // wants one takes it: the one case the IR leaves open on purpose, and the
+        // one the other emitter converts rather than refuses.
+        OperandClass::Condition => Ok(OperandClass::Scalar(want)),
         OperandClass::Scalar(seen) if seen == want => Ok(OperandClass::Scalar(want)),
         OperandClass::Scalar(_) => Err(mixed_classes(at)),
         OperandClass::Opaque => Ok(OperandClass::Opaque),
@@ -2849,30 +2845,37 @@ fn as_operand_class(
 ///
 /// **A read of the lowered IR, not an emission, and it runs before the module's
 /// first section exists** (see [`assemble_module`]).  That placement is the whole
-/// design: the class is a property of what the body *computes*, while this
-/// emitter lowers a fragment in one class throughout and so cannot see a mix
-/// while emitting — it would have `F32Add` the `1.0` and the index, because both
-/// are floats in the module it is building.  A branch inside [`lower_instrs`]
-/// would therefore be too late to be correct and early enough to cost the
-/// compiler everything it had already emitted.
+/// design: whether two classes meet is a property of the lowered body, and the
+/// answer is available before a section — let alone an instruction — is written,
+/// so the refusal costs nothing.  A branch inside [`lower_instrs`] would be too
+/// late to be free and would report a position inside an emission rather than the
+/// instruction the mix is in.
+///
+/// **What a mix is, and what it is not.**  A body may hold values of both classes
+/// — that is what per-value classes are for, and a float kernel's index beside
+/// its data is the ordinary case.  What it may not do is meet them in one
+/// operation, because `Int` and `Float` do not convert in either direction
+/// (`docs/notes/floating-point.md` §4.2): so the walk refuses where the two
+/// actually meet, which is the `Bin` whose operands disagree, the `write` storing
+/// one class into the other's buffer, or an index that is not an integer.
 ///
 /// The two backends can only agree because they agree on *what the IR means*:
-/// the fragment's class ([`fragment_class`], the same answer
-/// `spirv::module_class` gives for a compiler-built fragment), a `Const` and a
-/// comparison's `0`/`1` taking the class of the position that reads them, and
-/// everything else the class it was computed in.
+/// every instruction carries the class it was lowered in, a parameter leaf takes
+/// its class from `param_shape` by the offset `LocalGet` names, and a comparison's
+/// `0`/`1` is `1`/`0` in either class.  The fragment has no class to consult —
+/// `fragment_class` is its first write's, and a body may compute in more than one.
 fn refuse_mixed_classes(fragment: &KernelFragment) -> Result<(), String> {
-    let module = fragment_class(fragment);
+    let params = param_classes(fragment);
     // A function's parameters are locals rather than stack values, so the stack a
     // body starts from is empty and `LocalGet` is what puts a value on it.
     let mut stack = Vec::new();
-    check_flow(&fragment.body.entry, module, &mut stack)
+    check_flow(&fragment.body.entry, &params, &mut stack)
 }
 
 /// Walk one flow, carrying the classes the enclosing block left on the stack.
 fn check_flow(
     flow: &Flow,
-    module: ScalarClass,
+    params: &[ScalarClass],
     stack: &mut Vec<OperandClass>,
 ) -> Result<(), String> {
     match flow {
@@ -2886,9 +2889,9 @@ fn check_flow(
             // what the SPIR-V refusal's `at` counts: the same numbering the other
             // emitter reports, over the same list.
             for (at, instruction) in instrs.iter().enumerate() {
-                check_instr(instruction, module, stack, at)?;
+                check_instr(instruction, params, stack, at)?;
             }
-            check_terminator(terminator, module, stack)
+            check_terminator(terminator, params, stack)
         }
     }
 }
@@ -2904,23 +2907,37 @@ fn pop_class(stack: &mut Vec<OperandClass>) -> OperandClass {
 }
 
 /// Check one instruction's effect on the stack.
+///
+/// **Every instruction that carries a class is checked against its own**, which
+/// is what makes this walk exact: a value's class is a fact of the value, so the
+/// only question a mix raises is whether two values of *different* classes meet
+/// in one operation.  The fragment has no class to consult — `fragment_class` is
+/// its first write's, and a body may compute in more than one.
 fn check_instr(
     instruction: &KernelInstr,
-    module: ScalarClass,
+    params: &[ScalarClass],
     stack: &mut Vec<OperandClass>,
     at: usize,
 ) -> Result<(), String> {
-    match instruction {
-        KernelInstr::Const(_) => {
-            stack.push(OperandClass::Literal);
+    match *instruction {
+        // A literal is a value of its own class: `1` is an integer and `1.0` is
+        // not, and the language refuses an integer in a float position before
+        // this walk sees it (`(x : Float) => x * 2` does not check), so nothing
+        // here converts one into the other.
+        KernelInstr::Const(class, _) => {
+            stack.push(OperandClass::Scalar(class));
         }
-        // **An integer, whatever the fragment's class**: the index is the
-        // invocation id, and an access chain indexes with an integer on every
-        // target.  A float fragment's index local is the same number in `f32`,
-        // which is why this is the class the two emitters agree on and not the
-        // module's.
-        KernelInstr::LocalGet(_) => {
-            stack.push(OperandClass::Scalar(ScalarClass::Int));
+        // **A parameter leaf's class is its own**, read from `param_shape` by the
+        // offset the instruction names.  A parallel fragment's count and index
+        // are both `Int` (`compile_parallel_fragment` declares them so), and a
+        // scalar kernel's leaves are whatever it declared.
+        KernelInstr::LocalGet(k) => {
+            stack.push(
+                params
+                    .get(k as usize)
+                    .copied()
+                    .map_or(OperandClass::Opaque, OperandClass::Scalar),
+            );
         }
         // The narrowing a `0`/`1` scalar takes to become a `select` condition.
         KernelInstr::I32WrapI64 => {
@@ -2932,36 +2949,34 @@ fn check_instr(
             pop_class(stack);
             let otherwise = pop_class(stack);
             let then = pop_class(stack);
-            // A `select`'s arms are the language's scalars, so the module's class
-            // is what both have to be.
-            as_operand_class(otherwise, module, at)?;
-            as_operand_class(then, module, at)?;
-            stack.push(OperandClass::Scalar(module));
+            // A `select`'s arms are the value it yields, so they are one class;
+            // the narrowing above is what makes the condition a `0`/`1` scalar.
+            let class = operand_class(then, otherwise).unwrap_or(ScalarClass::Int);
+            as_operand_class(then, class, at)?;
+            as_operand_class(otherwise, class, at)?;
+            stack.push(OperandClass::Scalar(class));
         }
-        KernelInstr::BufferReadCall => {
+        KernelInstr::BufferReadCall(class) => {
             let element = pop_class(stack);
             pop_class(stack);
             // An access chain's index is an integer.
             as_operand_class(element, ScalarClass::Int, at)?;
-            // A buffer's element is the module's class, which is what
-            // `Positions::input_classes` declares every read position to be.
-            stack.push(OperandClass::Scalar(module));
+            // The element is the class the instruction names, which is the class
+            // `Positions::input_classes` declares that position to be.
+            stack.push(OperandClass::Scalar(class));
         }
-        KernelInstr::BufferWriteCall => {
+        KernelInstr::BufferWriteCall(class) => {
             let value = pop_class(stack);
             let element = pop_class(stack);
             pop_class(stack);
-            // A buffer element is the module's class whatever the body computed
-            // the value as, and an access chain's index is an integer — so this
-            // is where `1.0 + i`, computed in the index's class, meets the float
-            // buffer it was going into.
-            as_operand_class(value, module, at)?;
+            // **This is where a mix is caught**: a value of the other class
+            // stored into this buffer, or an index that is not an integer.
+            as_operand_class(value, class, at)?;
             as_operand_class(element, ScalarClass::Int, at)?;
         }
-        KernelInstr::Bin(operator) => {
+        KernelInstr::Bin(class, operator) => {
             let rhs = pop_class(stack);
             let lhs = pop_class(stack);
-            let class = operand_class(lhs, rhs, module);
             as_operand_class(lhs, class, at)?;
             as_operand_class(rhs, class, at)?;
             // A comparison yields the language's `0`/`1` scalar rather than a
@@ -2989,7 +3004,7 @@ fn check_instr(
 /// Check one terminator, and walk into the flows it opens.
 fn check_terminator(
     terminator: &Terminator,
-    module: ScalarClass,
+    params: &[ScalarClass],
     stack: &mut Vec<OperandClass>,
 ) -> Result<(), String> {
     match terminator {
@@ -3004,10 +3019,10 @@ fn check_terminator(
             // it, so each arm is checked against its own copy of that stack.
             pop_class(stack);
             let mut arm = stack.clone();
-            check_flow(on_one, module, &mut arm)?;
+            check_flow(on_one, params, &mut arm)?;
             if let Some(on_zero) = on_zero {
                 let mut arm = stack.clone();
-                check_flow(on_zero, module, &mut arm)?;
+                check_flow(on_zero, params, &mut arm)?;
             }
             // The join receives `passes` values whose class depends on which arm
             // ran, so what is left on the stack is how many there are and not
@@ -3021,7 +3036,7 @@ fn check_terminator(
             // instruction here, so nothing the body inherits from the header's
             // entry stack can be judged — only what the body computes from it.
             let mut body_stack = vec![OperandClass::Opaque; stack.len() + carried];
-            let result = check_flow(body, module, &mut body_stack);
+            let result = check_flow(body, params, &mut body_stack);
             // The loop leaves through its `exit` label, which this walk does not
             // resolve, so the enclosing block continues from nothing known.
             stack.clear();
@@ -3936,16 +3951,25 @@ impl Positions {
     }
 }
 
-/// The class of the values a fragment's body computes — the one class its
-/// operators, its result types and its buffer elements are all lowered in.
+/// The class a fragment's **own** values are lowered in: the dummy result a
+/// parallel body leaves, and the type of every local a loop carries.
 ///
-/// **Read off [`KernelFragment::output_classes`], which is the fragment's one
-/// class-carrying field.**  For a parallel fragment the list is one entry per
-/// write ordinal, so its first entry is the class the index function computes
-/// in; for a scalar fragment it is one entry per wasm result (a fragment that
-/// writes no buffers declares its result classes there), so its first entry is
-/// the class the body returns.  A fragment with no entry at all — a hand-built
-/// one, or a legacy shape — is the ABI's integer default rather than a panic.
+/// **Not the class of its body.**  A body may compute in more than one class, so
+/// this is the class of its *first produced value* and nothing more — every
+/// instruction carries its own, and a backend reads them rather than this.  The
+/// two places it is still the answer are the ones that have no value to ask: the
+/// dummy scalar is a value nobody reads, and a loop's carried locals are typed
+/// once for the whole loop.
+///
+/// **Read off [`KernelFragment::output_classes`] first, then
+/// [`KernelFragment::result_classes`].**  A parallel fragment's output list is one
+/// entry per write ordinal, so its first entry is what the index function's first
+/// write computes in; a scalar fragment has no output buffers and declares its
+/// wasm results in `result_classes`.  A fragment with neither — a hand-built one
+/// — is the ABI's integer default rather than a panic.
+///
+/// A loop carrying values of *two* classes is the limitation this names: it needs
+/// the carried list to be typed per position rather than per loop.
 fn fragment_class(fragment: &KernelFragment) -> ScalarClass {
     fragment
         .output_classes
