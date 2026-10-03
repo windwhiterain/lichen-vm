@@ -761,6 +761,80 @@ compute.read ((compute.Read _)(.from out, .at 2))
 }
 
 #[test]
+fn a_runtime_scalar_reaches_the_body_beside_the_extent() {
+    // The parallel ABI's arguments are the parameter's scalar leaves in field
+    // order — the launch extent first — and then the index, so `cfg` is
+    // `(n, alpha, (buffers…))` and `alpha` arrives as a real argument rather than
+    // as a second count.  The extent reaches `k.n` (three indices out), the input
+    // buffer is the first kernel's `[10, 11, 12]`, and each element is bumped by
+    // `float2int k.alpha = 2`
+    // (`docs/notes/compute-runtime-scalars.md` §1, §3).
+    let out = run(r#"
+--- compute = import "compute.lichen" ---
+g = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
+}
+kg = compute.parallel g "cpu"
+inbuf = compute.plrun kg (3,)
+In  = struct<.a _>
+Out = struct<.z _>
+Par = struct<.n Int, .alpha Float, .in In, .out Out>
+f = (k : Par) => {
+  i = compute.range k.n
+  v = compute.read ((compute.Read _)(.from k.in.a, .at i))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value v + float2int k.alpha))
+}
+k = compute.parallel f "cpu"
+out = compute.plrun k (3, 2.0, (inbuf,))
+(compute.read ((compute.Read _)(.from out, .at 0)), compute.read ((compute.Read _)(.from out, .at 1)), compute.read ((compute.Read _)(.from out, .at 2)))
+"#);
+    assert_eq!(
+        out, "(12, 13, 14): <?a, ?b, ?c>",
+        "runtime scalar kernel produced: {out:?}"
+    );
+}
+
+#[test]
+fn a_scalar_leaf_of_the_wrong_class_is_refused_by_name() {
+    // A leaf is handed to the body as the value *its own field* declared, so a
+    // launch that passes an `Int` for a `Float` leaf is refused by name rather
+    // than run with the bits reinterpreted — the count's own refusal,
+    // generalised (`docs/notes/compute-runtime-scalars.md` §3).
+    let messages = fail(
+        r#"
+--- compute = import "compute.lichen" ---
+g = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
+}
+kg = compute.parallel g "cpu"
+inbuf = compute.plrun kg (3,)
+In  = struct<.a _>
+Out = struct<.z _>
+Par = struct<.n Int, .alpha Float, .in In, .out Out>
+f = (k : Par) => {
+  i = compute.range k.n
+  v = compute.read ((compute.Read _)(.from k.in.a, .at i))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value v + float2int k.alpha))
+}
+k = compute.parallel f "cpu"
+out = compute.plrun k (3, 2, (inbuf,))
+compute.read ((compute.Read _)(.from out, .at 0))
+"#,
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("scalar leaf is Float")
+                && message.contains("passes an Int")),
+        "the refusal must name the leaf's class and what was passed: {messages:?}"
+    );
+}
+
+#[test]
 fn a_refused_call_argument_element_says_why() {
     // `call` gates its argument against a *fresh* domain cell, so a tuple whose
     // element is a string passes the checker and is refused at run time, where
