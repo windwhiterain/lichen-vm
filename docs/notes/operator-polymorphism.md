@@ -540,6 +540,31 @@ answered.
    the operator's end state (`x : ?a ! in_num`) plus a perspective on one
    parameter would.  Generalising the slot to a per-marker set is the fix, and it
    is not this phase's.
+7. **A class domain has no surface form — Phase 3's prerequisite.**  `Num` in
+   §3's end state is a *value* a library writes, and today nothing in the
+   language can spell one: `class_set::build` is called from exactly one place
+   (`check_binop`, the checker) and `TypeValue::TypeSet` has no syntax, so
+   `lichen-std` cannot write `Num = {Int, Float}` and the contract cannot move
+   out of Rust.  The options, in the language's own terms:
+
+   - **A keyword-led form, `domain<Int, Float>`** — the idiom the language
+     already uses wherever a delimiter would be ambiguous (`array<T, n>`,
+     `struct<…>`, `table{…}` are all keyword-led for exactly that reason).
+     Pros: no new punctuation, reads as what it is, and `Num = domain<Int,
+     Float>` is a plain binding.  Cons: the encoding's **default** element needs
+     a story — either the surface form names it (`domain<Int, Float>` whose
+     default is the *first* member, a documented convention) or it grows a
+     slot for it, and the default is load-bearing (§8.4: it is what types the
+     specialize pass's placeholder and what the kernel picks).
+   - **A native operator, `$domain(Int, Float)`** — no new syntax at all, and
+     the `$name(args)` mechanism exists (`compute.lichen` is an embedded
+     source).  Cons: `$` is the *plugin-private* sigil — "a normal file never
+     lexes it as a valid call" — so this works only for a source the host
+     embeds, not for a std a *user* could write, which is the opposite of what
+     Phase 3 is for.
+   - **Reusing `{…}`** — refuted already: a glued `{` is a table lookup, and
+     making it a domain in type position would be the mode-dependence §2.1 of
+     the language spec exists to avoid.
 8. **The kernel boundary is not this feature's to fix — it is a recorded
    dependency.**  Making `+` polymorphic leaves a kernel body's class open, and
    a kernel lowered from a *template* has no class to compile: two targets go red
