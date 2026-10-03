@@ -505,7 +505,7 @@ them the ranking below is unchanged:
    argument.  A settle pass would be a partial duplicate of it.
 
 **The unmerged branch that tried the direct pin — `feature/read-kind-unify`,
-parked.**  Two commits, and they are one experiment in two halves:
+parked.**  Three commits, and they are one experiment in three parts:
 
 - `c1e0e36` ("WIP: every read form states its accepted container kind") replaces
   each form's skip-when-undecided guard with a unify on the container's
@@ -521,6 +521,10 @@ parked.**  Two commits, and they are one experiment in two halves:
   `X::a`'s struct-kind requirement stays for **both** tiers (which is what removes
   the `TableGet` panic on a deferred non-struct), while `.a` keeps the lazy
   name-table read when the container is undecided.
+- `c776676` ("read kinds fallout") states the accepted kind in the tests, the
+  example and the docs — the parser/checker, `field_read_kinds.rs`,
+  `docs/language-spec.md`, `docs/notes/raw-index.md`, `docs/notes/code-audit.md`
+  and `examples/raw_index.lichen`.
 
 **Why it is parked.**  The undecided tier's *term-shaped* pin binds the container's
 own **type** cell, so a consumer that reads a type structurally through the class —
@@ -532,15 +536,10 @@ prints `parameterized: ?a` and `crates/lichen-language/tests/compute.rs` goes fr
 the static pin — rather than a landing candidate.  What it needs is option 1's
 **re-checkable assert**: a predicate on the assert worklist that meets the actual
 argument per apply, instead of a concrete value written into the container's own
-type cell.  The branch is left unmerged with its work intact; whoever writes the
-assert can lift its two refusals and its diagnostic fix, and must re-measure
-`tests/compute.rs` (62/0 on `dev` now) rather than trusting the numbers above.
-**Its worktree holds more than its two commits**: `.worktrees/read-kind-unify` has
-uncommitted changes in the parser (`ast.rs`, `parse.rs`), the checker
-(`indexing.rs`), four test files, `docs/language-spec.md`,
-`docs/notes/raw-index.md`, `docs/notes/code-audit.md`, `examples/raw_index.lichen`
-and an untracked `.probe/`.  It is a live worktree, not a snapshot to delete, and
-the check must be run with `.scratch`-style probes excluded from the merge.
+type cell.  The branch is live — its three commits are on it and its worktree is
+clean as of `c776676` — so whoever writes the assert can lift its refusals, its
+diagnostic fix and its docs, and must **re-measure** `tests/compute.rs` (62/0 on
+`dev` now) rather than trusting the numbers above.
 
 ### 6.3 The message/predicate disagreement (analyzed, not landed)
 
