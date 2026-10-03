@@ -1,12 +1,15 @@
 # Evaluation runs before unification, and nothing wakes what it read
 
-> Status: **§2.1 fixed, §2.2 open** — the order-sensitivity is **measured on
+> Status: **§2.1 fixed, §2.2/§2.4 open** — the order-sensitivity is **measured on
 > `dev@5e89bb1`** (§2's matrix is compiler output, reproducible from the inline
 > programs); the node-level chain behind §2.1 is now **traced**, not guessed
 > (§3.3); §4 is the comparison to other languages; §5.1's minimal half — a merge
 > carries the class's decided value to the members it adds — is **landed** on
-> `feature/lazy-wakeup` and fixes §2.1, while §2.2's accept/refuse flip and the
-> re-checkable guard of §5.2 stay open, and the rest of §5 stays a sketch.
+> `feature/lazy-wakeup` and fixes §2.1 (pinned by
+> `crates/lichen-language/tests/merge_carry.rs`), while §2.2's accept/refuse
+> flip, §2.4's template-level face of the same gap, and the re-checkable guard
+> of §5.2 stay open — §6.2 analyzes the fix directions and §6.3 the shared
+> diagnostic's wording, and the rest of §5 stays a sketch.
 >
 > Companions: [class-channel](class-channel.md) (the write-side half of the
 > same principle — a fact is decided once and stated on the class; this note is
@@ -106,8 +109,7 @@ and the runtime `Index` *cannot*: arrays and tuples are both
 `LowValue::Array`, so the runtime read of `[10, 20, 30](0)` legitimately
 computes `10`.  The deferral path silently drops a check the other order
 enforces.  (Aside, found while probing: the guard's message lists `array`
-among the accepted kinds while the predicate refuses it — the message and the
-predicate disagree.)
+among the accepted kinds while the predicate refuses it — analyzed in §6.3.)
 
 ### 2.3 The contrast case: apply **is** caught in both orders
 
@@ -127,6 +129,31 @@ distinguishable from a scalar at runtime.  The two rows differ in *which*
 refusal fires and how good the diagnostic is; §2.2's pair differs in
 **whether the program is accepted at all**.  A deferred check needs a net at
 the later tier; the paren read is the case that has none.
+
+### 2.4 The pin route is sound; the guard route is not
+
+The two container reads defer an undecided container by different mechanisms:
+`e[i]` and `t{k}` **pin** the container's type to a fresh array/table type
+(`check_index`/`check_table_find`, `checker/indexing.rs`), and the pin is
+enforced by the apply's argument unify per call; `a(k)` **guards** on
+concreteness and skips when undecided (§2.2).  Measured, with no annotation
+anywhere in either program — so no statement order is involved:
+
+```lichen
+f = x => x(0)      f = x => x[0]
+f [10, 20]         f (10, 20)
+```
+
+| read | output |
+|---|---|
+| paren `x(0)`, array argument | `10: Int` — **accepted**; nothing ever asks whether an array may be paren-read |
+| bracket `x[0]`, tuple argument | `error: expected array<?a, ?b>, found <Int, Int>` — refused at the apply, statically, with a span |
+
+So §2.2's order flip is one face of a wider gap: the paren read's deferral has
+no enforcing tier at all — not at the definition pass, not at the apply, and
+not at runtime (a tuple and an array are both `LowValue::Array`, and the
+lowlevel is untyped by design — `type-system-cleanup-plan` D1).  §6.2 analyzes
+the fix directions this measurement leaves.
 
 ## 3. The mechanism, as it stands
 
@@ -316,7 +343,9 @@ net currently cannot help (the tuple/array confusion is invisible to
 a type-level "is this a positional type" operator beside
 [`TypeOperator::InDomain`](../crates/lichen-highlevel/src/program.rs), whose
 answer is `USize(0/1)` over a type value — plus a spelling for the diagnostic it
-records when the condition fails at the apply.  **Not landed.**
+records when the condition fails at the apply.  **Not landed**; §6.2 ranks this
+against the alternatives (a shape-pin, a runtime net, a settle pass) and §2.4
+measures the template-level face it must also close.
 
 The one-shot *class questions* (`check_binop`'s `stated`/`float`) needed no
 change on the question side after all: the polymorphic path they fall back to is
@@ -351,13 +380,72 @@ commit reaching the class (§5.1) rather than by asking the question later.
   late, and one of them would then be the policy and the other an optimization of
   it.
 
-### 6.2 Still open
+### 6.2 The §2.2/§2.4 fix direction (analyzed, not landed)
 
-- **The guard's message and its predicate disagree** (§2.2's aside): the
-  `IndexTarget` diagnostic reads "expected a tuple, array, or struct type" while
-  `is_positional_type` refuses an array.  Either the wording or the predicate is
-  wrong, and §2.2's fix has to decide which — the read `a(k)` is for tuples and
-  structs, so the wording looks like the stale half.
+The gap is that the paren read cannot simply copy the bracket read's pin: a
+pin is a unify against **one** concrete kind, and `a(k)` accepts a
+*disjunction* — a tuple type `[shape, [TypeTuple, K]]` **or** a struct type
+`[shape, [TypeStruct{id, names}, K]]`.  An open marker cell cannot express
+"tuple or struct, not array": whatever flows in binds the cell, `ArrayType`
+included — which is exactly what §2.4's accepted row is.  The options, in the
+order the analysis ranked them (the ranking is **reasoned from the encoding**,
+not measured — only §2.4's two rows are measurements):
+
+1. **Re-checkable assert (recommended).**  Keep skipping the static guard when
+   the container is undecided, and register the condition on the assert
+   worklist exactly like `InDomain` and the bounds assert: a `TypeOperator`
+   over the container type answering `USize(0/1)` for "positional" — the
+   predicate to wrap is `shape::is_positional_type_any` — plus an
+   `AssertSpelling` for the diagnostic.  The machinery is the one §2.1's
+   polymorphic binop already rides: pending at the definition pass, re-checked
+   per apply clone.  That closes **both** faces: §2.2's same-scope flip (the
+   definition pass evaluates the assert once the annotation binds) and §2.4's
+   template hole (the clone's re-check meets the actual argument).  Cost: one
+   operator, one spelling, one diagnostic string.
+2. **Shape-pin plus the same assert.**  Additionally pin the undecided
+   container to the skeleton `[shape, [marker, K]]` with an open marker — the
+   shape `check_index` pins, minus the kind — so `slot_read`'s lazy `Index`
+   reads a decided structure and a lowering sees a field list before the kind
+   is known.  Strictly more than option 1; worth it only if a consumer needs
+   that, and none measured does.
+3. **Runtime net — impossible by design.**  Evaluation cannot distinguish a
+   tuple from an array (both are `LowValue::Array`) and must not: the lowlevel
+   is untyped (`type-system-cleanup-plan` D1).  This is why §2.3's apply has a
+   net and §2.2's read cannot have one.
+4. **A settle pass (re-ask skipped guards after the statement pass) —
+   insufficient alone.**  It fixes §2.2's same-scope flip but not §2.4's
+   template hole: a template's container legitimately stays undecided, and only
+   the per-apply re-check (option 1's machinery) can refuse a wrong-kind
+   argument.  A settle pass would be a partial duplicate of it.
+
+### 6.3 The message/predicate disagreement (analyzed, not landed)
+
+`DiagKind::IndexTarget` is shared by three guards with three different
+accepted sets, and its single message names a kind **none** of them accepts:
+
+| site | read | accepted | message claims |
+|---|---|---|---|
+| `check_field` | `a(k)` | tuple, struct | tuple, **array**, struct |
+| `check_named_field` | `a.name` | struct | tuple, array, struct |
+| `check_raw_named_field` | `X::a` | struct type value | tuple, array, struct |
+
+So "expected a tuple, array, or struct type" is wrong at every site — the
+array at all three, the tuple at the two named ones (the existing pipeline
+tests pin both named sites: `a_named_field_read_on_a_non_struct_is_rejected`,
+`a_raw_named_read_requires_a_type_struct_container`).  The predicate is the
+correct half and the wording the stale half.  The fix is per-site
+expected-sides — two spellings suffice, positional for `a(k)` and named for
+`.name`/`::a` — and §6.2 option 1's assert diagnostic should reuse them rather
+than invent a fourth wording.
+
+One drift found while reading: the [spec](../language-spec.md) §Indexing says a
+concretely non-indexable `e[i]` "is an `IndexTarget` diagnostic at check
+time" — but `check_index` pins and fails through `DiagKind::Guard` ("expected
+`array<…>`, found …", §2.4's refused row).  The spec sentence predates the
+pin; it should describe the Guard-style refusal.
+
+### 6.4 Still open, unanswered
+
 - Should a woken re-check be able to **retract** a diagnostic, if some future
   wakeup needs it?  Answered *no* for now (§6.1), on the order-independence
   argument alone.
