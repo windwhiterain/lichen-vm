@@ -2430,27 +2430,31 @@ fn block_arities(flow: &Flow) -> Vec<usize> {
     fn walk(flow: &Flow, out: &mut Vec<usize>) {
         match flow {
             Flow::Jump { .. } => {}
-            Flow::Block { terminator, .. } => match &**terminator {
-                Terminator::Return => {}
-                Terminator::If {
-                    on_one,
-                    on_zero,
-                    passes,
-                    ..
-                } => {
-                    out.push(*passes);
-                    walk(on_one, out);
-                    if let Some(on_zero) = on_zero {
-                        walk(on_zero, out);
-                    }
+            Flow::Seq { terminator, .. } => walk_terminator(terminator, out),
+            Flow::Block { terminator, .. } => walk_terminator(terminator, out),
+        }
+    }
+    fn walk_terminator(terminator: &Terminator, out: &mut Vec<usize>) {
+        match terminator {
+            Terminator::Return => {}
+            Terminator::If {
+                on_one,
+                on_zero,
+                passes,
+                ..
+            } => {
+                out.push(*passes);
+                walk(on_one, out);
+                if let Some(on_zero) = on_zero {
+                    walk(on_zero, out);
                 }
-                Terminator::While {
-                    body, passed_out, ..
-                } => {
-                    out.push(*passed_out);
-                    walk(body, out);
-                }
-            },
+            }
+            Terminator::While {
+                body, passed_out, ..
+            } => {
+                out.push(*passed_out);
+                walk(body, out);
+            }
         }
     }
     walk(flow, &mut out);
@@ -2463,21 +2467,25 @@ fn count_carried(flow: &Flow) -> usize {
     fn walk(flow: &Flow, total: &mut usize) {
         match flow {
             Flow::Jump { .. } => {}
-            Flow::Block { terminator, .. } => match &**terminator {
-                Terminator::Return => {}
-                Terminator::If {
-                    on_one, on_zero, ..
-                } => {
-                    walk(on_one, total);
-                    if let Some(on_zero) = on_zero {
-                        walk(on_zero, total);
-                    }
+            Flow::Seq { terminator, .. } => walk_carried(terminator, total),
+            Flow::Block { terminator, .. } => walk_carried(terminator, total),
+        }
+    }
+    fn walk_carried(terminator: &Terminator, total: &mut usize) {
+        match terminator {
+            Terminator::Return => {}
+            Terminator::If {
+                on_one, on_zero, ..
+            } => {
+                walk(on_one, total);
+                if let Some(on_zero) = on_zero {
+                    walk(on_zero, total);
                 }
-                Terminator::While { body, carried, .. } => {
-                    *total += carried;
-                    walk(body, total);
-                }
-            },
+            }
+            Terminator::While { body, carried, .. } => {
+                *total += carried;
+                walk(body, total);
+            }
         }
     }
     walk(flow, &mut total);
@@ -2672,6 +2680,15 @@ fn lower_flow(
     out: &mut wasm_encoder::Function,
 ) -> Result<(), String> {
     match flow {
+        // A `Seq` is instructions then a plain transfer — which is exactly what
+        // a loop body needs to *compute* its carried values and then hand them
+        // back, rather than forwarding the header's own.
+        Flow::Seq {
+            instrs, terminator, ..
+        } => {
+            lower_instrs(instrs, state, out)?;
+            lower_terminator(terminator, frames, state, out)
+        }
         Flow::Block {
             instrs, terminator, ..
         } => {
