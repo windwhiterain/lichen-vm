@@ -2874,6 +2874,39 @@ fn assemble_module(
         func_types.push(*ti);
     }
 
+    // A structured body needs a `() -> (T × n)` block type per distinct `(T, n)`
+    // it hands a branch: an `If`'s join, and a `While`'s exit and its own `loop`
+    // frame (which takes `[] -> []`, because a `br` to a `loop` label carries no
+    // operands). `T` is the fragment's class — an `f32` body and an `i64` body need
+    // different block types for the same arity.
+    //
+    // **This has to happen before the type section is written, and it did not.**
+    // `wasm.section(&types)` below serializes the section, so anything added to
+    // `types` afterwards is in no section at all: the index a body names then refers
+    // to a type the module does not have, which is `unknown type: type index out of
+    // bounds`. Nothing noticed while no body named one.
+    let mut block_arities: Vec<(ScalarClass, usize)> = ordered
+        .iter()
+        .flat_map(|frag| {
+            let class = fragment_class(frag);
+            block_arities(&frag.body.entry)
+                .into_iter()
+                .map(move |arity| (class, arity))
+        })
+        .collect();
+    // The order is only here so that equal pairs are adjacent; `ScalarClass` has
+    // no `Ord` of its own and none is claimed for it.
+    block_arities.sort_unstable_by_key(|&(class, arity)| (class == ScalarClass::Float, arity));
+    block_arities.dedup();
+    let mut block_types: HashMap<(ScalarClass, usize), u32> = HashMap::new();
+    for (class, arity) in &block_arities {
+        let id = types.len();
+        types
+            .ty()
+            .function(vec![], vec![value_type(*class); *arity]);
+        block_types.insert((*class, *arity), id);
+    }
+
     let mut wasm = WasmModule::new();
     wasm.section(&types);
     if !import_classes.is_empty() {
@@ -2903,32 +2936,8 @@ fn assemble_module(
     exports.export("main", ExportKind::Func, base);
     wasm.section(&exports);
 
-    // A structured body needs a `() -> (T × n)` block type per distinct `(T, n)`
-    // it hands a branch or a loop, `T` being the fragment's class — an `f32` body
-    // and an `i64` body need different block types for the same arity.  The type
-    // section is written before the code section, so the pairs are collected here
-    // and declared below the function types.
-    let mut block_arities: Vec<(ScalarClass, usize)> = ordered
-        .iter()
-        .flat_map(|frag| {
-            let class = fragment_class(frag);
-            block_arities(&frag.body.entry)
-                .into_iter()
-                .map(move |arity| (class, arity))
-        })
-        .collect();
-    // The order is only here so that equal pairs are adjacent; `ScalarClass` has
-    // no `Ord` of its own and none is claimed for it.
-    block_arities.sort_unstable_by_key(|&(class, arity)| (class == ScalarClass::Float, arity));
-    block_arities.dedup();
-    let mut block_types: HashMap<(ScalarClass, usize), u32> = HashMap::new();
-    for (class, arity) in &block_arities {
-        let id = types.len();
-        types
-            .ty()
-            .function(vec![], vec![value_type(*class); *arity]);
-        block_types.insert((*class, *arity), id);
-    }
+    // The block types a structured body needs were declared above, before
+    // `wasm.section(&types)` serialized the type section.
 
     let mut code = CodeSection::new();
     for frag in ordered {
@@ -3235,6 +3244,9 @@ fn check_terminator(
 ) -> Result<(), String> {
     match terminator {
         Terminator::Return => Ok(()),
+        // A plain transfer: the walk does not resolve the label it arrives at, and
+        // the values it hands over were checked where they were computed.
+        Terminator::Jump { .. } => Ok(()),
         Terminator::If {
             on_one,
             on_zero,
@@ -3283,7 +3295,7 @@ fn block_arities(flow: &Flow) -> Vec<usize> {
     }
     fn walk_terminator(terminator: &Terminator, out: &mut Vec<usize>) {
         match terminator {
-            Terminator::Return => {}
+            Terminator::Return | Terminator::Jump { .. } => {}
             Terminator::If {
                 on_one,
                 on_zero,
@@ -3320,7 +3332,7 @@ fn count_carried(flow: &Flow) -> usize {
     }
     fn walk_carried(terminator: &Terminator, total: &mut usize) {
         match terminator {
-            Terminator::Return => {}
+            Terminator::Return | Terminator::Jump { .. } => {}
             Terminator::If {
                 on_one, on_zero, ..
             } => {
@@ -3344,6 +3356,14 @@ fn count_carried(flow: &Flow) -> usize {
 use lichen_kernel_ir::BlockId as Label;
 
 /// One wasm frame a `br` can target, and the IR label it stands for.
+///
+/// **`Header` and the loop-locals bookkeeping below are the loop emitter's
+/// prerequisites, and the loop emitter is not written** — `lower_terminator`'s
+/// `While` arm refuses a loop by name until a slot-based emitter lands
+/// (`docs/notes/wasm-control-flow.md`). They are kept because they are the *shape*
+/// the slot-based version needs and because deleting them would make that work
+/// rediscover them; the `dead_code` allowance goes when the loop does.
+#[allow(dead_code)]
 enum Frame {
     /// A `block` or an `if`: branching to it **exits** it, and the values it
     /// produces are the operands the `br` leaves on the stack.
@@ -3364,14 +3384,17 @@ struct WasmState<'a> {
     index: &'a HashMap<KernelId, u32>,
     base: u32,
     at: usize,
-    next_local: usize,
-    /// The locals one fragment's body may declare, from [`count_carried`].
+    /// The next free local, and how many a body declared room for.
     ///
-    /// **The count is known and the addresses are not.** A loop's state tuple needs
-    /// `carried` locals, and which locals those are depends on how many loops a
-    /// depth-first walk reached first — the same order [`count_carried`] counts
-    /// them in — so the addresses are handed out as the walk reaches them and the
-    /// count is what proves every declared local was claimed ([`Self::loop_locals`]).
+    /// **These are the loop emitter's, and the loop emitter is not written** — see
+    /// [`Frame`]. A loop's state tuple needs `carried` locals, and which locals those
+    /// are depends on how many loops a depth-first walk reached first (the order
+    /// [`count_carried`] counts them in), so the addresses are handed out as the walk
+    /// reaches them and the count is what proves every declared local was claimed
+    /// ([`Self::loop_locals`]).
+    #[allow(dead_code)]
+    next_local: usize,
+    #[allow(dead_code)]
     carried_locals: usize,
     block_types: &'a HashMap<(ScalarClass, usize), u32>,
     /// The wasm function index each buffer import took, per class — the reads
@@ -3419,6 +3442,7 @@ impl WasmState<'_> {
     /// `local.get` each of `locals` in order, so the first local ends up
     /// **deepest** — the inverse of [`Self::set_locals`], which is what makes a
     /// state tuple round-trip through the locals unchanged.
+    #[allow(dead_code)]
     fn get_locals(&self, locals: std::ops::Range<usize>, out: &mut wasm_encoder::Function) {
         use wasm_encoder::Instruction;
         for local in locals {
@@ -3433,6 +3457,7 @@ impl WasmState<'_> {
     /// pairs the two walks. A loop that would need a local the body did not declare
     /// room for means the two orders disagree, so it is refused by name rather than
     /// emitted as a `local.get` of a local the function does not have.
+    #[allow(dead_code)]
     fn loop_locals(&mut self, carried: usize) -> Result<std::ops::Range<usize>, String> {
         let first = self.next_local;
         if first + carried > self.carried_locals {
@@ -3538,6 +3563,9 @@ fn lower_terminator(
             out.instruction(&Instruction::Return);
             Ok(())
         }
+        // A plain transfer — one shape, whether it is a `Flow::Seq`'s own end or the
+        // `Flow::Jump` an `If` arm may be.
+        Terminator::Jump { target, passes } => emit_jump(*target, *passes, frames, state, out),
         Terminator::If {
             on_one,
             on_zero,
@@ -3566,41 +3594,30 @@ fn lower_terminator(
         }
         Terminator::While {
             header,
-            body,
-            exit,
             carried,
             passed_out,
+            ..
         } => {
-            // **The `block`/`loop` pair has to open before the header's
-            // instructions**, because the header's code *is* what a backedge to the
-            // `loop` label re-enters: opening the frames after they had run — which
-            // is what emitting the terminator in place would do — computes the
-            // condition once, outside the loop, and leaves the loop with no test at
-            // all. So the header's instructions are lowered *here*, with the frames
-            // already standing, and the walk's stack is the state tuple the frames
-            // were re-read from.
-            let exit_type = state.block_type(state.class, *passed_out)?;
-            // The tuple the loop re-enters with, materialised once and handed to
-            // `local.get` on every entry.
-            let loop_locals = state.loop_locals(*carried)?;
-            out.instruction(&Instruction::Block(BlockType::FunctionType(exit_type)));
-            frames.push(Frame::Exit {
-                label: Some(*exit),
-                arity: *passed_out,
-            });
-            out.instruction(&Instruction::Loop(BlockType::FunctionType(exit_type)));
-            frames.push(Frame::Header {
-                label: *header,
-                locals: loop_locals.clone(),
-            });
-            state.set_locals(loop_locals.clone(), out);
-            let inside = lower_flow(body, frames, state, out);
-            state.get_locals(loop_locals.clone(), out);
-            frames.pop();
-            out.instruction(&Instruction::End);
-            frames.pop();
-            out.instruction(&Instruction::End);
-            inside
+            // **A loop is refused by name here, and deliberately not half-emitted.**
+            // The `block`/`loop` pair has to open *before* the loop's test runs, which
+            // means the test is not where the terminator sits — so emitting it in
+            // place computes the condition once, outside the loop, and leaves a loop
+            // with no test at all (this was landed once and withdrawn: see
+            // `docs/notes/wasm-control-flow.md` §2).
+            //
+            // The emitter that serves it is a **slot-based** one: every value of a
+            // structured body lives in a local, so loop-carried state needs no locals
+            // allocated here and no operand-stack height is tracked by hand — that
+            // reasoning is what the four defects of the withdrawn attempt all came
+            // from (`docs/notes/wasm-control-flow.md` §3). Until it lands, a body with
+            // a loop is refused rather than mis-emitted.
+            let _ = (header, carried, passed_out);
+            Err(
+                "compute.wasm: this body holds a loop, and the wasm backend has no loop emitter yet — \
+                 a loop's test has to run before the loop opens as well as on every backedge, which \
+                 needs the slot-based emitter `docs/notes/wasm-control-flow.md` describes"
+                    .to_string(),
+            )
         }
     }
 }
@@ -3628,52 +3645,62 @@ fn lower_flow(
             lower_instrs(instrs, state, out)?;
             lower_terminator(terminator, frames, state, out)
         }
-        Flow::Jump { target, passes } => {
-            use wasm_encoder::Instruction;
-            // The depth a `br` needs counts from the innermost frame, so it is
-            // how many frames sit between here and the one standing for `target`.
-            let position = frames
-                .iter()
-                .rposition(|frame| match frame {
-                    Frame::Exit { label, .. } => *label == Some(*target),
-                    Frame::Header { label, .. } => label == target,
-                })
-                .ok_or_else(|| {
-                    format!(
-                        "compute.wasm: block {} is arrived at, but no enclosing branch stands for it",
-                        target.0
-                    )
-                })?;
-            let depth = (frames.len() - 1 - position) as u32;
-            match &frames[position] {
-                // A loop label takes no operands, so the next state goes to the
-                // locals the header re-reads it from.
-                Frame::Header { locals, .. } => {
-                    if locals.len() != *passes {
-                        return Err(format!(
-                            "compute.wasm: block {} takes {} value(s) but the jump passes {}",
-                            target.0,
-                            locals.len(),
-                            passes
-                        ));
-                    }
-                    state.set_locals(locals.clone(), out);
-                }
-                // An exit's values are the `br`'s operands, and they are already
-                // the top of the stack in order.
-                Frame::Exit { arity, .. } => {
-                    if arity != passes {
-                        return Err(format!(
-                            "compute.wasm: block {} takes {} value(s) but the jump passes {}",
-                            target.0, arity, passes
-                        ));
-                    }
-                }
+        Flow::Jump { target, passes } => emit_jump(*target, *passes, frames, state, out),
+    }
+}
+
+/// Emit a plain transfer — the one shape an `If` arm's `Flow::Jump` and a
+/// [`Flow::Seq`]'s own end share, so one place resolves a label to a frame.
+fn emit_jump(
+    target: Label,
+    passes: usize,
+    frames: &[Frame],
+    state: &mut WasmState<'_>,
+    out: &mut wasm_encoder::Function,
+) -> Result<(), String> {
+    use wasm_encoder::Instruction;
+    // The depth a `br` needs counts from the innermost frame, so it is how many
+    // frames sit between here and the one standing for `target`.
+    let position = frames
+        .iter()
+        .rposition(|frame| match frame {
+            Frame::Exit { label, .. } => *label == Some(target),
+            Frame::Header { label, .. } => *label == target,
+        })
+        .ok_or_else(|| {
+            format!(
+                "compute.wasm: block {} is arrived at, but no enclosing branch stands for it",
+                target.0
+            )
+        })?;
+    let depth = (frames.len() - 1 - position) as u32;
+    match &frames[position] {
+        // A loop label takes no operands, so the next state goes to the locals the
+        // header re-reads it from.
+        Frame::Header { locals, .. } => {
+            if locals.len() != passes {
+                return Err(format!(
+                    "compute.wasm: block {} takes {} value(s) but the jump passes {}",
+                    target.0,
+                    locals.len(),
+                    passes
+                ));
             }
-            out.instruction(&Instruction::Br(depth));
-            Ok(())
+            state.set_locals(locals.clone(), out);
+        }
+        // An exit's values are the `br`'s operands, and they are already the top of
+        // the stack in order.
+        Frame::Exit { arity, .. } => {
+            if *arity != passes {
+                return Err(format!(
+                    "compute.wasm: block {} takes {} value(s) but the jump passes {}",
+                    target.0, arity, passes
+                ));
+            }
         }
     }
+    out.instruction(&Instruction::Br(depth));
+    Ok(())
 }
 
 /// The wasm value type a class is lowered to.

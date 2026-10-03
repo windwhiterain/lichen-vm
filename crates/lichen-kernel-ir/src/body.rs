@@ -46,6 +46,30 @@ pub enum Terminator {
     /// Leave the fragment, carrying the top [`results`](crate::KernelFragment::results)
     /// values.
     Return,
+    /// Leave this flow by arriving at `target` with the top `passes` values.
+    ///
+    /// # Why this is a `Terminator` and not only a [`Flow::Jump`]
+    ///
+    /// A plain transfer is a transfer, and the two enums here split transfers by
+    /// *where they can appear* rather than by what they mean: an [`If`](Self::If)
+    /// arm is a `Flow` (it may be a block of its own, or a bare jump), and a
+    /// [`Flow::Seq`]'s own transfer is a `Terminator` — so without this variant a
+    /// sequence could end in a branch or in a return but **not in a jump**, which is
+    /// the one transfer its own documentation names ("run these instructions, then
+    /// perform this **plain** transfer"). A loop body could therefore not be
+    /// written at all: it has instructions to run and a backedge to take, and
+    /// nothing could say both.
+    ///
+    /// The two are deliberately not merged. An `If` arm has no instructions of its
+    /// own, so its transfer *is* its whole content and a [`Flow::Jump`] is the
+    /// honest shape for it; a `Seq` has instructions, so what it owes is a
+    /// `Terminator`. See `docs/notes/loop-body-expressiveness.md`.
+    Jump {
+        /// The label arrived at.
+        target: BlockId,
+        /// How many values are handed over.
+        passes: usize,
+    },
     /// A two-way branch on the `0`/`1` scalar **on top of the stack**.
     ///
     /// Each arm runs and then arrives at `join` with `passes` values. An arm that
@@ -92,10 +116,12 @@ pub enum Terminator {
     /// iteration is the same fact**, so the condition is never hoisted out of the
     /// header.
     ///
-    /// **The body must be able to compute its carried values**, which is what
-    /// [`Flow::Seq`] is for: without it a body can only hand back the header's
-    /// own values, and a reduction — the one shape with an accumulator — has no
-    /// representation. See [`Flow::Seq`].
+    /// **The body must be able to compute its carried values and hand them back**,
+    /// which is what [`Flow::Seq`] is for: without it a body can only hand back the
+    /// header's own values, and a reduction — the one shape with an accumulator —
+    /// has no representation. A body that has to *decide* between continuing and
+    /// leaving does it with a [`Terminator::If`] whose arms name this loop's header
+    /// and [`exit`](Self::While::exit).
     While {
         /// The label re-entered on every iteration; a backend's loop header.
         header: BlockId,
@@ -151,13 +177,13 @@ pub enum Flow {
     /// representation at all.
     ///
     /// `Seq` is that missing half: run these instructions, then perform this
-    /// **plain** transfer. [`Terminator::While`]'s `body` must be a `Seq`, so the
-    /// carried values are computed rather than forwarded.
+    /// **plain** transfer — a [`Terminator::Jump`] back to the loop header, or a
+    /// [`Terminator::If`] whose arms name the header and the loop's exit, so a body
+    /// can decide between continuing and leaving.
     Seq {
         /// The instructions, in emission order, consuming the stack from the top.
         instrs: Vec<KernelInstr>,
-        /// Where control goes afterwards — a jump back to the loop header, or a
-        /// branch out of the loop to its `exit`.
+        /// Where control goes afterwards.
         terminator: Box<Terminator>,
     },
     /// Leave this flow by arriving at `target` with the top `passes` values.
@@ -202,6 +228,7 @@ impl Flow {
 fn terminator_labels(terminator: &Terminator, out: &mut Vec<BlockId>) {
     match terminator {
         Terminator::Return => {}
+        Terminator::Jump { target, .. } => out.push(*target),
         Terminator::If {
             on_one,
             on_zero,
@@ -353,7 +380,7 @@ impl KernelBody {
                 ));
             }
         }
-        validate_flow(&self.entry, None)
+        validate_flow(&self.entry, FlagEnd::Return)
     }
 }
 
@@ -368,7 +395,7 @@ fn collect_exits(flow: &Flow, out: &mut Vec<BlockId>) {
 
 fn terminator_exits(terminator: &Terminator, out: &mut Vec<BlockId>) {
     match terminator {
-        Terminator::Return => {}
+        Terminator::Return | Terminator::Jump { .. } => {}
         Terminator::If {
             on_one, on_zero, ..
         } => {
@@ -402,7 +429,7 @@ fn collect_entries(flow: &Flow, out: &mut Vec<BlockId>) {
 
 fn terminator_entries(terminator: &Terminator, out: &mut Vec<BlockId>) {
     match terminator {
-        Terminator::Return => {}
+        Terminator::Return | Terminator::Jump { .. } => {}
         Terminator::If {
             on_one, on_zero, ..
         } => {
@@ -437,7 +464,7 @@ fn collect_instrs<'a>(flow: &'a Flow, out: &mut Vec<&'a KernelInstr>) {
 /// Every instruction a terminator's nested flows hold.
 fn collect_terminator_instrs<'a>(terminator: &'a Terminator, out: &mut Vec<&'a KernelInstr>) {
     match terminator {
-        Terminator::Return => {}
+        Terminator::Return | Terminator::Jump { .. } => {}
         Terminator::If {
             on_one, on_zero, ..
         } => {
@@ -450,140 +477,142 @@ fn collect_terminator_instrs<'a>(terminator: &'a Terminator, out: &mut Vec<&'a K
     }
 }
 
-/// Check one flow, carrying the loop header a nested body is obliged to return to.
-fn validate_flow(flow: &Flow, header: Option<BlockId>) -> Result<(), String> {
+/// How the flow being validated may end.
+///
+/// The validation is a walk of the body's tree, and what a nested flow owes
+/// depends on where it sits: a flow outside a loop ends by returning, and a flow
+/// inside one ends by **arriving somewhere the loop can close from** — its header,
+/// where the next iteration's state is handed over, or its exit, where the loop is
+/// left. Carrying that obligation explicitly is what lets one walk accept a body
+/// that computes its state on one path and leaves on another, which the old
+/// "everything must reach the header" rule could not express
+/// (`docs/notes/loop-body-expressiveness.md`).
+#[derive(Debug, Clone, Copy)]
+enum FlagEnd {
+    /// The fragment's own end: a flow under this ends by returning.
+    Return,
+    /// A loop's level: a flow under this ends by arriving at `header` (the
+    /// backedge, handing over the next state) or at `exit` (leaving the loop).
+    Loop { header: BlockId, exit: BlockId },
+}
+
+/// Check one flow against the end it owes.
+fn validate_flow(flow: &Flow, end: FlagEnd) -> Result<(), String> {
     match flow {
-        Flow::Jump { target, .. } => match header {
-            Some(header) if *target != header => Err(format!(
-                "a loop body must arrive back at its header block {}, but this one leaves for block {} — \
-                 a backend has no backedge to close the loop with",
-                header.0, target.0
-            )),
-            _ => Ok(()),
-        },
-        // A `Seq` inside a loop must leave for the header, and the check is the
-        // same one a bare jump gets: the obligation is on the *transfer*, so both
-        // shapes answer it identically.
-        Flow::Seq { terminator, .. } => match header {
-            Some(_) => match &**terminator {
-                Terminator::Return => Err(
-                    "a loop body returns instead of arriving back at its header; the loop has no \
-                     backedge"
-                        .to_string(),
-                ),
-                Terminator::If {
-                    on_one,
-                    on_zero,
-                    join,
-                    passes,
-                } => {
-                    if join.0 == header.expect("checked just above").0 {
-                        validate_flow(on_one, header)?;
-                        if let Some(on_zero) = on_zero {
-                            validate_flow(on_zero, header)?;
-                        }
-                        // Both arms hand the header its carried values, and the
-                        // arms' own arms still owe the header the backedge.
-                        let _ = passes;
-                        Ok(())
-                    } else {
-                        Err(format!(
-                            "a loop body's sequence leaves for block {} through a selection, but a loop \
-                             body must arrive back at its header block {}",
-                            join.0,
-                            header.expect("checked just above").0
-                        ))
-                    }
-                }
-                Terminator::While { header: inner, .. } => Err(format!(
-                    "a loop body nests another loop, whose header is block {}; a backend has no way \
-                     to close both with one backedge",
-                    inner.0
-                )),
-            },
-            None => validate_terminator(terminator),
-        },
+        // The obligation is on the *transfer*, so a bare jump and a sequence that
+        // ends in one answer it identically.
+        Flow::Jump { target, .. } => arrive(target, end),
+        Flow::Seq { terminator, .. } => validate_terminator(terminator, end),
         Flow::Block {
             entry, terminator, ..
         } => {
-            if let (Some(entry), Some(header)) = (entry, header) {
-                if *entry != header {
-                    return Err(format!(
-                        "a loop body arrives back at block {}, but its own block is entered at block {} — \
-                         the backedge and the header disagree, so the loop would re-enter the wrong code",
-                        header.0, entry.0
-                    ));
-                }
+            // A block a loop re-enters has to be entered at *its* header, or the
+            // backedge and the header disagree and the loop would re-enter the
+            // wrong code.
+            if let FlagEnd::Loop { header, .. } = end
+                && entry.is_some_and(|entry| entry != header)
+            {
+                return Err(format!(
+                    "a loop body arrives back at block {}, but its own block is entered at block {} — \
+                     the backedge and the header disagree, so the loop would re-enter the wrong code",
+                    header.0,
+                    entry.expect("checked just above").0
+                ));
             }
-            match &**terminator {
-                Terminator::Return => match header {
-                    Some(_) => Err(
-                        "a loop body returns instead of arriving back at its header; the loop has no backedge"
-                            .to_string(),
-                    ),
-                    None => Ok(()),
-                },
-                Terminator::If {
-                    on_one,
-                    on_zero,
-                    ..
-                } => {
-                    validate_flow(on_one, header)?;
-                    match on_zero {
-                        Some(on_zero) => validate_flow(on_zero, header),
-                        None => Ok(()),
-                    }
-                }
-                Terminator::While {
-                    header,
-                    body,
-                    carried,
-                    passed_out,
-                    ..
-                } => {
-                    // **The exit reads the header's own tuple**, so it cannot hand
-                    // out more than that tuple holds. A larger count is a loop whose
-                    // exit values have no source at all on the zero-trip path, which
-                    // is the defect class a backend cannot report: it would emit a
-                    // stack that runs out underneath the branch.
-                    if passed_out > carried {
-                        return Err(format!(
-                            "a loop hands {passed_out} value(s) to its exit from a state of only \
-                             {carried}; the exit's values are the header's own, and a zero trip \
-                             count has no other place to get them"
-                        ));
-                    }
-                    validate_flow(body, Some(*header))?;
-                    if entry.is_some_and(|entry| entry != *header) {
-                        return Err(format!(
-                            "a loop declares its header at block {} but the block holding the loop is \
-                             entered at block {} — a backend would re-enter the loop's test from the \
-                             wrong place",
-                            header.0,
-                            entry.expect("checked just above").0
-                        ));
-                    }
-                    Ok(())
-                }
-            }
+            validate_terminator(terminator, end)
         }
     }
 }
 
-/// Validate a terminator with no loop-header obligation in force.
-fn validate_terminator(terminator: &Terminator) -> Result<(), String> {
+/// Check where one transfer arrives, against the end the flow owes.
+fn arrive(target: &BlockId, end: FlagEnd) -> Result<(), String> {
+    match end {
+        FlagEnd::Return => Err(format!(
+            "the body leaves for block {} instead of returning; a fragment's last act hands its \
+             results over",
+            target.0
+        )),
+        FlagEnd::Loop { header, exit } if *target == header || *target == exit => Ok(()),
+        FlagEnd::Loop { header, exit } => Err(format!(
+            "a loop body must arrive back at its header block {} or leave for its exit block {}, \
+             but this one leaves for block {} — a backend has no backedge to close the loop with",
+            header.0, exit.0, target.0
+        )),
+    }
+}
+
+/// Check one terminator, and walk into the flows it opens.
+fn validate_terminator(terminator: &Terminator, end: FlagEnd) -> Result<(), String> {
     match terminator {
-        Terminator::Return => Ok(()),
+        Terminator::Return => match end {
+            FlagEnd::Return => Ok(()),
+            FlagEnd::Loop { header, .. } => Err(format!(
+                "a loop body returns instead of arriving back at its header block {}; the loop has \
+                 no backedge",
+                header.0
+            )),
+        },
+        Terminator::Jump { target, .. } => arrive(target, end),
         Terminator::If {
-            on_one, on_zero, ..
+            on_one,
+            on_zero,
+            join,
+            ..
         } => {
-            validate_flow(on_one, None)?;
+            // **A selection inside a loop decides between its own landmarks.** A
+            // loop has two of them — the header, where the next state is handed over,
+            // and the exit, where the loop is left — and both arms of the body's
+            // selection may name either. They usually *branch* to them rather than
+            // merge, so the join is where the arms would meet; naming one of the two
+            // is what says the selection is part of the loop's own control flow
+            // rather than a merge the loop would have to close.
+            if let FlagEnd::Loop { header, exit } = end
+                && *join != header
+                && *join != exit
+            {
+                return Err(format!(
+                    "a loop body's selection joins at block {}, but a loop body must arrive back at \
+                     its header block {} or leave for its exit block {}",
+                    join.0, header.0, exit.0
+                ));
+            }
+            validate_flow(on_one, end)?;
             match on_zero {
-                Some(on_zero) => validate_flow(on_zero, None),
+                Some(on_zero) => validate_flow(on_zero, end),
                 None => Ok(()),
             }
         }
-        Terminator::While { body, .. } => validate_flow(body, None),
+        Terminator::While {
+            header,
+            body,
+            exit,
+            carried,
+            passed_out,
+        } => {
+            if passed_out > carried {
+                return Err(format!(
+                    "a loop hands {passed_out} value(s) to its exit from a state of only {carried}; \
+                     the exit's values are the header's own, and a zero trip count has no other \
+                     place to get them"
+                ));
+            }
+            // A loop body may not nest a second loop: a backend has one backedge to
+            // close and no way to close two.
+            if let FlagEnd::Loop { header: outer, .. } = end {
+                return Err(format!(
+                    "a loop whose header is block {} sits inside the level of the loop at block {}; \
+                     a backend has no way to close both with one backedge",
+                    header.0, outer.0
+                ));
+            }
+            validate_flow(
+                body,
+                FlagEnd::Loop {
+                    header: *header,
+                    exit: *exit,
+                },
+            )
+        }
     }
 }
 
