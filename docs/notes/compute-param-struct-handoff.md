@@ -246,11 +246,12 @@ closures:
    fresh closure and every later apply re-instantiates it per call.
 
 **Verified.** §2's probe runs and prints `22: ?a`; the minimal tuple-shaped
-variant runs and prints `[1, 2, 3, 4]`. `cargo test -p lichen-lowlevel`,
+variant runs and prints `[1, 2, 3, 4]`. Both are committed as regression
+tests: `a_tuple_kernel_runs_through_the_signature_carrying_wrapper` and
+`a_struct_parameter_kernel_runs_through_the_signature_carrying_wrapper`
+(`crates/lichen-language/tests/compute.rs`). `cargo test -p lichen-lowlevel`,
 `-p lichen-compute`, `-p lichen-kernel-ir`, `-p lichen-graph-ir`, and
 `-p lichen-language --test compute --test pipeline --test examples` all pass.
-**No committed regression test covers `parallel_sig` yet** — the probes were
-scratch files.
 
 ## 6. What must not break
 
