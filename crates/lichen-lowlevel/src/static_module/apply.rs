@@ -28,6 +28,7 @@ impl<P: Program> Module<P> {
                 remap: HashMap::new(),
                 applied: function.index,
                 parameter,
+                branch_top: None,
             };
             let applied = module.static_node_apply(r#return, &mut ctx);
             // The parameter is an entry point of the walk, not just a node the
@@ -227,19 +228,25 @@ impl<P: Program> Module<P> {
             let f = &ctx.module.functions[sref.index.0];
             (f.r#return, f.parameter, f.asserts.clone(), f.nodes.clone())
         };
-        // Fresh closure homed on the target block.  `parent` is None — the
-        // enclosing apply is a static function, which has no dynamic id, so a
-        // capture is a member of no enclosing dynamic template and is read in
-        // place; membership of the closure's own nodes rests entirely on the
-        // fresh id tagged below.
+        // Fresh closure homed on the target block.  Its `parent` is the
+        // enclosing fresh dynamic closure when re-homes nest (a wrapper
+        // whose body returns a closure that itself returns one), so the
+        // enclosing closure's later dynamic apply sees this one's nodes as
+        // template members and re-instantiates them per call — the static
+        // mirror of the dynamic path's `branch_top`.  [`None`] at the top of
+        // a static apply: the enclosing apply is a static function, which
+        // has no dynamic id, so a capture is a member of no enclosing
+        // dynamic template and is read in place.
         let fresh = self.functions.insert(Function {
             nodes: Vec::new(),
             r#return: NodeId::default(),
             parameter: NodeId::default(),
             asserts: Vec::new(),
-            parent: None,
+            parent: ctx.branch_top,
             block: ctx.target,
         });
+        // Nested re-homes inside this closure's walk hang under it.
+        let outer_top = std::mem::replace(&mut ctx.branch_top, Some(fresh));
         let ret_clone = self.static_node_apply(r#return, ctx);
         let param_clone = self.static_node_apply(parameter, ctx);
         let mut assert_clones = Vec::with_capacity(asserts.len());
@@ -263,6 +270,7 @@ impl<P: Program> Module<P> {
             self.nodes[clone].function = Some(fresh);
             own.push(clone);
         }
+        ctx.branch_top = outer_top;
         let fresh_function = &mut self.functions[fresh];
         fresh_function.nodes = own;
         fresh_function.r#return = ret_clone;
@@ -296,7 +304,14 @@ fn static_node_is_capturing_closure<P: Program>(
 /// Whether static function `index`'s body graph reaches `target` — a free
 /// variable it must capture (the applied function's parameter).  Walks the
 /// static module's nodes from the function's entry points (return,
-/// parameter, asserts), following operation operands and array-item refs.
+/// parameter, asserts), following operation operands, array-item refs, and
+/// **same-module static function values**: a capture that sits one closure
+/// layer down — the body returns `s => …` whose own body reads the outer
+/// parameter — is still a capture, because re-homing the outer closure
+/// without the inner one would leave the inner template frozen with an
+/// unbound cell nothing can unify.  The walk answers through the nested
+/// function's entry points rather than descending into a function *value*
+/// node, which is a leaf of the graph it rides in.
 fn static_function_captures<P: Program>(
     module: &StaticModule<P>,
     index: StaticFunctionId,
@@ -321,29 +336,50 @@ fn static_function_captures<P: Program>(
         {
             return true;
         }
-        if let Some(value) = sn.value
-            && let Some(LowValue::Array(array)) = value.as_enum()
-        {
-            // SAFETY: `array` is a payload in `module`'s arena, and the caller
-            // holds the registered static module alive for this walk.
-            for item in unsafe { array.items() } {
-                if let AnyNodeId::Static(sref) = item.node
-                    && sref.module == module.key
-                    && walk(module, sref.index, target, visited)
-                {
-                    return true;
+        if let Some(value) = sn.value {
+            match value.as_enum() {
+                Some(LowValue::Array(array)) => {
+                    // SAFETY: `array` is a payload in `module`'s arena, and the caller
+                    // holds the registered static module alive for this walk.
+                    for item in unsafe { array.items() } {
+                        if let AnyNodeId::Static(sref) = item.node
+                            && sref.module == module.key
+                            && walk(module, sref.index, target, visited)
+                        {
+                            return true;
+                        }
+                    }
                 }
+                // A nested same-module closure: its captures are this
+                // function's captures, transitively.  A foreign-module ref
+                // cannot name this module's parameter (local indices are
+                // per-module), so only the same-module arm descends.
+                Some(LowValue::Function(AnyFunctionId::Static(sref)))
+                    if sref.module == module.key =>
+                {
+                    if walk_function(module, sref.index, target, visited) {
+                        return true;
+                    }
+                }
+                _ => {}
             }
         }
         false
     }
-    let f = &module.functions[index.0];
-    let mut visited = HashSet::new();
-    walk(module, f.r#return, target, &mut visited)
-        || walk(module, f.parameter, target, &mut visited)
-        || f.asserts
-            .iter()
-            .any(|&condition| walk(module, condition, target, &mut visited))
+    fn walk_function<P: Program>(
+        module: &StaticModule<P>,
+        index: StaticFunctionId,
+        target: LocalNodeId,
+        visited: &mut HashSet<LocalNodeId>,
+    ) -> bool {
+        let f = &module.functions[index.0];
+        walk(module, f.r#return, target, visited)
+            || walk(module, f.parameter, target, visited)
+            || f.asserts
+                .iter()
+                .any(|&condition| walk(module, condition, target, visited))
+    }
+    walk_function(module, index, target, &mut HashSet::new())
 }
 
 /// The fixed context of one static materialize pass: where the clones land,
@@ -363,4 +399,17 @@ struct StaticApplyCtx<P: Program> {
     /// The applied function's parameter node (a free variable a nested
     /// closure might capture).
     parameter: LocalNodeId,
+    /// The enclosing **fresh dynamic closure** a nested re-home hangs under
+    /// ([`Function::parent`]) — the static mirror of the dynamic path's
+    /// `ApplyCtx::branch_top`.  [`None`] at the top of a static apply (the
+    /// enclosing apply is a static function, which has no dynamic id);
+    /// [`Some`] inside [`Module::static_clone_function`], so re-homes that
+    /// *nest* — a wrapper whose body returns a closure that itself returns
+    /// one — wire the inner closure's parent chain to the outer fresh id.
+    /// Without the link the outer closure's later dynamic apply cannot see
+    /// the inner one as a template member (its owner chain reaches no
+    /// dynamic ancestor), hands it on uncloned, and the inner body keeps
+    /// reading the *outer* apply's generation of a capture cell — a cell
+    /// the outer apply's own unify bound only a clone of.
+    branch_top: Option<FunctionId>,
 }
