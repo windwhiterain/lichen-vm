@@ -16,23 +16,48 @@ domain, because a template is never evaluated and an apply binds the clones.
 `compile_fragment` does three things, in this order, and holds no local copy of
 the answer at any point:
 
-1. **Seed.** The parameter's type slot is decoded by the encoding authority
+1. **Seed.** Each template term's type slot is decoded by the encoding authority
    (`lichen_highlevel::shape::low_type_of_slot`) and handed to
-   `Module::seed_class_low_type` as a lower bound on the parameter's class. A
-   parameter with no type cell seeds `Unknown`, which is the honest statement.
+   `Module::seed_class_low_type`: the **value** slot takes the cell's class as a
+   lower bound, and the **pair** takes `Tuple([shape, Unknown])`. A term with no
+   type cell seeds `Unknown`, which is the honest statement.
 2. **Pass.** `Module::infer_template_low_types` runs the fixed-point pass over
    the template, so the body's own low types exist before any apply.
 3. **Read.** The domain is `Module::low_type_of_node(param_value)` — the same
    read any other backend would do.
 
-`compile_parallel_fragment` is the same chain, except its seed is the **host
-ABI's** rather than a type fact: the parallel signature is `(n, index)` by
-construction, whatever the lichen type says, so it is stated rather than
-decoded.
+**The pair's half of the seed is the load-bearing one.** The pass reaches a
+let-bound name through `Index(pair, 0)`, and an `Index` reads its **container's**
+low type — so it reads the pair. A pair is one of the encoding arrays
+[lowlevel-low-types §6](lowlevel-low-types.md) says no backend compiles against,
+because observation joins its two positions to `Array(Unknown, 2)` and the join
+is `Unknown`; seeding the value slot alone therefore seeds a channel nothing
+reads, and the probe still answers `Int`. The tuple view makes the existing
+`Index` transfer work. The invariant this leans on is that note's own: *a low type
+is a function of the value, and the checker's unification already proves
+`value : type` consistent*.
+
+A read-scoped seed would be narrower but wrong: it has to chase every
+`Index(read_term, 0)`, and a let-alias (`b = a`) already breaks that, because
+`b`'s term's value slot is an `Index`, not a read.
+
+`compile_parallel_fragment` is the same chain, except it also seeds from the
+**host ABI's** shape rather than only from type facts: the parallel signature is
+`(n, index)` by construction, whatever the lichen type says, so it is stated
+rather than decoded.
 
 A domain that is undecided after the pass is refused, with a message that says
 what to write. A domain the wasm signature cannot express (a `string`, an
 array) is refused with its own message. Neither falls back.
+
+**`ComputeOperator`'s own `low_type` table is not one of these steps and nothing
+reads it.** The `impl OperatorExt for ComputeOperator` defines only
+`is_callable` and `run`, so the inherent `fn low_type` beside it has no caller —
+its `Read → USize` arm and the `Launch | Call | Range` arms are inert, and an
+undecided read reads as undecided rather than as `USize` until `node_class`'s
+default turns it into an `Int`. Read the table as **not authoritative**: if that
+hook is ever wired up, `Read → USize` will begin to contradict the seed above,
+and the fix then is to make `Read` decline, not to remove the seed.
 
 ## The callee's domain is read, not inferred
 

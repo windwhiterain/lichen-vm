@@ -174,6 +174,19 @@ backend compiles against. One overlap *is* resolved rather than degraded: a
 seeded `Tuple(..)` of arity `n` and an observed `Array(_, n)` are two views of
 the same array value, so the tuple view wins.
 
+**The exception is a pair, and it was found by a probe that stayed undecided.**
+The JIT seeds each template term's type cell onto two things: the term's value
+slot takes the cell's class, and the **pair** takes `Tuple([shape, Unknown])`. The
+pair is one of the arrays above, and it is seeded anyway because a body term is
+reached through `Index(pair, 0)` — an `Index` reads its **container**, so without
+the pair's half the seed lands on a channel nothing reads and the probe answers
+`Int` where the body is `Float`. The cost is that a pair's class is now *stated*
+rather than degraded, so the degradation argument above no longer covers it; what
+buys the safety in exchange is that the statement is the checker's own conclusion
+(`value : type`), so it cannot contradict a transfer — and where a seed and a
+transfer do disagree, the lattice still joins them to `Unknown`. See
+[compute-jit-low-types](compute-jit-low-types.md) §"Seed, pass, read".
+
 **Observation needs two sites, not one.** The design names
 `write_node_value` as the choke-point. It is the choke-point for *re-binding* a
 node, but a literal, a kind marker, or a freshly built array arrives through

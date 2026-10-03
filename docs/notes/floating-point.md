@@ -556,41 +556,73 @@ that touches a backend.
 
 ### 5.1 What phase 2 landed, and the three things it did not close
 
-**Landed.** The carrier (§4.4's four points), then both backends. The wasm
-backend admits a float domain, lowers `F32*`, and **computes**: a cross-kernel
-`jit` chain in `Float`, a float buffer written and read back by two kernels, and
-plain lichen agreeing with the result. The SPIR-V emitter produces a float module
-that `spirv-val` accepts — `OpTypeFloat 32`, `ArrayStride 4`, no `Int64`, the
-index a 32-bit constant, `OpFAdd`/`OpFDiv`, and `Eq`/`Neq` as bitcasts and
-`IEqual`/`INotEqual` rather than `OpFOrdEqual`.
+**Landed.** The carrier (§4.4's four points), then both backends, then the width.
+The wasm backend admits a float domain and lowers `F32*`; the SPIR-V emitter
+produces a module `spirv-val` accepts — `OpTypeFloat 32`, no `Int64`, the index a
+32-bit constant, `OpFAdd`/`OpFDiv`, and `Eq`/`Neq` as bitcasts and
+`IEqual`/`INotEqual` rather than `OpFOrdEqual`. The **same float program through
+`"cpu"` and through `"gpu"` produces the same numbers**, on a real device.
 
-**Three things stayed open, and none of them is a detail.**
+**The first two of the three things this section once listed are closed.**
 
-**1. The two halves disagree about the layout of the same buffer.** wasm's host
-slot is `AnyHandle<[i64]>` — **one `i64` word per element, for both classes**, a
-float being its bits in the low 32. The SPIR-V emitter declares `ArrayStride`
-**4** for a float. So a host float buffer of `N` elements occupies `8N` bytes and
-a GPU module reads it as if it were `4N` — the same buffer cannot feed both
-backends, and neither half noticed because nothing runs a float fragment through
-both. This is what a cross-backend agreement test exists to find, and it is the
-first thing it will find.
+**1. The layout, which is what the two halves disagreed about.** `ScalarClass`
+states `byte_width()` — `Int` 8, `Float` 4 — and everything derives from it: the
+host arena packs a float buffer as `f32`s rather than as `i64` words with the
+value in the low half, `spirv::element_stride` reads it instead of restating it,
+`dispatch` derives its stride, its padding and its transfer sizes from the
+fragment's class, and `DeviceBuffer` carries the class so a chained run does not
+re-upload what it can leave resident. `BufferSlot` became `Host(&'a [u8])` and
+**gave up `Eq`**: eight bytes are one `Int` or two `Float`s, so a type that
+answered `true` would be claiming a fact it cannot check, and it now derives only
+`PartialEq` — the weaker, honest statement. The class-carrying structs stay `Eq`,
+because a class tag is `Eq` and an `f32` payload is not.
 
-**2. A float GPU kernel cannot be dispatched yet.** The SPIR-V side emits and
-validates but the run path is not class-aware: `stage_run` and `fetch` size and
-stride everything at `size_of::<i64>()`, and a `ResidentId` records no class.
-`DeviceBuffer` gaining the class is the named next carrier, and the three
-`size_of::<i64>()` sites and `ScalarData::Int` follow it.
+**It is now a checked property rather than a promise.**
+`a_float_fragment_agrees_across_the_two_backends` and its integer twin run one
+source through both backends and compare the answers, at
+`LOCAL_SIZE_X + 5` elements so that 59 surplus lanes run past the bound into the
+padded tail — where a wrong stride does not fail loudly, it corrupts the
+neighbour. The test was seen red twice before being believed: re-introducing the
+historical contradiction (`element_stride` at 8 for a float) made every odd lane
+read `0.0`, which is the interleaved zero half-words read verbatim; and dropping
+the partial workgroup made the last five elements vanish, which at a workgroup
+multiple is invisible.
 
-**3. Two shapes are refused rather than lowered, both for one reason.** A body
-with **no concrete `Float` operand** cannot learn its class, so
-`jit (x : Float => compute.launch k_double (x + 1.0))` is refused — the callee
-is lowered in `Float` and the caller in `Int`. Adding `+ 0.0` makes it run. The
-same rule makes an **unanchored** `read` type `Int` while its value is `Float` at
-run time; the run then refuses it by name rather than coercing, but the static
-claim and the value disagree before that. Both follow from §4.4's "a float
-operand decides, and none means `Int`", and closing the second needs a
-value-to-type reconciliation at `read`/`collect` — a checker change, and out of
-scope for the backend work.
+**2. A float GPU kernel dispatches now.** The run path is class-aware, so what
+was blocked on `DeviceBuffer` is unblocked, and `GpuContext::fetch` returns
+`ScalarData` because a packed float payload cannot honestly be handed back as
+words.
+
+**3. What is still refused, and two of those refusals are the right answer.**
+
+- **A float launch count.** `compute.plrun k (4.0,)` used to be accepted and then
+  silently not run, because the count read wanted a `USize` and returned
+  `Parameterized` otherwise — the "wrong answer nobody sees" shape. It is refused
+  by name now; a dispatch extent is an `Int`.
+- **An unannotated read of a float buffer, and it should stay refused.**
+  `WriteOp::build` unifies the count, the index and the written value into one
+  element cell, so an undecided operand makes `check_binop` pin `a + a` to `Int`,
+  which flows back into that cell: the body's own unification closes the loop and
+  the read's fresh cell is not free after all. The refusal is truthful on both
+  sides — the language says `Int`, the buffer holds `Float` — and the author's
+  fix is the annotation, which is now a **lowering** fact and not only a checker
+  one. What did close is the case it used to share a cause with: a **pure
+  forward** (`compute.write [n, i, a]`) now lowers in the body's class and runs
+  on both backends, because each template term's type cell is seeded onto the
+  low-type channel (see
+  [compute-jit-low-types](compute-jit-low-types.md) §"Seed, pass, read").
+- **A cross-kernel float chain still needs a concrete `Float` operand.** A `jit`
+  whose body calls a float kernel and adds nothing float decides no class, and is
+  refused. `+ 0.0` makes it run.
+
+**One consequence of the mixed-class decision that is worth stating plainly:**
+because `Int` and `Float` may not meet inside one operation (§4.2), **every float
+element a parallel kernel can write is constant across lanes.** A float
+cross-backend comparison therefore catches a host/device width disagreement
+through the interleaved half-words and the padded tail, not through differing
+values; the integer case is the one that carries a wrong-stride alarm where the
+values themselves vary. That is a real limit on the float test and not a property
+of the float path.
 
 The verification for phase 0 is four tests, one per round-trip that can fail
 quietly: a literal's pair; the printer's spelling re-lexed and re-checked; an
