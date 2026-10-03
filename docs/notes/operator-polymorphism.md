@@ -436,28 +436,27 @@ answered.
    checker already keeps `user_asserts` to tell an explicit `assert` from a
    generated guard — so a refinement is a third flavour on that same
    discrimination, and the wording lands in the language layer.
-6. **The kernel's committed default.** §5 makes it load-bearing that
-   `compute.jit` writes the defaulted class into the parameter cell (or builds
-   `.sig` from what it compiled).  **Measured: it is not cosmetic and not only
-   about lowering.**  With the domain left open, three test targets go red, and
-   two of them are the signature being *unreadable* rather than misprinted:
+6. **The kernel boundary is not this feature's to fix — it is a recorded
+   dependency.**  Making `+` polymorphic leaves a kernel body's class open, and
+   a kernel lowered from a *template* has no class to compile: two targets go red
+   (`a_kernel_value_and_type_render_by_name` renders `.sig ?c -> ?c` with a
+   `none` artifact; `runtime_only_package`'s `launch` gate reads the domain
+   lazily out of an open `.sig` and cannot resolve it).  **The fix is the
+   specialize-before-JIT pass, and it is another workstream**
+   ([kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) §6: "a kernel
+   is never compiled from a template — at `jit`/`parallel` time the function is
+   applied to a placeholder typed by the annotated domain, so every term's type
+   cell is decided in the graph itself").
 
-   - `a_kernel_value_and_type_render_by_name` — `.sig Int -> Int` renders as
-     `.sig ?c -> ?c`, and the artifact itself comes out `none`.
-   - `runtime_only_package` — `launch`'s signature gate reads the domain
-     *lazily* out of `.sig` (`Index(sig.ty, 0)`); an open domain leaves that read
-     unresolvable, so the gate refuses an `Int` argument with `expected ?a, found
-     Int`.  A domain that is decided unblocks the gate as well as typing it.
-   - `examples` — `math.lichen`'s and `geometry.lichen`'s declared signatures
-     change from `Int -> Int` to `?a -> ?a`: **the feature showing up in public
-     example output**, which the repo's own harness says to update in the same
-     commit when intended.
+   The two halves meet at one interface: **the domain this note puts in the graph
+   as a value is what types that placeholder.**  So this phase owes the domain
+   and its readability, and owes *nothing* at the `jit` call site — writing a
+   defaulted class into the parameter cell there would be both the other
+   workstream's job and unsound (`f = y => y + y; k = jit f; f 1.5` must keep
+   working: the cell is shared, the kernel is not).
 
-   So the default must be **authorised**, not blanket: `jit (y => y)` has an open
-   domain and no candidates, and must keep refusing (today's `UNDECIDED_DOMAIN`,
-   "annotate it so its domain is known").  What authorises it is the domain the
-   refinement declares — which is the next thing to build, and the reason the
-   refinement and this default are one step rather than two.
+   A third red target, `examples`, is this feature in public output — two
+   declared signatures become `?a -> ?a` — and is updated in this branch.
 
 (Closed since the first draft: the narrowing rule and its `Program` hook, and the
 refinement *record* plus its `Program` hook — §3 rejects the set's type role, and
@@ -476,10 +475,12 @@ than budgeting for it.)
   registered by `check_binop` through `register_assert`.  Measured: no existing
   test regressed, and `add "a" "b"` went from *accepted* to refused.
 - **Phase 1 — the contract on the builtin operators.** The operand tie and the
-  domain condition are landed (§5).  What remains is the kernel's authorised
-  default (§8.4), the refinement's diagnostic flavour (§8.5), the `T{…}` surface
-  spelling and its lowering, and updating the two example declarations whose
-  signatures became polymorphic. *This is the user-visible feature.*
+  domain condition are landed (§5).  What remains is the refinement's diagnostic
+  flavour (§8.5), the `T{…}` surface spelling and its lowering, and updating the
+  two example declarations whose signatures became polymorphic.  The kernel
+  boundary (§8.4) is **not** in this phase: it is the specialize-before-JIT
+  pass's, and the domain landed here is that pass's input.
+  *This is the user-visible feature.*
 - **Phase 2 — the dependent if.** `if` desugars to the tuple read `(e, t)(c)`
   instead of the array read `[e, t][c]`, and the claimed laziness of an
   unselected arm is measured. Unlocks user-written generic numeric functions.
