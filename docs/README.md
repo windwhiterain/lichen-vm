@@ -43,6 +43,7 @@ Every note opens with a `> Status:` line:
 | [A lichen program as a whiting scene](notes/whiting-scene-document.md) | `lichen-language` (`session`/`compile`), `lichen-lowlevel`, external `whiting-definition` | proposed (the seam is one scene document; no compiler impl, no device) |
 | [Static modules & registry](notes/static-modules.md) | `lichen-lowlevel`, `lichen-language` (`persist`) | current |
 | [The computational operators](notes/operators.md) | `lichen-language-lex`/`-parser`/`-language`, `lichen-highlevel` (`ir`/`program`/`checker`), `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu` | current |
+| [Operator polymorphism](notes/operator-polymorphism.md) | `lichen-highlevel` (`checker`/`shape`/`program`), `lichen-lowlevel` (`equality`), `lichen-compute`, `lichen-std` | proposed — the class constraint is a first-class set type value; narrowing is not subtyping; the kernel is the only defaulting point |
 | [The compute JIT on low types](notes/compute-jit-low-types.md) | `lichen-compute` | current |
 | [Low types for a lowlevel-based JIT](notes/lowlevel-low-types.md) | `lichen-lowlevel` (`LowShape`), `lichen-highlevel` (`shape`), `lichen-compute` | implemented (Phases 3a–3c) |
 | [Type-system cleanup plan](notes/type-system-cleanup-plan.md) | `lichen-lowlevel`, `lichen-highlevel`, `lichen-compute` | current (Phases 0–5 complete) |

@@ -257,6 +257,12 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
 
 ## 8. What is deliberately not here
 
+- **Class-polymorphic arithmetic.** Today an operation with no concretely
+  `Float` operand pins both operands to `Int` (`check_binop`), so
+  `x => y => x + y` is `Int -> Int -> Int`. The proposed fix — the class
+  constraint as a first-class set type value, with the kernel as the only
+  defaulting point — has its own note:
+  [operator-polymorphism](operator-polymorphism.md).
 - **Shifts (`<<`, `>>`).** A `>>` token swallows the adjacent closers of nested
   angle types — `array<array<Int, 2>, 3>` ends `3>>` — and a `logos` lexer cannot
   split it back; the fix is parser-level token splitting, which is a change to
