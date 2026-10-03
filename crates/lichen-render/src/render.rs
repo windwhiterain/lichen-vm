@@ -33,7 +33,7 @@ type RenderExt<'a, V> = &'a dyn Fn(&V) -> Option<String>;
 ///
 /// The type chain decides how the value reads: a value whose type is the
 /// universe is an atomic type constant (`Int` / `Type`), a value whose type
-/// is a kind is a compound type (`struct<Int, Type>`, `Int -> Int`,
+/// is a kind is a compound type (`struct<.f Int, .g Type>`, `Int -> Int`,
 /// `<Int, Type>`, `array<Int, 3>`), a value whose type is a tuple type reads as a
 /// tuple `(1, Int)`, an array type as an array `[1, 2, 3]`, and a struct
 /// type as its field tuple.  When the type chain is opaque (an unbound cell,
@@ -49,7 +49,7 @@ where
 
 /// Render a type expression (the recursive-pair encoding again) in the
 /// language's own type syntax: `Int`, `Type`, `T1 -> T2`, `<T1, ..., Tn>`,
-/// `array<T, len>`, `struct<T1, ...>`.  Unbound cells get stable `?a`, `?b`, …
+/// `array<T, len>`, `struct<.a T1, ...>`.  Unbound cells get stable `?a`, `?b`, …
 /// names — cells in the same unification class share a name — so the type
 /// shows which parts are linked.  Cycles are cut at `…`; a node the walk
 /// cannot read as a form renders as its raw layout, marked `raw[…]`.

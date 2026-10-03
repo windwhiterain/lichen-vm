@@ -51,8 +51,8 @@ where
     /// kind, or an unbound cell) contributes its pair directly; a *term*
     /// put in a type position contributes its own value pair too, and the
     /// subsequent unification fails (a term's value pair does not unify
-    /// with its own type) — `struct<Int, b>` with `b : B` fails, while
-    /// `struct<Int, B>` works.
+    /// with its own type) — `struct<.f Int, .g b>` with `b : B` fails, while
+    /// `struct<.f Int, .g B>` works.
     /// An expression that **carries attributes** denotes the annotated value's
     /// term instead, not the `[type, …, attribute]` group the attribute lives in:
     /// a refinement may be written on a type inside a compound

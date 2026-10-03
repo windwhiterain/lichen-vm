@@ -368,7 +368,7 @@ pub enum ExprKind<L> {
     /// There is no array-type pinning, no [`IndexTarget`](crate::DiagKind)
     /// guard, and no bounds assert — the container is read by value whatever
     /// its type, so it reads a component of a type-as-value
-    /// (`<Int, string><0>`, `struct<Int, string><1>`) or of any expression's
+    /// (`<Int, string><0>`, `struct<.f Int, .g string><1>`) or of any expression's
     /// value.  The result is the element's own pair: its value is element 0
     /// of the read, its type element 1, both lazily (an unbound container
     /// resolves at the apply).  This form is what the `T<e>` array-type
@@ -484,7 +484,7 @@ pub enum ExprKind<L> {
     /// `_` — an inference placeholder hole, usable in any position (type or
     /// value).  Compiles to a fresh unbound cell that binds to whatever the
     /// context unifies it with: `x : _`, `x : Int -> _`, `x : array<Int, _>`,
-    /// `x : <Int, _>`, `struct<Int, _>`, and the value holes `_ : Int`,
+    /// `x : <Int, _>`, `struct<.f Int, .g _>`, and the value holes `_ : Int`,
     /// `f _`, `(1, _)`.
     Placeholder,
     /// A recovered-error region, masked at the frontend: an opaque leaf the

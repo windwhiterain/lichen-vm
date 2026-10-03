@@ -51,7 +51,7 @@ where
         // A struct type itself: the value's type is the struct kind
         // `[id, [TypeStruct, K], names]` (not a `[shape, [marker, K]]` pair),
         // and the value is the field-type list — render
-        // `struct<T1, ..., Tn>` (or `struct<.a T1, ...>` when named).
+        // `struct<.a T1, ..., .n Tn>` (a struct field always carries a name).
         if is_struct_kind(self.module, ty)
             && let Some(LowValue::Array(shape)) = value.as_enum()
         {

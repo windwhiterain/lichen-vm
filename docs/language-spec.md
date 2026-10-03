@@ -85,7 +85,7 @@ postfix  := glue ( '[' expr ']'                     -- index  e[i]
 element  := '~'n? expr                              -- shallow marker (inside array literals only)
 pair     := expr '==>' expr                         -- table entry: deep-equal key ==> value
 sfield   := '.' name expr                           -- named struct field  (a leading '.' marks it)
-           | expr                                   -- unnamed (positional) struct field
+           | expr                                   -- a bare expression field: refused, every field is named
 fields   := (farg (sep farg)* sep?)?             -- instantiation/field-read paren content
 farg     := '.' name expr                         -- named instantiation argument  .x 1
            | expr                                 -- positional argument
@@ -132,7 +132,7 @@ farg     := '.' name expr                         -- named instantiation argumen
   position — type and value alike.  In type position (the right side of `:`,
   and the components of the type forms under it) it infers the type from
   context — `x : _`, `x : Int -> _`, `x : array<Int, _>`, `x : <Int, _>`,
-  `struct<Int, _>` — and in value position it is a typed hole: `_ : Int`
+  `struct<.f Int, .g _>` — and in value position it is a typed hole: `_ : Int`
   checks as an underdetermined value of type `Int`, and `f _` / `(1, _)`
   leave a hole the context unifies.  `_` is **never a name**: it cannot be
   bound (`_ = 5`) or used as a lambda parameter (`_ => e`) — both are parse
@@ -272,7 +272,7 @@ farg     := '.' name expr                         -- named instantiation argumen
 Brackets `[ ]` and parens `( )` build values; angle brackets `< >` build
 types.  `[1, 2]` is an array value and `(1, 2)` a tuple value; `array<Int, 3>`
 is the array type of length 3, `<Int, Type>` the tuple type, and
-`struct<Int, Type>` a nominal struct type.
+`struct<.f Int, .g Type>` a nominal struct type.
 
 All five postfix delimiters — `(` `{` `<` `[` `::` — are **postfix-only when
 glued** to the preceding token.  The lexer emits a zero-width `Glue` token immediately
@@ -288,7 +288,7 @@ delimiter is a fresh atom — an argument of an application:
   `f ([1, 2])` applies `f` to the array.
 - `X<e>` (glued `<`) is a **raw index**: element `e` of `X`'s *value*, read
   with **no type validation** (see §3).  It reads a component of a type-as-value
-  (`<Int, string><0>`, `struct<Int, string><1>`) — any expression may be the
+  (`<Int, string><0>`, `struct<.f Int, .g string><1>`) — any expression may be the
   container, and it stays lazy on an unbound one, but the element it reads must
   itself be a value/type pair, which is what every element of a type-as-value
   is.  A spaced `<` is a fresh tuple-type
@@ -301,13 +301,13 @@ delimiter is a fresh atom — an argument of an application:
   token's *shape*, not a mode or a spacing convention beyond the `Glue` rule
   above: a **glued** `<` is the raw index; otherwise an *expression before* the
   token makes it a comparison and an *expression after* it is that comparison's
-  right operand.  `a < b` and `2 > 1` compare; `struct<Int, Type>` and `X<a>` are
+  right operand.  `a < b` and `2 > 1` compare; `struct<.f Int, .g Type>` and `X<a>` are
   brackets.  Two consequences, both deliberate:
   - **`>` compares only when an expression follows it unglued.**  A `>` followed
     by something that cannot begin an expression (a separator, a closer, the end
     of the program) closes the bracket it is in, and so does a `>` followed by a
     *glued* delimiter — a glued `(` or `<` belongs to the angle form
-    (`struct<Int, Int>(1, 2)` instantiates, `struct<Int, string><0>` reads a
+    (`struct<.f Int, .g Int>(1, 2)` instantiates, `struct<.f Int, .g string><0>` reads a
     field of the type as a value).
   - **Application wins over comparison for `<`.**  `f <Int, Type>` is still `f`
     applied to the tuple type; `a < b` is the comparison only because `<b>` is
@@ -471,7 +471,9 @@ maps every span back to the original file.
   statement is a binding (and with no `return` anywhere) has **no tail**, and
   instead parses as a **struct-returning block**: its value is an anonymous
   struct instance whose fields are the statements — a `name = value`
-  binding is a named field, a bare expression a positional one, a `let`
+  binding is a field (its name is the binding's), a bare expression is
+  refused (a field without a name would have no read: see *Nominal struct
+  types*), a `let`
   binding is a block-local and never a field, and a `pub`-marked statement is
   a field (when any statement is `pub`, only the `pub` ones are).  At the top
   level this is a **record program**: a library file that ends in its bindings
@@ -501,7 +503,7 @@ maps every span back to the original file.
 - **Unification is equi-recursive — by design.**  There is deliberately **no
   occurs check**: cyclic types unify, and the universe *requires* a cycle
   (`K = [Type, K]` above).  A recursive struct type is an ordinary cyclic
-  type — `A = struct<Int, B>; B = struct<Type, A>` checks and runs (see
+  type — `A = struct<.f Int, .g B>; B = struct<.f Type, .g A>` checks and runs (see
   `examples/struct_recursion.lichen`).  This is the approved semantics
   (decision D2 of
   [type-system-cleanup-plan](notes/type-system-cleanup-plan.md)), not a
@@ -556,21 +558,24 @@ maps every span back to the original file.
   cannot answer this case: it compares array *handles*).  A set of ordinary
   values is compared by value: `2 @in set{1, 2}` is `1` and `3 @in set{1, 2}` is
   `0`.  See [operator-polymorphism](notes/operator-polymorphism.md) §3.
-- **Indexing.**  `e[i]` reads the `i`-th element of an **array**.  A tuple's or
-  a struct instance's positional slots are read with the dedicated positional
-  form `a(k)` (`s(0)` is the first field, `(0, 1)` the first element of a
-  tuple) or by name (`s.x`) — the operator is chosen by syntax, never by a
-  runtime kind dispatch, so `e[i]` on a concretely non-array container is a
-  diagnostic rather than a silently different read.  A
+- **Indexing.**  `e[i]` reads the `i`-th element of an **array**, and `a(k)` —
+  the adjacent single-expression paren — reads position `k` of a **tuple**
+  (`(0, 1)(1)` is `1`).  A struct instance's fields are read **by name**
+  (`s.x`, `X::a`), so a struct type is refused by `a(k)` like any other
+  non-tuple: the operator is chosen by syntax, never by a runtime kind dispatch,
+  and each read form states the container kind it accepts.  Both state it as a
+  **pin** — the container's type is unified with a fresh array / tuple type —
+  so a container that is not decided yet is refused by the *application* that
+  supplies it, per call, rather than skipped: `x(0)` over an array is
+  `expected <?a, …>, found array<Int, 2>`, and `x[0]` over a tuple is
+  `expected array<…>, found <Int, Int>`.  A
   literal index into a statically-known array is checked against its length
   at check time (an out-of-bounds index is an `IndexOutOfBounds`
   diagnostic); an index known only at runtime (a parameter, a call result)
   is checked when evaluated.  Indexing a *concretely* non-indexable type —
   a tuple, a struct, a function, a table or an atomic type — is a refusal,
-  never a runtime panic (mirroring the apply guard): the read **pins** its
-  container to a fresh array type, so the diagnostic reads
-  `expected array<…>, found …` — at check time when the container's type is
-  concrete, and at the application that binds it otherwise.
+  never a runtime panic (mirroring the apply guard), at check time when the
+  container's type is concrete and at the application that binds it otherwise.
   `[then, else][i]` is the mechanism under the conditional form
   (`if c then e1 else e2` desugars to it) — an integer index selects a branch, and the untaken
   branch is never evaluated (the lowlevel `Index` stays lazy on it).
@@ -578,7 +583,7 @@ maps every span back to the original file.
   **value** with **no type validation** — no array-type pinning, no
   `IndexTarget` guard, no bounds assert.  It is the way to read a component of
   a *type-as-value* directly: `<Int, string><0>` is the `Int` type (the tuple
-  type's first element), `struct<Int, string><1>` the `string` type, and any
+  type's first element), `struct<.f Int, .g string><1>` the `string` type, and any
   expression may be the container (a bound name, a parameter, a call result).
   The read's result is **the element's own pair**, its value in the value slot
   and its type in the type slot, both read lazily.  Because it is unvalidated,
@@ -606,22 +611,25 @@ maps every span back to the original file.
   compare any two same-typed values (an `Int` or a type value): `S::a == Int`
   is `1`, `S::a == string` is `0`, while a cross-type comparison is a check-time
   `BinOp` error.
-- **Nominal struct types.**  `struct<T1, ..., Tn>` is a *new type* with
-  positional fields; a field may carry an optional name prefix (`.name`), so
-  `struct<.x Int, .y Type>` names its fields.  The leading `.` unambiguously
-  marks a named field — the language-server-friendly discriminator, since a
-  field name and a field-type expression (both identifiers) can never be
-  confused while the user is typing.  The names are stored on the struct type
-  as a name→index table, in the second field of the struct's **two-field
-  marker** (`TypeStruct{id, names}`, the kind's marker slot), which lets a
+- **Nominal struct types.**  `struct<.x T1, ..., .z Tn>` is a *new type*; **every
+  field carries a name**, given by the `.name` prefix.  The leading `.`
+  unambiguously marks a named field — the language-server-friendly
+  discriminator, since a field name and a field-type expression (both
+  identifiers) can never be confused while the user is typing — and a field
+  *without* one (`struct<Int, Type>`) is a `StructFieldName` check error: a
+  struct instance reads by name, so an unnamed field would have no read at all
+  (the positional form `a(k)` is the *tuple* read, see *Indexing*).  The names
+  are stored on the struct type as a name→index table, in the second field of
+  the struct's **two-field marker** (`TypeStruct{id, names}`, the kind's marker
+  slot), which lets a
   `a.name` read resolve a field by name.  Its kind is a standard `[marker, K]`
   pair whose marker is that two-field value.  The kind also holds a **fresh
   nominal id** — each occurrence of the syntax allocates a new id, so two
   occurrences never unify and a struct never unifies with a same-shape tuple
   type (nominal identity).  Bind one occurrence and it is reusable: the
   checker compiles each expression once, so a bound or parameter-passed
-  struct type used many times is the *same* type — `s = struct<Int>; [s, s]`
-  is a homogeneous array, while `[struct<Int>, struct<Int>]` (two
+  struct type used many times is the *same* type — `s = struct<.f Int>; [s, s]`
+  is a homogeneous array, while `[struct<.f Int>, struct<.f Int>]` (two
   source occurrences) is a nominal conflict.
 - **Struct instantiation.**  `s(1, 2)` — an application whose callee is a
   struct type — wraps the positional tuple in the nominal type: it compiles
@@ -631,7 +639,7 @@ maps every span back to the original file.
   different types, even with the same fields.  The form is **syntactic**:
   any `C(f1, …, fn)` with the `(` glued to the callee and the tuple comma
   discipline (`C()`, `C(,)`, `C(e,)`, `C(e1, …, en)` — the bare
-  single-expression `C(e)` stays the positional slot read) lowers to
+  single-expression `C(e)` stays the tuple read) lowers to
   `Instantiate`; there is no frontend callee-kind dispatch, the checker
   decides whether the callee is a struct type, and a callee that is not one
   fails at check time (the `InstantiateCallee` diagnostic — structs are
@@ -639,30 +647,30 @@ maps every span back to the original file.
   callee (a parameter, a deferred read) is *pinned* to a struct kind, so a
   non-struct actual callee fails the apply's argument check per call; a
   call-result callee (`(mk (Int))(1, 2)`) is force-evaluated at check time,
-  so the static checks see the concrete struct type.  An instance's positional
-  fields are read with the positional form: `s(1, 2)(0)` is the first field,
-  and its type is the corresponding field type (an out-of-bounds field index is
-  an `IndexOutOfBounds` diagnostic).  `s(1, 2)[0]` is **not** that read — `e[i]`
-  is an array read, and a struct instance is not an array (see *Indexing*
-  above).  A struct instance with named fields also
-  reads by name: `a.x` resolves `x` through the struct's name→index table to
-  the field's positional index (a `a.x` on a struct without that field is a
-  `NamedField` diagnostic; a `a.x` on a non-struct is an `IndexTarget`
-  diagnostic).  Values of struct type beyond the wrapped
+  so the static checks see the concrete struct type.  An instance's fields are
+  read **by name**: `a.x` resolves `x` through the struct's name→index table to
+  the field's positional index, and the read's type is that field's type (a
+  `a.x` on a struct without that field is a `NamedField` diagnostic; a `a.x` on
+  a non-struct is an `IndexTarget` diagnostic).  The positional form
+  `s(1, 2)(0)` is **not** this read — `a(k)` is the *tuple* read, and a struct
+  instance is refused by it (see *Indexing*) — nor is `s(1, 2)[0]`, which is the
+  array read.  Values of struct type beyond the wrapped
   tuple are future work.
 - **Named instantiation arguments.**  An argument of an instantiation may be
   prefixed with the same `.name` discriminator a `struct<…>` definition
   uses: `S = struct<.x Int, .y Type>; S(.y Int, .x 1)`.  The names ride the
   `Instantiate` expression to the checker, which validates them against the
   struct type's name table and **reorders** the argument values into the
-  definition's positional order — a later `.b`/`a(0)` read sees the
+  definition's positional order — a later `.b` read sees the
   definition's order, not the call's.  Named and positional arguments mix:
   a positional argument fills the lowest-numbered unclaimed position.  The
   structural mismatches are their own diagnostics, each pointing at the
   offending argument: an unknown field (`StructUnknownField`), a duplicate
   (`StructDuplicateField`), a field left unsupplied (`StructMissingField`),
   an excess positional argument (`StructExcessField`), and a `.name`
-  argument against an anonymous struct (`StructAnonymousField`).  The name
+  argument against a struct type with no names (`StructAnonymousField` — no
+  longer reachable from source, since every definition is named, and kept for
+  hand-built IR).  The name
   table — and so the reorder — must be statically known: through an unbound
   callee (a parameter) a named argument is an `InstantiateNamesNotStatic`
   diagnostic ("named arguments require a statically known struct type").
@@ -729,7 +737,7 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `int2float e` / `float2int e` | `Convert { operator, value }` — the only form whose type is not its operand's: the operand checks against the direction's source class, the result's type is its target |
 | `if c then t else e` | `Index { array: [e, t], index: c }` — desugared to the lazy branch index; there is no `If` kind |
 | `e[i]` | `Index { array, index }` |
-| `a(k)` | `Field { container, key }` — the adjacent single-expression paren form; a positional slot read over a tuple element or struct field |
+| `a(k)` | `Field { container, key }` — the adjacent single-expression paren form; a positional slot read over a **tuple** element (a struct reads `a.name`) |
 | `e : T` | `Annotation { value, type: Some(compile(T)), attributes: <an empty range> }` — `attributes` holds one value expression per schema-tail entry, and a bare `:` annotation has no tail, so the range is empty |
 | `# p` / `e : T # p` | `Annotation { value, type: Some(compile(T))?, attributes: <a range over compile(p)> }` — the attribute expression lands in the children range **positionally aligned** with the schema tail it annotates (an `e : T # p ? d` pairs `attributes[0]` with `[Perspective]` and `attributes[1]` with `[Doc]`), and the tail is stamped onto the annotated node's schema |
 | `! p` / `e : T ! p` | the same `Annotation` chain's **refinement** piece: `p` is a predicate on the annotated *value*, held in one attribute slot and required to evaluate to `1`.  Like `#`/`?` the right side is one operand at the `->` level, so `e : T ! (x => x > 3)` writes the predicate explicitly; see [operator-polymorphism](notes/operator-polymorphism.md) §3 |
@@ -737,8 +745,8 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `T1 -> T2` | `TypeFunction { parameter, return }` (domain, codomain) |
 | `(e1, …, en)` | `Tuple(range)` |
 | `<T1, …, Tn>` | `TypeTuple(range)` |
-| `struct<T1, …, Tn>` / `struct<.a T1, .b T2>` | `TypeStruct { fields, names }` — nominal, fresh id per occurrence; the kind is a `[marker, K]` pair whose marker is the two-field `TypeStruct{id, names}` value |
-| `a.name` | `NamedField { container, name }` — the checker resolves `name` through the struct's name→index table to the positional index, then reads like `a(k)` |
+| `struct<.a T1, .b T2>` | `TypeStruct { fields, names }` — nominal, fresh id per occurrence; the kind is a `[marker, K]` pair whose marker is the two-field `TypeStruct{id, names}` value.  A field without a `.name` (`struct<T1, …>`) is a `StructFieldName` check error |
+| `a.name` | `NamedField { container, name }` — the checker resolves `name` through the struct's name→index table to the positional index, then reads the field's type out of the field list |
 | `X::a` | `RawNamedField { container, name }` — a raw named read over a **TypeStruct value**: the container type (a TypeStruct kind) supplies the name table at `container_ty[0][1]`; yields the field's *type* as a value |
 | `s(1, 2)` / `s(.x 1, .y 2)` (callee a struct type) | `Instantiate { type_expr, value, names }` — `names` is index-aligned with `value`'s tuple elements (a `.x 1` argument is `Some("x")`, a positional `1` is `None`); the checker reorders named arguments to the definition's positional order |
 | `[e1, …, en]` | `Array(range)` |

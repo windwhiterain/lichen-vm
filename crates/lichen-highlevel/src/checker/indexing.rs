@@ -86,7 +86,7 @@ where
     /// pinning (unlike [`Self::check_index`]), no `IndexTarget` guard and no
     /// shape-derived type (unlike [`Self::check_field`]): the container is
     /// read by value whatever its type, so it reads a component of a
-    /// type-as-value (`<Int, string><0>`, `struct<Int, string><1>`) or of any
+    /// type-as-value (`<Int, string><0>`, `struct<.f Int, .g string><1>`) or of any
     /// expression's value.  An unbound container (a parameter, a call result)
     /// stays lazy — the lowlevel `Index` defers — and resolves at the apply,
     /// exactly the laziness the wrapper field reads rely on.
