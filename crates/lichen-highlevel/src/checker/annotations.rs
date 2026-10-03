@@ -116,6 +116,10 @@ where
             // A lambda is a leaf for stage 1 (its own `# p` binds a slot).
             ExprKind::Function { .. } => Vec::new(),
             ExprKind::Assert { .. } => Vec::new(),
+            // The converted operand is the expression's subject, so its
+            // perspective participates in the meet exactly as a `BinOp`
+            // operand's does.
+            ExprKind::Convert { value, .. } => vec![value],
             ExprKind::NativeCall { .. } => self.range_children(e),
         }
     }

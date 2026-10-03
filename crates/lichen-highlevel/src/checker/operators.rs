@@ -1,4 +1,4 @@
-//! The binary-operator rule.
+//! The operator rules: the binary operations and the two class conversions.
 
 use lichen_lowlevel::LowShape;
 
@@ -136,5 +136,54 @@ where
     /// every numeric operand was before floats existed.
     fn names_float_class(&self, ty: NodeId) -> bool {
         crate::shape::low_type_of_slot(&self.module, AnyNodeId::Dynamic(ty)) == LowShape::Float
+    }
+
+    /// A prefix class conversion `int2float e` / `float2int e` — the one place
+    /// the language's two scalar classes meet.
+    ///
+    /// The operand is checked against the direction's **source** class and the
+    /// result's type is its **target**, so this is the only expression form
+    /// whose type is not its operand's.  A wrong-class operand is the same
+    /// refusal every other operator issues — the diagnostic names the class it
+    /// expected, and nothing here silently converts
+    /// (`docs/notes/floating-point.md` §4.2 owns the rule that no *other*
+    /// construct crosses).
+    ///
+    /// **Only a class the operand already states is unified.**  A unify binds
+    /// every cell the operand's class shares, and a kernel body's
+    /// `compute.write [n, i, int2float i]` is one array literal whose integer
+    /// positions and float value hold *one* element-type cell: pinning the index
+    /// to `Int` there would bind the float written beside it and refuse the very
+    /// program these two words exist to write.  So an undecided operand stays
+    /// undecided, and the value that arrives at the other class answers the lazy
+    /// marker in [`crate::program::TypeOperator::run`] rather than a guess here —
+    /// a weaker message than a parameter pinned at its apply, paid for by the
+    /// conversion being usable where the classes are not yet decided.
+    ///
+    /// `float2int`'s partiality is not checked here: in range is a fact about
+    /// the value, not about its type, so the interpreter records
+    /// [`crate::program::OUT_OF_RANGE`] and answers the lazy marker.
+    pub(super) fn check_convert(&mut self, e: ExprId, operator: ConvOp, value: ExprId) -> NodeId {
+        self.check_expr(value);
+        let (source, target) = match operator {
+            ConvOp::Int2Float => (self.int_type, self.float_type),
+            ConvOp::Float2Int => (self.float_type, self.int_type),
+        };
+        let operand_ty = self.state[value].ty.unwrap();
+        if crate::shape::low_type_of_slot(&self.module, AnyNodeId::Dynamic(operand_ty)).is_known() {
+            self.check_unify(operand_ty, source, self.loc(value, 1), DiagKind::Conv);
+        }
+        // A unary operator's operand array is the binary one with its second
+        // slot absent — the shape [`crate::program::TypeOperator`]'s `run`
+        // reads `operands[0]` from.
+        let operand = self.value_of(value);
+        let operands = self.array_node(self.current_block, &[operand]);
+        let operator = P::Operator::from(TypeOperator::from(operator));
+        let node = self.op_node(self.current_block, operator, Some(operands));
+        let pair = self.pair_of(node, target);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(node);
+        self.state[e].ty = Some(target);
+        pair
     }
 }

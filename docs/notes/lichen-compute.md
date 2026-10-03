@@ -200,9 +200,12 @@ out.
 `output_classes` are one class per buffer position or write ordinal, because a
 parallel fragment's shape is `(config, index)` however many buffers it reads — so
 the buffers' classes cannot live on the shape. All three are in
-`fragment_digest`, and a fragment with a float anywhere in it is **still refused
-by name**: the classes are a carrier landed ahead of the permission, not the
-permission. See [floating-point](floating-point.md) §4.4.
+`fragment_digest`, and a float fragment is permitted — the classes were a carrier
+landed ahead of the permission, and
+[floating-point](floating-point.md) §5.1 is the record of the permission landing.
+What stays refused is a body that mixes the two classes in one operation, and a
+crossing that does not name itself with `int2float` or `float2int`
+(`docs/notes/operators.md` §7).
 
 `inputs` and `outputs` are the two buffer spaces, and both are counted by the
 emitter as it emits the positions rather than declared by hand, so neither can

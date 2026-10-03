@@ -1383,6 +1383,10 @@ fn classify_token_kind(
         | TokenKind::KwPub
         | TokenKind::KwCache
         | TokenKind::KwLoop
+        // The class conversions are prefix operators the lexer reserves words for,
+        // so they read as keywords rather than as the symbol operators below.
+        | TokenKind::KwInt2Float
+        | TokenKind::KwFloat2Int
         // `_` — a placeholder is a reserved inference form, never a name.
         | TokenKind::Placeholder => Some((SemanticTokenType::KEYWORD, Vec::new())),
         // A `Name` is resolved by `classify_names` (or the `.` heuristic).
@@ -1534,6 +1538,7 @@ impl<'a> NameClass<'a> {
                 self.expr(else_branch);
             }
             Expr::Assert { value, .. } => self.expr(value),
+            Expr::Convert { value, .. } => self.expr(value),
             Expr::NativeCall { args, .. } => {
                 for a in args {
                     self.expr(a);
@@ -1783,6 +1788,7 @@ impl Walk {
                 self.expr(else_branch);
             }
             Expr::Assert { value, .. } => self.expr(value),
+            Expr::Convert { value, .. } => self.expr(value),
             Expr::NativeCall { args, .. } => {
                 for a in args {
                     self.expr(a);
@@ -2084,6 +2090,7 @@ impl<'a> ScopeCapture<'a> {
                 self.expr(else_branch);
             }
             Expr::Assert { value, .. } => self.expr(value),
+            Expr::Convert { value, .. } => self.expr(value),
             Expr::NativeCall { args, .. } => {
                 for a in args {
                     self.expr(a);

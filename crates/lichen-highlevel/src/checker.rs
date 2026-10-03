@@ -48,7 +48,7 @@ use stacksafe::stacksafe;
 
 use crate::attr::{AttrExtRegistry, AttrSet};
 use crate::diagnostic::{DiagKind, DiaryEntry};
-use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc};
+use crate::ir::{BinOp, ChildRange, ConvOp, ExprId, ExprKind, IR, Loc};
 use crate::native::{NativeArg, NativeOps, no_native_ops};
 use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
 use crate::shape::for_each_kind_marker;
@@ -1150,6 +1150,7 @@ where
             | ExprKind::Instantiate { .. }
             | ExprKind::Record { .. }
             | ExprKind::Assert { .. }
+            | ExprKind::Convert { .. }
             | ExprKind::Index { .. }
             | ExprKind::RawIndex { .. }
             | ExprKind::Field { .. }
@@ -1332,6 +1333,7 @@ where
                 self.check_record(e, value, &field_names)
             }
             ExprKind::Assert { condition } => self.check_assert(e, condition),
+            ExprKind::Convert { operator, value } => self.check_convert(e, operator, value),
             ExprKind::Index { array, index } => self.check_index(e, array, index),
             ExprKind::RawIndex { container, index } => self.check_raw_index(e, container, index),
             ExprKind::Field { container, key } => self.check_field(e, container, key),

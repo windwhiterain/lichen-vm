@@ -1337,11 +1337,13 @@ fn answer_from_each_backend(source: &str) -> Option<(String, String)> {
 /// name (`docs/notes/floating-point.md` §5.1, point 3). `0.0 + a + a` anchors the
 /// class and computes the same number.
 ///
-/// **Every element carries the same float**, and that is a property of the pair
-/// rather than of this program: a float that *varied* with the index would have
-/// to come out of an `Int` operation, and the SPIR-V emitter refuses a body that
-/// mixes the two classes in one operation, so a varying float buffer is not
-/// something these two backends can be handed at all.
+/// **Every element here carries the same float**, and that is a property of these
+/// two bodies rather than of the language. A float that *varies* with the index
+/// arrives through `int2float` — the index being the only per-lane value an `Int`
+/// operation can produce, and a body that mixes the two classes in one operation
+/// is still refused (`docs/notes/floating-point.md` §5.1). The varying case is
+/// `a_varying_float_element_is_seeded_from_the_index`, through the same two
+/// backends.
 #[test]
 fn a_float_fragment_agrees_across_the_two_backends() {
     let source = format!(
@@ -1414,5 +1416,170 @@ out = compute.plrun k2 ({ELEMENT_COUNT}, (inbuf,))
     assert_eq!(
         gpu, cpu,
         "the two backends answered one integer fragment differently"
+    );
+}
+
+/// A `Float` buffer whose elements **differ from their neighbour**, each one
+/// seeded from the invocation index — the case
+/// `docs/notes/floating-point.md` §5.1 recorded as not writable.
+///
+/// `int2float i` is the crossing that writes it.  The index is the language's
+/// `Int`, a `Float` fragment carries it in an `f32` holding the exact integer,
+/// and the two backends answer one crossing two different ways from the same IR:
+/// the wasm one emits **nothing** where the value it holds is already a float,
+/// and SPIR-V emits `OpConvertUToF` because its index is a 32-bit integer.  That
+/// is precisely the pair of answers a comparison of the two backends keeps, which
+/// is why this runs over a whole workgroup plus five rather than over five
+/// elements — a wrong element width corrupts a neighbour, and only a buffer where
+/// every element differs shows it at the first index it touches.
+#[test]
+fn a_varying_float_element_is_seeded_from_the_index() {
+    let source = format!(
+        r#"
+--- compute = import "compute.lichen" ---
+f = cfg => {{
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, int2float i + 0.5]
+}}
+k = compute.parallel f "{BACKEND}"
+out = compute.plrun k ({ELEMENT_COUNT},)
+(compute.read [out, 0], compute.read [out, 1], compute.read [out, {last}], compute.collect out)
+"#,
+        last = ELEMENT_COUNT - 1,
+    );
+    let Some((cpu, gpu)) = answer_from_each_backend(&source) else {
+        return;
+    };
+    println!("varying float  cpu: {cpu}\nvarying float  gpu: {gpu}");
+    assert!(
+        cpu.starts_with("(0.5, 1.5, 68.5, [0.5, 1.5, 2.5"),
+        "every element is its index plus a half, so none of them repeats: {cpu:?}"
+    );
+    assert_eq!(
+        gpu, cpu,
+        "the two backends answered one index-seeded float fragment differently"
+    );
+}
+
+/// A `jit` kernel crossing the two classes, in both directions and twice over.
+///
+/// **The kernel's own domain is what makes these the hard cases**: a `jit`
+/// function's locals keep the classes the author annotated, so `int2float x` over
+/// an `Int` parameter is a real crossing of a value the body never computed, and
+/// `float2int` of a `Float` one is the truncation toward zero the interpreter
+/// promises for the same number.  The last two rows are a literal folded into the
+/// body's own class and a crossing in each direction inside one expression.
+#[test]
+fn a_jit_kernel_crosses_the_two_classes_both_ways() {
+    let cases = [
+        (
+            r#"
+---
+  compute = import "compute.lichen"
+---
+k = compute.jit (x : Int => int2float x)
+compute.launch k 5
+"#,
+            "5.0: Float",
+        ),
+        (
+            r#"
+---
+  compute = import "compute.lichen"
+---
+k = compute.jit (x : Float => float2int x)
+compute.launch k 5.7
+"#,
+            "5: Int",
+        ),
+        (
+            r#"
+---
+  compute = import "compute.lichen"
+---
+k = compute.jit (x : Float => int2float (x > 1.0))
+compute.launch k 5.0
+"#,
+            "1.0: Float",
+        ),
+        (
+            r#"
+---
+  compute = import "compute.lichen"
+---
+k = compute.jit (x : Int => x + float2int 3.7)
+compute.launch k 5
+"#,
+            "8: Int",
+        ),
+        (
+            r#"
+---
+  compute = import "compute.lichen"
+---
+k = compute.jit (x : Float => int2float (float2int (x + 0.5)))
+compute.launch k 3.0
+"#,
+            "3.0: Float",
+        ),
+    ];
+    for (source, expected) in cases {
+        let out = run(source);
+        assert_eq!(out, expected, "the kernel program produced: {out:?}");
+    }
+}
+
+/// The one crossing a kernel cannot be given: an operand the body would have to
+/// compute in a class it does not hold.
+///
+/// **A fragment has one representation for its whole body** — every constant is
+/// read in it and every operator's opcode is picked from it — so a
+/// `Float`-returning kernel whose parameter is an `Int` can cross that parameter
+/// (`int2float x`, `int2float (x > 1.0)`, both above) but cannot *add* it as an
+/// integer first.  The refusal is the shared emitter's, so one program gets one
+/// answer whichever backend it is then handed to, and it names the shape rather
+/// than leaving the module to fail validation.
+#[test]
+fn a_conversion_the_body_cannot_hold_is_refused_by_name() {
+    let diags = fail(
+        r#"
+---
+  compute = import "compute.lichen"
+---
+k = compute.jit (x : Int => int2float (x + 1))
+compute.launch k 5
+"#,
+    );
+    assert!(
+        diags
+            .iter()
+            .any(|message| message.contains("one fragment has one representation")),
+        "an integer add inside a float kernel is refused for what it is: {diags:?}"
+    );
+
+    // The mirror, in a parallel fragment: the buffer's class is the body's, so a
+    // float computed in order to be written as an integer has no form there
+    // either, and the refusal names the literal the body cannot spell.
+    let diags = fail(
+        r#"
+---
+  compute = import "compute.lichen"
+---
+f = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, float2int (int2float i + 0.5)]
+}
+k = compute.parallel f "cpu"
+out = compute.plrun k (5,)
+compute.collect out
+"#,
+    );
+    assert!(
+        diags
+            .iter()
+            .any(|message| message.contains("no form in an Int kernel body")),
+        "a float literal in an integer fragment is refused by name: {diags:?}"
     );
 }

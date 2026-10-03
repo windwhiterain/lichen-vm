@@ -75,6 +75,10 @@ pub enum DiagKind {
     TableValue,
     /// A binary operator's operand must be an `Int`.
     BinOp,
+    /// A class conversion's operand must be the direction's *source* class —
+    /// `Int` for `int2float`, `Float` for `float2int`.  The one operator kind
+    /// whose own type is the other class.
+    Conv,
     /// An attribute (perspective) check: an expression's attribute slot must
     /// equal the expected one.
     Attribute,

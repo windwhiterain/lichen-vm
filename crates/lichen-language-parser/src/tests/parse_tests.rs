@@ -167,7 +167,7 @@ fn statement_errors_carry_spans() {
     let err = parse_err("a = ; 5");
     assert_eq!(
         err.message,
-        "expected '!' or an expression, found a separator"
+        "expected '!', 'int2float', 'float2int', or an expression, found a separator"
     );
     assert_eq!(err.span, Some((1, 5)));
 }
@@ -699,11 +699,12 @@ fn the_index_postfix() {
 #[test]
 fn index_errors_carry_spans() {
     // `a[]` is application of `a` to an empty array literal — the
-    // element error mentions the `~` prefix the array parser now accepts.
+    // element error mentions the `~` prefix the array parser now accepts, and the
+    // two prefix keywords a unary position can start with.
     let err = parse_err("a[]");
     assert_eq!(
         err.message,
-        "expected '~', '!', or an expression, found ']'"
+        "expected '~', '!', 'int2float', 'float2int', or an expression, found ']'"
     );
     let err = parse_err("a[0");
     assert_eq!(err.span, Some((1, 4)));
@@ -720,7 +721,7 @@ fn parse_errors_carry_spans() {
     let err = parse_err("x =>");
     assert_eq!(
         err.message,
-        "expected '!' or an expression, found the end of the program"
+        "expected '!', 'int2float', 'float2int', or an expression, found the end of the program"
     );
     assert_eq!(err.span, Some((1, 5)));
     let err = parse_err("(x");
@@ -929,7 +930,7 @@ fn broken_statements_are_recovered() {
     assert_eq!(errors.len(), 1, "the broken binding's error");
     assert_eq!(
         errors[0].message,
-        "expected '!' or an expression, found a separator"
+        "expected '!', 'int2float', 'float2int', or an expression, found a separator"
     );
     assert_eq!(program.statements.len(), 2);
     assert!(matches!(program.expr, Some(Expr::Int(5, _))));

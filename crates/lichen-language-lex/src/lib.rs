@@ -114,6 +114,15 @@ pub enum TokenKind {
     /// replaces the old `T<e>` array-type postfix, which is now the raw
     /// type-component read (`X<e>`).
     KwArray,
+    /// The `int2float` keyword -- the prefix conversion from `Int` to `Float`.
+    /// It is a keyword because the operation is the language's own (its two
+    /// classes are), and it needs no new precedence level: it sits at the
+    /// prefix level beside `!`, so `int2float f x` converts `f x` and
+    /// `int2float a + 1` converts `a`.
+    KwInt2Float,
+    /// The `float2int` keyword -- the prefix conversion from `Float` to `Int`,
+    /// truncating toward zero.
+    KwFloat2Int,
     /// '->' -- a function type.
     Arrow,
     /// '=>' -- a lambda.
@@ -219,6 +228,8 @@ impl TokenKind {
             TokenKind::KwPub => "'pub'".to_string(),
             TokenKind::KwCache => "'cache'".to_string(),
             TokenKind::KwArray => "'array'".to_string(),
+            TokenKind::KwInt2Float => "'int2float'".to_string(),
+            TokenKind::KwFloat2Int => "'float2int'".to_string(),
             TokenKind::Arrow => "'->'".to_string(),
             TokenKind::FatArrow => "'=>'".to_string(),
             TokenKind::Colon => "':'".to_string(),
@@ -339,6 +350,10 @@ enum RawToken {
     AtNameLit,
     #[token("array")]
     KwArray,
+    #[token("int2float")]
+    KwInt2Float,
+    #[token("float2int")]
+    KwFloat2Int,
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     NameLit,
     #[token("->")]
@@ -791,6 +806,8 @@ fn raw_to_kind(
             "pub" => TokenKind::KwPub,
             "cache" => TokenKind::KwCache,
             "array" => TokenKind::KwArray,
+            "int2float" => TokenKind::KwInt2Float,
+            "float2int" => TokenKind::KwFloat2Int,
             "_" => TokenKind::Placeholder,
             _ => TokenKind::Name(slice.to_string()),
         }),
@@ -833,6 +850,8 @@ fn raw_to_kind(
         RawToken::KwPub => Some(TokenKind::KwPub),
         RawToken::KwCache => Some(TokenKind::KwCache),
         RawToken::KwArray => Some(TokenKind::KwArray),
+        RawToken::KwInt2Float => Some(TokenKind::KwInt2Float),
+        RawToken::KwFloat2Int => Some(TokenKind::KwFloat2Int),
         RawToken::Arrow => Some(TokenKind::Arrow),
         RawToken::FatArrow => Some(TokenKind::FatArrow),
         RawToken::DoubleColon => Some(TokenKind::DoubleColon),

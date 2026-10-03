@@ -395,6 +395,22 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                     });
                 }
                 KernelInstr::I32WrapI64 => {}
+                // The language's class conversion.  **The number, not the
+                // bits**: `int2float` is the nearest `f32` and `float2int`
+                // truncates toward zero, which is what the two real backends
+                // answer for every value this reading is asked about — and the
+                // reason the emitter refuses the ones they would not
+                // (`docs/notes/floating-point.md` §4.2).
+                KernelInstr::Conv { from, to } => {
+                    let seen = stack.pop().unwrap().as_class(*from);
+                    stack.push(match (seen, *to) {
+                        (Scalar::Int(value), ScalarClass::Float) => Scalar::Float(value as f32),
+                        (Scalar::Float(value), ScalarClass::Int) => {
+                            Scalar::Int(value.trunc() as i64)
+                        }
+                        (seen, _) => seen,
+                    });
+                }
                 KernelInstr::Select => {
                     let condition = stack.pop().unwrap();
                     let otherwise = stack.pop().unwrap().as_class(class);
