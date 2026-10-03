@@ -351,6 +351,18 @@ load-bearing:
   refuse `"a"` and accept `1.5`.  No new machinery: it is
   `register_assert`'s documented behaviour, the same one `check_index`'s bounds
   constraint already relies on.
+- **The pin was also hiding a printer bug.**  A type printer names an unbound
+  cell by its **equality class** — `TypePrinter::class_name` keys its name table
+  by the class representative — but `static_class_name` (a *frozen* module's
+  cell) keyed by the ref alone, with no representative walk, and the lowlevel had
+  no static representative query to walk with.  Under the pin every member of a
+  class holds a committed value, so both cells printed `Int` and the difference
+  was invisible; with the class open, an imported `?a -> ?a` printed `?a -> ?b`
+  (`geo.double`'s hover) while the same type rendered dynamically printed
+  `?a -> ?a` (the example's own `output =`).  Fixed by
+  `Module::static_equality_representative` — the freeze keeps the class of a node
+  whose own value is unbound *whole*, so following `parent` over the artifact's
+  local ids is well defined — and the printer now mirrors `class_name` exactly.
 
 - **Definition.** `x : ?a{in_num}` and `y : ?a{in_num}` put the predicate in the
   parameters' attribute slots; the *type* cells stay open, so the signature is

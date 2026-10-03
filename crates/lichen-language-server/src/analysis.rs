@@ -2775,28 +2775,43 @@ mod tests {
             d.diagnostics
         );
 
-        // Line 7 (0-based line 6): `(math.succ 41, geo.double 5, geo.inc_twice 5)`
-        for pos in [
+        // Line 7 (0-based line 6): `(math.succ 41, geo.double 5, geo.inc_twice 5)`.
+        // Each field's declared type is asserted beside it: `succ` and
+        // `inc_twice` are `Int -> Int` because their bodies compute over a
+        // stated class, while `double` is `?a -> ?a` — `x => math.add x x` over
+        // the now-polymorphic `add` — which is the same type the example's own
+        // `output =` declaration records
+        // (`docs/notes/operator-polymorphism.md` §5).
+        for (pos, expected) in [
             // `.succ` field access on `math`
-            Position {
-                line: 6,
-                character: 6,
-            },
+            (
+                Position {
+                    line: 6,
+                    character: 6,
+                },
+                "Function : Int -> Int",
+            ),
             // `.double` field access on `geo`
-            Position {
-                line: 6,
-                character: 19,
-            },
+            (
+                Position {
+                    line: 6,
+                    character: 19,
+                },
+                "Function : ?a -> ?a",
+            ),
             // `.inc_twice` field access on `geo`
-            Position {
-                line: 6,
-                character: 33,
-            },
+            (
+                Position {
+                    line: 6,
+                    character: 33,
+                },
+                "Function : Int -> Int",
+            ),
         ] {
             let (msg, _) = d.hover_at(pos).expect("hover on an imported field access");
             assert!(
-                msg.contains("Function : Int -> Int"),
-                "field access hover msg = {msg}"
+                msg.contains(expected),
+                "field access hover msg = {msg}, expected to contain {expected}"
             );
             assert!(
                 !msg.contains("unresolved") && !msg.contains("field of imported module"),

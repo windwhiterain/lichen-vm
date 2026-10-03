@@ -101,6 +101,36 @@ impl<P: Program> Module<P> {
         self.static_module(sref.module).read(sref.index)
     }
 
+    /// The representative of a **static** node's equality class — the frozen
+    /// mirror of [`Module::equality_representative`], walking `parent` over the
+    /// artifact's own local ids (no path compression, so a read never mutates
+    /// the artifact).
+    ///
+    /// A reader that *names* cells must use it, exactly as it uses the dynamic
+    /// representative: the freeze keeps the equality class of a node whose own
+    /// value is still unbound **whole** (see `freeze::closure`'s contract — the
+    /// class is what holds that node's answer), so two refs in one class are one
+    /// variable.  Keying a name table by the ref alone prints them as two:
+    /// measured, an imported polymorphic `?a -> ?a` rendered `?a -> ?b`, while
+    /// the same type rendered dynamically — where the printer does follow the
+    /// representative — read `?a -> ?a`.
+    pub fn static_equality_representative(&self, sref: StaticNodeId) -> StaticNodeId {
+        let module = self.static_module(sref.module);
+        let mut index = sref.index;
+        // A parent chain visits each node at most once, so it cannot be longer
+        // than the artifact's node table.
+        for _ in 0..=module.nodes.len() {
+            match module.nodes[index.index].equality.parent() {
+                Some(parent) => index = parent,
+                None => break,
+            }
+        }
+        StaticNodeId {
+            module: sref.module,
+            index,
+        }
+    }
+
     /// The raw value behind `id` — no evaluation.  A static ref reads its
     /// solved value (which may be `Parameterized`); refs are absolute, so
     /// the raw value is safe to store anywhere.  A dynamic ref that names a
