@@ -8,6 +8,8 @@
 > it.  §1 is the incoherence as first read; §2 and §3 record what measurement says
 > that first reading got wrong.
 > Worktree `.worktrees/kernel-param-struct`, branch `feature/kernel-param-struct`.
+> §5.1 (the class a lowering runs in) and §5.3 (the wrapper owning its signature
+> arrow) are landed; §5.4 is the statement itself.
 > Companions: [compute-runtime-scalars](compute-runtime-scalars.md) (the measured
 > case that exposed this — its §4.4 is the symptom, this note is the fix),
 > [lowlevel-low-types](lowlevel-low-types.md) (the seed → pass → read chain),
@@ -292,13 +294,62 @@ can be stated.  Each is a trap that cost an attempt:
 
 Traps 3 and 4 pull apart: the sides must be *cells in the function's own type
 classes* (4) yet must never be written (the pin the handoff forbids), while a
-launch's read of them must resolve (3).  The shape that satisfies all four is the
-one worth trying next: an operator whose term is `[shape, [FunctionType, K]]`
-with `shape` the operator's **own node**, whose value the arm sets to
-`[domain, codomain]` — the sides being **lazy reads** of `f`'s type, written by
-the arm into the *reads'* own values (never the shared cells), with the whole
-expression handed to `$jit`/`$parallel` so it is evaluated and so an unstamped
-type node never enters an operand array.
+launch's read of them must resolve (3).
+
+**Measured, this session — the pin is real, and per-application cloning is what
+makes any statement of it possible:**
+
+- an annotation written *inside* a wrapper body reaches the argument
+  (`pin = g => {t = type_of g; h = g : Int -> Int; t}`, then `pin f; f 1.5`) is
+  refused — "expected Int, found Float": the applied parameter's cells are one
+  class with the argument's, so a class written there *is* the parameter cell the
+  handoff forbids writing;
+- the same function called twice with different classes is accepted
+  (`f (1 : Int)` then `f (1.5 : Float)`), so a *callee's* cells are cloned per
+  application — which is why a wrapper *definition* can stay generic while an
+  *applied* result states its own class;
+- the printer's arrow branch reads the **shape slot's value** at print time
+  (`type_printer::elements`: `elements[0]`'s value must be a two-element array),
+  so the statement is exactly "rewrite the shape node's value" — and it has to be
+  a shape the *wrapper* owns, because the function's own shape node is what every
+  other use of the function reads.
+
+### 5.3 Landed: the wrapper owns its signature arrow (`$sig`)
+
+`$sig(f)` (`compute.rs`) builds the arrow `JitOp`'s own gate builds — two fresh
+cells through `ctx.arrow`'s shape/kind/pair triple — and unifies it against `f`'s
+type, so its sides are *cells in the function's own classes* (trap 4) while the
+shape node belongs to the wrapper (no pin).  `jit`'s `.sig` field is
+`($sig(f))` instead of `(type_of f)`.
+
+Measured: the wrapper definition still renders
+`Function: ?a -> ?b -> struct<.native raw[?c, ?d], .sig ?a -> ?b>` — a native call
+*is* accepted in a type position and its term is what the field type becomes — an
+applied result still renders `.sig ?c -> ?c`, and the tree stays `57 of 58` with
+every other suite unchanged.  `$sig`'s *value* node is the shape: the node §5.2's
+statement has to rewrite.
+
+### 5.4 Open: who rewrites the shape, and how it reaches them
+
+The member is knowable **only at run time** (`open_class_of` reads the function's
+asserts, and the frozen template's parameter has no body), and every node an
+operator's operand array holds is deep-pass gated by `run_deferred`'s default —
+the gate the LaunchOp idiom's inert read rides on and that an open signature
+therefore fails.  So the writer needs one of:
+
+- **an operand that is already concrete**: an array holding the shape is what the
+  gate is expected to refuse (its items are the still-open cells — the next thing
+  to measure, and the measurement decides whether anything else is needed);
+- **a `run_deferred` override** on the compute vocabulary: the one op that must
+  read its operand *structurally* is exactly the case the default gate cannot
+  serve, at the cost of restating that gate for the other arms; or
+- **a node-carrying opaque value** (a `ComputeValue` variant holding the shape):
+  concrete for the pass and it carries the node — at the cost of a value variant
+  whose GC tracing and codec must keep that node alive.
+
+The write itself is the same in every case: for each shape item whose class is
+still open, use the class domain's first member as that item, rebuild the shape
+array, `Module::write_node_value` it — never a write into the function's cells.
 
 ## 6. How to verify, at each step
 

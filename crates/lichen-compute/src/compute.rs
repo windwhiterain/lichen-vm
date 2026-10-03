@@ -8465,6 +8465,7 @@ macro_rules! compute_native_ops {
         // The self-supporting `static`s below are the operator structs, which
         // are program-independent; the leaked slice is the table above.
         static JIT: $crate::JitOp = $crate::JitOp;
+        static SIG: $crate::SigOp = $crate::SigOp;
         static LAUNCH: $crate::LaunchOp = $crate::LaunchOp;
         static CALL: $crate::CallOp = $crate::CallOp;
         static PARALLEL: $crate::ParallelOp = $crate::ParallelOp;
@@ -8477,6 +8478,7 @@ macro_rules! compute_native_ops {
         static GRAPHRUN: $crate::GraphRunOp = $crate::GraphRunOp;
         let ops: Vec<(&'static str, &'static dyn $crate::NativeOp<$program>)> = vec![
             ("jit", &JIT as &dyn $crate::NativeOp<$program>),
+            ("sig", &SIG as &dyn $crate::NativeOp<$program>),
             ("launch", &LAUNCH as &dyn $crate::NativeOp<$program>),
             ("call", &CALL as &dyn $crate::NativeOp<$program>),
             ("parallel", &PARALLEL as &dyn $crate::NativeOp<$program>),
@@ -8503,6 +8505,22 @@ macro_rules! compute_native_ops {
 /// `NativeOps` registry (a `&'static [(&str, &dyn NativeOp<P>)]`), so the
 /// `$jit`/`$launch` names stay private to the plugin's own embedded source.
 pub struct JitOp;
+
+/// `$sig(f)` — the signature `f` is lowered under, as a type expression the
+/// **wrapper owns**.
+///
+/// `.sig`'s field type must be an arrow whose sides are the *function's own*
+/// classes (so the frozen wrapper still renders `?a -> ?b`), and it must not be
+/// the function's own type expression: a class written there would pin a
+/// polymorphic body (`f = y => y + y; k = compute.jit f; f 1.5` must keep
+/// working).  So this builds the same fresh arrow [`JitOp::build`] gates with —
+/// two fresh cells unified against `f`'s type, then the shape/kind/pair triple —
+/// and hands the wrapper a signature whose *shape node* is its own.
+///
+/// The shape is the node a later step rewrites to the class the lowering runs in
+/// (`docs/notes/class-channel.md` §5.2); owning it is what keeps that statement
+/// off the function's own cells.
+pub struct SigOp;
 
 /// `$launch(native, sig, a)` — run kernel `native` on `a`.  The signature gate
 /// unifies `sig`'s type with a function type, reading the domain/codomain
@@ -8540,6 +8558,36 @@ where
             node: pair,
             val: None,
             ty: kernel_ty,
+        }
+    }
+}
+
+impl<P> NativeOp<P> for SigOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
+    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+        let f = &args[0];
+        // The arrow the function is lowered under: fresh cells in the function's
+        // own classes (the `JitOp` gate's construction, through `ctx.arrow`'s
+        // three nodes), so the wrapper's rendering still names the function's
+        // variables.
+        let d = ctx.fresh();
+        let c = ctx.fresh();
+        let shape = ctx.array_node(&[d, c]);
+        let marker = ctx.value_node(<P::Value as ValueType>::function_type_marker());
+        let kind = ctx.kind_expr(marker);
+        let fn_ty = ctx.array_node(&[shape, kind]);
+        ctx.check_unify(f.ty, fn_ty, loc, DiagKind::Guard);
+        // The term is the arrow type expression; the value node is its *shape*,
+        // which the wrapper hands to `$jit` so the lowering can state the class
+        // it chose on it.
+        NativeApply {
+            node: fn_ty,
+            val: Some(shape),
+            ty: kind,
         }
     }
 }
