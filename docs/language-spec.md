@@ -45,7 +45,7 @@ sep      := newline | ';' | ','                      -- one uniform Separator to
 
 expr     := lambda
 lambda   := annotated ('=>' expr)?                  -- lambda; right-assoc; lhs is a (possibly annotated) name
-annotated:= arrow ((':' arrow) | ('#' arrow) | ('?' arrow))*   -- type (':'), perspective ('#'), and/or doc ('?') annotation, right-assoc
+annotated:= arrow ((':' arrow) | ('#' arrow) | ('!' arrow) | ('?' arrow))*   -- type (':'), perspective ('#'), refinement ('!'), and/or doc ('?') annotation, right-assoc
 arrow    := cmp ('->' cmp)*                         -- function type; right-assoc
 cmp      := bits (('<' | '>' | '<=' | '>=' | '==' | '!=') bits)*   -- comparison, left-assoc; yields 0/1
 bits     := bitxor ('|' bitxor)*                    -- bitwise or
@@ -180,7 +180,15 @@ farg     := '.' name expr                         -- named instantiation argumen
   body scope (so a `T` referring to `x` itself is in scope, e.g. `x : x -> Int`)
   while the codomain is inferred from the body.  Likewise `x # n => e` desugars
   to `x => { x # n; e }` — the parameter's perspective slot, checked at each
-  apply against the argument's perspective.  The body still extends maximally:
+  apply against the argument's perspective; the IR keeps it as a parameter
+  field (`parameter_attribute`) so the apply can compare the argument's own
+  attribute against the declared one.  A **refinement** parameter, `x ! p => e`,
+  takes the same desugar *without* the optimization — `x => { x ! p; e }` — which
+  is the general form and needs no IR field: the annotation rule then registers
+  the predicate's assertion on the function being built, so an apply clone
+  re-checks it against the call's argument
+  ([operator-polymorphism](notes/operator-polymorphism.md) §3).  The body still
+  extends maximally:
   `x : T => e : U` is `x : T => (e : U)`.  `x : T` without a following `=>`
   stays an ordinary annotation.
 - **One grammar, no type mode.**  Types are expressions, so term and type forms

@@ -191,6 +191,7 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
             r#type,
             perspective,
             doc,
+            refinement,
             ..
         } => {
             push_index(&mut out, 0, value);
@@ -202,6 +203,9 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
             }
             if let Some(doc) = doc {
                 push_index(&mut out, 3, doc);
+            }
+            if let Some(refinement) = refinement {
+                push_index(&mut out, 4, refinement);
             }
         }
         Expr::Arrow {

@@ -97,6 +97,7 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 value,
                 r#type,
                 perspective,
+                refinement,
                 ..
             } => {
                 walk_expr(value, out);
@@ -105,6 +106,9 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 }
                 if let Some(p) = perspective {
                     walk_expr(p, out);
+                }
+                if let Some(r) = refinement {
+                    walk_expr(r, out);
                 }
             }
             Expr::Arrow {

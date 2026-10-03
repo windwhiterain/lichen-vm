@@ -207,6 +207,38 @@ where
         false
     }
 
+    /// The condition this attribute imposes on the annotated expression's own
+    /// **value**, as a node whose value must evaluate to `1` — or `None` when
+    /// the attribute constrains nothing.
+    ///
+    /// This is the one hook an attribute has into the *runtime* of the
+    /// expression it annotates: every other method here reconciles slots at
+    /// compile time, while a constraint is a fact about a value and a fact about
+    /// a value is checked by *evaluating* it.  The checker registers the
+    /// returned node through its ordinary assert channel (the same one
+    /// [`lichen_language`'s `@assert`](Self::missing_value) uses), which is what
+    /// gives the condition its semantics for free: the checker force-evaluates
+    /// it ignoring laziness and requires `USize(1)`, a condition that stays lazy
+    /// is *pending* rather than failed, the apply clone re-checks the
+    /// instantiated condition per call, and it freezes with the function.
+    ///
+    /// `value_pair` is the annotated expression's `[value, type]` term — the
+    /// argument a predicate is applied to — and `slot` is this attribute's own
+    /// slot node on that expression, whose interior only the attribute knows how
+    /// to read ([`Self::slot_value`] is the read, [`Ctx::class_value`] the
+    /// context-local one).
+    ///
+    /// Default `None` — an attribute that constrains nothing at run time (a
+    /// perspective, a doc) says nothing, and the checker asks every attribute.
+    fn constraint(
+        &self,
+        _ctx: &mut dyn Ctx<P>,
+        _value_pair: NodeId,
+        _slot: NodeId,
+    ) -> Option<NodeId> {
+        None
+    }
+
     /// Render this attribute's slot value in the language's own syntax
     /// (`# 4`, `? name = "five"`), or `None` when it cannot be spelled (an
     /// unbound or runtime-dependent value, or an attribute with no display).

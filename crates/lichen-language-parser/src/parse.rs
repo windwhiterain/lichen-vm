@@ -760,11 +760,14 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                 })
             });
 
-        // `:` (the type annotation) and `#` (the perspective annotation) at the
-        // same precedence, right-associative.  Either may appear alone; the two
-        // fold into a single `Annotation` carrying whichever are present (at
-        // most one of each).  Both right sides are parsed at the `->` level:
-        // `e : Int -> Int` annotates with the arrow type, `e # n` with `n`.
+        // `:` (the type annotation), `#` (the perspective) and `!` (the
+        // refinement) at the same precedence, right-associative.  Any may
+        // appear alone; they fold into a single `Annotation` carrying whichever
+        // are present (at most one of each).  Every right side is parsed at the
+        // `->` level: `e : Int -> Int` annotates with the arrow type, `e # n`
+        // with `n`, `e ! p` with the predicate `p` — so a refinement predicate
+        // is written explicitly, `e : Int ! (v => v > 3)`, and a bare `e ! f x`
+        // takes `f` alone (parenthesize an application).
         let term4 = term3
             .clone()
             .then(
@@ -775,6 +778,9 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                     token(TokenKind::Hash)
                         .ignore_then(operand(tokens, term3.clone()))
                         .map(AnnPiece::Perspective),
+                    token(TokenKind::Bang)
+                        .ignore_then(operand(tokens, term3.clone()))
+                        .map(AnnPiece::Refinement),
                     token(TokenKind::Question)
                         .ignore_then(operand(tokens, term3.clone()))
                         .map(AnnPiece::Doc),
@@ -812,18 +818,53 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                         value,
                         r#type,
                         perspective,
+                        refinement,
                         span,
                         ..
                     } => match *value {
-                        Expr::Name(parameter, parameter_span, _) => Expr::Lambda {
-                            parameter,
-                            parameter_span,
-                            parameter_binder: None,
-                            parameter_type: r#type,
-                            parameter_perspective: perspective,
-                            r#return: rhs,
-                            span,
-                        },
+                        Expr::Name(parameter, parameter_span, _) => {
+                            // A parameter **refinement** is desugared into a
+                            // body statement, `x ! p => e` becoming
+                            // `x => { x ! p; e }` — the same desugar the
+                            // perspective documents, but *not* optimized into
+                            // an IR parameter field (the perspective's
+                            // `parameter_attribute` is a single slot, and the
+                            // desugar is the general form).  It buys the
+                            // refinement's whole semantics from the ordinary
+                            // annotation rule: the annotate-and-assert runs in
+                            // the body scope, so the assertion is registered on
+                            // the function being built and an apply clone
+                            // re-checks it against the call's argument
+                            // (`docs/notes/operator-polymorphism.md` §3).
+                            let r#return = match refinement {
+                                None => rhs,
+                                Some(refinement) => {
+                                    let parameter_value =
+                                        Expr::Name(parameter.clone(), parameter_span, None);
+                                    Box::new(Expr::Block {
+                                        statements: vec![Stmt::Expr(Expr::Annotation {
+                                            value: Box::new(parameter_value),
+                                            r#type: None,
+                                            perspective: None,
+                                            refinement: Some(refinement),
+                                            doc: None,
+                                            span: parameter_span,
+                                        })],
+                                        expr: rhs,
+                                        span,
+                                    })
+                                }
+                            };
+                            Expr::Lambda {
+                                parameter,
+                                parameter_span,
+                                parameter_binder: None,
+                                parameter_type: r#type,
+                                parameter_perspective: perspective,
+                                r#return,
+                                span,
+                            }
+                        }
                         value => {
                             emit.emit(Rich::custom(me.span(), "expected a name before '=>'"));
                             value
@@ -869,23 +910,25 @@ where
     combine(first, acc)
 }
 
-/// One `: T`, `# p`, or `? e` partner of an annotation chain.
+/// One `: T`, `# p`, `! r`, or `? e` partner of an annotation chain.
 #[derive(Clone, Debug)]
 enum AnnPiece {
     Type(Expr),
     Perspective(Expr),
+    Refinement(Expr),
     Doc(Expr),
 }
 
-/// Accumulate a `: T` / `# p` / `? e` chain into one [`Expr::Annotation`],
-/// carrying whichever of the three annotations are present (at most one of
-/// each — a later one of the same kind overwrites, matching the
-/// `expr [: expr] [# expr] [? expr]` grammar).  `e : A : B` keeps `B`
+/// Accumulate a `: T` / `# p` / `! r` / `? e` chain into one
+/// [`Expr::Annotation`], carrying whichever of the four annotations are present
+/// (at most one of each — a later one of the same kind overwrites, matching the
+/// `expr [: expr] [# expr] [! expr] [? expr]` grammar).  `e : A : B` keeps `B`
 /// (rightmost wins), as before.  An expression with no annotation (`rest`
 /// empty) is returned unchanged — it is not wrapped in a no-op
 /// `Annotation`, so the grammar stays faithful.
 /// `? e` is the label slot: a metadata value (a user-made struct instance),
-/// never a constraint.
+/// never a constraint.  `! r` is the opposite: a predicate on the value,
+/// required to evaluate to `1`.
 fn fold_annotations(first: Expr, rest: Vec<AnnPiece>) -> Expr {
     if rest.is_empty() {
         return first;
@@ -894,11 +937,13 @@ fn fold_annotations(first: Expr, rest: Vec<AnnPiece>) -> Expr {
     let value = Box::new(first);
     let mut r#type = None;
     let mut perspective = None;
+    let mut refinement = None;
     let mut doc = None;
     for piece in rest {
         match piece {
             AnnPiece::Type(t) => r#type = Some(Box::new(t)),
             AnnPiece::Perspective(p) => perspective = Some(Box::new(p)),
+            AnnPiece::Refinement(r) => refinement = Some(Box::new(r)),
             AnnPiece::Doc(d) => doc = Some(Box::new(d)),
         }
     }
@@ -906,6 +951,7 @@ fn fold_annotations(first: Expr, rest: Vec<AnnPiece>) -> Expr {
         value,
         r#type,
         perspective,
+        refinement,
         doc,
         span,
     }

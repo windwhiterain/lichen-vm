@@ -9,17 +9,29 @@ use lichen_utils::extend::AsEnum;
 /// contract, like the codec tags: reordering the manifest silently renumbers
 /// every persisted pair.  This pins it (the composition's build-time check
 /// pins the *mechanism*: index == position).
+///
+/// The refinement was **appended**, which is what the contract permits: the
+/// slots below `4` keep their numbers, so no persisted pair is renumbered —
+/// a pair either predates the refinement (and has no slot `4`) or carries it.
 #[test]
 fn the_canonical_order_is_the_persisted_pair_layout() {
     assert_eq!(
         LANG_ATTR_ORDER,
-        [LangAttr::Perspective(Perspective), LangAttr::Doc(Doc)]
+        [
+            LangAttr::Perspective(Perspective),
+            LangAttr::Doc(Doc),
+            LangAttr::Refinement(Refinement),
+        ]
     );
     assert_eq!(
         shape::attr_slot(LangAttr::Perspective(Perspective).order_index()),
         2
     );
     assert_eq!(shape::attr_slot(LangAttr::Doc(Doc).order_index()), 3);
+    assert_eq!(
+        shape::attr_slot(LangAttr::Refinement(Refinement).order_index()),
+        4
+    );
 }
 
 /// Feed `values` (as the operand array) to the language's `Gcd` operator

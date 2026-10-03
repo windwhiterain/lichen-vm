@@ -138,11 +138,12 @@ pub(crate) fn shift_expr(
             r#type,
             perspective,
             doc,
+            refinement,
             span,
         } => {
             shift(span, old_starts, new_starts, delta);
             shift_expr(value, old_starts, new_starts, delta);
-            for attribute in [r#type, perspective, doc].into_iter().flatten() {
+            for attribute in [r#type, perspective, doc, refinement].into_iter().flatten() {
                 shift_expr(attribute, old_starts, new_starts, delta);
             }
         }

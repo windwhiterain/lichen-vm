@@ -244,6 +244,12 @@ where
             None => self.state[value].ty.unwrap(),
         };
         let value_node = self.value_of(value);
+        // The annotated value's own term — the `[value, type]` pair a
+        // refinement's predicate is applied to (the *value being checked*, not
+        // the annotation's pair, which carries the refinement slot itself).
+        let value_term = self.state[value]
+            .term
+            .expect("an annotated value is compiled");
         // The annotation *replaces* the attribute slots it spells and
         // *preserves* every slot it does not — it is not a fresh, isolated
         // attribute set.  So the resulting schema is the value's slots merged
@@ -350,6 +356,18 @@ where
                     // The annotation value *is* the slot (it replaces).
                     constraint_slot = Some(slot);
                     slots.push(slot);
+                    // A refinement is **enforced**, not merely reconciled: the
+                    // attribute applies its predicate to the annotated value and
+                    // the ordinary assert channel requires the result to be `1`.
+                    // Registered here, while the expression is lowered, so it
+                    // rides the enclosing function and the apply clone re-checks
+                    // the instantiated condition per call — which is what turns a
+                    // refinement written on a parameter into a per-application
+                    // check.  An attribute that constrains nothing returns `None`
+                    // and the checker names no concrete attribute.
+                    if let Some(condition) = ext.constraint(self, value_term, slot) {
+                        self.register_assert(condition, self.loc(e, 0), true);
+                    }
                 }
             } else {
                 // A slot the annotation does not spell is *preserved*: carry the

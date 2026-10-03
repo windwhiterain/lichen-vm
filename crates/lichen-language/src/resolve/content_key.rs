@@ -288,6 +288,7 @@ impl KeyWriter {
                 r#type,
                 perspective,
                 doc,
+                refinement,
                 ..
             } => {
                 self.u(16);
@@ -295,6 +296,7 @@ impl KeyWriter {
                 self.opt_expr(r#type);
                 self.opt_expr(perspective);
                 self.opt_expr(doc);
+                self.opt_expr(refinement);
             }
             Expr::Arrow {
                 parameter,

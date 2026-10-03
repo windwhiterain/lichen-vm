@@ -507,13 +507,20 @@ than budgeting for it.)
   class node out of another module would compare unequal), and the condition
   registered by `check_binop` through `register_assert`.  Measured: no existing
   test regressed, and `add "a" "b"` went from *accepted* to refused.
-- **Phase 1 — the contract on the builtin operators.** The operand tie and the
-  domain condition are landed (§5).  What remains is the refinement's diagnostic
-  flavour (§8.5), the `T{…}` surface spelling and its lowering, and updating the
-  two example declarations whose signatures became polymorphic.  The kernel
-  boundary (§8.4) is **not** in this phase: it is the specialize-before-JIT
-  pass's, and the domain landed here is that pass's input.
-  *This is the user-visible feature.*
+- **Phase 1 — the contract on the builtin operators.** The operand tie, the
+  domain condition, the `!` surface spelling and the **refinement attribute**
+  itself are landed; the assert is inserted through the new
+  [`AttrExt::constraint`](../../crates/lichen-highlevel/src/attr.rs), so the
+  checker stays attribute-agnostic and the enforcement is the ordinary assert
+  channel.  A **parameter** refinement (`x ! p => e`) is desugared to a body
+  statement rather than an IR parameter field — the general form, which needs no
+  new field and gets per-application re-checking for free.  Measured:
+  `f = x : Int ! (v => v > 3) => x` yields `f 5` as `5: Int` and refuses `f 2`
+  with `expected 1, found 0` attributed to the annotation.  What remains is the
+  refinement's diagnostic flavour (§8.5), the printer's spelling (§8.1), and the
+  `Num`/std migration.  The kernel boundary (§8.4) is **not** in this phase: it
+  is the specialize-before-JIT pass's, and the domain landed here is that pass's
+  input.  *The builtin operators are the user-visible feature.*
 - **Phase 2 — the dependent if.** `if` desugars to the tuple read `(e, t)(c)`
   instead of the array read `[e, t][c]`, and the claimed laziness of an
   unselected arm is measured. Unlocks user-written generic numeric functions.
