@@ -257,10 +257,13 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
    type read, and the contract now lives in the built-in **`core`** prelude
    (`crates/lichen-language/src/core.lichen`, seeded into every source).  Measured
    in §3's last rows; the module's own note is [core-prelude](core-prelude.md).
-   Three pieces of that leg remain, all diagnostics work:
-   - the **jump** into the built-in file from a prelude name (the editor's name
-     index still skips the prelude — `is_prelude_import` — because its entries
-     had no file; the source record §4 adds is what a definition should point at);
+   Three pieces of that leg's diagnostics work, the first now landed:
+   - the **jump** into the built-in file from a prelude name — **landed** in the
+     language server: the source record §4 adds is what a prelude name's
+     `Definition` now points at, so go-to-definition answers with the built-in
+     file's URI, and a failure inside the built-in is published against that file
+     instead of the document (`crates/lichen-language-server/src/analysis.rs`,
+     [core-prelude](core-prelude.md) §4);
    - the **domain spelling** across modules: a refusal inside the prelude reads
      the assert channel's generic wording, not `does not satisfy {Int, Float}`,
      because the spelling and the domain node live in the built-in's build;
