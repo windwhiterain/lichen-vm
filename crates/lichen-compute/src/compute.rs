@@ -1831,22 +1831,8 @@ struct ParallelRoles {
 impl ParallelRoles {
     /// The index of `path` among the input buffers — the `cfg_pos` a read of it
     /// takes.
-    ///
-    /// Not yet called: the emitter still derives a read's position from
-    /// `cfg(1)(k)`, and a struct parameter is refused before emission
-    /// ([`PARALLEL_PARAM_EMISSION`]).  It lands with the emission side, and it
-    /// is written here because it is the table's own question rather than the
-    /// emitter's.
-    #[allow(dead_code)]
     fn input_pos(&self, path: &[usize]) -> Option<usize> {
         self.inputs.iter().position(|candidate| candidate == path)
-    }
-    /// The index of `path` among the outputs — the `out_pos` a write of it takes.
-    ///
-    /// Not yet called, for the same reason as [`Self::input_pos`].
-    #[allow(dead_code)]
-    fn output_pos(&self, path: &[usize]) -> Option<usize> {
-        self.outputs.iter().position(|candidate| candidate == path)
     }
     /// The wasm local offset of a scalar parameter read, within its slot.
     fn scalar_offset(&self, path: &[usize]) -> Option<usize> {
@@ -1944,18 +1930,20 @@ const PARALLEL_PARAM_FIELDS: &str = "a parallel kernel's parameter is \
      `struct<.n Int, .in <inputs>, .out <outputs>>`, and this one is a struct \
      without both `.in` and `.out`";
 
-/// A parallel kernel whose parameter *is* the named struct term, which the
-/// lowering recognises but cannot yet emit for.
+/// A parallel kernel whose parameter is the named struct term, which the
+/// lowering reads and the launch cannot yet decode.
 ///
-/// The two halves of the shape are decoded (`parallel_roles`), and the emission
-/// side is not: a read's position is still derived from `cfg(1)(k)` and a
-/// write's ordinal from its emission order, and a struct parameter has neither.
-/// The refusal names that gap rather than letting the old path report "not a cfg
-/// buffer tuple slot", which would blame the author for the wrong thing.
-const PARALLEL_PARAM_EMISSION: &str = "a parallel kernel's parameter is a named \
-     struct (`struct<.n Int, .in …, .out …>`), and lowering one is not written \
-     yet: a read's position and a write's ordinal still come from the \
-     `cfg = (n, (buffers…))` shape";
+/// The two halves of the shape are the *lowering's* and the *launch's*: the
+/// lowering reads `.in` for a read's position, the scalar fields for the
+/// signature, and `.out` for the declared counts, and all of that is written.
+/// `ParLaunch`'s host-side walk still reads `cfg = (n, (buffers…))`, so a launch
+/// cannot decode the argument — and a launch that cannot read its argument
+/// answers `parameterized`, which is exactly the answer that channel exists to
+/// stop giving.  Refused by name rather than left to it.
+const PARALLEL_PARAM_LAUNCH: &str = "a parallel kernel's parameter is a named \
+     struct (`struct<.n Int, .in …, .out …>`), and launching one is not written \
+     yet: the lowering reads its fields and the host-side argument walk still \
+     reads `cfg = (n, (buffers…))`";
 
 /// A parameter slot in a kernel's wasm signature.
 ///
@@ -2138,7 +2126,7 @@ where
         body: body.into(),
         inputs: tally.reads,
         outputs: tally.writes,
-        input_classes: tally.input_classes(),
+        input_classes: tally.input_classes(tally.reads),
         // A scalar fragment has no output buffers, so this is empty: the values
         // it produces are its **wasm results**, which is `result_classes` below.
         // The two were one field while a fragment had one class, and they
@@ -2254,44 +2242,46 @@ where
         Some(items) if !items.is_empty() => dyn_node(items[0].node)?,
         _ => body,
     };
-    // **Which shape the parameter is.**  A kernel written against
-    // `compute.K (compute.P _)(…)` has a named struct parameter whose fields
-    // carry the roles; the older `cfg = (n, (buffers…))` has a tuple.
+    // **Which shape the parameter is, and where its facts live.**  A kernel
+    // written against `compute.K (compute.P _)(…)` has a named struct parameter
+    // whose fields carry the roles; the older `cfg = (n, (buffers…))` has a
+    // tuple.
     //
     // The role table is decoded from the parameter's *type*, because
-    // `low_type_of` answers `Unknown` for every struct **by design** — a
-    // nominal struct has no low shape (`lichen_highlevel::shape`) — so the
-    // struct half cannot go through the seed → pass → read chain below.
+    // `low_type_of` answers `Unknown` for every struct **by design** — a nominal
+    // struct has no low shape (`lichen_highlevel::shape`) — so the struct half
+    // cannot go through the seed → pass → read chain below.
     let roles = parallel_roles(module, cfg_pair)?;
     if roles.is_some() {
-        // Recognised, and not yet lowerable: the emission side still derives a
-        // read's position from `cfg(1)(k)` and a write's ordinal from its
-        // emission order, and a struct parameter has neither.  Refused by name
-        // rather than left to the old path's "not a cfg buffer tuple slot",
-        // which would name the wrong cause.
-        return Err(PARALLEL_PARAM_EMISSION.into());
+        // **Recognised, and not yet runnable.**  The lowering below reads the
+        // role table (a read's position from `.in`, the scalar parameters, the
+        // declared counts), and the *launch* does not: `ParLaunch`'s host-side
+        // walk still reads `cfg = (n, (buffers…))`, and a launch that cannot read
+        // its argument answers `parameterized` — the one answer that channel
+        // exists to stop giving.  Refused by name until that walk lands.
+        return Err(PARALLEL_PARAM_LAUNCH.into());
     }
-    // The output count is the **codomain's arity**, read here as the body's own
-    // value: a bare value is one output, a materialized tuple value is one
-    // output per element.  It is a fact of the *function*, so it is fixed
-    // before any index runs — the count is never discovered from which slots
-    // happened to be written.  (The kernel struct's `.sig` names the same
-    // arity as a type; the body's value is the same fact read where the
-    // emitter can count it, without the type encoding.)
+    // A struct parameter's scalar parameters are its fields other than `.in` and
+    // `.out`; a tuple parameter's one scalar is the count `n`.  The output count
+    // is the **codomain's arity** for both — a bare value is one output, a
+    // materialized tuple value one per element — because that is where the writes
+    // are: a `compute.write` is a value, so a body that writes several outputs
+    // returns a tuple of them.  Both counts are facts of the *function*, fixed
+    // before any index runs rather than discovered from which slots happened to
+    // be written.
+    let scalar_count = roles.as_ref().map_or(1, |roles| roles.scalars.len());
     let outputs = parallel_output_nodes(module, ret_value);
-    // `cfg = (n, (buffer…))`.  `cfg(0)` is the scalar count `n` — the only
-    // scalar wasm param from cfg; the buffer tuple is host-side (read via the
-    // `read` import by its position in `cfg(1)`).  Model the cfg's scalar part
-    // as a `Tuple([USize])` so the emitter maps `cfg(0)` → `local.get 0`.
-    //
-    // This seed is the *host ABI's*, not a type fact: the parallel signature is
-    // `(n, index)` by construction, whatever the lichen type says, so it is
-    // stated here rather than decoded.  The pass then runs as usual, and the
-    // slot's shape is read back off the class — the same seed → pass → read
-    // chain `compile_fragment` uses.
+    // The seed is the *host ABI's*, not a type fact: the parallel signature is
+    // the parameter's scalar leaves followed by the index, whatever the lichen
+    // type says, so it is stated here rather than decoded.  The pass then runs as
+    // usual, and the slot's shape is read back off the class — the same
+    // seed → pass → read chain `compile_fragment` uses.
     let cfg_value = pair_value_node(module, cfg_pair)
         .ok_or_else(|| "parallel cfg parameter is not a [value, type] pair".to_string())?;
-    module.seed_class_low_type(cfg_value, LowShape::Tuple(vec![LowShape::USize]));
+    module.seed_class_low_type(
+        cfg_value,
+        LowShape::Tuple(vec![LowShape::USize; scalar_count]),
+    );
     seed_template_term_low_types(module, fid);
     module.infer_template_low_types(fid);
     let Some(cfg_shape) = module.low_type_of_node(cfg_value) else {
@@ -2303,30 +2293,33 @@ where
         value: cfg_value,
         shape: cfg_shape,
         base: 0,
-        roles: None,
+        roles: roles.clone(),
     }];
     let mut body_instr: Vec<KernelInstr> = Vec::new();
-    // **The outputs may mix the two.**  Each write's ordinal carries the class of
-    // the value it writes (`Positions::write_classes`), and a module declares its
-    // `write` import once per class for exactly this reason.  The first decided
-    // one is kept as the fragment's own class, which is what the dummy result and
-    // the fallback filler below are lowered in.
-    let write_classes: Vec<Option<ScalarClass>> = outputs
+    // **The class a buffer read is declared in** — see
+    // [`Positions::element_class`].  It is the *first* write's class, which is the
+    // fallback declaration and not a claim that the others agree: each write's own
+    // ordinal carries its own value's class (`Positions::write_classes`).
+    let class = outputs
         .iter()
-        .map(|output| write_value_node(module, *output).map(|value| node_class(module, value)))
-        .collect();
-    let class = write_classes
-        .iter()
-        .flatten()
-        .copied()
+        .filter_map(|output| {
+            write_value_node(module, *output).map(|value| node_class(module, value))
+        })
         .next()
         .unwrap_or(ScalarClass::Int);
+    // **The outputs are the codomain's, for both shapes.**  A `compute.write` is
+    // a *value*, so a body that writes several outputs returns a tuple of them
+    // and one that writes one returns it directly; the graph is lazy, so a write
+    // whose result nothing uses is never emitted at all.  A struct parameter's
+    // `.out` therefore declares how many there are and what class each holds, and
+    // the check below is what keeps the declaration and the body agreeing.
+    //
     // One `compute.write` per codomain position, in position order, so write `k`
-    // is emitted with `out_pos = k`.  A position is *required* to emit exactly
-    // one write: a position that emits none is named, and the total is checked
-    // afterwards so a write reached nested inside a position's value (which
-    // would consume an ordinal of its own) is caught too.  A conditional write
-    // is refused by the emitter, which knows the more specific cause.
+    // is emitted with `out_pos = k`.  A position is *required* to emit exactly one
+    // write: a position that emits none is named, and the total is checked
+    // afterwards so a write reached nested inside a position's value (which would
+    // consume an ordinal of its own) is caught too.  A conditional write is
+    // refused by the emitter, which knows the more specific cause.
     let mut tally = Positions::default();
     // The class a buffer read is declared in; see [`Positions::element_class`].
     tally.element_class = Some(class);
@@ -2351,6 +2344,17 @@ where
             outputs.len()
         ));
     }
+    if let Some(roles) = &roles
+        && outputs.len() != roles.outputs.len()
+    {
+        return Err(format!(
+            "this index function's codomain names {} output(s) but its parameter declares {} \
+             `.out` field(s): the two are the same list, and a struct parameter states it in \
+             the type",
+            outputs.len(),
+            roles.outputs.len()
+        ));
+    }
     // The index function writes into the output buffers (side effects); leave a
     // dummy scalar on the stack so the shared `assemble_module` signature holds
     // for the write-only kernel.  That dummy is exactly **one** value, which is
@@ -2360,29 +2364,41 @@ where
     // class like every other value in the body, so the signature's result type
     // follows the class too.
     body_instr.push(KernelInstr::Const(class, const_bits(class, 0)));
+    // **The declared input count.**  A struct parameter declares it as `.in`'s
+    // field count, and a `(n, (buffers…))` one as the highest position the body
+    // read (`tally.reads`) — the positions there are a sparse space, so the count
+    // is a max rather than a tally.
+    let declared_inputs = roles
+        .as_ref()
+        .map_or(tally.reads, |roles| roles.inputs.len());
     Ok(KernelFragment {
-        // `(config, index)` however many buffers the body reads: the buffers are
-        // bound rather than passed, so this shape is the parallel signature and
-        // says nothing about them. `tally.reads` is what says that.
+        // The parameter's scalar leaves followed by the index, however many
+        // buffers the body reads: the buffers are bound rather than passed, so
+        // this shape is the parallel signature and says nothing about them.
+        // `tally.reads` is what says that, and for a struct parameter so is
+        // `.in`'s field count.
         //
-        // **Both leaves are `Int`, and that is the ABI's own statement rather
-        // than a language fact** (`cfg(0)`'s type is a fresh cell the body pins,
-        // if it uses it at all).  The count is a launch extent and the index is a
-        // lane number: neither is data, so neither takes the buffer's class.  A
-        // float fragment's index is an `i64` — the conversion that made it an
-        // `f32` existed only because the fragment had one class, and the host's
+        // **Every leaf is `Int`, and that is the ABI's own statement rather than
+        // a language fact** (`cfg(0)`'s type is a fresh cell the body pins, if it
+        // uses it at all).  The count is a launch extent and the index is a lane
+        // number: neither is data, so neither takes a buffer's class.  A float
+        // fragment's index is an `i64` — the conversion that made it an `f32`
+        // existed only because the fragment had one class, and the host's
         // `read`/`write` imports no longer convert it.
-        param_shape: KernelShape::Tuple(vec![
-            KernelShape::Scalar(ScalarClass::Int),
-            KernelShape::Scalar(ScalarClass::Int),
-        ]),
+        param_shape: KernelShape::Tuple(
+            (0..=scalar_count)
+                .map(|_| KernelShape::Scalar(ScalarClass::Int))
+                .collect(),
+        ),
         body: body_instr.into(),
-        inputs: tally.reads,
-        outputs: tally.writes,
-        input_classes: tally.input_classes(),
+        inputs: declared_inputs,
+        outputs: roles
+            .as_ref()
+            .map_or(tally.writes, |roles| roles.outputs.len()),
+        input_classes: tally.input_classes(declared_inputs),
         output_classes: tally.output_classes(),
-        // The dummy scalar the write-only body leaves on the stack, in the
-        // fragment's class like every other value it computes.
+        // The dummy scalar the write-only body leaves on the stack, in the class
+        // the first write computes in like every other value the body produces.
         result_classes: vec![class],
         int_width: IntWidth::I64,
     })
@@ -3902,14 +3918,15 @@ struct Positions {
 }
 
 impl Positions {
-    /// The declared class of every input position, one per position, at least
-    /// [`Self::reads`] long: a position a body never read is still a position a
-    /// caller binds, and it takes the declared class for the same reason the
-    /// reads do.
-    fn input_classes(&self) -> Vec<ScalarClass> {
+    /// The declared class of every input position, `declared` entries long — the
+    /// count the fragment declares, which is the highest position a body read for
+    /// a `(n, (buffers…))` parameter and the `.in` field count for a struct one.
+    /// A position a body never read is still a position a caller binds, and it
+    /// takes the declared class for the same reason the reads do.
+    fn input_classes(&self, declared: usize) -> Vec<ScalarClass> {
         let class = self.element_class.unwrap_or(ScalarClass::Int);
         let mut classes = self.read_classes.clone();
-        classes.resize(self.reads.max(classes.len()), class);
+        classes.resize(declared.max(classes.len()), class);
         classes
     }
     /// The declared class of every write ordinal, one per ordinal — this is the
@@ -4315,37 +4332,10 @@ where
                 // that to the actual buffer node (the cfg buffer-tuple slot)
                 // so `parallel_buffer_pos` recognizes it, exactly like the
                 // `Index` emitter peels a constant array element.
-                let mut buf = buf;
-                for _ in 0..8 {
-                    let target_oi = match module.node_operation(buf).as_ref() {
-                        Some(op)
-                            if matches!(
-                                AsEnum::<LowOperator>::as_enum(&op.operator),
-                                Some(LowOperator::Index)
-                            ) =>
-                        {
-                            operand_pair(module, op.operand).ok()
-                        }
-                        _ => None,
-                    };
-                    let Some((target, index)) = target_oi else {
-                        break;
-                    };
-                    let Some(k) = usize_value(module, index) else {
-                        break;
-                    };
-                    let Some(array_value) = value_of_node(module, target).or(Some(target)) else {
-                        break;
-                    };
-                    // SAFETY: `array_value` is a live node of `module`.
-                    let Some(items) = (unsafe { module.array_items(array_value) }) else {
-                        break;
-                    };
-                    let Some(item) = items.get(k) else { break };
-                    buf = dyn_node(item.node)?;
-                }
+                let buf = peeled_argument(module, buf)?;
                 let pos = parallel_buffer_pos(module, params, buf).ok_or_else(|| {
-                    "read's buffer argument is not a cfg buffer tuple slot (cfg(1)(k))".to_string()
+                    "read's buffer argument is not an input buffer of the parallel parameter"
+                        .to_string()
                 })?;
                 // The input count is a **max**, not a tally: the read positions are
                 // a sparse space, and a body that reads only `cfg(1)(1)` still
@@ -4373,14 +4363,21 @@ where
                 body.push(KernelInstr::BufferReadCall(element));
                 return Ok(());
             }
-            // A pending write: `write [n, idx, val]` → the host
+            // A pending write: `write [buffer, idx, val]` → the host
             // `write(out_pos, idx, val)` import, with `out_pos` this write's
-            // **emission ordinal** — its position in the index function's
-            // codomain, which is a compile-time constant exactly as `read`'s
-            // `cfg_pos` is.  The ordinal is taken (and the counter advanced)
-            // before the operands are emitted, so a write nested inside another
-            // write's value would still consume an ordinal of its own — which
-            // is what `compile_parallel_fragment`'s count check refuses.
+            // **emission ordinal** — its position in the codomain, which is a
+            // compile-time constant exactly as `read`'s `cfg_pos` is.  The ordinal
+            // is taken (and the counter advanced) before the operands are emitted,
+            // so a write nested inside another write's value would still consume
+            // an ordinal of its own — which is what `compile_parallel_fragment`'s
+            // count check refuses.
+            //
+            // **The codomain is what orders the outputs for both shapes.**  A
+            // struct parameter's `.out` fields are checked against the codomain's
+            // arity rather than ordering the emission, because a `compute.write`
+            // is a *value*: a body that writes several outputs returns a tuple of
+            // them, and the graph is lazy enough that a write nothing uses is
+            // never emitted at all.
             ComputeOperator::Write => {
                 let operand = operation
                     .operand
@@ -4421,17 +4418,26 @@ where
     ))
 }
 
-/// The buffer's cfg position, if `node` is a cfg buffer-tuple slot
-/// `cfg(1)(k)` in a parallel kernel — the position `k` the host `read` import
-/// reads.  `params[0]` is the cfg parameter slot; its `.value` is the cfg tuple
-/// value node, and the buffer tuple lives at `cfg(1)`.
+/// The buffer position `node` names in a parallel kernel — the `cfg_pos` the
+/// host `read` import reads.
+///
+/// **Two shapes, one question.**  A struct parameter *declares* its inputs, so
+/// the node's own [`param_path`] is the answer: `.in`'s fields are the input
+/// positions in declaration order, and nothing about how the body spelled the
+/// read enters into it.  A `(n, (buffers…))` parameter declares nothing, so the
+/// position is the constant the body wrote — `cfg(1)(k)` — and it is read off
+/// the node.
 fn parallel_buffer_pos<P>(module: &Module<P>, params: &[ParamSlot], node: NodeId) -> Option<usize>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let cfg_value = params.first()?.value;
+    let slot = params.first()?;
+    if let Some(roles) = &slot.roles {
+        return roles.input_pos(&param_path(module, slot.pair, node)?);
+    }
+    let cfg_value = slot.value;
     let operation = module.node_operation(node)?;
     if !matches!(
         AsEnum::<LowOperator>::as_enum(&operation.operator),
@@ -4459,6 +4465,57 @@ where
         return None;
     }
     Some(k)
+}
+
+/// The node a wrapped slot-read argument reaches.
+///
+/// A buffer operand arrives through the wrapper's slot-read destructuring:
+/// `read = x => $read(x(0), x(1))` applied to `[k.in.x, i]` leaves
+/// `Index(arg_array, 0)`, where `arg_array` is the materialized argument array.
+/// This peels constant `Index` layers down to the element the author actually
+/// named — exactly as the `Index` emitter peels a constant array element — so
+/// that both [`parallel_buffer_pos`] and the write arm see the buffer node and
+/// not the wrapper around it.
+///
+/// Bounded rather than recursive: the wrapper nests one level per argument, and
+/// a chain deeper than the bound is not a wrapper this walk understands, so it
+/// stops and lets its caller name the cause.
+fn peeled_argument<P>(module: &Module<P>, node: NodeId) -> Result<NodeId, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let mut value = node;
+    for _ in 0..8 {
+        let target_oi = match module.node_operation(value).as_ref() {
+            Some(op)
+                if matches!(
+                    AsEnum::<LowOperator>::as_enum(&op.operator),
+                    Some(LowOperator::Index)
+                ) =>
+            {
+                operand_pair(module, op.operand).ok()
+            }
+            _ => None,
+        };
+        let Some((target, index)) = target_oi else {
+            break;
+        };
+        let Some(k) = usize_value(module, index) else {
+            break;
+        };
+        let Some(array_value) = value_of_node(module, target).or(Some(target)) else {
+            break;
+        };
+        // SAFETY: `array_value` is a live node of `module`.
+        let Some(items) = (unsafe { module.array_items(array_value) }) else {
+            break;
+        };
+        let Some(item) = items.get(k) else { break };
+        value = dyn_node(item.node)?;
+    }
+    Ok(value)
 }
 
 /// A cross-kernel call to a callee that returns **more than one value**.
