@@ -278,22 +278,17 @@ where
             .then(|| self.named_field_index_any(AnyNodeId::Dynamic(container_ty), name))
             .flatten();
         // The requirement is the container's **kind** — the corresponding slot of
-        // the `[shape, kind]` term — and it is stated as a unify, so both tiers
-        // say it once: a decided container is judged where it is, an undecided
-        // one is pinned by the term below, and the apply that binds the container
-        // reconciles it per call (`docs/notes/eval-before-unify.md` §2.4).  The
-        // marker is the two-field identity a `struct<…>` builds; its cells stay
-        // open, so the requirement is the kind, not the identity or the names.
-        let id = self.fresh_cell();
-        let names = self.fresh_cell();
-        let marker = self.struct_marker_node(id, names);
-        let kind = self.kind_expr(self.current_block, marker);
+        // the `[shape, kind]` term — stated as a unify, so the refusal names the
+        // two kinds (`expected TypeStruct, found TypeArray`) instead of the
+        // shared "tuple, array, or struct" wording this read does not accept
+        // (`docs/notes/eval-before-unify.md` §6.3).  The marker is the two-field
+        // identity a `struct<…>` builds; its cells stay open, so the requirement
+        // is the kind, not the identity or the names.
         if concrete {
-            // Judged on the kind slot alone.  The *term*-shaped pin below would
-            // descend the shape slot first and bind the pinned shape cell to the
-            // decided container's field list, echoing it back as the expected
-            // fields (`expected struct<Int, 2>`) — the slot states the same
-            // requirement without that.
+            let id = self.fresh_cell();
+            let names = self.fresh_cell();
+            let marker = self.struct_marker_node(id, names);
+            let kind = self.kind_expr(self.current_block, marker);
             let container_kind = self.lazy_index_path(container_ty, &[shape::TYPE_KIND_SLOT]);
             self.check_unify(
                 container_kind,
@@ -301,21 +296,15 @@ where
                 self.loc(container, 1),
                 DiagKind::Guard,
             );
-        } else {
-            // An undecided container (a parameter, a call result): pin the whole
-            // term to a fresh struct type, so the apply that binds it refuses a
-            // wrong-kind actual per call — and so the read's own structure
-            // resolves with it.  The guard this replaces was asked once, while
-            // the container was still a cell, and never again.
-            let shape_cell = self.fresh_cell();
-            let struct_ty = self.array_node(self.current_block, &[shape_cell, kind]);
-            self.check_unify(
-                container_ty,
-                struct_ty,
-                self.loc(container, 1),
-                DiagKind::Guard,
-            );
         }
+        // An *undecided* container keeps the lazy name-table read and its
+        // requirement stays unstated until the apply decides it — the open half
+        // recorded in `docs/notes/eval-before-unify.md` §2.4/§6.2.  A term-shaped
+        // pin here would bind the container's own type cell, and a consumer that
+        // reads a type *structurally* through the class (the compute extension
+        // forces a template's parameter type before any apply) would then see the
+        // pin's open cells instead of the deferred real type: measured, the
+        // extension's suite goes from its 58/2 baseline to 8/52.
         if concrete
             && shape::is_struct_type_any(
                 &mut self.module,
