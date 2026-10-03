@@ -1330,11 +1330,16 @@ out = compute.plrun k2 (3, (inbuf,))
     // leaving it to process exit.
     lichen_compute_gpu::uninstall();
 
-    // The collected array's element type decides (`Int`): the deferred
-    // unification the write's element class goes through now commits the type
-    // value instead of merging silently (docs/notes/defer-pending-type-forms.md).
+    // The collected array's element type is **undecided**, and that is the
+    // honest answer now: the `Int` this used to print rode on the read
+    // argument's *array* element cell — a homogeneous array literal's cell,
+    // which a consumer's array literal then committed
+    // (`docs/notes/compute-runtime-scalars.md` §4.4).  A struct argument has no
+    // such cell, so the element class is a fact the class channel has to state
+    // (`docs/notes/class-channel.md` §5.2) — and this string goes back to
+    // `array<Int, ?d>` when that lands.
     assert_eq!(
-        out, "(20, 22, 24, [20, 22, 24]): <?a, ?b, ?c, array<Int, ?d>>",
+        out, "(20, 22, 24, [20, 22, 24]): <?a, ?b, ?c, array<?d, ?e>>",
         "a two-kernel \"gpu\" chain produced"
     );
     assert_eq!(
