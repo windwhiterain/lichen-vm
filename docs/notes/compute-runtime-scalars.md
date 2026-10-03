@@ -172,6 +172,15 @@ in that test decided too — they are `?a, ?b, ?c` in both spellings.  Until it
 lands, the choice is between the array (precision, homogeneity) and the
 struct/tuple (no homogeneity, one undecided element type).
 
+**The fix is planned, with its reasoning, in
+[class-channel](class-channel.md)**: this is the symptom of one fact having a
+class-routed authority in the lowlevel (`class_value`/`class_low_type`/
+`write_node_value`/`seed_class_low_type`) and a node-slotted second reading in the
+highlevel (`shape::low_type_of_slot`, `compute::node_class`).  That note's §2 (the
+readers ask the class) and §3 (the decider writes through the choke-point) are the
+two halves; §4 is this note's struct migration as the carrier, and §5 is the
+structural change that removes the fresh cell the commit path exists for.
+
 ## 5. Blocker B: only the shipped lambdas can spell a JIT'd signature
 
 `parallel_sig f "cpu" Sig` needs a `Sig` whose domain is the JIT'd input struct.
