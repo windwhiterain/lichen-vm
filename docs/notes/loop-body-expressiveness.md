@@ -1,16 +1,19 @@
 # A loop body cannot compute its state and jump back
 
-> Status: **finding, unresolved.** Found while settling §8.5 step 1 of
+> Status: **closed.** Found while settling §8.5 step 1 of
 > [loop-conversion](loop-conversion.md) (the `passed_out` contract) and step 2 (the
-> wasm `While`). It is the third shape of the same defect that
-> `ca2a2a2`/`ca372a2` found twice: the IR cannot express the thing the feature
-> exists to run. **The `passed_out` contract itself is settled** — see §3 — and the
-> wasm emitter is fixed against it; what is blocked is the next step, because the
-> acceptance case has no representation to emit.
+> wasm `While`), as the third shape of a defect `ca372a2` had already found twice:
+> the IR could not express the thing the feature exists to run. **Both halves are
+> now fixed** — §4 — and the tests that pin them are in
+> `crates/lichen-compute/src/compute.rs` and `crates/lichen-kernel-ir/src/body.rs`.
+>
+> One thing found on the way is *not* closed and is not about this IR at all: the
+> wasm emitter cannot serve a loop, and the attempt to make it is withdrawn. That is
+> [wasm-control-flow](wasm-control-flow.md).
 
 ## 1. The fact
 
-**`Terminator` has no plain-jump variant.**
+**`Terminator` had no plain-jump variant.**
 
 ```rust
 pub enum Terminator {
@@ -20,48 +23,44 @@ pub enum Terminator {
 }
 ```
 
-A plain transfer is `Flow::Jump { target, passes }` — a variant of **`Flow`**, not
-of `Terminator`. `Flow::Seq`'s own field is a `Box<Terminator>`:
+A plain transfer was `Flow::Jump { target, passes }` — a variant of **`Flow`**, not
+of `Terminator` — while `Flow::Seq`'s own field is a `Box<Terminator>`:
 
 ```rust
 Seq { instrs: Vec<KernelInstr>, terminator: Box<Terminator> }
 ```
 
 So the one shape `Flow::Seq` exists to express — *"run these instructions, then
-perform this **plain** transfer"*, its own documentation — **cannot be built**.
-A `Seq` can only end in `Return`, `If` or `While`.
+perform this **plain** transfer"*, its own documentation — **could not be built**.
+A `Seq` could only end in `Return`, `If` or `While`.
 
-## 2. Why that blocks the acceptance case
+## 2. Why that blocked the acceptance case
 
 The reduction of [loop-conversion §8.5](loop-conversion.md) is a loop body that
-**computes** `[counter - 1, accumulator + read(counter - 1)]` and **jumps back to
-the header** with it. Every route the current IR offers is refused or wrong:
+**computes** a next state and **jumps back to the header** with it. Every route the
+old IR offered was refused or wrong:
 
-| the body, as built | what happens |
+| the body, as built | what happened |
 |---|---|
-| `Flow::Jump` | Not a `Terminator`, so it does not type-check as a `Seq` body. |
-| `Flow::Seq` ending in `Terminator::If` | `validate_flow` requires the `If`'s `join` to **be** the header, and requires both arms to arrive there. That expresses "the merge *is* the loop head", not "hand the header a new state"; and it forces both arms to the header, so a body that exits cannot be written either. |
+| `Flow::Jump` | Not a `Terminator`, so it did not type-check as a `Seq` body. |
+| `Flow::Seq` ending in `Terminator::If` | `validate_flow` required the `If`'s `join` to **be** the header and both arms to arrive there, so a body that leaves the loop could not be written. |
 | `Flow::Seq` ending in `Terminator::While` | Refused: "a loop body nests another loop". |
-| `Flow::Block { entry: Some(header), .. }` | Refused: the block's own entry **is** the header, so the loop's header and its body would be one block — and the label would then be defined twice. |
+| `Flow::Block { entry: Some(header), .. }` | The block's own entry **is** the header, so the label would be defined twice. |
 
 ### 2.1 The consequence, which is stronger than "a reduction is blocked"
 
-**The current IR cannot express a *terminating* loop at all**, and the argument is
-short. The only body that type-checks is a bare `Flow::Jump` back to the header
-(which the SPIR-V emitter refuses, having no block for `OpLoopMerge`'s continue
-target), and a `Jump` passes the header's **own** values — `ca372a2`'s message says
-exactly this: "a bare `Jump` back to the header, which passes the header's own
-values and nothing else". Two things then follow:
+**The old IR could not express a *terminating* loop at all.** The only body that
+type-checked was a bare `Flow::Jump` back to the header, and a `Jump` passes the
+header's **own** values — `ca372a2`'s message says exactly this: "a bare `Jump` back
+to the header, which passes the header's own values and nothing else". Two things
+followed:
 
-- the state never changes, so a pure condition over it evaluates the **same way on
+- the state never changed, so a pure condition over it evaluated the **same way on
   every iteration** — an infinite loop or a zero-trip one, and nothing between;
-- no route leaves for the `exit`, so no body can branch out of the loop either.
+- no route left for the `exit`, so no body could branch out either.
 
-The wasm emitter's terminating path — `br` to the `loop` label, which is
-`local.set` the next state and `br` — is therefore **unreachable today**, and the
-SPIR-V emitter says the same from the other end by refusing the one body that
-exists. The gap `Seq` was added to fill is not "a reduction is hard"; it is that
-**no loop the IR can build does anything**.
+The gap `Seq` was added to fill is not "a reduction is hard"; it is that **no loop
+the IR could build did anything**.
 
 ## 3. What was settled on the way, and is not in question
 
@@ -72,63 +71,39 @@ and `crates/lichen-kernel-ir/src/body.rs`): the loop's whole state is the tuple 
 top `passed_out` values**. The exit's values are the header's and not the body's,
 which is what gives a zero-trip loop a defined result: a trip count of zero never
 runs the body, so a `passed_out` the body had to compute would have no source on
-that path. `passed_out ≤ carried` therefore holds, and `validate()` now refuses a
-loop that breaks it by name.
+that path. `passed_out ≤ carried` therefore holds, and `validate()` refuses a loop
+that breaks it by name.
 
-The wasm `While` was then reordered against that contract: the `Block`/`Loop` pair
-now opens **before** the header's instructions, the state tuple is re-read with
-`local.get` on every entry, and the false edge falls out of the `block` with the
-top `passed_out` of that tuple. That is §8.3 item 1 closed, and it has an execution
-test (a hand-built `While` fragment run through `wasmi`).
+## 4. The fix, as it landed
 
-## 4. The fix, and what it costs
+**Two changes, and both were needed.**
 
-**Two things are missing, and both are needed before the acceptance case can be
-built.**
+1. **`Terminator::Jump` exists**, so a `Seq` can end in the plain transfer its own
+   documentation names. §2's table had a row for `Terminator::If` "joining the
+   header", which was the reading that made this look unnecessary: a selection's
+   *join* is where arms meet, and a body that leaves the loop does not want its arms
+   to meet anywhere. With `Terminator::Jump` a body reaches the header directly.
+2. **`validate_flow` lets a loop body name the loop's landmarks.** A `While` body's
+   transfer may arrive at the loop's `header` (the backedge) or its `exit` (leaving),
+   and a body's `If` may join at either — both are the loop's own control flow, and
+   any other target is refused by name. The obligation is carried as
+   `FlagEnd::{Return, Loop { header, exit }}` rather than as "everything must reach
+   the header", which is what the old rule said and what made a loop with a body that
+   decides between continuing and leaving inexpressible.
 
-1. **`Flow::Seq`'s terminator should be the plain transfer it documents** — that
-   is, `Seq { instrs, terminator: Box<Flow> }`, so a `Seq` can end in `Flow::Jump`
-   (and, as today, in an `If`). This is the smallest change that makes the
-   documented shape real, and it **adds no new concept**: `Flow::Jump` already
-   exists, is already handled by both emitters' `Flow` walks, and is already the
-   thing `Seq`'s own doc names.
-2. **`validate_flow` must let a loop body's `If` leave for the loop's `exit`** as
-   well as for its header. Today the only accepted body `If` is one whose `join`
-   *is* the header, so "compute the state on one path and leave on the other" — the
-   reducer's actual shape — stays inexpressible even after (1). This is why (1)
-   alone is not enough, and it is worth saying plainly: a loop that can only ever
-   continue is a loop with one exit, and that exit is the test.
-
-Alternatives to (1), and why they are worse:
-
-- **`Terminator::Jump`** — reaches the same place through a type whose whole
-  meaning is "where control goes **after** a sequence", which would then carry two
-  ways to say a plain jump (`Flow::Jump` and `Terminator::Jump`). The duplication is
-  the cost; nothing about the IR needs `Terminator` to grow.
-- **Leaving the IR alone and lowering a reduction into the *other* shapes** — there
-  is no such shape (§2), so this is not an option at all.
-
-**What the fix touches**, and this is why it is worth stating before it is made:
-`body.rs`'s label/exit/entry walks and `validate_flow`; the wasm emitter's
-`lower_flow`/`lower_terminator`; the SPIR-V emitter's, once
-`feature/spirv-loop-emitter` is rebased; and the class-checking walk that refuses a
-mixed `Int`/`Float` body. Each is a `match` that gains or loses an arm rather than a
-change of meaning.
-
-**Do not start this before deciding it.** It is an IR change under a feature whose
-whole remaining critical path sits on top of it, and the last two times this seam
-was crossed (`a3e4713`, `ca372a2`) the shape was discovered by trying to build the
-acceptance case against it.
+`Terminator::Jump` does duplicate `Flow::Jump`, and that is deliberate: the two enums
+split transfers by **where they can appear**, not by what they mean. An `If` arm is a
+`Flow` (it may be a block or a bare jump, and has no instructions of its own, so a
+jump *is* its whole content); a `Seq`'s own transfer is a `Terminator`. Merging them
+would mean making `If` a `Flow` variant, which is a larger change to both emitters for
+no expressive gain.
 
 ## 5. What this changes about [loop-conversion §8.5](loop-conversion.md)
-
-The order there stands, but step 1 grew a second half and step 3 depends on it:
 
 | §8.5 step | now |
 |---|---|
 | 1. Settle `passed_out` | **Done** — §3 above, and it is in the IR's own doc. |
-| 1b. Make the body expressible | **New, and blocking.** §4 above. Nothing can produce a loop until it lands. |
-| 2. Fix the wasm `While` | **Done**, against the settled contract, with an execution test. |
-| 3. Rebase the SPIR-V emitter for `Seq` | Unchanged, and it now also inherits the `Terminator::While` refusal's replacement — the `Jump` arm it wrote can become the real backedge. |
-| 4. Delete `value_decided`, make the evaluator record a loop | Unchanged, and it cannot be tested until 1b lands. |
-
+| 1b. Make the body expressible | **Done** — §4 above. |
+| 2. Fix the wasm `While` | **Withdrawn** — the reorder was written, found to need four more fixes, and withdrawn in favour of a slot-based emitter: [wasm-control-flow](wasm-control-flow.md). |
+| 3. Rebase the SPIR-V emitter for `Seq` | Unchanged, and it inherits the `Jump` arm it wrote as the real backedge. |
+| 4. Delete `value_decided` and make the evaluator record a loop | Unchanged. It is now the only thing between the IR and a running loop — the emitters are the other half, and the wasm one is the blocker. |
