@@ -6,8 +6,10 @@
 >
 > Companions: [defer-pending-type-forms](defer-pending-type-forms.md), whose §5
 > argument was built on a printed type name and is withdrawn because of this,
-> and [raw-rendering-mark](raw-rendering-mark.md), which marks the fallback
-> step 6 below without touching the tag/structured split this note is about.
+> [raw-rendering-mark](raw-rendering-mark.md), which marks the fallback
+> step 6 below without touching the tag/structured split this note is about,
+> and [applied-struct-nominal-id](applied-struct-nominal-id.md), the third
+> spelling/identity defect, fixed.
 
 ## 1. The symptom
 

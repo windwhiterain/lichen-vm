@@ -298,11 +298,7 @@ where
             vals.push(self.value_of(el));
             tys.push(self.state[el].ty.unwrap());
         }
-        let id = self.op_node(
-            self.current_block,
-            P::Operator::from(TypeOperator::Fresh),
-            None,
-        );
+        let id = self.fresh_nominal_id();
         let (_shape, _kind, struct_ty) = self.struct_type_type(id, &tys, field_names);
         let value_node = self.array_node(self.current_block, &vals);
         let pair = self.pair_of(value_node, struct_ty);
@@ -691,9 +687,10 @@ where
     /// ```
     ///
     /// The `TypeStruct` marker is a **two-field value** `[id, names]` — the
-    /// nominal id (a per-compilation
-    /// [`P::Operator::from(TypeOperator::Fresh)`] call, so two occurrences keep
-    /// distinct ids) plus the optional name→index table.  It sits in the kind's
+    /// nominal id ([`Checker::fresh_nominal_id`]: one id per written
+    /// occurrence, so two occurrences keep distinct ids and an applied type
+    /// lambda does not mint one per application) plus the optional name→index
+    /// table.  It sits in the kind's
     /// marker slot, exactly like a function/tuple/array/table kind's marker, so
     /// a struct type's kind is a standard `[marker, K]` pair.  Fields are
     /// positional unless a field carries a `.name Ty` prefix, in which case
@@ -712,11 +709,7 @@ where
         for &el in &elements {
             tys.push(self.check_type_element(el));
         }
-        let id = self.op_node(
-            self.current_block,
-            P::Operator::from(TypeOperator::Fresh),
-            None,
-        );
+        let id = self.fresh_nominal_id();
         let (shape, kind, pair) = self.struct_type_type(id, &tys, &names);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(shape);

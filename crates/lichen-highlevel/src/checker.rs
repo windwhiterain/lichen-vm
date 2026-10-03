@@ -1042,6 +1042,21 @@ where
         self.array_node(self.current_block, &[id, names])
     }
 
+    /// A struct type's nominal id node — the [`TypeOperator::Fresh`] call one
+    /// **written occurrence** of a struct type expression (or a
+    /// struct-returning block) allocates.  Where that node's value is decided
+    /// is [`Checker::struct_type_type`]'s business, not this one's: the id is
+    /// only meaningful inside the identity marker that construction builds.
+    ///
+    /// See `docs/notes/applied-struct-nominal-id.md`.
+    fn fresh_nominal_id(&mut self) -> NodeId {
+        self.op_node(
+            self.current_block,
+            P::Operator::from(TypeOperator::Fresh),
+            None,
+        )
+    }
+
     /// The struct type's full encoding — the field-type `shape`, the `kind`
     /// `[TypeStruct{id, names}, K]`, and the `[shape, kind]` wrapper pair —
     /// built from the caller's nominal `id` node, the field types and the
@@ -1055,8 +1070,24 @@ where
     ///
     /// The single construction point for the layout [`shape`](crate::shape)
     /// documents but deliberately never builds.  The `id` stays the caller's
-    /// because its per-occurrence freshness is a policy of the emitting rule,
+    /// because which occurrence allocated it is a policy of the emitting rule,
     /// not part of the encoding.
+    ///
+    /// The identity `[id, names]` is decided **here**, once per written
+    /// occurrence.  Both halves are computations the apply clone walk would
+    /// otherwise copy: the `Fresh` id would run again per application, and the
+    /// name table is an arena payload, so a copy is a *different* table that
+    /// does not unify with the original.  Either way one written struct type
+    /// applied to one argument twice yields two nominal types that do not
+    /// unify — a type constructor that is not a function.  Deep-evaluating the
+    /// marker is what pins them: a node the deep pass proved concrete is
+    /// referenced **in place** by every clone (and the same verdict freezes it
+    /// non-parameterized in a static module, so a solved artifact bakes the
+    /// identity too).  The field types stay out of the identity — they ride in
+    /// the shape — so `A Int` and `A Float` remain different types, and two
+    /// `struct<…>` written apart remain two declarations.
+    ///
+    /// See `docs/notes/applied-struct-nominal-id.md`.
     fn struct_type_type(
         &mut self,
         id: NodeId,
@@ -1066,6 +1097,7 @@ where
         let shape = self.array_node(self.current_block, field_tys);
         let names = self.build_struct_names(field_names);
         let marker = self.struct_marker_node(id, names);
+        self.module.evaluate_node_deep(marker, None);
         let kind = self.kind_expr(self.current_block, marker);
         let wrapper = self.array_node(self.current_block, &[shape, kind]);
         (shape, kind, wrapper)

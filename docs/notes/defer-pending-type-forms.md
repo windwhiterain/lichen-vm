@@ -10,7 +10,8 @@
 >
 > Companion: [type-rendering-inconsistent](type-rendering-inconsistent.md)
 > (a separate, still-open spelling defect — no printed type name decided any
-> of this either).
+> of this either), and [applied-struct-nominal-id](applied-struct-nominal-id.md)
+> (the third defect found the same way; fixed).
 >
 > **Open remainder in this machinery**: a *call-result* type read is still not
 > usable as a type expression the way the removed builtin's raw `Index` read

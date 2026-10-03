@@ -399,8 +399,10 @@ pub enum ExprKind<L> {
     /// `[shape, kind]` pair — shape `[T1, …, Tn]`, kind
     /// `[TypeStruct{id, names}, K]` — so the *fresh nominal* id and the
     /// optional name table sit in the kind, never in the shape (see the
-    /// checker's struct-type construction).  A struct type is reused by
-    /// binding it once through a parameter.
+    /// checker's struct-type construction).  One written occurrence is one
+    /// nominal type however many times it is evaluated: binding it once
+    /// through a parameter names that same type, and so does writing it once
+    /// inside a function body and applying the function repeatedly.
     TypeStruct {
         fields: ChildRange,
         names: ChildRange,
