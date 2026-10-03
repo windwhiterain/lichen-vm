@@ -236,6 +236,35 @@ cell for the lazy read to bind.  That is a checker question, and it is the same
 family as the decided-vs-lazy field type of `type-query-api-proposal` §7 — but it
 is **not** diagnosed yet, and this note does not claim a cause.
 
+**Narrowed further by measurement, and the narrowing moves the question.**  It is
+not the type-lambda application: a **plain** arrow of two named struct types
+written in the author's own module —
+
+```lichen
+Par = struct<.n Int, .in In, .out Out>
+Sig = Par -> Out
+k = compute.parallel_sig f "cpu" Sig
+```
+
+— fails the same way (`expected Par -> Out, found TypeFunction`).  And with the
+wrapper's field type taken from the function instead of from `s`
+(`.sig (type_of f)` with the value still `s`), the *expected* side becomes the
+right arrow but the error stays, because **a type value's own type is its kind**:
+`Sig`'s type is `[FunctionType, K]`, whose marker renders `TypeFunction`.  So the
+two ends pull apart in the checker's own vocabulary:
+
+- a **type position** fed by a bound variable contributes that variable's *type*,
+  which for a type value is the kind — never the type expression it holds;
+- a struct **field value** must inhabit the field's declared type, so a type
+  value cannot be *stored* in a field declared to be the arrow it denotes.
+
+Either one alone explains the failure; a wrapper cannot fix both, and
+`compute.jit`'s own `.sig (type_of f)` sidesteps them by declaring the field's
+type *and* passing `_` as the value — which is available only because the type is
+already a fact of the function there.  For an author-stated signature the type is
+not a fact of the function (that is why they state it), so **`parallel_sig` needs
+the checker question answered**, not a different spelling.
+
 **Narrowed by measurement**: this blocks the *explicit* `parallel_sig f backend
 Sig` spelling only.  `compute.parallel f backend` derives the signature from the
 function's own type (`type_of f`), so a `Par` with a runtime scalar launches end
