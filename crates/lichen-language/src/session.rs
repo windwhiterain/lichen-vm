@@ -736,6 +736,7 @@ where
         let (ir, span_index, compiled_cells) = crate::compile::compile_resolved_with_cells(
             &program,
             &resolved.import_binders,
+            &resolved.prelude,
             Some(&self.cells),
         );
         let mut report: Report<P> = build_report::<P>(

@@ -94,6 +94,14 @@ struct Inner<P: LangProgramShape> {
     /// cache is bounded by the number of open documents: a keystroke replaces
     /// the entry rather than adding one.
     indexes: Mutex<HashMap<Url, CachedIndex>>,
+    /// The **other files** each open document's last analysis published
+    /// diagnostics for — a built-in package's source, whose failures belong to
+    /// that file rather than the document (`docs/notes/core-prelude.md` §4).
+    /// Remembered so a later analysis that no longer reports one **clears** it:
+    /// a client keeps a file's diagnostics until an empty list replaces them, so
+    /// a fixed error would otherwise stay on the built-in's line for the rest of
+    /// the session.
+    published_files: Mutex<HashMap<Url, Vec<Url>>>,
     /// The compile worker — the one thread that owns the `!Send` half of the
     /// server: the package store, the shared registry, and one
     /// [`BufferSession`](lichen_language::session::BufferSession) per open
@@ -348,7 +356,7 @@ where
             build: report.build.clone(),
             diagnostics,
         };
-        let (index, diagnostics) = index::<P>(text, line_starts, &pre, artifacts);
+        let (index, diagnostics) = index::<P>(text, line_starts, &pre, artifacts, &store);
         let dependencies = imported_files(&store);
         let cacheable = cacheable(&diagnostics);
         let (cells, reused_build) = (report.cells, report.reused);
@@ -541,6 +549,40 @@ where
         self.client
             .publish_diagnostics(uri.clone(), index.lsp_diagnostics(), None)
             .await;
+        // A diagnostic inside a built-in package's source is a property of
+        // *that* file, not of the document (`docs/notes/core-prelude.md` §4):
+        // it is published against the built-in's own URI, whose file the store
+        // materialized on disk, so the client shows it on the line that wrote
+        // it and the document is never blamed for a position it does not
+        // contain.
+        let mut files: Vec<Url> = Vec::new();
+        for file in index.file_diagnostics() {
+            let Ok(file_uri) = Url::from_file_path(&file.path) else {
+                // A path the URL grammar cannot name (a virtual package with no
+                // materialized file): nothing to publish it against.
+                continue;
+            };
+            self.client
+                .publish_diagnostics(file_uri.clone(), file.diagnostics.clone(), None)
+                .await;
+            files.push(file_uri);
+        }
+        // Clear the built-in files this document no longer reports: a client
+        // keeps a file's diagnostics until an empty list replaces them, so a
+        // fixed error would otherwise stay on the built-in's line.
+        let stale = self
+            .published_files
+            .lock()
+            .unwrap()
+            .insert(uri.clone(), files.clone())
+            .unwrap_or_default();
+        for file_uri in stale {
+            if !files.contains(&file_uri) {
+                self.client
+                    .publish_diagnostics(file_uri, Vec::new(), None)
+                    .await;
+            }
+        }
         // The compile's own event surface, pushed alongside the diagnostics: a
         // caller that cannot see it cannot tell an incremental analysis from a
         // full one, and this is the caller (`AnalysisStats`).
@@ -579,6 +621,7 @@ where
                 client,
                 documents: Mutex::new(HashMap::new()),
                 indexes: Mutex::new(HashMap::new()),
+                published_files: Mutex::new(HashMap::new()),
                 worker: Worker::spawn::<P>(home.cache_root().to_path_buf()),
                 generations: AtomicU64::new(0),
                 _program: std::marker::PhantomData,
@@ -739,7 +782,21 @@ where
         // a request, and a closed document must not keep it.  This is also when
         // those artifacts become evictable (see `WorkerState::forget`).
         self.inner.worker.close(uri.clone());
-        // Clear the now-stale diagnostics for the closed document.
+        // Clear the now-stale diagnostics for the closed document, and for the
+        // built-in files its last analysis reported.
+        let files = self
+            .inner
+            .published_files
+            .lock()
+            .unwrap()
+            .remove(&uri)
+            .unwrap_or_default();
+        for file_uri in files {
+            self.inner
+                .client
+                .publish_diagnostics(file_uri, Vec::new(), None)
+                .await;
+        }
         self.inner
             .client
             .publish_diagnostics(uri, Vec::new(), None)
@@ -770,10 +827,19 @@ where
             return Ok(None);
         };
         let (index, _) = self.inner.index_for(&uri, text, hash).await;
-        let response = index.definition_at(position).map(|range| {
+        // The definition is in the document **unless** it is a built-in's: a
+        // prelude name is defined in the built-in package's own file, which the
+        // store materialized on disk, so the answer names that file's URI and
+        // the position in it (`docs/notes/core-prelude.md` §4).
+        let response = index.definition_at(position).map(|def| {
+            let target = def
+                .file
+                .as_ref()
+                .and_then(|file| Url::from_file_path(&file.path).ok())
+                .unwrap_or_else(|| uri.clone());
             GotoDefinitionResponse::Scalar(Location {
-                uri: uri.clone(),
-                range,
+                uri: target,
+                range: index.definition_range(&def),
             })
         });
         Ok(response)

@@ -16,6 +16,14 @@
 > domain is that workstream's value, and its reader is what commits to a member).
 > This worktree therefore proceeds with §4, the struct-argument migration, whose
 > 57-of-58 acceptance leaves exactly the element cell the two red targets want.
+> **Then the operator routing landed** (§5.1.1): the operator *is* the prelude's
+> binding, so a kernel body's `+` is an apply of a frozen function.  The kernel
+> side of that — the static operands and the one class reader — is landed and
+> measured (12 → 58 of 60 in `--test compute`), and **§5.1 is superseded by the
+> requirement that a kernel function be explicitly specialized**: the class a
+> lowering runs in is the author's statement (the parameter's type), never a
+> domain the compiler reads or a default it invents.  What remains is the
+> cross-kernel/`launch` argument shape §6 names.
 > Companions: [compute-runtime-scalars](compute-runtime-scalars.md) (the measured
 > case that exposed this — its §4.4 is the symptom, this note is the fix),
 > [lowlevel-low-types](lowlevel-low-types.md) (the seed → pass → read chain),
@@ -259,20 +267,73 @@ body, where `+`'s class is open and the recorded choice is the class domain's
 `default`.  So the slice is: **choose the class where the domain says to choose
 it, and state it as the kernel's signature** — not a new lowering path.
 
-### 5.1 Landed: the class the lowering runs in
+### 5.1 Superseded: the class a lowering runs in is the **author's** statement
 
-`open_class_of` (`compute.rs`) walks the function's own `asserts` for the
-`InDomain(cell, set)` condition `check_binop` registers, and `set::members` reads
-the set's members — the **first** is the class a reader commits to, the canonical
-`int_type` node.  `compile_fragment` takes it as `open_class` and uses it as the
-**seed** when the parameter's type slot states no class, refusing by name for a
-domain that commits to anything but `Int` (the emitter's class-free default).
+`open_class_of` (the first landing here) walked the function's own `asserts` for
+the `InDomain(cell, set)` condition `check_binop` registered and took the set's
+**first** member as the class to lower in.  **The routing removed the premise**,
+and the decision that replaces it is the requirement itself: **a kernel function
+must be explicitly specialized** — a kernel is lowered for one class and compiled
+before any apply, so the parameter's type is where the language says which class
+this artifact is for, and a body that left its class open is refused by name
+([`UNDECIDED_DOMAIN`]: "the kernel parameter's class is not decided when the
+kernel is compiled … annotate the parameter").  Measured: `compute.jit (y => y +
+y)` is refused, `compute.jit (y : Int => y + y)` is `(Kernel, parameterized):
+struct<.native raw[?a, ?b], .sig Int -> Int>` and launches `3 + 3 = 6`, and the
+function itself stays polymorphic for its other uses (`f = y => y + y; k =
+compute.jit f; f 1.5` is `3.0: Float` — the refusal does not touch the class).
+`open_class_of` and `compile_fragment`'s `open_class` parameter are **deleted**;
+the seed is the parameter's own type and nothing else.
 
-The seed is a *low-type* write on the class, never a write into a type cell, so
-the function stays polymorphic for its other uses.  Measured: `compute.jit
-(y => y + y)` goes from `(none, parameterized)` (the lowering refused with
-`UNDECIDED_DOMAIN`) to `(Kernel, parameterized)` — a real artifact — with
-`57 of 58` unchanged and no regression in any other suite.
+### 5.1.1 The routing took the domain out of the caller — measured
+
+**Landed in `feature/operator-std` (§6.1 of
+[operator-polymorphism](operator-polymorphism.md)) and re-measured here**: the
+surface operators now lower to the prelude's bindings, so a kernel body's `y + y`
+*is* `Apply(Static(<core's add>), [y, y])`.  Two consequences for this pass, both
+measured on this tree:
+
+- **The domain is no longer in the caller's function.**  `open_class_of` reads
+  `InDomain` out of `module.functions[fid].asserts`, and after the routing the
+  jitted function's assert list is **empty** while the only `InDomain` in the
+  program is inside frozen module `158` (the `core` prelude): the *callee's*
+  refinement (`add = operands => { operands : array<(_ ! in_num), 2>; … }`) is
+  what confines the class now, and it is enforced by the apply, in the callee's
+  own module.  So `compute.jit (y => y + y)` is refused with `UNDECIDED_DOMAIN`
+  again — the parallel path is unaffected only because the ABI seeds every scalar
+  leaf `USize`.  **This is the one red target of the two §5 named that is a
+  *typing* question rather than a printer's**, and the answer taken is §5.1's:
+  the author states the class (a kernel must be explicitly specialized).  The
+  three candidates that were weighed — the routing restates the domain at the
+  call site, the pass reads a frozen function's own statements through a new
+  lowlevel accessor, or an open body must be annotated — are settled on the
+  third: **no default is invented and no frozen structure is read**.
+- **The frozen callee's constants reach the caller as static refs.**  The static
+  apply's residual clone keeps the callee's unchanged subterms as references into
+  the frozen module, so a routed body's `operands[0]` selector arrives as
+  `Static(…)` beside nodes of the caller's own.  A frozen node is a **value** and
+  never a computation (a static module is fully solved), and `low_type`'s own
+  reading says so (`low_type.rs`: "a static ref is a decided leaf with no class
+  to refine").  The emitter therefore reads an operand's *value* from either kind
+  (`emit_operand`, `AnyNodeId::dynamic`, and the readers that take
+  `impl Into<AnyNodeId>`) instead of refusing it, and a static apply emits the
+  residual the lowlevel already wrote for it.
+
+**Landed with that reading: the class of a value had two readers and they
+disagreed.**  A body lowered from a template is made of parameter reads the
+low-type pass cannot transfer through, so `node_class` declined and fell back to
+the integer default while the *emission* used the operands' class.  Measured on
+the routed shapes: `compute.jit (x : Float => x * x)` declared
+`result_classes = [Int]` over a body of `[LocalGet(0), LocalGet(0), Bin(Float,
+Mul)]`, which the wasm validator refused ("expected i64, found f32"), and the
+float index function of `a_varying_float_element_is_seeded_from_the_index` wrote
+through `BufferWriteCall(Int)` a value it had computed as `f32` ("instruction 6
+mixed an integer and a float").  `node_class_in` is now the one reader: the
+emission's own order — a parameter read resolved through its slot's shape, the
+same peel `node_class` makes, a whole-parameter read matched by equality class,
+and an arithmetic operator's class taken from its operands with a comparison's
+`0`/`1` the one exception.  `--test compute` went 12 of 60 (after the routing) to
+**57 of 60** with the other suites unchanged.
 
 ### 5.2 Open: the signature the wrapper publishes
 
@@ -385,6 +446,20 @@ cargo test -q -p lichen-language --test compute --test pipeline --test graph_jit
 - `an_imported_package_that_jits_at_its_top_level_still_runs`
   (`crates/lichen-language/tests/runtime_only_package.rs:41`) — the `launch` gate
   must resolve the domain of an open `.sig`.
+
+**Where the tree stands after §5.1 and §5.1.1** (`--test compute`, 60 cases): 58
+pass.  The two reds are one shape each, and neither is a printer:
+| case | what it needs |
+|---|---|
+| `jit_cross_kernel_call`, `jit_cross_kernel_wrapper` | a cross-kernel call or `compute.launch` whose **argument** is a routed operator (`k0 (x + 1)`): the emitter reaches the argument's cell and its equality class holds a *bare cell*, not a computation, so there is nothing to emit.  Measured why: **an apply's value is its result cell, not the apply node** — before the routing `x + 1` *was* an `Add` operation node, so `class_computation_node` found the computation in the class; now the class holds the routed apply's result cell (and the wrapper's), both bare, while the clone's `Add` residual exists in the module with **no graph edge** to either.  Annotating the parameter does not help — the routed apply is there either way.  The fix belongs where the clone is made: the lowlevel's static apply would have to leave the residual as (or unify it with) the apply's **value**, not only write it into the result cell at run time |
+| `examples/compute_jit.lichen` (`--test examples`) | the same shape through a `compute.launch` argument; it fails on the *unmodified* merge too |
+
+The `jit_cross_kernel_*` cases and the example are annotated as the rule requires;
+their remaining failure is the residual edge above, not the class.  Both
+`a_kernel_value_and_type_render_by_name` and
+`an_imported_package_that_jits_at_its_top_level_still_runs` — the two targets
+§5.2/§8.8 recorded as red — **pass** with the class stated, which is what the
+rule says they need.
 
 The probes that pin the rest (scratch files, not committed):
 

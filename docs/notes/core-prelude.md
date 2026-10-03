@@ -108,26 +108,49 @@ both are the reason the record exists:
   failed assert whose condition was cloned out of a static module names it by a
   `StaticNodeId` (`AssertError::template`); `Build::diagnostics` now emits that
   static ref instead of dropping the failure, and the package layer resolves it
-  through the record to a position in *that* file.  Measured — `add "a" "b"`:
+  through the record to a position in *that* file.  Measured — `add ["a", "b"]`
+  (the element outside the class):
 
   ```
   error: assertion failed: expected 1, found 0
-    --> ~/.lichen/compilers/<key>/builtin/core.lichen:3:24
+    --> ~/.lichen/compilers/<key>/builtin/core.lichen:3:39
      |
-   3 | add = x => y => { x : (_ ! in_num); y : (_ ! in_num); x + y }
-     |                        ^
+   3 | add = operands => { operands : array<(_ ! in_num), 2>; operands[0] + operands[1] }
+     |                                       ^
   ```
 
-  A module with **no** kept source — an ordinary imported package, whose own build
-  already reported the failure when it compiled — drops as before, so
+  The wording is the assert channel's own rather than `does not satisfy {Int,
+  Float}` — §5's domain spelling.  A module with **no** kept source — an ordinary
+  imported package, whose own build already reported the failure when it
+  compiled — drops as before, so
   `a_failed_assert_in_an_imported_package_still_reports_a_diagnostic` keeps its
   meaning.  An in-memory store has no root to materialize under: the file is
   named by its own path (`core.lichen`) and still carries positions.
 - **A jump lands in it.**  The record is what an editor needs to point a
-  definition at the built-in's line rather than at nothing.
+  definition at the built-in's line rather than at nothing.  **Landed** in the
+  language server: the prelude import's names are seeded into the base scope as
+  definitions whose `file` is this record and whose position is the name's own
+  binding in it, so a use of `add` resolves to `core.lichen` and
+  `textDocument/definition` answers with `Url::from_file_path` and the position
+  in *that* file — which the client can open, because the file exists on disk.
+  A failure inside the built-in is published the same way, as its own
+  `publishDiagnostics` for that file rather than as a diagnostic on the document
+  (`crates/lichen-language-server/src/analysis.rs`, `src/server.rs`).
+  Two things that made it work are worth keeping in mind: a built-in definition
+  must not enter any table keyed by a *document* span (the prelude import's own
+  span is the synthetic `(1, 1)`, and its bindings' positions are `core.lichen`'s
+  — either would collide with a document position), and the position is read from
+  the record's **text**, not from its frozen-node `spans`: those cover the nodes a
+  *failure* can name, which is not every binding's export node.
 
-## 5. What this costs, and what is open
+## 5. What is open, and how far "done" is verified
 
+- **The built-in's names are not *hovered* with a type.**  A jump and a completion
+  item for a prelude name name the built-in's file; the hover shows the definition
+  line in it (`defined at line 3 of core.lichen`).  It does not render
+  `value : type`, because that snapshot is the *built-in's* build — the record
+  keeps positions and text, not checker facts — and the compiler is not this
+  layer's to re-run.  Read from the record if it ever needs to be shown.
 - **The domain spelling is not carried across modules.**  A refusal *inside* the
   prelude reads `assertion failed: expected 1, found 0` where the same assertion
   written in the document reads `does not satisfy {Int, Float}`: the spelling
@@ -141,14 +164,35 @@ both are the reason the record exists:
   that made it (`AssertError` has no origin).  Recording that origin — the apply
   node, at the two clone sites (`static_module/apply.rs`, `function.rs`) — and
   resolving it through `Build::apply_edges` is what would add the "related"
-  location.
+  location.  (`Diag::related` is plumbed for it and nothing fills it.)
+- **What "jump" and "publish" are verified against.**  `Doc`'s unit tests hold the
+  in-memory case: a use of a prelude name resolves to a definition whose file
+  records `core.lichen` and whose position is the binding's own line in it, and a
+  refusal inside the built-in (`add ["a", "b"]`) lands in the document's *file*
+  diagnostics, not its own.  The integration test
+  (`tests/lsp_incremental.rs`) runs the real binary, so the file path the store
+  materializes under the cache root is the one `Url::from_file_path` names and the
+  failure is published as a second `publishDiagnostics` for it.  Not verified: a
+  client actually opening that URI (the server never opens documents itself).
 - **The built-in is compiled by every store and not device-cached.**  It is a
   virtual module (`persist::virtual_file_id`), compiled fresh in memory like
   `compute`; its values are ordinary (functions and a set of type values), so
   caching it is *possible* and simply not done.
-- **The contract is enforced twice while the routing is the checker's.**  `+`
-  still lowers to the machine leaf and the checker still registers the builtin's
-  domain assert (routing R3, [operator-polymorphism](operator-polymorphism.md)
-  §7), so a wrong-class operand reports the class refinement *and* the builtin's
-  assert — both now pointing into `core.lichen`.  Moving the surface operator
-  onto this binding (R3 → R2/R1) is what would make `core` the single authority.
+- **The surface operators route here.**  `+`, `-`, `*`, `/` and the four order
+  comparisons lower onto this module's bindings — the resolver hands out the
+  prelude's binders and the lowering applies one to the operand group — so `1 + 1.5`
+  is refused by *this file's* tie and `1 + 2` is this file's `add`, with no builtin
+  contract restated in Rust.  `==`/`!=` (unconstrained), `%` and the bitwise trio
+  (`Int`-only, a single class the checker pins) are deliberately not routed.  The
+  built-in module's **own** body keeps the machine operators — it has no prelude,
+  since the prelude is what it is — which is what makes the module the
+  implementation rather than a caller of itself.  The routing was blocked until
+  `6e9c409` (an apply of a *static* function did not instantiate its signature per
+  call, so the first call pinned an open class); what it costs now is measured in
+  [operator-polymorphism](operator-polymorphism.md) §7.1.
+- **A kernel body cannot call a binding.**  A routed operator *is* an apply of a
+  static function, and the kernel path refuses it
+  (`compute.jit: static refs are not kernel-compilable v1`), so
+  `examples/compute_jit.lichen` — whose `y + y` is exactly that shape — is red until
+  the kernel workstream's specialize-before-JIT pass folds the apply back to a
+  machine leaf.

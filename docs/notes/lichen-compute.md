@@ -14,7 +14,7 @@ surface is an embedded `compute.lichen` that re-exports a small namespace:
 
 ```
 --- compute = import "compute.lichen" ---
-k = compute.jit (x => x + 1)     -- jit: compile the lambda to a kernel (via `$jit`)
+k = compute.jit (x : Int => x + 1)  -- jit: compile the lambda to a kernel (via `$jit`)
 compute.launch k 5               -- launch: run it -> 6 : Int (via `$launch`)
 ```
 

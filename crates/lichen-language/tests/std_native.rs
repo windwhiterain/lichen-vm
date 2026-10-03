@@ -12,6 +12,8 @@
 
 use lichen_language::package::PackageStore;
 use lichen_language::persist::{NoPersist, ProgramCodecOf};
+use lichen_lowlevel::{AnyNodeId, LowValue, Module, NodeId};
+use lichen_utils::extend::AsEnum;
 
 /// The plugin-built compiler's vocabulary: the language's leaves plus the
 /// `lichen-std-native` plugin (its leaves come in via the `plugins` arm).
@@ -122,11 +124,31 @@ fn new_store() -> DStore {
     store
 }
 
-/// Compile, check, and run `source`, returning the rendered `value: type`.
-fn run(source: &str) -> String {
+/// Compile, check, and run `source`, returning the module, the evaluated root
+/// value, and the root type node.
+fn run(source: &str) -> (Module<HostProgram>, LangValue, NodeId) {
     let mut store = new_store();
-    lichen_language::run::evaluate_raw(source, None, &mut store)
-        .unwrap_or_else(|diags| panic!("expected {source:?} to check and run, got: {diags:?}"))
+    let (preprocessed, diags) = lichen_language::preprocess::preprocess(source, None, &mut store);
+    assert!(diags.is_empty(), "expected imports to resolve: {diags:?}");
+    let line_starts = lichen_language::lex::line_starts(source);
+    let report = lichen_language::compile_with_imports_at::<HostProgram>(
+        preprocessed.code,
+        &preprocessed.imports,
+        Some(store.registry()),
+        preprocessed.code_base,
+        &line_starts,
+        lichen_highlevel::no_native_ops(),
+    );
+    assert!(
+        report.ok(),
+        "expected {source:?} to check and run, got: {:?}",
+        report.diagnostics
+    );
+    let build = report.build.unwrap();
+    let mut module = build.module;
+    let value = module.evaluate_node_deep(build.root_val, None);
+    module.evaluate_node_deep(build.root_ty, None);
+    (module, value, build.root_ty)
 }
 
 /// Compile `source` and assert it *fails*; return the rendered diagnostics.
@@ -139,17 +161,47 @@ fn fail(source: &str) -> Vec<String> {
         .collect()
 }
 
+/// The `usize` scalar behind a value.
+fn usize_of(value: &LangValue) -> usize {
+    match AsEnum::<LowValue>::as_enum(value) {
+        Some(LowValue::USize(n)) => n,
+        _ => panic!("expected a usize value, got {value:?}"),
+    }
+}
+
+/// The element values of an array (or tuple) value, evaluated in order.
+fn array_values(module: &Module<HostProgram>, value: &LangValue) -> Vec<LangValue> {
+    match AsEnum::<LowValue>::as_enum(value) {
+        Some(LowValue::Array(array)) => unsafe { array.items() }
+            .iter()
+            .map(|item| match item.node {
+                AnyNodeId::Dynamic(node) => module
+                    .node_value(AnyNodeId::Dynamic(node))
+                    .expect("an array element has a value"),
+                AnyNodeId::Static(_) => panic!("language arrays are dynamic"),
+            })
+            .collect(),
+        _ => panic!("expected an array value, got {value:?}"),
+    }
+}
+
+/// The `usize` elements of an array value, in order.
+fn usize_array(module: &Module<HostProgram>, value: &LangValue) -> Vec<usize> {
+    array_values(module, value).iter().map(usize_of).collect()
+}
+
 #[test]
 fn std_sort_sorts_a_usize_array() {
-    let out = run(r#"
+    let (module, value, _) = run(r#"
 ---
   std = import "std.lichen"
 ---
 std.sort [3, 1, 2]
 "#);
     assert_eq!(
-        out, "[1, 2, 3]: array<Int, 3>",
-        "std.sort produced: {out:?}"
+        usize_array(&module, &value),
+        vec![1, 2, 3],
+        "std.sort produced the sorted elements"
     );
 }
 
@@ -158,15 +210,22 @@ fn std_sort_is_reusable_and_length_preserving() {
     // The wrapper's `sort` is an ordinary typed function: applying it several
     // times over arrays of different lengths is fine (the length is a fresh
     // cell bound at each apply), and the result keeps the length.
-    let out = run(r#"
+    let (module, value, _) = run(r#"
 ---
   std = import "std.lichen"
 ---
 (std.sort [4, 1, 3, 2], std.sort [9, 7])
 "#);
+    let pair = array_values(&module, &value);
     assert_eq!(
-        out, "([1, 2, 3, 4], [7, 9]): <array<Int, 4>, array<Int, 2>>",
-        "produced: {out:?}"
+        usize_array(&module, &pair[0]),
+        vec![1, 2, 3, 4],
+        "the first result keeps its four sorted elements"
+    );
+    assert_eq!(
+        usize_array(&module, &pair[1]),
+        vec![7, 9],
+        "the second result keeps its two sorted elements"
     );
 }
 

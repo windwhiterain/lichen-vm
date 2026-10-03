@@ -5,6 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod common;
+
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_language::package::PackageStore;
 use lichen_language::program::LangProgram;
@@ -35,8 +37,9 @@ fn imports_an_integer_package() {
     write(&dir, "pkg.lichen", "42\n");
     let main = "---x = import \"pkg.lichen\"---x\n";
     let mut store = PackageStore::<LangProgram>::new();
-    let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
-    assert_eq!(out, "42: Int");
+    let (module, value, root_ty) = common::run_at(main, Some(&dir), &mut store);
+    assert_eq!(common::usize_of(&value), 42);
+    assert!(common::type_is_int(&module, root_ty));
 }
 
 #[test]
@@ -45,8 +48,9 @@ fn imports_and_applies_a_function_package() {
     write(&dir, "f.lichen", "x => x + 1\n");
     let main = "---f = import \"f.lichen\"---f 41\n";
     let mut store = PackageStore::<LangProgram>::new();
-    let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
-    assert_eq!(out, "42: Int");
+    let (module, value, root_ty) = common::run_at(main, Some(&dir), &mut store);
+    assert_eq!(common::usize_of(&value), 42);
+    assert!(common::type_is_int(&module, root_ty));
 }
 
 #[test]
@@ -55,8 +59,12 @@ fn imports_a_struct_type_and_instantiates_it() {
     write(&dir, "s.lichen", "struct<.f Int>\n");
     let main = "---s = import \"s.lichen\"---s(5,)\n";
     let mut store = PackageStore::<LangProgram>::new();
-    let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
-    assert_eq!(out, "(5,): struct<.f Int>");
+    let (module, value, _) = common::run_at(main, Some(&dir), &mut store);
+    assert_eq!(
+        common::usize_of(&common::array_values(&module, &value)[0]),
+        5,
+        "the struct instance is the one-element tuple (5,)"
+    );
 }
 
 #[test]
@@ -75,8 +83,9 @@ fn transitive_imports_apply_across_modules() {
     );
     let main = "---f = import \"middle.lichen\"---f 41\n";
     let mut store = PackageStore::<LangProgram>::new();
-    let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
-    assert_eq!(out, "42: Int");
+    let (module, value, root_ty) = common::run_at(main, Some(&dir), &mut store);
+    assert_eq!(common::usize_of(&value), 42);
+    assert!(common::type_is_int(&module, root_ty));
     // Both packages loaded exactly once, into the one shared registry.
     assert_eq!(store.packages.len(), 2);
 }
@@ -95,8 +104,9 @@ fn transitive_struct_types_flow_through_packages() {
     );
     let main = "---v = import \"middle.lichen\"---v.f\n";
     let mut store = PackageStore::<LangProgram>::new();
-    let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
-    assert_eq!(out, "41: Int");
+    let (module, value, root_ty) = common::run_at(main, Some(&dir), &mut store);
+    assert_eq!(common::usize_of(&value), 41);
+    assert!(common::type_is_int(&module, root_ty));
 }
 
 #[test]
@@ -109,8 +119,10 @@ fn diamond_imports_load_each_package_once() {
     write(&dir, "c.lichen", "---a = import \"a.lichen\"---a + 2\n");
     let main = "---b = import \"b.lichen\"\nc = import \"c.lichen\"---(b, c)\n";
     let mut store = PackageStore::<LangProgram>::new();
-    let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
-    assert_eq!(out, "(43, 44): <Int, Int>");
+    let (module, value, _) = common::run_at(main, Some(&dir), &mut store);
+    let elements = common::array_values(&module, &value);
+    assert_eq!(common::usize_of(&elements[0]), 43);
+    assert_eq!(common::usize_of(&elements[1]), 44);
     assert_eq!(
         store.packages.len(),
         3,
@@ -308,20 +320,18 @@ fn two_importers_share_one_package_through_one_store() {
     let dir = temp_dir("shared");
     write(&dir, "pkg.lichen", "x => x + 1\n");
     let mut store = PackageStore::<LangProgram>::new();
-    let first = evaluate_raw(
+    let (_, first, _) = common::run_at(
         "---f = import \"pkg.lichen\"---f 41\n",
         Some(&dir),
         &mut store,
-    )
-    .unwrap();
-    let second = evaluate_raw(
+    );
+    let (_, second, _) = common::run_at(
         "---f = import \"pkg.lichen\"---f 1\n",
         Some(&dir),
         &mut store,
-    )
-    .unwrap();
-    assert_eq!(first, "42: Int");
-    assert_eq!(second, "2: Int");
+    );
+    assert_eq!(common::usize_of(&first), 42);
+    assert_eq!(common::usize_of(&second), 2);
     assert_eq!(
         store.packages.len(),
         1,

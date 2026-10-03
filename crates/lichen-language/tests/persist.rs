@@ -15,8 +15,9 @@ use lichen_language::package::PackageStore;
 use lichen_language::persist::{
     DeviceRegistry, artifact_hash, deserialize_artifact, file_id_hash, hex, sha256,
 };
+mod common;
+
 use lichen_language::program::{LangProgram, LangValue};
-use lichen_language::run::evaluate_raw;
 use lichen_lowlevel::LowValue;
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -91,8 +92,8 @@ fn cache_round_trip_across_stores() {
 
     let mut store1 = PackageStore::<LangProgram>::with_cache_dir(cache.clone());
     let source = fs::read_to_string(&main_path).unwrap();
-    let out1 = evaluate_raw(&source, Some(&dir), &mut store1).unwrap();
-    assert_eq!(out1, "42: Int");
+    let (_, value1, _) = common::run_at(&source, Some(&dir), &mut store1);
+    assert_eq!(common::usize_of(&value1), 42);
     assert_eq!(
         store1.compiled, 2,
         "the first load compiles the two packages of the chain"
@@ -100,8 +101,8 @@ fn cache_round_trip_across_stores() {
     assert_eq!(store1.loaded_from_cache, 0);
 
     let mut store2 = PackageStore::<LangProgram>::with_cache_dir(cache.clone());
-    let out2 = evaluate_raw(&source, Some(&dir), &mut store2).unwrap();
-    assert_eq!(out2, "42: Int");
+    let (_, value2, _) = common::run_at(&source, Some(&dir), &mut store2);
+    assert_eq!(common::usize_of(&value2), 42);
     assert_eq!(store2.compiled, 0, "a cache hit compiles nothing");
     assert_eq!(
         store2.loaded_from_cache, 2,

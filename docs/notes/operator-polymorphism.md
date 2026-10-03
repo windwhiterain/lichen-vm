@@ -1,9 +1,13 @@
 # Operator polymorphism: a refinement contract over a lichen dispatch
 
 > Status: **Phases 0–3 landed** on `dev` (the refinement contract, the set value,
-> `@in`, the **class refinement** `x : (_ ! in_num)`, and the contract as the
-> built-in [`core`](core-prelude.md) prelude); the routing (R3 → R2/R1) is the
-> remaining phase and waits on the kernel workstream (§9).
+> `@in`, the **class refinement** `x : (_ ! in_num)`, the contract as the
+> built-in [`core`](core-prelude.md) prelude, the static-signature instantiation a
+> frozen module needs, and the **routing** — `+`, `-`, `*`, `/` and the four order
+> comparisons lower onto the prelude's bindings).  What that routing costs — kernel
+> bodies until the kernel workstream's specialize pass, an open class's honest
+> `raw[?a, ?b]` rendering, and a routed statement's missing value snapshot — is
+> measured in §7.1.
 >
 > The architecture was settled in discussion before any code: **an operator's
 > contract and its implementation are separate artifacts, and the contract may be
@@ -561,42 +565,75 @@ routing-agnostic: phases 0–2 below land the semantics under R3, and R2/R1 are 
 "operators are library functions" end state whenever the prelude question is
 answered.
 
-### 7.1 Measured: R1 works, and it is blocked by something *upstream* of kernels
+### 7.1 Measured: the two things R1 needed, and why it is still withdrawn
 
-R1 was implemented on this branch (the resolver hands out the prelude's binders,
+R1 has been implemented twice — the resolver hands out the prelude's binders and
 the lowering turns a routed `BinOp` into an apply of that binding with the operand
-group `[l, r]`) and measured.  **Mechanically it works**: `1 + 2` is `3`,
-`1 + 1.5` is refused at the operator with the *contract's* tie
-(`expected Int, found Float`), `array<Int, add [1, 2]>` still decides to
-`array<Int, 3>`, and a kernel body's `y + y` becomes a static-ref apply — the
-kernel reports it (`static refs are not kernel-compilable v1`), which is the
-expected-and-accepted cost.
+group `[l, r]` — and **withdrawn twice**, each time for a measured reason that is
+not the routing's syntax.  It is kept as a one-command patch
+(`.scratch-core/routing.patch`) rather than landed.
 
-**But it regresses polymorphism, and that is not a kernel error.**
-`f = x => x + x; (f 1, f 1.5)` was `(2, 3.0)` (the plan's own measured row:
-`(add 1 2, add 1.5 2.5)` = `(3, 4.0)` for `add = x => y => x + y`) and becomes
-`expected Int, found Float` at the *second* call.  Isolated, without any
-operator: `f = x => add [x, x]` fails the same way while the *same* apply at the
-top level — `(add [1, 2], add [1.5, 2.5])` — is `(3, 4.0)`.  So the cause is not
-arithmetic: **an apply of a *static* (imported) function unifies the caller's
-cells with the callee module's own**, and the first call fixes the class for every
-call.  A static ref is a decided leaf, so the callee's *type* is never
-instantiated per application.
+**First withdrawal: it regressed polymorphism.**  `f = x => x + x; (f 1, f 1.5)`
+was `(2, 3.0)` and became `expected Int, found Float` at the second call — and the
+same failure appeared with no operator at all (`f = x => add [x, x]`), while the
+*same* apply at the top level (`(add [1, 2], add [1.5, 2.5])` = `(3, 4.0)`) was
+fine.  It was neither the frozen concreteness flag nor the caller's apply node
+being baked: a **residual clone made by a static apply carried no owner tag**, so
+it was a member of no template; a caller's per-call clone walk re-instantiates only
+template *members*, and a non-member is referenced in place — so the caller's open
+parameter **type** was one module-global cell and the first call bound it for good.
 
-That is the same root as the recorded `type_of` monomorphism and as the shared-hole
-tie (§3), now on the path of *every* operator-using lambda.  So the dependency
-chain is not "routing, then kernel specialize":
+That root is **fixed and landed** (`6e9c409`), by mirroring the owner tag the
+dynamic path already stamps (`crates/lichen-lowlevel/src/static_module/apply.rs`;
+`baked` clones stay untagged, keeping the concrete-leaf fast path).  Measured on a
+hand-written static function that returns a structure with no operator involved
+(`pair = x => [x, x]`, `f = x => p.pair x`): `([1, 1], [1.5, 1.5])` where it had
+failed identically.  That fix stands on its own — it is what makes an apply of *any*
+static function instantiate its signature per call.
 
-1. **static-signature instantiation** — an apply of a static function must
-   instantiate the callee's parameter *type* (deeply, per application), not unify
-   against the frozen module's own cells.  This also retires the `type_of`
-   monomorphism, the `raw[?a, ?b]` signature, and the shared-hole tie.
-2. **the routing** (§7's R1/R2, above), which the prelude's binders make a
-   lowering substitution.
-3. **kernel specialize** (the kernel workstream's specialize-before-JIT pass),
-   which folds step 2's static-ref apply back to a machine leaf.
+**Landed: the routing is the call form**, and it carries three costs.  The resolver
+hands out the prelude's binders and the lowering turns a routed `BinOp` into an
+apply of that binding with the operand group `[l, r]` — so the surface operator
+*is* the binding (its contract and its body), and the checker's builtin operator
+remains only for the built-in module's own source (which has no prelude, so the
+expansion terminates).  Measured: `1 + 2` is `3`, `1 + 1.5` is refused by the
+*contract's* tie at the operator, `array<Int, add [1, 2]>` decides to
+`array<Int, 3>` (so a routed operator still folds where a *value* is forced), and
+`f = x => x + x; (f 1, f 1.5)` is `(2, 3.0)` — the polymorphism the first
+withdrawal had cost.
 
-The R1 code is kept unlanded until step 1 exists.
+What it costs, who owns each, and why the first is not a defect:
+
+1. **A kernel body cannot call the binding** — `compute.jit: static refs are not
+   kernel-compilable v1`.  This is the kernel workstream's specialize-before-JIT
+   pass, and this shape is *what it was waiting for*: `y + y` now lowers to
+   `Apply(Static(<the prelude's add>), [y, y])`, whose inlined form
+   (`operands = [y, y]; operands[0] + operands[1]`) was measured kernel-clean
+   (`6: Int` inside `compute.jit`).
+2. **An open class renders `raw[?a, ?b]`** — the operator's operand-group element
+   is the placeholder's `[class, kind]` pair, so every arithmetic lambda's
+   signature now prints the mark the *refined* form printed all along
+   (`x : (_ ! in_num)`).  That is the printer's **honest** reading of two cells the
+   type chain never explained ([raw-rendering-mark](raw-rendering-mark.md) §2), not
+   a new defect; the expectations that pinned `?a -> ?a` are printer-dependent
+   tests, which are being converted to semantic assertions by a separate piece of
+   work ([tests-do-not-render](tests-do-not-render.md)).
+   The one *real* printer defect this surfaced is fixed: a universe read out of a
+   frozen module (a replica whose tail names the canonical self-loop in the module
+   that wrote it) fell back to `raw[Int, Type]` where `<Int, Int>` was meant
+   (`8805020`).
+3. **A routed statement's concrete value is not in the snapshot** —
+   `Doc::statement_values` reports `None` for `y = x + 4` because the builtin
+   operator folded it *eagerly* at check time while a call stays lazy (the
+   snapshot deliberately never forces a value: a recursive binding must not
+   diverge).  The value is still computed at run time; only the static snapshot is
+   lost.  Fixing it without the eager fold is what the *body-expansion* form would
+   do — expand the binding's own body at the call site — which is recorded here as
+   the open alternative, not as the landed shape.
+
+So the chain's three steps: **static-signature instantiation** (landed,
+`6e9c409`), **the routing** (landed, the call form), **kernel specialize** (the
+kernel workstream's, for cost 1).
 
 ## 8. Open questions
 
@@ -790,9 +827,9 @@ than budgeting for it.)
   `does not satisfy {Int, Float}`, because the spelling and the domain node live
   in the built-in's build) and the **call site** (`AssertError` records the
   template it came from, not the apply that cloned it) —
-  [core-prelude](core-prelude.md) §5; the **routing** (the leaf-selection
-  dispatch, the split leaves, and the surface operator resolving to the `core`
-  binding — R3 → R2/R1), which needs the kernel workstream's
-  specialize-before-JIT pass first (§8.4); and the read's monomorphism
+  [core-prelude](core-prelude.md) §5; the **kernel side of the routing** (a routed
+  operator is an apply of the `core` binding, so a kernel body waits on the kernel
+  workstream's specialize-before-JIT pass to fold it back to a machine leaf — the
+  surface routing itself is landed, §7.1); and the read's monomorphism
   ([type-of-in-std](type-of-in-std.md)), which is off the contract's path now that
   the class refinement needs no read.

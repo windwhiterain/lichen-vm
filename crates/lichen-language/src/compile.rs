@@ -107,7 +107,7 @@ pub fn compile_with_imports_with_cells(
     // lowering below reads those fields instead of re-resolving.
     let resolved = crate::resolve::resolve(program, imports);
     let (ir, spans, compiled_cells) =
-        compile_resolved_with_cells(program, &resolved.import_binders, cells);
+        compile_resolved_with_cells(program, &resolved.import_binders, &resolved.prelude, cells);
     (ir, spans, resolved.diagnostics, compiled_cells)
 }
 
@@ -125,10 +125,12 @@ pub fn compile_with_imports_with_cells(
 pub(crate) fn compile_resolved_with_cells(
     program: &Program,
     import_binders: &[crate::resolve::ImportBinder],
+    prelude: &[(String, BinderId)],
     cells: Option<&CellStore>,
 ) -> (IR<LangAttr>, SpanIndex, Vec<(Path, ExprId)>) {
     let mut compiler = Compiler::new();
     compiler.seed_imports(import_binders);
+    compiler.seed_prelude(prelude);
     // One `for_each` pass over the resolved AST is what gives every marked binding
     // its occurrence path; the lowering walk below never carries one.
     compiler.cached_paths = cached_bindings(program);
@@ -296,6 +298,11 @@ struct Compiler {
     /// The source span of each IR node, keyed by [ExprId] — the crate's own
     /// position index; highlevel itself is span-free.
     spans: Vec<Option<Span>>,
+    /// The **prelude**'s binders by name ([`crate::resolve::Resolved::prelude`]):
+    /// what the surface operators route onto.  Empty when the source has no
+    /// prelude, which is the built-in module's own compilation — so the module's
+    /// body keeps the machine operators and the routing terminates.
+    prelude: HashMap<String, BinderId>,
 }
 
 impl Compiler {
@@ -310,7 +317,40 @@ impl Compiler {
             op_names: HashMap::new(),
             str_names: HashMap::new(),
             spans: Vec::new(),
+            prelude: HashMap::new(),
         }
+    }
+
+    /// Record the prelude's binders, so [`Self::routed_operator`] can resolve a
+    /// surface operator to its binding.
+    fn seed_prelude(&mut self, prelude: &[(String, BinderId)]) {
+        for (name, binder) in prelude {
+            self.prelude.insert(name.clone(), *binder);
+        }
+    }
+
+    /// The prelude binding a **surface operator** routes onto, if this source has
+    /// a prelude and the prelude exports that operator
+    /// ([core-prelude](../docs/notes/core-prelude.md),
+    /// [operator-polymorphism](../docs/notes/operator-polymorphism.md) §7).
+    ///
+    /// Only the operators the prelude carries are routed: `==`/`!=` are
+    /// unconstrained, and `%` and the bitwise trio are `Int`-only, so their
+    /// contract is a single class the checker already pins — a library binding
+    /// would add an indirection with nothing to say.
+    fn routed_operator(&self, operator: &crate::ast::BinOp) -> Option<BinderId> {
+        let name = match operator {
+            crate::ast::BinOp::Add => "add",
+            crate::ast::BinOp::Sub => "sub",
+            crate::ast::BinOp::Mul => "mul",
+            crate::ast::BinOp::Div => "div",
+            crate::ast::BinOp::Lt => "less",
+            crate::ast::BinOp::Gt => "greater",
+            crate::ast::BinOp::Leq => "less_or_equal",
+            crate::ast::BinOp::Geq => "greater_or_equal",
+            _ => return None,
+        };
+        self.prelude.get(name).copied()
     }
 
     /// Emit the `Static` node for each import binder, keyed by its `BinderId`.
@@ -692,6 +732,29 @@ impl Compiler {
                 right,
                 span,
             } => {
+                let left = self.compile_expr(left);
+                let right = self.compile_expr(right);
+                // **The routing**: with a prelude in scope, `a + b` lowers to the
+                // prelude's binding applied to the operand group — one
+                // `array<_, 2>` — so the contract a program meets is the built-in
+                // module's rather than a built-in's, and the *tie*, the *arity*
+                // and the *class* all come from that one module
+                // ([core-prelude](../docs/notes/core-prelude.md),
+                // [operator-polymorphism](../docs/notes/operator-polymorphism.md)
+                // §7).  The built-in module itself has no prelude, so its own body
+                // lowers to the machine operator — which is the implementation the
+                // routing is a surface for.
+                if let Some(binder) = self.routed_operator(operator) {
+                    let operands = self.alloc_array(&[left, right], span);
+                    let function = self.binder(binder);
+                    return self.alloc(
+                        ExprKind::Apply {
+                            function,
+                            argument: operands,
+                        },
+                        span,
+                    );
+                }
                 let operator = match operator {
                     crate::ast::BinOp::Add => BinOp::Add,
                     crate::ast::BinOp::Sub => BinOp::Sub,
@@ -709,8 +772,6 @@ impl Compiler {
                     crate::ast::BinOp::BitXor => BinOp::BitXor,
                     crate::ast::BinOp::In => BinOp::In,
                 };
-                let left = self.compile_expr(left);
-                let right = self.compile_expr(right);
                 self.alloc(
                     ExprKind::BinOp {
                         operator,
