@@ -2126,7 +2126,7 @@ where
         return Err(MIXED_CLASS_BODY.into());
     }
     for leaf in &leaves {
-        emit_node(module, &params, *leaf, 0, class, &mut body, &mut tally)?;
+        emit_node(module, &params, *leaf, 0, &mut body, &mut tally)?;
     }
 
     Ok(KernelFragment {
@@ -2336,15 +2336,7 @@ where
         // **Depth 0 at the root**: the body value is the outermost expression, and
         // every level below it is one `emit_node` frame (see
         // [`MAX_KERNEL_BODY_DEPTH`]).
-        emit_node(
-            module,
-            &params,
-            *output,
-            0,
-            class,
-            &mut body_instr,
-            &mut tally,
-        )?;
+        emit_node(module, &params, *output, 0, &mut body_instr, &mut tally)?;
         if tally.writes == before {
             return Err(format!(
                 "output {position} of the parallel index function is not a `compute.write` \
@@ -3411,7 +3403,6 @@ fn lower_instrs(
 ) -> Result<(), String> {
     use wasm_encoder::Instruction;
     let (index, base) = (state.index, state.base);
-    let class = state.class;
 
     for instr in body {
         // `KernelInstr` is `Copy`, so this matches it **by value**: an
@@ -4018,13 +4009,14 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
 /// that the two buffer spaces' totals come out of the emission that produced the
 /// positions rather than out of a separate reading of the body.
 ///
-/// `class` is the class the fragment's body is lowered in
-/// ([`fragment_class`]), decided before the walk: it is the representation every
-/// constant is pushed in ([`const_bits`]), and the class whose `KernelInstr` op
-/// codes [`lower_body`] picks.  An operator that has no form in that class — the
-/// bitwise trio and `Rem` over float operands — is refused here by name, where
-/// the operand's class is still visible, rather than emitted into a module that
-/// would not validate.
+/// Each value is lowered in **its own** class, read from the node rather than
+/// threaded in from the caller: a body may compute in more than one class, so
+/// the representation every constant is pushed in ([`const_bits`]) and the
+/// opcode [`lower_body`] picks are the ones the *value* is lowered in, and one
+/// value's class must not be able to decide another's.  An operator that has no
+/// form in a class — the bitwise trio and `Rem` over float operands — is refused
+/// here by name, where the operand's class is still visible, rather than emitted
+/// into a module that would not validate.
 ///
 /// `depth` is how many levels of this walk are already open beneath the body
 /// value, and it is checked against [`MAX_KERNEL_BODY_DEPTH`] on entry. It is a
@@ -4037,7 +4029,6 @@ fn emit_node<P>(
     params: &[ParamSlot],
     node: NodeId,
     depth: usize,
-    class: ScalarClass,
     body: &mut Vec<KernelInstr>,
     tally: &mut Positions,
 ) -> Result<(), String>
@@ -4053,6 +4044,7 @@ where
     if depth > MAX_KERNEL_BODY_DEPTH {
         return Err(kernel_body_too_deep());
     }
+    let class = node_class(module, node);
     if let Some(value) = module.node_value(AnyNodeId::Dynamic(node)) {
         match AsEnum::<LowValue>::as_enum(&value) {
             Some(LowValue::USize(n)) => {
@@ -4089,7 +4081,7 @@ where
         // parameterized: `launch` is two-step, assemble then call, so the
         // argument is only concrete at run time).  Emit the defining member.
         if let Some(definer) = class_computation_node(module, node) {
-            return emit_node(module, params, definer, depth + 1, class, body, tally);
+            return emit_node(module, params, definer, depth + 1, body, tally);
         }
         // **A node nothing can resolve, described rather than numbered.** This used
         // to report only its `NodeId`, which is a compiler-internal number: the
@@ -4135,7 +4127,7 @@ where
                 if usize_value(module, index) == Some(0)
                     && let Some(value_node) = value_of_node(module, node)
                 {
-                    return emit_node(module, params, value_node, depth + 1, class, body, tally);
+                    return emit_node(module, params, value_node, depth + 1, body, tally);
                 }
                 // A constant index into a concrete array value selects that
                 // element — the wrapper's slot-read destructuring
@@ -4155,7 +4147,6 @@ where
                             params,
                             dyn_node(item.node)?,
                             depth + 1,
-                            class,
                             body,
                             tally,
                         );
@@ -4185,24 +4176,8 @@ where
                         let mut then_body = Vec::new();
                         let mut else_body = Vec::new();
                         let mut select_body = Vec::new();
-                        emit_node(
-                            module,
-                            params,
-                            then_node,
-                            depth + 1,
-                            class,
-                            &mut then_body,
-                            tally,
-                        )?;
-                        emit_node(
-                            module,
-                            params,
-                            else_node,
-                            depth + 1,
-                            class,
-                            &mut else_body,
-                            tally,
-                        )?;
+                        emit_node(module, params, then_node, depth + 1, &mut then_body, tally)?;
+                        emit_node(module, params, else_node, depth + 1, &mut else_body, tally)?;
                         if then_body
                             .iter()
                             .chain(else_body.iter())
@@ -4210,15 +4185,7 @@ where
                         {
                             return Err(CONDITIONAL_WRITE.into());
                         }
-                        emit_node(
-                            module,
-                            params,
-                            index,
-                            depth + 1,
-                            class,
-                            &mut select_body,
-                            tally,
-                        )?;
+                        emit_node(module, params, index, depth + 1, &mut select_body, tally)?;
                         body.append(&mut then_body);
                         body.append(&mut else_body);
                         body.append(&mut select_body);
@@ -4240,9 +4207,7 @@ where
                 // the callee's function index once the kernel's relative launch
                 // set is laid out.
                 if kernel_id_of(module, callee).is_some() {
-                    return emit_cross_kernel_call(
-                        module, params, callee, arg, depth, class, body, tally,
-                    );
+                    return emit_cross_kernel_call(module, params, callee, arg, depth, body, tally);
                 }
                 // Style 1: a full lichen-function call (inline its body) —
                 // deferred.
@@ -4284,8 +4249,8 @@ where
                  four order comparisons, not `%` or the bitwise operators"
             ));
         }
-        emit_node(module, params, left, depth + 1, class, body, tally)?;
-        emit_node(module, params, right, depth + 1, class, body, tally)?;
+        emit_node(module, params, left, depth + 1, body, tally)?;
+        emit_node(module, params, right, depth + 1, body, tally)?;
         body.push(KernelInstr::Bin(class, bin));
         return Ok(());
     }
@@ -4296,9 +4261,7 @@ where
         match compute_op {
             ComputeOperator::Launch | ComputeOperator::Call => {
                 let (kernel, arg) = apply_pair(module, operation.operand)?;
-                return emit_cross_kernel_call(
-                    module, params, kernel, arg, depth, class, body, tally,
-                );
+                return emit_cross_kernel_call(module, params, kernel, arg, depth, body, tally);
             }
             // The loop index of the current parallel invocation.  The index is
             // the wasm param immediately after the cfg scalar params.
@@ -4364,7 +4327,7 @@ where
                 tally.reads = tally.reads.max(pos + 1);
                 tally.read_classes.push(class);
                 body.push(KernelInstr::Const(class, const_bits(class, pos as i64)));
-                emit_node(module, params, idx, depth + 1, class, body, tally)?;
+                emit_node(module, params, idx, depth + 1, body, tally)?;
                 body.push(KernelInstr::BufferReadCall(class));
                 return Ok(());
             }
@@ -4391,8 +4354,8 @@ where
                 let element = node_class(module, val);
                 tally.write_classes.push(element);
                 body.push(KernelInstr::Const(class, const_bits(class, out_pos as i64)));
-                emit_node(module, params, idx, depth + 1, class, body, tally)?;
-                emit_node(module, params, val, depth + 1, class, body, tally)?;
+                emit_node(module, params, idx, depth + 1, body, tally)?;
+                emit_node(module, params, val, depth + 1, body, tally)?;
                 body.push(KernelInstr::BufferWriteCall(element));
                 return Ok(());
             }
@@ -4490,7 +4453,6 @@ fn emit_cross_kernel_call<P>(
     kernel: NodeId,
     arg: NodeId,
     depth: usize,
-    class: ScalarClass,
     body: &mut Vec<KernelInstr>,
     tally: &mut Positions,
 ) -> Result<(), String>
@@ -4505,15 +4467,15 @@ where
     // *callee's* registration, read here and released before any emission:
     // emitting can reach a further cross-kernel call, which locks the same
     // registry again, and the lock is not reentrant.
-    let (shape, results, callee_class) = {
+    let (shape, callee_params, results) = {
         let fragments = kernels().lock().unwrap();
         let fragment = fragments
             .get(&kid)
             .ok_or_else(|| "cross-kernel callee is not a registered kernel".to_string())?;
         (
             fragment.param_shape.clone(),
+            param_classes(fragment),
             fragment.result_classes.len(),
-            fragment_class(fragment),
         )
     };
     if results != 1 {
@@ -4522,10 +4484,19 @@ where
             CROSS_KERNEL_RESULT_ARITY
         ));
     }
-    if callee_class != class {
+    // **The argument's class must be the callee's parameter class**, because a
+    // wasm `call` types its operand by the callee's signature and `Int` and
+    // `Float` do not convert.  The check is on the *argument*, not on the
+    // enclosing body: a body may compute in more than one class, so only the
+    // value actually handed over can decide whether the call has a signature.
+    let arg_class = node_class(module, pair_value_node(module, arg).unwrap_or(arg));
+    if let Some(expected) = callee_params.first()
+        && *expected != arg_class
+    {
         return Err(format!(
-            "cross-kernel call to kernel {kid}, which is lowered in {callee_class:?}, from a body \
-             lowered in {class:?}: Int and Float do not convert, so the call has no signature"
+            "cross-kernel call to kernel {kid}, whose parameter is lowered in {expected:?}, from \
+             an argument lowered in {arg_class:?}: Int and Float do not convert, so the call has \
+             no signature"
         ));
     }
     if shape.flat_arity() == 1 {
@@ -4534,9 +4505,9 @@ where
         // (A *tuple* domain has to resolve its own encoding; see
         // `emit_callee_args`.)
         let arg = pair_value_node(module, arg).unwrap_or(arg);
-        emit_node(module, params, arg, depth + 1, class, body, tally)?;
+        emit_node(module, params, arg, depth + 1, body, tally)?;
     } else {
-        emit_callee_args(module, params, arg, &shape, depth, class, body, tally)?;
+        emit_callee_args(module, params, arg, &shape, depth, body, tally)?;
     }
     body.push(KernelInstr::CallKernel(kid));
     Ok(())
@@ -4573,7 +4544,6 @@ fn emit_callee_args<P>(
     arg: NodeId,
     shape: &KernelShape,
     depth: usize,
-    class: ScalarClass,
     body: &mut Vec<KernelInstr>,
     tally: &mut Positions,
 ) -> Result<(), String>
@@ -4583,7 +4553,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let KernelShape::Tuple(items) = shape else {
-        return emit_node(module, params, arg, depth + 1, class, body, tally);
+        return emit_node(module, params, arg, depth + 1, body, tally);
     };
     // A candidate that reads as a tuple but disagrees with the domain is a
     // cause worth reporting; one that simply is not a tuple only says the
@@ -4601,7 +4571,6 @@ where
             candidate,
             items,
             depth,
-            class,
             &mut leaves,
             &mut candidate_tally,
         ) {
@@ -4668,7 +4637,6 @@ fn emit_tuple_leaves<P>(
     node: NodeId,
     items: &[KernelShape],
     depth: usize,
-    class: ScalarClass,
     out: &mut Vec<KernelInstr>,
     tally: &mut Positions,
 ) -> Result<(), String>
@@ -4704,19 +4672,10 @@ scalar(s)",
     }
     for (element, element_shape) in elements.iter().zip(items) {
         match element_shape {
-            KernelShape::Tuple(nested) => emit_tuple_leaves(
-                module,
-                params,
-                *element,
-                nested,
-                depth + 1,
-                class,
-                out,
-                tally,
-            )?,
-            KernelShape::Scalar(_) => {
-                emit_node(module, params, *element, depth + 1, class, out, tally)?
+            KernelShape::Tuple(nested) => {
+                emit_tuple_leaves(module, params, *element, nested, depth + 1, out, tally)?
             }
+            KernelShape::Scalar(_) => emit_node(module, params, *element, depth + 1, out, tally)?,
         }
     }
     Ok(())
