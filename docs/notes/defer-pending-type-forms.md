@@ -13,11 +13,13 @@
 > of this either), and [applied-struct-nominal-id](applied-struct-nominal-id.md)
 > (the third defect found the same way; fixed).
 >
-> **Open remainder in this machinery**: a *call-result* type read is still not
-> usable as a type expression the way the removed builtin's raw `Index` read
-> was — a library `type_of` in a struct field's declared type resolves to the
-> enclosing struct kind.  Reproducer, mechanism and what was already ruled out:
-> [`type-of-in-std` § *Open defect*](type-of-in-std.md#open-defect-a-library-read-is-not-the-builtin-read-in-a-field-type-position).
+> **Open remainder (not in this machinery)**: a library `type_of` in a struct
+> field's declared type *prints* as the enclosing struct kind — the graph
+> commits the right type; the printer misreads a **frozen** kind as the universe
+> (no `defer_pending` verdict fires in that repro).  Diagnosis, the verified fix
+> and its acceptance test: [universe-containment](universe-containment.md);
+> symptom and history: [`type-of-in-std` § *Open
+> defect*](type-of-in-std.md#open-defect-the-printer-misreads-a-frozen-kind-as-the-universe).
 
 ## 1. The repro
 

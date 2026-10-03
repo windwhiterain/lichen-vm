@@ -2,10 +2,13 @@
 
 > Status: current — the keyword, the AST form, the highlevel `ExprKind::TypeOf`
 > and its checker special case are gone; the type read lives in
-> [lichen-std/_.lichen](../../lichen-std/_.lichen).  **One defect is open** (§
-> *Open defect*): a library type read used as a struct field's declared type
-> does not behave like the builtin's lazy read, so three rendering assertions
-> are parked with `#[ignore]` (they are the acceptance test for the fix).> Points at: `crates/lichen-language-lex`, `crates/lichen-language-parser`
+> [lichen-std/_.lichen](../../lichen-std/_.lichen).  **One defect is diagnosed,
+> fix not landed** (§ *Open defect*): the `.sig` mis-render is a *printer*
+> misclassification — the graph holds the right type — caused by
+> ["contains the universe" being read as "is the
+> universe"](universe-containment.md); three rendering assertions stay parked
+> with `#[ignore]` (they are the acceptance test for landing the fix).
+> Points at: `crates/lichen-language-lex`, `crates/lichen-language-parser`
 > (`ast`/`parse`), `crates/lichen-language` (`compile`/`resolve`/`dirty`/`spans`),
 > `crates/lichen-highlevel` (`ir`/`checker`), `crates/lichen-compute`
 > (`compute.lichen`), `lichen-std/_.lichen`.
@@ -73,12 +76,14 @@ consumer either imports the standard library or spells the one-liner next to
 the probe that needs it (as the language tests do — `compile` takes a bare
 source with no package store).
 
-## Open defect: a library read is not the builtin read in a field-type position
+## Open defect: the printer misreads a frozen kind as the universe
 
-**Status: open — not fixed, deliberately parked for a separate change.**  The
-removal shipped with this known gap; the two `compute` assertions that measure
-it are `#[ignore]`d with the note cited in the reason string, so they are the
-acceptance test for whoever closes this.
+**Status: diagnosed — fix identified and verified, not landed; deliberately
+parked for a separate change.**  The removal shipped with this known gap; the
+three assertions that measure it are `#[ignore]`d with this note cited in the
+reason string, so they are the acceptance test for whoever lands the fix
+([universe-containment](universe-containment.md) §2.2 has the exact patch and
+its measured acceptance).
 
 ### The symptom
 
@@ -93,10 +98,12 @@ k
 | with the library `type_of` | `(Kernel, parameterized): struct<.native raw[?a, ?b], .sig TypeStruct>` |
 
 The kernel's `.sig` field is *declared* as the read of the argument's type; the
-read's **value** is still right (`compute.launch k 5` is `10`, and `k.sig` still
-gates as a function type), but the field's **declared type** resolves to the
-enclosing struct type's kind marker instead of the signature.  Three assertions
-measure it, all parked with `#[ignore]` and this note in the reason string:
+read's **value** is right (`compute.launch k 5` is `10`, and `k.sig` still gates
+as a function type), and — as it turns out — so is its **declared type**: a
+class dump of the `.sig` field-type node shows the committed value *is* the
+arrow `[[Int, Int], [TypeFunction, K]]`.  Only the **printing** is wrong.  Three
+assertions measure it, all parked with `#[ignore]` and this note in the reason
+string:
 
 - `a_kernel_value_and_type_render_by_name` and
   `a_tuple_domain_kernel_type_renders_as_a_function` in
@@ -125,33 +132,29 @@ same shape is correct (`f : _ -> _; type_of f` is `Int -> Int: TypeFunction`),
 and with `.native 0` replaced by a concrete value and no gate the field type is
 correct too.
 
-### What differs, mechanically
+### The mechanism (corrected — the earlier reading is withdrawn)
 
-- The builtin (`Checker::check_type_of`, now deleted) set the read's
-  `state[e].term` to `Index(operand_pair, 1)` — a **plain lazy element read**
-  over the operand's pair, so the template rewrite that reaches the operand's
-  pair also reaches the read.
-- A call's `term` is the **Apply node itself**
-  (`crates/lichen-highlevel/src/checker/lambda.rs`, the `check_apply` tail: the
-  node's operands are `[function_value, argument_pair, result_cell]` and "the
-  apply node *is* the return pair" once the runtime apply writes it).
-- A struct field's declared type is `state[el].term`
-  (`crates/lichen-highlevel/src/checker/tuples.rs`, `check_type_element`), read
-  while the call is still unresolved in the frozen module.
-- The deferral then commits the wrong side: the gate's unification makes the
-  read pending, and the pin
-  (`crates/lichen-lowlevel/src/equality.rs`, `pin_committed_value` /
-  `is_pending_apply`, reached from
-  `crates/lichen-highlevel/src/shape.rs`, `defer_pending`) commits the
-  enclosing struct type's kind onto the class instead of the argument's arrow.
+The defect is **not** in the checker, the deferral, or the wrapper: no
+`defer_pending` verdict fires anywhere in the repro (measured), and the graph
+commits the correct arrow onto the `.sig` field type.  It is the printer: the
+renderer's `is_universe` asks whether a node *contains* the universe instead of
+whether it *is* it, and the gate's arrow — built inside the **frozen** module —
+has a kind `[TypeFunction, K_static]` whose tail is the static universe.  The
+struct-kind branch then also needs `marker_is_struct`'s "any 2-element array"
+guess to fire on the shape `[Int, Int]`, and the two together misread the arrow
+type value as a struct kind.  Without the gate the arrow comes from the argument
+(local, dynamic `K`) and everything prints correctly — which is why every
+wrapper-level experiment below changed nothing: they moved *when* the read
+happens, never *where the arrow's `K` comes from*.
 
-See [defer-pending-type-forms](defer-pending-type-forms.md) for the machinery
-this rides on (that note is the fix's starting point).
+Full analysis, the verified one-function fix, and its measured acceptance (the
+three parked tests pass, the `compute` suite stays green):
+[universe-containment](universe-containment.md) §2.
 
 ### What was tried and did **not** work
 
 Every spelling-level dodge, and one plugin-side change — all still render
-`TypeStruct`:
+`TypeStruct` (as § *The mechanism* explains: none of them touches the printer):
 
 - hoisting the read into a binding (`s = type_of f`, then `.sig s`);
 - pinning the parameter first (`f : _ -> _` as a leading statement, i.e. the
@@ -161,7 +164,4 @@ Every spelling-level dodge, and one plugin-side change — all still render
   (reading the domain/codomain out of `f.ty` instead of two fresh cells) — this
   one needs `P::Operator: From<LowOperator>` on the impl and still does not fix
   the render; it was reverted.
-
-So the fix is on the checker side (making an unresolved call result usable as a
-type expression the way the builtin's raw read was), not in the wrapper.
 
