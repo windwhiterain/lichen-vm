@@ -41,7 +41,7 @@
 //!   refine?" *is* the condition node, because this attribute applied the
 //!   predicate to that value.
 
-use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
+use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, Module, NodeId};
 use lichen_utils::extend::AsEnum;
 
 use crate::attr::{AttrExt, AttrExtRegistry, AttrSpec};
@@ -131,11 +131,29 @@ where
         let read = ctx.array_node(&[apply, zero]);
         Some(ctx.op_node(P::Operator::from(LowOperator::Index), Some(read)))
     }
+
+    /// The refinement spells `! <the predicate's name>`.  The slot holds the
+    /// predicate's own pair, so the name is the *predicate's* label — found
+    /// through the general [`pair_label`] search, because which attributes that
+    /// pair carries is not in the graph.  A predicate with no labelled doc
+    /// spells nothing: a function value has no source form, and a made-up one
+    /// could not be spelled back.
+    fn render(
+        &self,
+        module: &Module<P>,
+        slot: NodeId,
+        attrs: &dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>,
+    ) -> Option<String> {
+        Some(format!(
+            "! {}",
+            crate::attr::pair_label(module, slot, attrs)?
+        ))
+    }
 }
 
-// `render` is deliberately not overridden: the slot holds a *function value*,
-// which is not printable on its own (the graph keeps a lambda as an opaque
-// function, and a binding's name is resolved away).  The general answer is the
-// doc attribute overriding the value's print — `f ? "fibo" = x => …` prints `f`
-// as `?fibo` — so a predicate carrying a doc prints as that doc, with no rule
-// special to this attribute (`docs/notes/operator-polymorphism.md` §8.1).
+// The refinement's spelling is `! <the predicate's name>`: the slot holds the
+// predicate's own pair, so the name is the *predicate's* label, found through
+// the general [`pair_label`] search (`docs/notes/operator-polymorphism.md`
+// §8.1).  A predicate with no labelled doc spells nothing — honest, because a
+// function value has no source form to print, and a made-up one could not be
+// spelled back.

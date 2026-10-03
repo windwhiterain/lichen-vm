@@ -100,7 +100,12 @@ where
     /// A doc spells `? <named fields>` — the slot is the annotation value
     /// expression's `[value, type]` term pair, so the field *names* come from
     /// the value's struct type chain (never a hardcoded shape).
-    fn render(&self, module: &Module<P>, slot: NodeId) -> Option<String> {
+    fn render(
+        &self,
+        module: &Module<P>,
+        slot: NodeId,
+        _attrs: &dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>,
+    ) -> Option<String> {
         // The render slot is the `?` expression's `[value, type]` pair.
         let pair = self.slot_value(module, slot)?;
         let LowValue::Array(items) = pair else {
@@ -116,9 +121,11 @@ where
     }
 
     /// A **string** doc *names* the value it attaches to: `in_num ? "in_num" =
-    /// v => …` gives the predicate the name `?in_num`, and that name is the one
+    /// v => …` gives the predicate the name `in_num`, and that name is the one
     /// thing a value that cannot print itself — a function — can be spelled by
-    /// (`docs/notes/operator-polymorphism.md` §8.1).  A struct doc describes
+    /// (`docs/notes/operator-polymorphism.md` §8.1).  The answer is the bare
+    /// name; a labelled value *reads* as `?name`, which is the caller's
+    /// spelling ([`lichen_render::value_label`]).  A struct doc describes
     /// instead of naming, so it answers `None` here and spells through
     /// [`Self::render`].
     fn label(&self, module: &Module<P>, slot: NodeId) -> Option<String> {
@@ -131,7 +138,7 @@ where
         let items = unsafe { items.items() };
         let value = items.first()?.node;
         match module.node_value(value).and_then(|v| v.as_enum()) {
-            Some(LowValue::Str(name)) => Some(format!("?{name}")),
+            Some(LowValue::Str(name)) => Some(name.to_string()),
             _ => None,
         }
     }

@@ -239,16 +239,18 @@ where
         None
     }
 
-    /// The **label** this attribute gives the value it attaches to — the name
-    /// the value reads as, or `None` when the attribute names nothing.
+    /// The **name** this attribute gives the value it attaches to — or `None`
+    /// when the attribute names nothing.
     ///
     /// This is the general answer to "how is a value printed" for a value that
     /// cannot print itself: a refinement's slot holds a *function*, and a
     /// function has no source spelling in the graph, so a predicate that carries
     /// a naming doc is spelled by that name
-    /// (`docs/notes/operator-polymorphism.md` §8.1).  A *describing* attribute
-    /// (a struct doc, a perspective) answers `None` and spells through
-    /// [`Self::render`] as before.
+    /// (`docs/notes/operator-polymorphism.md` §8.1).  The answer is the bare
+    /// name: how a *labelled value* reads (`?name`, the doc sigil) is the
+    /// caller's spelling, not the attribute's ([`crate::render::value_label`]).
+    /// A *describing* attribute (a struct doc, a perspective) answers `None` and
+    /// spells through [`Self::render`] as before.
     ///
     /// Default `None`.
     fn label(&self, _module: &Module<P>, _slot: NodeId) -> Option<String> {
@@ -262,8 +264,19 @@ where
     /// carries: they iterate the expression's schema tail and render every
     /// *present* attribute, so an un-annotated expression spells nothing.
     ///
+    /// `attrs` is the composed extension registry — the one piece of context a
+    /// slot cannot carry itself.  An attribute whose slot holds a **nested pair**
+    /// (a refinement's slot *is* its predicate's pair) needs it to find a name
+    /// inside that pair ([`pair_label`]), because which attributes a nested pair
+    /// carries is not in the graph.
+    ///
     /// Default `None` — an attribute that does not override it is not shown.
-    fn render(&self, _module: &Module<P>, _slot: NodeId) -> Option<String> {
+    fn render(
+        &self,
+        _module: &Module<P>,
+        _slot: NodeId,
+        _attrs: &dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>,
+    ) -> Option<String> {
         None
     }
 
@@ -278,6 +291,49 @@ where
             .and_then(|v| v.as_enum())
             .filter(|v| !matches!(v, LowValue::Parameterized))
     }
+}
+
+/// The **name** `pair` reads as, when one of the attributes it carries names it
+/// — the general answer to "how is a value with no spelling of its own printed",
+/// for a pair found *inside* an attribute's slot (a refinement's predicate).
+///
+/// No schema tail is needed, and none is readable: a pair's **arity** is in the
+/// graph, but *which* attribute each of its tail slots belongs to is not (a
+/// one-entry tail is `[Doc]` or `[Perspective]`, and both are three elements
+/// long).  So the search asks **every** attribute of the composed set whether it
+/// names that slot, in canonical order, and the first answer wins — the same rule
+/// and the same order [`crate::render::render_attributes`] uses.  It is sound
+/// because an attribute answers only about content it recognises as its own (a
+/// string doc, [`label`](AttrExt::label)), so a slot is a label exactly when some
+/// attribute says so.
+///
+/// `None` when the pair is not an array, carries no attribute, or carries none
+/// that names it.  A *static* (frozen) slot is skipped: an attribute reads a
+/// dynamic node, and inventing a name for a frozen one is worse than silence.
+pub fn pair_label<P>(
+    module: &Module<P>,
+    pair: NodeId,
+    attrs: &dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>,
+) -> Option<String>
+where
+    P: HighProgram,
+    P::Value: ValueType,
+{
+    // SAFETY: `pair` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let items = unsafe { crate::shape::array_items(module, AnyNodeId::Dynamic(pair)) }?;
+    for item in items.iter().skip(crate::shape::PAIR_ATTR_BASE) {
+        let AnyNodeId::Dynamic(slot) = item.node else {
+            continue;
+        };
+        if let Some(label) = P::Attr::ORDER
+            .iter()
+            .find_map(|marker| attrs(marker).label(module, slot))
+        {
+            return Some(label);
+        }
+    }
+    None
 }
 
 /// The **attribute-extension registry**: a lookup from an attribute marker to
