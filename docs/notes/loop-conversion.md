@@ -58,9 +58,13 @@ same-module call and unifies the substituted parameter with the argument before
 the emitter walks the body, so `steps 4` and `square (i + 1)` already work
 ([gpu-algorithm-roadmap §4.1](gpu-algorithm-roadmap.md)). Static expansion has
 two measured ceilings — the VM's 2000-apply budget, which reports a *terminating*
-loop as non-terminating ([`P1-40`](code-audit.md)), and a **hard stack overflow**
-in the emitter's walk between 400 and 1000 levels — and an unrolled loop costs
-about 29 µs of compile time per iteration.
+loop as non-terminating ([`P1-40`](code-audit.md)), and the emitter's own
+`emit_node` walk, which used to be a **hard stack overflow** between 400 and
+1000 levels and is now a **named refusal** at
+[`MAX_KERNEL_BODY_DEPTH`](../../crates/lichen-compute/src/compute.rs) = 512
+levels — a trip count in the low hundreds, since expansion nests every copy
+inside the last one's else arm — while an unrolled loop costs about 29 µs of
+compile time per iteration.
 
 **The missing half is a dynamic loop.** A loop reads its trip count from a
 register, so it removes both ceilings by construction, and it is the only form
@@ -415,6 +419,20 @@ from REFUSED to a number, on **both** backends.
 documentation side and the measurement: `spirv-val` / `spirv-dis` on the emitted
 module (the offline validation this project's SPIR-V emitter is already built
 around), and the ceilings of §1 re-measured to show they are gone.
+
+> **The emitter's ceiling is already a refusal, so Stage 3 measures one number
+> fewer.** `emit_node` is `#[stacksafe]` and depth-budgeted at
+> `MAX_KERNEL_BODY_DEPTH` = 512, and its refusal already names the fix this
+> section describes: *"Mark the recursion `@loop` so it may become a dynamic loop
+> instead of an expansion"* — with the doc reference this section owns
+> ([§1.1](#11-unroll-is-the-default-and-the-keyword-is-the-override)). That
+> matters for the staging: **the keyword lexes and parses already** (Stage 0a
+> landed it), so a program refused at 512 levels is being sent to a surface that
+> exists and is simply not honoured yet. Until the evaluator's half lands, the
+> honest reading of a 512-level refusal is "this recursion needs a `@loop` the
+> compiler can name but not yet record" — which is a Stage 0b dependency, not a
+> Stage 1 one. The 400-to-1000 **crash** it replaced was the same symptom with no
+> way to act on it at all.
 
 **One thing this does not buy.** A workgroup that cannot talk to itself buys
 throughput, not capability: scan, sort, tiled matmul and sub-group reduction need

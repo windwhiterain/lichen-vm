@@ -191,9 +191,10 @@ section concluded ("recommended: nothing here"): a library `loop` buys ergonomic
 at a ceiling, and the thing a GPU kernel needs is the *unbounded* count. The two
 ceilings are the argument rather than a side note, and they are
 [`P1-40`](code-audit.md) with the measurement: **1024** is a matmul's inner loop
-and **2²⁰** is a scan, and both are past the 2000-apply budget and the ~400–1000
-emitter depth. A dynamic loop removes both by construction — which is the
-strongest single reason to make it a builtin rather than a function.
+and **2²⁰** is a scan, and both are past the 2000-apply budget and the
+512-level emitter budget — which is itself a named refusal rather than a crash,
+since `P1-40`'s second half. A dynamic loop removes both by construction — which
+is the strongest single reason to make it a builtin rather than a function.
 
 > **Since this section: the surface argument held and the surface changed.** The
 > *builtin rather than a library function* conclusion below is kept verbatim — it
@@ -261,18 +262,43 @@ independent limits**, both on the *host* side and neither on the device:
 | limit | where | what it does |
 |---|---|---|
 | **2000 applies** | the VM's own budget | *"this binding never terminates — it applied a function more than 2000 times"*, at 4000 iterations that terminate in 62 ms |
-| **stack, between 400 and 1000** | the emitter's walk | a **hard overflow**, not a diagnostic — **re-measured at 100**: a debug build on the main thread overflows there, so the low end of the range is a property of the thread's stack, not only of the walk |
+| **512 levels of the emitter's walk** | `emit_node` (`MAX_KERNEL_BODY_DEPTH`) | a **named refusal** — *"a kernel body's expression nests more than 512 levels … Mark the recursion `@loop`"* — at a trip count in the low hundreds |
 
 Cost is linear at about **29 µs of compile time per iteration** — 100 iterations
 4.4 ms, 400 iterations 11.6 ms, for a four-element kernel. So an expanded `loop`
 is comfortable where the ladder could already write by hand (`dot4`, a 2×2 matmul,
 `K ≤ 16`) and **unusable at what a data-parallel kernel wants**.
 
+The second limit **used to be a hard stack overflow** and is now a refusal that
+names itself. Measured first-hand on this machine: the overflow was in
+`emit_node`, not in the backend, and the walk's depth *is* the trip count — an
+unmarked recursion is expanded and every copy nests inside the last one's else
+arm, so the graph is a chain (`depth ≈ 18 + 3.1 × trip`, measured on
+`crates/lichen-language/examples/recursion.rs`). On a 1 MiB main thread of a
+debug build it died at **level ~175**, which is why the same program was
+"between 400 and 1000" on a thread with more stack. `emit_node` is now
+`#[stacksafe]` — it was the one walk on that path with no annotation in front of
+it, and the annotation is what lets a body of 100 trips compile at all — and the
+512-level budget is what keeps the walk bounded. Before/after, both backends:
+
+| trip | before | after (`cpu` / `gpu`) |
+|---|---|---|
+| 100 | `thread 'main' has overflowed its stack` | **answers** 103 — 25 ms / 55 ms |
+| 400 | (never reached) | **refused by name** — the 512-level message |
+
+The limit is a **constant** rather than a number derived from the thread's stack,
+because a threshold that changes between a debug and a release build is not one
+a program can be written against; the stack is handled on the other side of the
+same change by the annotation. What a dynamic loop removes is both rows at once:
+a loop reads its trip count from a register, so neither the apply budget nor the
+walk's depth depends on it. See [code-audit `P1-40`](code-audit.md).
+
 The first is [`P1-40`](code-audit.md) and its message is wrong in a way worth
 fixing on its own: it reports a **terminating** loop as non-terminating, which
-sends the reader to look for a fault that is not there. The second should be a
-named refusal where the first is a named verdict — a depth limit that crashes is
-the same defect class as the `NodeId` message, one level out.
+sends the reader to look for a fault that is not there. The second was the same
+defect class one level out — a depth limit that crashes is the same thing as the
+`NodeId` message — and is now the named refusal where the first is still a named
+verdict.
 
 ### 4.2 Axis C: lane width, and the consumer `Perspective` has been waiting for
 

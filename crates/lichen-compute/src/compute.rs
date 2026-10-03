@@ -71,6 +71,7 @@ use lichen_lowlevel::{
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
+use stacksafe::stacksafe;
 
 pub mod graph;
 
@@ -1904,7 +1905,7 @@ where
         return Err(MIXED_CLASS_BODY.into());
     }
     for leaf in &leaves {
-        emit_node(module, &params, *leaf, class, &mut body, &mut tally)?;
+        emit_node(module, &params, *leaf, 0, class, &mut body, &mut tally)?;
     }
 
     Ok(KernelFragment {
@@ -2093,7 +2094,18 @@ where
     let mut tally = Positions::default();
     for (position, output) in outputs.iter().enumerate() {
         let before = tally.writes;
-        emit_node(module, &params, *output, class, &mut body_instr, &mut tally)?;
+        // **Depth 0 at the root**: the body value is the outermost expression, and
+        // every level below it is one `emit_node` frame (see
+        // [`MAX_KERNEL_BODY_DEPTH`]).
+        emit_node(
+            module,
+            &params,
+            *output,
+            0,
+            class,
+            &mut body_instr,
+            &mut tally,
+        )?;
         if tally.writes == before {
             return Err(format!(
                 "output {position} of the parallel index function is not a `compute.write` \
@@ -3136,6 +3148,89 @@ where
 const CONDITIONAL_WRITE: &str = "a `compute.write` inside a conditional is not supported: that \
      output ordinal would not be written on every index";
 
+/// How many levels deep [`emit_node`]'s walk may go before it refuses.
+///
+/// **The budget is on the walk, and the walk's depth is the trip count.** An
+/// unmarked recursion is **expanded** while the body is evaluated
+/// (`docs/notes/loop-conversion.md` §1.1), and each expanded copy nests inside
+/// the previous one's else arm — so the graph this emitter walks is a chain, not
+/// a tree, and its depth is *linear in the trip count*. Measured first-hand on
+/// `crates/lichen-language/examples/recursion.rs`: about **3.1 levels per
+/// expanded step**, so `depth ≈ 18 + 3.1 × trip` — trip 1 reaches 21, trip 10
+/// reaches 49, trip 400 would reach ~1260.
+///
+/// This is the one walk on the lowering path that nothing else grows the stack
+/// for. [`compile`](crates/lichen-language/src/compile.rs) is `#[stacksafe]`,
+/// but `stacksafe` only tests for room at an **annotated** frame, so everything
+/// below it shares the segment that frame grew and never asks for another:
+/// measured on a 1 MiB main thread of a debug build, the walk died at **level
+/// ~175** — a hard stack overflow with no diagnostic at all. [`emit_node`] is
+/// therefore `#[stacksafe]` as well, and the two are not alternatives: without
+/// the annotation a trip of 100 still crashes below this limit, and without the
+/// limit a trip of 400 still compiles (measured: answers 403 in 66 ms on `cpu`,
+/// 220 ms on `gpu`) at about 1260 levels and 7 MiB of stack.
+///
+/// **The other recursion on this path is not budgeted, on purpose.** `lower_flow`
+/// walks the [`Flow`] tree, and its depth is the nesting a program *writes* — a
+/// branch or a loop nest, not an expansion — which the parser, the checker and
+/// the lowlevel all walk first and all of them `#[stacksafe]`. The walk that an
+/// unmarked recursion drives is the one with no other growth in front of it.
+///
+/// # Why 512
+///
+/// - **Three times the depth that crashed here.** A limit below the measured
+///   overflow point would be a statement about *this machine's main thread*
+///   rather than about the program, and would refuse a body a release build or a
+///   worker thread compiles without trouble. The annotation is what makes the
+///   number reachable everywhere, so the thread's stack stops being an input.
+/// - **Deep enough that nothing hand-written is near it.** Fifty nested
+///   expressions is already unreadable in a kernel body, and every kernel anyone
+///   writes by hand (`dot4`, a 2×2 matmul, `K ≤ 16`) is a body of tens of
+///   levels. 512 is an order of magnitude above that, so the budget is reachable
+///   by expansion and by nothing else.
+/// - **Shallow enough to be the right advice.** 512 levels is about **160
+///   expanded copies** of a step this size, at the ~29 µs of compile time per
+///   iteration `docs/notes/gpu-algorithm-roadmap.md` §4.1 measures — so what is
+///   refused here is a body that was going to cost milliseconds to compile and
+///   would still be `O(n)` code. The trip counts a GPU inner loop wants (1024,
+///   2²⁰) are an order of magnitude past this, which is the point: they need
+///   `@loop`, not a larger constant.
+/// - **Bounded in stack.** The worst case under the limit is ~512 × 6 KB of
+///   measured debug frames ≈ 3 MiB, two `stacksafe` segments — a cost an author
+///   can predict. Unbounded, the walk would allocate a segment per level and
+///   never stop.
+///
+/// # Why a constant
+///
+/// **Not derived from the thread's stack**: a threshold that changes between a
+/// debug and a release build of the same program is not a number a program can be
+/// written against, which is the bar `docs/notes/code-audit.md` `P1-40` sets. The
+/// stack is handled on the other side of the same change, so the constant can
+/// carry the *policy* while the stack stays a fact of the caller. **Not
+/// configurable**: the emitter has no other knob, and the tree's other budgets
+/// ([`Module::MAX_APPLY_DEPTH`], [`Module::MAX_APPLY_TOTAL`]) are constants too.
+const MAX_KERNEL_BODY_DEPTH: usize = 512;
+
+/// The refusal [`emit_node`] gives past [`MAX_KERNEL_BODY_DEPTH`], naming the
+/// limit, what the limit is protecting, and the form that does not expand.
+///
+/// One string rather than a `format!` at the call site so that every refusal of
+/// this cause carries the same three facts — the same discipline
+/// [`CONDITIONAL_WRITE`] follows.
+fn kernel_body_too_deep() -> String {
+    format!(
+        "a kernel body's expression nests more than {MAX_KERNEL_BODY_DEPTH} levels, so lowering it \
+         would recurse deeper than a compile should spend on its stack — the walk costs about 3 \
+         levels per expanded copy, so this is a trip count in the low hundreds. An unmarked \
+         recursion is **expanded**, and expansion nests every copy inside the last one's else arm, \
+         so the walk's depth is the trip count: it is the expansion that is too big rather than the \
+         program. Mark the recursion `@loop` so it may become a dynamic loop instead of an \
+         expansion (`docs/notes/loop-conversion.md` §1.1) — that form is O(1) in the trip count and \
+         removes this limit by construction — or, if the trip count is small, write the copies out \
+         by hand."
+    )
+}
+
 /// The buffer positions one kernel body addresses, counted as it is emitted.
 ///
 /// **Two counters, one per buffer space, and they are the two halves of one
@@ -3329,10 +3424,18 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
 /// bitwise trio and `Rem` over float operands — is refused here by name, where
 /// the operand's class is still visible, rather than emitted into a module that
 /// would not validate.
+///
+/// `depth` is how many levels of this walk are already open beneath the body
+/// value, and it is checked against [`MAX_KERNEL_BODY_DEPTH`] on entry. It is a
+/// parameter rather than a counter on `tally` because it is a property of the
+/// **position in the walk** rather than of what the walk has emitted, and the two
+/// must not be able to disagree.
+#[stacksafe]
 fn emit_node<P>(
     module: &Module<P>,
     params: &[ParamSlot],
     node: NodeId,
+    depth: usize,
     class: ScalarClass,
     body: &mut Vec<KernelInstr>,
     tally: &mut Positions,
@@ -3342,6 +3445,13 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
+    // **The refusal is at the top of the walk, before any node is read**, so the
+    // limit costs the same whether the body it stops is a deep expression or a
+    // deep expansion.  It is a refusal and not a panic: this is the condition a
+    // program can be written against.
+    if depth > MAX_KERNEL_BODY_DEPTH {
+        return Err(kernel_body_too_deep());
+    }
     if let Some(value) = module.node_value(AnyNodeId::Dynamic(node)) {
         match AsEnum::<LowValue>::as_enum(&value) {
             Some(LowValue::USize(n)) => {
@@ -3378,7 +3488,7 @@ where
         // parameterized: `launch` is two-step, assemble then call, so the
         // argument is only concrete at run time).  Emit the defining member.
         if let Some(definer) = class_computation_node(module, node) {
-            return emit_node(module, params, definer, class, body, tally);
+            return emit_node(module, params, definer, depth + 1, class, body, tally);
         }
         // **A node nothing can resolve, described rather than numbered.** This used
         // to report only its `NodeId`, which is a compiler-internal number: the
@@ -3424,7 +3534,7 @@ where
                 if usize_value(module, index) == Some(0)
                     && let Some(value_node) = value_of_node(module, node)
                 {
-                    return emit_node(module, params, value_node, class, body, tally);
+                    return emit_node(module, params, value_node, depth + 1, class, body, tally);
                 }
                 // A constant index into a concrete array value selects that
                 // element — the wrapper's slot-read destructuring
@@ -3439,7 +3549,15 @@ where
                     if let Some(items) = unsafe { module.array_items(array_value) }
                         && let Some(item) = items.get(k)
                     {
-                        return emit_node(module, params, dyn_node(item.node)?, class, body, tally);
+                        return emit_node(
+                            module,
+                            params,
+                            dyn_node(item.node)?,
+                            depth + 1,
+                            class,
+                            body,
+                            tally,
+                        );
                     }
                 }
                 // A conditional `if c then a else b` lowers to `[b, a][c]` — a
@@ -3466,14 +3584,38 @@ where
                         let mut then_body = Vec::new();
                         let mut else_body = Vec::new();
                         let mut select_body = Vec::new();
-                        emit_node(module, params, then_node, class, &mut then_body, tally)?;
-                        emit_node(module, params, else_node, class, &mut else_body, tally)?;
+                        emit_node(
+                            module,
+                            params,
+                            then_node,
+                            depth + 1,
+                            class,
+                            &mut then_body,
+                            tally,
+                        )?;
+                        emit_node(
+                            module,
+                            params,
+                            else_node,
+                            depth + 1,
+                            class,
+                            &mut else_body,
+                            tally,
+                        )?;
                         if then_body.contains(&KernelInstr::BufferWriteCall)
                             || else_body.contains(&KernelInstr::BufferWriteCall)
                         {
                             return Err(CONDITIONAL_WRITE.into());
                         }
-                        emit_node(module, params, index, class, &mut select_body, tally)?;
+                        emit_node(
+                            module,
+                            params,
+                            index,
+                            depth + 1,
+                            class,
+                            &mut select_body,
+                            tally,
+                        )?;
                         body.append(&mut then_body);
                         body.append(&mut else_body);
                         body.append(&mut select_body);
@@ -3495,7 +3637,9 @@ where
                 // the callee's function index once the kernel's relative launch
                 // set is laid out.
                 if kernel_id_of(module, callee).is_some() {
-                    return emit_cross_kernel_call(module, params, callee, arg, class, body, tally);
+                    return emit_cross_kernel_call(
+                        module, params, callee, arg, depth, class, body, tally,
+                    );
                 }
                 // Style 1: a full lichen-function call (inline its body) —
                 // deferred.
@@ -3537,8 +3681,8 @@ where
                  four order comparisons, not `%` or the bitwise operators"
             ));
         }
-        emit_node(module, params, left, class, body, tally)?;
-        emit_node(module, params, right, class, body, tally)?;
+        emit_node(module, params, left, depth + 1, class, body, tally)?;
+        emit_node(module, params, right, depth + 1, class, body, tally)?;
         body.push(KernelInstr::Bin(bin));
         return Ok(());
     }
@@ -3549,7 +3693,9 @@ where
         match compute_op {
             ComputeOperator::Launch | ComputeOperator::Call => {
                 let (kernel, arg) = apply_pair(module, operation.operand)?;
-                return emit_cross_kernel_call(module, params, kernel, arg, class, body, tally);
+                return emit_cross_kernel_call(
+                    module, params, kernel, arg, depth, class, body, tally,
+                );
             }
             // The loop index of the current parallel invocation.  The index is
             // the wasm param immediately after the cfg scalar params.
@@ -3615,7 +3761,7 @@ where
                 tally.reads = tally.reads.max(pos + 1);
                 tally.read_classes.push(class);
                 body.push(KernelInstr::Const(const_bits(class, pos as i64)));
-                emit_node(module, params, idx, class, body, tally)?;
+                emit_node(module, params, idx, depth + 1, class, body, tally)?;
                 body.push(KernelInstr::BufferReadCall);
                 return Ok(());
             }
@@ -3642,8 +3788,8 @@ where
                 // buffers that class is the element type of.
                 tally.write_classes.push(node_class(module, val));
                 body.push(KernelInstr::Const(const_bits(class, out_pos as i64)));
-                emit_node(module, params, idx, class, body, tally)?;
-                emit_node(module, params, val, class, body, tally)?;
+                emit_node(module, params, idx, depth + 1, class, body, tally)?;
+                emit_node(module, params, val, depth + 1, class, body, tally)?;
                 body.push(KernelInstr::BufferWriteCall);
                 return Ok(());
             }
@@ -3732,11 +3878,15 @@ have";
 /// body — would be a module that does not validate.  A multi-value callee is
 /// refused by name (see [`CROSS_KERNEL_RESULT_ARITY`]) rather than truncated to
 /// its first result.
+///
+/// `depth` is the level of the call's own `emit_node` frame, passed on so the
+/// argument walk continues the *same* count rather than restarting it.
 fn emit_cross_kernel_call<P>(
     module: &Module<P>,
     params: &[ParamSlot],
     kernel: NodeId,
     arg: NodeId,
+    depth: usize,
     class: ScalarClass,
     body: &mut Vec<KernelInstr>,
     tally: &mut Positions,
@@ -3781,9 +3931,9 @@ where
         // (A *tuple* domain has to resolve its own encoding; see
         // `emit_callee_args`.)
         let arg = pair_value_node(module, arg).unwrap_or(arg);
-        emit_node(module, params, arg, class, body, tally)?;
+        emit_node(module, params, arg, depth + 1, class, body, tally)?;
     } else {
-        emit_callee_args(module, params, arg, &shape, class, body, tally)?;
+        emit_callee_args(module, params, arg, &shape, depth, class, body, tally)?;
     }
     body.push(KernelInstr::CallKernel(kid));
     Ok(())
@@ -3810,11 +3960,16 @@ whole parameter read; build the argument from its elements (or pass the paramete
 /// encoding is *emitted* and the first that produces one leaf per domain
 /// element is kept.  That is not a guess: the leaves have to emit anyway, and a
 /// pair read as a tuple fails here on its second element, which is a type cell.
+///
+/// `depth` is the level of the calling `emit_node` frame: a candidate that is
+/// tried and thrown away still walked its argument, so each candidate continues
+/// the same count from the same place.
 fn emit_callee_args<P>(
     module: &Module<P>,
     params: &[ParamSlot],
     arg: NodeId,
     shape: &KernelShape,
+    depth: usize,
     class: ScalarClass,
     body: &mut Vec<KernelInstr>,
     tally: &mut Positions,
@@ -3825,7 +3980,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let KernelShape::Tuple(items) = shape else {
-        return emit_node(module, params, arg, class, body, tally);
+        return emit_node(module, params, arg, depth + 1, class, body, tally);
     };
     // A candidate that reads as a tuple but disagrees with the domain is a
     // cause worth reporting; one that simply is not a tuple only says the
@@ -3842,6 +3997,7 @@ where
             params,
             candidate,
             items,
+            depth,
             class,
             &mut leaves,
             &mut candidate_tally,
@@ -3898,11 +4054,17 @@ where
 ///   nested domain).  A scalar element goes through [`emit_node`], so a
 ///   constant, a parameter read, a call result, and a `Parameterized` cell
 ///   resolved through its class all keep working inside a tuple argument.
+///
+/// `depth` is the level of the calling `emit_node` frame, and a nested domain
+/// element is one level deeper **in the walk as well as in the shape** — a
+/// tuple's nesting is the type's own, but counting it costs nothing and keeps
+/// the count an upper bound on the frames actually open.
 fn emit_tuple_leaves<P>(
     module: &Module<P>,
     params: &[ParamSlot],
     node: NodeId,
     items: &[KernelShape],
+    depth: usize,
     class: ScalarClass,
     out: &mut Vec<KernelInstr>,
     tally: &mut Positions,
@@ -3939,10 +4101,19 @@ scalar(s)",
     }
     for (element, element_shape) in elements.iter().zip(items) {
         match element_shape {
-            KernelShape::Tuple(nested) => {
-                emit_tuple_leaves(module, params, *element, nested, class, out, tally)?
+            KernelShape::Tuple(nested) => emit_tuple_leaves(
+                module,
+                params,
+                *element,
+                nested,
+                depth + 1,
+                class,
+                out,
+                tally,
+            )?,
+            KernelShape::Scalar(_) => {
+                emit_node(module, params, *element, depth + 1, class, out, tally)?
             }
-            KernelShape::Scalar(_) => emit_node(module, params, *element, class, out, tally)?,
         }
     }
     Ok(())

@@ -5,6 +5,10 @@ edition.workspace = true
 
 [dependencies]
 wasmi = "2.0.0"
+# `emit_node` is the one recursive walk on the kernel lowering path that nothing
+# else grows the stack for, so it is `#[stacksafe]` and depth-budgeted
+# (`MAX_KERNEL_BODY_DEPTH` in `compute.rs`).
+stacksafe.workspace = true
 # The wasm-tools release of `wasmi` 2.0.0's validator (`wasmparser` 0.228):
 # `wasmi::Module::new` validates every assembled module before it runs, so the
 # encoder must not be a newer generation than the parser that checks its output.
