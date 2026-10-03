@@ -1,9 +1,9 @@
 # One channel for a class's value and its low type
 
-> Status: **planned, not started.** The plan below is the answer to "which change
-> makes this unified and simpler"; §1 is the incoherence it removes, §2 and §3 are
-> the two halves, §4 is the carrier migration that waits on them, §5 is the
-> structural change that would delete the need for both.
+> Status: **§2 refuted by measurement** (below), §3 still open and now specified
+> more sharply, §4 waits on §3, §5 is the structural change that would delete the
+> need for both.  §1 is the incoherence as first read; §2 records what the
+> measurement says that first reading got wrong.
 > Worktree `.worktrees/kernel-param-struct`, branch `feature/kernel-param-struct`.
 > Companions: [compute-runtime-scalars](compute-runtime-scalars.md) (the measured
 > case that exposed this — its §4.4 is the symptom, this note is the fix),
@@ -55,54 +55,97 @@ That split is what makes today's behaviour accidental rather than stated:
   exactly what `class_low_type`'s doc says must not matter.
 
 The point of the plan: a fact is decided once, the class is where it lives, and
-every reader asks the class.
+every reader asks the class.  §2 is where that second clause is measured and
+narrowed: a fact *about a value's class* does live on the class, and a fact about
+a *type* does not.
 
-## 2. Half one — the readers ask the class
+## 2. Half one — refuted: a class's low type is not a second reading of a type slot
 
-**What**: route the highlevel's type-slot decoding through the lowlevel's
-class-routed channel, keeping the node walk only as the static/undecided fallback.
+**What was proposed**: route `shape::low_type_of_slot`'s dynamic slots through
+`Module::low_type_of_node`, keeping the node walk as the fallback, so that
+"which member of the class a reader asks" stops mattering.
 
-- `shape::low_type_of_slot(module, slot)`: for a **dynamic** slot, prefer
-  `module.low_type_of_node(node)` (the class's low type, already refined by the
-  two observation sites) and fall back to today's node walk; a **static** slot
-  keeps the node walk (a static module's classes are its own).
-- `compute::node_class` (`compute.rs:4302`): the same, on the value node it
-  already resolves.
-- The printer: audit its paths for the same split — `type_printer::is_arrow` uses
-  `representative`, so the file already has the class-routed form; any path that
-  reads a node's own value where the class is the authority belongs here.
-- `checker::names_float_class` needs no change: it rides on `low_type_of_slot`.
+**What the measurement says** (branch at `3d55923`, every suite green before the
+change):
 
-**Why it is the simplifying half**: it deletes a second reading of a fact the
-lowlevel already owns, and it makes "which member is the representative"
-unobservable — which is what the lowlevel's own docs promise.
+- Routing the dynamic slot through the class channel broke **15 of the 58**
+  `--test compute` cases, several as `(none, …)` values rather than as type
+  differences.  The cause was on the *write* side of the chain, not the read
+  side: `compile_fragment` (`compute.rs:2159`) and `seed_template_term_low_types`
+  (`:2544`) *seed* a parameter/term slot from what `low_type_of_slot` answers, so
+  a class answer there pins a slot to a shape nobody wrote and the pass then
+  conflicts with it — `the kernel parameter's type is not decided when the kernel
+  is compiled`.
+- Restricting the class answer to the two scalar classes (`USize`, `Float`) left
+  **6** failures, all of the same seed-side kind, so the breakage is not the
+  compound answers alone.
+- A trace of every call that reached the channel shows what it answers with:
+  `Array(Unknown, 2)` **for a `[value, type]` term pair** (a pair is a two-element
+  array), `Tuple([…])` for tuple values, `USize` for template cells whose class
+  was unified with a runtime value.
+- Narrowed further — the class read added at one *reader* only
+  (`checker::names_float_class`, which asks a class question) — all suites are
+  green **and the new branch never fired once** across the crate's test binaries.
 
-**Acceptance**: all suites green, and *no behavioural change expected on the
-current baseline* — this half alone does not create a missing fact. Its proof is
-that the same answers survive while the node-slotted path is gone; if any answer
-*improves* (a class-decided shape becomes readable through a non-representative
-member), that is the half working.
+**Why**: the low type vocabulary serves two subjects.  `low_type_of` decodes a
+**type expression**; `Module::class_low_type` states the machine shape of the
+**values** in a class.  The two coincide exactly for the scalar classes — there a
+value's shape *is* its class — and nowhere else.  A type cell and a value node can
+also share one class (an annotated parameter's type cell holds the annotation's
+pair term; a frozen template's type cell resolves to a runtime *value* at the
+apply), which is why a scalar answer from the channel is not evidence about a
+slot's type either: in the trace the class was describing the *template's* value.
 
-## 3. Half two — the decider writes through the choke-point
+So the "second reading" in §1 is not a reading of the same fact, and deleting it
+would delete a correct answer rather than a duplicate one.  `low_type_of_slot`
+stays the type decode; `compute::node_class` was already class-routed
+(`low_type_of_node`, `compute.rs:4320`) and is the one site that reads a *value's*
+class — the right subject for it.
+
+**What survives from the half**: the class channel is the only reading that sees
+a class a *run* decided (a value's class), so a reader that asks a class question
+can be routed to it — but only once §3 has made a run state one, and only as a
+*class* (a scalar answer), never as a type.  That reader-side routing is therefore
+part of §3's landing, not a step of its own.
+
+## 3. Half two — the decider states the fact, in both vocabularies
 
 **What**: the layer that decided a class states it on the class, instead of
-leaving it to a deferral's side effect.
+leaving it to a deferral's side effect.  §2's measurement splits the one action
+into the two statements the two readers need.
 
 - **Where the parallel run decides it**: `ComputeOperator::ParLaunch`'s arm
   (`compute.rs:1329`ff) builds the result values (bare `Buffer` /
-  `DeviceBuffer`, or a tuple of them); each carries its element `class`.  One node
-  for the result plus `seed_class_low_type(node, low_shape_of(element_class))` (or
-  `write_node_value` where a *value* is the fact) records it on the class.
+  `DeviceBuffer`, or a tuple of them); each carries its element `class`.
+- **A class reader needs the low type**:
+  `seed_class_low_type(node, low_shape_of(element_class))` — what the value's
+  class *is*, readable by anything that asks a class question.
+- **The printer needs the value**, and this is the part the earlier plan got
+  wrong: `type_printer::node` (`crates/lichen-render/src/render/type_printer.rs:62`)
+  renders an unbound cell as its `class_name`, and **the printer never consults
+  low types at all**.  So `array<Int, ?b>` is a claim about the element cell's
+  *class value*, and only a value write through the choke-point
+  (`Module::write_node_value`, `equality.rs:258`) can state it: the type value
+  `Int` (the `[int, K]` node the checker's own `int_type` is) written into the
+  result's element cell.  A seed alone changes what a *compiler* sees and nothing
+  about what a program prints.
 - **Where the scalar path decides it**: `kernel_results_value`
-  (`compute.rs:6195`) already creates a node per scalar result; the same seed
-  belongs there for the multi-result form.
-- **The rule to state in the doc comment**: a run that decided a class declares it;
-  a reader must never have to hope a pending read sits in the same class.  The
-  existing seeding discipline is the precedent: `compile_parallel_fragment` seeds
-  the parameter slot (`compute.rs:2361`), `seed_template_term_low_types` seeds the
-  template's decided terms.
+  (`compute.rs:6195`) already creates a node per scalar result; the same two
+  statements belong there for the multi-result form.
+- **The rule to state in the doc comment**: a run that decided a class declares it,
+  in the vocabulary each reader asks in — the low type for a class question, the
+  value for a type question.  A reader must never have to hope a pending read sits
+  in the same class.  The existing seeding discipline is the precedent:
+  `compile_parallel_fragment` seeds the parameter slot (`compute.rs:2361`),
+  `seed_template_term_low_types` seeds the template's decided terms.
 - `low_shape_of` (`compute.rs`, the inverse of `scalar_class_of`) already exists
-  for the class → shape step.
+  for the class → shape step; the type value for a class is the checker's own
+  `int_type`/`float_type` and must be reachable from the module at run time
+  (open question: the arm holds `module`, not `ctx`).
+- The reader-side routing §2 could not justify on its own — `names_float_class`
+  and the conversion gate — lands here, where a run has actually stated a class;
+  it is added **only** as a class question (`class_scalar_of_slot`-style, scalar
+  answers only), never as a type read.
 
 **Acceptance**: the GPU chain test's collected array is `array<Int, ?d>` again with
 the **struct/tuple** argument spelling (i.e. without the array's homogeneity), and
@@ -131,8 +174,9 @@ with call sites `compute.read ((compute.Read _)(.from buf, .at i))` and
 213 scripted call sites give **57 of 58** `--test compute` green, the frozen-module
 panic gone and the `raw[…]` field-type leak gone (fields render concretely).
 
-**Order**: §2 → §3 → this.  §3 is what should turn the 57 into 58; if it does not,
-the remaining difference is a second commit path and belongs back in §1's terms.
+**Order**: §3 → this.  §2 is refuted, so §3 is the first landed step, and §3 is
+what should turn the 57 into 58; if it does not, the remaining difference is a
+second commit path and belongs back in §1's terms.
 
 **Not to forget**: the migration touches `crates/lichen-language/tests/*`,
 `crates/lichen-language/examples/*`, and the docs' code blocks; the script must
@@ -151,12 +195,12 @@ type a **fresh cell**, and its own doc says why:
 So the class of a `plrun` result is knowable only at run time — which is *why* §3
 exists at all.  If the signature were concrete **before** `build` runs, the result
 type would be stated where types are stated, and the fresh cell, the deferral
-side-effect dependency, and the second reading would all be unnecessary rather
-than merely fixed.  That is the specialize-before-JIT direction
+side-effect dependency, and §3's run-time statement would all be unnecessary
+rather than merely fixed.  That is the specialize-before-JIT direction
 ([kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) §6,
 [compute-param-struct-handoff](compute-param-struct-handoff.md) §7), and it is why
-§2/§3 are worth doing as *steps*: they are the honest state of the model while the
-signature is late, and they are the checks that tell us when it has arrived.
+§3 is worth doing as a *step*: it is the honest state of the model while the
+signature is late, and it is the check that tells us when it has arrived.
 
 ## 6. How to verify, at each step
 
@@ -167,7 +211,7 @@ cargo test -q -p lichen-language --test compute --test pipeline --test graph_jit
   --test graph_structure --test examples --test defer_pending
 ```
 
-The probes that pin the two halves (scratch files, not committed):
+The probes that pin the remaining half (scratch files, not committed):
 
 - **§3's own assertion**: a single-kernel `plrun` + `collect` must print
   `array<Int, ?b>` — today it prints `array<?a, ?b>` on the array API and on every
