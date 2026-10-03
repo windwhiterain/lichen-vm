@@ -233,6 +233,20 @@ another workstream and names the two red targets), and it also carries the class
 domain that workstream put in the graph as a *value*: that domain is what types
 the placeholder the specialization applies the kernel to.
 
+**Measured: the gap is exactly the open class.**  With the parameter annotated
+there is nothing to specialize —
+
+```lichen
+annotated = compute.jit ((y : Int) => y + y)
+annotated
+```
+
+prints `(Kernel, parameterized): struct<.native raw[?a, ?b], .sig Int -> Int>` —
+the target string, already, on today's tree.  The red target is the *unannotated*
+body, where `+`'s class is open and the recorded choice is the class domain's
+`default`.  So the slice is: **choose the class where the domain says to choose
+it, and state it as the kernel's signature** — not a new lowering path.
+
 ## 6. How to verify, at each step
 
 ```bash
