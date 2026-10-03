@@ -2752,11 +2752,14 @@ above, P1-34's own reproduction and P1-35's table below — no longer check. The
 measured outputs are kept as the record of the tree they were taken on; the named
 spelling of the same programs is the one that runs now.
 
-Two consequences worth naming for the next pass. A *struct-returning block*'s
-bare-expression field is refused too (`{ 1; x = 2 }`), which is what makes a
-non-tail bare expression a check error rather than a positional field. And with
-an empty struct type (`struct<>`) and an empty block (`{}`) both unspellable,
-every reachable struct type now has at least one field and all of them named, so
+Two consequences worth naming for the next pass. A *struct-returning block* is
+**not** affected by the name rule: its fields are its bindings, and a bare
+expression is an ordinary statement — checked, its value discarded — so
+`{ 1; x = 2 }` is a record with the single field `.x` rather than a record with a
+positional first field. And with an empty struct type (`struct<>`) and an empty
+block (`{}`)
+both unspellable, every reachable struct type now has at least one field and all
+of them named, so
 the name-table-less `Void` struct marker — and `DiagKind::StructAnonymousField`,
 the `.name`-argument-against-no-names-table error — is **unreachable from
 source**; it survives only for hand-built IR.

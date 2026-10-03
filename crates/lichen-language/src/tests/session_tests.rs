@@ -119,11 +119,9 @@ fn growing_an_error_block_reuses_the_established_build() {
     // changes the clean content (a new binding appears), so the first compile
     // is fresh; growing that *error block* changes only the mask — the clean
     // (beyond-error) content is unchanged, so the established build is reused.
-    // The clean program names every top-level field: a bare expression
-    // statement in the block would be an unnamed struct field (`StructFieldName`),
-    // which is a *check* diagnostic inside the clean content, not part of the
-    // masked region the test is exercising.
-    let mut sess = BufferSession::<LangProgram>::new("a = 1\nf = x => a + x\nr = f 2\n");
+    // The clean program ends in a bare expression, which is its value: a
+    // statement that is not a field (a block's record is its bindings).
+    let mut sess = BufferSession::<LangProgram>::new("a = 1\nf = x => a + x\nf 2\n");
     let r0 = sess.compile();
     assert!(!r0.reused, "the first compile is a fresh build");
     assert!(r0.ok(), "the clean program checks");
@@ -152,9 +150,8 @@ fn growing_an_error_block_reuses_the_established_build() {
         Some(true),
         "the reused build is still the (correct) established build"
     );
-    // The established statements survived: `a`, `f`, and the `r = f 2`
-    // application are still in the IR, just the trailing broken binding was
-    // skipped.
+    // The established statements survived: `a`, `f`, and the `f 2` application
+    // are still in the IR, just the trailing broken binding was skipped.
     assert!(
         r2.diagnostics.iter().any(|d| d.stage == Stage::Parse),
         "the parse error for the still-unclosed paren is re-reported"
@@ -181,9 +178,9 @@ fn typing_inside_an_unclosed_region_reuses_every_keystroke() {
     // is a single masked error block (an unclosed paren), every keystroke
     // grows only the mask — the clean structure is unchanged, so the
     // established program is reused per char.
-    // Every top-level field is named (see the sibling test); the mask grows
+    // A block's record is its bindings (see the sibling test); the mask grows
     // under `fix1 = (1` keystroke by keystroke.
-    let mut sess = BufferSession::<LangProgram>::new("a = 1\nf = x => a + x\nr = f 2\n");
+    let mut sess = BufferSession::<LangProgram>::new("a = 1\nf = x => a + x\nf 2\n");
     let _ = sess.compile();
     sess.push("fix1 = (1");
     let r0 = sess.compile();

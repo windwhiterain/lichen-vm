@@ -290,7 +290,7 @@ where
             "cannot name a field — the struct has no named fields".to_string()
         }
         DiagKind::StructFieldName => {
-            "a struct field must be named — `struct<.name T>`, or `name = e` in a block".to_string()
+            "a struct field must be named — write `struct<.name T>`".to_string()
         }
         DiagKind::InstantiateCallee => format!(
             "the callee of an instantiation must be a struct type, found {}",

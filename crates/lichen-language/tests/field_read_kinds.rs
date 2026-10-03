@@ -111,16 +111,13 @@ fn an_unnamed_struct_field_is_refused() {
     assert_eq!(first.span, Some((1, 12)), "the caret is the unnamed field");
 }
 
-/// A block's bare expression is a field too, and it has no name to read it by —
-/// the struct-block spelling of the same rule.
+/// A block's fields are its **bindings**: a bare expression is an ordinary
+/// statement — checked, its value discarded — so it is not a field, and the
+/// record holds the named one alone.
 #[test]
-fn a_bare_expression_field_in_a_block_is_refused() {
-    let (message, kind) = refused("a = { 1; x = 2 }\na.x");
-    assert_eq!(kind, DiagKind::StructFieldName);
-    assert!(
-        message.contains("must be named"),
-        "the rule, stated: {message}"
-    );
+fn a_bare_expression_in_a_block_is_not_a_field() {
+    assert_eq!(output("a = { 1; x = 2 }\na"), "(2,): struct<.x Int>");
+    assert_eq!(output("a = { 1; x = 2 }\na.x"), "2: Int");
 }
 
 /// The named forms are untouched, and a struct instance reads by name.

@@ -1907,15 +1907,37 @@ fn a_let_in_a_struct_block_is_a_local_not_a_field() {
 }
 
 #[test]
-fn a_struct_block_refuses_a_bare_expression_field() {
-    // { 1; x = 2 } — a bare expression in a struct-returning block is a field
-    // with no name, and every struct field must be named (`name = e` in a
-    // block); the bare expression is refused at its own location.
-    let d = diags("a = { 1; x = 2 }; a");
-    assert_eq!(d.len(), 1, "{d:?}");
-    let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::StructFieldName);
-    assert_eq!(d[0].span, Some((1, 7)), "the offending field expression");
+fn a_bare_expression_in_a_block_is_a_statement_not_a_field() {
+    // { 1; x = 2 } — a bare expression is an ordinary statement: checked, its
+    // value discarded, and never a field.  The block's record is its binding
+    // `x` alone (one field), which is why a block's fields are always named and
+    // the positional read `a(0)` has nothing to read there.
+    let (module, root) = run("a = { 1; x = 2 }; (a, a.x)");
+    let mut module = module;
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(ids.len(), 2, "the record and the read of its field");
+    let fields = array_ids(module.evaluate_node_deep(ids[0], None));
+    assert_eq!(fields.len(), 1, "only the binding is a field");
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(fields[0]))
+                .as_ref()
+                .unwrap()
+        ),
+        2,
+        "the binding's value, not the discarded expression's"
+    );
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[1]))
+                .as_ref()
+                .unwrap()
+        ),
+        2,
+        "a.x reads it"
+    );
 }
 
 #[test]

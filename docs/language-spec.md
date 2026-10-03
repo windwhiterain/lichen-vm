@@ -85,7 +85,7 @@ postfix  := glue ( '[' expr ']'                     -- index  e[i]
 element  := '~'n? expr                              -- shallow marker (inside array literals only)
 pair     := expr '==>' expr                         -- table entry: deep-equal key ==> value
 sfield   := '.' name expr                           -- named struct field  (a leading '.' marks it)
-           | expr                                   -- a bare expression field: refused, every field is named
+           | expr                                   -- a bare expression statement: never a struct field
 fields   := (farg (sep farg)* sep?)?             -- instantiation/field-read paren content
 farg     := '.' name expr                         -- named instantiation argument  .x 1
            | expr                                 -- positional argument
@@ -470,10 +470,12 @@ maps every span back to the original file.
   before or among the statements (`{ a = 1; return 2 }`).  A body whose last
   statement is a binding (and with no `return` anywhere) has **no tail**, and
   instead parses as a **struct-returning block**: its value is an anonymous
-  struct instance whose fields are the statements — a `name = value`
-  binding is a field (its name is the binding's), a bare expression is
-  refused (a field without a name would have no read: see *Nominal struct
-  types*), a `let`
+  struct instance whose fields are the **bindings** — a `name = value`
+  binding is a field (its name is the binding's), and every field is therefore
+  named, as in a `struct<…>` declaration (see *Nominal struct types*).  A bare
+  expression is an ordinary statement: it is checked, its value is discarded,
+  and it is never a field, so `{ 1; x = 2 }` returns a record with the single
+  field `.x`.  A `let`
   binding is a block-local and never a field, and a `pub`-marked statement is
   a field (when any statement is `pub`, only the `pub` ones are).  At the top
   level this is a **record program**: a library file that ends in its bindings

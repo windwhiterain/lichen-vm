@@ -438,11 +438,13 @@ commit reaching the class (§5.1) rather than by asking the question later.
   Chosen so that `a(k)`'s accepted set is **one** kind, which is what lets its
   check be a plain unify (§5.2) instead of a re-checkable condition.  The cost
   is a language change, taken deliberately: `s(0)` and `struct<Int, Type>` are
-  refused (`StructFieldName`), a block's bare non-tail expression is refused (it
-  was a positional field), and a struct instance reads by name only — which is
-  also what makes the named reads' gap (§2.4) the *only* way to read one.  The
-  alternative was purely additive (keep the disjunction, register the condition)
-  and is what the named reads still need, §6.2.
+  refused (`StructFieldName`), and a struct instance reads by name only — which
+  is also what makes the named reads' gap (§2.4) the *only* way to read one.  A
+  *block*'s record is unaffected beyond that: its fields are its **bindings**, and
+  an expression statement is an ordinary statement (checked, its value
+  discarded), never a field.  The alternative was purely additive (keep the
+  disjunction, register the condition) and is what the named reads still need,
+  §6.2.
 
 ### 6.2 The §2.2/§2.4 fix direction (the paren read landed; the named reads open)
 

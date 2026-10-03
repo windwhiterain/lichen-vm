@@ -396,36 +396,44 @@ where
             })
     }
 
-    /// Struct instantiation: `s(1, 2)` — the positional tuple `value` is
-    /// wrapped in the struct type `type_expr`.  The tuple's element-type
-    /// list is checked against the struct's field list, and the
-    /// expression's type is the struct type itself (the instance carries
-    /// the nominal id; the tuple's own kind marker is discarded).  A
-    /// non-tuple value fails the list check — a literal is not a struct
-    /// value.
+    /// A struct-returning block (`{ x = 1; y = Int }`): the checker builds an
+    /// anonymous struct type whose shape is the **bindings'** value-type list
+    /// and whose name table maps each binding's name to its position, then wraps
+    /// those values in it.  The instance is a fresh nominal type per occurrence,
+    /// exactly like an in-place `struct<…>` expression.
+    ///
+    /// **An expression statement is not a field.**  A block's record is its
+    /// *bindings*: a bare expression is an ordinary statement, checked like any
+    /// other (so its diagnostics fire) but discarded, which is why the frontend
+    /// hands the statements' value tuple and their name list index-aligned and
+    /// this keeps the named positions alone.  A block's fields are therefore
+    /// always named, like a `struct<…>` declaration's
+    /// (`docs/language-spec.md` §Blocks).
     pub(super) fn check_record(
         &mut self,
         e: ExprId,
         value: ExprId,
         field_names: &[Option<&'static str>],
     ) -> NodeId {
-        // A struct-returning block: the value is a positional tuple of the
-        // emitted field values.  The checker builds an anonymous struct type
-        // whose shape is the value's element-type list and whose name table
-        // maps each field name to its position, then wraps the value in it.
-        // The instance is a fresh nominal type per occurrence, exactly like
-        // an in-place `struct<…>` expression.
         self.check_expr(value);
         let elements = self.range_children(value);
         let mut vals = Vec::with_capacity(elements.len());
         let mut tys = Vec::with_capacity(elements.len());
-        for &el in &elements {
+        let mut names = Vec::with_capacity(elements.len());
+        for (&el, &name) in elements.iter().zip(field_names) {
+            let Some(name) = name else {
+                // A bare expression: no field, its value discarded.  It was
+                // checked with the rest of the block, and nothing references its
+                // value node, so it is not evaluated either — the same laziness a
+                // statement nothing reads has anywhere else.
+                continue;
+            };
             vals.push(self.value_of(el));
             tys.push(self.state[el].ty.unwrap());
+            names.push(Some(name));
         }
         let id = self.fresh_nominal_id();
-        let (_shape, _kind, struct_ty) = self.struct_type_type(id, &tys, field_names);
-        self.require_struct_field_names(field_names, &elements, struct_ty);
+        let (_shape, _kind, struct_ty) = self.struct_type_type(id, &tys, &names);
         let value_node = self.array_node(self.current_block, &vals);
         let pair = self.pair_of(value_node, struct_ty);
         self.state[e].term = Some(pair);
@@ -844,14 +852,16 @@ where
         pair
     }
 
-    /// Refuse a struct **definition** or struct-returning block with an unnamed
-    /// field, at that field's own location.
+    /// Refuse a struct **definition** with an unnamed field, at that field's own
+    /// location.
     ///
     /// **Every struct field carries a name.**  A struct instance reads by name
     /// (`s.x`, `X::a`), so a field with none would be unreachable: the
     /// positional form `a(k)` is the *tuple* read, and the raw read `X<e>` reads
     /// an element's `[value, type]` pair, which a struct instance's field is not
-    /// (`docs/language-spec.md` §Structs).  `struct_node` is the struct type term
+    /// (`docs/language-spec.md` §Structs).  A *block*'s fields need no check
+    /// here: they are its bindings, and a bare expression statement is simply not
+    /// a field ([`Self::check_record`]).  `struct_node` is the struct type term
     /// the check is about — the hole the caller carries on with, since a
     /// reported definition is a rejected build either way.
     fn require_struct_field_names(
