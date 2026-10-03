@@ -35,7 +35,11 @@ use crate::{
 pub enum DiagKind {
     /// `inner : T` — expected = the annotation's type value.
     Annotation,
-    /// Applying a concretely non-function type — expected = a function.
+    /// An operand's type must have a particular **shape** and does not —
+    /// expected = that shape.  The shape guards: a callee that must be a
+    /// function (`check_lam`/`check_app`), a container that must be an array or
+    /// a table (the index and table-lookup pins), and a membership test's right
+    /// operand, which must be a set.
     Guard,
     /// Indexing a concretely non-indexable type (a function, an atomic
     /// type) — expected = a tuple, array, or struct type.

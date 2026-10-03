@@ -252,6 +252,20 @@ The domain is *data*, and the predicate is the *function that consults it*: the
 membership test reads the set. Nothing unifies against either, `+ : ?a -> ?a ->
 ?a` stays exactly that, and no rule is added to `unify_inner`.
 
+The membership test itself is **representation-agnostic**, and that is a fix the
+`@in` operator forced rather than a convenience.  A *source* set's members are
+`TypeValue` nodes — the runtime's own value for a type constant — while the
+domain the checker registers for the builtin operators is the array-encoded type
+expression, and [`ValueExt::value_eq`] compares array *handles*: neither
+representation matches the other, so a structural-only reader refused every
+source-written domain.  [`set::contains`](../../crates/lichen-highlevel/src/set.rs)
+therefore matches a member **by the class it denotes when it denotes one, and by
+the language's own value equality otherwise** — the array encoding goes through
+[`low_type_of`], a `TypeValue` compares by value (the variant is nominal, not
+allocated), and an ordinary value (`set{1, 2}`) compares by value too.  Measured:
+`type_of 5 @in Num` is `1`, `type_of "a" @in Num` is `0`, `2 @in set{1, 2}` is
+`1` and `3 @in set{1, 2}` is `0`.
+
 ```lichen
 -- lichen-std, end state
 Num  = set{Int, Float}                  -- the domain VALUE: a set of type values
@@ -263,10 +277,21 @@ add  = x => y => { x : ?a{in_num}; y : ?a{in_num}      -- the contract
                    (fadd, iadd)(is_int (type_of x)) x y }
 ```
 
-`Num` is writable today (`set{Int, Float}` is an ordinary binding); what the
-snippet still needs is the *membership* spelling — the `@`-keyword **`@in`**,
-joining `@loop` and `@assert` (its arity and level are settled with the
-implementation) — and the leaf selection, both of which are Phase 3's (§8.7, §9).
+`Num` is writable, and so is the predicate: `@in` **landed** in Phase 3 — a
+keyword operator at the comparison level, infix and left-associative, joining
+`@loop` and `@assert` at the `@` sigil ([operators](operators.md) §3; the
+language spec's *Membership*) — so every piece of the snippet is now expressible
+in the language.  What is left of Phase 3 is the leaf selection and the routing
+(§8.7, §9).
+
+One thing the snippet spells more simply than it can be written *today*:
+`v => type_of v @in Num` is **monomorphic**, because a read that a lambda returns
+shares the argument's type cell across applications.  That is a pre-existing
+`type_of` defect, not a property of the contract
+([type-of-in-std](type-of-in-std.md), *The monomorphism a wrapping lambda
+induces*), and until it is fixed the predicate is written through one opaque
+combinator: `in_num = compose (t => t @in Num) type_of` — measured `(1, 1, 0)`
+for `(in_num 1, in_num 1.5, in_num "a")`.
 
 `x : ?a{in_num}` puts the predicate in the parameter's attribute slot and leaves
 its *type* cell open — that is the polymorphism. `add`'s printed type is
@@ -659,8 +684,21 @@ than budgeting for it.)
   **opt-in** — `(e, t)(c)` — and needs no work: the positional slot read already
   types it as the taken branch's type.  Verified by hand: `(10, "ten")(1 == 1)`
   renders `"ten": string`.
-- **Phase 3 — the implementation moves to std.** The leaf-selection dispatch, the
-  split leaves, `Num` and the operator bindings in `lichen-std`; routing R3 →
-  R2/R1.  `Num = set{Int, Float}` is writable now; what Phase 3 still needs is the
-  *membership* spelling for the predicate — the keyword **`@in`**, decided, with
-  its arity and level to settle at the implementation.
+- **Phase 3 — the implementation moves to std. Started.**  Landed: the membership
+  keyword **`@in`** — the comparison rung, infix and left-associative, with the
+  membership reader made representation-agnostic (§3 above) — and with it the
+  plan's whole contract is **writable in the language**.  Measured, with `Num`,
+  `in_num` and an `add` whose parameters carry `! in_num` all written in lichen:
+  `(add 1 2, add 1.5 2.5)` is `(3, 4.0)`, `add "a" "b"` is refused with the domain
+  named, and `add` prints `?a -> ?a -> ?a`.  One spelling decision fell out of
+  that measurement: the operand annotation is written `x ! in_num`, **not**
+  `x : _ ! in_num` — a `: _` annotation unifies the parameter's type with the
+  placeholder's term *pair*, which prints as `raw[?a, ?b] -> …` and loses the
+  clean signature.
+
+  Two things stay open, both recorded: the read's monomorphism when a lambda
+  returns it ([type-of-in-std](type-of-in-std.md)), and the **routing** — the
+  leaf-selection dispatch, the split leaves, and `Num` and the operator bindings
+  in a built-in `core` prelude module, which is what makes the surface operator
+  resolve to the library function (R3 → R2/R1), and which needs the kernel
+  workstream's specialize-before-JIT pass to land first (§8.4).

@@ -702,7 +702,10 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
             .boxed();
 
         // The comparisons, left-associative, and the loosest binary level:
-        // `<` `>` `<=` `>=` `==` `!=`.
+        // `<` `>` `<=` `>=` `==` `!=`.  `@in` (set membership) sits here too:
+        // it is a predicate yielding the same `0`/`1` the comparisons yield, so
+        // `x @in S == 1` reads as `(x @in S) == 1`, and its right operand is an
+        // ordinary expression at this level — the set it tests against.
         //
         // **`>` is the one operator that is also a delimiter**, so whether it is
         // the comparison at all is decided *before* it is consumed: it is the
@@ -726,6 +729,7 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
             token(TokenKind::Geq).to(BinOp::Geq),
             token(TokenKind::Eq).to(BinOp::Eq),
             token(TokenKind::Neq).to(BinOp::Neq),
+            token(TokenKind::KwIn).to(BinOp::In),
         ))
         .then(operand(tokens, bitor.clone()));
         let comparison_gt = a_comparison_follows(tokens)

@@ -43,17 +43,23 @@ impl<A> Default for Schema<A> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SchemaId(pub u32);
 
-/// A binary operation on integers.  The arithmetic ops (`Add`, `Sub`, `Mul`,
-/// `Div`, `Rem`) and the bitwise ops (`BitAnd`, `BitOr`, `BitXor`) yield their
-/// result; the comparisons (`Lt`, `Gt`, `Leq`, `Geq`, `Eq`, `Neq`) yield
-/// `USize(0/1)` so the result can drive the lazy `Index` branch of an `if` —
-/// there is no `Bool` value in the universe.
+/// A binary operation.  The arithmetic ops (`Add`, `Sub`, `Mul`, `Div`, `Rem`)
+/// and the bitwise ops (`BitAnd`, `BitOr`, `BitXor`) yield their result; the
+/// comparisons (`Lt`, `Gt`, `Leq`, `Geq`, `Eq`, `Neq`) yield `USize(0/1)` so the
+/// result can drive the lazy `Index` branch of an `if` — there is no `Bool`
+/// value in the universe.
 ///
 /// `Eq`/`Neq` are the **generalized** equality (see `docs/language-spec.md`):
 /// they compare any two same-typed values whole, so they are the only two whose
 /// operands the checker does not pin to `Int`.  Everything else is `Int`-only,
 /// and unsigned — an `Int` is a machine-sized unsigned integer, so `Div`/`Rem`
 /// are the unsigned division and remainder.
+///
+/// `In` is the membership predicate `value @in set`: it yields `0`/`1` like a
+/// comparison, and its two operands are a value and a **set** of such values
+/// (`docs/notes/operator-polymorphism.md` §3).  It is not arithmetic, so it is
+/// the third member — after `Eq`/`Neq` — whose operands are not pinned to
+/// `Int`; unlike them it pins nothing at all and is checked structurally.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BinOp {
     Add,
@@ -70,6 +76,8 @@ pub enum BinOp {
     BitAnd,
     BitOr,
     BitXor,
+    /// `value @in set` — membership in a set (`docs/notes/operator-polymorphism.md` §3).
+    In,
 }
 
 /// Every [`BinOp`] names the [`TypeOperator`] the checker runs: the two enums
@@ -94,6 +102,7 @@ impl From<BinOp> for TypeOperator {
             BinOp::BitAnd => TypeOperator::BitAnd,
             BinOp::BitOr => TypeOperator::BitOr,
             BinOp::BitXor => TypeOperator::BitXor,
+            BinOp::In => TypeOperator::InDomain,
         }
     }
 }

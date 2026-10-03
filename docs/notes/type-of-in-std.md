@@ -6,7 +6,10 @@
 > removal first exposed is **fixed**: it was a *printer* misclassification of a
 > frozen kind, not a checker or deferral fault —
 > ["contains the universe" being read as "is the
-> universe"](universe-containment.md) §2.
+> universe"](universe-containment.md) §2.  A **second, still-open** defect of the
+> same read — it is monomorphic when a lambda returns it, found while writing the
+> operator contract in lichen — is recorded below (*The monomorphism a wrapping
+> lambda induces*).
 > Points at: `crates/lichen-language-lex`, `crates/lichen-language-parser`
 > (`ast`/`parse`), `crates/lichen-language` (`compile`/`resolve`/`dirty`/`spans`),
 > `crates/lichen-highlevel` (`ir`/`checker`), `crates/lichen-compute`
@@ -165,4 +168,57 @@ Every spelling-level dodge, and one plugin-side change — all still rendered
   (reading the domain/codomain out of `f.ty` instead of two fresh cells) — this
   one needs `P::Operator: From<LowOperator>` on the impl and still does not fix
   the render; it was reverted.
+
+## The monomorphism a wrapping lambda induces
+
+> Status: **open** — pre-existing, reproducible on `dev` without any of the
+> operator work, and found while writing the operator contract in lichen
+> ([operator-polymorphism](operator-polymorphism.md) §3, §9 Phase 3).
+
+The read is polymorphic **called directly** and **monomorphic when a lambda
+returns it**:
+
+| program | result |
+|---|---|
+| `(type_of 1, type_of 1.5)` | `(Int, Float): <Type, Type>` |
+| `f = v => type_of v; (f 1, f 1.5)` | **refused**: `expected Int, found Float` |
+| `f = v => type_of v; f 1` | `Int: Type` |
+| `f = v => type_of v; f 1.5` | `Float: Type` |
+| `f = v => type_of v; f` | `Function: raw[?a, ?b] -> ?b` |
+
+The declaration is the tell: the wrapper's **domain prints as a raw pair**
+(`raw[?a, ?b]`, not `?a`), because `type_of`'s declared result type *is* the
+argument's type cell — the `x : t` annotation inside the read unifies `t` with the
+parameter's type slot, and the body returns `t`, so the read's type and its
+argument's type are one class.  Applying the wrapper twice then writes that one
+cell twice: the *first* application's class sticks and the second is refused.  An
+explicit `t : Type` statement in the read fixes the *printed* signature
+(`?a -> Type`) but not the sharing, so the sharing is in the per-call
+instantiation of the read's body, not in its declared type: the lowlevel apply
+re-instantiates a function's conditions and parameter per call
+(`apply_parameter_check`, `Function::asserts`), and a body cell that only an
+annotation tied to the parameter's type slot is not among the nodes it remaps.
+
+**Until it is fixed** the predicate is written through one opaque combinator,
+which keeps the read's cells out of the caller's type:
+
+```lichen
+type_of = x => {t = _; x : t; t}
+compose = f => g => x => f (g x)
+Num = set{Int, Float}
+in_num = compose (t => t @in Num) type_of     -- measured: (in_num 1, in_num 1.5, in_num "a") = (1, 1, 0)
+```
+
+**The preferred fix** is the one the measurement points at: the per-call
+instantiation must remap every cell in the equality class of the parameter's type
+slot, so a body cell an annotation tied to it is re-instantiated too — which would
+let the read be wrapped plainly (`in_num = v => type_of v @in Num`) and would
+retire the `raw[?a, ?b]` domain.  It touches the apply/instantiation path the
+kernel workstream also depends on, so it is its own change, not this one's.
+
+The read itself is unchanged and stays where it is: `type_of` is an ordinary
+library function ([lichen-std/\_.lichen](../../lichen-std/_.lichen)), and every
+consumer that wants the read at two classes in one program either calls it
+directly or goes through the combinator above.
+
 

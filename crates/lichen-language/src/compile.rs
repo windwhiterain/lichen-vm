@@ -707,6 +707,7 @@ impl Compiler {
                     crate::ast::BinOp::BitAnd => BinOp::BitAnd,
                     crate::ast::BinOp::BitOr => BinOp::BitOr,
                     crate::ast::BinOp::BitXor => BinOp::BitXor,
+                    crate::ast::BinOp::In => BinOp::In,
                 };
                 let left = self.compile_expr(left);
                 let right = self.compile_expr(right);

@@ -1390,6 +1390,10 @@ fn classify_token_kind(
         | TokenKind::KwInt2Float
         | TokenKind::KwFloat2Int
         | TokenKind::KwAssert
+        // `@in` is the one keyword that is an *infix* operator, but it is a
+        // reserved word all the same, so it reads as a keyword rather than as
+        // one of the symbol operators below.
+        | TokenKind::KwIn
         // `_` — a placeholder is a reserved inference form, never a name.
         | TokenKind::Placeholder => Some((SemanticTokenType::KEYWORD, Vec::new())),
         // A `Name` is resolved by `classify_names` (or the `.` heuristic).

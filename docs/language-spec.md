@@ -47,7 +47,7 @@ expr     := lambda
 lambda   := annotated ('=>' expr)?                  -- lambda; right-assoc; lhs is a (possibly annotated) name
 annotated:= arrow ((':' arrow) | ('#' arrow) | ('!' arrow) | ('?' arrow))*   -- type (':'), perspective ('#'), refinement ('!'), and/or doc ('?') annotation, right-assoc
 arrow    := cmp ('->' cmp)*                         -- function type; right-assoc
-cmp      := bits (('<' | '>' | '<=' | '>=' | '==' | '!=') bits)*   -- comparison, left-assoc; yields 0/1
+cmp      := bits (('<' | '>' | '<=' | '>=' | '==' | '!=' | '@in') bits)*   -- comparison and set membership, left-assoc; yield 0/1
 bits     := bitxor ('|' bitxor)*                    -- bitwise or
 bitxor   := bitand ('^' bitand)*                    -- bitwise exclusive or
 bitand   := sum ('&' sum)*                          -- bitwise and
@@ -93,6 +93,9 @@ farg     := '.' name expr                         -- named instantiation argumen
 
 - **Keywords:** `Int`, `Float`, `string`, `Type`, `struct`, `array`, `table`, `set`, `let`, `if`, `then`,
   `else`, `return`, `pub`, `cache`, `int2float`, `float2int`, `=>`, `->`, `:`.  The
+  `@`-led keywords — `@loop`, `@assert`, and the membership operator `@in` — are
+  reserved words too (see the `@` note in §2).
+  The
   two conversion keywords open a prefix expression and so cannot be used as
   names; the rest are reserved as words.  `=` binds a name in a statement; `#`, `?`,
   `$`, `::`, `==>`,
@@ -487,6 +490,23 @@ maps every span back to the original file.
   a jitted kernel it stays the author's responsibility (the CPU kernel's wasm
   traps; a GPU kernel's is undefined, and a guard would cost a branch on the
   device's hottest path).  See [operators](notes/operators.md).
+- **Membership.**  `a @in S` tests whether `a` is a **member of the set** `S`,
+  and yields `0`/`1` like a comparison.  It is a keyword at the `@` sigil rather
+  than punctuation — it is a predicate over a set, and `@` is where the
+  language's reserved words live — and it sits at the **comparison level**,
+  left-associative, so `x @in S == 1` is `(x @in S) == 1`.  Its right operand is
+  checked to be a set: a membership test against anything else is a check-time
+  refusal, the same container pin `e[i]` applies.  **Nothing unifies against
+  either operand**: a membership test is a fact about a *value*, so it is
+  answered by evaluating the value, never by reconciling types.
+
+  A member is matched **by the class it denotes when it denotes one, and by the
+  language's own value equality otherwise**.  A set of *type values* — the class
+  domain a contract is written over (`Num = set{Int, Float}`) — is therefore
+  compared structurally, so a class out of another module matches (`ValueExt::value_eq`
+  cannot answer this case: it compares array *handles*).  A set of ordinary
+  values is compared by value: `2 @in set{1, 2}` is `1` and `3 @in set{1, 2}` is
+  `0`.  See [operator-polymorphism](notes/operator-polymorphism.md) §3.
 - **Indexing.**  `e[i]` reads the `i`-th element of an **array**.  A tuple's or
   a struct instance's positional slots are read with the dedicated positional
   form `a(k)` (`s(0)` is the first field, `(0, 1)` the first element of a

@@ -800,6 +800,38 @@ fn an_at_assert_binds_a_full_application_but_tighter_than_a_binary_operator() {
 }
 
 #[test]
+fn an_at_in_membership_test_parses_at_the_comparison_level() {
+    // `a @in S` — the left operand is the application (it binds tighter), the
+    // right is an ordinary expression at this level: the set being tested.
+    let e = parse_ok("type_of v @in set{Int, Float}");
+    let Expr::BinOp {
+        operator: BinOp::In,
+        left,
+        right,
+        ..
+    } = e
+    else {
+        panic!("expected a membership test, got {e:?}")
+    };
+    assert!(
+        matches!(*left, Expr::Apply { .. }),
+        "`type_of v` is the left operand"
+    );
+    assert!(matches!(*right, Expr::Set(..)));
+    // Left-associative at the comparison rung: `x @in S == 1` is
+    // `(x @in S) == 1`.
+    let e = parse_ok("Int @in set{Int} == 1");
+    assert!(matches!(
+        e,
+        Expr::BinOp {
+            operator: BinOp::Eq,
+            left,
+            ..
+        } if matches!(*left, Expr::BinOp { operator: BinOp::In, .. })
+    ));
+}
+
+#[test]
 fn a_block_is_bindings_followed_by_a_final_expression() {
     let Expr::Block {
         statements, expr, ..
