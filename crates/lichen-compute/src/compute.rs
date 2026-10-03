@@ -62,7 +62,7 @@ use lichen_highlevel::program::{Ctx, HighProgram, LeafKindMarkers, TypeOperator,
 use lichen_highlevel::shape::{
     KIND_MARKER_SLOT, PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, STRUCT_MARKER_NAMES_SLOT,
     TYPE_KIND_SLOT, TYPE_SHAPE_SLOT, TypeRef, array_items as array_items_any, field_list,
-    field_names, field_type, low_type_of_slot,
+    field_names, field_type, low_type_of, low_type_of_slot,
 };
 use lichen_kernel_ir::{
     BufferSlot, Flow, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
@@ -1177,7 +1177,13 @@ where
                     // stay lazy rather than panicking.
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 };
-                match compile_fragment(module, function) {
+                // The class a body that left its class open is lowered in: its
+                // own operator's class domain names it ([`open_class_of`]).
+                let open_class = match function {
+                    AnyFunctionId::Dynamic(fid) => open_class_of(module, fid),
+                    AnyFunctionId::Static(_) => None,
+                };
+                match compile_fragment(module, function, open_class) {
                     Ok(fragment) => {
                         // Content-addressed, so recompiling the same function —
                         // which is what a keystroke does — keeps one id and
@@ -2115,9 +2121,22 @@ where
 /// design names (a polymorphic template's domain is not a fact any mechanism
 /// can recover before an apply), so this refuses with an actionable reason
 /// rather than compiling a domain it invented.
+///
+/// **One exception, and it is not an invention: `open_class`.**  When the body
+/// itself left a class open, the operator that did so registered a *class domain*
+/// and its `default` member is the class a reader is meant to pick
+/// ([`open_class_of`], `docs/notes/operator-polymorphism.md` §8.4).  The caller
+/// passes that class here and it stands in for the undecided type slot — **seeded
+/// on the class's low type, never written into any type cell**, so the function
+/// stays polymorphic for its other uses (`f = y => y + y; k = compute.jit f;
+/// f 1.5` must keep working).  Every domain in the language defaults to `Int`
+/// (`checker/operators.rs`), which is also the class-free default the emitter
+/// states ([`node_class`]); a domain that ever defaults to another class is
+/// refused by name rather than emitted in the wrong class.
 fn compile_fragment<P>(
     module: &mut Module<P>,
     function: AnyFunctionId,
+    open_class: Option<AnyNodeId>,
 ) -> Result<KernelFragment, String>
 where
     P: Program,
@@ -2155,8 +2174,25 @@ where
 
     // 1. Seed.  A parameter with no type cell seeds `Unknown`, which is the
     //    honest statement: this class has been traced and nothing has decided
-    //    it.
-    let seed = param_type.map_or(LowShape::Unknown, |slot| low_type_of_slot(module, slot));
+    //    it.  A body that left its class open states it in the class domain
+    //    instead, and the domain's default is that statement ([`open_class_of`]).
+    let seed = match param_type.map(|slot| low_type_of_slot(module, slot)) {
+        Some(shape) if shape.is_known() => shape,
+        _ => match open_class.map(|class| low_type_of(module, class)) {
+            Some(LowShape::USize) => LowShape::USize,
+            Some(LowShape::Float) => {
+                return Err(
+                    "this kernel body leaves its class to a domain that defaults to \
+                     `Float`, and a kernel is lowered in the emitter's class-free \
+                     default `Int`: annotate the parameter's class instead"
+                        .into(),
+                );
+            }
+            // A domain whose default is not a machine scalar states no class this
+            // lowering can use, so it is as undecided as before.
+            _ => LowShape::Unknown,
+        },
+    };
     module.seed_class_low_type(param_value, seed);
     // 2. Pass.
     module.infer_template_low_types(fid);
@@ -4276,6 +4312,53 @@ fn const_bits(class: ScalarClass, value: i64) -> i64 {
         // `MAX_PARALLEL_ELEMENTS`, both far below 2^24.
         ScalarClass::Float => float_bits(value as f32),
     }
+}
+
+/// The class an **open** kernel body is lowered in — the `default` member of the
+/// class domain the body's own polymorphic operator carries, or `None` when
+/// nothing in the body left a class open.
+///
+/// A parameter whose type states a class needs nothing: [`low_type_of_slot`]
+/// answers for it.  An *open* one — `y => y + y`, where `+` keeps its operands on
+/// one undecided cell — is the case the class domain exists for.  `check_binop`
+/// registers `InDomain(cell, domain)` as an assert on the enclosing function
+/// (`checker/operators.rs`), and the domain's `default` member is "what the
+/// specialize pass types its placeholder with and what a kernel picks"
+/// (`class_set`, `docs/notes/operator-polymorphism.md` §8.4).
+///
+/// The answer is a **type value node** — the canonical marker node the domain was
+/// built from — so it is what [`low_type_of`] reads a class from, and what a
+/// signature can name.
+fn open_class_of<P>(module: &Module<P>, function: FunctionId) -> Option<AnyNodeId>
+where
+    P: Program,
+    P::Value: ValueType,
+    P::Operator: AsEnum<TypeOperator>,
+{
+    for &condition in &module.functions[function].asserts {
+        let Some(operation) = module.node_operation(condition) else {
+            continue;
+        };
+        if !matches!(operation.operator.as_enum(), Some(TypeOperator::InDomain)) {
+            continue;
+        }
+        let Some(operand) = operation.operand else {
+            continue;
+        };
+        // SAFETY: `operand` is a live node of `module`; nothing in this crate
+        // calls `Module::drop_block`.
+        let Some(items) = (unsafe { module.array_items(operand) }) else {
+            continue;
+        };
+        // `InDomain(class, domain)`: the domain is the second operand.
+        let Some(domain) = items.get(1).map(|item| item.node) else {
+            continue;
+        };
+        if let Some(default) = lichen_highlevel::class_set::default_class(module, domain) {
+            return Some(default);
+        }
+    }
+    None
 }
 
 /// The class a node's value is.

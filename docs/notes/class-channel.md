@@ -247,6 +247,59 @@ body, where `+`'s class is open and the recorded choice is the class domain's
 `default`.  So the slice is: **choose the class where the domain says to choose
 it, and state it as the kernel's signature** — not a new lowering path.
 
+### 5.1 Landed: the class the lowering runs in
+
+`open_class_of` (`compute.rs`) walks the function's own `asserts` for the
+`InDomain(cell, domain)` condition `check_binop` registers, and
+`class_set::default_class` reads the domain's `default` member — the canonical
+`int_type` node.  `compile_fragment` takes it as `open_class` and uses it as the
+**seed** when the parameter's type slot states no class, refusing by name for a
+domain that defaults to anything but `Int` (the emitter's class-free default).
+
+The seed is a *low-type* write on the class, never a write into a type cell, so
+the function stays polymorphic for its other uses.  Measured: `compute.jit
+(y => y + y)` goes from `(none, parameterized)` (the lowering refused with
+`UNDECIDED_DOMAIN`) to `(Kernel, parameterized)` — a real artifact — with
+`57 of 58` unchanged and no regression in any other suite.
+
+### 5.2 Open: the signature the wrapper publishes
+
+`.sig`'s type must be a **decided arrow**, and four measurements constrain how it
+can be stated.  Each is a trap that cost an attempt:
+
+1. **A node that appears only in the type graph is never evaluated.**  An operator
+   whose whole life is `.sig`'s field type never runs: the printer reads a value
+   that nothing computed.  The statement must be made by an operator that already
+   runs (`$jit`/`$parallel`), so the wrapper has to hand the signature expression
+   to it as a value — `.sig s` **and** `$jit(f, s)`.
+2. **`run_deferred` reports an unstamped node as `parameterized`.**  Putting the
+   function's *type* node (`f.ty`) in an operand array makes the whole array read
+   `parameterized` and the arm never runs at all (`OperatorExt::run_deferred`,
+   `lowlevel/src/lib.rs`); the deep pass never stamps a type node.  So the
+   signature expression must reach the operator without a type node among its
+   operands.
+3. **A `LaunchOp` domain read has to land on a pure cell.**  When the arrow's two
+   sides are `Index` op nodes, `LaunchOp`'s `check_unify(a.ty, d)` against one of
+   them defers and never resolves: measured, the four `jit_cross_kernel_*` tests
+   print `parameterized` and the launch computes nothing, while the identical
+   wrapper with a cell-sided signature passes 7 of 7.
+4. **The generic wrapper's type must still render as an arrow with the function's
+   own variables.**  `wrapper_functions_render_with_named_type_variables` pins
+   `.sig ?a -> ?b` — the *same* classes as the wrapper parameter's own type.  A
+   fresh arrow renders its own names, and a shape slot that is an unset operator
+   renders `raw[?c, TypeFunction]` (the printer's kind branch needs the shape
+   slot's *value* to be a two-element array).
+
+Traps 3 and 4 pull apart: the sides must be *cells in the function's own type
+classes* (4) yet must never be written (the pin the handoff forbids), while a
+launch's read of them must resolve (3).  The shape that satisfies all four is the
+one worth trying next: an operator whose term is `[shape, [FunctionType, K]]`
+with `shape` the operator's **own node**, whose value the arm sets to
+`[domain, codomain]` — the sides being **lazy reads** of `f`'s type, written by
+the arm into the *reads'* own values (never the shared cells), with the whole
+expression handed to `$jit`/`$parallel` so it is evaluated and so an unstamped
+type node never enters an operand array.
+
 ## 6. How to verify, at each step
 
 ```bash
