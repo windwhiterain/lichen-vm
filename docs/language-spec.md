@@ -385,7 +385,11 @@ maps every span back to the original file.
   `4.0` and `add "a" "b"` is refused, in an otherwise empty file.  The prelude is
   **shadowable, not reserved**: it is seeded *before* a program's own imports and
   bindings, so a program that binds `add` gets its own.  The module is also
-  reachable as a value (`core = import "core"`, then `core.add`).
+  reachable as a value (`core = import "core"`, then `core.add`), and it is a
+  **file**: the toolchain materializes its source under its cache root and blames
+  a contract violation on the line that wrote it (`…/builtin/core.lichen:3:24:
+  assertion failed: expected 1, found 0`), rather than reporting a failure with
+  no position.
 - **Statements and bindings.**  A program is a **block body**: a list of
   (possibly `pub`-marked) statements — a `name = expr` binding or a bare
   expression — followed by an optional **tail** expression.  The top level is

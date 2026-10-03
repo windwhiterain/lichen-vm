@@ -197,7 +197,7 @@ it.
 | `(Num, in_num Int, in_num Float, in_num string)` | — | `(set{Int, Float}, 1, 1, 0)` |
 | `core.add 1 2` | — | `3: Int` (the module value is reachable too) |
 | `add = x => y => 99; add 1 2` | — | `99: Int` (the prelude is shadowed) |
-| `add "a" "b"` through the prelude | — | **refused, but unattributed** — "the failing check could not be attributed to an expression in this source" (the assert lives in `core`; §7) |
+| `add "a" "b"` through the prelude | — | refused, and attributed: three diagnostics pointing into the built-in's own file (`…/builtin/core.lichen:3:24`, `:3:42` for the two class refinements, `:3:55` for the builtin's domain assert) |
 
 Two mechanism facts that came out of measuring, and both are load-bearing:
 
@@ -257,8 +257,16 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
    type read, and the contract now lives in the built-in **`core`** prelude
    (`crates/lichen-language/src/core.lichen`, seeded into every source).  Measured
    in §3's last rows; the module's own note is [core-prelude](core-prelude.md).
-   The remaining work on this leg is the **attribution** a prelude failure needs
-   (§7, the "unattributed" trap) — a diagnostics task, not a contract one.
+   Three pieces of that leg remain, all diagnostics work:
+   - the **jump** into the built-in file from a prelude name (the editor's name
+     index still skips the prelude — `is_prelude_import` — because its entries
+     had no file; the source record §4 adds is what a definition should point at);
+   - the **domain spelling** across modules: a refusal inside the prelude reads
+     the assert channel's generic wording, not `does not satisfy {Int, Float}`,
+     because the spelling and the domain node live in the built-in's build;
+   - the **call site**: the diagnostic names the built-in's line, not the
+     application that failed it (`AssertError` records its template, not the
+     apply that cloned it).
 2. **Phase 3, Stage 3 — the routing (R3 → R2/R1), a later workstream.**  The
    leaf-selection dispatch, the split leaves, and the surface operator resolving
    to the `core` binding.  It needs the kernel workstream's
@@ -332,6 +340,16 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
   the two `examples/import/*.lichen` `output =` declarations (via the repo's own
   `sync-readme`, which mirrors them into `README.md`) and
   `imported_field_access_hovers_with_value_and_type` (asserted per field now).
+- **A failure inside a built-in is attributed only because the store keeps its
+  source.**  `AssertError::template` is a `StaticNodeId` when the condition was
+  cloned out of another module, and the *only* thing that turns it into a
+  position is the package meta's source record
+  (`HighPackageMeta::source`, `crates/lichen-language/src/core-prelude.md` §4):
+  a module with no kept source — an ordinary imported package — drops the
+  diagnostic, exactly as before, and a host that never materialized the file
+  still gets positions.  Doctrine to keep: the record holds *positions*, not
+  checker facts, so the domain spelling and the call site are still the other
+  module's (and the document's) business.
 - **`@in`'s left operand must stay unconstrained.**  Pinning it to the set's
   element cell (or to `Type`) looks like a better diagnostic and is a trap: a
   membership test that a *refinement* uses is applied to a parameter whose class

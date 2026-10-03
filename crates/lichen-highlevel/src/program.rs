@@ -96,6 +96,38 @@ pub struct HighPackageMeta {
     /// recompiling the module — which the registry refuses, a key naming one
     /// artifact.  Empty for an ordinary package.
     pub direct: Vec<(String, lichen_lowlevel::StaticNodeId)>,
+    /// The package's **own source**, kept only for a built-in: the file its
+    /// source is exposed at and the position of every frozen node.  A runtime
+    /// failure whose condition was cloned out of this module names it by a
+    /// [`StaticNodeId`](lichen_lowlevel::StaticNodeId), and this is what turns
+    /// that ref into a position in the file the user can open
+    /// (`docs/notes/core-prelude.md`).  `None` for an ordinary package, which
+    /// caches as an opaque artifact and keeps no source.
+    pub source: Option<PackageSource>,
+}
+
+/// A built-in package's source, as the package layer records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageSource {
+    /// The file the source is exposed at — the copy the store materialized under
+    /// the device's cache root (the source itself is embedded in the binary).
+    pub path: std::path::PathBuf,
+    /// The source text, so a renderer can print the line a position is on
+    /// without a second read of the file.
+    pub code: std::sync::Arc<str>,
+    /// `(frozen node index, line, column)`, sorted by index so a lookup is a
+    /// binary search.
+    pub spans: Vec<(usize, (u32, u32))>,
+}
+
+impl PackageSource {
+    /// Where the frozen node `index` came from, when the build recorded it.
+    pub fn span_of(&self, index: lichen_lowlevel::LocalNodeId) -> Option<(u32, u32)> {
+        self.spans
+            .binary_search_by_key(&index.index, |(node, _)| *node)
+            .ok()
+            .map(|at| self.spans[at].1)
+    }
 }
 
 /// The result of building a literal: the compiled `[value, type]` pair plus

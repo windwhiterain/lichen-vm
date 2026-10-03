@@ -6,6 +6,8 @@
 //! ([`crate::render::checker_message`]); the boxed highlevel `Diag` in
 //! `check` stays raw for tests and tooling.
 
+use std::sync::Arc;
+
 use lichen_language_lex::Span;
 
 /// Which stage of the pipeline produced a diagnostic.
@@ -38,6 +40,19 @@ pub struct Diag<P: lichen_lowlevel::Program> {
     pub span: Option<Span>,
     pub message: String,
     pub stage: Stage,
+    /// The **package** `span` is a position in, when that is not the source being
+    /// compiled.  A runtime failure whose condition was cloned out of another
+    /// module — a built-in package's contract — is a property of *that* module's
+    /// source, and the package layer keeps it as a file with its text
+    /// ([core-prelude](../docs/notes/core-prelude.md)); this is the file it is
+    /// displayed and opened under, and the text its caret comes from.  `None`
+    /// means the source this diagnostic was produced for, which is what every
+    /// frontend and checker diagnostic means.
+    pub file: Option<Arc<lichen_highlevel::program::PackageSource>>,
+    /// The failing **use**'s position in the compiled source, present when
+    /// `span`/`file` point at another file: the application that failed the
+    /// contract it applied.  Meaningful only alongside `file`.
+    pub related: Option<Span>,
     /// The checker's structured facts — `None` for frontend errors.  Boxed
     /// so a diagnostic stays small (these are the `Err` payload of the
     /// frontend functions).  `message` is the pretty rendering for display;
@@ -51,6 +66,8 @@ impl<P: lichen_lowlevel::Program> Diag<P> {
             span: Some(span),
             message: message.into(),
             stage,
+            file: None,
+            related: None,
             check: None,
         }
     }
@@ -63,6 +80,8 @@ impl<P: lichen_lowlevel::Program> Diag<P> {
             span: None,
             message: message.into(),
             stage,
+            file: None,
+            related: None,
             check: None,
         }
     }
@@ -79,6 +98,8 @@ impl<P: lichen_lowlevel::Program> Diag<P> {
             span: d.span,
             message: d.message,
             stage: Stage::Lex,
+            file: None,
+            related: None,
             check: None,
         }
     }
@@ -89,6 +110,8 @@ impl<P: lichen_lowlevel::Program> Diag<P> {
             span: d.span,
             message: d.message,
             stage: Stage::Parse,
+            file: None,
+            related: None,
             check: None,
         }
     }
@@ -103,6 +126,8 @@ impl<P: lichen_lowlevel::Program> Diag<P> {
             span: d.span,
             message: d.message,
             stage: Stage::Preprocess,
+            file: None,
+            related: None,
             check: None,
         }
     }
@@ -121,6 +146,8 @@ impl<P: lichen_lowlevel::Program> Diag<P> {
             span: self.span,
             message: self.message,
             stage: self.stage,
+            file: self.file,
+            related: self.related,
             check: None,
         }
     }

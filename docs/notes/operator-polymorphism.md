@@ -1,13 +1,18 @@
 # Operator polymorphism: a refinement contract over a lichen dispatch
 
-> Status: **proposed** — nothing here is implemented. The architecture was
-> settled in discussion before any code: **an operator's contract and its
-> implementation are separate artifacts, and the contract may be stricter than
-> the implementation** (§2). The contract is a **refinement** (§3): one
-> predicate function on the operand's *value* that must evaluate to `1`, carried
-> in an ordinary **attribute** and enforced by the ordinary **assert** channel.
-> The implementation is an ordinary lichen function that selects a per-class
-> leaf and applies it (§4). The panic arm is dead by construction (§5).
+> Status: **Phases 0–3 landed** on `dev` (the refinement contract, the set value,
+> `@in`, the **class refinement** `x : (_ ! in_num)`, and the contract as the
+> built-in [`core`](core-prelude.md) prelude); the routing (R3 → R2/R1) is the
+> remaining phase and waits on the kernel workstream (§9).
+>
+> The architecture was settled in discussion before any code: **an operator's
+> contract and its implementation are separate artifacts, and the contract may be
+> stricter than the implementation** (§2). The contract is a **refinement** (§3):
+> one predicate function that must evaluate to `1`, carried in an ordinary
+> **attribute** and enforced by the ordinary **assert** channel — on the operand's
+> *value* by `e : T ! p`, or on its *class* by `x : (_ ! in_num)`. The
+> implementation is an ordinary lichen function that selects a per-class leaf and
+> applies it (§4). The panic arm is dead by construction (§5).
 >
 > **Rejected on the way here: the set as a *type*.** A kind marker usable in
 > *type* position, whose
@@ -723,11 +728,15 @@ than budgeting for it.)
   `in_num` are in scope with no import, and a program's own `add` shadows the
   prelude's.
 
-  What stays open: the **attribution** a prelude failure needs (the assert's
-  template belongs to `core`, so a refusal reads *"could not be attributed"* —
-  the pre-existing behaviour for an imported assert, now met by every program);
-  the **routing** (the leaf-selection dispatch, the split leaves, and the surface
-  operator resolving to the `core` binding — R3 → R2/R1), which needs the kernel
-  workstream's specialize-before-JIT pass first (§8.4); and the read's
-  monomorphism ([type-of-in-std](type-of-in-std.md)), which is off the contract's
-  path now that the class refinement needs no read.
+  What stays open: the **editor's jump** into the built-in file and the two
+  diagnostics a cross-module failure still needs — the **domain spelling** (a
+  refusal inside the prelude reads the assert channel's generic wording, not
+  `does not satisfy {Int, Float}`, because the spelling and the domain node live
+  in the built-in's build) and the **call site** (`AssertError` records the
+  template it came from, not the apply that cloned it) —
+  [core-prelude](core-prelude.md) §5; the **routing** (the leaf-selection
+  dispatch, the split leaves, and the surface operator resolving to the `core`
+  binding — R3 → R2/R1), which needs the kernel workstream's
+  specialize-before-JIT pass first (§8.4); and the read's monomorphism
+  ([type-of-in-std](type-of-in-std.md)), which is off the contract's path now that
+  the class refinement needs no read.

@@ -185,6 +185,45 @@ fn a_package_whose_last_statement_is_a_raw_read_reports_the_package_own_failure(
 }
 
 #[test]
+fn a_failure_inside_the_prelude_is_attributed_to_its_own_file() {
+    // The prelude's contract is a built-in module's source, so the condition a
+    // failure names belongs to *that* file: the diagnostic carries the file and
+    // the position of the line that wrote the condition, which is what makes a
+    // refusal navigable instead of "could not be attributed"
+    // (`docs/notes/core-prelude.md`).  The module is materialized on disk when a
+    // store has a cache root, and named by its own path when it has none.
+    let mut store = PackageStore::<LangProgram>::new();
+    let err = evaluate_raw("add \"a\" \"b\"\n", None, &mut store).unwrap_err();
+    let attributed: Vec<_> = err.iter().filter(|d| d.file.is_some()).collect();
+    assert!(
+        !attributed.is_empty(),
+        "a prelude failure names the file it came from: {err:?}"
+    );
+    let diag = attributed[0];
+    let source = diag.file.as_ref().unwrap();
+    assert!(
+        source.path.ends_with("core.lichen"),
+        "the built-in's own path: {:?}",
+        source.path
+    );
+    let (line, _col) = diag.span.expect("a position in that file");
+    assert!(
+        source.code.lines().count() >= line as usize,
+        "the position is inside the kept source: {line}"
+    );
+    // The line it names is the contract's own line — the one that spelled
+    // `in_num` — not the program's.
+    assert!(
+        source
+            .code
+            .lines()
+            .nth(line as usize - 1)
+            .is_some_and(|text| text.contains("in_num")),
+        "the position names the contract's line"
+    );
+}
+
+#[test]
 fn a_failed_assert_in_an_imported_package_still_reports_a_diagnostic() {
     // The imported body's assert is cloned into the importer's module with the
     // *imported* module's node as its template, so this build has no expression

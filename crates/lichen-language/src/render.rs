@@ -124,17 +124,33 @@ fn render_with_line_starts<P: lichen_lowlevel::Program>(
     diag: &Diag<P>,
 ) -> String {
     let mut out = format!("error: {}\n", diag.message);
-    if let Some((line, col)) = diag.span {
-        out.push_str(&format!("  --> {line}:{col}\n"));
-        out.push_str("   |\n");
-        // The line the caret sits on comes from the shared line model
-        // (`line_starts`), not from a second scan of the source — so the text
-        // and the `(line, col)` name the same line.
-        if let Some(text) = crate::lex::line_text(source, starts, line) {
-            let caret = format!("{}^", " ".repeat((col as usize).saturating_sub(1)));
-            out.push_str(&format!(" {line} | {text}\n"));
-            out.push_str(&format!("   | {caret}\n"));
-        }
+    let Some((line, col)) = diag.span else {
+        return out;
+    };
+    // A position in another file — a built-in package's own source, where the
+    // condition that failed was written — carries that path, and its line and
+    // caret come from *that* file's text ([core-prelude](../docs/notes/core-prelude.md)).
+    // The line the caret sits on comes from the shared line model
+    // (`line_starts`), not from a second scan of the source — so the text and the
+    // `(line, col)` name the same line.
+    let foreign_starts = diag
+        .file
+        .as_ref()
+        .map(|package| crate::lex::line_starts(&package.code));
+    let (text, starts, arrow) = match (diag.file.as_ref(), foreign_starts.as_deref()) {
+        (Some(package), Some(starts)) => (
+            package.code.as_ref(),
+            starts,
+            format!("{}:{line}:{col}", package.path.display()),
+        ),
+        _ => (source, starts, format!("{line}:{col}")),
+    };
+    out.push_str(&format!("  --> {arrow}\n"));
+    out.push_str("   |\n");
+    if let Some(text) = crate::lex::line_text(text, starts, line) {
+        let caret = format!("{}^", " ".repeat((col as usize).saturating_sub(1)));
+        out.push_str(&format!(" {line} | {text}\n"));
+        out.push_str(&format!("   | {caret}\n"));
     }
     out
 }
