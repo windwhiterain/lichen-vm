@@ -276,6 +276,14 @@ pub struct Diag<P: Program> {
     /// Which `Module::unify_errors` entry a mismatch came from — the key back
     /// to its diary entry, for callers that re-render.
     pub error_index: Option<usize>,
+    /// The **template** of a failed assert whose body lives in another module:
+    /// the static node the condition was cloned from, present exactly when
+    /// `loc` is `None` for that reason.  This build's tables hold no entry for a
+    /// static template, so the position is the *other* module's; a host that
+    /// kept that module's source turns this into one
+    /// (`docs/notes/core-prelude.md`), and a host that kept none leaves the
+    /// failure unattributed.
+    pub static_template: Option<lichen_lowlevel::StaticNodeId>,
 }
 
 impl<P: Program> Diag<P> {
@@ -303,6 +311,7 @@ impl<P: Program> Diag<P> {
             field: None,
             budget: None,
             error_index: None,
+            static_template: None,
         }
     }
 
@@ -416,6 +425,7 @@ where
                     length: Some(*length),
                     field: None,
                     error_index: None,
+                    static_template: None,
                 }),
                 EvalError::TableMiss { key, .. } => {
                     out.push(Diag::factual(DiagKind::TableMiss, self.node_loc(*key)))
@@ -459,8 +469,25 @@ where
         // apply's clone records: a per-call failure is attributed to the
         // `assert` expression the user wrote, not to a clone.
         for err in &self.module.assert_errors {
-            let AnyNodeId::Dynamic(template) = err.template else {
-                continue; // cloned out of a static module: no location to attribute
+            let template = match err.template {
+                AnyNodeId::Dynamic(template) => template,
+                // Cloned out of a **static** module — a built-in package's
+                // contract, or an imported one's.  This build's tables have no
+                // entry for the template, so the diagnostic carries the static
+                // ref instead: a host that keeps that module's source resolves it
+                // to a position in *that* file, and a host that keeps none drops
+                // the diagnostic (the package's own build reported it when it
+                // compiled).  The `user_asserts` filter cannot apply — the flag
+                // lives in the other build — so the check is left to the host
+                // that knows which modules it kept sources for.
+                AnyNodeId::Static(sref) => {
+                    out.push(Diag {
+                        assert_value: Some(err.value),
+                        static_template: Some(sref),
+                        ..Diag::factual(DiagKind::Assert, None)
+                    });
+                    continue;
+                }
             };
             if self.user_asserts.contains(&template) {
                 // A refinement may name the class domain it refused; the
@@ -574,6 +601,7 @@ where
                 length: None,
                 field: None,
                 error_index: Some(i),
+                static_template: None,
             };
         }
         // The owning diary entry: the one whose owned range contains this
@@ -604,6 +632,7 @@ where
             length: None,
             field,
             error_index: Some(i),
+            static_template: None,
         }
     }
 }

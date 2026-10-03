@@ -5,7 +5,9 @@
 > package ([`PackageStore::register_core`](../../crates/lichen-language/src/package.rs)),
 > and seeded into every source the preprocessor sees
 > ([`crate::preprocess::preprocess`](../../crates/lichen-language/src/preprocess/mod.rs),
-> `PackageStore::prelude_import`).
+> `PackageStore::prelude_import`).  Its source is a **file** the store
+> materializes under the cache root (§4), which is what makes a failure inside it
+> attributable and a definition jumpable.
 > The contract it carries is [operator-polymorphism](operator-polymorphism.md) §3;
 > the migration it completes is §9 Phase 3.
 > Points at: `crates/lichen-language/src/core.lichen`, `package.rs`
@@ -93,31 +95,60 @@ the prelude adds, not a second module).
   store, so the collision was latent (`compute` had it too — it now takes the
   same reuse path).
 
-## 4. What this costs, and what is open
+## 4. The built-in's own file
 
-- **A failure inside the prelude is unattributed.**  `add "a" "b"` is refused,
-  but the diagnostic reads *"the build failed, but the failing check could not be
-  attributed to an expression in this source"*: the failing assert's **template**
-  belongs to the `core` module, and the importer's build has no expression to
-  blame.  That is the pre-existing, pinned behaviour for an assert inside an
-  imported package
-  (`crates/lichen-language/tests/registry.rs`'s
-  `a_failed_assert_in_an_imported_package_still_reports_a_diagnostic`) — what the
-  prelude changes is that it is now the *first* thing a program meets, for a
-  contract nobody wrote locally.  Two fixes are open and both are diagnostics
-  work: attribute a failure whose template belongs to another module to the
-  importer's **call site** (the apply channel already records the argument's
-  span), or at least name the module the template came from.
+A built-in is a **file**: the store materializes its source under the cache root
+(`<cache>/builtin/core.lichen`, `…/compute.lichen`) and keeps a **source record**
+in the package meta — the path, the text, and the position of every frozen node
+(`HighPackageMeta::source`, built by `located_nodes` + `builtin_source` from the
+build's `node_edges` and the frontend's `span_index`).  Two things follow, and
+both are the reason the record exists:
+
+- **A failure inside the module is attributed to the line that wrote it.**  A
+  failed assert whose condition was cloned out of a static module names it by a
+  `StaticNodeId` (`AssertError::template`); `Build::diagnostics` now emits that
+  static ref instead of dropping the failure, and the package layer resolves it
+  through the record to a position in *that* file.  Measured — `add "a" "b"`:
+
+  ```
+  error: assertion failed: expected 1, found 0
+    --> ~/.lichen/compilers/<key>/builtin/core.lichen:3:24
+     |
+   3 | add = x => y => { x : (_ ! in_num); y : (_ ! in_num); x + y }
+     |                        ^
+  ```
+
+  A module with **no** kept source — an ordinary imported package, whose own build
+  already reported the failure when it compiled — drops as before, so
+  `a_failed_assert_in_an_imported_package_still_reports_a_diagnostic` keeps its
+  meaning.  An in-memory store has no root to materialize under: the file is
+  named by its own path (`core.lichen`) and still carries positions.
+- **A jump lands in it.**  The record is what an editor needs to point a
+  definition at the built-in's line rather than at nothing.
+
+## 5. What this costs, and what is open
+
+- **The domain spelling is not carried across modules.**  A refusal *inside* the
+  prelude reads `assertion failed: expected 1, found 0` where the same assertion
+  written in the document reads `does not satisfy {Int, Float}`: the spelling
+  (`AssertSpelling::Refinement { domain }`) and the domain node live in the
+  *built-in's* build, and the record keeps positions, not checker facts.
+  Carrying them (the spelling table plus the domain's node, printed through the
+  module the failure names) is the next step on this leg.
+- **The call site is not attached yet.**  The diagnostic names the built-in's
+  line; it does not also name the application in the document that failed the
+  contract, because an assert's clone records its *template* and not the apply
+  that made it (`AssertError` has no origin).  Recording that origin — the apply
+  node, at the two clone sites (`static_module/apply.rs`, `function.rs`) — and
+  resolving it through `Build::apply_edges` is what would add the "related"
+  location.
+- **The built-in is compiled by every store and not device-cached.**  It is a
+  virtual module (`persist::virtual_file_id`), compiled fresh in memory like
+  `compute`; its values are ordinary (functions and a set of type values), so
+  caching it is *possible* and simply not done.
 - **The contract is enforced twice while the routing is the checker's.**  `+`
   still lowers to the machine leaf and the checker still registers the builtin's
   domain assert (routing R3, [operator-polymorphism](operator-polymorphism.md)
-  §7), so `core`'s class refinement and the builtin's assert both fire on a
-  wrong-class operand — the *message* the user sees is still the builtin's
-  `does not satisfy {Int, Float}` when it can be attributed at all.  Moving the
-  surface operator onto this binding (R3 → R2/R1) is what would make `core` the
-  single authority.
-- **The prelude is compiled by every store and not device-cached.**  It is a
-  virtual module (`persist::virtual_file_id`), compiled fresh in memory like
-  `compute`; its values are ordinary (functions and a set of type values), so
-  caching it is *possible* and simply not done — a store's first compile pays one
-  small module.
+  §7), so a wrong-class operand reports the class refinement *and* the builtin's
+  assert — both now pointing into `core.lichen`.  Moving the surface operator
+  onto this binding (R3 → R2/R1) is what would make `core` the single authority.

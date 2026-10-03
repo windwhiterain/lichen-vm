@@ -27,7 +27,7 @@ use std::sync::{Arc, RwLock};
 use lichen_compute::WRAPPER_SOURCE;
 use lichen_highlevel::checker::Build;
 use lichen_highlevel::native::NativeOps;
-use lichen_highlevel::program::{HighPackageMeta, TypeOperator, ValueType};
+use lichen_highlevel::program::{HighPackageMeta, PackageSource, TypeOperator, ValueType};
 use lichen_lowlevel::{LocalNodeId, ModuleKey, NodeId, Registry, StaticModule, StaticNodeId};
 use lichen_preprocess::{ImportResolver, PreprocessDiag, ResolvedPackage};
 
@@ -94,6 +94,32 @@ pub fn is_prelude_import(import: &ResolvedImport) -> bool {
         .path
         .file_name()
         .is_some_and(|name| name == CORE_PATH)
+}
+
+/// Every node of a checked built-in that has a source position, paired with that
+/// position.  The build is the only thing that knows a node's source — a frozen
+/// module carries values, not spans — so this is read before the module freezes
+/// and the refs are mapped through the freeze afterwards
+/// ([`PackageStore::builtin_source`]).
+fn located_nodes<P>(
+    build: &Build<P>,
+    span_index: Option<&crate::compile::SpanIndex>,
+) -> Vec<(NodeId, (u32, u32))>
+where
+    P: LangProgramShape,
+    P::Value: ValueType,
+{
+    let Some(span_index) = span_index else {
+        return Vec::new();
+    };
+    build
+        .node_edges
+        .iter()
+        .filter_map(|(node, loc)| {
+            let span = span_index.get(loc.expr.0 as usize).copied().flatten()?;
+            Some((*node, span))
+        })
+        .collect()
 }
 
 /// The `(name, term)` pairs [`CORE_SOURCE`] exposes **directly**: one per
@@ -483,6 +509,8 @@ where
         }
         let build = report.build.unwrap();
 
+        // The nodes' positions, read before the module moves into the freeze.
+        let located = located_nodes(&build, report.span_index.as_ref());
         // Fully evaluate the exported value and type before freezing.
         let mut module = build.module;
         module.evaluate_node_deep(build.root_val, None);
@@ -501,6 +529,7 @@ where
             module: freeze.key,
             index: freeze.node_map[&build.root_term],
         };
+        let package_source = self.builtin_source(COMPUTE_PATH, source, &located, &freeze.node_map);
         self.registry
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -508,6 +537,7 @@ where
                 freeze.key,
                 HighPackageMeta {
                     export: Some(export),
+                    source: Some(package_source),
                     ..Default::default()
                 },
             );
@@ -521,6 +551,77 @@ where
             .insert(PathBuf::from(COMPUTE_PATH), handle.clone());
         self.compiled += 1;
         Ok(handle)
+    }
+
+    /// The path a built-in module's source is exposed at: a materialized copy
+    /// under the cache root, so the file a message names and an editor opens
+    /// actually exists.  An in-memory store has no root to write under, so the
+    /// built-in's own name is the path.
+    fn builtin_path(&self, name: &str) -> PathBuf {
+        match &self.cache_dir {
+            Some(root) => root.join("builtin").join(name),
+            None => PathBuf::from(name),
+        }
+    }
+
+    /// Materialize a built-in module's source under the cache root, returning the
+    /// path it is exposed at.  Rewritten only when the bytes differ, and a no-op
+    /// without a cache root (the store's writes never fail a compile — see
+    /// `home.rs`).
+    fn materialize_builtin(&self, name: &str, source: &str) -> PathBuf {
+        let path = self.builtin_path(name);
+        if self.cache_dir.is_none() {
+            return path;
+        }
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(source) {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&path, source);
+        }
+        path
+    }
+
+    /// The **source record** of a built-in the store just froze: its file, and
+    /// the position of every frozen node — what turns a [`StaticNodeId`] a
+    /// failure names into a line the user can open
+    /// (`docs/notes/core-prelude.md`).
+    fn builtin_source(
+        &self,
+        name: &str,
+        source: &str,
+        located: &[(NodeId, (u32, u32))],
+        node_map: &HashMap<NodeId, LocalNodeId>,
+    ) -> PackageSource {
+        let path = self.materialize_builtin(name, source);
+        let mut spans: Vec<(usize, (u32, u32))> = located
+            .iter()
+            .filter_map(|(node, span)| Some((node_map.get(node)?.index, *span)))
+            .collect();
+        spans.sort_unstable();
+        // One position per frozen node: the first recorded wins, so a node the
+        // build located twice does not shadow itself.
+        spans.dedup_by_key(|(index, _)| *index);
+        PackageSource {
+            path,
+            code: std::sync::Arc::from(source),
+            spans,
+        }
+    }
+
+    /// A built-in module's **source record**, if this registry holds one — the
+    /// file the module's source is exposed at and the position of each frozen
+    /// node.  A failure cloned out of the module is attributed through it
+    /// (`docs/notes/core-prelude.md`); a module with no kept source (an ordinary
+    /// imported package) has none.
+    pub fn package_source(&self, key: ModuleKey) -> Option<PackageSource> {
+        let registry = self
+            .registry
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registry
+            .get(key)
+            .and_then(|package| package.meta.source.clone())
     }
 
     /// A built-in module this registry already holds, as a handle — the reuse
@@ -594,9 +695,11 @@ where
                 .join("\n"));
         }
         let build = report.build.unwrap();
-        // The names' pairs are read from the checked build, before the module
-        // moves into the freeze (`core_terms`).
+        // The names' pairs and the nodes' positions are read from the checked
+        // build, before the module moves into the freeze (`core_terms`,
+        // `located_nodes`).
         let terms = core_terms(&build)?;
+        let located = located_nodes(&build, report.span_index.as_ref());
         let mut module = build.module;
         module.evaluate_node_deep(build.root_val, None);
         module.evaluate_node_deep(build.root_ty, None);
@@ -614,6 +717,7 @@ where
             index: freeze.node_map[&build.root_term],
         };
         let direct = core_direct(terms, freeze.key, &freeze.node_map)?;
+        let package_source = self.builtin_source(CORE_PATH, source, &located, &freeze.node_map);
         self.registry
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -622,6 +726,7 @@ where
                 HighPackageMeta {
                     export: Some(export),
                     direct: direct.clone(),
+                    source: Some(package_source),
                 },
             );
         let handle = PackageHandle {

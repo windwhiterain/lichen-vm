@@ -381,22 +381,44 @@ where
             build
                 .diagnostics()
                 .into_iter()
-                .map(|d| {
+                .filter_map(|d| {
                     // The highlevel is source-blind: a diagnostic carries a
                     // structured `Loc` (an IR expression + position), and the
                     // frontend maps that back to a source span through its own
                     // `span_index` (highlevel nodes carry none).
-                    let span = d.loc().and_then(|loc| {
+                    let loc = d.loc().cloned();
+                    let span = loc.as_ref().and_then(|loc| {
                         span_index
                             .as_ref()
                             .and_then(|s| s.get(loc.expr.0 as usize).copied().flatten())
                     });
-                    Diag {
+                    // A failure whose condition was cloned out of a **static**
+                    // module — a built-in package's contract, which every program
+                    // now carries — is a property of *that* module's source, not
+                    // of this one.  Its kept source record is what turns the static
+                    // ref into a position in the file the user can open; a module
+                    // with no kept source (an ordinary imported package, whose own
+                    // build reported the failure when it compiled) has none, and
+                    // the diagnostic drops here.
+                    let (span, file) = match d.static_template {
+                        Some(sref) => {
+                            let source = registry
+                                .read()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .get(sref.module)
+                                .and_then(|package| package.meta.source.clone())?;
+                            (Some(source.span_of(sref.index)?), Some(Arc::new(source)))
+                        }
+                        None => (span, None),
+                    };
+                    Some(Diag {
                         span,
                         message: crate::render::checker_message(&mut printer, &d),
                         stage: Stage::Check,
+                        file,
+                        related: None,
                         check: Some(Box::new(d)),
-                    }
+                    })
                 })
                 .collect::<Vec<_>>(),
         );
@@ -427,6 +449,8 @@ where
                 span: None,
                 message: crate::render::checker_message(&mut printer, &unattributed),
                 stage: Stage::Check,
+                file: None,
+                related: None,
                 check: Some(Box::new(unattributed)),
             });
         }

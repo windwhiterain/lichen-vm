@@ -32,6 +32,8 @@ fn a_spanless_diagnostic_has_no_caret() {
         span: None,
         message: "internal".to_string(),
         stage: Stage::Check,
+        file: None,
+        related: None,
         check: None,
     };
     assert_eq!(render("x", &diag), "error: internal\n");
