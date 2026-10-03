@@ -17,9 +17,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod common;
+
 use lichen_language::package::PackageStore;
 use lichen_language::program::LangProgram;
-use lichen_language::run::evaluate_raw;
 
 fn temp_dir(name: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -60,14 +61,10 @@ fn an_imported_package_that_jits_at_its_top_level_still_runs() {
     // never reached.
     let mut store = PackageStore::<LangProgram>::with_cache_dir(dir.join("cache"));
     let source = fs::read_to_string(&main).unwrap();
-    let output = evaluate_raw(&source, Some(main.as_path()), &mut store).unwrap_or_else(|diags| {
-        panic!(
-            "a package that jits at its top level must not fail the compile — its kernel has \
-             no on-disk form, so the package is simply not cached.  Diagnostics: {diags:?}"
-        )
-    });
+    let (_, value, _) = common::run_at(&source, Some(main.as_path()), &mut store);
     assert_eq!(
-        output, "6: Int",
+        common::usize_of(&value),
+        6,
         "the program must still evaluate to its declared output"
     );
 

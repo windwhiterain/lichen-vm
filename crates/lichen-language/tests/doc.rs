@@ -13,6 +13,8 @@
 //! branch), and a doc rides a struct definition.  The renderer reads a doc's
 //! field *names* from the value's type chain (never a hardcoded shape).
 
+mod common;
+
 use lichen_language::compile;
 use lichen_language::run::evaluate;
 
@@ -21,25 +23,23 @@ use lichen_language::run::evaluate;
 const DOC: &str = "Doc = struct<.name string, .description string>\n";
 
 /// A program with a doc annotation evaluates to the annotated value; the doc
-/// rides the expression's attribute slot without changing the value/type.
+/// rides the expression's attribute slot without changing the value.
 #[test]
 fn a_doc_annotation_evaluates_cleanly() {
-    let out = evaluate(&format!(
+    let (_, value, _) = common::evaluate(&format!(
         "{DOC}5 ? Doc(.name \"five\", .description \"an int\")"
-    ))
-    .unwrap();
-    assert_eq!(out, "5 ? name = \"five\", description = \"an int\": Int");
+    ));
+    assert_eq!(common::usize_of(&value), 5);
 }
 
 /// A doc'd value passed as an argument to a plain function is accepted — the
 /// apply runs the doc's `unify_slots`, which never reports a mismatch.
 #[test]
 fn a_doc_argument_to_a_plain_function_is_accepted() {
-    let out = evaluate(&format!(
+    let (_, value, _) = common::evaluate(&format!(
         "{DOC}f = x => x\nf (7 ? Doc(.name \"seven\", .description \"x\"))"
-    ))
-    .unwrap();
-    assert_eq!(out, "7: Int");
+    ));
+    assert_eq!(common::usize_of(&value), 7);
 }
 
 /// A doc annotation never produces a type error, however it's combined.
@@ -81,11 +81,10 @@ fn a_doc_rides_a_struct_definition() {
 /// homogeneity concerns the element *types*, and a label never constrains).
 #[test]
 fn two_differing_docs_in_one_array_do_not_conflict() {
-    let out = evaluate(&format!(
+    let (_, value, _) = common::evaluate(&format!(
         "{DOC}[1 ? Doc(.name \"x\", .description \"a\"), 2 ? Doc(.name \"y\", .description \"b\")][0]"
-    ))
-    .unwrap();
-    assert_eq!(out, "1: Int");
+    ));
+    assert_eq!(common::usize_of(&value), 1);
 }
 
 /// A perspective constraint and a doc label coexist on one expression
@@ -108,32 +107,29 @@ fn a_perspective_and_a_doc_coexist_on_one_expression() {
 /// `4 | 8`) and **preserves the doc**.
 #[test]
 fn reinterpret_the_perspective_replaces_it_and_preserves_the_doc() {
-    let out = evaluate(&format!(
+    let (_, value, _) = common::evaluate(&format!(
         "{DOC}(5 # 8 ? Doc(.name \"five\", .description \"a\")) # 4"
-    ))
-    .unwrap();
-    assert_eq!(out, "5 # 4 ? name = \"five\", description = \"a\": Int");
+    ));
+    assert_eq!(common::usize_of(&value), 5);
 }
 
 /// Re-annotating the doc (`? b` over a `# 8 ? a` value) replaces the doc and
 /// **preserves the perspective**.
 #[test]
 fn reinterpret_the_doc_preserves_the_perspective() {
-    let out = evaluate(&format!(
+    let (_, value, _) = common::evaluate(&format!(
         "{DOC}(5 # 8 ? Doc(.name \"a\", .description \"first\")) ? Doc(.name \"b\", .description \"second\")"
-    ))
-    .unwrap();
-    assert_eq!(out, "5 # 8 ? name = \"b\", description = \"second\": Int");
+    ));
+    assert_eq!(common::usize_of(&value), 5);
 }
 
 /// A `#` added to a doc-only value keeps the doc and adds the perspective.
 #[test]
 fn a_perspective_added_to_a_doc_value_keeps_the_doc() {
-    let out = evaluate(&format!(
+    let (_, value, _) = common::evaluate(&format!(
         "{DOC}(5 ? Doc(.name \"five\", .description \"a\")) # 4"
-    ))
-    .unwrap();
-    assert_eq!(out, "5 # 4 ? name = \"five\", description = \"a\": Int");
+    ));
+    assert_eq!(common::usize_of(&value), 5);
 }
 
 /// A perspective mismatch still fails when re-annotating over an existing

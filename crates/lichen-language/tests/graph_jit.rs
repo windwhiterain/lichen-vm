@@ -36,7 +36,10 @@ use lichen_kernel_ir::{
     install_parallel_backend,
 };
 use lichen_language::package::PackageStore;
-use lichen_language::program::LangProgram;
+use lichen_language::program::{LangProgram, LangValue};
+use lichen_lowlevel::{Module, NodeId};
+
+mod common;
 
 /// A backend that computes `sum(inputs)[i] + 1` and remembers what it saw.
 #[derive(Clone, Default)]
@@ -168,11 +171,10 @@ fn stub() -> (MutexGuard<'static, ()>, Stub) {
     (guard, stub.clone())
 }
 
-/// Compile and run `source`, returning the rendered output.
-fn run(source: &str) -> String {
-    let mut store = PackageStore::<LangProgram>::new();
-    lichen_language::run::evaluate_raw(source, None, &mut store)
-        .unwrap_or_else(|diags| panic!("expected the program to check and run, got: {diags:?}"))
+/// Compile and run `source`, returning the module, the evaluated root value,
+/// and the root type node.
+fn run(source: &str) -> (Module<LangProgram>, LangValue, NodeId) {
+    common::run(source)
 }
 
 /// Compile `source` and return the rendered diagnostics.
@@ -217,7 +219,7 @@ built = compute.graph step
 fn a_recording_produces_the_same_numbers_as_running_the_dispatches() {
     let (_guard, stub) = stub();
     // The direct answer first, from the same kernels run one at a time.
-    let direct = run(&format!(
+    let (direct_module, direct, _) = run(&format!(
         r#"---
   compute = import "compute.lichen"
 ---
@@ -227,7 +229,7 @@ out = compute.plrun k2 (3, (first,))
 compute.collect out
 "#
     ));
-    let through_a_graph = run(&format!(
+    let (graph_module, through_a_graph, _) = run(&format!(
         r#"---
   compute = import "compute.lichen"
 ---
@@ -237,7 +239,8 @@ compute.collect (compute.graphrun built (3,))
 "#
     ));
     assert_eq!(
-        through_a_graph, direct,
+        common::usize_array(&graph_module, &through_a_graph),
+        common::usize_array(&direct_module, &direct),
         "a recorded chain is the chain, and the graph's numbers are the same numbers"
     );
     assert_eq!(
@@ -258,7 +261,7 @@ fn a_graph_runs_at_whichever_extent_its_argument_names() {
     // have to be rebuilt per run, and rebuilding a graph per run is the same as
     // not having one.
     for count in [3, 5] {
-        let out = run(&format!(
+        let (module, out, _) = run(&format!(
             r#"---
   compute = import "compute.lichen"
 ---
@@ -273,10 +276,10 @@ compute.collect (compute.graphrun built ({count},))
         // are a property of the *wiring* and the length is the property of the
         // extent: a graph that reused a count from build time, or built a fresh
         // graph per run, would answer a different length for the same program.
-        let expected = vec!["2"; count].join(", ");
-        assert!(
-            out.starts_with(&format!("[{expected}]")),
-            "at extent {count} the graph answered {out:?}, and {count} twos were expected"
+        assert_eq!(
+            common::usize_array(&module, &out),
+            vec![2; count],
+            "at extent {count} the graph answered {count} twos"
         );
     }
 }
@@ -671,11 +674,11 @@ compute.collect (compute.graphrun built (3,))
     // numbers are the stub's rather than the kernels': `k1` reads no buffer, so
     // the stub answers `0 + 1` at every index, and `k2` reading that answers
     // `1 + 1`. What is being checked is that a run happened at all.
-    let gpu = run(&program("gpu"));
-    assert!(
-        gpu.starts_with("[2, 2, 2]"),
-        "a gpu graph of a shape a cpu graph already interned must run and answer, and it \
-         answered {gpu:?}"
+    let (module, gpu, _) = run(&program("gpu"));
+    assert_eq!(
+        common::usize_array(&module, &gpu),
+        vec![2, 2, 2],
+        "a gpu graph of a shape a cpu graph already interned must run and answer"
     );
     assert_eq!(
         stub.saw().len(),

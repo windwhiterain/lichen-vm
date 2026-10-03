@@ -4,11 +4,20 @@
 //! `compute.jit` and `compute.launch`.
 
 use lichen_language::package::PackageStore;
-use lichen_language::program::LangProgram;
+use lichen_language::program::{LangProgram, LangValue};
+use lichen_lowlevel::{Module, NodeId};
+
+mod common;
 
 /// Compile and run `source` (resolving imports through a fresh store),
-/// returning the rendered `value: type` output.
-fn run(source: &str) -> String {
+/// returning the module, the evaluated root value, and the root type node.
+fn run(source: &str) -> (Module<LangProgram>, LangValue, NodeId) {
+    common::run(source)
+}
+
+/// Compile and run `source`, returning the rendered `value: type` output — for
+/// the tests whose subject is the rendering itself.
+fn render(source: &str) -> String {
     let mut store = PackageStore::<LangProgram>::new();
     lichen_language::run::evaluate_raw(source, None, &mut store)
         .unwrap_or_else(|diags| panic!("expected {source:?} to check and run, got: {diags:?}"))
@@ -81,27 +90,43 @@ compute.read ((compute.Read _)(.from out, .at 0))
 fn jit_then_launch_scalar() {
     // `compute.jit` is `jit` — compiles the lambda to a wasm kernel; `launch k 5`
     // runs it and yields `6`, typed `Int`.
-    let out = run(r#"
+    let (module, value, root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
 k = compute.jit (x => x + 1)
 compute.launch k 5
 "#);
-    assert_eq!(out, "6: Int", "jit+launch produced: {out:?}");
+    assert_eq!(
+        common::usize_of(&value),
+        6,
+        "jit+launch produced the launch result"
+    );
+    assert!(
+        common::type_is_int(&module, root_ty),
+        "the launch result is typed Int"
+    );
 }
 
 #[test]
 fn jit_multi_op_signature() {
     // A body of several scalar operations: `x + 1 + 2`.
-    let out = run(r#"
+    let (module, value, root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
 k = compute.jit (x => x + 1 + 2)
 compute.launch k 5
 "#);
-    assert_eq!(out, "8: Int", "multi-op jit+launch produced: {out:?}");
+    assert_eq!(
+        common::usize_of(&value),
+        8,
+        "multi-op jit+launch produced 8"
+    );
+    assert!(
+        common::type_is_int(&module, root_ty),
+        "the launch result is typed Int"
+    );
 }
 
 #[test]
@@ -142,38 +167,58 @@ compute.launch (x => x + 1) 5
 fn jit_multi_arg_tuple() {
     // A tuple-domain kernel: `(p : <Int, Int> => p(0) + p(1))` compiles to
     // a wasm `(i64, i64) -> i64` and launches with a 2-tuple argument.
-    let out = run(r#"
+    let (module, value, root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
 k = compute.jit (p : <Int, Int> => p(0) + p(1))
 compute.launch k (5, 3)
 "#);
-    assert_eq!(out, "8: Int", "tuple-domain jit+launch produced: {out:?}");
+    assert_eq!(
+        common::usize_of(&value),
+        8,
+        "tuple-domain jit+launch produced 8"
+    );
+    assert!(
+        common::type_is_int(&module, root_ty),
+        "the launch result is typed Int"
+    );
 }
 
 #[test]
 fn jit_multi_arg_ternary() {
-    let out = run(r#"
+    let (module, value, root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
 k = compute.jit (p : <Int, Int, Int> => p(0) + p(1) + p(2))
 compute.launch k (5, 3, 2)
 "#);
-    assert_eq!(out, "10: Int", "ternary jit+launch produced: {out:?}");
+    assert_eq!(
+        common::usize_of(&value),
+        10,
+        "ternary jit+launch produced 10"
+    );
+    assert!(
+        common::type_is_int(&module, root_ty),
+        "the launch result is typed Int"
+    );
 }
 
 #[test]
 fn jit_multi_arg_sub() {
-    let out = run(r#"
+    let (module, value, root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
 k = compute.jit (p : <Int, Int> => p(0) - p(1))
 compute.launch k (10, 3)
 "#);
-    assert_eq!(out, "7: Int", "tuple subtraction produced: {out:?}");
+    assert_eq!(common::usize_of(&value), 7, "tuple subtraction produced 7");
+    assert!(
+        common::type_is_int(&module, root_ty),
+        "the launch result is typed Int"
+    );
 }
 
 #[test]
@@ -201,7 +246,7 @@ fn jit_closes_over_constant() {
     // A kernel body may reference a module-level constant binding (non-function
     // values are graph-shared, so the body references the value node in place
     // and the JIT lowers it to `i64.const`).
-    let out = run(r#"
+    let (module, value, root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
@@ -209,21 +254,33 @@ a = 42
 k = compute.jit (x => x + a)
 compute.launch k 1
 "#);
-    assert_eq!(out, "43: Int", "closure-over-constant produced: {out:?}");
+    assert_eq!(
+        common::usize_of(&value),
+        43,
+        "closure-over-constant produced 43"
+    );
+    assert!(
+        common::type_is_int(&module, root_ty),
+        "the launch result is typed Int"
+    );
 }
 
 #[test]
 fn jit_multi_arg_all_ops() {
     // A tuple-domain body mixing `+`, `-`, `<=` and a constant.
     // (5 + 3) - (5 <= 3) = 8 - 0 = 8.
-    let out = run(r#"
+    let (module, value, root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
 k = compute.jit (p : <Int, Int> => (p(0) + p(1)) - (p(0) <= p(1)))
 compute.launch k (5, 3)
 "#);
-    assert_eq!(out, "8: Int", "mixed-op tuple produced: {out:?}");
+    assert_eq!(common::usize_of(&value), 8, "mixed-op tuple produced 8");
+    assert!(
+        common::type_is_int(&module, root_ty),
+        "the launch result is typed Int"
+    );
 }
 
 #[test]
@@ -241,7 +298,7 @@ fn jit_lowers_the_arithmetic_comparison_and_bitwise_operators() {
     // between two elements is **two** separators, which the tuple grammar does
     // not tolerate (a pre-existing wart, unrelated to these operators — the
     // same program fails on `dev`), so this test does not depend on it.
-    let out = run(r#"
+    let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k1 = compute.jit (x => ((x * 3) % 7) + (x / 2) + ((x < 5) & (x > 1)))
 k2 = compute.jit (p : <Int, Int> => p(0) > p(1))
@@ -251,36 +308,71 @@ k5 = compute.jit (p : <Int, Int> => (p(0) < p(1)) | (p(0) == p(1)))
 k6 = compute.jit (p : <Int, Int> => (p(0) > p(1)) ^ (p(0) == p(1)))
 (compute.launch k1 4, compute.launch k2 (5, 3), compute.launch k3 (3, 3), compute.launch k4 (5, 3), compute.launch k5 (5, 5), compute.launch k6 (5, 5))
 "#);
+    let elements = common::array_values(&module, &value);
     assert_eq!(
-        out, "(8, 1, 1, 1, 1, 1): <Int, Int, Int, Int, Int, Int>",
-        "the new operators jitted produced: {out:?}"
+        common::usize_of(&elements[0]),
+        8,
+        "the arithmetic group's product-remainder-division-comparison result"
     );
+    assert_eq!(
+        common::usize_of(&elements[1]),
+        1,
+        "the `>` comparison yields 1 for 5 > 3"
+    );
+    assert_eq!(
+        common::usize_of(&elements[2]),
+        1,
+        "the `>=` comparison yields 1"
+    );
+    assert_eq!(
+        common::usize_of(&elements[3]),
+        1,
+        "the `!=` comparison yields 1"
+    );
+    assert_eq!(common::usize_of(&elements[4]), 1, "the `|` pair yields 1");
+    assert_eq!(common::usize_of(&elements[5]), 1, "the `^` pair yields 1");
 }
 
 #[test]
 fn jit_conditional_then() {
     // `if x <= 3 then 10 else 20` lowers to `[20, 10][x <= 3]` — a 2-element
     // array index the JIT lowers to a wasm `select`.
-    let out = run(r#"
+    let (module, value, root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
 k = compute.jit (x => if x <= 3 then 10 else 20)
 compute.launch k 2
 "#);
-    assert_eq!(out, "10: Int", "conditional (then) produced: {out:?}");
+    assert_eq!(
+        common::usize_of(&value),
+        10,
+        "conditional (then) produced 10"
+    );
+    assert!(
+        common::type_is_int(&module, root_ty),
+        "the launch result is typed Int"
+    );
 }
 
 #[test]
 fn jit_conditional_else() {
-    let out = run(r#"
+    let (module, value, root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
 k = compute.jit (x => if x <= 3 then 10 else 20)
 compute.launch k 5
 "#);
-    assert_eq!(out, "20: Int", "conditional (else) produced: {out:?}");
+    assert_eq!(
+        common::usize_of(&value),
+        20,
+        "conditional (else) produced 20"
+    );
+    assert!(
+        common::type_is_int(&module, root_ty),
+        "the launch result is typed Int"
+    );
 }
 
 #[test]
@@ -288,14 +380,22 @@ fn jit_nested_tuple_domain() {
     // A nested tuple domain `<<Int, Int>, Int>`: the parameter flattens to
     // three wasm i64 locals, and `p(0)(0) + p(0)(1) + p(1)` reads them at
     // their flattened offsets (0, 1, 2).  Exercises recursive LowShape.
-    let out = run(r#"
+    let (module, value, root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
 k = compute.jit (p : <<Int, Int>, Int> => p(0)(0) + p(0)(1) + p(1))
 compute.launch k ((2, 3), 4)
 "#);
-    assert_eq!(out, "9: Int", "nested tuple jit+launch produced: {out:?}");
+    assert_eq!(
+        common::usize_of(&value),
+        9,
+        "nested tuple jit+launch produced 9"
+    );
+    assert!(
+        common::type_is_int(&module, root_ty),
+        "the launch result is typed Int"
+    );
 }
 
 #[test]
@@ -308,7 +408,7 @@ fn jit_cross_kernel_call() {
     // checker only resolves it via `$launch`), so the value is asserted.  The
     // wrapper form `compute.launch k0 (x + 1)` *does* give `Int` — covered by
     // `jit_cross_kernel_wrapper` below.
-    let out = run(r#"
+    let (_module, value, _root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
@@ -316,10 +416,7 @@ k0 = compute.jit (y => y + 1)
 k1 = compute.jit (x => k0 (x + 1))
 compute.launch k1 5
 "#);
-    assert!(
-        out.starts_with("7:"),
-        "cross-kernel call produced 7, got: {out:?}"
-    );
+    assert_eq!(common::usize_of(&value), 7, "cross-kernel call produced 7");
 }
 
 #[test]
@@ -328,13 +425,13 @@ fn jit_cross_kernel_subexpr() {
     // checker peels the call result via `Index(apply, 0)` (a `value_of`
     // extraction), which the JIT now looks through to emit the kernel call
     // directly:   launch k1 5 = k0(5) + 1 = 6 + 1 = 7.
-    let out = run(r#"
+    let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k0 = compute.jit (y => y + 1)
 k1 = compute.jit (x => k0 (x) + 1)
 compute.launch k1 5
 "#);
-    assert!(out.starts_with("7:"), "subexpr produced: {out:?}");
+    assert_eq!(common::usize_of(&value), 7, "subexpr produced 7");
 }
 
 #[test]
@@ -345,13 +442,13 @@ fn jit_inline_lichen_function() {
     // to the enclosing kernel's parameter (via its unified equality class) and
     // becomes a `local.get`.  `helper x + 1` → `(x + 2) + 1`:
     //   launch k 5 = (5 + 2) + 1 = 8.
-    let out = run(r#"
+    let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 helper = y => y + 2
 k = compute.jit (x => helper x + 1)
 compute.launch k 5
 "#);
-    assert!(out.starts_with("8:"), "inline produced: {out:?}");
+    assert_eq!(common::usize_of(&value), 8, "inline produced 8");
 }
 
 #[test]
@@ -363,13 +460,13 @@ fn jit_cross_kernel_wrapper() {
     // unified with the defining `x + 1` computation, and the JIT emits that
     // through the cell's equality class:  launch k1 5 = k0(5 + 1) = 7.
     // Unlike the bare `k x` apply, the wrapper's result is typed `Int`.
-    let out = run(r#"
+    let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k0 = compute.jit (y => y + 1)
 k1 = compute.jit (x => compute.launch k0 (x + 1))
 compute.launch k1 5
 "#);
-    assert!(out.starts_with("7:"), "wrapper produced: {out:?}");
+    assert_eq!(common::usize_of(&value), 7, "wrapper produced 7");
 }
 
 #[test]
@@ -381,15 +478,16 @@ fn jit_cross_kernel_tuple_argument() {
     // The caller's own `x` is annotated: a bare kernel apply states no
     // signature, so nothing in the body decides `x` (the wrapper `launch` of
     // the test below does, through `.sig`).
-    let out = run(r#"
+    let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k0 = compute.jit (p : <Int, Int> => p(0) + p(1))
 k1 = compute.jit (x : Int => k0 (x, 1))
 compute.launch k1 5
 "#);
-    assert!(
-        out.starts_with("6:"),
-        "tuple-argument cross-kernel call produced 6, got: {out:?}"
+    assert_eq!(
+        common::usize_of(&value),
+        6,
+        "tuple-argument cross-kernel call produced 6"
     );
 }
 
@@ -399,15 +497,16 @@ fn jit_cross_kernel_passes_the_parameter_through() {
     // parameter's own locals rather than materialized element by element — the
     // caller's `q` *is* the callee's `p`:
     //   launch k1 (9, 4) = k0(9, 4) = 9 - 4 = 5.
-    let out = run(r#"
+    let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k0 = compute.jit (p : <Int, Int> => p(0) - p(1))
 k1 = compute.jit (q : <Int, Int> => k0 q)
 compute.launch k1 (9, 4)
 "#);
-    assert!(
-        out.starts_with("5:"),
-        "parameter pass-through produced 5, got: {out:?}"
+    assert_eq!(
+        common::usize_of(&value),
+        5,
+        "parameter pass-through produced 5"
     );
 }
 
@@ -417,15 +516,16 @@ fn jit_cross_kernel_passes_a_sub_tuple_through() {
     // are contiguous in the flattened layout, so `r(1)` starts at local 1 and
     // the callee's three arguments are locals 1, 2 and 3:
     //   launch k1 (100, ((9, 4), 5)) = k0((9, 4), 5) = 9 - 4 + 5 = 10.
-    let out = run(r#"
+    let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k0 = compute.jit (p : <<Int, Int>, Int> => p(0)(0) - p(0)(1) + p(1))
 k1 = compute.jit (r : <Int, <<Int, Int>, Int>> => k0 r(1))
 compute.launch k1 (100, ((9, 4), 5))
 "#);
-    assert!(
-        out.starts_with("10:"),
-        "sub-tuple pass-through produced 10, got: {out:?}"
+    assert_eq!(
+        common::usize_of(&value),
+        10,
+        "sub-tuple pass-through produced 10"
     );
 }
 
@@ -435,15 +535,16 @@ fn jit_cross_kernel_tuple_argument_through_the_wrapper() {
     // `Parameterized` cell — concrete only at run time — so the tuple is
     // reached through the cell's equality class rather than as an array value:
     //   launch k1 5 = k0(5, 1) = 6.
-    let out = run(r#"
+    let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k0 = compute.jit (p : <Int, Int> => p(0) + p(1))
 k1 = compute.jit (x => compute.launch k0 (x, 1))
 compute.launch k1 5
 "#);
-    assert!(
-        out.starts_with("6:"),
-        "wrapper tuple-argument launch produced 6, got: {out:?}"
+    assert_eq!(
+        common::usize_of(&value),
+        6,
+        "wrapper tuple-argument launch produced 6"
     );
 }
 
@@ -452,14 +553,14 @@ fn jit_inline_nested_function() {
     // Nested inline: the deep pass reduces `b x` (which calls `a`) through to
     // the leaf arithmetic, so `b x + 1` → `(x + 1) + 1 + 1`:
     //   a = y => y + 1;  b = y => a y + 1;  launch k 5 = (((5 + 1) + 1) + 1) = 8.
-    let out = run(r#"
+    let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 a = y => y + 1
 b = y => a y + 1
 k = compute.jit (x => b x + 1)
 compute.launch k 5
 "#);
-    assert!(out.starts_with("8:"), "nested inline produced: {out:?}");
+    assert_eq!(common::usize_of(&value), 8, "nested inline produced 8");
 }
 
 #[test]
@@ -469,11 +570,13 @@ fn a_kernel_value_and_type_render_by_name() {
     // field carries the signature, so the type renders as the struct
     // `struct<.native <_>, .sig Int -> Int>`.  Dropping `TypeKernel` means no
     // renderer special-case — the struct's own fields carry the signature.
-    let out = run(r#"
+    let out = render(
+        r#"
 --- compute = import "compute.lichen" ---
 k = compute.jit (y => y + y)
 k
-"#);
+"#,
+    );
     assert_eq!(
         out, "(Kernel, parameterized): struct<.native raw[?a, ?b], .sig Int -> Int>",
         "kernel value/type: {out:?}"
@@ -487,15 +590,14 @@ fn jit_tuple_codomain_returns_several_values() {
     // function is `(i64, i64) -> (i64, i64)` and the launch yields the tuple of
     // them — the two facts are the same count, read from the body at compile
     // time and from the run at launch time.
-    let out = run(r#"
+    let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k = compute.jit (p : <Int, Int> => (p(0), p(1)))
 compute.launch k (5, 3)
 "#);
-    assert_eq!(
-        out, "(5, 3): <Int, Int>",
-        "tuple-codomain jit+launch produced: {out:?}"
-    );
+    let elements = common::array_values(&module, &value);
+    assert_eq!(common::usize_of(&elements[0]), 5, "the identity leaf");
+    assert_eq!(common::usize_of(&elements[1]), 3, "the summed leaf");
 }
 
 #[test]
@@ -504,30 +606,32 @@ fn jit_tuple_codomain_computes_each_leaf() {
     // the identity and the second sums the domain, so a leaf that were emitted
     // as the wrong expression — or read from the wrong stack slot — would show
     // here.
-    let out = run(r#"
+    let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k = compute.jit (p : <Int, Int> => (p(0), p(0) + p(1)))
 compute.launch k (5, 3)
 "#);
-    assert_eq!(
-        out, "(5, 8): <Int, Int>",
-        "per-leaf tuple codomain produced: {out:?}"
-    );
+    let elements = common::array_values(&module, &value);
+    assert_eq!(common::usize_of(&elements[0]), 5, "the identity leaf");
+    assert_eq!(common::usize_of(&elements[1]), 8, "the summed leaf");
 }
 
 #[test]
 fn jit_tuple_codomain_elements_are_indexable() {
     // The tuple the launch returns is an ordinary lichen array value, so a
     // downstream read addresses a leaf by position with no special case.
-    let out = run(r#"
+    let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k = compute.jit (p : <Int, Int> => (p(0) + 10, p(1) + 100))
 r = compute.launch k (2, 3)
 (r(0), r(1))
 "#);
+    let elements = common::array_values(&module, &value);
+    assert_eq!(common::usize_of(&elements[0]), 12, "the first indexed leaf");
     assert_eq!(
-        out, "(12, 103): <Int, Int>",
-        "indexing a returned tuple produced: {out:?}"
+        common::usize_of(&elements[1]),
+        103,
+        "the second indexed leaf"
     );
 }
 
@@ -536,15 +640,15 @@ fn jit_three_value_codomain_returns_three_values() {
     // Three leaves, so the function is `(i64) -> (i64, i64, i64)` — a distinct
     // wasm signature from the two-value one, which is what forces the assembler
     // to key its type index on the (parameter arity, result arity) *pair*.
-    let out = run(r#"
+    let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k = compute.jit (x : Int => (x, x + 1, x + 2))
 compute.launch k 7
 "#);
-    assert_eq!(
-        out, "(7, 8, 9): <Int, Int, Int>",
-        "three-value tuple codomain produced: {out:?}"
-    );
+    let elements = common::array_values(&module, &value);
+    assert_eq!(common::usize_of(&elements[0]), 7, "the first leaf");
+    assert_eq!(common::usize_of(&elements[1]), 8, "the second leaf");
+    assert_eq!(common::usize_of(&elements[2]), 9, "the third leaf");
 }
 
 #[test]
@@ -557,14 +661,19 @@ fn jit_tuple_codomain_launches_through_the_cross_kernel_wrapper() {
     // not by the gate), so the type is undecided here — the same fact
     // `jit_cross_kernel_call` pins for the single-value case.  With no type to
     // read the value against, the result is a raw dump, marked `raw[…]`.
-    let out = run(r#"
+    let (module, value, root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k = compute.jit (p : <Int, Int> => (p(0) - p(1), p(0) + p(1)))
 compute.call k (10, 4)
 "#);
     assert_eq!(
-        out, "raw[6, 14]: ?a",
-        "compute.call on a tuple-codomain kernel produced: {out:?}"
+        common::usize_array(&module, &value),
+        vec![6, 14],
+        "compute.call on a tuple-codomain kernel produced the two leaves"
+    );
+    assert!(
+        common::type_is_undecided(&module, root_ty),
+        "the untyped `call` form leaves the result type undecided"
     );
 }
 
@@ -603,11 +712,13 @@ fn a_tuple_domain_kernel_type_renders_as_a_function() {
     // A tuple-domain kernel's signature is `[<Int, Int>, Int]`; the struct's
     // `.sig` field carries it, so the type renders as the struct
     // `struct<.native <_>, .sig <Int, Int> -> Int>`.
-    let out = run(r#"
+    let out = render(
+        r#"
 --- compute = import "compute.lichen" ---
 k = compute.jit (p : <Int, Int> => p(0) + p(1))
 k
-"#);
+"#,
+    );
     assert_eq!(
         out, "(Kernel, parameterized): struct<.native raw[?a, ?b], .sig <Int, Int> -> Int>",
         "tuple-domain kernel value/type: {out:?}"
@@ -622,10 +733,12 @@ fn wrapper_functions_render_with_named_type_variables() {
     // `.sig` field is that signature.  The wrapper itself stays generic; only
     // an *applied* result resolves to `Int -> Int`.
     assert_eq!(
-        run(r#"
+        render(
+            r#"
 --- compute = import "compute.lichen" ---
 compute.jit
-"#),
+"#
+        ),
         "Function: ?a -> ?b -> struct<.native raw[?c, ?d], .sig ?a -> ?b>",
         "jit wrapper value/type"
     );
@@ -633,10 +746,12 @@ compute.jit
     // stays a generic `? -> ? -> ?` (the codomain is an unbound cell at the
     // module level) — the concrete codomain only resolves when applied.
     assert_eq!(
-        run(r#"
+        render(
+            r#"
 --- compute = import "compute.lichen" ---
 compute.launch
-"#),
+"#
+        ),
         "Function: ?a -> ?b -> ?c",
         "launch wrapper value/type"
     );
@@ -648,7 +763,7 @@ fn parallel_range_write_is_map() {
     // writes `i + i` into the output buffer at index `i`.  `plrun k cfg` runs
     // over `[0, cfg(0))` (the count is fixed at cfg position 0) and returns the
     // output buffer.  `out = [0, 2, 4, 6]`; `read [out, 2] = 4`.
-    let out = run(r#"
+    let (module, value, root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
@@ -661,7 +776,15 @@ k = compute.parallel f "cpu"
 out = compute.plrun k (4,)
 compute.read ((compute.Read _)(.from out, .at 2))
 "#);
-    assert_eq!(out, "4: ?a", "parallel range/write map produced: {out:?}");
+    assert_eq!(
+        common::usize_of(&value),
+        4,
+        "parallel range/write map produced 4"
+    );
+    assert!(
+        common::type_is_undecided(&module, root_ty),
+        "a buffer's element class is a fact of the value, so the read's type stays undecided"
+    );
     // The element type renders as an unbound cell, and that is the honest
     // answer now: a buffer's element class is a fact of the *value*, so
     // `compute.read` no longer pins its result to `Int` — which is exactly the
@@ -676,7 +799,7 @@ fn parallel_read_input_buffer() {
     // A first kernel writes a buffer `[10, 11, 12]`; a second kernel reads it
     // (`cfg(1)(0)`, the input buffer tuple at cfg position 1) and doubles it.
     //   f2: out[i] = f1.out[i] + f1.out[i] = (i + 10) + (i + 10).
-    let out = run(r#"
+    let (_module, value, _root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
@@ -697,16 +820,17 @@ k2 = compute.parallel f2 "cpu"
 out = compute.plrun k2 (3, (inbuf,))
 compute.read ((compute.Read _)(.from out, .at 1))
 "#);
-    assert!(
-        out.starts_with("22:"),
-        "parallel read/write produced: {out:?}"
+    assert_eq!(
+        common::usize_of(&value),
+        22,
+        "parallel read/write produced 22"
     );
 }
 
 #[test]
 fn parallel_write_only_collects_whole_buffer() {
     // `compute.collect out` materialises the whole output buffer into an array.
-    let out = run(r#"
+    let (module, value, _root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
@@ -719,9 +843,10 @@ k = compute.parallel f "cpu"
 out = compute.plrun k (3,)
 compute.collect out
 "#);
-    assert!(
-        out.starts_with("[1, 2, 3]:"),
-        "parallel collect produced: {out:?}"
+    assert_eq!(
+        common::usize_array(&module, &value),
+        vec![1, 2, 3],
+        "parallel collect produced the whole buffer"
     );
 }
 
@@ -769,7 +894,7 @@ fn a_runtime_scalar_reaches_the_body_beside_the_extent() {
     // buffer is the first kernel's `[10, 11, 12]`, and each element is bumped by
     // `float2int k.alpha = 2`
     // (`docs/notes/compute-runtime-scalars.md` §1, §3).
-    let out = run(r#"
+    let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 g = cfg => {
   n = cfg(0)
@@ -790,9 +915,21 @@ k = compute.parallel f "cpu"
 out = compute.plrun k (3, 2.0, (inbuf,))
 (compute.read ((compute.Read _)(.from out, .at 0)), compute.read ((compute.Read _)(.from out, .at 1)), compute.read ((compute.Read _)(.from out, .at 2)))
 "#);
+    let elements = common::array_values(&module, &value);
     assert_eq!(
-        out, "(12, 13, 14): <?a, ?b, ?c>",
-        "runtime scalar kernel produced: {out:?}"
+        common::usize_of(&elements[0]),
+        12,
+        "the first bumped element"
+    );
+    assert_eq!(
+        common::usize_of(&elements[1]),
+        13,
+        "the second bumped element"
+    );
+    assert_eq!(
+        common::usize_of(&elements[2]),
+        14,
+        "the third bumped element"
     );
 }
 
@@ -929,7 +1066,7 @@ fn parallel_multi_output_writes_every_output_in_one_pass() {
     // The index function's codomain is a **tuple of writes**, so one `plrun`
     // produces two output buffers: write `k` of the body is output buffer `k`
     // (`out(k)`), and both come out of the single pass over the indices.
-    let out = run(r#"
+    let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 f = cfg => {
   n = cfg(0)
@@ -940,9 +1077,12 @@ k = compute.parallel f "cpu"
 outs = compute.plrun k (3,)
 (compute.read ((compute.Read _)(.from outs(0), .at 2)), compute.read ((compute.Read _)(.from outs(1), .at 2)))
 "#);
+    let elements = common::array_values(&module, &value);
+    assert_eq!(common::usize_of(&elements[0]), 2, "the first output's read");
     assert_eq!(
-        out, "(2, 4): <?a, ?b>",
-        "multi-output parallel map produced: {out:?}"
+        common::usize_of(&elements[1]),
+        4,
+        "the second output's read"
     );
 }
 
@@ -951,7 +1091,7 @@ fn parallel_multi_output_collects_each_output() {
     // Three outputs, one of which reads an input buffer: `collect` materialises
     // one output buffer whole, which is the point of a multi-output kernel — a
     // single pass emitting several result columns.
-    let out = run(r#"
+    let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 f1 = cfg => {
   n = cfg(0)
@@ -970,9 +1110,10 @@ k2 = compute.parallel f2 "cpu"
 outs = compute.plrun k2 (3, (inbuf,))
 compute.collect outs(1)
 "#);
-    assert!(
-        out.starts_with("[20, 22, 24]:"),
-        "collecting the second output produced: {out:?}"
+    assert_eq!(
+        common::usize_array(&module, &value),
+        vec![20, 22, 24],
+        "collecting the second output produced the doubled buffer"
     );
 }
 
@@ -993,7 +1134,7 @@ fn a_multi_output_parallel_run_is_identical_sequential_and_parallel() {
     // same arithmetic.  (Which regime a *given* count is in is
     // `lichen-compute`'s `parallel_worker_count`, unit-tested there; no
     // lichen-level value can distinguish the two, which is the point.)
-    let small = run(r#"
+    let (small_module, small, _) = run(r#"
 --- compute = import "compute.lichen" ---
 f = cfg => {
   n = cfg(0)
@@ -1004,11 +1145,18 @@ k = compute.parallel f "cpu"
 outs = compute.plrun k (4,)
 (compute.collect outs(0), compute.collect outs(1))
 "#);
+    let small_pair = common::array_values(&small_module, &small);
     assert_eq!(
-        small, "([3, 4, 5, 6], [0, 2, 4, 6]): <array<?a, ?b>, array<?c, ?d>>",
-        "the sequential multi-output run produced: {small:?}"
+        common::usize_array(&small_module, &small_pair[0]),
+        vec![3, 4, 5, 6],
+        "the sequential run's first output"
     );
-    let big = run(r#"
+    assert_eq!(
+        common::usize_array(&small_module, &small_pair[1]),
+        vec![0, 2, 4, 6],
+        "the sequential run's second output"
+    );
+    let (big_module, big, _) = run(r#"
 --- compute = import "compute.lichen" ---
 f = cfg => {
   n = cfg(0)
@@ -1019,13 +1167,18 @@ k = compute.parallel f "cpu"
 outs = compute.plrun k (4096,)
 (compute.collect outs(0), compute.collect outs(1))
 "#);
-    assert!(
-        big.starts_with("([3, 4, 5, 6, 7, 8, 9, 10,"),
-        "the parallel run's first elements must be the sequential run's: {big:?}"
+    let big_pair = common::array_values(&big_module, &big);
+    let big_first = common::usize_array(&big_module, &big_pair[0]);
+    let big_second = common::usize_array(&big_module, &big_pair[1]);
+    assert_eq!(
+        &big_first[..8],
+        &[3, 4, 5, 6, 7, 8, 9, 10],
+        "the parallel run's first elements must be the sequential run's"
     );
-    assert!(
-        big.ends_with("8190]): <array<?a, ?b>, array<?c, ?d>>"),
-        "the parallel run's last element must be the same arithmetic: {big:?}"
+    assert_eq!(
+        big_second.last(),
+        Some(&8190),
+        "the parallel run's last element must be the same arithmetic"
     );
 }
 
@@ -1037,7 +1190,7 @@ fn a_parallel_run_over_the_threshold_covers_every_index() {
     // go wrong, so this reads the first index, one in the middle and the last of
     // **both** output buffers: a worker that wrote into the wrong span, or one
     // that was skipped, cannot produce those values.
-    let out = run(r#"
+    let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 f = cfg => {
   n = cfg(0)
@@ -1048,9 +1201,36 @@ k = compute.parallel f "cpu"
 outs = compute.plrun k (4096,)
 (compute.read ((compute.Read _)(.from outs(0), .at 0)), compute.read ((compute.Read _)(.from outs(0), .at 2048)), compute.read ((compute.Read _)(.from outs(0), .at 4095)), compute.read ((compute.Read _)(.from outs(1), .at 0)), compute.read ((compute.Read _)(.from outs(1), .at 2048)), compute.read ((compute.Read _)(.from outs(1), .at 4095)))
 "#);
+    let elements = common::array_values(&module, &value);
     assert_eq!(
-        out, "(3, 2051, 4098, 0, 4096, 8190): <?a, ?b, ?c, ?d, ?e, ?f>",
-        "a fan-out over 4096 indices produced: {out:?}"
+        common::usize_of(&elements[0]),
+        3,
+        "first output, first index"
+    );
+    assert_eq!(
+        common::usize_of(&elements[1]),
+        2051,
+        "first output, middle index"
+    );
+    assert_eq!(
+        common::usize_of(&elements[2]),
+        4098,
+        "first output, last index"
+    );
+    assert_eq!(
+        common::usize_of(&elements[3]),
+        0,
+        "second output, first index"
+    );
+    assert_eq!(
+        common::usize_of(&elements[4]),
+        4096,
+        "second output, middle index"
+    );
+    assert_eq!(
+        common::usize_of(&elements[5]),
+        8190,
+        "second output, last index"
     );
 }
 
@@ -1067,7 +1247,7 @@ outs = compute.plrun k (4096,)
 /// surface on the wrapper mechanics alone.
 #[test]
 fn a_tuple_kernel_runs_through_the_signature_carrying_wrapper() {
-    let out = run(r#"
+    let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 type_of = x => {t = _; x: t; t}
 f = cfg => {
@@ -1080,8 +1260,9 @@ out = compute.plrun k (4,)
 compute.collect out
 "#);
     assert_eq!(
-        out, "[1, 2, 3, 4]: array<?a, ?b>",
-        "parallel_sig over a tuple-shaped kernel produced: {out:?}"
+        common::usize_array(&module, &value),
+        vec![1, 2, 3, 4],
+        "parallel_sig over a tuple-shaped kernel produced the buffer"
     );
 }
 
@@ -1104,7 +1285,7 @@ compute.collect out
 /// codegen").
 #[test]
 fn a_struct_parameter_kernel_runs_through_the_signature_carrying_wrapper() {
-    let out = run(r#"
+    let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 g = cfg => {
   n = cfg(0)
@@ -1127,8 +1308,9 @@ out = compute.plrun k ((compute.A In)(.n 3, .I In(.a inbuf)))
 compute.read ((compute.Read _)(.from out, .at 1))
 "#);
     assert_eq!(
-        out, "22: ?a",
-        "the struct-parameter kernel produced: {out:?}"
+        common::usize_of(&value),
+        22,
+        "the struct-parameter kernel produced 22"
     );
 }
 
@@ -1256,24 +1438,37 @@ compute.collect (compute.plrun k (8, (data,)))
 #[test]
 fn a_float_domain_is_permitted_at_every_position_the_walk_reaches() {
     // The parameter itself: a real float kernel, compiled, run and read back.
-    let out = run(r#"
+    let (module, value, root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k = compute.jit (x : Float => x + 1.0)
 compute.launch k 1.5
 "#);
     assert_eq!(
-        out, "2.5: Float",
-        "a float-domain jit+launch produced: {out:?}"
+        common::float_of(&value),
+        2.5,
+        "a float-domain jit+launch produced 2.5"
+    );
+    assert!(
+        common::type_is_float(&module, root_ty),
+        "the launch result is typed Float"
     );
 
     // A tuple element: a mixed domain, where the leaf the body reads keeps its
     // own class and the fragment is lowered in the *body's*.
-    let out = run(r#"
+    let (module, value, root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k = compute.jit (p : <Int, Float> => p(0))
 compute.launch k (1, 1.5)
 "#);
-    assert_eq!(out, "1: Int", "a float tuple element produced: {out:?}");
+    assert_eq!(
+        common::usize_of(&value),
+        1,
+        "a float tuple element produced 1"
+    );
+    assert!(
+        common::type_is_int(&module, root_ty),
+        "the launch result is typed Int"
+    );
 
     // An array element inside a tuple: the `jit` is permitted, and the aggregate
     // argument is what the ABI cannot place — a compound position is one local,
@@ -1398,7 +1593,7 @@ k2 = compute.parallel f2 "gpu"
 out = compute.plrun k2 (3, (inbuf,))
 (compute.read ((compute.Read _)(.from out, .at 0)), compute.read ((compute.Read _)(.from out, .at 1)), compute.read ((compute.Read _)(.from out, .at 2)), compute.collect out)
 "#;
-    let out = run(source);
+    let (module, value, _) = run(source);
     // Uninstalling drops the context, so every device buffer it was holding goes
     // back at the same moment — which is the point of doing it here rather than
     // leaving it to process exit.
@@ -1410,11 +1605,15 @@ out = compute.plrun k2 (3, (inbuf,))
     // which a consumer's array literal then committed
     // (`docs/notes/compute-runtime-scalars.md` §4.4).  A struct argument has no
     // such cell, so the element class is a fact the class channel has to state
-    // (`docs/notes/class-channel.md` §5.2) — and this string goes back to
-    // `array<Int, ?d>` when that lands.
+    // (`docs/notes/class-channel.md` §5.2).
+    let elements = common::array_values(&module, &value);
+    assert_eq!(common::usize_of(&elements[0]), 20, "the first read");
+    assert_eq!(common::usize_of(&elements[1]), 22, "the second read");
+    assert_eq!(common::usize_of(&elements[2]), 24, "the third read");
     assert_eq!(
-        out, "(20, 22, 24, [20, 22, 24]): <?a, ?b, ?c, array<?d, ?e>>",
-        "a two-kernel \"gpu\" chain produced"
+        common::usize_array(&module, &elements[3]),
+        vec![20, 22, 24],
+        "the collected whole buffer"
     );
     assert_eq!(
         lichen_compute_gpu::installed_backend_name(),
@@ -1460,11 +1659,16 @@ const ELEMENT_COUNT: usize = lichen_compute_gpu::LOCAL_SIZE_X as usize + 5;
 /// The installed-backend slot is process-global, so the whole body holds the
 /// same mutex the device test above holds — a parallel test in this binary must
 /// not observe a device another test has just uninstalled.
-fn answer_from_each_backend(source: &str) -> Option<(String, String)> {
+fn answer_from_each_backend(
+    source: &str,
+) -> Option<(
+    (Module<LangProgram>, LangValue),
+    (Module<LangProgram>, LangValue),
+)> {
     let _installed = GPU_SLOT
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let cpu = run(&source.replace(BACKEND, "cpu"));
+    let (cpu_module, cpu, _) = run(&source.replace(BACKEND, "cpu"));
     if let Err(reason) = lichen_compute_gpu::install_default() {
         eprintln!(
             "no device to run the second backend on, so the two backends are not compared \
@@ -1472,12 +1676,12 @@ fn answer_from_each_backend(source: &str) -> Option<(String, String)> {
         );
         return None;
     }
-    let gpu = run(&source.replace(BACKEND, "gpu"));
+    let (gpu_module, gpu, _) = run(&source.replace(BACKEND, "gpu"));
     // Uninstalling drops the context, so every device buffer it was holding goes
     // back at the same moment — the reason the device test above does it rather
     // than leaving it to process exit.
     lichen_compute_gpu::uninstall();
-    Some((cpu, gpu))
+    Some(((cpu_module, cpu), (gpu_module, gpu)))
 }
 
 /// A float buffer, through two kernels, computed by both backends.
@@ -1525,12 +1729,11 @@ out = compute.plrun k2 ({ELEMENT_COUNT}, (inbuf,))
 "#,
         last = ELEMENT_COUNT - 1,
     );
-    let Some((cpu, gpu)) = answer_from_each_backend(&source) else {
+    let Some(((cpu_module, cpu), (gpu_module, gpu))) = answer_from_each_backend(&source) else {
         return;
     };
-    println!("float  cpu: {cpu}\nfloat  gpu: {gpu}");
-    assert_eq!(
-        gpu, cpu,
+    assert!(
+        common::values_eq((&cpu_module, &cpu), (&gpu_module, &gpu)),
         "the two backends answered one float fragment differently"
     );
 }
@@ -1566,12 +1769,11 @@ out = compute.plrun k2 ({ELEMENT_COUNT}, (inbuf,))
 "#,
         last = ELEMENT_COUNT - 1,
     );
-    let Some((cpu, gpu)) = answer_from_each_backend(&source) else {
+    let Some(((cpu_module, cpu), (gpu_module, gpu))) = answer_from_each_backend(&source) else {
         return;
     };
-    println!("int    cpu: {cpu}\nint    gpu: {gpu}");
-    assert_eq!(
-        gpu, cpu,
+    assert!(
+        common::values_eq((&cpu_module, &cpu), (&gpu_module, &gpu)),
         "the two backends answered one integer fragment differently"
     );
 }
@@ -1605,16 +1807,24 @@ out = compute.plrun k ({ELEMENT_COUNT},)
 "#,
         last = ELEMENT_COUNT - 1,
     );
-    let Some((cpu, gpu)) = answer_from_each_backend(&source) else {
+    let Some(((cpu_module, cpu), (gpu_module, gpu))) = answer_from_each_backend(&source) else {
         return;
     };
-    println!("varying float  cpu: {cpu}\nvarying float  gpu: {gpu}");
-    assert!(
-        cpu.starts_with("(0.5, 1.5, 68.5, [0.5, 1.5, 2.5"),
-        "every element is its index plus a half, so none of them repeats: {cpu:?}"
+    let elements = common::array_values(&cpu_module, &cpu);
+    assert_eq!(common::float_of(&elements[0]), 0.5, "the first element");
+    assert_eq!(common::float_of(&elements[1]), 1.5, "the second element");
+    assert_eq!(
+        common::float_of(&elements[2]),
+        ELEMENT_COUNT as f32 - 1.0,
+        "the last element"
     );
     assert_eq!(
-        gpu, cpu,
+        &common::float_array(&cpu_module, &elements[3])[..3],
+        &[0.5, 1.5, 2.5],
+        "every collected element is its index plus a half"
+    );
+    assert!(
+        common::values_eq((&cpu_module, &cpu), (&gpu_module, &gpu)),
         "the two backends answered one index-seeded float fragment differently"
     );
 }
@@ -1627,6 +1837,12 @@ out = compute.plrun k ({ELEMENT_COUNT},)
 /// `float2int` of a `Float` one is the truncation toward zero the interpreter
 /// promises for the same number.  The last two rows are a literal folded into the
 /// body's own class and a crossing in each direction inside one expression.
+/// The expected crossed scalar for [`a_jit_kernel_crosses_the_two_classes_both_ways`].
+enum CrossedScalar {
+    Int(usize),
+    Float(f32),
+}
+
 #[test]
 fn a_jit_kernel_crosses_the_two_classes_both_ways() {
     let cases = [
@@ -1638,7 +1854,7 @@ fn a_jit_kernel_crosses_the_two_classes_both_ways() {
 k = compute.jit (x : Int => int2float x)
 compute.launch k 5
 "#,
-            "5.0: Float",
+            CrossedScalar::Float(5.0),
         ),
         (
             r#"
@@ -1648,7 +1864,7 @@ compute.launch k 5
 k = compute.jit (x : Float => float2int x)
 compute.launch k 5.7
 "#,
-            "5: Int",
+            CrossedScalar::Int(5),
         ),
         (
             r#"
@@ -1658,7 +1874,7 @@ compute.launch k 5.7
 k = compute.jit (x : Float => int2float (x > 1.0))
 compute.launch k 5.0
 "#,
-            "1.0: Float",
+            CrossedScalar::Float(1.0),
         ),
         (
             r#"
@@ -1668,7 +1884,7 @@ compute.launch k 5.0
 k = compute.jit (x : Int => x + float2int 3.7)
 compute.launch k 5
 "#,
-            "8: Int",
+            CrossedScalar::Int(8),
         ),
         (
             r#"
@@ -1678,12 +1894,35 @@ compute.launch k 5
 k = compute.jit (x : Float => int2float (float2int (x + 0.5)))
 compute.launch k 3.0
 "#,
-            "3.0: Float",
+            CrossedScalar::Float(3.0),
         ),
     ];
     for (source, expected) in cases {
-        let out = run(source);
-        assert_eq!(out, expected, "the kernel program produced: {out:?}");
+        let (module, value, root_ty) = run(source);
+        match expected {
+            CrossedScalar::Int(n) => {
+                assert_eq!(
+                    common::usize_of(&value),
+                    n,
+                    "the kernel program produced the crossed Int"
+                );
+                assert!(
+                    common::type_is_int(&module, root_ty),
+                    "the crossed Int is typed Int"
+                );
+            }
+            CrossedScalar::Float(f) => {
+                assert_eq!(
+                    common::float_of(&value),
+                    f,
+                    "the kernel program produced the crossed Float"
+                );
+                assert!(
+                    common::type_is_float(&module, root_ty),
+                    "the crossed Float is typed Float"
+                );
+            }
+        }
     }
 }
 
@@ -1703,14 +1942,22 @@ compute.launch k 3.0
 /// one SPIR-V module (`crates/lichen-compute-gpu/src/spirv.rs`).
 #[test]
 fn a_body_may_compute_in_one_class_and_cross() {
-    let out = run(r#"
+    let (module, value, root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
 k = compute.jit (x : Int => int2float (x + 1))
 compute.launch k 5
 "#);
-    assert_eq!(out, "6.0: Float", "the integer add stays an integer's");
+    assert_eq!(
+        common::float_of(&value),
+        6.0,
+        "the integer add stays an integer's"
+    );
+    assert!(
+        common::type_is_float(&module, root_ty),
+        "the result is typed Float"
+    );
 
     let source = format!(
         r#"
@@ -1726,17 +1973,24 @@ out = compute.plrun k ({ELEMENT_COUNT},)
 "#,
         last = ELEMENT_COUNT - 1,
     );
-    let Some((cpu, gpu)) = answer_from_each_backend(&source) else {
+    let Some(((cpu_module, cpu), (gpu_module, gpu))) = answer_from_each_backend(&source) else {
         return;
     };
-    println!("crossing  cpu: {cpu}\ncrossing  gpu: {gpu}");
-    assert!(
-        cpu.starts_with(&format!("(0, 1, {}, [0, 1, 2,", ELEMENT_COUNT - 1)),
-        "the truncation of the index plus a half is the index, so every element \
-         differs from its neighbour: {cpu:?}"
+    let elements = common::array_values(&cpu_module, &cpu);
+    assert_eq!(common::usize_of(&elements[0]), 0, "the first element");
+    assert_eq!(common::usize_of(&elements[1]), 1, "the second element");
+    assert_eq!(
+        common::usize_of(&elements[2]),
+        ELEMENT_COUNT - 1,
+        "the last element is the truncation of the index plus a half"
     );
     assert_eq!(
-        gpu, cpu,
+        &common::usize_array(&cpu_module, &elements[3])[..3],
+        &[0, 1, 2],
+        "every collected element differs from its neighbour"
+    );
+    assert!(
+        common::values_eq((&cpu_module, &cpu), (&gpu_module, &gpu)),
         "the two backends answered one class crossing differently"
     );
 }
