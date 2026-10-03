@@ -504,6 +504,44 @@ them the ranking below is unchanged:
    the per-apply re-check (option 1's machinery) can refuse a wrong-kind
    argument.  A settle pass would be a partial duplicate of it.
 
+**The unmerged branch that tried the direct pin — `feature/read-kind-unify`,
+parked.**  Two commits, and they are one experiment in two halves:
+
+- `c1e0e36` ("WIP: every read form states its accepted container kind") replaces
+  each form's skip-when-undecided guard with a unify on the container's
+  *corresponding slot*: `X<e>` requires the tuple kind `[TypeTuple, K]` (a type
+  value's type *is* its kind, so `struct<…><0>` / `(1, 2)<0>` / `[1, 2]<0>` become
+  check-time refusals instead of reading a struct's shape or failing at run time —
+  the `P1-35` rows), `X::a` requires a struct kind `[[?id, ?names], K]`, and `.a`
+  states its requirement on the container's **kind slot**.  It also fixes a false
+  diagnostic it exposed: a *second* named read on the same undecided container was
+  refused as "no field with this name", because the first read's pin made the
+  container look decided while its name table was still a cell.
+- `ddb2c23` keeps the sound half and drops the one a consumer cannot tolerate:
+  `X::a`'s struct-kind requirement stays for **both** tiers (which is what removes
+  the `TableGet` panic on a deferred non-struct), while `.a` keeps the lazy
+  name-table read when the container is undecided.
+
+**Why it is parked.**  The undecided tier's *term-shaped* pin binds the container's
+own **type** cell, so a consumer that reads a type structurally through the class —
+`lichen-compute`, which forces a template's parameter type before any apply — reads
+the pin's open cells instead of deferring through the class: `compute.launch k 5`
+prints `parameterized: ?a` and `crates/lichen-language/tests/compute.rs` goes from
+`dev`'s 58/2 to 8/52.  `ddb2c23` measures `dev`'s baseline with the dropped pin
+(58/2 at `0f02875`), so the branch is a **measurement of the rejected route** —
+the static pin — rather than a landing candidate.  What it needs is option 1's
+**re-checkable assert**: a predicate on the assert worklist that meets the actual
+argument per apply, instead of a concrete value written into the container's own
+type cell.  The branch is left unmerged with its work intact; whoever writes the
+assert can lift its two refusals and its diagnostic fix, and must re-measure
+`tests/compute.rs` (62/0 on `dev` now) rather than trusting the numbers above.
+**Its worktree holds more than its two commits**: `.worktrees/read-kind-unify` has
+uncommitted changes in the parser (`ast.rs`, `parse.rs`), the checker
+(`indexing.rs`), four test files, `docs/language-spec.md`,
+`docs/notes/raw-index.md`, `docs/notes/code-audit.md`, `examples/raw_index.lichen`
+and an untracked `.probe/`.  It is a live worktree, not a snapshot to delete, and
+the check must be run with `.scratch`-style probes excluded from the merge.
+
 ### 6.3 The message/predicate disagreement (analyzed, not landed)
 
 `DiagKind::IndexTarget` is shared by three guards with three different

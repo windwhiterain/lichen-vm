@@ -1,8 +1,12 @@
 # Loop conversion: compiling a marked recursive function into a loop nest
 
-> Status: **proposed.** Nothing here is implemented. This is the design the
-> research settled on, the qualification rules it is gated by, and the order the
-> work goes in — not a description of what the code does today.
+> Status: **in progress.** The design below is settled, and the parts [§8.2](#82-landed-on-dev)
+> lists are landed on `dev` — the `KernelBody` IR with `Flow::Seq`, the validator,
+> the `@loop` keyword, the wasm emitter, and the depth refusal. **The conversion
+> itself is not written**: [§8.3](#83-known-broken-and-by-whom) is what is known
+> broken and by whom, [§8.4](#84-unmerged-branches-and-exactly-what-each-needs) is
+> what the two unmerged branches need, and [§8.5](#85-the-critical-path-to-the-acceptance-case)
+> is the critical path to the acceptance case.
 >
 > **Four decisions are closed** and are not to be re-opened without a new
 > reason: the **surface** is a `loop` keyword on the function; the **scope** is
@@ -394,13 +398,21 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
    header's `local.get`s leave the accumulator on the stack with the condition
    above it. **Decide this before writing either emitter's fix**, or the emitters
    will disagree again.
-3. **`sums()` in `graph_on_device.rs` cannot be dispatched on the GPU**, and that
+3. **`sums()` in `graph_on_device.rs` could not be dispatched on the GPU**, which
    is `dispatch.rs`'s documented refusal (a dispatch pushes the launch extent
    alone; a runtime scalar needs the leaf list only the CPU path passes). The test
-   expects the opposite, so it is a test to update, not a fragment to repair. Not
-   this feature's work.
+   expected the opposite, so it was a test to update, not a fragment to repair —
+   **done**: `sums()` declares the ABI's two leaves (extent and index) and the
+   chain test runs, while a fragment that *does* declare a runtime scalar is
+   refused by name in `a_parameter_with_a_runtime_scalar_is_refused_by_name`. Not
+   this feature's work, and no longer open.
 
 ### 8.4 Unmerged branches, and exactly what each needs
+
+**Both are deliberately parked**, not dropped: this tree's clean-up pass does not
+merge work that needs a rebase and a measurement of its own, and nothing about
+them is lost — the commits are on the branches, and what each needs is below.
+A successor should treat this section as the handoff.
 
 - **`feature/spirv-loop-emitter`** (`a0bfa2c`) — a complete SPIR-V emitter for
   `If` and `While`, validated with a real `spirv-val` (which rejected four genuine

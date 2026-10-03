@@ -228,6 +228,12 @@ slot, so a body cell an annotation tied to it is re-instantiated too — which w
 let the read be wrapped plainly (`in_num = v => type_of v @in Num`) and would
 retire the `raw[?a, ?b]` domain.  It touches the apply/instantiation path the
 kernel workstream also depends on, so it is its own change, not this one's.
+**Where the open domain shows in public output**: `examples/import/math.lichen`
+(`.add`) and `geometry.lichen` (`.double`) declare it in their `output =` lines,
+because an arithmetic lambda over the refined `add` never pins its class; those
+two declarations are re-pinned where the printer is, and this fix is what would
+retire them as well ([operator-polymorphism](operator-polymorphism.md) §7.1
+cost 2).
 
 The read itself is unchanged and stays where it is: `type_of` is an ordinary
 library function ([lichen-std/\_.lichen](../../lichen-std/_.lichen)), and every

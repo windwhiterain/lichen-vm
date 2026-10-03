@@ -1,7 +1,10 @@
 //! `Doc::statement_values` / `Doc::statement_at` — the read-only per-statement
 //! type/value snapshot the language server exposes.  Type is always reported;
-//! a value only when the build produced a concrete one (a lazy/recursive
-//! binding, whose value is a deferred `Parameterized` cell, reports `None`).
+//! a value only when the build produced a concrete one: a lazy/recursive
+//! binding, whose value is a deferred `Parameterized` cell, reports `None`, and
+//! so does a statement whose expression is a **call** — a routed operator
+//! (`y = x + 4`) is an apply of the `core` prelude's binding and stays lazy at
+//! snapshot time (`docs/notes/operator-polymorphism.md` §7.1, cost 3).
 
 use std::path::Path;
 
@@ -25,13 +28,21 @@ fn statement_values_report_type_and_concrete_value() {
         "x and y are the two statements; got {vals:#?}"
     );
 
-    // x = 3 → type Int, value "3".
+    // x = 3 → type Int, value "3": a literal is a concrete value at check time.
     assert!(vals[0].ty.contains("Int"), "x type = {:?}", vals[0].ty);
     assert_eq!(vals[0].value.as_deref(), Some("3"));
 
-    // y = x + 4 → type Int, value "7".
+    // y = x + 4 → type Int, **no** value: `+` routes onto the prelude's binding,
+    // which the checker applies rather than folds, and a call is lazy — so the
+    // build computed no concrete value for this snapshot to report.  The value is
+    // still computed at run time; only the static snapshot loses it, which is the
+    // price the routing recorded (`docs/notes/operator-polymorphism.md` §7.1,
+    // cost 3).
     assert!(vals[1].ty.contains("Int"), "y type = {:?}", vals[1].ty);
-    assert_eq!(vals[1].value.as_deref(), Some("7"));
+    assert_eq!(
+        vals[1].value, None,
+        "a routed operator's statement reports its type only"
+    );
 }
 
 #[test]
@@ -40,9 +51,14 @@ fn statement_at_finds_the_containing_statement() {
     // byte offset 0 is inside `x = 3`.
     let s0 = doc.statement_at(0).expect("first statement at offset 0");
     assert_eq!(s0.value.as_deref(), Some("3"));
-    // `x = 3\n` is 6 bytes; offset 6 is the start of `y = x + 4`.
+    // `x = 3\n` is 6 bytes; offset 6 is the start of `y = x + 4`.  The statement
+    // is found and its type is reported; its value is not, for the reason above.
     let s1 = doc.statement_at(6).expect("second statement at offset 6");
-    assert_eq!(s1.value.as_deref(), Some("7"));
+    assert!(s1.ty.contains("Int"), "y type = {:?}", s1.ty);
+    assert_eq!(
+        s1.value, None,
+        "a routed operator's statement reports its type only"
+    );
 }
 
 #[test]
@@ -119,6 +135,35 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     );
 }
 
+/// The named type variables (`?a`, …) a rendered line mentions, in order.
+///
+/// The *names* are positional — which cell the checker numbered first is an
+/// encoding detail, not a contract
+/// ([checker-encoding-instability](../../../docs/notes/checker-encoding-instability.md))
+/// — so a test whose subject is "these cells are named, and the same cell is
+/// named twice" reads the names out and asserts the relation rather than the
+/// letters ([tests-do-not-render](../../../docs/notes/tests-do-not-render.md)).
+fn type_variables(rendered: &str) -> Vec<String> {
+    let chars: Vec<char> = rendered.chars().collect();
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < chars.len() {
+        if chars[at] != '?' {
+            at += 1;
+            continue;
+        }
+        at += 1;
+        let start = at;
+        while at < chars.len() && chars[at].is_ascii_alphanumeric() {
+            at += 1;
+        }
+        if at > start {
+            out.push(chars[start..at].iter().collect());
+        }
+    }
+    out
+}
+
 #[test]
 fn compute_wrapper_functions_hover_with_named_type_variables() {
     // `compute.jit` / `compute.launch` are generic wrappers from a frozen
@@ -131,35 +176,57 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
     let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
     let doc = ShipsDoc::new_with_base(source, Some(&dir));
 
-    // `jit` at line 5 (0-based): "k_double = compute.jit (y => y + y)" — char 19.
+    // `jit` at line 5 (0-based): "k_double = compute.jit (y : Int => y + y)" —
+    // char 19.
     let (hover, _range) = doc
         .hover_at(Position {
             line: 5,
             character: 19,
         })
         .expect("hover on `jit`");
-    // `?a`..`?d` are the frozen module's own type lambdas' cells by the time this
-    // hover renders, so `jit`'s four continue at `?e` (see the `launch` note).
+    // `jit` names six cells: its two arguments, the kernel struct's raw pair, and
+    // then `.sig`'s domain and codomain — which are those same two arguments
+    // rather than fresh cells, and that is the property this test is about.  A
+    // frozen module's own type lambdas claim cells before these, so the letters
+    // begin wherever they begin.
+    let cells = type_variables(&hover);
     assert_eq!(
-        hover,
-        "`.jit` — `Function : ?e -> ?f -> struct<.native raw[?g, ?h], .sig ?e -> ?f>`"
+        cells.len(),
+        6,
+        "jit names six cells (two arguments, the raw pair, and `.sig`'s repeat): {hover}"
+    );
+    assert_eq!(
+        (&cells[4], &cells[5]),
+        (&cells[0], &cells[1]),
+        "`.sig`'s domain and codomain are the wrapper's own cells: {hover}"
+    );
+    assert_ne!(
+        cells[0], cells[1],
+        "the wrapper's two arguments are distinct cells: {hover}"
+    );
+    assert!(
+        hover.contains(".sig"),
+        "a kernel's signature is named as the struct's `.sig` field: {hover}"
     );
 
-    // `launch` at line 7 (0-based): "compute.launch k_outer 3" — char 9.  The
-    // cells are numbered by the order the check creates them, and a frozen
-    // module's own type lambdas are checked before either wrapper is used — so
-    // `?n` continues from `?h` by way of the cells those lambdas claim, not by
-    // way of `?i`.  The letters are therefore *positional*, which
-    // [checker-encoding-instability](../../../docs/notes/checker-encoding-instability.md)
-    // records as the open half of this rendering: what this test pins is that
-    // the cells are **named** (and shared between `.sig`'s domain and codomain),
-    // not what they are named.  `launch` reads the kernel's `.sig` lazily and
-    // returns its codomain, so it stays a generic `? -> ? -> ?`.
+    // `launch` at line 7 (0-based): "compute.launch k_outer 3" — char 9.  It
+    // reads the kernel's `.sig` lazily and returns its codomain, so it stays a
+    // generic function of three named, distinct cells rather than the opaque
+    // `? -> ? -> ?`.
     let (hover, _range) = doc
         .hover_at(Position {
             line: 7,
             character: 9,
         })
         .expect("hover on `launch`");
-    assert_eq!(hover, "`.launch` — `Function : ?n -> ?o -> ?p`");
+    let cells = type_variables(&hover);
+    assert_eq!(
+        cells.len(),
+        3,
+        "launch names three cells, so none of them is anonymous: {hover}"
+    );
+    assert!(
+        cells[0] != cells[1] && cells[1] != cells[2] && cells[0] != cells[2],
+        "launch's three cells are distinct: {hover}"
+    );
 }

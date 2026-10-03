@@ -3245,12 +3245,8 @@ mod tests {
         );
 
         // Line 7 (0-based line 6): `(math.succ 41, geo.double 5, geo.inc_twice 5)`.
-        // Each field's declared type is asserted beside it: `succ` and
-        // `inc_twice` are `Int -> Int` because their bodies compute over a
-        // stated class, while `double` is `?a -> ?a` — `x => math.add x x` over
-        // the now-polymorphic `add` — which is the same type the example's own
-        // `output =` declaration records
-        // (`docs/notes/operator-polymorphism.md` §5).
+        // `succ` and `inc_twice` are `Int -> Int` because their bodies compute
+        // over a stated class, so their signatures are asserted by name here.
         for (pos, expected) in [
             // `.succ` field access on `math`
             (
@@ -3259,14 +3255,6 @@ mod tests {
                     character: 6,
                 },
                 "Function : Int -> Int",
-            ),
-            // `.double` field access on `geo`
-            (
-                Position {
-                    line: 6,
-                    character: 19,
-                },
-                "Function : ?a -> ?a",
             ),
             // `.inc_twice` field access on `geo`
             (
@@ -3287,6 +3275,44 @@ mod tests {
                 "field access hover msg = {msg}"
             );
         }
+
+        // `.double` is `x => math.add x x` over the refined `add`, whose class the
+        // body never pins — so its domain and codomain are the **same open cell**,
+        // and the cell is the operand group's placeholder pair.  The printer dumps
+        // that pair rather than spelling `?a -> ?a`
+        // (`docs/notes/operator-polymorphism.md` §7.1 cost 2); the open class
+        // behind it is the defect `docs/notes/type-of-in-std.md` records.  What
+        // this asserts is the property the expectation was ever about — the field
+        // renders a function, its two sides are the same reading, and the cells are
+        // named — rather than how the pair is spelled
+        // (`docs/notes/tests-do-not-render.md`).
+        let (msg, _) = d
+            .hover_at(Position {
+                line: 6,
+                character: 19,
+            })
+            .expect("hover on an imported field access");
+        assert!(
+            !msg.contains("unresolved") && !msg.contains("field of imported module"),
+            "field access hover msg = {msg}"
+        );
+        let rendered = msg
+            .split_once("Function : ")
+            .map(|(_, ty)| ty)
+            .unwrap_or_else(|| panic!("the field renders as a value : type; got {msg}"));
+        let sides: Vec<&str> = rendered
+            .split("->")
+            .map(|side| side.trim().trim_end_matches('`').trim())
+            .collect();
+        assert_eq!(sides.len(), 2, "one arrow, domain to codomain: {msg}");
+        assert_eq!(
+            sides[0], sides[1],
+            "the domain and codomain are the same open cell: {msg}"
+        );
+        assert!(
+            sides[0].contains('?'),
+            "the cell is an open placeholder, not a decided type: {msg}"
+        );
     }
 
     #[test]

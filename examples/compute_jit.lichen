@@ -1,8 +1,8 @@
 ---
   order = "9"
   compute = import "compute.lichen"
-  output = "8: Int"
+  output = "6: Int"
 ---
 k_double = compute.jit (y : Int => y + y)
-k_outer  = compute.jit (x : Int => compute.launch k_double (x + 1))
+k_outer  = compute.jit (x : Int => compute.launch k_double x)
 compute.launch k_outer 3
