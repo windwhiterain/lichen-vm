@@ -61,8 +61,8 @@ use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram, LeafKindMarkers, TypeOperator, ValueType};
 use lichen_highlevel::shape::{
     KIND_MARKER_SLOT, PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, STRUCT_MARKER_NAMES_SLOT,
-    TYPE_KIND_SLOT, TYPE_SHAPE_SLOT, array_items as array_items_any, low_type_of_slot,
-    struct_fields_by_shape,
+    TYPE_KIND_SLOT, TYPE_SHAPE_SLOT, TypeRef, array_items as array_items_any, field_list,
+    field_names, low_type_of_slot,
 };
 use lichen_kernel_ir::{
     BufferSlot, Flow, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
@@ -1841,6 +1841,38 @@ impl ParallelRoles {
     }
 }
 
+/// The named fields and field-type list of the type a **type slot** names,
+/// whichever way that slot holds it.
+///
+/// The slot may be the `[shape, kind]` type **term** itself, or a node that
+/// holds one — an annotated parameter's type cell is the annotation's own
+/// `[value, type]` pair ([`low_type_of_slot`] resolves the same indirection for
+/// a low type).  Which of the two it is is the encoding's question, not this
+/// walk's, so both are asked and the **decode** decides ([`shape::TypeRef`]);
+/// a node that is neither answers `None` either way.
+///
+/// This is the lowering's reader rather than [`shape::struct_names_any`]'s
+/// caller because the lowering has no universe handle: the universe is a `Ctx`
+/// fact and a kernel is lowered below the checker, so the gate here is the
+/// `[Type, ↺]` cycle.
+fn struct_fields_of_slot<P>(
+    module: &mut Module<P>,
+    slot: AnyNodeId,
+) -> Option<(Vec<Option<&'static str>>, AnyNodeId)>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    [TypeRef::Term(slot), TypeRef::Slot(slot)]
+        .into_iter()
+        .find_map(|ty| {
+            let names = field_names(module, ty)?;
+            let shape = field_list(module, ty)?;
+            Some((names, shape))
+        })
+}
+
 /// The role table of a parallel kernel's parameter struct, decoded from the
 /// parameter's **type slot**.
 ///
@@ -1870,13 +1902,11 @@ where
     let Some(type_slot) = items.get(PAIR_TYPE_SLOT).map(|item| item.node) else {
         return Ok(None);
     };
-    // The two indirections `low_type_of_slot` walks, tried in its order.
-    let fields = struct_fields_by_shape(module, type_slot).or_else(|| {
-        // SAFETY: `type_slot` is a live node of `module`.
-        let value_slot = unsafe { array_items_any(module, type_slot) }
-            .and_then(|items| items.first().map(|item| item.node))?;
-        struct_fields_by_shape(module, value_slot)
-    });
+    // The parameter's type slot holds either the type **term** (`[shape, kind]`)
+    // or a node that holds one — which of the two is the annotation's business,
+    // not this walk's, so both are asked and the decode decides
+    // ([`shape::TypeRef`]).
+    let fields = struct_fields_of_slot(module, type_slot);
     let Some((names, shape)) = fields else {
         return Ok(None);
     };
@@ -1893,14 +1923,7 @@ where
     };
     let count_under = |module: &mut Module<P>, at: usize| -> Option<usize> {
         let field = field_types.get(at)?.node;
-        struct_fields_by_shape(module, field)
-            .or_else(|| {
-                // SAFETY: `field` is a live node of `module`.
-                let value_slot = unsafe { array_items_any(module, field) }
-                    .and_then(|items| items.first().map(|item| item.node))?;
-                struct_fields_by_shape(module, value_slot)
-            })
-            .map(|(names, _)| names.len())
+        struct_fields_of_slot(module, field).map(|(names, _)| names.len())
     };
     let Some(input_count) = count_under(module, inputs_at) else {
         return Err(PARALLEL_PARAM_FIELDS.into());
