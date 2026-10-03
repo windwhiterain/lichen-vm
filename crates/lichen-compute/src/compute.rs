@@ -63,7 +63,7 @@ use lichen_highlevel::program::{Ctx, HighProgram, LeafKindMarkers, TypeOperator,
 use lichen_highlevel::shape::{
     KIND_MARKER_SLOT, PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, STRUCT_MARKER_NAMES_SLOT,
     TYPE_KIND_SLOT, TYPE_SHAPE_SLOT, TypeRef, array_items as array_items_any, field_list,
-    field_names, field_type, low_type_of, low_type_of_slot,
+    field_names, field_type, low_type_of_slot,
 };
 use lichen_kernel_ir::{
     BufferSlot, Flow, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
@@ -1178,13 +1178,7 @@ where
                     // stay lazy rather than panicking.
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 };
-                // The class a body that left its class open is lowered in: its
-                // own operator's class domain names it ([`open_class_of`]).
-                let open_class = match function {
-                    AnyFunctionId::Dynamic(fid) => open_class_of(module, fid),
-                    AnyFunctionId::Static(_) => None,
-                };
-                match compile_fragment(module, function, open_class) {
+                match compile_fragment(module, function) {
                     Ok(fragment) => {
                         // Content-addressed, so recompiling the same function —
                         // which is what a keystroke does — keeps one id and
@@ -2149,21 +2143,24 @@ where
 /// can recover before an apply), so this refuses with an actionable reason
 /// rather than compiling a domain it invented.
 ///
-/// **One exception, and it is not an invention: `open_class`.**  When the body
-/// itself left a class open, the operator that did so registered a *set* of the
-/// classes it admits, and a reader that must commit to one takes its **first
-/// member** ([`open_class_of`], `docs/notes/operator-polymorphism.md` §3).  The caller
-/// passes that class here and it stands in for the undecided type slot — **seeded
-/// on the class's low type, never written into any type cell**, so the function
-/// stays polymorphic for its other uses (`f = y => y + y; k = compute.jit f;
-/// f 1.5` must keep working).  Every domain in the language defaults to `Int`
-/// (`checker/operators.rs`), which is also the class-free default the emitter
-/// states ([`node_class`]); a domain that ever defaults to another class is
-/// refused by name rather than emitted in the wrong class.
+/// **A kernel must be explicitly specialized, and that is the whole rule.**  A
+/// wasm or SPIR-V value is an `i64` or an `f32` and never either, and this
+/// lowering runs *before* any apply, so there is nothing to read a class off:
+/// the **parameter's type** is where the language states the class this artifact
+/// is for.  A body that left its class open — `y => y + y`, where `+` keeps its
+/// operands on one undecided cell — is therefore refused by name
+/// ([`UNDECIDED_DOMAIN`]) rather than lowered in a class the compiler picked.
+/// The operator's own contract is what confines such a body to a class domain
+/// (`docs/notes/operator-polymorphism.md` §3), and committing to one of that
+/// domain's members is the *author's* statement (`docs/notes/class-channel.md`
+/// §5.1.1).
+///
+/// The seed below is how the stated class reaches the body: it is a *low-type*
+/// write on the parameter's class, never a write into a type cell, so the
+/// function stays whatever it was for its other uses.
 fn compile_fragment<P>(
     module: &mut Module<P>,
     function: AnyFunctionId,
-    open_class: Option<AnyNodeId>,
 ) -> Result<KernelFragment, String>
 where
     P: Program,
@@ -2199,26 +2196,14 @@ where
         _ => return Err("parameter is not a [value, type] pair".into()),
     };
 
-    // 1. Seed.  A parameter with no type cell seeds `Unknown`, which is the
-    //    honest statement: this class has been traced and nothing has decided
-    //    it.  A body that left its class open states it in the class domain
-    //    instead, and the domain's default is that statement ([`open_class_of`]).
+    // 1. Seed.  The class comes from the parameter's own type and from nowhere
+    //    else: a parameter with no type cell seeds `Unknown`, which is the
+    //    honest statement — nothing decided this class — and the read below
+    //    refuses it by name.  A kernel is lowered for one class, so a body whose
+    //    class is open has to be annotated.
     let seed = match param_type.map(|slot| low_type_of_slot(module, slot)) {
         Some(shape) if shape.is_known() => shape,
-        _ => match open_class.map(|class| low_type_of(module, class)) {
-            Some(LowShape::USize) => LowShape::USize,
-            Some(LowShape::Float) => {
-                return Err(
-                    "this kernel body leaves its class to a domain that defaults to \
-                     `Float`, and a kernel is lowered in the emitter's class-free \
-                     default `Int`: annotate the parameter's class instead"
-                        .into(),
-                );
-            }
-            // A domain whose default is not a machine scalar states no class this
-            // lowering can use, so it is as undecided as before.
-            _ => LowShape::Unknown,
-        },
+        _ => LowShape::Unknown,
     };
     module.seed_class_low_type(param_value, seed);
     // 2. Pass.
@@ -3942,8 +3927,20 @@ fn comparison<'a>(
 /// This is the hard boundary of the low-type design, not a gap in it — lichen
 /// binds names per apply, so a polymorphic template's domain is a per-call-site
 /// fact by construction and no pre-apply mechanism can recover it.
-const UNDECIDED_DOMAIN: &str = "the kernel parameter's type is not decided when the kernel is compiled; \
-annotate it (for example `p : <Int, Int>`) so its domain is known";
+///
+/// **A kernel is lowered for one class, so the function must state it.**  A wasm
+/// or SPIR-V value is an `i64` or an `f32` and never either, and a body compiled
+/// from a template has no apply to read a class off — so the parameter's type is
+/// where the language says which class this lowering is for, and a body that
+/// left its class open (`y => y + y`, where `+` keeps its operands on one
+/// undecided cell) is refused here rather than lowered in a class the compiler
+/// invented.  The operator's own contract is what confines such a body to a
+/// class domain (`docs/notes/operator-polymorphism.md` §3); **committing to one
+/// of the domain's members** is the author's statement to make
+/// (`docs/notes/class-channel.md` §5.1.1).
+const UNDECIDED_DOMAIN: &str = "the kernel parameter's class is not decided when the kernel is \
+compiled: a kernel is lowered for one class, so the function must state it — annotate the \
+parameter (for example `p : <Int, Int>` for a tuple domain, or `y : Int` for a scalar one)";
 
 /// A kernel domain must be a decided scalar or a tuple of decided positions —
 /// everything else is a refusal, and each refusal names its own cause rather
@@ -4361,57 +4358,6 @@ fn parallel_leaf_classes(id: KernelId) -> Result<Vec<ScalarClass>, String> {
         .ok_or_else(|| format!("parallel kernel {id} is not registered"))?;
     let classes = param_classes(fragment);
     Ok(classes[..classes.len().saturating_sub(1)].to_vec())
-}
-
-/// The class an **open** kernel body is lowered in — the first member of the
-/// class **set** the body's own polymorphic operator carries, or `None` when
-/// nothing in the body left a class open.
-///
-/// A parameter whose type states a class needs nothing: [`low_type_of_slot`]
-/// answers for it.  An *open* one — `y => y + y`, where `+` keeps its operands on
-/// one undecided cell — is the case the class domain exists for.  `check_binop`
-/// registers `InDomain(cell, set)` as an assert on the enclosing function
-/// (`checker/operators.rs`), and "a reader that must commit to one class takes
-/// the **first member**" — `set{Int, Float}` prefers `Int`, the arithmetic
-/// operators' historical default (`lichen_highlevel::set`,
-/// `docs/notes/operator-polymorphism.md` §3).
-///
-/// The answer is a **type value node** — the canonical marker node the set was
-/// built from — so it is what [`low_type_of`] reads a class from, and what a
-/// signature can name.
-fn open_class_of<P>(module: &Module<P>, function: FunctionId) -> Option<AnyNodeId>
-where
-    P: Program,
-    P::Value: ValueType,
-    P::Operator: AsEnum<TypeOperator>,
-{
-    for &condition in &module.functions[function].asserts {
-        let Some(operation) = module.node_operation(condition) else {
-            continue;
-        };
-        if !matches!(operation.operator.as_enum(), Some(TypeOperator::InDomain)) {
-            continue;
-        }
-        let Some(operand) = operation.operand else {
-            continue;
-        };
-        // SAFETY: `operand` is a live node of `module`; nothing in this crate
-        // calls `Module::drop_block`.
-        let Some(items) = (unsafe { module.array_items(operand) }) else {
-            continue;
-        };
-        // `InDomain(class, set)`: the set's value is the second operand, and its
-        // value *is* its members.
-        let Some(set) = items.get(1).map(|item| item.node) else {
-            continue;
-        };
-        if let Some(first) = lichen_highlevel::set::members(module, set)
-            .and_then(|members| members.into_iter().next())
-        {
-            return Some(first);
-        }
-    }
-    None
 }
 
 /// The class a node's value is, read **with the kernel's parameter slots in

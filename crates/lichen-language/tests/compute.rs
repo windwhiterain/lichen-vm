@@ -312,8 +312,8 @@ fn jit_cross_kernel_call() {
 ---
   compute = import "compute.lichen"
 ---
-k0 = compute.jit (y => y + 1)
-k1 = compute.jit (x => k0 (x + 1))
+k0 = compute.jit ((y : Int) => y + 1)
+k1 = compute.jit ((x : Int) => k0 (x + 1))
 compute.launch k1 5
 "#);
     assert!(
@@ -365,8 +365,8 @@ fn jit_cross_kernel_wrapper() {
     // Unlike the bare `k x` apply, the wrapper's result is typed `Int`.
     let out = run(r#"
 --- compute = import "compute.lichen" ---
-k0 = compute.jit (y => y + 1)
-k1 = compute.jit (x => compute.launch k0 (x + 1))
+k0 = compute.jit ((y : Int) => y + 1)
+k1 = compute.jit ((x : Int) => compute.launch k0 (x + 1))
 compute.launch k1 5
 "#);
     assert!(out.starts_with("7:"), "wrapper produced: {out:?}");
@@ -469,9 +469,13 @@ fn a_kernel_value_and_type_render_by_name() {
     // field carries the signature, so the type renders as the struct
     // `struct<.native <_>, .sig Int -> Int>`.  Dropping `TypeKernel` means no
     // renderer special-case — the struct's own fields carry the signature.
+    //
+    // **The parameter states its class, and it has to**: a kernel is lowered for
+    // one class and compiled before any apply, so an open body (`y => y + y`) is
+    // refused by name rather than lowered in a class the compiler picked.
     let out = run(r#"
 --- compute = import "compute.lichen" ---
-k = compute.jit (y => y + y)
+k = compute.jit (y : Int => y + y)
 k
 "#);
     assert_eq!(

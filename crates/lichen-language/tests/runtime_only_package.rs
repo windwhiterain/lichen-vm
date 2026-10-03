@@ -45,7 +45,7 @@ fn an_imported_package_that_jits_at_its_top_level_still_runs() {
         &dir,
         "kernels.lichen",
         "---\n  order = \"0\"\n  compute = import \"compute.lichen\"\n  output = \"Function\"\n---\n\
-         k_double = compute.jit (y => y + y)\n",
+         k_double = compute.jit (y : Int => y + y)\n",
     );
     let main = write(
         &dir,
