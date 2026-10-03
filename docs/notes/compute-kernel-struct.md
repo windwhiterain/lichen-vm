@@ -106,45 +106,15 @@ A parallel kernel's parameter is being moved from `cfg = (n, (buffers…))` to a
 struct, so that a read names its buffer (`k.in.x`) instead of counting a position and
 the kernel can take runtime scalars (`k.alpha`) beside its count. The two shapes are
 decoded by a **role table** read from the parameter's type (`parallel_roles`), and the
-author's type lambdas are in `compute.lichen`:
+author's type lambdas (`KT`/`A`/`P`/`S`) plus the signature-carrying entries
+(`jit_sig`/`parallel_sig`) are in `compute.lichen`. The JIT'd signature has to come
+from the author, because a struct type's identity is the occurrence it is written at
+([applied-struct-nominal-id](applied-struct-nominal-id.md)).
 
-```
-KT = _x => struct<.I _, .O _>                      # the input/output pair
-A  = I  => struct<.n Int, .I I>                    # the JIT'd input
-P  = T: KT T => struct<.n Int, .in T.I, .out T.O>  # the author's parameter
-S  = T: KT T => A T.I -> T.O                       # the JIT'd signature
-```
-
-`parallel_sig f b s` / `jit_sig f s` declare the JIT'd signature in the kernel struct's
-`.sig`, which `plrun`'s gate already unifies the host's argument against. **The
-signature has to come from the author**: a struct type's identity is the occurrence it
-is written at ([applied-struct-nominal-id](applied-struct-nominal-id.md)), so a type
-the gate *built* could never be the type the host writes at the call site — only an
-occurrence the author supplies, evaluated by the checker, is shared with it. Nothing
-in the gates changes; declaring it in the type position is enough.
-
-Measured, and working: `Sig = S (KT _)(.I In, .O Out)` and the host's `(A In)(…)` are
-one type (`(f : Sig) => f ((A In)(…))` checks), the role table holds the input paths
-in declaration order (`[[1, 0]]` for `k.in.a` when `.in` is field 1), and the wasm
-signature is the scalar fields followed by the index.
-
-**Two blockers stop a struct-shaped kernel from running**, both measured:
-
-1. **`param_path` cannot resolve a named-field path.** The read arm peels the
-   wrapper's argument array and then asks `param_path` for the path from the parameter;
-   it answers `None` because an `Index`'s *selector is not an evaluated constant* at
-   that point (`usize_value` → `None`) — for the wrapper's own `x(0)` and for the
-   author's `k.in.a` alike. The role table and the answer therefore disagree while both
-   are correct in their own terms, and the refusal names that mismatch:
-   `read's buffer argument is not an input buffer of the parallel parameter (the
-   parameter's inputs are [[1, 0]])`. The old tuple shape never hits this: its position
-   is a constant the *body* wrote, read off the node.
-2. **`parallel_sig`'s extra curried parameter makes the `$parallel` operand
-   `Parameterized`.** `compute.parallel f "cpu"` with the *same* struct-shaped `f`
-   reaches the lowering (and reports blocker 1), while `compute.parallel_sig f "cpu"
-   Sig` fails earlier, at the operand check in `ComputeOperator::Parallel`'s run. The
-   third parameter is the only difference; `.sig s` is not the cause (reverting it to
-   `.sig (type_of f)` does not move the failure).
+**It does not run yet.** The current state, the two measured blockers, the
+reproduction and the orientation map are in
+[compute-param-struct-handoff](compute-param-struct-handoff.md) — that note is the one
+to read; this section is the pointer.
 
 _Footnote: the earlier proposal split the invocation into `call`/`launch`/`run` (a `.kernel`
 field-based 3-field struct). The shipped v1 keeps `launch`/`plrun` two-step and uses the
