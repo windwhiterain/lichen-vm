@@ -12,6 +12,7 @@
 
 pub mod attr;
 pub mod checker;
+pub mod class_set;
 pub mod diagnostic;
 pub mod ir;
 pub mod native;

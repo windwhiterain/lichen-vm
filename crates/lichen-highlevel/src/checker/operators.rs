@@ -95,8 +95,28 @@ where
                 } else {
                     // The two operands are one class, so a use at either class
                     // is a use for the whole operation: `add 1 1.5` stays a
-                    // refusal because `1` commits the shared cell first.
+                    // refusal because `1` commits the shared cell first — the
+                    // apply clone preserves the class, so the arguments of one
+                    // application meet.
                     self.check_unify(right_ty, left_ty, self.loc(right, 1), DiagKind::BinOp);
+                    // That shared class must lie in the operation's **domain**,
+                    // and the check is a refinement rather than a unify: the
+                    // condition `left_ty ∈ {Int, Float}` is registered as an
+                    // assert, so it stays *pending* while the class is open and
+                    // the apply clone re-checks it per call
+                    // (`docs/notes/operator-polymorphism.md` §3).  Without it a
+                    // non-numeric use is not refused at all — `run` answers the
+                    // lazy marker for a class it cannot compute, so `add "a" "b"`
+                    // would yield an undecided value.
+                    let (int_type, float_type) = (self.int_type, self.float_type);
+                    let domain = crate::class_set::build(self, &[int_type, float_type], int_type);
+                    let operands = self.array_node(self.current_block, &[left_ty, domain]);
+                    let condition = self.op_node(
+                        self.current_block,
+                        P::Operator::from(TypeOperator::InDomain),
+                        Some(operands),
+                    );
+                    self.register_assert(condition, self.loc(e, 1), true);
                 }
             }
         }

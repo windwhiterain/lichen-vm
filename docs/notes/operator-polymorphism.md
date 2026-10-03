@@ -293,31 +293,39 @@ add = x => y => { x : ?a{in_num}; y : ?a{in_num}
                   (fadd, iadd)(is_int (type_of x)) x y }
 ```
 
-Measured on `dev` before any of this, and again with the first §6 change landed
-(the operand tie instead of the pin), taken with `lichen-compiler`:
+Measured on `dev` before any of this, and again with §6's operand tie plus the
+§3 refinement condition landed, taken with `lichen-compiler`:
 
-| program | today | after the tie |
+| program | today | landed |
 |---|---|---|
 | `add 1 2` | `3: Int` | `3: Int` |
 | `add 1.5 2.5` | **fails**: `expected Int, found Float` at the `1.5` | **`4.0: Float`** |
 | `add 1 1.5` | fails: `expected Int, found Float` at the `1.5` | **identical**, same text and position |
-| `add "a" "b"` | fails: `expected Int, found string` | **`parameterized: string`** — not refused |
+| `add "a" "b"` | fails: `expected Int, found string` | **refused**: `assertion failed: expected 1, found 0` at the `x + y` |
 | `(add, add 1.5 2.5)` | — | `<?a -> ?a -> ?a, Float>` |
 
-Two mechanism facts fell out of that measurement, and both are load-bearing:
+Three mechanism facts fell out of that measurement, and all three are
+load-bearing:
 
 - **The apply clone preserves equality classes.**  Tying the two operands into
   one class *in the template* therefore makes the arguments of a single
   application share one class, which is why `add 1 1.5` is still refused with
   today's exact message: the first argument commits the shared class and the
-  second meets it.  So §8.4 is not a problem — "the operands are one class" is
+  second meets it.  So §8.3 is not a problem — "the operands are one class" is
   free, not a condition that has to be built and asserted.
 - **An unknown class is not an error, it is an undecided value.**
   `TypeOperator::run` answers `Parameterized` for a pair it cannot compute, so
-  `add "a" "b"` *runs* and yields an unresolved value instead of being refused.
-  That is the hole the refinement closes, and it says what the refinement has to
-  be: a condition that turns "undecided" into "refused", registered as an
-  assert on the operand.
+  before the refinement `add "a" "b"` *ran* and yielded an unresolved value.
+  That is what the condition closes, and it is why the condition is registered
+  as an assert *on the operand*: the assert is the only channel that turns
+  "undecided" into "refused".
+- **A condition undecided at definition time stays pending, and resolves per
+  application.**  `add`'s condition names the parameter's *cell*, which is open
+  while the definition is checked; the apply clone re-checks the instantiated
+  condition against the argument, which is what makes one polymorphic definition
+  refuse `"a"` and accept `1.5`.  No new machinery: it is
+  `register_assert`'s documented behaviour, the same one `check_index`'s bounds
+  constraint already relies on.
 
 - **Definition.** `x : ?a{in_num}` and `y : ?a{in_num}` put the predicate in the
   parameters' attribute slots; the *type* cells stay open, so the signature is
@@ -460,21 +468,18 @@ than budgeting for it.)
 
 ## 9. Phases
 
-- **Phase 0 — the mechanism.** The domain condition the refinement is built
-  from, and its insertion as a lowlevel `assert` on the operand
-  (`register_assert`), with a refinement flavour so the diagnostic reads as a
-  contract failure rather than `assert failed`. **The condition cannot be spelt
-  with `==`**: `TypeOperator::Eq` compares through `ValueExt::value_eq`, which
-  for an array is *handle* identity, so a structurally identical class node out
-  of another module would compare unequal and the refinement would fail
-  spuriously. The membership test must decode structurally, like
-  `shape::low_type_of_slot` already does — whether as a new `TypeOperator`
-  variant or as a checker-built structure over it is open.
-- **Phase 1 — the contract on the builtin operators.** `check_binop`'s operand
-  tie is already landed (§5); what remains is the domain condition for the
-  both-operands-open case, the `T{…}` surface spelling and its lowering, and the
-  kernel's authorised default (§8.6). `add` is polymorphic; a wrong-class use is
-  refused. *This is the user-visible feature.*
+- **Phase 0 — the mechanism. Landed.** The class domain as a *value*
+  (`[TypeSet, [members], default]`, tag beside `TypeId`, three elements so no
+  silhouette reads it as a type), `TypeOperator::InDomain` as the structural
+  membership test (`==` cannot do it: `value_eq` compares array *handles*, so a
+  class node out of another module would compare unequal), and the condition
+  registered by `check_binop` through `register_assert`.  Measured: no existing
+  test regressed, and `add "a" "b"` went from *accepted* to refused.
+- **Phase 1 — the contract on the builtin operators.** The operand tie and the
+  domain condition are landed (§5).  What remains is the kernel's authorised
+  default (§8.4), the refinement's diagnostic flavour (§8.5), the `T{…}` surface
+  spelling and its lowering, and updating the two example declarations whose
+  signatures became polymorphic. *This is the user-visible feature.*
 - **Phase 2 — the dependent if.** `if` desugars to the tuple read `(e, t)(c)`
   instead of the array read `[e, t][c]`, and the claimed laziness of an
   unselected arm is measured. Unlocks user-written generic numeric functions.
