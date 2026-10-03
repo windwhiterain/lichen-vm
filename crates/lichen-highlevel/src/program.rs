@@ -548,12 +548,7 @@ pub enum TypeOperator {
     /// [`HighGlobal::next_type_id`] and returns a `TypeId(n)` type value.
     /// Nullary — the checker emits it with no operand, so it fires once per
     /// source occurrence and the cached value is reused wherever the struct
-    /// type it tags is referenced.  Firing *once* is the checker's to enforce,
-    /// not this operator's: the apply clone walk copies an operation node the
-    /// deep pass never proved concrete and drops the copy's cached value, so
-    /// the struct-type construction evaluates the identity marker it is part
-    /// of while it builds it
-    /// (`docs/notes/applied-struct-nominal-id.md`).
+    /// type it tags is referenced.
     Fresh,
     /// Binary operators over `[left, right]`.
     ///

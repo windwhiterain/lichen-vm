@@ -1530,56 +1530,56 @@ compute.launch k 3.0
     }
 }
 
-/// The one crossing a kernel cannot be given: an operand the body would have to
-/// compute in a class it does not hold.
+/// A body may compute in one class and cross to the other, and the crossing is
+/// spelled — `int2float`/`float2int` are the only way between the two.
 ///
-/// **A fragment has one representation for its whole body** — every constant is
-/// read in it and every operator's opcode is picked from it — so a
-/// `Float`-returning kernel whose parameter is an `Int` can cross that parameter
-/// (`int2float x`, `int2float (x > 1.0)`, both above) but cannot *add* it as an
-/// integer first.  The refusal is the shared emitter's, so one program gets one
-/// answer whichever backend it is then handed to, and it names the shape rather
-/// than leaving the module to fail validation.
+/// **This is what per-value classes bought**: a fragment is no longer one
+/// representation for its whole body, so an `Int` parameter may be added as an
+/// integer and only then crossed (`int2float (x + 1)`), where the earlier
+/// fragment-wide rule refused it. The price is recorded in
+/// `docs/notes/floating-point.md`: in a float fragment `Int` data is 32-bit on
+/// the GPU and 64-bit on the CPU, so the two targets diverge past 2³².
+///
+/// The parallel half is the same decision inside an **integer** fragment: its
+/// buffers are integers, and the body crosses up to `Float` to compute and back
+/// down to store. That is the case both element types have to be declared for in
+/// one SPIR-V module (`crates/lichen-compute-gpu/src/spirv.rs`).
 #[test]
-fn a_conversion_the_body_cannot_hold_is_refused_by_name() {
-    let diags = fail(
-        r#"
+fn a_body_may_compute_in_one_class_and_cross() {
+    let out = run(r#"
 ---
   compute = import "compute.lichen"
 ---
 k = compute.jit (x : Int => int2float (x + 1))
 compute.launch k 5
-"#,
-    );
-    assert!(
-        diags
-            .iter()
-            .any(|message| message.contains("one fragment has one representation")),
-        "an integer add inside a float kernel is refused for what it is: {diags:?}"
-    );
+"#);
+    assert_eq!(out, "6.0: Float", "the integer add stays an integer's");
 
-    // The mirror, in a parallel fragment: the buffer's class is the body's, so a
-    // float computed in order to be written as an integer has no form there
-    // either, and the refusal names the literal the body cannot spell.
-    let diags = fail(
+    let source = format!(
         r#"
----
-  compute = import "compute.lichen"
----
-f = cfg => {
+--- compute = import "compute.lichen" ---
+f = cfg => {{
   n = cfg(0)
   i = compute.range n
   compute.write [n, i, float2int (int2float i + 0.5)]
-}
-k = compute.parallel f "cpu"
-out = compute.plrun k (5,)
-compute.collect out
+}}
+k = compute.parallel f "{BACKEND}"
+out = compute.plrun k ({ELEMENT_COUNT},)
+(compute.read [out, 0], compute.read [out, 1], compute.read [out, {last}], compute.collect out)
 "#,
+        last = ELEMENT_COUNT - 1,
     );
+    let Some((cpu, gpu)) = answer_from_each_backend(&source) else {
+        return;
+    };
+    println!("crossing  cpu: {cpu}\ncrossing  gpu: {gpu}");
     assert!(
-        diags
-            .iter()
-            .any(|message| message.contains("no form in an Int kernel body")),
-        "a float literal in an integer fragment is refused by name: {diags:?}"
+        cpu.starts_with(&format!("(0, 1, {}, [0, 1, 2,", ELEMENT_COUNT - 1)),
+        "the truncation of the index plus a half is the index, so every element \
+         differs from its neighbour: {cpu:?}"
+    );
+    assert_eq!(
+        gpu, cpu,
+        "the two backends answered one class crossing differently"
     );
 }

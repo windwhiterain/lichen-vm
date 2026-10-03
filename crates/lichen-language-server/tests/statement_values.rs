@@ -138,21 +138,28 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
             character: 19,
         })
         .expect("hover on `jit`");
+    // `?a`..`?d` are the frozen module's own type lambdas' cells by the time this
+    // hover renders, so `jit`'s four continue at `?e` (see the `launch` note).
     assert_eq!(
         hover,
-        "`.jit` — `Function : ?a -> ?b -> struct<.native raw[?c, ?d], .sig ?a -> ?b>`"
+        "`.jit` — `Function : ?e -> ?f -> struct<.native raw[?g, ?h], .sig ?e -> ?f>`"
     );
 
     // `launch` at line 7 (0-based): "compute.launch k_outer 3" — char 9.  The
-    // module struct renders `.jit` first, whose kernel-struct type claims
-    // `?a`..`?d`, so `launch`'s own cells continue at `?e`; `launch` reads the
-    // kernel's `.sig` lazily and returns its codomain, so it stays a generic
-    // `? -> ? -> ?`.
+    // cells are numbered by the order the check creates them, and a frozen
+    // module's own type lambdas are checked before either wrapper is used — so
+    // `?n` continues from `?h` by way of the cells those lambdas claim, not by
+    // way of `?i`.  The letters are therefore *positional*, which
+    // [checker-encoding-instability](../../../docs/notes/checker-encoding-instability.md)
+    // records as the open half of this rendering: what this test pins is that
+    // the cells are **named** (and shared between `.sig`'s domain and codomain),
+    // not what they are named.  `launch` reads the kernel's `.sig` lazily and
+    // returns its codomain, so it stays a generic `? -> ? -> ?`.
     let (hover, _range) = doc
         .hover_at(Position {
             line: 7,
             character: 9,
         })
         .expect("hover on `launch`");
-    assert_eq!(hover, "`.launch` — `Function : ?e -> ?f -> ?g`");
+    assert_eq!(hover, "`.launch` — `Function : ?n -> ?o -> ?p`");
 }

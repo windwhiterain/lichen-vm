@@ -1,8 +1,14 @@
 let type_of = x => {t = _; x: t; t}
+KT = _x => struct<.I _, .O _>
+A = I => struct<.n Int, .I I>
+P = T: KT T => struct<.n Int, .in T.I, .out T.O>
+S = T: KT T => A T.I -> T.O
 jit = f => (struct<.native _, .sig (type_of f)>)(.native $jit(f), .sig _)
+jit_sig = f => s => (struct<.native _, .sig s>)(.native $jit(f), .sig s)
 launch = k => a => $launch(k.native, k.sig, a)
 call = k => a => $call(k.native, a)
 parallel = f => b => (struct<.native _, .sig (type_of f)>)(.native $parallel(f, b), .sig _)
+parallel_sig = f => b => s => (struct<.native _, .sig s>)(.native $parallel(f, b), .sig s)
 plrun = k => a => $plrun(k.native, k.sig, a)
 range = x => $range(x)
 read = x => $read(x(0), x(1))

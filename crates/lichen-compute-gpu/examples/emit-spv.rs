@@ -27,15 +27,15 @@ fn main() {
     // and computed `1 + i` instead of `in[i] + 1` — a wrong answer with nothing
     // refused anywhere.
     let count_prologue = vec![
-        KernelInstr::Const(0),       // buffer position, in the *output* space
-        KernelInstr::LocalGet(1),    // the index
-        KernelInstr::Const(0),       // cfg_pos, in the *input* space
-        KernelInstr::LocalGet(1),    // the index
-        KernelInstr::BufferReadCall, // in[i]
-        KernelInstr::Const(1),
-        KernelInstr::Bin(KernelBin::Add), // in[i] + 1
-        KernelInstr::BufferWriteCall,
-        KernelInstr::Const(0),
+        KernelInstr::Const(ScalarClass::Int, 0), // buffer position, in the *output* space
+        KernelInstr::LocalGet(1),                // the index
+        KernelInstr::Const(ScalarClass::Int, 0), // cfg_pos, in the *input* space
+        KernelInstr::LocalGet(1),                // the index
+        KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
+        KernelInstr::Const(ScalarClass::Int, 1),
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add), // in[i] + 1
+        KernelInstr::BufferWriteCall(ScalarClass::Int),
+        KernelInstr::Const(ScalarClass::Int, 0),
     ];
 
     let fragment = KernelFragment {
@@ -48,7 +48,7 @@ fn main() {
         outputs: 1,
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
-        results: 1,
+        result_classes: vec![ScalarClass::Int],
         int_width: IntWidth::I64,
     };
 

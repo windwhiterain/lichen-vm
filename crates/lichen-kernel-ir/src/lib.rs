@@ -123,10 +123,9 @@ impl ScalarClass {
 /// # The bits, not a conversion
 ///
 /// The payload is the buffer's bytes, and the variant says how to read them.
-/// No conversion happens here: this is the ABI's carrier, not a lowerer.  What
-/// conversions exist are decided below it — the language's own crossing, which
-/// reaches a backend as a [`KernelInstr::Conv`] in a body, and the **boundary**
-/// conversion a lowering chooses at a place nothing above the backend decided
+/// No conversion happens here: this is the ABI's carrier, not a lowerer. The
+/// one conversion the design has is a **boundary** conversion a lowering
+/// chooses later, at a place nothing above the backend decided
 /// (`docs/notes/floating-point.md` §4.3).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScalarData {
@@ -556,10 +555,20 @@ pub enum KernelBin {
 /// during the walk that lowers it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KernelInstr {
-    /// Push a constant of the fragment's declared [`IntWidth`].
-    Const(i64),
-    /// A binary [`KernelBin`] operator over the top two stack values.
-    Bin(KernelBin),
+    /// Push a constant, **of the class it names**.
+    ///
+    /// The class is per *instruction*, not per fragment: a body may compute in
+    /// more than one class, so a constant's bits are only readable against the
+    /// class it was lowered in — an `Int` local takes the value, a `Float` local
+    /// takes an `f32`'s bits (`docs/notes/floating-point.md`).
+    Const(ScalarClass, i64),
+    /// A binary [`KernelBin`] operator over the top two stack values, **in the
+    /// class it names**.
+    ///
+    /// Per instruction for the same reason [`Self::Const`] is: the opcode a
+    /// backend emits for `Add` is `i64.add` in one class and `f32.add` in the
+    /// other, and a body that mixes the two needs both.
+    Bin(ScalarClass, KernelBin),
     /// Read a parameter leaf, by its offset in the flattened domain.
     LocalGet(u32),
     /// Convert the top stack value to the condition width a `select` needs.
@@ -579,26 +588,40 @@ pub enum KernelInstr {
     ///
     /// Because *which* of the two it is cannot be read off the operand: `Int →
     /// Float` and `Float → Int` are the same shape on a stack machine, and the
-    /// direction is the language's decision, not a target's. A backend that had
-    /// to re-derive it from the fragment's class would be guessing, and the two
-    /// backends could guess differently — which is the exact failure
-    /// `docs/notes/floating-point.md` §5.1 records the wasm backend producing.
+    /// direction is the language's decision, not a target's.  A backend that had
+    /// to re-derive it would be guessing, and the two backends could guess
+    /// differently — the exact failure `docs/notes/floating-point.md` §5.1
+    /// records the wasm backend producing.  It is the same reason every other
+    /// instruction here names its own class rather than leaving one to be
+    /// inferred: a fact the language decided is stated, not reconstructed.
     ///
-    /// `from == to` is a **reclassification and not a no-op**: it is what the
-    /// emitter writes when the operand already carries the answer in the target
-    /// representation, so that the walk of the body ([`KernelBody`] consumption in
-    /// each backend) sees a value of `to` where it would otherwise see one of
-    /// `from`. A backend lowers it to nothing.
+    /// # Why it is not redundant with the instruction's class
+    ///
+    /// Every other instruction runs *in* one class and names it.  A conversion
+    /// is the one instruction whose operand and result are **different**
+    /// classes, so naming "the class" would name one of them and leave the other
+    /// to be guessed — which is precisely the direction that cannot be recovered.
+    ///
+    /// # What the class pair does *not* say
+    ///
+    /// It says what the **language** asked for, not what the value's
+    /// representation *is*.  The two differ at the ABI: a float fragment's index
+    /// and count arrive in `f32` locals (the fragment's class is what the
+    /// parameter list is typed by), while the language's number is an `Int`, so
+    /// `int2float` of the index is a conversion whose operand already holds its
+    /// result's representation.  That is a fact about the target and the ABI
+    /// rather than about the program, so it is not in this instruction and no
+    /// backend may assume it: each one tracks the representation it is actually
+    /// building and lowers a crossing between a class and itself to nothing.
     ///
     /// # What each backend emits
     ///
     /// Neither opcode is named here, because the two targets hold the same number
     /// in genuinely different places:
     ///
-    /// - wasm's locals are the fragment's own classes, so a `Float` fragment's
-    ///   parameter leaves are `f32` and its `Int` ones `i64`: the conversion is
-    ///   the opcode that crosses them (`f32.convert_i64_u`, `i64.trunc_f32_u`)
-    ///   and **nothing at all** when the value on the stack is already a `to`.
+    /// - wasm's locals are typed per class, so the conversion is the opcode that
+    ///   crosses them (`f32.convert_i64_u`, `i64.trunc_f32_u`) — and **nothing at
+    ///   all** when the value on the stack already holds a `to`.
     /// - SPIR-V's index is the invocation id — a 32-bit integer in every module,
     ///   float included — so `Int → Float` there is always `OpConvertUToF`, and a
     ///   module that has not declared the other class's type refuses the
@@ -610,18 +633,27 @@ pub enum KernelInstr {
     /// is the intersection of what the backends compute *the same way*, and this
     /// conversion is in it only for the values both answer identically.
     Conv {
-        /// The class the stack holds.
+        /// The class the operand is, as the language names it.
         from: ScalarClass,
-        /// The class this leaves behind.
+        /// The class this leaves behind, as the language names it.
         to: ScalarClass,
     },
     /// Read one element of one input buffer: the stack holds
-    /// `[buffer_position, index]`.
-    BufferReadCall,
+    /// `[buffer_position, index]`, and the value pushed is of the class named
+    /// here — the buffer's **element** class.
+    ///
+    /// The position and the index are `Int` regardless: a position is a
+    /// compile-time ordinal and an index is a lane number, and neither is ever
+    /// the data.  So this instruction is the one place a body names two classes
+    /// at once, and the class named here is the one the *import* is typed by.
+    BufferReadCall(ScalarClass),
     /// Write one element of one output buffer: the stack holds
     /// `[buffer_position, index, value]`. The buffer position is a
     /// compile-time constant pushed immediately before the call.
-    BufferWriteCall,
+    ///
+    /// The class is the element class, as in [`Self::BufferReadCall`]; the
+    /// position and the index are `Int`.
+    BufferWriteCall(ScalarClass),
 }
 
 /// A compiled kernel-callable unit: a lowered function body plus the facts a
@@ -686,25 +718,32 @@ pub struct KernelFragment {
     /// slots are ordered to match it — so position *is* the ordinal a slot would
     /// need, and a slot carries no class of its own to be read from instead.
     pub input_classes: Vec<ScalarClass>,
-    /// The element class of each value the fragment hands out.
-    ///
-    /// **For a parallel fragment: one entry per write ordinal**, in ordinal
-    /// order, so the length is [`Self::outputs`].  For a fragment that writes no
-    /// buffers — a scalar kernel, whose results are its wasm return values — the
-    /// list is **one entry per wasm result**, in source order, so the length is
-    /// [`Self::results`]: one field holds both because both are "the class of a
-    /// value this fragment produces", and the fragment's single class is its
-    /// first entry either way.
+    /// The element class of each output buffer the fragment writes — **one
+    /// entry per write ordinal**, in ordinal order, so the length is
+    /// [`Self::outputs`].
     ///
     /// The ordinal/write-position correspondence is the same compile-time
     /// constant [`KernelInstr::BufferWriteCall`] is fed, so a caller reading
     /// element `k` of this list is reading the class of the buffer write `k`
     /// filled. A backend reads it where it prepares a buffer; a host reads it
     /// when a resident buffer has to say what its elements are.
+    ///
+    /// **A scalar fragment's results are not here**, they are
+    /// [`Self::result_classes`].  The two were one field while a fragment had
+    /// one class — both are "the class of a value this fragment produces" — and
+    /// they separate once a body may produce values of more than one class,
+    /// because a write ordinal and a wasm result are positions in different
+    /// spaces.
     pub output_classes: Vec<ScalarClass>,
-    /// How many values the body leaves on the stack: the function's result
-    /// arity. `1` for a scalar body, and one per leaf for a tuple codomain.
-    pub results: usize,
+    /// The class of each value the body leaves on the stack, **one entry per
+    /// result**, in source order — the function's result arity, typed.
+    ///
+    /// A count alone is not enough once a body may compute in more than one
+    /// class: the emitted function's result list is typed per position, so a
+    /// body returning `(Int, Float)` and one returning `(Float, Int)` have the
+    /// same arity and different signatures, and a backend that typed both from
+    /// one class would emit a function the module cannot validate.
+    pub result_classes: Vec<ScalarClass>,
     /// The integer width the body was lowered to mean. A backend whose target
     /// cannot represent it refuses the fragment rather than narrowing.
     pub int_width: IntWidth,
@@ -744,7 +783,7 @@ pub fn fragment_digest(fragment: &KernelFragment) -> u64 {
     fragment.outputs.hash(&mut hasher);
     format!("{:?}", fragment.input_classes).hash(&mut hasher);
     format!("{:?}", fragment.output_classes).hash(&mut hasher);
-    fragment.results.hash(&mut hasher);
+    fragment.result_classes.hash(&mut hasher);
     format!("{:?}", fragment.int_width).hash(&mut hasher);
     hasher.finish()
 }

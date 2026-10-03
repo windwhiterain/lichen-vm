@@ -61,24 +61,32 @@
 //! two conversions where the position demands them instead (see
 //! [`as_class`]/[`as_condition`]). Same IR, same semantics, two spellings.
 //!
-//! # A module has one numeric class, and it is derived from the fragment
+//! # A module's *buffers* have one numeric class; its values may be either
 //!
-//! `Int` and `Float` do not convert in either direction
-//! (`docs/notes/floating-point.md` §4.2), and a kernel body is written in one
-//! class or the other, so a module has **one** class: [`module_class`] reads it
-//! off the fragment's declared positions. The class is baked into the module
-//! rather than chosen per dispatch because the storage buffer's element type,
-//! the pointer into it and its array stride are all module-scope instructions —
-//! and [`Binding`], the caller's record of how many buffers a run binds, has
-//! nowhere to say which class they hold.
+//! [`module_class`] reads the class a module is built for off the fragment's
+//! declared positions, and that class is baked in rather than chosen per
+//! dispatch: the storage buffer's element type, the pointer into it and its
+//! array stride are all module-scope instructions — and [`Binding`], the
+//! caller's record of how many buffers a run binds, has nowhere to say which
+//! class they hold.
 //!
-//! The difference between the two is exactly the ABI. An integer module's scalar
-//! is a 64-bit unsigned integer, its buffer element is eight bytes, and it
-//! declares the `Int64` capability. A float module's scalar is a 32-bit float —
-//! core in SPIR-V, no capability — its element is four bytes, and its **index**
-//! is 32-bit, so a float module declares no 64-bit integer at all and needs no
-//! device with `shaderInt64`: [`needs_int64`] is what a caller checks before it
-//! builds a pipeline.
+//! **Both element types are nevertheless declared in every module.** `Int` and
+//! `Float` do not convert in either direction on their own
+//! (`docs/notes/floating-point.md` §4.2), but a body may compute in one class
+//! and cross to the other through the explicit `Conv`, so both the module's
+//! scalar and the other element type have to have an id to name. `OpTypeFloat 32`
+//! is core SPIR-V and costs no capability, so only the **64-bit integer** is
+//! conditional: an integer module's scalar is that 64-bit unsigned integer, its
+//! buffer element is eight bytes, and it declares `Int64`; a float module's
+//! scalar is a 32-bit float, its element is four bytes, and its **index** is
+//! 32-bit, so it declares no 64-bit integer at all and needs no device with
+//! `shaderInt64` — [`needs_int64`] is what a caller checks before it builds a
+//! pipeline.
+//!
+//! The price of the missing 64-bit integer is that a float module's `Int` data
+//! is 32-bit where the wasm target's is 64-bit, so the two diverge past 2³²; it
+//! is the same kind of recorded price as kernels computing `f32` while the
+//! interpreter computes `f64` (`docs/notes/floating-point.md`).
 //!
 //! A comparison still yields `OpTypeBool` here and is still materialised only
 //! where a position wants the scalar, but *which* scalar is the class's: the
@@ -118,11 +126,14 @@ mod op {
     pub const LABEL: u16 = 248;
     pub const RETURN: u16 = 253;
     pub const U_CONVERT: u16 = 113;
-    /// The two class crossings: `OpConvertUToF` widens an unsigned integer to the
-    /// float, `OpConvertFToU` truncates a float toward zero to an unsigned
-    /// integer — which is the language's `float2int`, whose `Int` is unsigned.
-    pub const CONVERT_U_TO_F: u16 = 112;
+    /// `OpConvertFToU` — the `float2int` crossing: a 32-bit float to the
+    /// unsigned integer type, truncating toward zero (and undefined outside what
+    /// that type holds, which is why the language refuses what the interpreter
+    /// can see is out of range).
     pub const CONVERT_F_TO_U: u16 = 109;
+    /// `OpConvertUToF` — the `int2float` crossing.  The **unsigned** source is
+    /// the language's `Int`, so this is the conversion and not `OpConvertSToF`.
+    pub const CONVERT_U_TO_F: u16 = 111;
     /// The reinterpretation an integer constant and a float operand meet
     /// through: same width, same bits, no conversion of the value.
     pub const BITCAST: u16 = 124;
@@ -254,25 +265,10 @@ pub enum SpirvRefusal {
     /// computes something nobody wrote is worse than one that does not run.
     UnsupportedFloatOperator { operator: &'static str, at: usize },
     /// A value and a buffer index of different classes met in one operation.
-    /// `Int` and `Float` do not meet in one operation without saying so — the
-    /// two conversions are the only crossing the language has
-    /// (`docs/notes/floating-point.md` §4.2) — so this is a malformed fragment
+    /// `Int` and `Float` do not convert in either direction
+    /// (`docs/notes/floating-point.md` §4.2), so this is a malformed fragment
     /// rather than a shape a conversion could serve.
     MixedClasses { at: usize },
-    /// A class conversion in a module that declares one numeric class only.
-    ///
-    /// **Both directions need the type the module does not have.**  An integer
-    /// module declares `OpTypeInt 64 0` and no float at all, and `OpTypeFloat 32`
-    /// stays out of it on purpose — `docs/notes/floating-point.md` §4.4 — because
-    /// that is what keeps `needs_int64` answering the question a device chooser
-    /// asks.  A float module has both types and emits `OpConvertUToF` /
-    /// `OpConvertFToU`; an integer one refuses here rather than declaring a type
-    /// its class never chose to carry.
-    UnsupportedConversion {
-        from: ScalarClass,
-        to: ScalarClass,
-        at: usize,
-    },
     /// The body does not leave exactly the one value a compute shader needs.
     ResultArity { results: usize, left: usize },
     /// The stack did not balance: an instruction popped more than it pushed.
@@ -338,15 +334,8 @@ impl fmt::Display for SpirvRefusal {
             SpirvRefusal::MixedClasses { at } => write!(
                 f,
                 "instruction {at} mixed an integer and a float in one operation. `Int` and `Float` \
-                 meet only where `int2float` or `float2int` says so, so nothing here can make the \
-                 two operands meet: this is a malformed fragment rather than an unsupported shape."
-            ),
-            SpirvRefusal::UnsupportedConversion { from, to, at } => write!(
-                f,
-                "instruction {at} converts a {from:?} to a {to:?}, and this fragment's module \
-                 declares only the integer type: `OpTypeFloat 32` is not in it, and a conversion \
-                 is where the body meets the class the module does not carry. See \
-                 `docs/notes/floating-point.md` §4.4 for why an integer module keeps it out."
+                 do not convert in either direction, so nothing here can make the two operands \
+                 meet: this is a malformed fragment rather than an unsupported shape."
             ),
             SpirvRefusal::ResultArity { results, left } => write!(
                 f,
@@ -596,20 +585,23 @@ struct Ids {
     ptr_elem: u32,
     fn_ty: u32,
     /// The 32-bit `0` an access chain's member indices are built from, and the
-    /// integer zero a float module's conditions are compared against.
+    /// zero a float's *bit pattern* is compared against ([`as_condition`]) — 32
+    /// bits in every module, which is what makes it the right zero there even
+    /// where the integer class is 64-bit.
     zero: u32,
     /// The scalar `1` and `0` a comparison is materialised into — the operands
-    /// of the `OpSelect` [`as_class`] emits.  Their type is the module's scalar,
-    /// so they are `1.0`/`0.0` over two floats: the language's `1`/`0` *is* the
-    /// class's scalar (`docs/notes/floating-point.md` §4.4).
-    one_scalar: u32,
-    zero_scalar: u32,
-    /// The same materialisation where the position wants the *integer* class
-    /// instead.  Only a float module can tell the two apart — there the integer
-    /// type is 32-bit and is not the scalar — and in an integer module these are
-    /// [`Self::one_scalar`] and [`Self::zero_scalar`].
+    /// of the `OpSelect` [`as_class`] emits — where the position wants the
+    /// **integer** class.  In an integer module that class is the module's
+    /// scalar and these are its pair; in a float module the integer is the
+    /// 32-bit element index, whose `0` is [`Self::zero`].
     one_integer: u32,
     zero_integer: u32,
+    /// The same materialisation where the position wants the **float** class:
+    /// the `f32` pair, declared in every module.  In a float module these are
+    /// the module's scalar pair; in an integer module they are the only floats
+    /// it holds, which is what lets a comparison be materialised there at all.
+    one_float: u32,
+    zero_float: u32,
     gid: u32,
     /// The first of `binding.total()` consecutive storage-buffer variables.
     buffers: u32,
@@ -644,14 +636,14 @@ impl Ids {
     fn one_of(&self, class: ScalarClass) -> u32 {
         match class {
             ScalarClass::Int => self.one_integer,
-            ScalarClass::Float => self.one_scalar,
+            ScalarClass::Float => self.one_float,
         }
     }
 
     fn zero_of(&self, class: ScalarClass) -> u32 {
         match class {
             ScalarClass::Int => self.zero_integer,
-            ScalarClass::Float => self.zero_scalar,
+            ScalarClass::Float => self.zero_float,
         }
     }
 
@@ -790,7 +782,7 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
     // same derivation, so a caller and this module cannot disagree about it.
     let class = module_class(fragment)?;
     let index = index_local(fragment).ok_or(SpirvRefusal::ResultArity {
-        results: fragment.results,
+        results: fragment.result_classes.len(),
         left: 0,
     })?;
 
@@ -799,16 +791,18 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
     // after the last module-scope id and ends as the module's id bound.
     //
     // A float module declares no 64-bit integer, so `ulong` is reserved and left
-    // undefined there; an integer module leaves `float` the same way. An id that
-    // nothing defines is legal: the id bound is an upper limit, not a count.
+    // undefined there. An id that nothing defines is legal: the id bound is an
+    // upper limit, not a count.
     //
-    // The `1`/`0` a comparison materialises into are the *integer* pair in an
-    // integer module, where that class is the scalar; a float module declares a
-    // 32-bit pair beside them, and shares the module's `zero` for its integer
-    // zero.
-    let (one_integer, zero_integer) = match class {
-        ScalarClass::Int => (17, 18),
-        ScalarClass::Float => (19, 16),
+    // **Both element types are declared in every module** (see the module docs),
+    // so the `1`/`0` a comparison materialises into are allocated for *both*
+    // classes: the integer pair is the 64-bit one in an integer module and the
+    // 32-bit one in a float module, and the float pair is reverse. A float
+    // module's integer zero is the module's 32-bit `zero`; an integer module
+    // needs two ids no other module uses for its floats.
+    let (one_integer, zero_integer, one_float, zero_float, gid) = match class {
+        ScalarClass::Int => (17, 18, 19, 20, 21),
+        ScalarClass::Float => (19, 16, 17, 18, 20),
     };
     let ids = Ids {
         class,
@@ -828,12 +822,12 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
         ptr_elem: 14,
         fn_ty: 15,
         zero: 16,
-        one_scalar: 17,
-        zero_scalar: 18,
         one_integer,
         zero_integer,
-        gid: 20,
-        buffers: 21,
+        one_float,
+        zero_float,
+        gid,
+        buffers: gid + 1,
     };
     let mut next = ids.buffers + binding.total() as u32;
     // `OpConstant` is a *module-scope* instruction, so the body's literals are
@@ -878,19 +872,20 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
 
     for (at, instruction) in instrs.iter().enumerate() {
         match instruction {
-            KernelInstr::Const(value) => {
+            KernelInstr::Const(class, value) => {
                 // A constant is emitted once per (class, value) no matter how
                 // often the body pushes it: SPIR-V requires every id to be
-                // defined exactly once. The push takes the module's scalar,
-                // which is the reading a *value* position wants; a position that
-                // wants an integer asks the pool for that reading instead.
-                let id = literals.get(ids.class, *value, &ids, &mut next);
+                // defined exactly once. The push takes the class the
+                // *instruction* names, which is the reading a value position
+                // wants; a position that wants an integer asks the pool for that
+                // reading instead.
+                let id = literals.get(*class, *value, &ids, &mut next);
                 stack.push(literal(id, *value));
             }
-            KernelInstr::Bin(operator) => {
+            KernelInstr::Bin(class, operator) => {
                 let rhs = pop(&mut stack, at)?;
                 let lhs = pop(&mut stack, at)?;
-                let operand_class = bin_class(lhs.kind, rhs.kind, ids.class);
+                let operand_class = bin_class(lhs.kind, rhs.kind, *class);
                 // A comparison is the one operator whose operands may not be
                 // scalars — `(a < b) == c` compares the *scalar* a comparison
                 // means — and the one whose result is not one. Every other
@@ -1069,49 +1064,6 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                 }
                 stack.push(scalar(index_value, ScalarClass::Int));
             }
-            // The language's class conversion.  **This target always emits it**, and
-            // always has both types to emit it with in the module where it can appear:
-            // a `Float` module declares `OpTypeFloat 32` *and* the 32-bit integer its
-            // index is, so `Int → Float` is `OpConvertUToF` and `Float → Int` is
-            // `OpConvertFToU` — and the index a fragment converts is a `uint` holding
-            // the invocation id, which is the number `int2float` asks for
-            // (`docs/notes/floating-point.md` §5.1).
-            //
-            // An **integer module refuses it by name** rather than declaring
-            // `OpTypeFloat 32` for the occasion: §4.4 keeps that type out of an
-            // integer module because its absence is what `needs_int64` reads to
-            // answer a device chooser, and a body that reaches this point has not
-            // decided to be a float module — it has met the other class inside
-            // itself, which is the shape §4.2 says a kernel does not have.
-            KernelInstr::Conv { from, to } => {
-                let seen = pop(&mut stack, at)?;
-                // The operand is the class the operator converts *from*, and a
-                // literal or a comparison's `0`/`1` is materialised into it here —
-                // the same two positions the rest of this emitter decides the class
-                // at, and the reason the IR carries `from` rather than leaving it
-                // to be read off the module.
-                let seen = as_class(seen, *from, &ids, &mut literals, &mut code, &mut next, at)?;
-                if from == to {
-                    stack.push(seen);
-                    continue;
-                }
-                if ids.class != ScalarClass::Float {
-                    return Err(SpirvRefusal::UnsupportedConversion {
-                        from: *from,
-                        to: *to,
-                        at,
-                    });
-                }
-                let result = next;
-                next += 1;
-                let opcode = if *from == ScalarClass::Int {
-                    op::CONVERT_U_TO_F
-                } else {
-                    op::CONVERT_F_TO_U
-                };
-                code.push(Inst::new(opcode, vec![ids.type_of(*to), result, seen.id]));
-                stack.push(scalar(result, *to));
-            }
             // The condition a `select` needs.  **Not a no-op here**: wasm's
             // `i32.wrap_i64` narrows an `i64` condition to the `i32` its
             // `select` takes, and this target's `select` takes a *bool*, so the
@@ -1163,7 +1115,47 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                 ));
                 stack.push(scalar(result, ids.class));
             }
-            KernelInstr::BufferReadCall => {
+            // The language's two class crossings.  **The direction is the
+            // instruction's**, and that is the whole reason the IR carries the
+            // pair: `Int → Float` and `Float → Int` have the same operand shape,
+            // so a target that read the direction off the operand would be
+            // guessing — and the two targets could guess differently.
+            //
+            // The operand is the class the conversion is *from*, and a literal or
+            // a comparison's `0`/`1` is materialised into it here — the same two
+            // positions the rest of this emitter decides a class at.
+            KernelInstr::Conv { from, to } => {
+                let (from, to) = (*from, *to);
+                let seen = pop(&mut stack, at)?;
+                let seen = as_class(seen, from, &ids, &mut literals, &mut code, &mut next, at)?;
+                // A crossing between one class and itself is a reclassification:
+                // the value already holds the answer, and nothing is emitted.
+                if from == to {
+                    stack.push(seen);
+                    continue;
+                }
+                // **Every crossing the language has is representable here, in
+                // both module classes.**  The module declares both element types
+                // (see the module docs), so the operand's type always has an id:
+                // `Int → Float` is `OpConvertUToF` from the module's integer — the
+                // 64-bit one in an integer module, the 32-bit element index in a
+                // float one — and `Float → Int` is `OpConvertFToU` back to it.
+                // Only the 64-bit integer and its `Int64` capability are
+                // conditional, which is why a float module's `Int` data is 32-bit
+                // and a value past 2³² diverges from the wasm target — the
+                // recorded price (`docs/notes/floating-point.md`).
+                let result = next;
+                next += 1;
+                let opcode = match (from, to) {
+                    // The unsigned conversions, because an `Int` is unsigned.
+                    (ScalarClass::Int, ScalarClass::Float) => op::CONVERT_U_TO_F,
+                    (ScalarClass::Float, ScalarClass::Int) => op::CONVERT_F_TO_U,
+                    _ => unreachable!("a same-class crossing returned above"),
+                };
+                code.push(Inst::new(opcode, vec![ids.type_of(to), result, seen.id]));
+                stack.push(scalar(result, to));
+            }
+            KernelInstr::BufferReadCall(_) => {
                 let element = pop(&mut stack, at)?;
                 let position = pop(&mut stack, at)?;
                 // An access chain's index is an **integer**, so a float in this
@@ -1199,7 +1191,7 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                 code.push(Inst::new(op::LOAD, vec![ids.scalar(), loaded, pointer]));
                 stack.push(scalar(loaded, ids.class));
             }
-            KernelInstr::BufferWriteCall => {
+            KernelInstr::BufferWriteCall(_) => {
                 let value = pop(&mut stack, at)?;
                 let element = pop(&mut stack, at)?;
                 let position = pop(&mut stack, at)?;
@@ -1252,7 +1244,7 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
 
     if stack.len() != 1 {
         return Err(SpirvRefusal::ResultArity {
-            results: fragment.results,
+            results: fragment.result_classes.len(),
             left: stack.len(),
         });
     }
@@ -1366,14 +1358,16 @@ fn assemble(ids: &Ids, binding: Binding, literals: &[Inst], code: &[Inst], bound
         Inst::new(op::TYPE_VOID, vec![ids.void]),
         Inst::new(op::TYPE_BOOL, vec![ids.boolean]),
     ];
-    match ids.class {
-        // The fragment's own 64-bit integer is **unsigned** (signedness `0`):
-        // the language's `Int` is, and the unsigned opcodes a kernel divides,
-        // takes a remainder and compares with require it. See [`Ids::ulong`].
-        ScalarClass::Int => types.push(Inst::new(op::TYPE_INT, vec![ids.ulong, 64, 0])),
-        // `OpTypeFloat 32`: the language's `Float` is `f32`
-        // (`docs/notes/floating-point.md` §4.1).
-        ScalarClass::Float => types.push(Inst::new(op::TYPE_FLOAT, vec![ids.float, 32])),
+    // **Both element types are declared in every module**, because a body may
+    // hold values of either class and cross between them through `Conv`. `Float32`
+    // is core SPIR-V and carries no capability, so it is unconditional; the
+    // 64-bit integer is what costs `Int64`, and an integer module's own signedness
+    // is `0` because the language's `Int` is unsigned and the unsigned opcodes a
+    // kernel divides, takes a remainder and compares with require it (see
+    // [`Ids::ulong`]).
+    types.push(Inst::new(op::TYPE_FLOAT, vec![ids.float, 32]));
+    if ids.class == ScalarClass::Int {
+        types.push(Inst::new(op::TYPE_INT, vec![ids.ulong, 64, 0]));
     }
     types.extend([
         Inst::new(op::TYPE_INT, vec![ids.uint, 32, 0]),
@@ -1403,33 +1397,43 @@ fn assemble(ids: &Ids, binding: Binding, literals: &[Inst], code: &[Inst], bound
 
     let mut constants = vec![Inst::new(op::CONSTANT, vec![ids.uint, ids.zero, 0])];
     // The scalar `1` and `0` a comparison is materialised into — `1.0`/`0.0`
-    // over two floats, the i64 pair over two integers. Declared unconditionally
-    // with the other constants — `OpConstant` is module-scope, and an unused
-    // constant is legal — because which body needs them is known only after the
-    // walk above.
+    // over two floats, the integer pair over the module's integer (`i64` in an
+    // integer module, `u32` in a float one). Declared unconditionally with the
+    // other constants — `OpConstant` is module-scope, and an unused constant is
+    // legal — because which body needs them is known only after the walk above.
+    //
+    // **Both pairs, because both element types are declared in every module**
+    // (see the module docs): a comparison materialised into a float position is
+    // reachable in an integer module too. The integer `0` a float module needs is
+    // `ids.zero` above, so only its `1` is declared here.
     match ids.class {
         ScalarClass::Int => {
             constants.push(Inst::new(
                 op::CONSTANT,
-                vec![ids.ulong, ids.one_scalar, 1, 0],
+                vec![ids.ulong, ids.one_integer, 1, 0],
             ));
             constants.push(Inst::new(
                 op::CONSTANT,
-                vec![ids.ulong, ids.zero_scalar, 0, 0],
+                vec![ids.ulong, ids.zero_integer, 0, 0],
+            ));
+            constants.push(Inst::new(
+                op::CONSTANT,
+                vec![ids.float, ids.one_float, 1.0f32.to_bits()],
+            ));
+            constants.push(Inst::new(
+                op::CONSTANT,
+                vec![ids.float, ids.zero_float, 0.0f32.to_bits()],
             ));
         }
         ScalarClass::Float => {
             constants.push(Inst::new(
                 op::CONSTANT,
-                vec![ids.float, ids.one_scalar, 1.0f32.to_bits()],
+                vec![ids.float, ids.one_float, 1.0f32.to_bits()],
             ));
             constants.push(Inst::new(
                 op::CONSTANT,
-                vec![ids.float, ids.zero_scalar, 0.0f32.to_bits()],
+                vec![ids.float, ids.zero_float, 0.0f32.to_bits()],
             ));
-            // The 32-bit `1` a comparison's bool is materialised into where the
-            // position wants the *integer* class. The integer `0` is the
-            // `ids.zero` above.
             constants.push(Inst::new(op::CONSTANT, vec![ids.uint, ids.one_integer, 1]));
         }
     }
@@ -1583,10 +1587,15 @@ fn as_condition(
             *next += 1;
             let result = *next;
             *next += 1;
+            // The bit pattern is compared in its **32-bit** reading, so the zero
+            // is `ids.zero` and not the integer class's: in an integer module that
+            // class is 64-bit, and `OpINotEqual` over a `uint` and a `ulong` is an
+            // invalid instruction rather than a wide comparison. `ids.zero` is the
+            // 32-bit `0` every module declares.
             code.push(Inst::new(op::BITCAST, vec![ids.uint, bits, slot.id]));
             code.push(Inst::new(
                 op::I_NOT_EQUAL,
-                vec![ids.boolean, result, bits, ids.zero_of(ScalarClass::Int)],
+                vec![ids.boolean, result, bits, ids.zero],
             ));
             condition(result)
         }
