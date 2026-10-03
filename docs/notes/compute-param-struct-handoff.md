@@ -276,4 +276,4 @@ tests: `a_tuple_kernel_runs_through_the_signature_carrying_wrapper` and
 | Position resolution | `parallel_buffer_pos`, `peeled_argument`, `param_path` (`IndexStep`/`resolve_steps`), `is_param_value`, `usize_value`, `struct_type_names`, `param_value_shape` |
 | Launch walk (count and buffers) | `ComputeOperator::ParLaunch`, `compute.rs:1334` |
 | The `Parallel` gate and run | `ParallelOp::build` and `ComputeOperator::Parallel`, `compute.rs:1283` |
-| Struct type reading | `struct_term_parts`, `struct_names_any`, `struct_fields_by_shape`, `crates/lichen-highlevel/src/shape.rs` |
+| Struct type reading | `struct_term_parts`, `struct_names_any`, `field_names`/`field_list`/`field_type`/`TypeRef` (`crates/lichen-highlevel/src/shape.rs`), `struct_fields_of_slot` (`compute.rs`) |

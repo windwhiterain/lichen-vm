@@ -185,6 +185,28 @@ Open risk recorded: `parallel_sig`'s `Parameterized` blocker (see
 apply-with-symbolic-argument gap on exactly the path specialization needs —
 prototype the typed-placeholder apply before committing to the rest.
 
+**Updated after measurement (S1/S2, see
+[type-query-api-proposal](type-query-api-proposal.md) §7).**  Two corrections to
+the direction above, both measured on this tree:
+
+- The `parallel_sig` risk is **stale**: handoff §5 diagnosed the `Parameterized`
+  operand as nested static closures losing their captures' bindings (two defects
+  in `static_module/apply.rs`), and fixed both.  Nothing about it blocks
+  specialization, so the typed-placeholder apply is no longer a prototype that
+  has to precede the rest.
+- The named-reads bullet below, and the `class_of` adapter this note's companion
+  proposal wanted, are **partly answered without specialization**: a field read's
+  type was left lazy even when the container's type was concrete, so a class
+  question about it (`check_binop`'s `names_float_class`) simply had no answer —
+  `(x : struct<.a Float>) => x.a + x.a` did not check in plain lichen.  With
+  `shape`'s field accessors and `Checker::slot_read` reading the field's own type
+  node, every term of an *annotated* parameter's body **is** decided in the graph
+  already, which is the property §6 wanted the apply to produce.  What
+  specialization still buys is the *value* laziness — the emitter's "compiled
+  from a template before any apply" catch-all (a body-local `let` fed by a buffer
+  read, a body-local helper, a `compute.call` wrapper) — and the all-`Int`
+  parallel ABI seed, which are §6's remaining bullets.
+
 ## 7. Non-goals and traps
 
 - **Do not build** `TypeRef`, `class_of`, or any new `shape.rs` accessor.
