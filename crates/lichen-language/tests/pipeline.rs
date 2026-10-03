@@ -1028,6 +1028,89 @@ fn a_polymorphic_struct_constructor_shares_one_nominal_kind() {
 }
 
 #[test]
+fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
+    // `A = I => struct<.n Int, .I I>` — one written struct type with *named*
+    // fields, inside a function body.  Its identity is decided when the
+    // occurrence is checked, so both applications of `A` are one nominal
+    // type and the instance built through `S1` annotates against `S2`.  Both
+    // halves of the identity matter: the nullary `Fresh` node (a copy
+    // re-runs it) and the name table (an arena payload, so a copy is a
+    // different table that does not unify).  Before the fix this program
+    // failed the annotation with `…>#2` against `…>#1`
+    // (`docs/notes/applied-struct-nominal-id.md`).
+    let (module, root) = run("A = I => struct<.n Int, .I I>\n\
+         In = struct<.x _, .y _>\n\
+         S1 = A In\n\
+         S2 = A In\n\
+         x = S1(.n 3, .I In(.x 10, .y 20))\n\
+         y = (x : S2)\n\
+         y");
+    let mut module = module;
+    let instance = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(instance.len(), 2, "the instance wraps its two field values");
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(instance[0]))
+                .as_ref()
+                .unwrap()
+        ),
+        3
+    );
+    let inner = array_ids(module.evaluate_node_deep(instance[1], None));
+    assert_eq!(inner.len(), 2, "the inner struct wraps its own two fields");
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(inner[0]))
+                .as_ref()
+                .unwrap()
+        ),
+        10
+    );
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(inner[1]))
+                .as_ref()
+                .unwrap()
+        ),
+        20
+    );
+    // The control the fix must keep: the id is the *occurrence*, not the
+    // instantiation, so one constructor applied to different field types is
+    // still two types — the field types ride in the shape.
+    let d = diags(
+        "A = I => struct<.n Int, .I I>\n\
+         S1 = A Int\n\
+         S2 = A Float\n\
+         x = S1(.n 3, .I 5)\n\
+         y = (x : S2)\n\
+         y",
+    );
+    assert_eq!(d.len(), 1, "different field types must not unify: {d:?}");
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::Annotation);
+    // The runtime half of the same identity: here the annotation sits in the
+    // *callee's* body, so the argument's type meets the declared one in the
+    // apply-time parameter check rather than in a checker-issued unify.  A
+    // pinned id alone does not fix this row — the copied name table is what
+    // conflicts.
+    let report = compile(
+        "A = I => struct<.n I>\n\
+         S1 = A Int\n\
+         S2 = A Int\n\
+         f = v => (v : S2)\n\
+         f S1(.n 3)",
+    );
+    assert!(
+        report.ok(),
+        "one occurrence, two evaluations, at apply time: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
 fn a_named_struct_field_read_resolves_to_the_positional_index() {
     // `A = struct<.x Int, .y Type>` carries a name→index table; `a.x`
     // reads field `x` (index 0), `a.y` field `y` (index 1).
