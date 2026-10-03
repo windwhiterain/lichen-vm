@@ -57,6 +57,25 @@ impl<P: Program> disjoint::Node for Node<P> {
 }
 
 impl<P: Program> Module<P> {
+    /// Merge the classes of `a` and `b`, carrying the merged class's decided
+    /// value to the members the merge adds to it.
+    ///
+    /// The two low-type reads at the top are the shape half; the value half is
+    /// the class-channel invariant ([`Self::write_node_value`]) applied to the
+    /// merge that **grows** a class rather than to the write that fills one.  A
+    /// decided value is not necessarily on the representative: replication
+    /// skips operation-bearing members, so a class whose representative is a
+    /// pending operation holds its value on some other member.  A merge that
+    /// read only the two representatives' slots would therefore see no value
+    /// and carry nothing, leaving the cell that just joined the class
+    /// undecided while the class has been decided all along — a read that
+    /// happened before the unification which decided the class, with nothing
+    /// to wake it afterwards (`docs/notes/eval-before-unify.md` §2.1).
+    ///
+    /// Gated on the representative's own slot being unbound and the class
+    /// having more than one member: a representative that is a pure cell is
+    /// written by every commit (replication covers it), and a class of one has
+    /// no other member to hide a value on.
     pub fn add_equality(&mut self, a: NodeId, b: NodeId) -> NodeId {
         // Both sides' low types are read *before* the union (which leaves the
         // authoritative copy on whichever node becomes the representative) and
@@ -66,6 +85,12 @@ impl<P: Program> Module<P> {
         let representative = disjoint::union(&mut self.nodes, a, b);
         for shape in [left, right].into_iter().flatten() {
             self.refine_class_low_type(representative, shape);
+        }
+        if is_unbound(self.nodes[representative].value)
+            && self.nodes[representative].meta().next().is_some()
+            && let Some(value) = self.class_committed_value(representative)
+        {
+            self.replicate_class_value(representative, value);
         }
         representative
     }
@@ -282,17 +307,33 @@ impl<P: Program> Module<P> {
             {
                 return;
             }
-            let rep = self.equality_representative(node);
-            let mut member = rep;
-            loop {
-                let next = self.nodes[member].meta().next();
-                if self.nodes[member].operation.is_none() && is_unbound(self.nodes[member].value) {
-                    self.nodes[member].value = Some(value);
-                }
-                let Some(next) = next else { break };
-                member = next;
+            let representative = self.equality_representative(node);
+            self.replicate_class_value(representative, value);
+            self.observe_class_low_type(representative, value);
+        }
+    }
+
+    /// Replicate a concrete `value` over the unbound pure cells of
+    /// `representative`'s class — the second half of
+    /// [`Self::write_node_value`], shared with [`Self::add_equality`], where a
+    /// merge carries the class's decided value to the members it adds exactly
+    /// as a write carries it to the members it finds.
+    ///
+    /// Only operation-free (pure) cells are written, matching `force_pending`,
+    /// so a pending computation is never overridden: an operation node's own
+    /// slot is its computation's to settle.  Deliberately **not** the low-type
+    /// observation [`Self::write_node_value`] performs — observation is a class
+    /// *gaining* a decided value, and this merge adds no fact to the class, only
+    /// members.
+    fn replicate_class_value(&mut self, representative: NodeId, value: P::Value) {
+        let mut member = representative;
+        loop {
+            let next = self.nodes[member].meta().next();
+            if self.nodes[member].operation.is_none() && is_unbound(self.nodes[member].value) {
+                self.nodes[member].value = Some(value);
             }
-            self.observe_class_low_type(rep, value);
+            let Some(next) = next else { break };
+            member = next;
         }
     }
 
