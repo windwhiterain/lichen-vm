@@ -85,12 +85,13 @@ fn an_array_element_conflict_renders_unbound_arrow_cells() {
 fn a_struct_conflict_keeps_the_nominal_ids() {
     // Two source occurrences are different nominal types.  The message
     // renders each side's full struct type *with its nominal id*
-    // (`struct<Int, Int>#0` vs `#1`), so the two structs stay
+    // (`struct<.f Int, .g Int>#0` vs `#1`), so the two structs stay
     // distinguishable even though their field shapes match.
-    let report =
-        crate::compile("s1 = struct<Int, Int>; s2 = struct<Int, Int>; [s1(1, 2), s2(1, 2)]");
+    let report = crate::compile(
+        "s1 = struct<.f Int, .g Int>; s2 = struct<.f Int, .g Int>; [s1(1, 2), s2(1, 2)]",
+    );
     let message = &report.diagnostics[0].message;
-    assert!(message.contains("struct<Int, Int>#"), "{}", message);
+    assert!(message.contains("struct<.f Int, .g Int>#"), "{}", message);
 }
 
 #[test]
@@ -116,20 +117,20 @@ fn output(source: &str) -> String {
 
 #[test]
 fn a_struct_type_value_renders_in_type_syntax() {
-    // A struct type's value is the raw shape `[TypeId(0), [Int, Type]]` —
-    // the lowlevel data layout.  Read against its kind, it prints as the
-    // code that produced it.
+    // A struct type's value is the raw shape `[Int, Type]` — the positional
+    // field-type list, the lowlevel data layout.  Read against its kind, it
+    // prints as the code that produced it.
     assert_eq!(
-        output("A = struct<Int, Type>\nA"),
-        "struct<Int, Type>: TypeStruct"
+        output("A = struct<.f Int, .t Type>\nA"),
+        "struct<.f Int, .t Type>: TypeStruct"
     );
 }
 
 #[test]
 fn a_struct_instance_renders_its_field_tuple() {
     assert_eq!(
-        output("A = struct<Int, Type>\na = A(1, Int)\n(A, a, a(0), a(1))"),
-        "(struct<Int, Type>, (1, Int), 1, Int): <TypeStruct, struct<Int, Type>, Int, Type>"
+        output("A = struct<.f Int, .t Type>\na = A(1, Int)\n(A, a, a.f, a.t)"),
+        "(struct<.f Int, .t Type>, (1, Int), 1, Int): <TypeStruct, struct<.f Int, .t Type>, Int, Type>"
     );
 }
 
@@ -138,8 +139,8 @@ fn a_single_field_struct_instance_keeps_the_tuple_comma() {
     // A single field needs no extra comma in the source (`B(1)`); the
     // rendered value still shows the one-element tuple's comma `(1,)`.
     assert_eq!(
-        output("B = struct<Int>\nb = B(1,)\n(B, b)"),
-        "(struct<Int>, (1,)): <TypeStruct, struct<Int>>"
+        output("B = struct<.f Int>\nb = B(1,)\n(B, b)"),
+        "(struct<.f Int>, (1,)): <TypeStruct, struct<.f Int>>"
     );
 }
 
@@ -171,7 +172,7 @@ fn a_raw_index_reads_a_type_component() {
     // and yields that component type.
     assert_eq!(output("<Int, string><0>"), "Int: Type");
     assert_eq!(output("<Int, string><1>"), "string: Type");
-    assert_eq!(output("struct<Int, string><1>"), "string: Type");
+    assert_eq!(output("struct<.a Int, .b string><1>"), "string: Type");
     assert_eq!(output("<Int, string, Type><0>"), "Int: Type");
 }
 

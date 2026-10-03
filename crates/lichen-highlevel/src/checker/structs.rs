@@ -87,7 +87,12 @@ where
                 container_ty
             }
             None => {
-                self.check_unify(container_ty, tuple_ty, self.loc(container, 1), DiagKind::Guard);
+                self.check_unify(
+                    container_ty,
+                    tuple_ty,
+                    self.loc(container, 1),
+                    DiagKind::Guard,
+                );
                 tuple_ty
             }
         };
@@ -99,8 +104,7 @@ where
         // decided, so `slot_read` reads the field's type out of it instead of
         // leaving an `Index` no class question can see through.
         let position = self.constant_position(key);
-        let (value_node, ty_node) =
-            self.slot_read(read_ty, container_value, key_value, position);
+        let (value_node, ty_node) = self.slot_read(read_ty, container_value, key_value, position);
         let pair = self.pair_of(value_node, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);

@@ -52,11 +52,11 @@ fn imports_and_applies_a_function_package() {
 #[test]
 fn imports_a_struct_type_and_instantiates_it() {
     let dir = temp_dir("struct");
-    write(&dir, "s.lichen", "struct<Int>\n");
+    write(&dir, "s.lichen", "struct<.f Int>\n");
     let main = "---s = import \"s.lichen\"---s(5,)\n";
     let mut store = PackageStore::<LangProgram>::new();
     let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
-    assert_eq!(out, "(5,): struct<Int>");
+    assert_eq!(out, "(5,): struct<.f Int>");
 }
 
 #[test]
@@ -84,16 +84,16 @@ fn transitive_imports_apply_across_modules() {
 #[test]
 fn transitive_struct_types_flow_through_packages() {
     // A struct type defined in the inner package, instantiated in the
-    // middle one, indexed in the importer: the nominal id and the frozen
+    // middle one, read by name in the importer: the nominal id and the frozen
     // type travel across two freeze boundaries.
     let dir = temp_dir("transitive-struct");
-    write(&dir, "inner.lichen", "struct<Int>\n");
+    write(&dir, "inner.lichen", "struct<.f Int>\n");
     write(
         &dir,
         "middle.lichen",
         "---S = import \"inner.lichen\"---S(41,)\n",
     );
-    let main = "---v = import \"middle.lichen\"---v(0)\n";
+    let main = "---v = import \"middle.lichen\"---v.f\n";
     let mut store = PackageStore::<LangProgram>::new();
     let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
     assert_eq!(out, "41: Int");

@@ -6,7 +6,7 @@ type — the `Fresh` id is per occurrence and shared, so `Box Int` and
 `Box Type` differ only in their field lists (the value shape), not in
 their type (the shared kind).  They therefore coexist in one homogeneous
 tuple."
-  output = "(struct<Int>, struct<Type>, struct<Int>): <TypeStruct, TypeStruct, TypeStruct>"
+  output = "(struct<.f Int>, struct<.f Type>, struct<.f Int>): <TypeStruct, TypeStruct, TypeStruct>"
 ---
-Box = t => struct<t>
+Box = t => struct<.f t>
 (Box Int, Box Type, Box Int)

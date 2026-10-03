@@ -2464,6 +2464,12 @@ first-hand fixed on this tree: `(1,\n2)` is `(1, 2): <Int, Int>`, `[1,\n2]` is
 `A = struct<.x Int,\n.y Type>` instantiates as `A(.x 1,\n.y Int)`, and
 `table { 1 ==> 2,\n3 ==> 4 }` reads back `4`.
 
+The struct line's *parser* result is what this item measured, and the newline
+tolerance it pins is unchanged; under the later named-field rule that same
+program is refused at check time, the named spelling
+`struct<.f Int,\n.g string>(1,\n"a")` being `(1, "a"): struct<.f Int, .g string>`.
+See the addendum to `P1-34`'s outcome.
+
 **The discriminator had to move with the grammar.** `comma_list`'s
 `saw_comma` — what splits the single-argument positional slot read `A(1)` from
 the instantiation `A(1,)` — counted a *trailing token*, so it became a trailing
@@ -2697,7 +2703,9 @@ Reproductions at `dev@a972a79`, first-hand:
 s = struct<Int, string>(1, "a"); s[0] error: expected array<Int, string>, found struct<Int, string>  --> 1:5
 ```
 
-`(1, 2)(0)` and `s(0)` both work and yield the field.
+`(1, 2)(0)` works and yields the field. `s(0)` does **not** any more: the paren
+read is the *tuple* read, so a struct instance is refused there (see the
+addendum to this item's Outcome below).
 
 **Which side is wrong is a call, so this is `blocked:D16`** and neither side was
 changed. The evidence leans one way — the code's intent is explicit, its doc
@@ -2729,6 +2737,29 @@ rather than a reopening of this one; the shape that answer would need (what a
 *struct's* positional index means, given that `a(k)` resolves through the
 struct's name table while the spec's answer was "its wrapped tuple's elements")
 is recorded in `D16` below.
+
+**Later addendum — the positional spelling is gone too, and struct fields are
+named.** The tuple-only positional read (`check_field`, commit `a356ae6`)
+narrows D16's answer one step further. `check_field` now pins an *undecided*
+container to a fresh tuple type and refuses a *decided* non-tuple, both with
+`DiagKind::Guard`; the requirement prints as that open tuple, `<?a, …>`. So
+`a(k)` is the **tuple** read and nothing else, `s(1, 2)(0)` is refused exactly as
+`s(1, 2)[0]` is, and a struct instance reads by name (`s.x`, `X::a`). The same
+change requires **every struct field to be named** (`DiagKind::StructFieldName`:
+`struct<.name T>`, or `name = e` in a block), so the anonymous `struct<Int,
+string>` spellings recorded earlier in this file — the comma-list reproduction
+above, P1-34's own reproduction and P1-35's table below — no longer check. Their
+measured outputs are kept as the record of the tree they were taken on; the named
+spelling of the same programs is the one that runs now.
+
+Two consequences worth naming for the next pass. A *struct-returning block*'s
+bare-expression field is refused too (`{ 1; x = 2 }`), which is what makes a
+non-tail bare expression a check error rather than a positional field. And with
+an empty struct type (`struct<>`) and an empty block (`{}`) both unspellable,
+every reachable struct type now has at least one field and all of them named, so
+the name-table-less `Void` struct marker — and `DiagKind::StructAnonymousField`,
+the `.name`-argument-against-no-names-table error — is **unreachable from
+source**; it survives only for hand-built IR.
 
 **The raw form is not an available substitute, and that is its own item.** The
 tempting answer — "spell it `s<0>`" — does not work on a runtime container: see
@@ -6604,9 +6635,11 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   *Arrays only* is what `check_index` implements and documents
   (`checker/indexing.rs:19-28`, `:39-52`): the container's type is pinned to a
   fresh array type, so a tuple or a struct instance is refused with
-  `DiagKind::Guard`, and the positional read of a tuple or struct is the
-  dedicated `a(k)` — the operator is chosen by syntax, never by a runtime kind
-  dispatch. Every example agrees (`examples/index.lichen` reads `b(0)`).
+  `DiagKind::Guard`, and the positional read of a **tuple** is the dedicated
+  `a(k)` (a struct instance reads by name, `s.x` — the tuple-only narrowing is
+  the addendum to `P1-34`'s outcome) — the operator is chosen by syntax, never by
+  a runtime kind dispatch. Every example agrees (`examples/index.lichen` reads
+  `b(0)`).
 
   *Any container* is what `language-spec.md` §3 stated, twice and explicitly:
   `e[i]` reads the `i`-th element of "an array, tuple, or struct instance", and
@@ -6626,9 +6659,10 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   *Rejected — teaching `check_index` the tuple and struct kinds:* it is the
   larger of the two and it would have to answer a question the deleted sentence
   answered badly — what a *struct's* positional index means, given that the
-  spec's answer was "its wrapped tuple's elements" while `a(k)` resolves through
-  the struct's name table. A user who wants `(1, 2)[0]` to be `1` files that as
-  a new item, and it starts by answering the struct question.
+  spec's answer was "its wrapped tuple's elements" while the struct read has its
+  own resolution through the struct's name table (`s.x`). A user who wants
+  `(1, 2)[0]` to be `1` files that as a new item, and it starts by answering the
+  struct question.
 
   One adjacent fact belongs with the decision rather than the item: the raw form
   `X<e>` *looks* like it could have spelled the spec's meaning without touching

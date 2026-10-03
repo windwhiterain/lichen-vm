@@ -101,7 +101,8 @@ fn app(ir: &mut IR, f: ExprId, x: ExprId) -> ExprId {
 fn index(ir: &mut IR, a: ExprId, i: ExprId) -> ExprId {
     ir.alloc(ExprKind::Index { array: a, index: i })
 }
-/// `a(k)` — a positional slot read over a tuple element or struct field.
+/// `a(k)` — a positional slot read over a tuple element (a struct instance
+/// reads by name, `s.x`; a decided non-tuple container is refused).
 fn field(ir: &mut IR, c: ExprId, k: ExprId) -> ExprId {
     ir.alloc(ExprKind::Field {
         container: c,
@@ -128,12 +129,8 @@ fn tuple(ir: &mut IR, elements: &[ExprId]) -> ExprId {
 fn type_tuple(ir: &mut IR, elements: &[ExprId]) -> ExprId {
     ir.alloc_type_tuple(elements)
 }
-/// A struct type expression: `struct<T1, ..., Tn>` — positional fields.
-fn type_struct(ir: &mut IR, fields: &[ExprId]) -> ExprId {
-    let fields: Vec<(ExprId, Option<&'static str>)> = fields.iter().map(|&e| (e, None)).collect();
-    ir.alloc_type_struct(&fields)
-}
-/// A struct type expression with field names: `struct<.a T1, .b T2>`.
+/// A struct type expression with field names: `struct<.a T1, .b T2>` — every
+/// struct field is named (an unnamed one is refused, `DiagKind::StructFieldName`).
 fn named_type_struct(ir: &mut IR, fields: &[(ExprId, &'static str)]) -> ExprId {
     let fields: Vec<(ExprId, Option<&'static str>)> =
         fields.iter().map(|&(e, name)| (e, Some(name))).collect();
@@ -1338,24 +1335,26 @@ fn array_index_out_of_bounds_against_a_bound_length() {
 }
 
 // --- struct types ----------------------------------------------------------
-// A struct type is the pair [[TypeId(n), field types], [TypeStruct, Type]]:
-// like an array type (shape [element type, length]), the shape bundles a
-// *fresh nominal* id with the positional field-type list, and the kind slot
-// holds the fixed TypeStruct marker.  Equal ids unify, different ids never
-// do, and a struct never unifies with a same-shape tuple — nominal identity.
+// A struct type is the pair [[field types], [marker, Type]]: like an array
+// type (shape [element type, length]), the shape is the *positional
+// field-type list*, and the kind slot holds the fixed TypeStruct marker — a
+// two-field `[TypeId(n), names]` array carrying a *fresh nominal* id and the
+// name→index table.  Equal ids unify, different ids never do, and a struct
+// never unifies with a same-shape tuple — nominal identity.  Every field is
+// named, so a struct instance reads by name.
 
 #[test]
 fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
-    // struct { Int, Type } — the pair [[int, Type], [TypeId(0), [TypeStruct, Type]]].
+    // struct<.f Int, .t Type> — the pair [[int, Type], [TypeId(0), [TypeStruct, Type]]].
     let mut ir = IR::new();
     let t1 = int_t(&mut ir);
     let t2 = ty(&mut ir);
-    let s = type_struct(&mut ir, &[t1, t2]);
+    let s = named_type_struct(&mut ir, &[(t1, "f"), (t2, "t")]);
     let b = build(s, ir);
-    assert!(b.ok, "struct {{ Int, Type }} should kind");
+    assert!(b.ok, "struct<.f Int, .t Type> should kind");
     assert!(b.module.unify_errors.is_empty());
     // the shape is just the positional field-type list [int, Type] — the
-    // nominal id no longer rides in the shape
+    // nominal id does not ride in the shape
     let shape = b.state[s].val.unwrap();
     let shape_ids = array_ids(&b, shape);
     assert_eq!(shape_ids.len(), 2);
@@ -1373,12 +1372,13 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
         b.module.node_value(AnyNodeId::Dynamic(marker_ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
     ));
-    // an anonymous struct carries no name table — the marker's second field
-    // is the `Void` marker (a computed nothing, not the `None` unit value).
-    assert_eq!(
+    // a named struct's marker carries a name table in its second field (the
+    // `Void` marker is the no-names case, reachable only from hand-built IR:
+    // every source struct type now has named fields).
+    assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(marker_ids[1])),
-        Some(HighProgramValue::LowValue(LowValue::Void))
-    );
+        Some(HighProgramValue::LowValue(LowValue::Table(_)))
+    ));
     // one source occurrence consumed exactly one fresh id
     assert_eq!(
         AsField::<HighGlobal>::get(&b.module.global_ext).type_id_counter,
@@ -1436,8 +1436,8 @@ fn a_named_struct_carries_a_name_to_index_table() {
 fn each_struct_type_occurrence_allocates_a_distinct_id() {
     let mut ir = IR::new();
     let f = int_t(&mut ir);
-    let s1 = type_struct(&mut ir, &[f]);
-    let s2 = type_struct(&mut ir, &[f]);
+    let s1 = named_type_struct(&mut ir, &[(f, "f")]);
+    let s2 = named_type_struct(&mut ir, &[(f, "f")]);
     let pair = tuple(&mut ir, &[s1, s2]);
     let b = build(pair, ir);
     assert!(b.ok);
@@ -1463,8 +1463,8 @@ fn two_struct_type_occurrences_do_not_unify() {
     // same fields, different occurrences → different ids → nominal conflict
     let mut ir = IR::new();
     let f = int_t(&mut ir);
-    let s1 = type_struct(&mut ir, &[f]);
-    let s2 = type_struct(&mut ir, &[f]);
+    let s1 = named_type_struct(&mut ir, &[(f, "f")]);
+    let s2 = named_type_struct(&mut ir, &[(f, "f")]);
     let pair = tuple(&mut ir, &[s1, s2]);
     let b = build(pair, ir);
     assert!(b.ok);
@@ -1486,7 +1486,7 @@ fn two_struct_type_occurrences_do_not_unify() {
 fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
     let mut ir = IR::new();
     let f = int_t(&mut ir);
-    let s = type_struct(&mut ir, &[f]);
+    let s = named_type_struct(&mut ir, &[(f, "f")]);
     let t = type_tuple(&mut ir, &[f]);
     let pair = tuple(&mut ir, &[s, t]);
     let b = build(pair, ir);
@@ -1520,7 +1520,7 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
 fn a_struct_type_unifies_with_itself() {
     let mut ir = IR::new();
     let f = int_t(&mut ir);
-    let s = type_struct(&mut ir, &[f]);
+    let s = named_type_struct(&mut ir, &[(f, "f")]);
     let b = build(s, ir);
     assert!(b.ok);
     let mut module = b.module;
@@ -1533,16 +1533,16 @@ fn a_struct_type_unifies_with_itself() {
 
 #[test]
 fn an_annotation_against_a_struct_type_reports_the_conflict() {
-    // 5 : struct { Int } — the literal's int type conflicts with the struct
+    // 5 : struct<.f Int> — the literal's int type conflicts with the struct
     // type; the struct pair (the diary's expected side) renders with its
     // nominal id in the flow line.
     let mut ir = IR::new();
     let five = int(&mut ir, 5);
     let f = int_t(&mut ir);
-    let s = type_struct(&mut ir, &[f]);
+    let s = named_type_struct(&mut ir, &[(f, "f")]);
     let a = ann(&mut ir, five, s);
     let b = build(a, ir);
-    assert!(!b.ok, "5 : struct {{ Int }} must fail");
+    assert!(!b.ok, "5 : struct<.f Int> must fail");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
@@ -1561,14 +1561,14 @@ fn an_annotation_against_a_struct_type_reports_the_conflict() {
 
 #[test]
 fn two_struct_types_conflict_reports_the_nominal_ids() {
-    // (\x. (x : struct { Int })) (struct { Int }) — the argument's struct
+    // (\x. (x : struct<.f Int>)) (struct<.f Int>) — the argument's struct
     // type has a different fresh id than the annotation's, so the apply-time
     // unify fails on the ids.
     let mut ir = IR::new();
     let f1 = int_t(&mut ir);
-    let s1 = type_struct(&mut ir, &[f1]);
+    let s1 = named_type_struct(&mut ir, &[(f1, "f")]);
     let f2 = int_t(&mut ir);
-    let s2 = type_struct(&mut ir, &[f2]);
+    let s2 = named_type_struct(&mut ir, &[(f2, "f")]);
     let x = param(&mut ir);
     let body = ann(&mut ir, x, s1);
     let l = lam(&mut ir, x, body);
@@ -1587,12 +1587,12 @@ fn two_struct_types_conflict_reports_the_nominal_ids() {
 
 #[test]
 fn an_annotation_with_a_struct_type_rejects_a_literal_at_apply_time() {
-    // (\x. (x : struct { Int })) 5 — the struct type sits directly in the
+    // (\x. (x : struct<.f Int>)) 5 — the struct type sits directly in the
     // annotation, so the apply-time unify checks the argument's type against
     // it and fails.
     let mut ir = IR::new();
     let f = int_t(&mut ir);
-    let s = type_struct(&mut ir, &[f]);
+    let s = named_type_struct(&mut ir, &[(f, "f")]);
     let x = param(&mut ir);
     let body = ann(&mut ir, x, s);
     let l = lam(&mut ir, x, body);
@@ -1625,7 +1625,7 @@ fn a_shared_expression_compiles_once_with_one_nominal_id() {
     // would conflict.
     let mut ir = IR::new();
     let f = int_t(&mut ir);
-    let s = type_struct(&mut ir, &[f]);
+    let s = named_type_struct(&mut ir, &[(f, "f")]);
     let a = array(&mut ir, &[s, s]);
     let b = build(a, ir);
     assert!(b.ok, "one shared occurrence is one nominal type");
@@ -1655,7 +1655,7 @@ fn a_tuple_instantiated_with_a_struct_type_is_an_instance() {
     let v = tuple(&mut ir, &[one, two]);
     let f1 = int_t(&mut ir);
     let f2 = int_t(&mut ir);
-    let s = type_struct(&mut ir, &[f1, f2]);
+    let s = named_type_struct(&mut ir, &[(f1, "f"), (f2, "g")]);
     let inst = instantiate(&mut ir, s, v);
     let b = build(inst, ir);
     assert!(b.ok, "s(1, 2) must check");
@@ -1675,7 +1675,7 @@ fn a_struct_instantiation_checks_its_fields() {
     let two = int(&mut ir, 2);
     let v = tuple(&mut ir, &[one, two]);
     let f = int_t(&mut ir);
-    let s = type_struct(&mut ir, &[f]);
+    let s = named_type_struct(&mut ir, &[(f, "f")]);
     let inst = instantiate(&mut ir, s, v);
     let b = build(inst, ir);
     assert!(
@@ -1689,18 +1689,18 @@ fn a_struct_instantiation_checks_its_fields() {
     let v = tuple(&mut ir, &[one, two]);
     let t1 = ty(&mut ir);
     let t2 = ty(&mut ir);
-    let s = type_struct(&mut ir, &[t1, t2]);
+    let s = named_type_struct(&mut ir, &[(t1, "f"), (t2, "t")]);
     let inst = instantiate(&mut ir, s, v);
     let b = build(inst, ir);
     assert!(
         !b.ok,
-        "s(1, 2) against struct {{ Type, Type }} must fail (fields)"
+        "s(1, 2) against struct<.f Type, .t Type> must fail (fields)"
     );
     // a literal is not a positional value
     let mut ir = IR::new();
     let five = int(&mut ir, 5);
     let f = int_t(&mut ir);
-    let s = type_struct(&mut ir, &[f]);
+    let s = named_type_struct(&mut ir, &[(f, "f")]);
     let inst = instantiate(&mut ir, s, five);
     let b = build(inst, ir);
     assert!(!b.ok, "s(5) must fail — a literal is not a struct value");
@@ -1717,11 +1717,11 @@ fn instances_of_different_struct_occurrences_conflict() {
     let v = tuple(&mut ir, &[one, two]);
     let f1 = int_t(&mut ir);
     let f2 = int_t(&mut ir);
-    let s1 = type_struct(&mut ir, &[f1, f2]);
+    let s1 = named_type_struct(&mut ir, &[(f1, "f"), (f2, "g")]);
     let i1 = instantiate(&mut ir, s1, v);
     let f3 = int_t(&mut ir);
     let f4 = int_t(&mut ir);
-    let s2 = type_struct(&mut ir, &[f3, f4]);
+    let s2 = named_type_struct(&mut ir, &[(f3, "f"), (f4, "g")]);
     let i2 = instantiate(&mut ir, s2, v);
     let a = array(&mut ir, &[i1, i2]);
     let b = build(a, ir);
@@ -1747,15 +1747,15 @@ fn instances_of_different_struct_occurrences_conflict() {
 
 #[test]
 fn an_instantiation_through_a_call_result_callee_checks() {
-    // `(mk (Int))(1, 2)` with `mk = u => struct<Int, Int>` — the callee is an
-    // unevaluated apply node (not a statically readable array pair): the
+    // `(mk (Int))(1, 2)` with `mk = u => struct<.f Int, .g Int>` — the callee is
+    // an unevaluated apply node (not a statically readable array pair): the
     // checker forces it, so the instantiation sees the concrete struct type.
     // (Reading the callee's pair unconditionally was a panic before the fix.)
     let mut ir = IR::new();
     let p = param(&mut ir);
     let f1 = int_t(&mut ir);
     let f2 = int_t(&mut ir);
-    let s = type_struct(&mut ir, &[f1, f2]);
+    let s = named_type_struct(&mut ir, &[(f1, "f"), (f2, "g")]);
     let mk = lam(&mut ir, p, s);
     let arg = int_t(&mut ir);
     let call = app(&mut ir, mk, arg);

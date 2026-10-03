@@ -619,14 +619,20 @@ fn comparisons_share_their_tokens_with_the_angle_bracket_forms() {
     // angle-bracket form still parses — including ones followed by another
     // form's glued delimiter.
     assert_eq!(usize_of(&evaluate("<Int, string><1> == string")), 1);
-    assert_eq!(usize_of(&evaluate("struct<Int, string><0> == Int")), 1);
+    assert_eq!(
+        usize_of(&evaluate("struct<.a Int, .b string><0> == Int")),
+        1
+    );
     assert_eq!(usize_of(&evaluate("a = <Int, string>; a<0> == Int")), 1);
     // …including one whose closing `>` is followed by the *glued* `(` of an
     // instantiation: the glued delimiter belongs to the angle form, so the `>`
-    // is a closer.  (The field is read with the slot read `s(0)`; indexing an
-    // instance with `s[0]` is a separate, pre-existing refusal.)
+    // is a closer.  (The field is read by name `s.a`; the positional `s(0)` is
+    // the tuple read, and indexing an instance with `s[0]` is a separate,
+    // pre-existing refusal.)
     assert_eq!(
-        usize_of(&evaluate("s = struct<Int, string>(1, \"a\"); s(0)")),
+        usize_of(&evaluate(
+            "s = struct<.a Int, .b string>(1, \"a\"); s.a == 1"
+        )),
         1
     );
     // An array type's `>` (the keyword-led form) closes as it always did, and
@@ -956,10 +962,10 @@ fn a_self_referential_array_checks_without_overflow() {
 
 #[test]
 fn a_self_nested_struct_checks_without_overflow() {
-    // `s = struct<s>` — a struct type whose field is the struct type itself.
+    // `s = struct<.f s>` — a struct type whose field is the struct type itself.
     // The checker cuts the type-level cycle (a struct is a nominal type, not
     // a value, so the nominal id is allocated once); it must not overflow.
-    let report = compile("s = struct<s>; s");
+    let report = compile("s = struct<.f s>; s");
     if let Some(s) = report.diagnostics.first() {
         assert_eq!(s.stage, Stage::Resolve, "{s:?}");
     }
@@ -1028,9 +1034,9 @@ fn a_deep_operator_chain_compiles_without_an_overflow() {
 
 #[test]
 fn a_struct_type_kinds_and_evaluates() {
-    // struct<Int, Int> — the pair [[Int, Int], [TypeId(n), Type]]; a bare
+    // struct<.f Int, .g Int> — the pair [[Int, Int], [TypeId(n), Type]]; a bare
     // struct type is a well-typed program with a determined root.
-    run("struct<Int, Int>");
+    run("struct<.f Int, .g Int>");
 }
 
 #[test]
@@ -1039,7 +1045,7 @@ fn a_bound_struct_type_is_reusable() {
     // element check unifies the two uses, and they are the *same* compiled
     // node (the checker compiles each expression once, so the single
     // nominal id survives).
-    let (module, root) = run("s = struct<Int>; [s, s]");
+    let (module, root) = run("s = struct<.f Int>; [s, s]");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
@@ -1060,7 +1066,7 @@ fn two_struct_type_occurrences_do_not_unify() {
     // the nominality surfaces at the type slot, not the value slot.  (The
     // same occurrence shared across applications stays homogeneous, see
     // a_struct_type_in_a_function_body_is_shared_across_applications.)
-    let report = compile("[struct<Int>, struct<Int>]");
+    let report = compile("[struct<.f Int>, struct<.f Int>]");
     assert!(
         !report.ok(),
         "two distinct struct occurrences are different nominal types: {:?}",
@@ -1070,14 +1076,14 @@ fn two_struct_type_occurrences_do_not_unify() {
 
 #[test]
 fn a_struct_type_in_a_function_body_is_shared_across_applications() {
-    // `f = t => struct<t>` — the struct occurrence lives in the function
+    // `f = t => struct<.f t>` — the struct occurrence lives in the function
     // body.  Its `Fresh` node does not read the parameter, so the deep pass
     // evaluates it to a concrete `TypeId` and the apply clone references the
     // node in place: every application of `f` shares the one nominal id.
     // Because the id lives in the type slot now, the shared kind makes
     // `[f (Int), f (Int)]` homogeneous — the array checks, which is exactly
     // the sharing proof.
-    let report = compile("f = t => struct<t>; [f (Int), f (Int)]");
+    let report = compile("f = t => struct<.f t>; [f (Int), f (Int)]");
     assert!(
         report.ok(),
         "a body-local struct must be one nominal type across applications: {:?}",
@@ -1087,20 +1093,20 @@ fn a_struct_type_in_a_function_body_is_shared_across_applications() {
 
 #[test]
 fn a_polymorphic_struct_constructor_shares_one_nominal_kind() {
-    // `Box = t => struct<t>` — a generic struct constructor.  The `Fresh` id
+    // `Box = t => struct<.f t>` — a generic struct constructor.  The `Fresh` id
     // is per *occurrence* and is shared (referenced in place by every apply
     // clone), so all applications of `Box` resolve to one nominal kind: the
     // id lives in the kind slot while the field-type list rides in the value
     // shape.  Same constructor + same fields is homogeneous and checks;
     // same constructor with different field types is also one nominal kind —
     // the fields differ only in the shape (the value), not the type.
-    let report = compile("Box = t => struct<t>; [Box (Int), Box (Int)]");
+    let report = compile("Box = t => struct<.f t>; [Box (Int), Box (Int)]");
     assert!(
         report.ok(),
         "same constructor, same fields: {:?}",
         report.diagnostics
     );
-    let report = compile("Box = t => struct<t>; [Box (Int), Box (Type)]");
+    let report = compile("Box = t => struct<.f t>; [Box (Int), Box (Type)]");
     assert!(
         report.ok(),
         "same constructor (one nominal kind), fields differ only in the value: {:?}",
@@ -1208,8 +1214,9 @@ fn a_named_struct_field_read_resolves_to_the_positional_index() {
 /// is asked of a *cell* (`shape::low_type_of_slot`), which cannot see through an
 /// unevaluated `Index`.  So `x.a + x.a` found neither operand concretely
 /// `Float`, pinned the operation to the `+` default (`Int`), and then refused
-/// both operands against it.  The named and the positional form read the same
-/// field list, so both are pinned here.
+/// both operands against it.  The named form (a struct) and the positional form
+/// (a tuple) each resolve the field's type out of the container type's own field
+/// list, so both are pinned here.
 #[test]
 fn a_field_reads_class_is_decided_where_the_container_type_is() {
     let named = evaluate(
@@ -1286,7 +1293,10 @@ fn a_raw_read_of_a_type_value_reads_the_components_pair() {
         LangValue::TypeValue(TypeValue::TypeInt)
     );
     assert_eq!(usize_of(&evaluate("<Int, string><0> == Int")), 1);
-    assert_eq!(usize_of(&evaluate("struct<Int, string><1> == string")), 1);
+    assert_eq!(
+        usize_of(&evaluate("struct<.a Int, .b string><1> == string")),
+        1
+    );
     // The element's own *value* slot, which is what a `Type`-valued element
     // carries: `<Int, string><0> == Int` is the comparison of markers.
     assert_eq!(usize_of(&evaluate("<Int, string><1> == string")), 1);
@@ -1463,7 +1473,7 @@ fn struct_occurrences_in_distinct_bodies_keep_distinct_ids() {
     // `Fresh` node is its own, so the nominal ids stay distinct across the
     // functions.  Distinct ids mean distinct kinds (distinct types), so
     // `[f (Int), g (Int)]` is heterogeneous and is rejected.
-    let report = compile("f = t => struct<t>; g = t => struct<t>; [f (Int), g (Int)]");
+    let report = compile("f = t => struct<.f t>; g = t => struct<.f t>; [f (Int), g (Int)]");
     assert!(
         !report.ok(),
         "distinct body-local structs must keep distinct nominal ids: {:?}",
@@ -1473,10 +1483,10 @@ fn struct_occurrences_in_distinct_bodies_keep_distinct_ids() {
 
 #[test]
 fn an_annotation_against_a_struct_type_conflicts() {
-    // 5 : struct<Int> — an annotation compares the full type expressions
+    // 5 : struct<.f Int> — an annotation compares the full type expressions
     // and the literal's int type is not the struct type; instantiation is
     // the dedicated `s(1, 2)` form, not an annotation.
-    let d = diags("5 : struct<Int>");
+    let d = diags("5 : struct<.f Int>");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
@@ -1484,15 +1494,16 @@ fn an_annotation_against_a_struct_type_conflicts() {
 
 #[test]
 fn a_struct_type_application_is_an_instance() {
-    // struct<Int, Int>(1, 2) — the struct type applied to a positional
+    // struct<.f Int, .g Int>(1, 2) — the struct type applied to a positional
     // tuple compiles to the Instantiate expression: the element types are
-    // checked against the fields, and the result has the struct type.
-    let (module, root) = run("struct<Int, Int>(1, 2)");
+    // checked against the named fields' types, and the result has the struct
+    // type.
+    let (module, root) = run("struct<.f Int, .g Int>(1, 2)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
     // a bound struct type instantiates the same way
-    let (module, root) = run("s = struct<Int, Int>; s(1, 2)");
+    let (module, root) = run("s = struct<.f Int, .g Int>; s(1, 2)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
@@ -1501,33 +1512,33 @@ fn a_struct_type_application_is_an_instance() {
 #[test]
 fn a_struct_instance_with_mismatched_fields_is_rejected() {
     // arity: two fields, one value
-    let d = diags("struct<Int>(1, 2)");
+    let d = diags("struct<.f Int>(1, 2)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
     // field types: the tuple's Ints are not Type
-    let d = diags("struct<Type, Type>(1, 2)");
+    let d = diags("struct<.f Type, .g Type>(1, 2)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
     // a different source occurrence is a different nominal type
-    let d = diags("s1 = struct<Int, Int>; s2 = struct<Int, Int>; [s1(1, 2), s2(1, 2)]");
+    let d = diags("s1 = struct<.f Int, .g Int>; s2 = struct<.f Int, .g Int>; [s1(1, 2), s2(1, 2)]");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::ArrayElement);
     assert!(
-        d[0].message.contains("struct<Int, Int>#"),
+        d[0].message.contains("struct<.f Int, .g Int>#"),
         "the two struct occurrences must keep distinct nominal ids: {}",
         d[0].message
     );
 }
 
 #[test]
-fn a_struct_instance_indexes_its_fields() {
-    // s = struct<Int, Type>; a = s(1, Int); (a(0), a(1)) — a slot read
+fn a_struct_instance_reads_its_fields_by_name() {
+    // s = struct<.f Int, .t Type>; a = s(1, Int); (a.f, a.t) — a named read
     // over an instance reads the wrapped tuple's elements, and each
     // element's type is the corresponding field type (Int and Type).
-    let (module, root) = run("s = struct<Int, Type>; a = s(1, Int); (a(0), a(1))");
+    let (module, root) = run("s = struct<.f Int, .t Type>; a = s(1, Int); (a.f, a.t)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
@@ -1545,41 +1556,45 @@ fn a_struct_instance_indexes_its_fields() {
         Some(LangValue::TypeValue(TypeValue::TypeInt)),
         "the second field is the `Int` type constant"
     );
-    // a slot read through a parameter works too — the read's type is
-    // `Index(shape, k)` over the container type's shape, which resolves
-    // when the call binds the parameter (the argument is parenthesized:
-    // `f s(1, Int)` would parse as `(f s)(1, Int)`)
-    let (module, root) = run("f = a => a(0); s = struct<Int, Type>; f (s(1, Int)) : Int");
+    // a named read through a parameter works too — the read's type is
+    // `Index(shape, k)` over the container type's shape, and the field's
+    // index comes from the struct's name table, so it resolves when the call
+    // binds the parameter (the argument is parenthesized: `f s(1, Int)`
+    // would parse as `(f s)(1, Int)`)
+    let (module, root) = run("f = a => a.f; s = struct<.f Int, .t Type>; f (s(1, Int)) : Int");
     let mut module = module;
     assert_eq!(usize_of(&module.evaluate_node_deep(root, None)), 1);
 }
 
 #[test]
-fn a_struct_instance_index_out_of_bounds_is_rejected() {
-    // a(5) — the field list is structural like a tuple's, so the bounds
-    // check fires at check time.
-    let d = diags("s = struct<Int, Type>; a = s(1, Int); a(5)");
+fn a_positional_read_of_a_struct_instance_is_refused() {
+    // a(0) — the paren read is the *tuple* read; a struct instance reads by
+    // name (`a.f`), so the positional form is refused (Guard) rather than
+    // reading the field list.  The requirement is stated as the open tuple
+    // type the container would have to be, and the caret is the container.
+    let d = diags("s = struct<.f Int, .t Type>; a = s(1, Int); a(0)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::IndexOutOfBounds);
-    assert_eq!(
-        check.value_a,
-        Some(LangValue::LowValue(LowValue::USize(5))),
-        "the index"
+    assert_eq!(check.kind, DiagKind::Guard);
+    assert!(
+        d[0].message.contains("expected <?a, …>")
+            && d[0].message.contains("struct<.f Int, .t Type>"),
+        "the requirement is the open tuple type, the found side the struct: {}",
+        d[0].message
     );
     assert_eq!(
-        check.value_b,
-        Some(LangValue::LowValue(LowValue::USize(2))),
-        "the field count"
+        d[0].span,
+        Some((1, 34)),
+        "the caret lands on the container the read resolves to"
     );
 }
 
 #[test]
 fn a_named_struct_instantiation_reorders_arguments() {
     // S(.y Int, .x 1) — the named arguments are reordered to the definition's
-    // positional order, so a(0) reads the .x field (1) and a(1) the .y field
+    // positional order, so a.x reads the .x field (1) and a.y the .y field
     // (Int).
-    let (module, root) = run("S = struct<.x Int, .y Type>; a = S(.y Int, .x 1); (a(0), a(1))");
+    let (module, root) = run("S = struct<.x Int, .y Type>; a = S(.y Int, .x 1); (a.x, a.y)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
@@ -1591,12 +1606,12 @@ fn a_named_struct_instantiation_reorders_arguments() {
                 .unwrap()
         ),
         1,
-        "a(0) reads the reordered .x field"
+        "a.x reads the reordered .x field"
     );
     assert_eq!(
         module.node_value(AnyNodeId::Dynamic(ids[1])),
         Some(LangValue::TypeValue(TypeValue::TypeInt)),
-        "a(1) reads the reordered .y field"
+        "a.y reads the reordered .y field"
     );
 }
 
@@ -1613,7 +1628,7 @@ fn a_named_struct_instantiation_in_definition_order() {
 fn a_named_struct_instantiation_mixes_positional_and_named() {
     // S(.y Int, 1) — the bare positional argument fills the lowest-numbered
     // unclaimed definition position (.x), so the instance is (1, Int).
-    let (module, root) = run("S = struct<.x Int, .y Type>; a = S(.y Int, 1); (a(0), a(1))");
+    let (module, root) = run("S = struct<.x Int, .y Type>; a = S(.y Int, 1); (a.x, a.y)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(
@@ -1662,10 +1677,12 @@ fn a_named_struct_instantiation_against_a_missing_field_is_rejected() {
 
 #[test]
 fn a_named_struct_instantiation_against_an_anonymous_struct_is_rejected() {
-    // A struct type with no named fields rejects a .name argument.
+    // A struct type with no named fields is refused at the definition: every
+    // struct field must carry a name, because a struct instance reads by name
+    // (`s.x`) and the positional `a(k)` form is the tuple read.
     let d = diags("S = struct<Int, Type>; S(.x 1, .y Int)");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::StructAnonymousField);
+    assert_eq!(check.kind, DiagKind::StructFieldName);
 }
 
 #[test]
@@ -1696,18 +1713,19 @@ fn a_named_struct_instantiation_reads_through_a_parameter() {
 }
 
 #[test]
-fn a_lazy_named_read_over_an_anonymous_struct_is_a_reported_miss() {
-    // `apply = s => s.x` applied to a positional (anonymous) struct
-    // instance: the read's name lookup only resolves at the apply, where the
-    // struct's "no name table" marker makes it a recorded table miss — never
-    // a panic, and never a false non-termination report.
+fn a_lazy_named_read_over_an_anonymous_struct_is_refused() {
+    // `S = struct<Int, Type>` — the positional struct is refused at its
+    // definition now, before the lazy read ever resolves: its fields carry
+    // no names, and every struct field must be named.  The refusal is a
+    // check diagnostic, never a panic and never a false non-termination
+    // report from the read that follows.
     let d = diags("S = struct<Int, Type>\na = S(1, Int)\napply = s => s.x\napply (a)");
     assert!(
         d.iter().any(|d| d
             .check
             .as_ref()
-            .is_some_and(|c| c.kind == DiagKind::TableMiss)),
-        "the read is a table miss: {d:?}"
+            .is_some_and(|c| c.kind == DiagKind::StructFieldName)),
+        "the unnamed struct field is the refusal: {d:?}"
     );
     assert!(
         !d.iter().any(|d| d
@@ -1725,13 +1743,14 @@ fn an_instantiation_through_a_call_result_checks() {
     // pre-fix behaviour).  Both spellings — the direct call result and a
     // bound alias of it — are the same graph.
     assert_eq!(
-        lichen_language::run::evaluate("mk = u => struct<Int, Int>\n(mk (Int))(1, 2)").unwrap(),
-        "(1, 2): struct<Int, Int>"
+        lichen_language::run::evaluate("mk = u => struct<.f Int, .g Int>\n(mk (Int))(1, 2)")
+            .unwrap(),
+        "(1, 2): struct<.f Int, .g Int>"
     );
     assert_eq!(
-        lichen_language::run::evaluate("mk = u => struct<Int, Int>\nt = mk (Int)\nt(1, 2)")
+        lichen_language::run::evaluate("mk = u => struct<.f Int, .g Int>\nt = mk (Int)\nt(1, 2)")
             .unwrap(),
-        "(1, 2): struct<Int, Int>"
+        "(1, 2): struct<.f Int, .g Int>"
     );
 }
 
@@ -1810,25 +1829,26 @@ fn an_instantiation_through_a_parameter_at_a_non_struct_fails_at_the_call() {
 
 #[test]
 fn an_alias_of_a_forward_used_binding_keeps_the_aliased_type() {
-    // `a = c(1, 2); b = struct<Int, Int>; c = b` — the use of `c` captured
-    // the reserved placeholder before `c = b` compiled; the alias re-points
-    // the earlier uses to `b`'s node, so the instantiation sees the struct
-    // type (it previously kept the stale placeholder's `?a`).
+    // `a = c(1, 2); b = struct<.f Int, .g Int>; c = b` — the use of `c`
+    // captured the reserved placeholder before `c = b` compiled; the alias
+    // re-points the earlier uses to `b`'s node, so the instantiation sees the
+    // struct type (it previously kept the stale placeholder's `?a`).
     assert_eq!(
-        lichen_language::run::evaluate("a = c(1, 2)\nb = struct<Int, Int>\nc = b\na").unwrap(),
-        "(1, 2): struct<Int, Int>"
+        lichen_language::run::evaluate("a = c(1, 2)\nb = struct<.f Int, .g Int>\nc = b\na")
+            .unwrap(),
+        "(1, 2): struct<.f Int, .g Int>"
     );
 }
 
 #[test]
 fn a_block_without_a_tail_returns_an_anonymous_struct_instance() {
     // { x = 1; y = Int } — a block whose last statement is a binding has no
-    // tail expression, so it returns an anonymous struct instance with fields
-    // x and y (readable by name or position).
-    let (module, root) = run("a = { x = 1; y = Int }; (a.x, a.y, a(0), a(1))");
+    // tail expression, so it returns a struct instance (its type is a fresh,
+    // unnamed one) whose fields are the named bindings x and y, read by name.
+    let (module, root) = run("a = { x = 1; y = Int }; (a.x, a.y)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
-    assert_eq!(ids.len(), 4);
+    assert_eq!(ids.len(), 2);
     assert_eq!(
         usize_of(
             module
@@ -1844,51 +1864,16 @@ fn a_block_without_a_tail_returns_an_anonymous_struct_instance() {
         Some(LangValue::TypeValue(TypeValue::TypeInt)),
         "a.y"
     );
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[2]))
-                .as_ref()
-                .unwrap()
-        ),
-        1,
-        "a(0)"
-    );
-    assert_eq!(
-        module.node_value(AnyNodeId::Dynamic(ids[3])),
-        Some(LangValue::TypeValue(TypeValue::TypeInt)),
-        "a(1)"
-    );
 }
 
 #[test]
 fn a_struct_block_with_pub_only_exposes_the_pub_fields() {
     // { pub x = 1; y = 2 } — a `pub` statement is a field; `y` is a
     // block-local, still compiled but not exposed.
-    let (module, root) = run("a = { pub x = 1; y = 2 }; (a.x, a(0))");
+    let (module, root) = run("a = { pub x = 1; y = 2 }; a.x");
     let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
-    assert_eq!(ids.len(), 2);
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[0]))
-                .as_ref()
-                .unwrap()
-        ),
-        1,
-        "a.x"
-    );
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[1]))
-                .as_ref()
-                .unwrap()
-        ),
-        1,
-        "a(0)"
-    );
+    let value = module.evaluate_node_deep(root, None);
+    assert_eq!(usize_of(&value), 1, "a.x reads the exposed pub field");
     // y is not exposed: reading it is a named-field error.
     let d = diags("a = { pub x = 1; y = 2 }; a.y");
     assert!(
@@ -1905,30 +1890,10 @@ fn a_struct_block_with_pub_only_exposes_the_pub_fields() {
 fn a_let_in_a_struct_block_is_a_local_not_a_field() {
     // { let x = 1; y = x + 1 } — `x` is a `let` local (never a field); `y` is
     // a field that references it.
-    let (module, root) = run("a = { let x = 1; y = x + 1 }; (a.y, a(0))");
+    let (module, root) = run("a = { let x = 1; y = x + 1 }; a.y");
     let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
-    assert_eq!(ids.len(), 2);
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[0]))
-                .as_ref()
-                .unwrap()
-        ),
-        2,
-        "a.y = x + 1"
-    );
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[1]))
-                .as_ref()
-                .unwrap()
-        ),
-        2,
-        "a(0)"
-    );
+    let value = module.evaluate_node_deep(root, None);
+    assert_eq!(usize_of(&value), 2, "a.y = x + 1");
     // x is not exposed: reading it is a named-field miss.
     let d = diags("a = { let x = 1; y = x + 1 }; a.x");
     assert!(
@@ -1942,33 +1907,15 @@ fn a_let_in_a_struct_block_is_a_local_not_a_field() {
 }
 
 #[test]
-fn a_struct_block_can_have_a_positional_expression_field() {
-    // { 1; x = 2 } — a bare expression is a positional field, a binding a
-    // named one.  With no `pub`, every statement is a field.
-    let (module, root) = run("a = { 1; x = 2 }; (a(0), a.x)");
-    let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
-    assert_eq!(ids.len(), 2);
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[0]))
-                .as_ref()
-                .unwrap()
-        ),
-        1,
-        "a(0)"
-    );
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(ids[1]))
-                .as_ref()
-                .unwrap()
-        ),
-        2,
-        "a.x"
-    );
+fn a_struct_block_refuses_a_bare_expression_field() {
+    // { 1; x = 2 } — a bare expression in a struct-returning block is a field
+    // with no name, and every struct field must be named (`name = e` in a
+    // block); the bare expression is refused at its own location.
+    let d = diags("a = { 1; x = 2 }; a");
+    assert_eq!(d.len(), 1, "{d:?}");
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::StructFieldName);
+    assert_eq!(d[0].span, Some((1, 7)), "the offending field expression");
 }
 
 #[test]
@@ -2004,15 +1951,15 @@ fn a_return_statement_enforces_the_block_value_anywhere() {
 
 #[test]
 fn mutually_recursive_structs_check_and_evaluate() {
-    // A = struct<Int, B>; B = struct<Type, A>; a = A(1, b); b = B(Int, a) —
-    // two struct types that reference each other *as types*, plus a pair of
-    // mutually-recursive instances.  The types close into A = struct<Int, B>,
-    // B = struct<Type, A>; the checker's skeleton cuts the IR cycle and the
-    // deep pass the value cycle.  The final tuple prints the two struct types
-    // and both cyclic instances.
+    // A = struct<.f Int, .g B>; B = struct<.f Type, .g A>; a = A(1, b);
+    // b = B(Int, a) — two struct types that reference each other *as types*,
+    // plus a pair of mutually-recursive instances.  The types close into
+    // A = struct<.f Int, .g B>, B = struct<.f Type, .g A>; the checker's
+    // skeleton cuts the IR cycle and the deep pass the value cycle.  The final
+    // tuple prints the two struct types and both cyclic instances.
     let report = compile(
-        "A = struct<Int, B>
-         B = struct<Type, A>
+        "A = struct<.f Int, .g B>
+         B = struct<.f Type, .g A>
          a = A(1, b)
          b = B(Int, a)
          (A, B, a, b)",
@@ -2380,12 +2327,15 @@ fn an_underscore_cannot_be_a_lambda_parameter() {
 fn a_shallow_marked_recursive_tail_stays_lazy() {
     // f = x => [x, ~ f (x + 1)] — the bare `~` cuts the deep pass at the
     // tail, so the definition pass terminates; each index read forces the
-    // next apply on demand, and the stream's type resolves level by level.
+    // next apply on demand, so the *values* resolve level by level (1, 2, 3).
+    // The reads' element *types* stay underdetermined (`?a, ?b, ?c`): a paren
+    // read pins an undecided container to a fresh open tuple, so the type is
+    // never claimed structurally across the lazy tail.
     let out = lichen_language::run::evaluate(
         "f = x => [x, ~ f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))",
     )
     .expect("the stream should check and terminate");
-    assert_eq!(out, "(1, 2, 3): <Int, Int, Int>");
+    assert_eq!(out, "(1, 2, 3): <?a, ?b, ?c>");
 }
 
 #[test]

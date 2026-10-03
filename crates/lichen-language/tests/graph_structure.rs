@@ -33,14 +33,18 @@
 //! template. See
 //! [`a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied`].
 //!
-//! **And a read of the parameter is a bare cell, while the parameter itself is a
-//! tuple with one cell per read.** So a graph's *arity* is readable from the
-//! unapplied function — `array_items(function.parameter).len()` — which is what
-//! sizes the placeholder tuple a build binds the parameter to, and there is no
-//! ceiling and nothing to trim. Which read is which slot is not visible
+//! **And a read of the parameter is a bare cell, while the positional read pins
+//! an open tuple type on the parameter.** The parameter is the `[value, type]`
+//! pair: the value cell carries no operation and stays unbound until the apply,
+//! and the type cell is `[?shape, [TypeTuple, K]]` — a tuple kind whose shape is
+//! still a cell, because the syntax that reads the parameter names no arity (the
+//! open tuple the printer renders `<?a, …>`). So the arity is **not** readable
+//! from the unapplied function: the placeholder tuple a build binds the parameter
+//! to is built at a ceiling and trimmed to the slots the body read
+//! (`compute.rs`, `MAX_GRAPH_INPUTS`). Which read is which slot is not visible
 //! structurally at all; the apply settles it, and it settles it by the position
 //! the source names rather than by the order the body reads. See
-//! [`a_parameter_read_is_a_bare_cell_and_the_arity_is_the_tuples_length`] and
+//! [`a_parameter_read_is_a_bare_cell_and_pins_an_open_tuple_type`] and
 //! [`a_parameter_is_bound_by_the_position_the_source_names_and_not_by_read_order`].
 
 use std::sync::Arc;
@@ -379,9 +383,9 @@ step = ins => {
 step
 "#;
 
-/// **A parameter read is a bare cell, and the arity is the parameter tuple's
-/// length.** The second correction this probe forced, and it is what decides how
-/// a graph is sized.
+/// **A parameter read is a bare cell, and the read pins an open tuple type on
+/// the parameter.** The second correction this probe forced, and it is what
+/// decides how a graph is sized.
 ///
 /// `ins(0)` and `ins(1)` do not compile to two extractions off the parameter.
 /// The compiler resolves each read into a cell of its own, so the cfg that
@@ -392,19 +396,22 @@ step
 /// of the **cfg slot**, not to the body's read, and reading it as an input
 /// position would conclude the graph takes one input and silently drop the rest.
 ///
-/// **But the arity is still decidable before the apply**, and from the parameter
-/// rather than from the body: the parameter cell is a tuple with one cell per
-/// read, so its length is how many inputs a caller has to satisfy. That is what
-/// sizes the placeholder tuple `$graph` binds the parameter to, and it is why
-/// there is no ceiling, no trim, and no refusal for reading past one. The design
-/// had a ceiling and a named refusal for it; the body does not need either.
+/// **The parameter is the `[value, type]` pair, and the positional reads pin the
+/// type slot.** The value cell is a bare cell — no operation, unbound until the
+/// apply. The type cell is `[?shape, [TypeTuple, K]]`: the reads pin the
+/// parameter to a *tuple type* whose shape is still a cell, because the syntax
+/// that reads it names no arity (the open tuple the printer renders `<?a, …>`).
+/// So the arity is **not** decidable before the apply, and the parameter's two
+/// slots are the value/type pair rather than one cell per read: that is why the
+/// graph recording builds its placeholder tuple at a ceiling and trims it to the
+/// slots the body read (`compute.rs`, `MAX_GRAPH_INPUTS`).
 ///
 /// Which read is which slot is *not* visible here — the cfg's cells are not the
 /// parameter's cells, and are not even in their classes. That half is settled by
 /// the apply, and is checked behaviourally in
 /// [`a_parameter_is_bound_by_the_position_the_source_names_and_not_by_read_order`].
 #[test]
-fn a_parameter_read_is_a_bare_cell_and_the_arity_is_the_tuples_length() {
+fn a_parameter_read_is_a_bare_cell_and_pins_an_open_tuple_type() {
     let (mut module, root) = run(FROM_PARAMETER);
     let function = function_of(&mut module, root);
     let parameter = module.functions[dynamic(function)].parameter;
@@ -446,25 +453,41 @@ fn a_parameter_read_is_a_bare_cell_and_the_arity_is_the_tuples_length() {
          input position"
     );
 
-    // The parameter is a **tuple of cells, one per read of it**, and that is the
-    // arity: it is readable with no evaluation at all, which is what sizes the
-    // placeholder tuple `$graph` binds the parameter to. No ceiling and no trim.
+    // The parameter is the `[value, type]` pair. The value cell is a **bare
+    // cell**: no operation, and unbound until the apply. The type cell is what
+    // the two positional reads pin — an open tuple type whose shape is a cell,
+    // so the two reads state no arity here.
     let slots = items(&module, parameter);
-    assert_eq!(slots.len(), 2, "one cell per `ins(i)` the body reads");
-    for (position, &cell) in slots.iter().enumerate() {
-        assert!(
-            module.node_operation(cell).is_none(),
-            "slot {position} is {cell:?} and carries no operation, so it is a \
-             cell the apply binds rather than a value"
-        );
-        assert_eq!(
-            module
-                .node_value(AnyNodeId::Dynamic(cell))
-                .and_then(|v| AsEnum::<LowValue>::as_enum(&v)),
-            Some(LowValue::Parameterized),
-            "and slot {position} is unbound until the function is applied"
-        );
-    }
+    assert_eq!(slots.len(), 2, "the parameter pair is [value, type]");
+    let value_cell = slots[0];
+    assert!(
+        module.node_operation(value_cell).is_none(),
+        "the parameter's value cell is {value_cell:?} and carries no operation, \
+         so the apply binds it rather than a read naming a slot"
+    );
+    assert_eq!(
+        module
+            .node_value(AnyNodeId::Dynamic(value_cell))
+            .and_then(|v| AsEnum::<LowValue>::as_enum(&v)),
+        Some(LowValue::Parameterized),
+        "and the value cell is unbound until the function is applied"
+    );
+    assert!(
+        module.node_operation(slots[1]).is_none(),
+        "the parameter's type cell carries no operation either"
+    );
+    let pinned = items(&module, slots[1]);
+    assert_eq!(pinned.len(), 2, "the pinned type is [shape, kind]");
+    assert_eq!(
+        module
+            .node_value(AnyNodeId::Dynamic(pinned[0]))
+            .and_then(|v| AsEnum::<LowValue>::as_enum(&v)),
+        Some(LowValue::Parameterized),
+        "the pinned tuple's shape is an open cell: `ins(0)` and `ins(1)` state \
+         the kind but not how many inputs a caller has to satisfy"
+    );
+    let kind = items(&module, pinned[1]);
+    assert_eq!(kind.len(), 2, "the kind is [marker, K]");
 }
 
 /// A graph function that reads its parameter **back to front**, and then runs,
@@ -516,9 +539,9 @@ fn buffer_data(handle: &lichen_lowlevel::AnyHandle<[u8]>) -> Vec<i64> {
 ///
 /// A body read of `ins(i)` compiles to a bare cell: no operation, no subscript,
 /// and not even a member of the parameter's class, so **nothing in the
-/// unapplied body links a read to a slot**. The parameter cell is a tuple of
-/// cells, one per read, and its length is therefore the arity — that part *is*
-/// readable — but which read is which slot is settled by the apply.
+/// unapplied body links a read to a slot** — and nothing states the arity either
+/// (a read pins an open tuple type, not a list of read cells). Which read is
+/// which slot is settled by the apply.
 ///
 /// If it were settled by read order, `step` below would take its two arguments
 /// swapped: a caller passing `(4, data)` would get a dispatch over four

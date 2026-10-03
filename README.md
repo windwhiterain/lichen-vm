@@ -166,7 +166,7 @@ a = x => (1, Int)(x)
 ```text
 ---
   order = "2"
-  output = "(1, 2, 3): <Int, Int, Int>"
+  output = "(1, 2, 3): <?a, ?b, ?c>"
 ---
 f = x => [x, ~ f (x + 1)]
 inf = f 0
@@ -255,10 +255,10 @@ b = B(.x 1,)
 ```text
 ---
   order = "3"
-  output = "(struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, struct<Type, …>>>, (1, (Int, (1, …))), (Int, (1, …))): <TypeStruct, TypeStruct, struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, …>>>"
+  output = "(struct<.f Int, .g struct<.f Type, .g struct<.f Int, .g …>>>, struct<.f Type, .g struct<.f Int, .g struct<.f Type, .g …>>>, (1, (Int, (1, …))), (Int, (1, …))): <TypeStruct, TypeStruct, struct<.f Int, .g struct<.f Type, .g struct<.f Int, .g …>>>, struct<.f Type, .g struct<.f Int, .g …>>>"
 ---
-A = struct<Int, B>
-B = struct<Type, A>
+A = struct<.f Int, .g B>
+B = struct<.f Type, .g A>
 a = A(1, b)
 b = B(Int, a)
 (A , B, a, b)
@@ -275,9 +275,9 @@ type — the `Fresh` id is per occurrence and shared, so `Box Int` and
 `Box Type` differ only in their field lists (the value shape), not in
 their type (the shared kind).  They therefore coexist in one homogeneous
 tuple."
-  output = "(struct<Int>, struct<Type>, struct<Int>): <TypeStruct, TypeStruct, TypeStruct>"
+  output = "(struct<.f Int>, struct<.f Type>, struct<.f Int>): <TypeStruct, TypeStruct, TypeStruct>"
 ---
-Box = t => struct<t>
+Box = t => struct<.f t>
 (Box Int, Box Type, Box Int)
 ```
 
@@ -405,7 +405,7 @@ five # 4
   order = "11"
   output = "(Int, string, Int, string): <Type, Type, Type, Type>"
 ---
-(<Int, string><0>, <Int, string><1>, struct<Int, string><0>, struct<Int, string><1>)
+(<Int, string><0>, <Int, string><1>, struct<.a Int, .b string><0>, struct<.a Int, .b string><1>)
 ```
 
 ### `raw_field.lichen`
