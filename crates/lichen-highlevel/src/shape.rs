@@ -751,7 +751,7 @@ where
 /// `[shape, [marker, K]]` → the marker's [`STRUCT_MARKER_NAMES_SLOT`].
 ///
 /// **The universe is supplied by the caller.**  A checker has it; a lowering
-/// does not, and [`struct_fields_by_shape`] is this reader for that side.
+/// does not, and [`field_names`] is this reader for that side.
 pub fn struct_names_any<P: Program>(
     module: &mut Module<P>,
     universe: NodeId,
@@ -764,34 +764,101 @@ where
     is_universe_any(module, universe, universe_slot).then_some(table)
 }
 
-/// The fields of a struct **type term** `[shape, kind]`, in field order, plus
-/// the term's field-type list node — read **without a universe handle**.
+// --- type references and field access ---------------------------------------
+
+/// A type as the encoding holds it: the `[shape, kind]` **term** itself, or a
+/// node that *holds* one at its value slot — an expression's type cell, which
+/// for an annotated parameter is the annotation's own `[value, type]` pair
+/// ([`low_type_of_slot`] resolves that same indirection for a low type).
 ///
-/// # Why this exists beside [`struct_names_any`]
+/// **Which one it is, is stated — never guessed.**  A term and a holder are both
+/// two-slot arrays, so no structural test separates them (the module docs'
+/// structural-guess weakness), while the side that holds one always knows: the
+/// checker walks a *type cell*, the lowering a *type term*.  A caller that
+/// genuinely does not know asks twice, once per variant, and lets the decode
+/// answer (`struct_fields_of_slot` in `lichen-compute`).
 ///
-/// `compile_parallel_fragment` runs on a [`Module`] and has no universe node:
-/// the universe is a `Ctx` fact, and the lowering is below the checker.  A
-/// kernel's parameter struct is a named struct type term, so the lowering needs
-/// this reader and cannot call the one above.
+/// The unwrap this type exists to stop being written by hand is `Index(ty, 0)`:
+/// that is a holder's value slot *or* a term's shape, and only the caller's own
+/// knowledge says which of the two it just read.
+#[derive(Clone, Copy)]
+pub enum TypeRef {
+    /// The `[shape, kind]` expression itself — its shape at slot 0, its kind at
+    /// slot 1.
+    Term(AnyNodeId),
+    /// A node whose value slot holds a `[shape, kind]` term, one level in.
+    Slot(AnyNodeId),
+}
+
+impl TypeRef {
+    /// The `[shape, kind]` term this names.
+    pub fn term<P: Program>(self, module: &Module<P>) -> Option<AnyNodeId>
+    where
+        P::Value: AsEnum<LowValue>,
+    {
+        match self {
+            TypeRef::Term(id) => Some(id),
+            // SAFETY: `id` is a live node of `module`; nothing in this crate
+            // calls `Module::drop_block`.
+            TypeRef::Slot(id) => unsafe { array_items(module, id) }
+                .and_then(|items| items.first())
+                .map(|item| item.node),
+        }
+    }
+}
+
+/// The **field-type list** of the value type a term names: a struct's field
+/// list, a tuple's element list — the term's shape (`[shape, kind]` slot 0).
+/// The two kinds that have one differ only in their kind marker
+/// ([`is_positional_type_any`]), which is why one reader serves both.
 ///
-/// # The gate is the cycle, not a second structural guess
+/// `None` when the node is not a two-slot term.
+pub fn field_list<P: Program>(module: &Module<P>, ty: TypeRef) -> Option<AnyNodeId>
+where
+    P::Value: AsEnum<LowValue>,
+{
+    shape_of(module, ty.term(module)?)
+}
+
+/// The type at field position `k` of a value type — the node its field list
+/// holds there, which is that field's own type term (a fresh cell for a field
+/// nothing has decided).
 ///
-/// The universe slot is recognised by [`Module::is_self_referential`] — the
-/// `[Type, ↺]` cycle.  That is the same test the renderer
-/// (`is_universe`) and `class_holds_type` already use, so this reader adds no
-/// new guess about the encoding; it chooses the one the modules that have no
-/// universe handle already had to use.
+/// This is the **resolved** form of the `Index(shape, k)` a reader would
+/// otherwise build: `Index(ty, 0)` is the shape and `[k]` its entry, so this is
+/// the node that `Index` would evaluate to, read without building an operation
+/// node.  The difference is observable wherever a *cell* is read rather than
+/// evaluated — [`low_type_of_slot`] cannot see through an unevaluated `Index`,
+/// so a class question asked of a field read would answer nothing.
+pub fn field_type<P: Program>(module: &Module<P>, ty: TypeRef, k: usize) -> Option<AnyNodeId>
+where
+    P::Value: AsEnum<LowValue>,
+{
+    let shape = field_list(module, ty)?;
+    // SAFETY: `shape` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    unsafe { array_items(module, shape) }?
+        .get(k)
+        .map(|item| item.node)
+}
+
+/// The **named fields** of a struct type, in field order — `None` for a
+/// positional field.  `None` for the whole answer when the type is not a named
+/// struct: an anonymous struct (whose marker's name slot holds no table),
+/// another kind, or a kind that does not close on the universe.
 ///
-/// `None` when `ty` is not a named struct type term.  A `None` entry is a
-/// positional field; a `Some(name)` entry is a `.name T` field.
-pub fn struct_fields_by_shape<P: Program>(
+/// The universe is recognised by [`Module::is_self_referential`] — the
+/// `[Type, ↺]` cycle — because the callers that need this (a lowering, which has
+/// no universe handle to pass) are below the checker.  That is the test the
+/// renderer and [`class_holds_type`] already use, not a new guess.
+pub fn field_names<P: Program>(
     module: &mut Module<P>,
-    ty: AnyNodeId,
-) -> Option<(Vec<Option<&'static str>>, AnyNodeId)>
+    ty: TypeRef,
+) -> Option<Vec<Option<&'static str>>>
 where
     P::Value: ValueType,
 {
-    let (universe_slot, shape, table) = struct_term_parts(module, ty)?;
+    let (universe_slot, shape, table) = struct_term_parts(module, ty.term(module)?)?;
     if !module.is_self_referential(universe_slot) {
         return None;
     }
@@ -804,27 +871,61 @@ where
     // SAFETY: `table` is the payload of the value read from the live node
     // named by the marker's name slot.
     for item in unsafe { table.items() } {
-        let name = module
-            .node_value(item.key)
-            .and_then(|v| v.as_enum())
-            .and_then(|v| match v {
-                LowValue::Str(s) => Some(s),
-                _ => None,
-            });
-        let index = module
-            .node_value(item.value)
-            .and_then(|v| v.as_enum())
-            .and_then(|v| match v {
-                LowValue::USize(n) => Some(n),
-                _ => None,
-            });
-        if let (Some(name), Some(index)) = (name, index)
+        if let Some((name, index)) = name_table_entry(module, item)
             && index < field_count
         {
             names[index] = Some(name);
         }
     }
-    Some((names, shape))
+    Some(names)
+}
+
+/// Where `name` sits in a struct type's name→index table — the fold a named read
+/// performs, shared by the two sides that hold the table by different routes:
+/// the checker reaches it through its canonical universe
+/// ([`struct_names_any`]), a lowering through the self-cycle ([`field_names`]).
+/// The **gate** stays each caller's, which is the whole reason the two readers
+/// exist; the fold over the entries is what they must not each re-spell.
+///
+/// The stored position is returned as it stands, without a field-count check:
+/// the table is the authority here, and a caller that has a field list bounds it
+/// against that (as [`field_names`] does).
+pub fn name_table_index<P: Program>(
+    module: &Module<P>,
+    table: AnyHandle<[TableItem]>,
+    name: &str,
+) -> Option<usize>
+where
+    P::Value: AsEnum<LowValue>,
+{
+    // SAFETY: `table` is the payload of the value read from a live node of
+    // `module`.
+    unsafe { table.items() }
+        .iter()
+        .find_map(|item| match name_table_entry(module, item) {
+            Some((entry, index)) if entry == name => Some(index),
+            _ => None,
+        })
+}
+
+/// One name-table entry decoded as its `(name, position)` pair.  `None` for an
+/// entry that is not a `Str` key beside a `USize` value — an entry still being
+/// built, or a table this encoding did not write.
+fn name_table_entry<P: Program>(
+    module: &Module<P>,
+    item: &TableItem,
+) -> Option<(&'static str, usize)>
+where
+    P::Value: AsEnum<LowValue>,
+{
+    let name = match module.node_value(item.key)?.as_enum()? {
+        LowValue::Str(name) => name,
+        _ => return None,
+    };
+    match module.node_value(item.value)?.as_enum()? {
+        LowValue::USize(index) => Some((name, index)),
+        _ => None,
+    }
 }
 
 // --- low types -----------------------------------------------------------------

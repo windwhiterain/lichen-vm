@@ -111,10 +111,10 @@ author's type lambdas (`KT`/`A`/`P`/`S`) plus the signature-carrying entries
 from the author, because a struct type's identity is the occurrence it is written at
 ([applied-struct-nominal-id](applied-struct-nominal-id.md)).
 
-**It does not run yet.** The current state, the two measured blockers, the
-reproduction and the orientation map are in
-[compute-param-struct-handoff](compute-param-struct-handoff.md) — that note is the one
-to read; this section is the pointer.
+**It runs** — both blockers were diagnosed and fixed. The current state, the two
+blockers as they were diagnosed, the reproduction and the orientation map are in
+[compute-param-struct-handoff](compute-param-struct-handoff.md) — that note is the
+one to read; this section is the pointer.
 
 _Footnote: the earlier proposal split the invocation into `call`/`launch`/`run` (a `.kernel`
 field-based 3-field struct). The shipped v1 keeps `launch`/`plrun` two-step and uses the

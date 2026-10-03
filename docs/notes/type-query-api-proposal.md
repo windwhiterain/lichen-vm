@@ -1,15 +1,17 @@
 # Proposal: one query surface for types and classes
 
-> Status: **superseded in diagnosis, deferred in construction.** Its claim that
-> the three failing conversion tests stem from a missing query surface was
-> measured and rejected — the three have three distinct causes, none of which
-> is a missing API (see
-> [kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) §0). Its
-> `shape.rs` accessor part (`TypeRef`, `field_list`/`field_type`/
-> `field_names`/`field_index`) is **not** built; it is deferred to the
-> specialize-before-JIT work recorded in the same note's §6, whose specialize
-> pass is the accessors' intended consumer. The boundary rules in §4 here still
-> hold.
+> Status: **superseded in diagnosis; §2's Level 1 landed in part (§7).**
+> Its claim that the three failing conversion tests stem from a missing query
+> surface was measured and rejected — the three have three distinct causes, none
+> of which is a missing API (see
+> [kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) §0).
+> What *has* landed is the accessor half of §2's Level 1, minus `field_index`
+> (whose consumer is the specialize pass): `TypeRef`, `field_list`,
+> `field_type`, `field_names`, and `name_table_index`.  They are consumed by the
+> checker's field read and by `lichen-compute`'s role decode, and they fix §1(c)'s
+> measured symptom — a class question about a struct field had no answer.
+> **Not built**: `field_index`, the compute-side `class_of` adapter, and §2's
+> Level 2.  The boundary rules in §4 still hold.
 > Companions: [compute-param-struct-handoff](compute-param-struct-handoff.md)
 > (the in-flight kernel work this unblocks), [floating-point](floating-point.md)
 > §4.2/§4.4/§5.1 (the class model), [lowlevel-low-types](lowlevel-low-types.md)
@@ -27,7 +29,9 @@ Four measurements, all from the current tree.
 **(a) `shape` has predicates but no accessors.** The public surface is
 `is_struct_type_any`, `is_function_type_any`, `is_positional_type_any`,
 `struct_names_any`, `struct_fields_by_shape`, `low_type_of`, `low_type_of_slot`.
-There is no "the field list of this type" and no "the field at index *k*". The
+There was no "the field list of this type" and no "the field at index *k*" —
+`struct_fields_by_shape` was the only field reader, and §7 re-expresses it as
+`field_names` + `field_list`. The
 one function that decodes values — `low_type_of` — **deliberately refuses
 structs**:
 
@@ -279,3 +283,60 @@ If those three read as obviously right, the boundary in §2 is the one to build.
 If one of them feels wrong — most likely `class_of` taking `params`, which is the
 one place this proposal makes a caller pass context it would rather not — that is
 the design question worth settling before writing the module.
+
+## 7. What landed: the accessors, and the field read they decide
+
+Built in `crates/lichen-highlevel/src/shape.rs`, consumed by the checker and by
+`lichen-compute`'s role decode:
+
+| Item | Consumer |
+|---|---|
+| `TypeRef::{Term, Slot}` + `term` | `struct_fields_of_slot` (`compute.rs`), the one caller that does not know which it holds |
+| `field_list` | same, and `field_type` |
+| `field_type` | `Checker::slot_read` — a concrete container's field read |
+| `field_names` | `struct_fields_of_slot` |
+| `name_table_index` | `Checker::named_field_index_any` — the fold over a name table, shared so the two gates cannot decode an entry differently |
+
+`struct_fields_by_shape` — §1(a)'s "the accessor this half-provides and three
+sites walk" — is **gone**, re-expressed as `field_names` + `field_list`; its four
+try-both call sites in `compute.rs` collapse into one `struct_fields_of_slot`.
+**`field_index` is not built**: its recorded consumer is the specialize pass, and
+a fold with no caller is surface this tree does not keep.  So is `class_of`: §2's
+Level 1 asked for it, but the field read below removed the case that needed it.
+
+### The symptom §1(c) named, fixed and measured
+
+A field read's **type** was `Index(Index(container_ty, 0), key)` — an operation
+node — even when the container's type was concrete and the checker had already
+resolved the field's position for its own guard.  A *cell* reader cannot see
+through that: `low_type_of_slot` reads a node's value, so `check_binop`'s class
+question (`names_float_class`) found neither operand concretely `Float`, pinned
+the operation to the `Int` default, and then refused its own operands against it.
+
+`Checker::slot_read` now reads the field's type straight out of the container
+type's field list when the position is known (`shape::field_type` on
+`TypeRef::Term`), and keeps the lazy form when it is not.  The node is the one
+the `Index` would have evaluated to, so nothing else about the read moves.
+
+Measured, plain lichen, no compute module involved:
+
+| Program | Before | After |
+|---|---|---|
+| `Par = struct<.n Int, .alpha Float>; (x : Par) => x.alpha + x.alpha` | `expected Int, found Float` (both operands) | `1.0: Float` |
+| `(x : <Int, Float>) => x(1) + x(1)` | `expected Int, found Float` | `1.0: Float` |
+| `Outer = struct<.in Inner>; (x : Outer) => x.in.a + x.in.a` | `expected Int, found Float` | `1.0: Float` |
+| the same three with one concrete `Float` operand (`x.alpha * 2.0`) | already worked | unchanged |
+
+The last row is why this is the *class question* and not the unify: a unify
+against a decided `Float` forces the lazy `Index` and passes, while the predicate
+that chooses the class cannot.  Both halves were old code (`73b13fb`,
+`371c800`), so this was a long-standing gap in the language rather than a
+regression.
+
+**What is still walked by hand.** `compute.rs`'s `struct_type_names`,
+`type_term_slot`, and `param_value_shape` (§3's third row) survive, and the
+reason is structural rather than inertia: the emitter holds `&Module`, while the
+universe gate these accessors use (`is_self_referential`, and
+`struct_names_any`'s equality-class form) needs `&mut Module`.  Re-pointing them
+would make the emitter mutable for a read.  They are a *second* walk until that
+boundary moves, and §3 should be read with that cost attached.

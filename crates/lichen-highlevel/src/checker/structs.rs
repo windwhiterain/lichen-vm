@@ -55,7 +55,13 @@ where
         let container_value = self.value_of(container);
         let key_value = self.value_of(key);
         self.node_edges.insert(key_value, self.loc(key, 0));
-        let (value_node, ty_node) = self.slot_read(container_ty, container_value, key_value);
+        // The field's position, when the key is a literal: a concrete container
+        // type then states the field's type, and `slot_read` reads it out of the
+        // field list instead of leaving an `Index` no class question can see
+        // through.
+        let position = self.constant_position(key);
+        let (value_node, ty_node) =
+            self.slot_read(container_ty, container_value, key_value, position);
         let pair = self.pair_of(value_node, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
@@ -64,16 +70,36 @@ where
     }
 
     /// The structural slot read shared by the positional form `a(k)` and the
-    /// named form `a.name`: `value = Index(container_value, key)`,
-    /// `type = Index(Index(container_ty, 0), key)` — the type comes from the
-    /// container's **type** tree (its shape), so an unbound container resolves
-    /// when the call binds it.  `key` is already the resolved slot: the
-    /// argument's own value, or a struct name table's read.
+    /// named form `a.name`: `value = Index(container_value, key)`, and the
+    /// **type** is the field's own type node out of the container type's field
+    /// list.  `key` is already the resolved slot: the argument's own value, or a
+    /// struct name table's read.
+    ///
+    /// **`position` is the field's position, and it is what makes the type
+    /// decided rather than lazy.**  A concrete container type states it — the
+    /// named form resolves the name through the type's own name table for its
+    /// guard ([`Self::named_field_index_any`]), and the positional form's key is
+    /// a literal — so the type is read straight out of the field list
+    /// ([`shape::field_type`]), which is the same node an
+    /// `Index(Index(container_ty, 0), key)` would evaluate to, one unify
+    /// earlier.
+    ///
+    /// That earliness is **observable**, and it is the reason this is not a
+    /// cosmetic change: a class question asked of an operand reads the type
+    /// *cell* with [`shape::low_type_of_slot`], which cannot see through an
+    /// unevaluated `Index` — so `(x : struct<.a Float>) => x.a + x.a` used to
+    /// find neither operand concretely `Float`, pin the operation to the `Int`
+    /// default (`check_binop`), and then refuse both operands against it.
+    ///
+    /// An **undecided** container (`position` is `None`) keeps the lazy form:
+    /// its type tree is not known here, and the `Index` is what resolves when the
+    /// apply binds it.
     fn slot_read(
         &mut self,
         container_ty: NodeId,
         container_value: NodeId,
         key: NodeId,
+        position: Option<usize>,
     ) -> (NodeId, NodeId) {
         let value_ops = self.array_node(self.current_block, &[container_value, key]);
         let value_node = self.op_node(
@@ -81,18 +107,41 @@ where
             P::Operator::from(LowOperator::Index),
             Some(value_ops),
         );
-        let shape_ops = self.array_node(self.current_block, &[container_ty, self.zero()]);
-        let shape = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(shape_ops),
-        );
-        let ty_ops = self.array_node(self.current_block, &[shape, key]);
-        let ty_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(ty_ops),
-        );
+        // Only a **dynamic** field type is taken directly: a frozen field type
+        // (one an imported package's type is built from) belongs to its own
+        // module's arena, and materializing a copy of it here would be a
+        // different node than the one the lazy `Index` evaluates to.  Such a
+        // field keeps the lazy form — the pre-existing behaviour — rather than
+        // getting a copy that unifies as something else.
+        let resolved = position
+            .and_then(|at| {
+                shape::field_type(
+                    &self.module,
+                    shape::TypeRef::Term(AnyNodeId::Dynamic(container_ty)),
+                    at,
+                )
+            })
+            .and_then(|ty| match ty {
+                AnyNodeId::Dynamic(node) => Some(node),
+                AnyNodeId::Static(_) => None,
+            });
+        let ty_node = match resolved {
+            Some(ty_node) => ty_node,
+            None => {
+                let shape_ops = self.array_node(self.current_block, &[container_ty, self.zero()]);
+                let shape = self.op_node(
+                    self.current_block,
+                    P::Operator::from(LowOperator::Index),
+                    Some(shape_ops),
+                );
+                let ty_ops = self.array_node(self.current_block, &[shape, key]);
+                self.op_node(
+                    self.current_block,
+                    P::Operator::from(LowOperator::Index),
+                    Some(ty_ops),
+                )
+            }
+        };
         (value_node, ty_node)
     }
 
@@ -183,6 +232,13 @@ where
         self.check_expr(container);
         let container_ty = self.state[container].ty.unwrap();
         let concrete = self.type_is_concrete(container_ty);
+        // The field's position, resolved **once** for both the guard below and
+        // the read's type: a concrete struct that has this field states where it
+        // is, and `slot_read` uses that to read the field's type out of the field
+        // list rather than leaving an `Index` no class question can see through.
+        let position = concrete
+            .then(|| self.named_field_index_any(AnyNodeId::Dynamic(container_ty), name))
+            .flatten();
         if concrete {
             if !shape::is_struct_type_any(
                 &mut self.module,
@@ -196,10 +252,7 @@ where
                     DiagKind::IndexTarget,
                     None,
                 );
-            } else if self
-                .named_field_index_any(AnyNodeId::Dynamic(container_ty), name)
-                .is_none()
-            {
+            } else if position.is_none() {
                 // The container is a struct but has no field of this name: the
                 // offending name rides in the entry, so the language layer can
                 // append a did-you-mean clause.
@@ -212,21 +265,42 @@ where
                 );
             }
         }
-        // names — the struct marker's name table, read through the container
-        // type's kind (`[shape, kind]`: kind at [1], marker at [0], names
-        // at [1]).
-        let names_node = self.lazy_index_path(container_ty, &shape::STRUCT_TYPE_NAMES_PATH);
-        // key = TableGet(names, name) — the field index.
-        let name_node = self.name_node(name);
-        let key_ops = self.array_node(self.current_block, &[names_node, name_node]);
-        let key = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::TableGet),
-            Some(key_ops),
-        );
+        // The field's **subscript**: a constant position when the container type
+        // is concrete and states it, and otherwise the lazy
+        // `TableGet(names, name)` a name table resolves through — which is what
+        // keeps an *unbound* container's named read resolvable at the apply.
+        //
+        // **A constant is not an optimisation here; it is the whole difference
+        // for the lowering.**  A kernel body is walked by its operands, and a
+        // name table's `TableGet` is not a value anything can resolve without
+        // re-deriving the struct's field order — so a concrete read's field
+        // position is written where it is decided (`slot_read`'s type read is
+        // the other half of the same decision).  The lazy form stays for the one
+        // case that needs it: a container whose type is not known yet.
+        let key = match position {
+            Some(at) => self.alloc_node(
+                self.current_block,
+                None,
+                Some(P::Value::from(LowValue::USize(at))),
+            ),
+            None => {
+                // names — the struct marker's name table, read through the
+                // container type's kind (`[shape, kind]`: kind at [1], marker at
+                // [0], names at [1]).
+                let names_node = self.lazy_index_path(container_ty, &shape::STRUCT_TYPE_NAMES_PATH);
+                // key = TableGet(names, name) — the field index.
+                let name_node = self.name_node(name);
+                let key_ops = self.array_node(self.current_block, &[names_node, name_node]);
+                self.op_node(
+                    self.current_block,
+                    P::Operator::from(LowOperator::TableGet),
+                    Some(key_ops),
+                )
+            }
+        };
         self.node_edges.insert(key, self.loc(e, 0));
         let container_value = self.value_of(container);
-        let (value_node, ty_node) = self.slot_read(container_ty, container_value, key);
+        let (value_node, ty_node) = self.slot_read(container_ty, container_value, key, position);
         let pair = self.pair_of(value_node, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
@@ -237,23 +311,31 @@ where
     /// The positional index of a named struct field, read from the struct
     /// type's name table at check time.  `None` when the type is not a
     /// struct, is an anonymous struct, or has no such named field.
+    ///
+    /// The **universe gate stays here** (`struct_names_any` compares against the
+    /// checker's canonical universe node); the fold over the table's entries is
+    /// [`shape::name_table_index`], shared with the lowering's reader so the two
+    /// cannot decode an entry differently.
     fn named_field_index_any(&mut self, ty: AnyNodeId, name: &'static str) -> Option<usize> {
         let table = shape::struct_names_any(&mut self.module, self.type_expr, ty)?;
-        // SAFETY: `table` is read from a live node of this module; nothing in
-        // this crate calls `Module::drop_block`.
-        for item in unsafe { table.items() } {
-            if self
-                .module
-                .node_value(item.key)
-                .and_then(|v| v.as_enum())
-                .is_some_and(|v| v == LowValue::Str(name))
-                && let Some(LowValue::USize(n)) =
-                    self.module.node_value(item.value).and_then(|v| v.as_enum())
-            {
-                return Some(n);
-            }
+        shape::name_table_index(&self.module, table, name)
+    }
+
+    /// The position a positional key expression states, when it states a
+    /// constant one: the `USize` its value node holds.  `None` for a key that
+    /// is computed or still undecided — the case where the field's position,
+    /// and so its type, is only known once the apply binds the container, which
+    /// is why [`Self::slot_read`] keeps its lazy form there.
+    fn constant_position(&self, key: ExprId) -> Option<usize> {
+        let value = self.state[key].val?;
+        match self
+            .module
+            .node_value(AnyNodeId::Dynamic(value))
+            .and_then(|held| held.as_enum())
+        {
+            Some(LowValue::USize(n)) => Some(n),
+            _ => None,
         }
-        None
     }
 
     /// Whether a type cell's value is statically inspectable — a concrete
