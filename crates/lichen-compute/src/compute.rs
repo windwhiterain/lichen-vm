@@ -2115,16 +2115,20 @@ where
     // instruction the emitter produces — a constant's representation, an
     // arithmetic opcode, the result types — is lowered in it, so it has to be
     // known before the first instruction rather than read off the finished body.
-    // A codomain that mixes the two has no single class to lower in and is
-    // refused by name here.
+    // **A codomain may mix the two.**  Every leaf is lowered in its own class, so
+    // there is no single class for the body to have, and the emitted function's
+    // result list is typed per position (`result_classes`) rather than one class
+    // repeated.
     let result_classes: Vec<ScalarClass> = leaves
         .iter()
         .map(|leaf| node_class(module, *leaf))
         .collect();
+    // The filler for the **positions** a body never read, which is the ABI's
+    // integer default: a scalar fragment reads no buffer at all, so this only
+    // decides the class of an empty list.
     let class = result_classes.first().copied().unwrap_or(ScalarClass::Int);
-    if result_classes.iter().any(|leaf| *leaf != class) {
-        return Err(MIXED_CLASS_BODY.into());
-    }
+    // The class a buffer read is declared in; see [`Positions::element_class`].
+    tally.element_class = Some(class);
     for leaf in &leaves {
         emit_node(module, &params, *leaf, 0, &mut body, &mut tally)?;
     }
@@ -2134,7 +2138,7 @@ where
         body: body.into(),
         inputs: tally.reads,
         outputs: tally.writes,
-        input_classes: tally.input_classes(class),
+        input_classes: tally.input_classes(),
         // A scalar fragment has no output buffers, so this is empty: the values
         // it produces are its **wasm results**, which is `result_classes` below.
         // The two were one field while a fragment had one class, and they
@@ -2302,15 +2306,11 @@ where
         roles: None,
     }];
     let mut body_instr: Vec<KernelInstr> = Vec::new();
-    // **The fragment's class, decided before anything is emitted.**  A parallel
-    // index function computes in one class for the same reason any kernel body
-    // does (`docs/notes/floating-point.md` §4.2), and every constant, operator
-    // and buffer the body touches is lowered in it: the read/write element type,
-    // the positions and the loop index all take this class's wasm value type, so
-    // it has to be known before the first instruction rather than read off the
-    // finished body.  It is the class of the value each output position writes —
-    // the body's own codomain — and writes that disagree are refused by name
-    // because the ABI's `read`/`write` import has one element type.
+    // **The outputs may mix the two.**  Each write's ordinal carries the class of
+    // the value it writes (`Positions::write_classes`), and a module declares its
+    // `write` import once per class for exactly this reason.  The first decided
+    // one is kept as the fragment's own class, which is what the dummy result and
+    // the fallback filler below are lowered in.
     let write_classes: Vec<Option<ScalarClass>> = outputs
         .iter()
         .map(|output| write_value_node(module, *output).map(|value| node_class(module, value)))
@@ -2321,9 +2321,6 @@ where
         .copied()
         .next()
         .unwrap_or(ScalarClass::Int);
-    if write_classes.iter().flatten().any(|write| *write != class) {
-        return Err(MIXED_CLASS_BUFFERS.into());
-    }
     // One `compute.write` per codomain position, in position order, so write `k`
     // is emitted with `out_pos = k`.  A position is *required* to emit exactly
     // one write: a position that emits none is named, and the total is checked
@@ -2331,6 +2328,8 @@ where
     // would consume an ordinal of its own) is caught too.  A conditional write
     // is refused by the emitter, which knows the more specific cause.
     let mut tally = Positions::default();
+    // The class a buffer read is declared in; see [`Positions::element_class`].
+    tally.element_class = Some(class);
     for (position, output) in outputs.iter().enumerate() {
         let before = tally.writes;
         // **Depth 0 at the root**: the body value is the outermost expression, and
@@ -2352,9 +2351,6 @@ where
             outputs.len()
         ));
     }
-    if tally.write_classes.iter().any(|write| *write != class) {
-        return Err(MIXED_CLASS_BUFFERS.into());
-    }
     // The index function writes into the output buffers (side effects); leave a
     // dummy scalar on the stack so the shared `assemble_module` signature holds
     // for the write-only kernel.  That dummy is exactly **one** value, which is
@@ -2369,21 +2365,21 @@ where
         // bound rather than passed, so this shape is the parallel signature and
         // says nothing about them. `tally.reads` is what says that.
         //
-        // **Both leaves take the body's class**, because this signature is the
-        // ABI's rather than a language fact (`cfg(0)`'s type is a fresh cell the
-        // body pins, if it uses it at all): a float fragment's count, index and
-        // buffer positions are `f32` values, and the host's `read`/`write`
-        // closures convert them.  The count and the index are exact in `f32` —
-        // the launch count is bounded by [`MAX_PARALLEL_ELEMENTS`], far below
-        // 2^24.
+        // **Both leaves are `Int`, and that is the ABI's own statement rather
+        // than a language fact** (`cfg(0)`'s type is a fresh cell the body pins,
+        // if it uses it at all).  The count is a launch extent and the index is a
+        // lane number: neither is data, so neither takes the buffer's class.  A
+        // float fragment's index is an `i64` — the conversion that made it an
+        // `f32` existed only because the fragment had one class, and the host's
+        // `read`/`write` imports no longer convert it.
         param_shape: KernelShape::Tuple(vec![
-            KernelShape::Scalar(class),
-            KernelShape::Scalar(class),
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
         ]),
         body: body_instr.into(),
         inputs: tally.reads,
         outputs: tally.writes,
-        input_classes: tally.input_classes(class),
+        input_classes: tally.input_classes(),
         output_classes: tally.output_classes(),
         // The dummy scalar the write-only body leaves on the stack, in the
         // fragment's class like every other value it computes.
@@ -2519,24 +2515,6 @@ where
     dyn_node(items.get(k)?.node).ok()
 }
 
-/// A kernel body that mixes `Int` and `Float` values.
-///
-/// A kernel is written in one class (`docs/notes/floating-point.md` §4.2), and
-/// the wasm half is where that stops being a stylistic claim: one fragment has
-/// one opcode family for its arithmetic, one result type and one element type
-/// for its buffers, so a body that computes both classes has no single lowering.
-/// Refused by name at compile time rather than mis-lowered.
-const MIXED_CLASS_BODY: &str = "a kernel body must compute one class: this body's result mixes Int \
-     and Float, and a kernel fragment is lowered in one class";
-
-/// A parallel index function whose outputs are written in different classes.
-///
-/// The fragment's `read`/`write` host import has one value type, so every buffer
-/// the body touches has to be the same class; two classes would need two imports
-/// the ABI does not have (`docs/notes/floating-point.md` §4.4).
-const MIXED_CLASS_BUFFERS: &str = "a parallel index function must read and write one class: this \
-     one names both Int and Float buffers, and the fragment's buffer ABI is one class";
-
 /// A value of one class in a position that wants the other.
 ///
 /// **The sentence is the SPIR-V emitter's, byte for byte** — the one
@@ -2627,12 +2605,13 @@ fn assemble_module(
         refuse_mixed_classes(fragment)?;
     }
 
-    // A fragment that lowers buffer `read`/`write` calls declares the two host
-    // imports (function indices 0 and 1); the defined functions then start at
-    // `base` (2).  A pure scalar kernel has no imports (base 0).
-    let imports_class = buffered_class(ordered)?;
-    let uses_imports = imports_class.is_some();
-    let base: u32 = if uses_imports { 2 } else { 0 };
+    // **One `read`/`write` import pair per class the set's buffer calls name**,
+    // the reads first and the writes after them: function index `i` is
+    // `import_classes[i]`'s read, and `import_classes.len() + i` its write.  The
+    // defined functions then start at `base`; a pure scalar kernel declares no
+    // imports at all.
+    let import_classes = buffered_classes(ordered);
+    let base: u32 = (import_classes.len() * 2) as u32;
 
     // Type section: the import signatures (if any), then one signature per
     // distinct **whole** `(params, results)` pair of value types.
@@ -2646,16 +2625,24 @@ fn assemble_module(
     // shared entry for the two runs that *do* agree: the scalar root and the
     // parallel path's write-only kernel.
     let mut types = TypeSection::new();
-    let (mut read_ty, mut write_ty) = (0u32, 0u32);
-    if let Some(class) = imports_class {
-        // A float fragment's positions and indices are its own class too, so the
-        // two imports are `(class, class) -> class` and `(class, class, class)`;
-        // the host's closures in `run_parallel_range` declare the same types.
-        let class = value_type(class);
-        read_ty = types.len();
-        types.ty().function(vec![class, class], vec![class]);
-        write_ty = types.len();
-        types.ty().function(vec![class, class, class], vec![]);
+    let mut read_ty: HashMap<ScalarClass, u32> = HashMap::new();
+    let mut write_ty: HashMap<ScalarClass, u32> = HashMap::new();
+    for class in &import_classes {
+        // **The position and the index are `i64` in every class**, and only the
+        // element's own type follows the class: a position is a compile-time
+        // ordinal in the buffer space and an index is a lane number, so neither
+        // is ever the data (`docs/notes/floating-point.md` §4.4).  The host's
+        // closures in `run_parallel_range` declare the same signatures.
+        let value = value_type(*class);
+        let position_and_index = vec![wasm_encoder::ValType::I64, wasm_encoder::ValType::I64];
+        let index = types.len();
+        types.ty().function(position_and_index.clone(), vec![value]);
+        read_ty.insert(*class, index);
+        let index = types.len();
+        types
+            .ty()
+            .function([position_and_index, vec![value]].concat(), vec![]);
+        write_ty.insert(*class, index);
     }
     let mut type_index_by_signature: HashMap<(Vec<ScalarClass>, Vec<ScalarClass>), u32> =
         HashMap::new();
@@ -2683,10 +2670,22 @@ fn assemble_module(
 
     let mut wasm = WasmModule::new();
     wasm.section(&types);
-    if uses_imports {
+    if !import_classes.is_empty() {
         let mut imports = ImportSection::new();
-        imports.import("env", "read", EntityType::Function(read_ty));
-        imports.import("env", "write", EntityType::Function(write_ty));
+        for class in &import_classes {
+            imports.import(
+                "env",
+                &buffer_import_name(*class, "read"),
+                EntityType::Function(read_ty[class]),
+            );
+        }
+        for class in &import_classes {
+            imports.import(
+                "env",
+                &buffer_import_name(*class, "write"),
+                EntityType::Function(write_ty[class]),
+            );
+        }
         wasm.section(&imports);
     }
     let mut funcs = FunctionSection::new();
@@ -2750,6 +2749,8 @@ fn assemble_module(
             at: 0,
             next_local: params,
             block_types: &block_types,
+            read_index: &read_ty,
+            write_index: &write_ty,
             class,
         };
         lower_body(frag, &mut state, &mut body)?;
@@ -3096,6 +3097,14 @@ struct WasmState<'a> {
     at: usize,
     next_local: usize,
     block_types: &'a HashMap<(ScalarClass, usize), u32>,
+    /// The wasm function index each buffer import took, per class — the reads
+    /// first, then the writes, as [`assemble_module`] declared them.
+    ///
+    /// **Keyed by class, because a buffer call names its own**: the import a read
+    /// resolves to is a function of the element's class, and a body may name
+    /// more than one.
+    read_index: &'a HashMap<ScalarClass, u32>,
+    write_index: &'a HashMap<ScalarClass, u32>,
     /// The class the fragment's whole body is lowered in, read off
     /// [`fragment_class`] before emission — the class of every local a loop
     /// carries and of every block type the body names.
@@ -3342,47 +3351,58 @@ fn param_classes(fragment: &KernelFragment) -> Vec<ScalarClass> {
     classes
 }
 
-/// The class of the fragments that lower the buffer `read`/`write` imports, or
-/// `None` for a launch set that uses no imports.
+/// The host import name a buffer call of `class` resolves to.
 ///
-/// **One class for the whole module, and that is the ABI's limit**: the module
-/// declares one `read` and one `write` import, each with a single value type,
-/// so two buffered fragments of different classes could not share it.  They
-/// cannot arise from one program (`docs/notes/floating-point.md` §4.2 — a kernel
-/// body is written in one class), so a set that mixes them is refused by name
-/// rather than given one fragment's signature.
-fn buffered_class(ordered: &[KernelFragment]) -> Result<Option<ScalarClass>, String> {
-    let mut class: Option<ScalarClass> = None;
+/// **The class is in the name because a wasm import has one signature.**  Its
+/// result type cannot depend on an argument, so one `read` could not serve both
+/// an integer buffer and a float one — the pair is declared per class instead,
+/// and this is the one place the name is spelled.
+fn buffer_import_name(class: ScalarClass, kind: &str) -> String {
+    let class = match class {
+        ScalarClass::Int => "i64",
+        ScalarClass::Float => "f32",
+    };
+    format!("{kind}_{class}")
+}
+
+/// The classes a launch set's buffer `read`/`write` calls name, in a fixed order
+/// — `Int` before `Float` — and empty for a set that calls neither.
+///
+/// **One `read`/`write` pair per class the set uses**, which is what lets one
+/// module hold fragments of different classes at all: a class nobody reads or
+/// writes costs no import.
+///
+/// **The order is the ABI's**, because it decides the import function indices:
+/// the reads come first and the writes after them, one entry per class.
+/// `assemble_module` declares them in this order and `run_parallel_range`
+/// resolves them against the same list, so the two cannot disagree about which
+/// index a class took.
+fn buffered_classes(ordered: &[KernelFragment]) -> Vec<ScalarClass> {
+    let mut classes: Vec<ScalarClass> = Vec::new();
     for fragment in ordered {
         // **Every instruction in the body, transfers included** — the question is
-        // "does this fragment call a buffer import anywhere", and a read or write
-        // inside a branch still needs the import declared.  A walk over
-        // `straight_line_instrs` would answer `None` for a branch and leave the
-        // module calling an import it never declared
+        // "which classes does this fragment call a buffer import in", and a read
+        // or write inside a branch still needs its import declared.  A walk over
+        // `straight_line_instrs` would miss a branch and leave the module calling
+        // an import it never declared
         // ([`KernelBody::instrs`](lichen_kernel_ir::KernelBody::instrs)).
-        let buffered = fragment.body.instrs().into_iter().any(|instruction| {
-            matches!(
-                instruction,
-                KernelInstr::BufferReadCall(_) | KernelInstr::BufferWriteCall(_)
-            )
-        });
-        if !buffered {
-            continue;
-        }
-        let this = fragment_class(fragment);
-        match class {
-            None => class = Some(this),
-            Some(seen) if seen == this => {}
-            Some(_) => {
-                return Err(
-                    "this launch set mixes Int and Float buffer fragments, and one module \
-                     declares one `read`/`write` import whose value type is one class"
-                        .into(),
-                );
+        for instruction in fragment.body.instrs() {
+            let class = match instruction {
+                KernelInstr::BufferReadCall(class) | KernelInstr::BufferWriteCall(class) => *class,
+                _ => continue,
+            };
+            if !classes.contains(&class) {
+                classes.push(class);
             }
         }
     }
-    Ok(class)
+    // A fixed order, so the indices are a function of the *set* rather than of
+    // the order the walk happened to meet the classes in.
+    classes.sort_by_key(|class| match class {
+        ScalarClass::Int => 0,
+        ScalarClass::Float => 1,
+    });
+    classes
 }
 
 /// Lower a sequence of abstract [`KernelInstr`]s into a wasm function body.
@@ -3500,13 +3520,19 @@ fn lower_instrs(
                 })?;
                 out.instruction(&Instruction::Call(base + target));
             }
-            KernelInstr::BufferReadCall(_) => {
-                // The host `read(cfg_pos, idx)` import — function index 0.
-                out.instruction(&Instruction::Call(0));
+            KernelInstr::BufferReadCall(class) => {
+                // The `read` import for this element's class.
+                let target = *state.read_index.get(&class).ok_or_else(|| {
+                    format!("compute.wasm: no `read` import was declared for {class:?} elements")
+                })?;
+                out.instruction(&Instruction::Call(target));
             }
-            KernelInstr::BufferWriteCall(_) => {
-                // The host `write(out_pos, idx, val)` import — function index 1.
-                out.instruction(&Instruction::Call(1));
+            KernelInstr::BufferWriteCall(class) => {
+                // The `write` import for this element's class.
+                let target = *state.write_index.get(&class).ok_or_else(|| {
+                    format!("compute.wasm: no `write` import was declared for {class:?} elements")
+                })?;
+                out.instruction(&Instruction::Call(target));
             }
         }
     }
@@ -3859,22 +3885,29 @@ struct Positions {
     /// count of two. [`Self::input_classes`] is what reconciles them, and the
     /// reconciliation is decided in one place rather than left to each caller.
     ///
-    /// **Every entry is the fragment's own class.**  A kernel body is written in
-    /// one class (`docs/notes/floating-point.md` §4.2), so a read's element is
-    /// the class the body computes in — the same class the write ordinals carry,
-    /// and the one the emitter reads off the value the read feeds.  A position
-    /// whose read is decided as a *different* class is a body that mixes the two,
-    /// which the fragment's one-class ABI cannot express; [`emit_node`] refuses
-    /// it by name rather than recording a class the module cannot type.
+    /// **Every entry is the class the reads are *declared* in**, which is
+    /// [`Self::element_class`] rather than the read node's: a buffer's element
+    /// class is a fact of the value the host binds at the run, not of any node in
+    /// the graph, so the lowering declares it and the run checks the binding
+    /// against it ([`check_input_classes`]).  Every *other* value's class is its
+    /// own, read from the node.
     read_classes: Vec<ScalarClass>,
+    /// The class a buffer read's element is declared in.
+    ///
+    /// **The one class that stays the fragment's.**  A read's element is the only
+    /// value whose class no node can carry, because the buffer it comes from is
+    /// bound by the host rather than computed by the body.  `None` before the
+    /// caller has said, and `Int` — the ABI's default — until then.
+    element_class: Option<ScalarClass>,
 }
 
 impl Positions {
     /// The declared class of every input position, one per position, at least
     /// [`Self::reads`] long: a position a body never read is still a position a
-    /// caller binds, and it takes the fragment's class for the same reason the
+    /// caller binds, and it takes the declared class for the same reason the
     /// reads do.
-    fn input_classes(&self, class: ScalarClass) -> Vec<ScalarClass> {
+    fn input_classes(&self) -> Vec<ScalarClass> {
+        let class = self.element_class.unwrap_or(ScalarClass::Int);
         let mut classes = self.read_classes.clone();
         classes.resize(self.reads.max(classes.len()), class);
         classes
@@ -4318,17 +4351,26 @@ where
                 // a sparse space, and a body that reads only `cfg(1)(1)` still
                 // needs two buffers bound or the one it read was never bound.
                 //
-                // **Every read position is the fragment's class.**  A body is
-                // written in one class (`docs/notes/floating-point.md` §4.2), so
-                // a read's element is the class the body computes in; whether the
-                // buffer actually holds that class is checked at the run, where
-                // the buffer's class is a fact of the value and the mismatch can
-                // be refused rather than reinterpreted (`check_input_classes`).
+                // **A read's element class is declared, not inferred.**  It is
+                // [`Positions::element_class`] — the fragment's — because the
+                // buffer it comes from is bound by the host rather than computed
+                // by the body, so no node carries it.  Whether the buffer actually
+                // holds that class is checked at the run, where the buffer's class
+                // is a fact of the value and the mismatch is refused rather than
+                // reinterpreted (`check_input_classes`).
+                let element = tally.element_class.unwrap_or(ScalarClass::Int);
                 tally.reads = tally.reads.max(pos + 1);
-                tally.read_classes.push(class);
-                body.push(KernelInstr::Const(class, const_bits(class, pos as i64)));
+                tally.read_classes.push(element);
+                // **The position is an `Int`, always.**  It is a compile-time
+                // ordinal in the input space, not data, and the import it feeds
+                // takes `i64` in every class — so a float fragment's positions
+                // are integers and no longer ride in `f32`.
+                body.push(KernelInstr::Const(
+                    ScalarClass::Int,
+                    const_bits(ScalarClass::Int, pos as i64),
+                ));
                 emit_node(module, params, idx, depth + 1, body, tally)?;
-                body.push(KernelInstr::BufferReadCall(class));
+                body.push(KernelInstr::BufferReadCall(element));
                 return Ok(());
             }
             // A pending write: `write [n, idx, val]` → the host
@@ -4353,7 +4395,12 @@ where
                 // one the buffer call names.
                 let element = node_class(module, val);
                 tally.write_classes.push(element);
-                body.push(KernelInstr::Const(class, const_bits(class, out_pos as i64)));
+                // The ordinal is an `Int` for the same reason a read's position
+                // is: it is a compile-time ordinal in the output space.
+                body.push(KernelInstr::Const(
+                    ScalarClass::Int,
+                    const_bits(ScalarClass::Int, out_pos as i64),
+                ));
                 emit_node(module, params, idx, depth + 1, body, tally)?;
                 emit_node(module, params, val, depth + 1, body, tally)?;
                 body.push(KernelInstr::BufferWriteCall(element));
@@ -6856,77 +6903,78 @@ fn run_parallel_range(
     end: usize,
 ) -> Result<(), String> {
     let class = state.class;
-    // The imports are typed in the fragment's own class, which is what
-    // `assemble_module` emitted for them: a float fragment's positions, indices
-    // and values are all `f32`, and the host converts the two index roles from
-    // the `f32` the ABI carries (`docs/notes/floating-point.md` §4.4).
-    let value_type = match class {
-        ScalarClass::Int => wasmi::ValType::I64,
-        ScalarClass::Float => wasmi::ValType::F32,
-    };
-
     let mut store = wasmi::Store::new(engine, state);
     let mut linker = wasmi::Linker::<ParallelState<'_>>::new(engine);
 
-    let read_ty = wasmi::FuncType::new([value_type, value_type], [value_type]);
-    let write_ty = wasmi::FuncType::new([value_type, value_type, value_type], []);
-    linker
-        .func_new(
-            "env",
-            "read",
-            read_ty,
-            |caller: wasmi::Caller<'_, ParallelState<'_>>,
-             params: &[wasmi::Val],
-             results: &mut [wasmi::Val]| {
-                let class = caller.data().class;
-                let pos = params.first().map_or(0, |v| import_index(class, v));
-                let idx = params.get(1).map_or(0, |v| import_index(class, v));
-                // The index is **global** — inputs are never partitioned — so
-                // no rebase here; a worker reads the whole input buffer.  The
-                // word is the element's own bits for both classes: an `f32`'s
-                // for a float fragment, the value for an integer one.
-                let value = caller
-                    .data()
-                    .inputs
-                    .get(pos)
-                    .and_then(|buffer| buffer.words.get(idx))
-                    .copied()
-                    .unwrap_or(0);
-                results[0] = word_value(class, value);
-                Ok(())
-            },
-        )
-        .map_err(|e| e.to_string())?;
-    linker
-        .func_new(
-            "env",
-            "write",
-            write_ty,
-            |mut caller: wasmi::Caller<'_, ParallelState<'_>>,
-             params: &[wasmi::Val],
-             _results: &mut [wasmi::Val]| {
-                let class = caller.data().class;
-                let out_pos = params.first().map_or(0, |v| import_index(class, v));
-                let idx = params.get(1).map_or(0, |v| import_index(class, v));
-                let value = params.get(2).map_or(0, |v| value_word(class, v));
-                let state = caller.data_mut();
-                // **The rebase.**  The kernel is handed a global index, and the
-                // worker owns `[base, base + span.len())` of this buffer, so the
-                // store is at `idx - base`.  A write outside the worker's own
-                // span cannot be rebased into it — `checked_sub` yields `None`
-                // and the write is dropped, exactly as an out-of-range write is
-                // today, rather than aliasing another worker's slots.
-                if let Some(slot) = state
-                    .outputs
-                    .get_mut(out_pos)
-                    .and_then(|buffer| buffer.get_mut(idx.checked_sub(state.base)?))
-                {
-                    *slot = value;
-                }
-                Ok(())
-            },
-        )
-        .map_err(|e| e.to_string())?;
+    // **One `read`/`write` pair per class**, matching what `assemble_module`
+    // declared: the position and the index are `i64` in both, and only the
+    // element's own type follows the class.  Both pairs are defined even when the
+    // module declares only one, and the two sides derive the names from the class
+    // through [`buffer_import_name`] rather than agreeing by construction.
+    for (element_class, value_type) in [
+        (ScalarClass::Int, wasmi::ValType::I64),
+        (ScalarClass::Float, wasmi::ValType::F32),
+    ] {
+        let read_ty =
+            wasmi::FuncType::new([wasmi::ValType::I64, wasmi::ValType::I64], [value_type]);
+        let write_ty =
+            wasmi::FuncType::new([wasmi::ValType::I64, wasmi::ValType::I64, value_type], []);
+        linker
+            .func_new(
+                "env",
+                &buffer_import_name(element_class, "read"),
+                read_ty,
+                move |caller: wasmi::Caller<'_, ParallelState<'_>>,
+                      params: &[wasmi::Val],
+                      results: &mut [wasmi::Val]| {
+                    let pos = position_of(params.first());
+                    let idx = position_of(params.get(1));
+                    // The index is **global** — inputs are never partitioned — so
+                    // no rebase here; a worker reads the whole input buffer.  The
+                    // word is the element's own bits for both classes: an `f32`'s
+                    // for a float buffer, the value for an integer one.
+                    let value = caller
+                        .data()
+                        .inputs
+                        .get(pos)
+                        .and_then(|buffer| buffer.words.get(idx))
+                        .copied()
+                        .unwrap_or(0);
+                    results[0] = word_value(element_class, value);
+                    Ok(())
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        linker
+            .func_new(
+                "env",
+                &buffer_import_name(element_class, "write"),
+                write_ty,
+                move |mut caller: wasmi::Caller<'_, ParallelState<'_>>,
+                      params: &[wasmi::Val],
+                      _results: &mut [wasmi::Val]| {
+                    let out_pos = position_of(params.first());
+                    let idx = position_of(params.get(1));
+                    let value = params.get(2).map_or(0, |v| value_word(element_class, v));
+                    let state = caller.data_mut();
+                    // **The rebase.**  The kernel is handed a global index, and the
+                    // worker owns `[base, base + span.len())` of this buffer, so the
+                    // store is at `idx - base`.  A write outside the worker's own
+                    // span cannot be rebased into it — `checked_sub` yields `None`
+                    // and the write is dropped, exactly as an out-of-range write is
+                    // today, rather than aliasing another worker's slots.
+                    if let Some(slot) = state
+                        .outputs
+                        .get_mut(out_pos)
+                        .and_then(|buffer| buffer.get_mut(idx.checked_sub(state.base)?))
+                    {
+                        *slot = value;
+                    }
+                    Ok(())
+                },
+            )
+            .map_err(|e| e.to_string())?;
+    }
 
     let instance = linker
         .instantiate_and_start(&mut store, module)
@@ -6935,11 +6983,13 @@ fn run_parallel_range(
         .get_func(&store, "main")
         .ok_or_else(|| "parallel kernel has no export `main`".to_string())?;
     for i in base..end {
-        // The count and the index are the fragment's own scalars; the result is
-        // the dummy `compile_parallel_fragment` leaves, in the same class.
+        // **The count and the index are `i64`**, whatever class the body computes
+        // in: `compile_parallel_fragment` declares both leaves `Int`, because a
+        // launch extent and a lane number are not data.  The result is the dummy
+        // it leaves, in the fragment's own class.
         let args = [
-            word_value(class, const_bits(class, count as i64)),
-            word_value(class, const_bits(class, i as i64)),
+            word_value(ScalarClass::Int, count as i64),
+            word_value(ScalarClass::Int, i as i64),
         ];
         let mut results = [word_value(class, 0)];
         main.call(&mut store, &args, &mut results)
@@ -6948,16 +6998,15 @@ fn run_parallel_range(
     Ok(())
 }
 
-/// The index a `read`/`write` import's position or index argument carries, in
-/// the fragment's class.
+/// The position or the index a `read`/`write` import's argument carries.
 ///
-/// Exact for every value a launch can hand over: the count is bounded by
-/// [`MAX_PARALLEL_ELEMENTS`], far below `f32`'s 2^24 integer range.
-fn import_index(class: ScalarClass, value: &wasmi::Val) -> usize {
-    match class {
-        ScalarClass::Int => value.i64().unwrap_or(0) as usize,
-        ScalarClass::Float => value.f32().map_or(0, |bits| bits.to_float() as usize),
-    }
+/// **Always an `i64`, in every class**: a position is a compile-time ordinal in
+/// the buffer space and an index is a lane number, so neither is ever the data.
+/// The conversion this replaces read an `f32` back into an integer, which
+/// existed only because a fragment had one class
+/// (`docs/notes/floating-point.md` §4.4).
+fn position_of(value: Option<&wasmi::Val>) -> usize {
+    value.and_then(|value| value.i64()).unwrap_or(0) as usize
 }
 
 /// The word a `read`/`write` import's value argument carries, in the fragment's
