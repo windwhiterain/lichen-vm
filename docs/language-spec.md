@@ -566,10 +566,12 @@ maps every span back to the original file.
   at check time (an out-of-bounds index is an `IndexOutOfBounds`
   diagnostic); an index known only at runtime (a parameter, a call result)
   is checked when evaluated.  Indexing a *concretely* non-indexable type —
-  a tuple, a struct, a function, a table or an atomic type — is an
-  `IndexTarget`
-  diagnostic at check time, not a runtime panic (mirroring the apply
-  guard).  `[then, else][i]` is the mechanism under the conditional form
+  a tuple, a struct, a function, a table or an atomic type — is a refusal,
+  never a runtime panic (mirroring the apply guard): the read **pins** its
+  container to a fresh array type, so the diagnostic reads
+  `expected array<…>, found …` — at check time when the container's type is
+  concrete, and at the application that binds it otherwise.
+  `[then, else][i]` is the mechanism under the conditional form
   (`if c then e1 else e2` desugars to it) — an integer index selects a branch, and the untaken
   branch is never evaluated (the lowlevel `Index` stays lazy on it).
 - **The raw index `X<e>`.**  The glued `<` postfix reads element `e` of `X`'s

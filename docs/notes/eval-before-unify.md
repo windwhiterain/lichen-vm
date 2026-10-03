@@ -9,7 +9,9 @@
 > `crates/lichen-language/tests/merge_carry.rs`), while §2.2's accept/refuse
 > flip, §2.4's template-level face of the same gap, and the re-checkable guard
 > of §5.2 stay open — §6.2 analyzes the fix directions and §6.3 the shared
-> diagnostic's wording, and the rest of §5 stays a sketch.
+> diagnostic's wording, which all three reads share (the two **named** reads
+> have no enforcing tier either: `x.a` over an array fails through runtime
+> table errors and `x::a` **panics**, §2.4), and the rest of §5 stays a sketch.
 >
 > Companions: [class-channel](class-channel.md) (the write-side half of the
 > same principle — a fact is decided once and stated on the class; this note is
@@ -154,6 +156,25 @@ no enforcing tier at all — not at the definition pass, not at the apply, and
 not at runtime (a tuple and an array are both `LowValue::Array`, and the
 lowlevel is untyped by design — `type-system-cleanup-plan` D1).  §6.2 analyzes
 the fix directions this measurement leaves.
+
+The **named** reads are the same guard route (`check_named_field`,
+`check_raw_named_field`), and their deferred half is measured the same way —
+again with no annotation anywhere, so no statement order is involved:
+
+| read | concrete container | deferred container (a parameter) |
+|---|---|---|
+| `l.a` on an array | `error: expected a tuple, array, or struct type, found array<Int, 2>` | two runtime diagnostics: `this value is not a container — it has no element to read`, then `table lookup missed — no entry for this key` |
+| `l::a` on an array | the same refusal | **a panic**: `internal error: entered unreachable code: TableGet target must be a table` (`evaluation.rs`) |
+| `l.a` / `l::a` on a tuple | the same refusal | — |
+
+Neither named site asks its skipped guard again either, so the deferred name
+lookup reads a container it was never checked against.  The outcomes differ by
+read: `a.name` fails, twice, with messages about tables rather than about the
+read, while `X::a` aborts the compiler — a template-level misread reaching an
+`unreachable!` written for an invariant violation.  The paren read's hole is
+*silent* (a wrong program accepted and evaluated); the named reads' are loud and
+mislabelled, and `X::a`'s is fatal.  The panic is pre-existing (§6.3 records it
+reproduced at `dev@cce8f09`) and is not a face of the carry.
 
 ## 3. The mechanism, as it stands
 
@@ -438,11 +459,27 @@ expected-sides — two spellings suffice, positional for `a(k)` and named for
 `.name`/`::a` — and §6.2 option 1's assert diagnostic should reuse them rather
 than invent a fourth wording.
 
+Every row above was re-measured on `dev@b356da5`: the three concrete-container
+rows print that one message, and the two tuple rows print it for `.a`/`::a` as
+well — the kind the message claims to accept.  The table covers the **guarded**
+half only.  The *deferred* half is §2.4's new rows, where there is no net at
+all: none of the three sites asks again, so `x.a` over an array fails through
+two runtime messages about tables, and `x::a` over one reaches `evaluation.rs`'s
+`unreachable!("TableGet target must be a table")` and aborts the compiler.  That
+panic reproduces at `dev@cce8f09` — the carry neither causes nor fixes it.
+
+Two consequences.  §6.2 option 1 is the only tier any of the three sites can
+get, so it is worth its cost for the named reads as much as for `a(k)`; and the
+`TableGet` arm needs the recorded-failure form its sibling `Index` arm already
+has (a target that is not a table is a user error about the read, not an
+invariant violation), independently of the wording fix.
+
 One drift found while reading: the [spec](../language-spec.md) §Indexing says a
 concretely non-indexable `e[i]` "is an `IndexTarget` diagnostic at check
 time" — but `check_index` pins and fails through `DiagKind::Guard` ("expected
-`array<…>`, found …", §2.4's refused row).  The spec sentence predates the
-pin; it should describe the Guard-style refusal.
+`array<…>`, found …", §2.4's refused row), at check time for a concrete
+container and at the apply otherwise.  The spec sentence predates the pin, and
+is corrected to describe the Guard-style refusal.
 
 ### 6.4 Still open, unanswered
 
