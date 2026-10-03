@@ -337,15 +337,22 @@ operator's operand array holds is deep-pass gated by `run_deferred`'s default �
 the gate the LaunchOp idiom's inert read rides on and that an open signature
 therefore fails.  So the writer needs one of:
 
-- **an operand that is already concrete**: an array holding the shape is what the
-  gate is expected to refuse (its items are the still-open cells — the next thing
-  to measure, and the measurement decides whether anything else is needed);
+- **an operand that is already concrete** — **refuted by measurement**: giving
+  `ComputeOperator::Jit`'s operand array the shape as an inert second element (the
+  `LaunchOp` idiom) turns the deep pass's answer for the whole array into
+  `parameterized`, so the default gate returns before the arm runs and the artifact
+  is never compiled: `35 of 58` `--test compute` cases go red, every one of them
+  reading `parameterized`.  A bound array whose items are still-open cells is
+  *not* concrete, and the shape's items are those cells by construction;
 - **a `run_deferred` override** on the compute vocabulary: the one op that must
   read its operand *structurally* is exactly the case the default gate cannot
-  serve, at the cost of restating that gate for the other arms; or
-- **a node-carrying opaque value** (a `ComputeValue` variant holding the shape):
-  concrete for the pass and it carries the node — at the cost of a value variant
-  whose GC tracing and codec must keep that node alive.
+  serve.  The default's body (deep-evaluate the operand node, refuse when its
+  stamp says parameterized, hand the arm the value) is **one policy**, so the
+  clean landing is to factor it into a shared step both the default and the
+  override call — otherwise the override restates it for all ten other arms; or
+- **a node-carrying opaque value**: a `ComputeValue` variant holding the shape is
+  concrete for the pass and carries the node to the arm — at the cost of a value
+  variant whose GC tracing and codec must keep that node alive.
 
 The write itself is the same in every case: for each shape item whose class is
 still open, use the class domain's first member as that item, rebuild the shape
