@@ -400,23 +400,62 @@ compute.launch k ((2, 3), 4)
 
 #[test]
 fn jit_cross_kernel_call() {
-    // Style 2: `k1`'s body calls kernel `k0` (`k0 (x + 1)`).  Launch assembles
-    // k1's *relative launch set* — k1 plus the kernel it cross-calls, k0 — into
-    // one wasm module, so the cross-kernel call is an in-module `call`:
-    //   launch k1 5 = k0(5 + 1) = k0(6) = 7.
+    // Style 2: `k1`'s body calls kernel `k0` (`k0 x`).  Launch assembles k1's
+    // *relative launch set* — k1 plus the kernel it cross-calls, k0 — into one
+    // wasm module, so the cross-kernel call is an in-module `call`:
+    //   launch k1 6 = k0(6) = 7.
+    // The argument is the parameter read directly.  An operator *inside* the
+    // argument (`k0 (x + 1)`, what this test used to write) is refused by name:
+    // a routed operator is an apply of the core prelude's binding, and the
+    // emitter has no node for a binding in an argument position —
+    // `jit_an_operator_inside_a_cross_kernel_argument_is_refused` below pins it
+    // (`docs/notes/operator-polymorphism.md` §7.1, cost 1).
     // The bare `k x` apply leaves a direct kernel apply's codomain `?a` (the
     // checker only resolves it via `$launch`), so the value is asserted.  The
-    // wrapper form `compute.launch k0 (x + 1)` *does* give `Int` — covered by
+    // wrapper form `compute.launch k0 x` *does* give `Int` — covered by
     // `jit_cross_kernel_wrapper` below.
     let (_module, value, _root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
 k0 = compute.jit ((y : Int) => y + 1)
-k1 = compute.jit ((x : Int) => k0 (x + 1))
-compute.launch k1 5
+k1 = compute.jit ((x : Int) => k0 x)
+compute.launch k1 6
 "#);
     assert_eq!(common::usize_of(&value), 7, "cross-kernel call produced 7");
+}
+
+/// The third shape a cross-kernel argument can take, and the one refused: an
+/// operator applied **inside** the argument.
+///
+/// A kernel body may cross-call a kernel with an argument it reads directly
+/// (`k0 x`, the test above) and may apply an operator to a call's *result*
+/// (`k0 x + 1`, `jit_cross_kernel_subexpr`).  Inside the argument the operator
+/// is an apply of the core prelude's binding with no machine node behind it, so
+/// it is refused by name rather than emitted as something else
+/// (`docs/notes/operator-polymorphism.md` §7.1, cost 1).
+#[test]
+fn jit_an_operator_inside_a_cross_kernel_argument_is_refused() {
+    let messages = fail(
+        r#"
+---
+  compute = import "compute.lichen"
+---
+k0 = compute.jit ((y : Int) => y + 1)
+k1 = compute.jit ((x : Int) => k0 (x + 1))
+compute.launch k1 5
+"#,
+    );
+    assert_eq!(messages.len(), 1, "one refusal: {messages:?}");
+    let message = &messages[0];
+    assert!(
+        message.contains("applies a prelude operator"),
+        "the refusal must name its own cause: {message:?}"
+    );
+    assert!(
+        message.contains("no node for"),
+        "the refusal must say what the emitter is missing: {message:?}"
+    );
 }
 
 #[test]
@@ -453,20 +492,49 @@ compute.launch k 5
 
 #[test]
 fn jit_cross_kernel_wrapper() {
-    // Style 3: the wrapper/`$launch` form `compute.launch k0 (x + 1)` inside a
-    // kernel body.  `launch = k => a => $launch(k, a)` is a *two-step* native
+    // Style 3: the wrapper/`$launch` form `compute.launch k0 x` inside a kernel
+    // body.  `launch = k => a => $launch(k, a)` is a *two-step* native
     // (assemble the module, then call it), so its argument is a run-time value
     // and arrives as a `Parameterized` cell at codegen time.  The cell is
-    // unified with the defining `x + 1` computation, and the JIT emits that
-    // through the cell's equality class:  launch k1 5 = k0(5 + 1) = 7.
-    // Unlike the bare `k x` apply, the wrapper's result is typed `Int`.
+    // unified with the defining `x` read, and the JIT emits that through the
+    // cell's equality class:  launch k1 6 = k0(6) = 7.
+    // Unlike the bare `k x` apply, the wrapper's result is typed `Int`.  The
+    // argument is the parameter read directly; a routed operator inside it is the
+    // wrapper's own refusal, pinned by
+    // `jit_an_operator_inside_a_launch_argument_is_refused` below.
     let (_module, value, _root_ty) = run(r#"
+--- compute = import "compute.lichen" ---
+k0 = compute.jit ((y : Int) => y + 1)
+k1 = compute.jit ((x : Int) => compute.launch k0 x)
+compute.launch k1 6
+"#);
+    assert_eq!(common::usize_of(&value), 7, "wrapper produced 7");
+}
+
+/// The wrapper's half of the same refusal: an operator inside `compute.launch`'s
+/// argument.
+///
+/// The wrapper's argument arrives as a `Parameterized` cell and the JIT emits the
+/// defining computation *through the cell's equality class* — a machine
+/// computation.  A routed operator is an apply of the prelude's binding rather
+/// than a machine node, so the cell names nothing the emitter can lower and it is
+/// refused by name (`docs/notes/operator-polymorphism.md` §7.1, cost 1).
+#[test]
+fn jit_an_operator_inside_a_launch_argument_is_refused() {
+    let messages = fail(
+        r#"
 --- compute = import "compute.lichen" ---
 k0 = compute.jit ((y : Int) => y + 1)
 k1 = compute.jit ((x : Int) => compute.launch k0 (x + 1))
 compute.launch k1 5
-"#);
-    assert_eq!(common::usize_of(&value), 7, "wrapper produced 7");
+"#,
+    );
+    assert_eq!(messages.len(), 1, "one refusal: {messages:?}");
+    let message = &messages[0];
+    assert!(
+        message.contains("neither a value nor an operation"),
+        "the refusal must name its own cause: {message:?}"
+    );
 }
 
 #[test]

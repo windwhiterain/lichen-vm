@@ -13,7 +13,7 @@
 
 mod common;
 
-use lichen_compute_gpu::GpuContext;
+use lichen_compute_gpu::{GpuContext, RunError};
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
@@ -28,12 +28,14 @@ fn adds() -> KernelFragment {
             KernelShape::Scalar(ScalarClass::Int),
         ]),
         body: vec![
-            KernelInstr::Const(ScalarClass::Int, 0),
+            KernelInstr::Const(ScalarClass::Int, 0), // out_pos
+            KernelInstr::LocalGet(1),                // the write's index
+            KernelInstr::Const(ScalarClass::Int, 0), // cfg_pos, the *input* space
             KernelInstr::LocalGet(1),
-            KernelInstr::BufferReadCall(ScalarClass::Int),
-            KernelInstr::Const(ScalarClass::Int, 0),
+            KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
+            KernelInstr::Const(ScalarClass::Int, 0),       // cfg_pos again
             KernelInstr::LocalGet(1),
-            KernelInstr::BufferReadCall(ScalarClass::Int),
+            KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
             KernelInstr::Const(ScalarClass::Int, 1),
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
@@ -52,21 +54,27 @@ fn adds() -> KernelFragment {
 
 /// `out[i] = a[i] + b[i] + 1` — the two-input shape a node takes when it
 /// combines a dispatch's result with something the caller supplied.
+///
+/// **Two leaves, however many inputs there are**: a graph dispatch pushes the
+/// launch extent and the index and nothing else, so the second input is reached
+/// through a read's own position rather than through a further parameter.  A
+/// fragment that declares a runtime scalar beside the extent is refused by name
+/// (`RunError::ScalarsNotPushed`) rather than dispatched with the argument
+/// missing — `docs/notes/compute-runtime-scalars.md` §3.
 fn sums() -> KernelFragment {
     KernelFragment {
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
-            KernelShape::Scalar(ScalarClass::Int),
         ]),
         body: vec![
             KernelInstr::Const(ScalarClass::Int, 0), // out_pos
-            KernelInstr::LocalGet(2),                // idx
+            KernelInstr::LocalGet(1),                // idx
             KernelInstr::Const(ScalarClass::Int, 0),
-            KernelInstr::LocalGet(2),
+            KernelInstr::LocalGet(1),
             KernelInstr::BufferReadCall(ScalarClass::Int), // a[i]
             KernelInstr::Const(ScalarClass::Int, 1),
-            KernelInstr::LocalGet(2),
+            KernelInstr::LocalGet(1),
             KernelInstr::BufferReadCall(ScalarClass::Int), // b[i]
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
             KernelInstr::Const(ScalarClass::Int, 1),
@@ -78,6 +86,37 @@ fn sums() -> KernelFragment {
         inputs: 2,
         outputs: 1,
         input_classes: vec![ScalarClass::Int, ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int],
+        int_width: IntWidth::I64,
+    }
+}
+
+/// The same shape with a **runtime scalar** declared beside the extent and the
+/// index: the parameter a dispatch cannot carry, kept here so the refusal that
+/// names it has something to refuse.
+fn with_a_runtime_scalar() -> KernelFragment {
+    KernelFragment {
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body: vec![
+            KernelInstr::Const(ScalarClass::Int, 0), // out_pos
+            KernelInstr::LocalGet(2),                // idx
+            KernelInstr::LocalGet(1),                // the runtime scalar
+            KernelInstr::Const(ScalarClass::Int, 0),
+            KernelInstr::LocalGet(2),
+            KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
+            KernelInstr::Const(ScalarClass::Int, 0),
+        ]
+        .into(),
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int],
         int_width: IntWidth::I64,
@@ -247,4 +286,30 @@ fn an_extent_that_is_one_of_the_graphs_own_values_runs_at_that_extent() {
         );
         release_all(&context, &out);
     }
+}
+
+/// A parameter that declares a runtime scalar is **refused by name** on this
+/// path, not dispatched with the argument missing.
+///
+/// The graph node is where the limit is sharpest: a `KernelNode` carries the
+/// extent and its inputs, and the push constant carries the extent alone, so a
+/// third leaf has nowhere to arrive — the CPU path passes the whole leaf list
+/// and this one cannot (`docs/notes/compute-runtime-scalars.md` §3).  Pinned
+/// here so the refusal stays named: the alternative is every lane computing from
+/// the wrong value.
+#[test]
+fn a_parameter_with_a_runtime_scalar_is_refused_by_name() {
+    let Some(context) = common::context("a_parameter_with_a_runtime_scalar_is_refused_by_name")
+    else {
+        return;
+    };
+    let data = vec![0u8; 8 * 8];
+    let refusal = context
+        .run(&with_a_runtime_scalar(), &[BufferSlot::Host(&data)], 8)
+        .expect_err("a runtime scalar has no push constant to arrive in");
+    assert_eq!(refusal, RunError::ScalarsNotPushed { leaves: 3 });
+    assert!(
+        refusal.to_string().contains("3 leaf/leaves"),
+        "the message names how many leaves it saw: {refusal}"
+    );
 }

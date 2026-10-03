@@ -4854,25 +4854,32 @@ where
             }
             LowOperator::Apply => {
                 let (callee, arg) = apply_pair(module, operation.operand)?;
-                // **A static callee is specialized away before the walk reads
-                // it.**  The apply of a frozen function is the one call the
-                // language lowers for an operator it routes — `x + 1` *is* the
-                // prelude's `add [x, 1]` (`docs/notes/operator-polymorphism.md`
-                // §7) — and the lowlevel's own apply has already written that
-                // callee's body, with this call's arguments substituted, as the
-                // apply's **value**: the residual clone, a member of the
-                // caller's template.  So what a static apply means *here* is
-                // exactly its residual, and the frozen callee is a body this
-                // module cannot walk (a static ref is a decided value).
+                // **A call of a routed operator has to be answered with the body
+                // it stands for.**  The routing lowers `x + 1` to a call of the
+                // prelude's binding (`x + 1` *is* `add [x, 1]`,
+                // `docs/notes/operator-polymorphism.md` §7), and the frozen
+                // callee is a body this module cannot walk (a static ref is a
+                // decided value) — so the emission needs the **residual** the
+                // lowlevel's own clone wrote for this call, and reads it off the
+                // call node's value.  A call that holds none is one inside a
+                // **template**, which nothing has evaluated (there is no apply
+                // to run it), so there is nothing to emit; the refusal says
+                // exactly that rather than claiming a lowering happened.
                 if is_static_function(module, callee) {
                     let residual = unsafe { module.array_items(node) }
                         .and_then(|items| items.first())
                         .map(|item| item.node);
                     let Some(residual) = residual else {
                         return Err(
-                            "a kernel body applied a frozen function whose result this module does \
-                             not hold: an apply of a static function is specialized to its own \
-                             value when the checker lowers it"
+                            "this kernel body applies a prelude operator where the kernel cannot \
+                             reach the body it lowered to: the operator is a call of the prelude's \
+                             binding, the call sits in the function's own template (which the \
+                             compiler never evaluates), and an operator applied *inside a call's \
+                             argument* is not materialised the way one that is the body's own result \
+                             is. A kernel body can cross-call a kernel with an argument it reads \
+                             directly (`k0 x`), and it can apply an operator to a call's result \
+                             (`k0 x + 1`); this shape (`k0 (x + 1)`) is the one the emitter has no \
+                             node for yet"
                                 .into(),
                         );
                     };
