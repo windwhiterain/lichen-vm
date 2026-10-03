@@ -469,7 +469,18 @@ answered.
    checker already keeps `user_asserts` to tell an explicit `assert` from a
    generated guard — so a refinement is a third flavour on that same
    discrimination, and the wording lands in the language layer.
-6. **The kernel boundary is not this feature's to fix — it is a recorded
+6. **One constraint slot per expression, at apply time — a pre-existing limit,
+   now reachable.**  `Checker::check_ann` records a single `state[e].attr` (the
+   last constraint attribute in canonical order) and `check_app`/`check_lam`
+   re-check exactly one marker, so an expression spelled with *both* a
+   perspective and a refinement reconciles both slots at the annotation but only
+   the later one is re-validated against a provider.  It does not bite this
+   feature — the refinement's *enforcement* is an assert and a parameter
+   refinement rides the desugar, neither of which goes through that slot — but
+   the operator's end state (`x : ?a ! in_num`) plus a perspective on one
+   parameter would.  Generalising the slot to a per-marker set is the fix, and it
+   is not this phase's.
+8. **The kernel boundary is not this feature's to fix — it is a recorded
    dependency.**  Making `+` polymorphic leaves a kernel body's class open, and
    a kernel lowered from a *template* has no class to compile: two targets go red
    (`a_kernel_value_and_type_render_by_name` renders `.sig ?c -> ?c` with a
