@@ -671,6 +671,7 @@ dependencies = [
  "lichen-kernel-ir",
  "lichen-lowlevel",
  "lichen-utils",
+ "stacksafe",
  "wasm-encoder 0.228.0",
  "wasmi",
 ]

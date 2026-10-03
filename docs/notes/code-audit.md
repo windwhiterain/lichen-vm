@@ -3062,24 +3062,67 @@ to look for non-termination that is not there. This is the same class as `P1-31`
 "stopped because it exceeded a budget" from "stopped because it cannot
 terminate."** A budget that refuses must say which.
 
-**Related and separate:** the second ceiling an unrolled loop runs into is the
-emitter's own recursion, which **overflows the stack between 400 and 1000
-iterations with no diagnostic at all** — a crash rather than a refusal. Measured:
-100 iterations 4.4 ms, 400 iterations 11.6 ms for a four-element kernel (about
-29 µs of compile time per iteration), and a hard overflow at 1000. **Re-measured
-first-hand on this machine at 100**, on the main thread of a debug build, via
-`crates/lichen-language/examples/recursion.rs` — the probe completes trips 1 and 10
-and overflows on 100. So the figure above is the low end on a thread with a larger
-stack, and the low end is a property of the thread as much as of the walk, which
-is what makes "a depth limit that refuses by name" a small change with an
-environment-dependent symptom. The fix shape
-is the same as this item's: a depth limit that **refuses by name** rather than
-one that crashes. Both ceilings are why
+**Related and separate — and this half is now fixed.** The second ceiling an
+unrolled loop runs into is the emitter's own recursion, which **overflowed the
+stack between 400 and 1000 iterations with no diagnostic at all** — a crash
+rather than a refusal. Measured: 100 iterations 4.4 ms, 400 iterations 11.6 ms
+for a four-element kernel (about 29 µs of compile time per iteration), and a hard
+overflow at 1000. **Re-measured first-hand on this machine at 100**, on the main
+thread of a debug build, via `crates/lichen-language/examples/recursion.rs` — the
+probe completes trips 1 and 10 and overflows on 100. So the figure above is the
+low end on a thread with a larger stack, and the low end is a property of the
+thread as much as of the walk.
+
+**The overflow was `emit_node`, and it is now a named refusal.** Instrumented
+first-hand, the walk reaches level ~175 of ~1 MiB of main-thread stack and dies
+— and the `Flow` walk behind it never runs at all (a conditional lowers to a
+`select`, so `lower_instrs` iterates a flat list). The walk's depth is the trip
+count itself: an unmarked recursion is expanded, and every expanded copy nests
+inside the previous one's else arm, so the graph is a chain. Measured on the
+probe, `depth ≈ 18 + 3.1 × trip` — trip 1 reaches 21, trip 10 reaches 49.
+
+**Why `#[stacksafe]` had not already covered it:** `lichen-compute` did not
+depend on the crate at all, and `#[stacksafe]` only tests for room **at an
+annotated frame** — so although `compile` is annotated and grows a segment, the
+whole subtree below it shares that one segment and nothing inside ever asks for
+another. Both halves were needed and neither was enough:
+
+- `#[stacksafe]` on `emit_node` is what makes a deep body *survivable* at all:
+  with the budget but no annotation, trip 100 still crashes below the limit.
+- the budget is what makes it *bounded and named*: with the annotation but no
+  budget, trip 400 compiles fine (answers 403 in 66 ms on `cpu`, 220 ms on `gpu`)
+  at ~1260 levels and ~7 MiB of stack, and a trip of 4000 would do the same.
+
+**The limit is 512 levels of the walk** (`MAX_KERNEL_BODY_DEPTH`,
+`crates/lichen-compute/src/compute.rs`), which is about **160 expanded copies**
+of a step this size. A constant, deliberately: a threshold derived from the
+thread's stack would differ between a debug and a release build of the same
+program, and a number that changes with the build profile is not one a program
+can be written against — which is the bar this item sets. The refusal names the
+limit, the cause (the expansion, not the program), and the fix: mark the
+recursion `@loop`
+([loop-conversion](loop-conversion.md) §1.1), or write a small trip count out by
+hand. Before/after on the probe:
+
+```text
+                                   before                    after
+  trip 100     thread 'main' has overflowed its stack    24.8 ms  103: ?a      (cpu)
+                                                             55.7 ms  103: ?a      (gpu)
+  trip 400     (never reached)                           refused: a kernel body's expression nests
+                                                        more than 512 levels, so lowering it would
+                                                        recurse deeper than a compile should spend on
+                                                        its stack … Mark the recursion `@loop` so it
+                                                        may become a dynamic loop instead of an
+                                                        expansion (`docs/notes/loop-conversion.md` §1.1)
+```
+
+Note that a *dynamic* loop — one the JIT emits into the backend IR rather than
+expanding — removes **both** of this item's ceilings by construction, which is
+why
 [`gpu-algorithm-roadmap.md`](gpu-algorithm-roadmap.md#41-axis-b-already-in-the-language-and-what-it-does-not-reach)
-§4.1 measures an unrolled loop before recommending it. Note that a *dynamic* loop
-— one the JIT emits into the backend IR rather than expanding — removes both
-ceilings by construction, which is the argument for `P1-33`'s operator being a
-builtin rather than a library function. **[Loop conversion](loop-conversion.md)
+§4.1 measures an unrolled loop before recommending it, and is the argument for
+`P1-33`'s operator being a builtin rather than a library function. **[Loop
+conversion](loop-conversion.md)
 keeps that argument and changes the operator**, and its Stage 1 is also the fix
 shape for the second ceiling: the structured body is what turns the emitter's
 400-to-1000 **crash** into a named refusal, independently of whether any loop is
