@@ -615,14 +615,29 @@ words.
   whose body calls a float kernel and adds nothing float decides no class, and is
   refused. `+ 0.0` makes it run.
 
-**One consequence of the mixed-class decision that is worth stating plainly:**
-because `Int` and `Float` may not meet inside one operation (§4.2), **every float
-element a parallel kernel can write is constant across lanes.** A float
-cross-backend comparison therefore catches a host/device width disagreement
-through the interleaved half-words and the padded tail, not through differing
-values; the integer case is the one that carries a wrong-stride alarm where the
-values themselves vary. That is a real limit on the float test and not a property
-of the float path.
+**One consequence of the mixed-class decision that is worth stating plainly.**
+The only per-index-varying value a kernel body can reach is the index, which is an
+`Int`; `Int` and `Float` may not meet inside one operation (§4.2), so **no
+expression can create a varying float out of the index.** What survives is
+arithmetic over a float a `read` brought in — `0.0 + a + a` is legal, is what the
+cross-backend float test uses, and varies exactly as much as its input buffer does.
+So a user can write a constant float, forward one that already varies, and
+**cannot seed a varying float buffer from an index** — there is no `Int → Float`
+conversion in the language, and inventing one is a language decision rather than
+an emitter one. A parallel kernel's float output is therefore either lane-constant
+or as varying as the float buffer it read.
+
+The float cross-backend comparison consequently catches a host/device width
+disagreement through the interleaved half-words and the padded tail rather than
+through differing values; **the integer case is the one that carries a
+wrong-stride alarm where the values themselves vary.** That is a real limit on the
+float test and not a property of the float path.
+
+**What refusing this caught is larger than a disagreement.** The wasm backend was
+not merely permissive here — it emitted a *valid* module computing `1.0f32 +
+i_as_f32` where the source said `Int + Float`, which is silently a different
+number. That is the failure shape the rest of these notes are written against, and
+no single-backend test could have seen it, because the GPU half was already right.
 
 The verification for phase 0 is four tests, one per round-trip that can fail
 quietly: a literal's pair; the printer's spelling re-lexed and re-checked; an
