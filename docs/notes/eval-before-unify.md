@@ -1,9 +1,12 @@
 # Evaluation runs before unification, and nothing wakes what it read
 
-> Status: **proposed** — the defect is **measured on `dev@5e89bb1`** (§2's matrix
-> is compiler output, reproducible from the inline programs); the node-level
-> chain behind each row is named but not instrumented (§3); §4 is the
-> comparison to other languages; §5 is the design sketch, not landed work.
+> Status: **§2.1 fixed, §2.2 open** — the order-sensitivity is **measured on
+> `dev@5e89bb1`** (§2's matrix is compiler output, reproducible from the inline
+> programs); the node-level chain behind §2.1 is now **traced**, not guessed
+> (§3.3); §4 is the comparison to other languages; §5.1's minimal half — a merge
+> carries the class's decided value to the members it adds — is **landed** on
+> `feature/lazy-wakeup` and fixes §2.1, while §2.2's accept/refuse flip and the
+> re-checkable guard of §5.2 stay open, and the rest of §5 stays a sketch.
 >
 > Companions: [class-channel](class-channel.md) (the write-side half of the
 > same principle — a fact is decided once and stated on the class; this note is
@@ -35,8 +38,10 @@ final — including when the answer was "I cannot tell yet".
 
 ## 2. The measured matrix
 
-Every program below was run through `lichen-compiler` at `dev@5e89bb1`.  The
-pairs differ **only in statement order**.
+Every program below was run through `lichen-compiler` at `dev@5e89bb1`; **this
+is the pre-fix measurement**, kept as the defect's record.  Where a landed fix
+has changed one of these outputs, the new output is stated with the row (§3.3
+for §2.1).  The pairs differ **only in statement order**.
 
 ### 2.1 A binop's result type: decided or `?a` by statement order
 
@@ -52,7 +57,7 @@ f (10, 20)                                       f (10, 20)
 
 | order | output |
 |---|---|
-| read, then annotate | `20: ?a` — the type **stays undecided** |
+| read, then annotate | `20: ?a` — the type **stays undecided** (pre-fix; `20: Int` since §5.1's landed half, §3.3) |
 | annotate, then read | `20: Int` |
 
 The annotation makes the result type fully resolvable in both orders — the
@@ -89,7 +94,7 @@ f [10, 20, 30]                                   f [10, 20, 30]
 
 | order | output |
 |---|---|
-| read, then annotate | `20: ?a` — **accepted** |
+| read, then annotate | `20: ?a` — **accepted** (pre-fix; its type decides to `20: Int` since §5.1's landed half, but the read is still accepted) |
 | annotate, then read | `error: expected a tuple, array, or struct type, found array<Int, 3>` — refused |
 
 The paren read `a(k)` is for tuples and structs; arrays read with `a[i]`
@@ -141,8 +146,10 @@ plain reads it works — §2.1's controls resolve:
 
 The common shape of all three: resolution happens **when somebody asks
 again** (re-read, re-unify, the apply's clone recompute) or is **pushed
-through a class merge**.  There is no registry of "who is waiting on this
-class".
+through a class merge**.  The push was the half that was missing — a merge
+carried the class's *shape* but not its decided *value* — and §5.1's landed
+change closes it.  There is still no registry of "who is waiting on this
+class", and none is needed: the class is the registry.
 
 ### 3.2 Where the one-shot reads are
 
@@ -161,18 +168,60 @@ answers permanently:
 Some of these are fine alone: the pending `InDomain` assert **is** a
 re-checkable registration, and it is what keeps a polymorphic `+` correct per
 apply.  The defect is the combination — the assert observes the class (and
-passes), while nothing ever **commits** the observed member to the class, so
-the result type cell reads `?a` forever (§2.1) and a skipped guard stays
-skipped (§2.2).
+passes), while nothing ever **commits** the observed member to the class.  That
+last clause was the guess this note opened with; §3.3's trace disproves it.  The
+class *is* committed; what was missing is that a merge which grows a class does
+not carry the class's already-decided value to the members it adds.
 
-The exact node-level chain of the §2.1 `?a` (which member of the shared class
-the annotation's bind failed to reach, and why the apply's clone recompute
-commits in the no-annotation row but not the annotate-after row) is **named
-but not instrumented** — the first step of any fix is a probe build that
-traces the commit/replication path for that class, in the style
-[defer-pending-type-forms](defer-pending-type-forms.md) §2 describes.
+### 3.3 The traced chain of §2.1
 
-### 3.3 Errors are permanent
+A probe build traced `unify`/`bind`/`add_equality`/`write_node_value` in
+`equality.rs` and the `check_field`/`check_binop`/`check_ann` sites in the
+checker, in the style [defer-pending-type-forms](defer-pending-type-forms.md) §2
+describes (the instrumentation was reverted).  For the **read-first** order of
+§2.1, with `T₁` the first `x(0)` read's lazy type and `T₂` the second's:
+
+1. `check_field` leaves each read's type as `Index(Index(container_ty, 0), k)`:
+   the container type is still an unbound cell, so `slot_read` keeps the lazy
+   form and neither read is decided.
+2. `check_binop` finds neither operand stated, takes the polymorphic path, and
+   unifies the two reads **with each other**.  Both are pending `Index` reads, so
+   `unify_inner`'s pending-read branch merges their classes with a bare
+   `add_equality` — no value and no computation to carry.
+3. The statement's `check_term` skeleton epilogue then unifies the skeleton's
+   type cell into that same class, again down `bind` with both representatives
+   unbound, so again nothing is carried.  The class now has three members and
+   still holds no value.
+4. The annotation `p = x: <Int, Int>` unifies the **template's** parameter type
+   cell — still an unbound cell — with the tuple type.  That is a concrete value,
+   so `bind` writes it and replication covers *that* class: the annotation
+   decides the container, and therefore what the lazy reads of steps 1–3 resolve
+   to, but it touches no member of their class.
+5. The definition pass deep-evaluates the body.  `T₁` now reads through the
+   bound container to the field's type — the `Int` type pair — and the
+   evaluation postlude caches that value on the operation node and replicates it
+   over the class.  **Replication skips operation-bearing members**, so the
+   class's representative (itself a pending `Index` read) keeps an empty slot
+   while two other members carry the value.
+6. The apply wires its result cell: `wire_apply_result` unifies the cell (a
+   fresh unbound pure cell) with the cloned return's type, which is the class of
+   step 5.  `bind` reads only the two **representatives'** slots, finds both
+   unbound, and merges with nothing to carry.  The cell joins a class decided
+   since step 5 and never receives the value, so the printed type reads `?a`
+   while the value `20` arrives normally.
+
+So the read is not "taken too early and never re-taken" at the *value* level —
+the class commits on time.  What was one-sided is the invariant: a class's
+decided value reached its members on every **write** (`write_node_value`) and on
+no **merge**, and a merge is the only other moment a class gains members.  A
+cell that joined the class after the commit was therefore never told.
+
+§2.1's **bare-read** control (`l = x(0)` read before the annotation) resolves on
+the unfixed build too, so the chain above says nothing about it: its own read's
+class is reached by a different path.  That path is not traced here, and the fix
+does not depend on it.
+
+### 3.4 Errors are permanent
 
 A recorded diagnostic is never retracted.  Every guard that *skips* when
 undecided is therefore safe-by-construction (it can only under-report), but
@@ -216,27 +265,43 @@ would unblock it, woken when that happens:
 
 ## 5. Design sketch for lichen
 
-Two halves, matching the two halves of §3.  Neither is landed; this section
-is the shape of the work, not a plan of record.
+Two halves, matching the two halves of §3.
 
-### 5.1 Runtime: class-attached blocked operations
+### 5.1 Runtime: the class as a channel (landed) and blocked operations (sketch)
 
-Give each union-find class a **blocked list**: the operations that evaluated
-to `Parameterized` because they read this class while it was unbound.  The
-list lives *on the class* (merged when classes merge — never keyed by
-`NodeId`, which `find` changes under you), and `write_node_value`/`bind`
-drains it on commit: forcing each blocked operation, which is exactly
-`force_pending` turned event-driven instead of unify-driven.  Replication
-already walks the class's members on every commit, so the drain hangs off the
-same hook.
+**Landed.**  §3.3's chain needs only the smaller half: `add_equality` now carries
+the merged class's decided value to the unbound pure cells the merge adds to it
+(`equality.rs`).  The value is read through `class_committed_value`, which scans
+the members, so it is found on whichever member carries it rather than only on
+the representative's own slot — the merge previously read just those two slots,
+which is exactly why a value committed onto an operation-bearing member was
+invisible to it.  `write_node_value`'s replication half is factored out as
+`replicate_class_value` so the write site and the merge site state the same
+invariant once.
 
-Watch-points: re-entrancy (a drain runs evaluation inside a bind that may
-itself be inside a unify inside an evaluation — the visit-mark invariant and
-the depth budget both apply); GC (a blocked edge keeps the waiter alive; a
-waiter nobody else references is what "undecided forever" currently *means*,
-so draining must not resurrect semantics by keeping dead nodes live); and the
-template/clone split (a template's parameters never bind — its blocked list
-must not fire).
+Two properties of the landed form are deliberate.  It writes the class's pure
+cells and never the representative's own slot, because an operation-bearing
+representative is a pending computation whose resolved value is the authority —
+caching the commit onto it would answer every later read with the bet instead of
+running the computation.  And it performs no low-type observation: observation
+is a class *gaining* a decided value, and this merge adds no fact to the class —
+only members.  Nothing is forced and no pending computation runs, so no program
+starts computing because something bound; what changes is that a cell added
+after the commit reads the value its class already had.
+
+**Sketch.**  A **blocked list** on each class — the operations that evaluated to
+`Parameterized` because they read the class while it was unbound — drained on
+commit by forcing each one (`force_pending` turned event-driven instead of
+unify-driven) remains a proposal.  **Neither measured row needs it**: §2.1's
+missing fact was a value the class already had, and §2.2 is not a runtime
+question at all.  It would be the honest fix for a computation — not a read —
+that must start when what it waited on arrives, and its watch-points are
+unchanged: re-entrancy (a drain runs evaluation inside a bind that may itself be
+inside a unify inside an evaluation — the visit-mark invariant and the depth
+budget both apply); GC (a blocked edge keeps the waiter alive; a waiter nobody
+else references is what "undecided forever" currently *means*, so draining must
+not resurrect semantics by keeping dead nodes live); and the template/clone split
+(a template's parameters never bind — its blocked list must not fire).
 
 ### 5.2 Checker: guards as re-checkable registrations
 
@@ -245,35 +310,54 @@ evaluated when it can be, re-checked per apply clone
 ([operator-polymorphism](operator-polymorphism.md) §3).  The §3.2 guards that
 currently skip-when-undecided (`check_field`'s kind guard is the §2.2 hole)
 can register the same way instead: skip now, **re-ask at the first moment the
-container's class commits** — which §5.1's drain provides — and at the
-apply's argument unify, where the runtime net currently cannot help (the
-tuple/array confusion is invisible to `LowValue::Array`).
+container's class commits** and at the apply's argument unify, where the runtime
+net currently cannot help (the tuple/array confusion is invisible to
+`LowValue::Array`).  What that needs is a *condition the runtime can evaluate* —
+a type-level "is this a positional type" operator beside
+[`TypeOperator::InDomain`](../crates/lichen-highlevel/src/program.rs), whose
+answer is `USize(0/1)` over a type value — plus a spelling for the diagnostic it
+records when the condition fails at the apply.  **Not landed.**
 
-The one-shot *class questions* (`check_binop`'s `stated`/`float`) are the
-harder half: the polymorphic path they fall back to is correct for the value
-but leaves the result type open (§2.1).  The minimal change is on the commit
-side, not the question side: when the shared class's first member commits,
-the commit should replicate to the class — the class-channel principle
-([class-channel](class-channel.md)) applied to the case where the decider is
-a read that resolved late.
+The one-shot *class questions* (`check_binop`'s `stated`/`float`) needed no
+change on the question side after all: the polymorphic path they fall back to is
+correct for the value, and the result type it leaves open was fixed by the
+commit reaching the class (§5.1) rather than by asking the question later.
 
 ### 5.3 What each measured row needs
 
 | row | fixed by |
 |---|---|
-| §2.1 `20: ?a` | the commit reaching the shared class (§5.1's drain, or §5.2's commit-side replication) |
-| §2.2 accept/refuse flip | the guard re-firing when the container's class commits (§5.2), or a runtime `Index` that distinguishes tuple from array — which the encoding currently cannot |
+| §2.1 `20: ?a` | **landed** (§5.1): the merge carries the class's decided value to the members it adds |
+| §2.2 accept/refuse flip | **open**: the guard must re-fire when the container's class commits (§5.2), or the runtime `Index` must distinguish tuple from array — which the encoding currently cannot |
 | §2.3 | already caught; only the diagnostic quality differs by order |
 
 ## 6. Open questions
 
-- Should a woken re-check be able to **retract** a diagnostic (§3.3), or only
-  add one?  Retraction makes the error stream order-dependent in a new way.
-- The drain makes evaluation order observable through the budget guards: a
-  program that today stays lazy could start computing (and hitting limits)
-  because a bind woke it.  Is that the intended semantics — "binding is
-  strictness"?  (Agda's answer is yes: instantiation wakes.)
-- Does §5.1 subsume `defer_pending`'s pin, or coexist with it?  The pin
-  commits early and reconciles; the drain commits late and re-evaluates.  One
-  of them is the policy and the other an optimization of it, and which is
-  which is a decision.
+### 6.1 Recorded decisions
+
+- **No retraction.**  A woken re-check may only *add* a diagnostic, never retract
+  one (§3.4).  The landed change records none at all, so it leaves the error
+  stream as order-independent as it found it; retraction stays rejected, because
+  it would make the error stream order-dependent in a new way.
+- **Binding is not strictness.**  The landed carry propagates a value the class
+  already holds and forces nothing, so a program that stays lazy today stays
+  lazy.  A future drain (§5.1's sketch) would have to answer this on its own —
+  its whole effect is to make a bind wake a computation, and the budget guards
+  would make that observable.
+- **The pin stays the policy.**  `defer_pending`'s pin commits early and
+  reconciles; the merge carry is not a competing policy but the same
+  class-channel fact applied where a member arrived after the commit.  Building
+  the drain would reopen the question — the pin commits early, the drain commits
+  late, and one of them would then be the policy and the other an optimization of
+  it.
+
+### 6.2 Still open
+
+- **The guard's message and its predicate disagree** (§2.2's aside): the
+  `IndexTarget` diagnostic reads "expected a tuple, array, or struct type" while
+  `is_positional_type` refuses an array.  Either the wording or the predicate is
+  wrong, and §2.2's fix has to decide which — the read `a(k)` is for tuples and
+  structs, so the wording looks like the stale half.
+- Should a woken re-check be able to **retract** a diagnostic, if some future
+  wakeup needs it?  Answered *no* for now (§6.1), on the order-independence
+  argument alone.
