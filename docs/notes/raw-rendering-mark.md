@@ -58,6 +58,23 @@ recognise it as an arrow.
   open defect is exactly that a tag and a structured form cannot be told apart.
   This note is a distinguishability fix for the fallback, not that fix.
 
+  That reading has to **read through a cross-module ref**. A kind read out of a
+  frozen module is a *replica*: its two items are refs into the module that wrote
+  it, so its tail names **that** module's canonical `[Type, ↺]` rather than the
+  replica itself. Requiring the tail to be the very node — the rule until this was
+  measured — made every such pair fall back to `raw[…]`: a package's
+  `double = x => x + x` printed `(43, 44): <raw[Int, Type], raw[Int, Type]>` where
+  the same program printed `<Int, Int>` before the operator's contract was written
+  in lichen. The head check is what keeps "is the universe" apart from "contains
+  the universe" ([universe-containment](universe-containment.md) §2); the tail only
+  has to *be* the universe, so it is read through the ref.
+
+  An **unbound** pair still marks: `raw[?a, ?b]` is two cells the type chain never
+  explained, which is exactly what the mark is for — an open class written as a
+  refined type hole (`x : (_ ! in_num)`) renders that way, and so does every
+  arithmetic lambda's signature once the surface operator resolves to such a
+  binding.
+
 ## 3. What the mark buys
 
 A reader can now tell which parts of a rendered type or value the printer

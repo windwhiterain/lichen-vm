@@ -483,6 +483,20 @@ where
         }
     }
 
+    /// Whether a **static** ref's value is the universe, `[Type, ↺]`.
+    ///
+    /// The head must be the `Type` marker: that is what separates *the* universe
+    /// from a kind that merely *contains* it — an `array<…>`'s `[TypeArray, K]`
+    /// has the same self-referential silhouette
+    /// ([universe-containment](../docs/notes/universe-containment.md) §2).
+    ///
+    /// The tail must be the universe too, but it need not be *this very node*: a
+    /// kind read out of a frozen module is a **replica** whose two items are refs
+    /// into the module that wrote it, and the tail then names that module's
+    /// canonical self-loop rather than the replica.  Reading through the ref is
+    /// what lets a `[shape, [Type, ↺]]` pair that crossed a module boundary render
+    /// as its head instead of falling back to the raw mark
+    /// ([raw-rendering-mark](../docs/notes/raw-rendering-mark.md) §2).
     fn is_static_universe(&self, id: AnyNodeId) -> bool {
         let AnyNodeId::Static(sref) = id else {
             return false;
@@ -493,9 +507,19 @@ where
             // SAFETY: `array` is the payload of the value read from the live
             // node `id`.
             let items = unsafe { array.items() };
-            return items.len() == 2
-                && self.module.node_value(items[0].node) == Some(P::Value::type_marker())
-                && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index);
+            if items.len() != 2
+                || self.module.node_value(items[0].node) != Some(P::Value::type_marker())
+            {
+                return false;
+            }
+            return match items[1].node {
+                AnyNodeId::Static(tail)
+                    if tail.module == sref.module && tail.index == sref.index =>
+                {
+                    true
+                }
+                tail => self.is_universe_any(tail),
+            };
         }
         false
     }
