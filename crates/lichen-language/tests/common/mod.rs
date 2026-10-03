@@ -148,8 +148,16 @@ pub fn values_eq(
             let ys = unsafe { y.items() };
             xs.len() == ys.len()
                 && xs.iter().zip(ys).all(|(xi, yi)| {
-                    let xv = a.0.node_value(xi.node).unwrap();
-                    let yv = b.0.node_value(yi.node).unwrap();
+                    // **An element with no value is a refusal, not a `false`.**  A
+                    // value that was never evaluated (a lazy read nothing forced)
+                    // has no answer to compare — and silently calling two of them
+                    // equal is what would make a comparison of backends vacuous.
+                    let xv =
+                        a.0.node_value(xi.node)
+                            .unwrap_or_else(|| panic!("left element {:?} has no value", xi.node));
+                    let yv =
+                        b.0.node_value(yi.node)
+                            .unwrap_or_else(|| panic!("right element {:?} has no value", yi.node));
                     values_eq((a.0, &xv), (b.0, &yv))
                 })
         }
