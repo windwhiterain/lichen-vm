@@ -65,11 +65,32 @@ pub enum Terminator {
     /// A loop, whose condition — the `0`/`1` scalar on top of the stack — is
     /// re-evaluated at `header` on every entry including the first.
     ///
-    /// `header` is a label this loop owns; `body` runs once per iteration and
-    /// arrives back at `header` with `carried` values. A zero condition leaves
-    /// to `exit` with `passed_out` values. **Testing before the first iteration
-    /// is what makes a zero-trip loop correct**, so the condition is never hoisted
-    /// out of the header.
+    /// # The one state tuple, and the two counts that read it
+    ///
+    /// `header` is a label this loop owns, and **the loop's whole state is the
+    /// tuple of `carried` values the header's instructions start from**: when the
+    /// header's own instructions run, the top `carried` values of the stack are
+    /// that tuple, and whatever the header pushes above them ends in the `0`/`1`
+    /// condition on top. So the stack at the terminator is
+    /// `…, state(carried), condition`, and both counts are read off *that* stack
+    /// after the condition is popped:
+    ///
+    /// - the **body** is handed the same `carried` values as its starting state —
+    ///   which happens by construction, because the body *is* the code that runs
+    ///   after the header's instructions, and the test is what decides whether it
+    ///   runs at all;
+    /// - when the condition is `0`, the **exit** is handed the top `passed_out` of
+    ///   those same values. `passed_out ≤ carried` therefore holds, and a
+    ///   reduction is the ordinary case rather than an accounting trick: it
+    ///   carries `[counter, accumulator]` and hands its exit the accumulator.
+    ///
+    /// **The exit's values are the header's, not the body's, and that is what
+    /// makes a zero-trip loop correct.** A trip count of zero never runs the body,
+    /// so a `passed_out` the body had to compute would have no source on that
+    /// path; reading it off the header's own tuple defines the result for free —
+    /// the initial state is handed straight out. **Testing before the first
+    /// iteration is the same fact**, so the condition is never hoisted out of the
+    /// header.
     ///
     /// **The body must be able to compute its carried values**, which is what
     /// [`Flow::Seq`] is for: without it a body can only hand back the header's
@@ -80,11 +101,13 @@ pub enum Terminator {
         header: BlockId,
         /// The per-iteration body, which must arrive back at `header`.
         body: Box<Flow>,
-        /// Where a zero condition goes, receiving `passed_out` values.
+        /// Where a zero condition goes, receiving the top `passed_out` values of
+        /// the header's state.
         exit: BlockId,
         /// How many values the body hands back to `header`.
         carried: usize,
-        /// How many values the loop hands to `exit`.
+        /// How many of the header's own values the exit receives. Never more than
+        /// `carried`.
         passed_out: usize,
     },
 }
@@ -511,7 +534,25 @@ fn validate_flow(flow: &Flow, header: Option<BlockId>) -> Result<(), String> {
                         None => Ok(()),
                     }
                 }
-                Terminator::While { header, body, .. } => {
+                Terminator::While {
+                    header,
+                    body,
+                    carried,
+                    passed_out,
+                    ..
+                } => {
+                    // **The exit reads the header's own tuple**, so it cannot hand
+                    // out more than that tuple holds. A larger count is a loop whose
+                    // exit values have no source at all on the zero-trip path, which
+                    // is the defect class a backend cannot report: it would emit a
+                    // stack that runs out underneath the branch.
+                    if passed_out > carried {
+                        return Err(format!(
+                            "a loop hands {passed_out} value(s) to its exit from a state of only \
+                             {carried}; the exit's values are the header's own, and a zero trip \
+                             count has no other place to get them"
+                        ));
+                    }
                     validate_flow(body, Some(*header))?;
                     if entry.is_some_and(|entry| entry != *header) {
                         return Err(format!(

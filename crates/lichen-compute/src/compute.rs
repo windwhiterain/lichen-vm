@@ -358,6 +358,56 @@ mod kernel_intern_tests {
         let registry = kernels().lock().unwrap();
         assert!(registry.contains_key(&a) && registry.contains_key(&b));
     }
+
+    /// A loop whose exit would take more values than its state holds has no source
+    /// for them on the zero-trip path, so it is refused **before** a backend reads
+    /// it rather than emitting a stack that runs out under the branch. `passed_out`
+    /// is read off the header's own tuple, so the bound is `carried`.
+    ///
+    /// **This is also as far as a test can go today.** The loop's execution cannot
+    /// be observed, because the only body shape the IR can build is a bare jump
+    /// back to the header — a body that computes its next state does not
+    /// type-check (`Flow::Seq`'s terminator is a `Terminator`, and a plain transfer
+    /// is a `Flow::Jump`). So the emitter's reorder — the `block`/`loop` opening
+    /// before the header's instructions, and the state tuple re-read on every
+    /// entry — has no source program that reaches it yet. See
+    /// `docs/notes/loop-body-expressiveness.md`; the execution test belongs with
+    /// the fix that makes a body expressible.
+    #[test]
+    fn a_loop_handing_out_more_than_it_carries_is_refused() {
+        let looping = |carried: usize, passed_out: usize| KernelBody {
+            labels: 2,
+            entry: Flow::Block {
+                // The header label is defined by the block that holds the loop:
+                // that pairing is what makes the backedge explicit.
+                entry: Some(Label(0)),
+                instrs: vec![
+                    KernelInstr::LocalGet(0),
+                    KernelInstr::Const(ScalarClass::Int, 0),
+                ],
+                terminator: Box::new(Terminator::While {
+                    header: Label(0),
+                    carried,
+                    passed_out,
+                    exit: Label(1),
+                    body: Box::new(Flow::Jump {
+                        target: Label(0),
+                        passes: carried,
+                    }),
+                }),
+            },
+        };
+        looping(2, 1)
+            .validate()
+            .expect("an exit taking one of a two-value state is well formed");
+        let refusal = looping(1, 2)
+            .validate()
+            .expect_err("an exit cannot take more values than the state holds");
+        assert!(
+            refusal.contains("exit"),
+            "the refusal must name the exit's values, and said: {refusal}"
+        );
+    }
 }
 
 /// The element results of a buffer payload — a borrowed view into the block
@@ -2904,6 +2954,7 @@ fn assemble_module(
             base,
             at: 0,
             next_local: params,
+            carried_locals: params + carried,
             block_types: &block_types,
             read_index: &read_ty,
             write_index: &write_ty,
@@ -3299,6 +3350,10 @@ enum Frame {
     Exit { label: Option<Label>, arity: usize },
     /// A `loop`: branching to it **re-enters** it, and takes no operands — a
     /// value that survives the backedge is in a local, not on the stack.
+    ///
+    /// **The locals are the loop's state tuple**, `carried` of them in order, so
+    /// the backedge moves the next state into them and the header re-reads them
+    /// with `local.get` on every entry.
     Header {
         label: Label,
         locals: std::ops::Range<usize>,
@@ -3310,6 +3365,14 @@ struct WasmState<'a> {
     base: u32,
     at: usize,
     next_local: usize,
+    /// The locals one fragment's body may declare, from [`count_carried`].
+    ///
+    /// **The count is known and the addresses are not.** A loop's state tuple needs
+    /// `carried` locals, and which locals those are depends on how many loops a
+    /// depth-first walk reached first — the same order [`count_carried`] counts
+    /// them in — so the addresses are handed out as the walk reaches them and the
+    /// count is what proves every declared local was claimed ([`Self::loop_locals`]).
+    carried_locals: usize,
     block_types: &'a HashMap<(ScalarClass, usize), u32>,
     /// The wasm function index each buffer import took, per class — the reads
     /// first, then the writes, as [`assemble_module`] declared them.
@@ -3352,6 +3415,37 @@ impl WasmState<'_> {
             out.instruction(&Instruction::LocalSet(local as u32));
         }
     }
+
+    /// `local.get` each of `locals` in order, so the first local ends up
+    /// **deepest** — the inverse of [`Self::set_locals`], which is what makes a
+    /// state tuple round-trip through the locals unchanged.
+    fn get_locals(&self, locals: std::ops::Range<usize>, out: &mut wasm_encoder::Function) {
+        use wasm_encoder::Instruction;
+        for local in locals {
+            out.instruction(&Instruction::LocalGet(local as u32));
+        }
+    }
+
+    /// The locals one loop's state tuple lives in.
+    ///
+    /// **The walk reaches a loop's state exactly once**, in the same depth-first
+    /// order [`count_carried`] counted it, so handing addresses out here is what
+    /// pairs the two walks. A loop that would need a local the body did not declare
+    /// room for means the two orders disagree, so it is refused by name rather than
+    /// emitted as a `local.get` of a local the function does not have.
+    fn loop_locals(&mut self, carried: usize) -> Result<std::ops::Range<usize>, String> {
+        let first = self.next_local;
+        if first + carried > self.carried_locals {
+            return Err(format!(
+                "compute.wasm: a loop needs {carried} local(s) for its state at local {first}, but \
+                 this body declares room for only {} — the locals are counted and handed out by the \
+                 same walk, so this is a body whose loops are not the ones it declared",
+                self.carried_locals
+            ));
+        }
+        self.next_local += carried;
+        Ok(first..first + carried)
+    }
 }
 
 /// Lower a fragment's whole body, structured transfers included.
@@ -3366,10 +3460,13 @@ impl WasmState<'_> {
 ///   being the fragment's class. A
 ///   missing arm falls out of the `if` with the stack as it stood, so a
 ///   one-armed branch invents no value for the absent side.
-/// - **`While`** is a `loop` **wrapped in a `block`**. The `loop` is the header
-///   and the `block` is the exit; falling off the loop's `end` and `br`-ing out
-///   of the block both land after the block's `end` carrying `passed_out`
-///   values, which is what makes the two exits agree.
+/// - **`While`** is a `loop` **wrapped in a `block`**, and it is the one transfer
+///   whose **code is ordered by the emitter rather than by the IR**: the `block`
+///   and the `loop` open *before* the header's instructions so that a `br` to the
+///   `loop` label re-enters them. The `loop` is the header and the `block` is the
+///   exit; falling off the loop's `end` and `br`-ing out of the block both land
+///   after the block's `end` carrying `passed_out` values, which is what makes the
+///   two exits agree.
 ///
 /// # Why a loop's carried values are locals
 ///
@@ -3386,6 +3483,13 @@ impl WasmState<'_> {
 /// lowers today — a branch's arms end the function, and a reduction's loop is
 /// the last thing the body does — but a body that wanted code *after* a branch
 /// would need the IR to grow a statement list rather than a terminator.
+///
+/// **A `while` also needs its whole state in the header's own tuple.** A wasm
+/// `loop` frame fixes the operand stack at the height its construct opened at, so
+/// a value that sat *below* the loop's state could not survive the backedge
+/// without a local of its own. The IR's ordinary shapes have none — the state is
+/// the top of the stack when the loop is reached — so a body that reached a loop
+/// with values underneath its state is refused by name rather than mis-emitted.
 fn lower_body(
     fragment: &KernelFragment,
     state: &mut WasmState<'_>,
@@ -3396,18 +3500,27 @@ fn lower_body(
         .validate()
         .map_err(|broken| format!("compute.wasm: the kernel body is malformed: {broken}"))?;
     match &fragment.body.entry {
+        // The function's own parameters are its first arrival, so the entry block
+        // has a label only when it *is* a loop's header — which is the shape a
+        // converted loop has: the fragment's first act is the test.
         Flow::Block {
-            entry: None,
+            entry,
             instrs,
             terminator,
         } => {
             let mut frames = Vec::new();
+            if let Some(label) = entry {
+                frames.push(Frame::Exit {
+                    label: Some(*label),
+                    arity: 0,
+                });
+            }
             lower_instrs(instrs, state, out)?;
             lower_terminator(terminator, &mut frames, state, out)
         }
         _ => Err(
-            "compute.wasm: a kernel body must begin with a block that has no entry label — the \
-             function's own parameters are its first arrival"
+            "compute.wasm: a kernel body must begin with a block, and a `Seq` is a loop's own body \
+             rather than a fragment's"
                 .to_string(),
         ),
     }
@@ -3458,34 +3571,41 @@ fn lower_terminator(
             carried,
             passed_out,
         } => {
+            // **The `block`/`loop` pair has to open before the header's
+            // instructions**, because the header's code *is* what a backedge to the
+            // `loop` label re-enters: opening the frames after they had run — which
+            // is what emitting the terminator in place would do — computes the
+            // condition once, outside the loop, and leaves the loop with no test at
+            // all. So the header's instructions are lowered *here*, with the frames
+            // already standing, and the walk's stack is the state tuple the frames
+            // were re-read from.
             let exit_type = state.block_type(state.class, *passed_out)?;
+            // The tuple the loop re-enters with, materialised once and handed to
+            // `local.get` on every entry.
+            let loop_locals = state.loop_locals(*carried)?;
             out.instruction(&Instruction::Block(BlockType::FunctionType(exit_type)));
             frames.push(Frame::Exit {
                 label: Some(*exit),
                 arity: *passed_out,
             });
             out.instruction(&Instruction::Loop(BlockType::FunctionType(exit_type)));
-            let first = state.next_local;
-            state.next_local += carried;
             frames.push(Frame::Header {
                 label: *header,
-                locals: first..first + carried,
+                locals: loop_locals.clone(),
             });
-            // Entering the loop, the top `carried` values are the header's
-            // parameters.
-            if let Frame::Header { locals, .. } = frames.last().expect("just pushed") {
-                state.set_locals(locals.clone(), out);
-            }
-            let failure = lower_flow(body, frames, state, out);
+            state.set_locals(loop_locals.clone(), out);
+            let inside = lower_flow(body, frames, state, out);
+            state.get_locals(loop_locals.clone(), out);
             frames.pop();
             out.instruction(&Instruction::End);
             frames.pop();
             out.instruction(&Instruction::End);
-            failure
+            inside
         }
     }
 }
 
+/// Lower one flow: its instructions, then its transfer.
 fn lower_flow(
     flow: &Flow,
     frames: &mut Vec<Frame>,
@@ -3526,8 +3646,8 @@ fn lower_flow(
                 })?;
             let depth = (frames.len() - 1 - position) as u32;
             match &frames[position] {
-                // A loop label takes no operands, so the values go to the locals
-                // the body reads them from.
+                // A loop label takes no operands, so the next state goes to the
+                // locals the header re-reads it from.
                 Frame::Header { locals, .. } => {
                     if locals.len() != *passes {
                         return Err(format!(
