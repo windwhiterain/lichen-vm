@@ -851,19 +851,20 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
 
     for (at, instruction) in instrs.iter().enumerate() {
         match instruction {
-            KernelInstr::Const(value) => {
+            KernelInstr::Const(class, value) => {
                 // A constant is emitted once per (class, value) no matter how
                 // often the body pushes it: SPIR-V requires every id to be
-                // defined exactly once. The push takes the module's scalar,
-                // which is the reading a *value* position wants; a position that
-                // wants an integer asks the pool for that reading instead.
-                let id = literals.get(ids.class, *value, &ids, &mut next);
+                // defined exactly once. The push takes the class the
+                // *instruction* names, which is the reading a value position
+                // wants; a position that wants an integer asks the pool for that
+                // reading instead.
+                let id = literals.get(*class, *value, &ids, &mut next);
                 stack.push(literal(id, *value));
             }
-            KernelInstr::Bin(operator) => {
+            KernelInstr::Bin(class, operator) => {
                 let rhs = pop(&mut stack, at)?;
                 let lhs = pop(&mut stack, at)?;
-                let operand_class = bin_class(lhs.kind, rhs.kind, ids.class);
+                let operand_class = bin_class(lhs.kind, rhs.kind, *class);
                 // A comparison is the one operator whose operands may not be
                 // scalars — `(a < b) == c` compares the *scalar* a comparison
                 // means — and the one whose result is not one. Every other

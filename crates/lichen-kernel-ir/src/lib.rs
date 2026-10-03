@@ -555,10 +555,20 @@ pub enum KernelBin {
 /// during the walk that lowers it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KernelInstr {
-    /// Push a constant of the fragment's declared [`IntWidth`].
-    Const(i64),
-    /// A binary [`KernelBin`] operator over the top two stack values.
-    Bin(KernelBin),
+    /// Push a constant, **of the class it names**.
+    ///
+    /// The class is per *instruction*, not per fragment: a body may compute in
+    /// more than one class, so a constant's bits are only readable against the
+    /// class it was lowered in — an `Int` local takes the value, a `Float` local
+    /// takes an `f32`'s bits (`docs/notes/floating-point.md`).
+    Const(ScalarClass, i64),
+    /// A binary [`KernelBin`] operator over the top two stack values, **in the
+    /// class it names**.
+    ///
+    /// Per instruction for the same reason [`Self::Const`] is: the opcode a
+    /// backend emits for `Add` is `i64.add` in one class and `f32.add` in the
+    /// other, and a body that mixes the two needs both.
+    Bin(ScalarClass, KernelBin),
     /// Read a parameter leaf, by its offset in the flattened domain.
     LocalGet(u32),
     /// Convert the top stack value to the condition width a `select` needs.

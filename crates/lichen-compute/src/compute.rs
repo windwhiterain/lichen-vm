@@ -255,7 +255,10 @@ mod kernel_intern_tests {
             labels: 2,
             entry: Flow::Block {
                 entry: Some(Label(header)),
-                instrs: vec![KernelInstr::Const(1), KernelInstr::LocalGet(0)],
+                instrs: vec![
+                    KernelInstr::Const(ScalarClass::Int, 1),
+                    KernelInstr::LocalGet(0),
+                ],
                 terminator: Box::new(Terminator::While {
                     header: Label(header),
                     carried: 1,
@@ -271,7 +274,7 @@ mod kernel_intern_tests {
                     } else {
                         Flow::Block {
                             entry: None,
-                            instrs: vec![KernelInstr::Const(2)],
+                            instrs: vec![KernelInstr::Const(ScalarClass::Int, 2)],
                             terminator: Box::new(Terminator::Return),
                         }
                     }),
@@ -314,7 +317,10 @@ mod kernel_intern_tests {
     /// form a lowering produces, and both backends lower it as they always did.
     #[test]
     fn a_straight_line_body_is_still_straight_line() {
-        let body = KernelBody::straight_line(vec![KernelInstr::Const(1), KernelInstr::LocalGet(0)]);
+        let body = KernelBody::straight_line(vec![
+            KernelInstr::Const(ScalarClass::Int, 1),
+            KernelInstr::LocalGet(0),
+        ]);
         assert!(body.is_straight_line());
         assert_eq!(
             body.straight_line_instrs().map(<[KernelInstr]>::len),
@@ -2366,7 +2372,7 @@ where
     // of the buffers the `write` import filled.  It is a value of the fragment's
     // class like every other value in the body, so the signature's result type
     // follows the class too.
-    body_instr.push(KernelInstr::Const(const_bits(class, 0)));
+    body_instr.push(KernelInstr::Const(class, const_bits(class, 0)));
     Ok(KernelFragment {
         // `(config, index)` however many buffers the body reads: the buffers are
         // bound rather than passed, so this shape is the parallel signature and
@@ -3403,14 +3409,17 @@ fn lower_instrs(
     let class = state.class;
 
     for instr in body {
-        match instr {
-            KernelInstr::Const(n) => {
+        // `KernelInstr` is `Copy`, so this matches it **by value**: an
+        // instruction's class is a value, not a borrow, and every arm below
+        // reads it directly rather than dereferencing a pattern binding.
+        match *instr {
+            KernelInstr::Const(class, n) => {
                 out.instruction(&match class {
-                    ScalarClass::Int => Instruction::I64Const(*n),
-                    ScalarClass::Float => Instruction::F32Const(f32::from_bits(*n as u32)),
+                    ScalarClass::Int => Instruction::I64Const(n),
+                    ScalarClass::Float => Instruction::F32Const(f32::from_bits(n as u32)),
                 });
             }
-            KernelInstr::Bin(op) => match op {
+            KernelInstr::Bin(class, op) => match op {
                 KernelBin::Add => {
                     out.instruction(&arithmetic(class, Instruction::I64Add, Instruction::F32Add));
                 }
@@ -3481,7 +3490,7 @@ fn lower_instrs(
                 }
             },
             KernelInstr::LocalGet(k) => {
-                out.instruction(&Instruction::LocalGet(*k));
+                out.instruction(&Instruction::LocalGet(k));
             }
             KernelInstr::I32WrapI64 => {
                 out.instruction(&Instruction::I32WrapI64);
@@ -3490,7 +3499,7 @@ fn lower_instrs(
                 out.instruction(&Instruction::Select);
             }
             KernelInstr::CallKernel(kid) => {
-                let target = *index.get(kid).ok_or_else(|| {
+                let target = *index.get(&kid).ok_or_else(|| {
                     format!("cross-kernel call to kernel {kid} is not in the assembled set")
                 })?;
                 out.instruction(&Instruction::Call(base + target));
@@ -4041,14 +4050,14 @@ where
     if let Some(value) = module.node_value(AnyNodeId::Dynamic(node)) {
         match AsEnum::<LowValue>::as_enum(&value) {
             Some(LowValue::USize(n)) => {
-                body.push(KernelInstr::Const(const_bits(class, n as i64)));
+                body.push(KernelInstr::Const(class, const_bits(class, n as i64)));
                 return Ok(());
             }
             // A float literal is a scalar like any other: its bits ride in the
             // same `Const`, because the fragment's class is what says how the
             // opcode reads them (`docs/notes/floating-point.md` §3.4, §4.4).
             Some(LowValue::Float(f)) => {
-                body.push(KernelInstr::Const(float_bits(f)));
+                body.push(KernelInstr::Const(ScalarClass::Float, float_bits(f)));
                 return Ok(());
             }
             _ => {}
@@ -4269,7 +4278,7 @@ where
         }
         emit_node(module, params, left, depth + 1, class, body, tally)?;
         emit_node(module, params, right, depth + 1, class, body, tally)?;
-        body.push(KernelInstr::Bin(bin));
+        body.push(KernelInstr::Bin(class, bin));
         return Ok(());
     }
     // The compute plugin's own operators: `Launch`/`Call` inside a kernel body
@@ -4346,7 +4355,7 @@ where
                 // be refused rather than reinterpreted (`check_input_classes`).
                 tally.reads = tally.reads.max(pos + 1);
                 tally.read_classes.push(class);
-                body.push(KernelInstr::Const(const_bits(class, pos as i64)));
+                body.push(KernelInstr::Const(class, const_bits(class, pos as i64)));
                 emit_node(module, params, idx, depth + 1, class, body, tally)?;
                 body.push(KernelInstr::BufferReadCall);
                 return Ok(());
@@ -4373,7 +4382,7 @@ where
                 // written in one class and the write's ordinal is one of the
                 // buffers that class is the element type of.
                 tally.write_classes.push(node_class(module, val));
-                body.push(KernelInstr::Const(const_bits(class, out_pos as i64)));
+                body.push(KernelInstr::Const(class, const_bits(class, out_pos as i64)));
                 emit_node(module, params, idx, depth + 1, class, body, tally)?;
                 emit_node(module, params, val, depth + 1, class, body, tally)?;
                 body.push(KernelInstr::BufferWriteCall);
@@ -7021,19 +7030,19 @@ mod parallel_launch_tests {
                 KernelShape::Scalar(ScalarClass::Int),
             ]),
             body: vec![
-                KernelInstr::Const(0),
+                KernelInstr::Const(ScalarClass::Int, 0),
                 KernelInstr::LocalGet(1),
                 KernelInstr::LocalGet(1),
-                KernelInstr::Const(1),
-                KernelInstr::Bin(KernelBin::Add),
+                KernelInstr::Const(ScalarClass::Int, 1),
+                KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
                 KernelInstr::BufferWriteCall,
-                KernelInstr::Const(1),
+                KernelInstr::Const(ScalarClass::Int, 1),
                 KernelInstr::LocalGet(1),
                 KernelInstr::LocalGet(1),
                 KernelInstr::LocalGet(1),
-                KernelInstr::Bin(KernelBin::Add),
+                KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
                 KernelInstr::BufferWriteCall,
-                KernelInstr::Const(0),
+                KernelInstr::Const(ScalarClass::Int, 0),
             ]
             .into(),
             inputs: 0,
