@@ -318,26 +318,144 @@ a change to one program. A silent fallback cannot offer either.
 
 ## 8. The order of the work
 
-**Where this stands.** The decisions and the shape are settled and the pieces are
-being built in the order §8 gives. Landed so far:
+> **HANDOFF — where this stands, and what the next person needs.** Written
+> against `dev` at the merge of `fix/adds-cfg-pos`. Read this section first; the
+> rest of the note is the design and is not a description of the code.
 
-- **The IR** — `KernelBody` with structured transfers over the same pure stack
-  machine, and a validator that a backend calls before it reads one. A label
-  defined twice, arrived at but never defined, or shared as two loops' exit is
-  refused, and a loop's declared header must be the entry of the block holding
-  it — which is what makes a zero-trip loop correct rather than a dropped
-  branch.
-- **The wasm backend** — it walks the structure and emits it. An `if` frame is
-  the join, a `while` is a `loop` wrapped in a `block` (so its two exits agree),
-  and a loop-carried value is a local, because a `br` to a loop label takes no
-  operands. The straight-line path is byte-identical to `dev`.
-- **The `@loop` keyword** — through the lexer, parser, AST and frontend, with
-  `@` reserved as the sigil so the next keyword is free. The absence of it is
-  still the unroll, and that is unchanged.
+### 8.1 What is settled, and one thing that was settled wrong
 
-Not written: the evaluator's loop recording (Stage 0b) and the SPIR-V emitter
-(Stage 1c). The SPIR-V half is where the `single-`invariant actually has to be
-replaced, and it is the largest single piece left.
+The **four decisions** hold: `@loop` is the surface; scope is tail-recursive
+cycles only; a `write` inside a loop body is refused; and the conversion runs in
+**evaluation**, not in the emitter, so one place decides per recursive call.
+
+**What the marker means had to be corrected, and the correction matters.** The
+first reading — the one an earlier version of this section gave — was that a
+`@loop` recursion whose count is *not* decidable should be **refused by name**,
+and one whose count *is* decidable should expand. **Both halves are backwards.**
+Being undecided is the loop's reason for existing; `while (n > 0)` with `n` read
+from memory is the most ordinary loop there is, and what being undecided
+disqualifies is *unrolling*, which is a different thing. So:
+
+| | undecided count | decided count |
+|---|---|---|
+| **no marker** | refuse — today's behaviour, unchanged | **unroll** — today's behaviour |
+| **`@loop`** | **loop** | **loop** |
+
+`@loop` means "this is a loop", full stop. The only choice is unroll-or-loop, not
+accept-or-refuse, and the marker is not permission to refuse. **The refusals that
+survive are §4's shape rules** — tail position, kernel-scalar carried values,
+loop-invariant environment, no write in the body, component cap, cycle-only.
+"The count is unknown" is not on that list and must not be put back on it.
+
+### 8.2 Landed, on `dev`
+
+- **The IR** (`lichen-kernel-ir`) — `KernelBody` with structured transfers
+  (`Return` / `If` / `While`) over the same pure stack machine, plus
+  **`Flow::Seq`**: instructions then a *plain* transfer. `Seq` is what lets a loop
+  body **compute** its carried values instead of forwarding the header's own —
+  without it a reduction, the acceptance case below, has no representation at all
+  (a bare `Jump` makes the header's `OpPhi` self-referential). `validate()` is the
+  gate a backend calls first: a label defined twice, arrived at but never defined,
+  or shared as two loops' exit is refused; a loop's declared header must be the
+  entry of the block holding it, which is what makes a zero-trip loop correct.
+- **The `@loop` keyword** — through lexer, parser, AST and frontend, with `@`
+  reserved as the sigil. It reaches `ExprKind::Function::looping`.
+- **The wasm backend** — walks the structure and emits `If` and `While`. An `if`
+  frame *is* the join; a `while` is a `loop` wrapped in a `block` so its two exits
+  agree; a carried value is a local, because a `br` to a loop label takes no
+  operands. **Straight-line fragments are byte-identical to the pre-change
+  emitter.**
+- **The emitter depth ceiling** — `emit_node` is `#[stacksafe]` and budgeted at
+  `MAX_KERNEL_BODY_DEPTH` = 512, so a body too deep to lower is refused by name
+  instead of overflowing the stack.
+
+### 8.3 Known broken, and by whom
+
+1. **The wasm `While` never tests its condition.** `lower_terminator`'s `While`
+   arm emits the enclosing block's instructions and *then* the `loop` opcode, so
+   the condition is computed once before the loop and never re-tested: the loop
+   only ends if its body branches out. `Instruction::BrIf` appears nowhere in
+   `crates/lichen-compute/src/compute.rs`. This contradicts this note's contract
+   ("the condition is re-evaluated at `header` on every entry including the
+   first") **and the SPIR-V emitter**, which does it correctly — so the two
+   backends currently give one fragment two meanings. It is latent only because
+   nothing can yet *produce* a loop. Fixing it needs the emission **reordered**:
+   the `Block`/`Loop` must open *before* the header's instructions, which means
+   `lower_flow`'s `Block` arm has to recognise a `While` terminator rather than
+   letting `lower_terminator` do it after the fact.
+2. **`passed_out` is under-specified, and this blocks the reduction.** §3 says a
+   zero condition leaves to `exit` "with `passed_out` values" — a bare count that
+   never says **which** values. In wasm the `Block` needs concrete values at its
+   `End`, and if the carried values live in locals the emitter must `local.get`
+   specific ones; `passed_out: usize` does not name them. **The natural reading,
+   which is not yet written into the IR**, is the discipline the IR already uses:
+   entry takes the top `carried` values, so exit hands out the top `passed_out`
+   values sitting beneath the condition. That makes a reduction work — the
+   header's `local.get`s leave the accumulator on the stack with the condition
+   above it. **Decide this before writing either emitter's fix**, or the emitters
+   will disagree again.
+3. **`sums()` in `graph_on_device.rs` cannot be dispatched on the GPU**, and that
+   is `dispatch.rs`'s documented refusal (a dispatch pushes the launch extent
+   alone; a runtime scalar needs the leaf list only the CPU path passes). The test
+   expects the opposite, so it is a test to update, not a fragment to repair. Not
+   this feature's work.
+
+### 8.4 Unmerged branches, and exactly what each needs
+
+- **`feature/spirv-loop-emitter`** (`a0bfa2c`) — a complete SPIR-V emitter for
+  `If` and `While`, validated with a real `spirv-val` (which rejected four genuine
+  bugs during development), straight-line output byte-identical at 185 words, and
+  the `single-OpLabel` invariant **replaced** with a stated structural one that
+  `dispatch.rs` now cites. It also refuses a write inside a loop body by name.
+  **What it needs**: it was cut before `Flow::Seq` existed, so it must be rebased
+  onto `dev` and taught `Seq`; and its own report says the IR could not express a
+  loop that computes its carried value — which is *precisely* what `Seq` fixed, so
+  the pass-through-block workaround it used can likely be deleted in favour of a
+  straight `Seq`.
+- **`feature/eval-loop-recording`** (`a709c2d`) — the marker reaching the
+  evaluator, cycle detection, and the *entering-call* insight (the recursive
+  call's own argument is the next state, undecided for every trip count, so only
+  an entering call's argument is the count — and the curried chain has to be
+  resolved to find it). All of that is **still right and still needed**.
+  **What it needs**: the `value_decided` gate drives the refusal, and it must be
+  **deleted and inverted** — a marked recursion becomes a loop, and the gate has
+  no remaining consumer, because for the unmarked path "is it decidable" is
+  already answered implicitly by whether the deep pass reduced the call.
+
+### 8.5 The critical path to the acceptance case
+
+The acceptance case is a **dynamic reduction** — the one shape with an
+**accumulator** (so it exercises the carried value) and a **run-time trip count**
+that is the buffer's length (so it exercises the whole point). It is named as the
+missing operator in [gpu-algorithm-roadmap §4.1](gpu-algorithm-roadmap.md), and it
+is the shape a `T -> T` `loop` cannot express at all — the second reason §7 does
+not ship one.
+
+```lichen
+---
+  compute = import "compute.lichen"
+---
+@loop sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + compute.read [buf, s(0) - 1])
+p = compute.parallel (cfg => { ... sum_to (cfg(0), 0) ... }) "BACKEND"
+```
+
+In order, and the order is forced:
+
+1. **Settle `passed_out`** (§8.3 item 2) in the IR's doc and, if it needs more
+   than a count, in the type.
+2. **Fix the wasm `While`** (§8.3 item 1) — the reorder above — and emit `Seq`.
+3. **Rebase and extend `feature/spirv-loop-emitter`** for `Seq`.
+4. **Delete `value_decided`** in `feature/eval-loop-recording` and make the
+   evaluator *record* a loop rather than refuse. This is the biggest remaining
+   piece and the one no branch has started: the recorded structure itself, the
+   defunctionalisation §3 step 2, and §4's shape rules.
+5. **Run the reduction on both backends**, past the 2000-apply budget and the 512
+   level ceiling, at more than one length so the count is demonstrably not a
+   compile-time constant.
+
+**Do not start 3 before 1.** Doing SPIR-V first against a contract that is already
+known to be wrong is how the `br_if` bug above came about, and it is the one
+mistake this section exists to prevent.
 
 **Stage 0 — the `loop` keyword and the evaluator's choice.** The surface lands
 first, and it is the smallest thing that can be observed working: a `loop` keyword
