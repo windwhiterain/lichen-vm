@@ -1201,6 +1201,30 @@ fn a_named_struct_field_read_resolves_to_the_positional_index() {
     assert_eq!(v, LangValue::TypeValue(TypeValue::TypeInt));
 }
 
+/// A field read's **class** is decided wherever its container's type is.
+///
+/// A field read's *type* used to be an `Index` node even when the container's
+/// type was concrete and its field index already resolved, and a class question
+/// is asked of a *cell* (`shape::low_type_of_slot`), which cannot see through an
+/// unevaluated `Index`.  So `x.a + x.a` found neither operand concretely
+/// `Float`, pinned the operation to the `+` default (`Int`), and then refused
+/// both operands against it.  The named and the positional form read the same
+/// field list, so both are pinned here.
+#[test]
+fn a_field_reads_class_is_decided_where_the_container_type_is() {
+    let named = evaluate(
+        "A = struct<.n Int, .alpha Float>\n\
+         f = (x : A) => x.alpha + x.alpha\n\
+         f (A(.n 1, .alpha 0.5))",
+    );
+    assert_eq!(named, LangValue::LowValue(LowValue::Float(1.0)));
+    let positional = evaluate(
+        "f = (x : <Int, Float>) => x(1) + x(1)\n\
+         f (1, 0.5)",
+    );
+    assert_eq!(positional, LangValue::LowValue(LowValue::Float(1.0)));
+}
+
 #[test]
 fn a_named_field_read_on_a_missing_field_is_rejected() {
     // `a.z` on a struct that has no field `z` is a reported type error (a
