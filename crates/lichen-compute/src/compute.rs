@@ -1358,6 +1358,27 @@ where
                     .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
                 {
                     Some(LowValue::USize(n)) => n,
+                    // A count that is a **decided** `Float` is refused by name
+                    // rather than left lazy.  Staying lazy here would mean the
+                    // dispatch quietly does not run and nothing says so, which is
+                    // the one answer this channel exists to stop giving — the
+                    // positions and the written value now share one class
+                    // (`WriteOp`), so a float kernel's count is `Float` all the
+                    // way here and a `plrun k (4.0,)` used to be accepted and
+                    // then skipped.
+                    //
+                    // An *undecided* count is still lazy: that is a program the
+                    // language has not evaluated yet, not a mistake, and the arm
+                    // below leaves it exactly as it was.
+                    Some(LowValue::Float(_)) => {
+                        module.record_extension_diagnostic(
+                            PARALLEL_DIAGNOSTIC,
+                            None,
+                            "the launch count is Float, but a dispatch extent is Int: \
+                             Int and Float do not convert",
+                        );
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    }
                     _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
                 };
                 // input buffers = cfg(1), a tuple of `Buffer` values.
