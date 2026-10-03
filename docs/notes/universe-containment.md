@@ -1,25 +1,24 @@
 # "Contains the universe" is not "is the universe"
 
-> Status: **open — diagnosed, fixes verified, not landed.**  Two predicates
-> answer "is this node the universe `K = [Type, ↺]`?" by asking only whether the
-> node *contains* the frozen universe among its elements.  A kind
-> `[marker, K]` built inside a frozen module holds the static universe at
-> slot 1, so it passes both tests — with two measured consequences: the printer
-> mis-spells a correct `Int -> Int` field type as `TypeStruct` (§2), and
-> unification merges two frozen kinds **without comparing their markers** (§3).
-> The renderer fix is verified against the three parked `type_of` acceptance
-> tests (all pass; the whole `compute` suite stays green).  The lowlevel twin is
-> verified against the §3 repro but breaks three `compute` tests that ride on
-> the unsound merge, so landing it needs the compute-side question in §3.4
-> answered first.
+> Status: **§2 landed; §3 open.**  Two predicates answer "is this node the
+> universe `K = [Type, ↺]`?" by asking only whether the node *contains* the
+> frozen universe among its elements.  A kind `[marker, K]` built inside a
+> frozen module holds the static universe at slot 1, so it passes both tests —
+> with two measured consequences: the printer mis-spelled a correct
+> `Int -> Int` field type as `TypeStruct` (§2, **fixed**: `is_universe` now
+> tests the whole shape, and the three `type_of` acceptance tests run
+> un-parked), and unification merges two frozen kinds **without comparing
+> their markers** (§3, **open**).  The lowlevel twin is verified against the §3
+> repro but breaks three `compute` tests that ride on the unsound merge, so
+> landing it needs the compute-side question in §3.4 answered first.
 >
 > Points at: `crates/lichen-render/src/render.rs` (`is_universe`),
 > `crates/lichen-lowlevel/src/equality.rs` (`is_self_referential`, and
 > `unify_inner`'s "two self-referential universes" cut that consumes it).
 >
-> Companions: [type-of-in-std](type-of-in-std.md) § *Open defect* — the `.sig`
-> mis-render this note explains; its earlier "the checker pins the wrong value"
-> reading is **withdrawn** (the graph was never wrong).
+> Companions: [type-of-in-std](type-of-in-std.md) § *The defect the removal
+> exposed* — the `.sig` mis-render this note explains; its earlier "the checker
+> pins the wrong value" reading is **withdrawn** (the graph was never wrong).
 > [defer-pending-type-forms](defer-pending-type-forms.md) — the deferral
 > machinery is *not* involved: no `defer_pending` verdict fires anywhere in the
 > §2 repro (measured).  [type-rendering-inconsistent](type-rendering-inconsistent.md)
@@ -57,9 +56,9 @@ representative test already answers no.
 
 ## 2. Manifestation A — the printer mis-spells a correct arrow as `TypeStruct`
 
-This is the mechanism behind [type-of-in-std](type-of-in-std.md) § *Open
-defect*: `compute.jit`'s `.sig` field — the standard library's
-`type_of f` read in a struct field's type position — renders `TypeStruct`
+This is the mechanism behind [type-of-in-std](type-of-in-std.md) § *The defect
+the removal exposed*: `compute.jit`'s `.sig` field — the standard library's
+`type_of f` read in a struct field's type position — rendered `TypeStruct`
 instead of the signature.  **The graph is correct**: a class dump of the `.sig`
 field-type node shows its committed value is the arrow pair
 `[[Int, Int], [TypeFunction, K]]`, with `K` the *static* universe (the gate
@@ -95,10 +94,10 @@ hence its kind — is frozen, and the misfire triggers.  This is why every
 wrapper-spelling experiment in type-of-in-std § *What was tried* failed: they
 all moved *when* the read happens, never *where the arrow's K comes from*.
 
-### 2.2 The verified fix (renderer)
+### 2.2 The fix (renderer) — **landed**
 
-`is_universe`'s dynamic arm becomes the honest `[Type, ↺]` shape test — the
-renderer knows the marker (`P::Value::type_marker()`), so it can check the head
+`is_universe`'s dynamic arm is now the honest `[Type, ↺]` shape test — the
+renderer knows the marker (`P::Value::type_marker()`), so it checks the head
 directly:
 
 ```rust
@@ -135,8 +134,8 @@ where
 
 Measured with exactly this change, nothing else:
 
-- the three parked acceptance tests pass with their `#[ignore]` removed:
-  `a_kernel_value_and_type_render_by_name`,
+- the three acceptance tests pass with their `#[ignore]` removed (they now run
+  un-parked): `a_kernel_value_and_type_render_by_name`,
   `a_tuple_domain_kernel_type_renders_as_a_function`
   (`crates/lichen-language/tests/compute.rs`), and
   `compute_kernel_bindings_render_by_name_not_raw_layout`
@@ -162,9 +161,11 @@ k = lib.jit (y => y + y)
 k
 ```
 
-Landing it is mechanical: apply the change, remove the three `#[ignore]`
-attributes (and their "open defect" comments), update
-[type-of-in-std](type-of-in-std.md) § *Open defect* to fixed.
+The landing was mechanical and is done: the change is in
+`crates/lichen-render/src/render.rs`, the three `#[ignore]` attributes and their
+"open defect" comments are gone, and
+[type-of-in-std](type-of-in-std.md) § *The defect the removal exposed* is marked
+fixed.
 
 ## 3. Manifestation B — unification merges frozen kinds without comparing markers
 
@@ -306,13 +307,13 @@ kind slot.  Two readings, not distinguished:
    accidental duty as "an undecided type unifies with anything".
 
 Answering this is the prerequisite for landing §3.2.  The renderer fix (§2.2)
-does **not** depend on the answer and can land alone.
+did **not** depend on the answer and landed alone.
 
 ## 4. Suggested order of work
 
-1. Land §2.2, un-park the three acceptance tests, update
+1. ~~Land §2.2, un-park the three acceptance tests, update
    [type-of-in-std](type-of-in-std.md) (defect → fixed, mechanism corrected)
-   and the `docs/README.md` index rows.
+   and the `docs/README.md` index rows.~~ **Done.**
 2. Investigate §3.4 on the `parallel`/`plrun`/`collect` chain (instrument the
    argument's type at the `collect` apply; compare against `$plrun`'s declared
    codomain in `lichen-compute`).

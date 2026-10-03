@@ -247,11 +247,17 @@ where
         })
 }
 
-/// Whether `node`'s class is the canonical universe `K = [Type, ↺]` — a node
-/// whose value is an array containing a member of its own unification class.
-/// The member test is a class comparison, so it covers both the canonical node
-/// itself and a cell that carries the replicated value.  A class the walk
-/// cannot place is not the universe.
+/// Whether `node`'s class is the canonical universe `K = [Type, ↺]` — the
+/// 2-element array whose **head is the `Type` marker** and whose tail is a
+/// member of its own unification class.  The tail test is a class comparison,
+/// so it covers both the canonical node itself and a cell that carries the
+/// replicated value; a class the walk cannot place is not the universe.
+///
+/// The head is checked first and the length pinned: a **kind** `[marker, K]`
+/// has the same self-referential silhouette whenever its `K` is the frozen
+/// (static) universe — a type value computed inside a frozen module and read
+/// in the importing one — so a tail-only test reads every such kind as the
+/// universe (see `docs/notes/universe-containment.md`).
 fn is_universe<P: HighProgram>(module: &Module<P>, node: NodeId) -> bool
 where
     P::Value: ValueType,
@@ -259,14 +265,22 @@ where
     let Some(rep) = representative(module, node) else {
         return false;
     };
-    matches!(module.node_value(AnyNodeId::Dynamic(node)), Some(value)
-    if matches!(value.as_enum(), Some(LowValue::Array(array))
-        // SAFETY: `array` is the payload of the value read from the live node
-        // `node`.
-        if unsafe { array.items() }.iter().any(|item| match item.node {
-            AnyNodeId::Dynamic(item) => representative(module, item) == Some(rep),
-            AnyNodeId::Static(_) => is_universe_any(module, item.node),
-        })))
+    let Some(LowValue::Array(array)) = module
+        .node_value(AnyNodeId::Dynamic(node))
+        .and_then(|value| value.as_enum())
+    else {
+        return false;
+    };
+    // SAFETY: `array` is the payload of the value read from the live node
+    // `node`.
+    let items = unsafe { array.items() };
+    if items.len() != 2 || module.node_value(items[0].node) != Some(P::Value::type_marker()) {
+        return false;
+    }
+    match items[1].node {
+        AnyNodeId::Dynamic(item) => representative(module, item) == Some(rep),
+        AnyNodeId::Static(_) => is_universe_any(module, items[1].node),
+    }
 }
 
 /// The read-only, static-aware universe test shared by the free printer

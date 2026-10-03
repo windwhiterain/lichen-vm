@@ -2,12 +2,11 @@
 
 > Status: current — the keyword, the AST form, the highlevel `ExprKind::TypeOf`
 > and its checker special case are gone; the type read lives in
-> [lichen-std/_.lichen](../../lichen-std/_.lichen).  **One defect is diagnosed,
-> fix not landed** (§ *Open defect*): the `.sig` mis-render is a *printer*
-> misclassification — the graph holds the right type — caused by
+> [lichen-std/_.lichen](../../lichen-std/_.lichen).  The `.sig` mis-render the
+> removal first exposed is **fixed**: it was a *printer* misclassification of a
+> frozen kind, not a checker or deferral fault —
 > ["contains the universe" being read as "is the
-> universe"](universe-containment.md); three rendering assertions stay parked
-> with `#[ignore]` (they are the acceptance test for landing the fix).
+> universe"](universe-containment.md) §2.
 > Points at: `crates/lichen-language-lex`, `crates/lichen-language-parser`
 > (`ast`/`parse`), `crates/lichen-language` (`compile`/`resolve`/`dirty`/`spans`),
 > `crates/lichen-highlevel` (`ir`/`checker`), `crates/lichen-compute`
@@ -76,14 +75,16 @@ consumer either imports the standard library or spells the one-liner next to
 the probe that needs it (as the language tests do — `compile` takes a bare
 source with no package store).
 
-## Open defect: the printer misreads a frozen kind as the universe
+## The defect the removal exposed: the printer misread a frozen kind as the universe
 
-**Status: diagnosed — fix identified and verified, not landed; deliberately
-parked for a separate change.**  The removal shipped with this known gap; the
-three assertions that measure it are `#[ignore]`d with this note cited in the
-reason string, so they are the acceptance test for whoever lands the fix
-([universe-containment](universe-containment.md) §2.2 has the exact patch and
-its measured acceptance).
+**Status: fixed** — the renderer's `is_universe` now tests the whole `[Type, ↺]`
+shape, so the three rendering assertions run un-parked and the `compute` suite is
+green ([universe-containment](universe-containment.md) §2 carries the analysis
+and the change; its §3 is a separate, still-open lowlevel hole in the same
+predicate family).  The record below is kept because it is what the fix was
+accepted against, and because it names the wrapper-level dodges that *cannot*
+work — they move *when* the read happens, never *where the arrow's `K` comes
+from*.
 
 ### The symptom
 
@@ -101,9 +102,9 @@ The kernel's `.sig` field is *declared* as the read of the argument's type; the
 read's **value** is right (`compute.launch k 5` is `10`, and `k.sig` still gates
 as a function type), and — as it turns out — so is its **declared type**: a
 class dump of the `.sig` field-type node shows the committed value *is* the
-arrow `[[Int, Int], [TypeFunction, K]]`.  Only the **printing** is wrong.  Three
-assertions measure it, all parked with `#[ignore]` and this note in the reason
-string:
+arrow `[[Int, Int], [TypeFunction, K]]`.  Only the **printing** was wrong.  Three
+assertions measured it (the middle row above is what they pinned, and they were
+`#[ignore]`d until the printer fix landed):
 
 - `a_kernel_value_and_type_render_by_name` and
   `a_tuple_domain_kernel_type_renders_as_a_function` in
@@ -126,18 +127,18 @@ jit (y => y + 1)
 The read must sit in the struct type's **field-type** position and the
 argument's type must be pinned to a **fresh arrow** (`f : _ -> _` here; the
 plugin's function-ness gate does the same with `ctx.arrow(ctx.fresh(), ctx.fresh())`).
-The builtin renders `.sig Int -> Int` for exactly this program; the library
-definition renders `.sig TypeStruct`.  With the read in a *value* position the
-same shape is correct (`f : _ -> _; type_of f` is `Int -> Int: TypeFunction`),
-and with `.native 0` replaced by a concrete value and no gate the field type is
-correct too.
+The builtin rendered `.sig Int -> Int` for exactly this program; the library
+definition rendered `.sig TypeStruct` (until the printer fix).  With the read in
+a *value* position the same shape was always correct (`f : _ -> _; type_of f` is
+`Int -> Int: TypeFunction`), and with `.native 0` replaced by a concrete value
+and no gate the field type was correct too.
 
 ### The mechanism (corrected — the earlier reading is withdrawn)
 
-The defect is **not** in the checker, the deferral, or the wrapper: no
+The defect was **not** in the checker, the deferral, or the wrapper: no
 `defer_pending` verdict fires anywhere in the repro (measured), and the graph
-commits the correct arrow onto the `.sig` field type.  It is the printer: the
-renderer's `is_universe` asks whether a node *contains* the universe instead of
+commits the correct arrow onto the `.sig` field type.  It was the printer: the
+renderer's `is_universe` asked whether a node *contains* the universe instead of
 whether it *is* it, and the gate's arrow — built inside the **frozen** module —
 has a kind `[TypeFunction, K_static]` whose tail is the static universe.  The
 struct-kind branch then also needs `marker_is_struct`'s "any 2-element array"
@@ -147,14 +148,14 @@ type value as a struct kind.  Without the gate the arrow comes from the argument
 wrapper-level experiment below changed nothing: they moved *when* the read
 happens, never *where the arrow's `K` comes from*.
 
-Full analysis, the verified one-function fix, and its measured acceptance (the
-three parked tests pass, the `compute` suite stays green):
+Full analysis and the landed one-function fix (`is_universe` tests the whole
+`[Type, ↺]` shape):
 [universe-containment](universe-containment.md) §2.
 
 ### What was tried and did **not** work
 
-Every spelling-level dodge, and one plugin-side change — all still render
-`TypeStruct` (as § *The mechanism* explains: none of them touches the printer):
+Every spelling-level dodge, and one plugin-side change — all still rendered
+`TypeStruct` (as § *The mechanism* explains: none of them touched the printer):
 
 - hoisting the read into a binding (`s = type_of f`, then `.sig s`);
 - pinning the parameter first (`f : _ -> _` as a leading statement, i.e. the

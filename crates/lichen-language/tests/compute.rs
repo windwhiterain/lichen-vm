@@ -462,16 +462,7 @@ compute.launch k 5
     assert!(out.starts_with("8:"), "nested inline produced: {out:?}");
 }
 
-// The two `.sig`-field assertions below are the acceptance test for an open
-// defect: with `type_of` a standard-library function (rather than the removed
-// builtin), a type read written in a struct field's *type* position resolves to
-// the enclosing struct kind, so `.sig` renders `TypeStruct` instead of the
-// signature.  Reproducer, mechanism and what was ruled out:
-// `docs/notes/type-of-in-std.md` § "Open defect".  Remove the `ignore` when the
-// checker fix lands.
 #[test]
-#[ignore = "open defect: a library type read in a field-type position resolves to \
-            the enclosing struct kind — see docs/notes/type-of-in-std.md"]
 fn a_kernel_value_and_type_render_by_name() {
     // A `jit` result's value is a kernel struct `[.native, .sig]`: the `.native`
     // artifact renders by name (via the compute vocabulary hook), the `.sig`
@@ -608,8 +599,6 @@ compute.launch k1 (5, 3)
 }
 
 #[test]
-#[ignore = "open defect: a library type read in a field-type position resolves to \
-            the enclosing struct kind — see docs/notes/type-of-in-std.md"]
 fn a_tuple_domain_kernel_type_renders_as_a_function() {
     // A tuple-domain kernel's signature is `[<Int, Int>, Int]`; the struct's
     // `.sig` field carries it, so the type renders as the struct

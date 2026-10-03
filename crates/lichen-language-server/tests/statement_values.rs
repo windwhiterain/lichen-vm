@@ -79,14 +79,7 @@ if 0 then (paradox : Int) else 5";
     );
 }
 
-// Parked for the same open defect the `compute` render assertions are parked
-// for: with `type_of` a standard-library function (rather than the removed
-// builtin), a type read in a struct field's *type* position resolves to the
-// enclosing struct kind, so a kernel's `.sig` renders `TypeStruct` instead of
-// the signature.  See `docs/notes/type-of-in-std.md` § "Open defect".
 #[test]
-#[ignore = "open defect: a library type read in a field-type position resolves to \
-            the enclosing struct kind — see docs/notes/type-of-in-std.md"]
 fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     // The `compute_jit` example's two kernel bindings are `compute.jit` results:
     // a kernel struct whose `.sig` field carries the signature.  Dropping
