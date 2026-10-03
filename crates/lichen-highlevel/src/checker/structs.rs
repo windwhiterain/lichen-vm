@@ -265,18 +265,39 @@ where
                 );
             }
         }
-        // names — the struct marker's name table, read through the container
-        // type's kind (`[shape, kind]`: kind at [1], marker at [0], names
-        // at [1]).
-        let names_node = self.lazy_index_path(container_ty, &shape::STRUCT_TYPE_NAMES_PATH);
-        // key = TableGet(names, name) — the field index.
-        let name_node = self.name_node(name);
-        let key_ops = self.array_node(self.current_block, &[names_node, name_node]);
-        let key = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::TableGet),
-            Some(key_ops),
-        );
+        // The field's **subscript**: a constant position when the container type
+        // is concrete and states it, and otherwise the lazy
+        // `TableGet(names, name)` a name table resolves through — which is what
+        // keeps an *unbound* container's named read resolvable at the apply.
+        //
+        // **A constant is not an optimisation here; it is the whole difference
+        // for the lowering.**  A kernel body is walked by its operands, and a
+        // name table's `TableGet` is not a value anything can resolve without
+        // re-deriving the struct's field order — so a concrete read's field
+        // position is written where it is decided (`slot_read`'s type read is
+        // the other half of the same decision).  The lazy form stays for the one
+        // case that needs it: a container whose type is not known yet.
+        let key = match position {
+            Some(at) => self.alloc_node(
+                self.current_block,
+                None,
+                Some(P::Value::from(LowValue::USize(at))),
+            ),
+            None => {
+                // names — the struct marker's name table, read through the
+                // container type's kind (`[shape, kind]`: kind at [1], marker at
+                // [0], names at [1]).
+                let names_node = self.lazy_index_path(container_ty, &shape::STRUCT_TYPE_NAMES_PATH);
+                // key = TableGet(names, name) — the field index.
+                let name_node = self.name_node(name);
+                let key_ops = self.array_node(self.current_block, &[names_node, name_node]);
+                self.op_node(
+                    self.current_block,
+                    P::Operator::from(LowOperator::TableGet),
+                    Some(key_ops),
+                )
+            }
+        };
         self.node_edges.insert(key, self.loc(e, 0));
         let container_value = self.value_of(container);
         let (value_node, ty_node) = self.slot_read(container_ty, container_value, key, position);
