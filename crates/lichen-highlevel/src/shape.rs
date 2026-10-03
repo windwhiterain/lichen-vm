@@ -671,45 +671,6 @@ where
         && is_struct_marker_any(module, items[KIND_MARKER_SLOT].node)
 }
 
-/// Whether `ty` is a concrete positional type expression — a tuple type
-/// (`[shape, [TypeTuple, K]]`) or a struct type (`[shape, [id,
-/// [TypeStruct, K]]]`, whose shape is the positional field-type list).
-/// The checker's field-read guard (`a(k)`) skips these; an array reads with
-/// `a[i]` (its type is pinned, so misuse fails the pin unify), a table
-/// with `t{k}`, and only concretely *non*-positional types are caught
-/// statically.
-pub fn is_positional_type_any<P: Program>(
-    module: &mut Module<P>,
-    universe: NodeId,
-    ty: AnyNodeId,
-) -> bool
-where
-    P::Value: ValueType,
-{
-    // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    let Some(items) = (unsafe { array_items(module, ty) }) else {
-        return false;
-    };
-    if items.len() != 2 {
-        return false;
-    }
-    kind_marker_is_any(
-        module,
-        universe,
-        items[TYPE_KIND_SLOT].node,
-        P::Value::tuple_type_marker(),
-    ) || is_struct_type_any(module, universe, ty)
-}
-
-/// [`is_positional_type_any`] over a dynamic node.
-pub fn is_positional_type<P: Program>(module: &mut Module<P>, universe: NodeId, ty: NodeId) -> bool
-where
-    P::Value: ValueType,
-{
-    is_positional_type_any(module, universe, AnyNodeId::Dynamic(ty))
-}
-
 /// The pieces of a struct **type term** `[shape, kind]` that every reader of it
 /// needs: the kind's universe slot — the node a caller checks to be sure the
 /// term really is a kinded type — the term's field-type list, and the marker's
@@ -816,8 +777,9 @@ impl TypeRef {
 
 /// The **field-type list** of the value type a term names: a struct's field
 /// list, a tuple's element list — the term's shape (`[shape, kind]` slot 0).
-/// The two kinds that have one differ only in their kind marker
-/// ([`is_positional_type_any`]), which is why one reader serves both.
+/// Both kinds carry the list in the same slot, so one reader serves both; what
+/// separates them is the kind marker, and each read form pins or checks the one
+/// it accepts ([`crate::checker`]'s field reads).
 ///
 /// `None` when the node is not a two-slot term.
 pub fn field_list<P: Program>(module: &Module<P>, ty: TypeRef) -> Option<AnyNodeId>

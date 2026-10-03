@@ -20,48 +20,87 @@ where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
-    /// A positional slot read `a(k)` — a tuple element or a struct field
-    /// (both type shapes are positional lists; the nominal struct id lives
-    /// in the kind slot, so the extraction is the same for both).  The
-    /// frontend emits this form for the adjacent single-expression paren —
-    /// `a(1)` — the syntactic distinction from struct instantiation
-    /// (`a(1,)`, `a(1,1)`, and the two zero-field spellings `a()` / `a(,)`,
-    /// mirroring the tuple grammar's `()` unit vs `(,)` empty tuple) and
-    /// from function application (a spaced paren), so no runtime kind
-    /// dispatch decides the read.
+    /// A positional slot read `a(k)` — a **tuple** element.  The frontend
+    /// emits this form for the adjacent single-expression paren — `a(1)` — the
+    /// syntactic distinction from struct instantiation (`a(1,)`, `a(1,1)`, and
+    /// the two zero-field spellings `a()` / `a(,)`, mirroring the tuple
+    /// grammar's `()` unit vs `(,)` empty tuple) and from function application
+    /// (a spaced paren), so no runtime kind dispatch decides the read.
     ///
-    /// The value is the structural `Index` over the container's value; the
-    /// type is `Index(shape, k)` over the container type's shape — read
-    /// structurally from the type pair itself, so a concrete tuple/struct
-    /// resolves at check time and an unbound container (a parameter, a call
-    /// result) resolves when the call binds it.  A *concretely*
-    /// non-positional container — an array (`a[i]` is its read), a table
-    /// (`t{k}`), a function, an atomic type — is the guard's error below,
-    /// not a runtime panic (mirroring the apply guard).
+    /// **A struct instance reads by name** (`s.x`, `X::a`), so a struct type
+    /// reaching this form is refused like any other non-tuple.  That is the
+    /// same principle the array read follows ([`Self::check_index`]): the syntax
+    /// picks the operator, and the refusal is the type's, never a runtime
+    /// dispatch on the container's kind.
+    ///
+    /// The value is the structural `Index` over the container's value; the type
+    /// is `Index(shape, k)` over the container type's shape.
+    ///
+    /// **The check is a unify, in one of two forms the container's state picks.**
+    /// A *decided* container is refused outright — its kind is readable, so the
+    /// term is judged where it is (`kind_marker_is_any`) and the refusal is
+    /// recorded as a fact, with the same stated requirement the pin states.  An
+    /// *undecided* container (a parameter, a call result) is **pinned** to a
+    /// fresh tuple type `[?shape, [TypeTuple, K]]` — the mirror of
+    /// `check_index`'s array pin — so the refusal is the application's argument
+    /// unify, per call.  Both name the requirement as that open tuple type,
+    /// which prints `<?a, …>`: a tuple whose arity is not decided.
+    ///
+    /// That per-call tier is the whole reason this is a unify and not a
+    /// skip-when-undecided guard: a guard asked once, while a parameter's type
+    /// is still a cell, is never asked again, so `x(0)` over an array used to be
+    /// **accepted** — and a struct was accepted by the same hole
+    /// (`docs/notes/eval-before-unify.md` §2.2/§2.4).
+    ///
+    /// An out-of-range slot is not a check: the runtime `Index` read records it
+    /// (`IndexOutOfBounds`), reporting the container's actual arity.
     pub(super) fn check_field(&mut self, e: ExprId, container: ExprId, key: ExprId) -> NodeId {
         self.check_expr(container);
         self.check_expr(key);
         let container_ty = self.state[container].ty.unwrap();
-        let concrete = self.type_is_concrete(container_ty);
-        if concrete && !shape::is_positional_type(&mut self.module, self.type_expr, container_ty) {
-            self.record_guard(
-                container_ty,
-                container_ty,
-                self.loc(container, 1),
-                DiagKind::IndexTarget,
-                None,
-            );
-        }
+        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
+        let shape_cell = self.fresh_cell();
+        let tuple_ty = self.array_node(self.current_block, &[shape_cell, kind]);
+        // `kind_of` answers only for a term the graph has already decided; a
+        // cell (an unbound parameter, a call result) has none, and that is
+        // exactly the case the pin exists for.
+        let read_ty = match shape::kind_of(&self.module, AnyNodeId::Dynamic(container_ty)) {
+            Some(container_kind) => {
+                if !shape::kind_marker_is_any(
+                    &mut self.module,
+                    self.type_expr,
+                    container_kind,
+                    P::Value::tuple_type_marker(),
+                ) {
+                    // Recorded, not unified: the term is decided, so there is
+                    // nothing to defer, and stating the requirement beside it
+                    // keeps the found side the *container's* type rather than a
+                    // shape a failed unify would have bound.
+                    self.record_guard(
+                        container_ty,
+                        tuple_ty,
+                        self.loc(container, 1),
+                        DiagKind::Guard,
+                        None,
+                    );
+                }
+                container_ty
+            }
+            None => {
+                self.check_unify(container_ty, tuple_ty, self.loc(container, 1), DiagKind::Guard);
+                tuple_ty
+            }
+        };
         let container_value = self.value_of(container);
         let key_value = self.value_of(key);
         self.node_edges.insert(key_value, self.loc(key, 0));
-        // The field's position, when the key is a literal: a concrete container
-        // type then states the field's type, and `slot_read` reads it out of the
-        // field list instead of leaving an `Index` no class question can see
-        // through.
+        // The field's position, when the key is a literal: the pinned shape is
+        // a cell whose class holds the container's field list once the pin is
+        // decided, so `slot_read` reads the field's type out of it instead of
+        // leaving an `Index` no class question can see through.
         let position = self.constant_position(key);
         let (value_node, ty_node) =
-            self.slot_read(container_ty, container_value, key_value, position);
+            self.slot_read(read_ty, container_value, key_value, position);
         let pair = self.pair_of(value_node, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
@@ -382,6 +421,7 @@ where
         }
         let id = self.fresh_nominal_id();
         let (_shape, _kind, struct_ty) = self.struct_type_type(id, &tys, field_names);
+        self.require_struct_field_names(field_names, &elements, struct_ty);
         let value_node = self.array_node(self.current_block, &vals);
         let pair = self.pair_of(value_node, struct_ty);
         self.state[e].term = Some(pair);
@@ -793,10 +833,45 @@ where
         }
         let id = self.fresh_nominal_id();
         let (shape, kind, pair) = self.struct_type_type(id, &tys, &names);
+        self.require_struct_field_names(&names, &elements, pair);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(shape);
         self.state[e].ty = Some(kind);
         pair
+    }
+
+    /// Refuse a struct **definition** or struct-returning block with an unnamed
+    /// field, at that field's own location.
+    ///
+    /// **Every struct field carries a name.**  A struct instance reads by name
+    /// (`s.x`, `X::a`), so a field with none would be unreachable: the
+    /// positional form `a(k)` is the *tuple* read, and the raw read `X<e>` reads
+    /// an element's `[value, type]` pair, which a struct instance's field is not
+    /// (`docs/language-spec.md` §Structs).  `struct_node` is the struct type term
+    /// the check is about — the hole the caller carries on with, since a
+    /// reported definition is a rejected build either way.
+    fn require_struct_field_names(
+        &mut self,
+        names: &[Option<&'static str>],
+        fields: &[ExprId],
+        struct_node: NodeId,
+    ) {
+        let Some(at) = names.iter().position(|name| name.is_none()) else {
+            return;
+        };
+        // `fields` is index-aligned with `names` (the frontend's contract, and
+        // the same pairing `struct_type_type` reads), so an unnamed field always
+        // has the expression that states it, which is where the caret goes.
+        let Some(&field) = fields.get(at) else {
+            return;
+        };
+        self.record_guard(
+            struct_node,
+            struct_node,
+            self.loc(field, 1),
+            DiagKind::StructFieldName,
+            None,
+        );
     }
 
     /// The struct name→index table value for a field-name list: the

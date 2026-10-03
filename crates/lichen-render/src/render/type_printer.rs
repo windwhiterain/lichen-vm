@@ -231,9 +231,25 @@ where
                     }
                 }
                 Some(m) if m == P::Value::tuple_type_marker() => {
-                    // shape = the field-type list — render `<T1, ..., Tn>`.
+                    // shape = the field-type list — render `<T1, ..., Tn>`.  A
+                    // shape the graph has not decided (a cell — the pin a
+                    // positional read states on an undecided container) is an
+                    // **open** field list: the arity is unknown, so its one
+                    // placeholder is shown with an ellipsis rather than
+                    // mistaken for the whole tuple (`<?a>` reads as a
+                    // one-element tuple).
+                    let open = !matches!(
+                        self.module
+                            .node_value(elements[0].node)
+                            .and_then(|value| value.as_enum()),
+                        Some(LowValue::Array(_))
+                    );
                     let fields = self.fields_any(elements[0].node);
-                    return format!("<{}>", fields.join(", "));
+                    return if open {
+                        format!("<{}, …>", fields.join(", "))
+                    } else {
+                        format!("<{}>", fields.join(", "))
+                    };
                 }
                 Some(m) if m == P::Value::array_type_marker() => {
                     // shape = [element type, length] — render `array<T, len>`.
