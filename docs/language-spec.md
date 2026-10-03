@@ -178,6 +178,24 @@ farg     := '.' name expr                         -- named instantiation argumen
   it (`@assert (x <= 3)`).  The keyword replaced the `!` sigil, which now marks
   a **refinement annotation** (`e : T ! p`) — see
   [operator-polymorphism](notes/operator-polymorphism.md) §3.
+- **A refinement, and what it refines.**  `e ! p` attaches a predicate to `e`'s
+  own **value**: the checker applies `p` to that value and requires the result to
+  be `1` (the assert channel), so `x ! (v => v > 3)` constrains the value.  The
+  predicate may instead be written **on a type**, inside the type position:
+  `x : (T ! p)` makes `T`'s own value — the *type* — the predicate's argument, so
+  `x : (_ ! in_num)` refines the **class** a parameter is used at, with `p`
+  receiving the type value and no type read of the value needed.  That is where a
+  *class* contract belongs (`Num = set{Int, Float}; in_num = t => t @in Num`),
+  and the type it names is the type expression's **denotation** — the annotated
+  expression's own term — so the annotation binds the parameter's type slot to
+  the type, not to the `[type, …, attribute]` group the attribute lives in.  The
+  refinement is enforced where it was written: the type expression's own assert
+  rides the enclosing function, so an *open* class is re-checked per application
+  (`Int` and `Float` pass, a `string` is refused) while a *concrete* one is
+  decided at the definition.  An open class's annotated type is the placeholder's
+  `[shape, kind]` pair of cells, so a printed signature shows it as the printer's
+  honest raw mark — `raw[?a, ?b] -> …` — where `x : (Int ! in_num)` prints
+  `Int -> …` ([raw-rendering-mark](notes/raw-rendering-mark.md)).
 - **Annotated parameters.**  `x : T => e` is a lambda whose parameter is
   annotated with `T` — the frontend desugars it to `x => { x : T; e }`, so the
   annotation is a leading body statement that unifies the parameter's slot in

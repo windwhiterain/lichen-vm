@@ -974,8 +974,29 @@ pub fn low_type_of<P: Program>(module: &Module<P>, type_value: AnyNodeId) -> Low
 where
     P::Value: ValueType,
 {
-    // A type expression is `[shape, kind]`; anything else is not a type this
-    // decoder can read.
+    // A type constant's own **value** is its marker node: `Int` *is* the
+    // `TypeValue::TypeInt` leaf, and the type value `[int, K]` is the array whose
+    // shape slot holds that leaf.  Both spellings denote one class, so a marker
+    // seen on its own answers what the array answers — and that case is not
+    // exotic: the members of a *source* set of type values (`Num = set{Int,
+    // Float}`) are markers, so a decoder that could only read arrays classified
+    // no source-written class domain at all (`docs/notes/operator-polymorphism.md`
+    // §3).
+    if let Some(value) = module.node_value(type_value) {
+        if value == P::Value::int_marker() {
+            return LowShape::USize;
+        }
+        if value == P::Value::float_marker() {
+            return LowShape::Float;
+        }
+        if value == P::Value::string_marker() || value == P::Value::type_marker() {
+            // The same refusals as the array spelling below: a string is not a
+            // machine scalar, and a type is not a value at all.
+            return LowShape::Unknown;
+        }
+    }
+    // Otherwise a type expression is `[shape, kind]`; anything else is not a type
+    // this decoder can read.
     // SAFETY: `type_value` is a live node of `module`; nothing in this crate
     // calls `Module::drop_block`.
     let Some(kinded) = (unsafe { array_items(module, type_value) }) else {

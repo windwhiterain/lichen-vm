@@ -199,15 +199,21 @@ re-instantiates a function's conditions and parameter per call
 (`apply_parameter_check`, `Function::asserts`), and a body cell that only an
 annotation tied to the parameter's type slot is not among the nodes it remaps.
 
-**Until it is fixed** the predicate is written through one opaque combinator,
-which keeps the read's cells out of the caller's type:
+**Until it is fixed** a predicate that needs the class does **not** use the read
+at all: the refinement is written on the **type** (`x : (_ ! in_num)`), so its
+predicate receives the type value and `in_num = t => t @in Num` needs no read
+([operator-polymorphism](operator-polymorphism.md) §3, §9 Phase 3).  Before that
+landed, the workaround was to keep the read's cells out of the caller's type
+through one opaque combinator:
 
 ```lichen
 type_of = x => {t = _; x : t; t}
 compose = f => g => x => f (g x)
-Num = set{Int, Float}
 in_num = compose (t => t @in Num) type_of     -- measured: (in_num 1, in_num 1.5, in_num "a") = (1, 1, 0)
 ```
+
+It is kept here as the measurement that localised the defect, not as a spelling to
+use: the class refinement supersedes it.
 
 **The preferred fix** is the one the measurement points at: the per-call
 instantiation must remap every cell in the equality class of the parameter's type
