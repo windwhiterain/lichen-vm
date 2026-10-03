@@ -2228,7 +2228,6 @@ where
         return Err(UNDECIDED_DOMAIN.into());
     };
     let param_shape = kernel_domain(domain)?;
-
     let params = vec![ParamSlot {
         pair: param_pair,
         value: param_value,
@@ -2260,7 +2259,7 @@ where
     // **filler** for what no leaf states.
     let result_classes: Vec<ScalarClass> = leaves
         .iter()
-        .map(|leaf| node_class(module, *leaf))
+        .map(|leaf| node_class_in(module, &params, *leaf))
         .collect();
     // The filler for the **positions** a body never read, which is the ABI's
     // integer default: a scalar fragment reads no buffer at all, so this only
@@ -2626,26 +2625,29 @@ where
 /// order the emitter walks them, because the class has to be known *before* the
 /// instructions are emitted.  `None` for a position that is not a write at all,
 /// which the emission names with the more specific cause rather than this walk.
-fn write_value_node<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
+fn write_value_node<P>(module: &Module<P>, node: NodeId) -> Option<AnyNodeId>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let mut node = value_of_node(module, node)
-        .or_else(|| pair_value_node(module, node))
-        .unwrap_or(node);
+    let mut node = AnyNodeId::Dynamic(
+        value_of_node(module, node)
+            .or_else(|| pair_value_node(module, node))
+            .unwrap_or(node),
+    );
     for _ in 0..8 {
-        if let Some(operation) = module.node_operation(node)
+        let current = node.dynamic()?;
+        if let Some(operation) = module.node_operation(current)
             && matches!(
                 AsEnum::<ComputeOperator>::as_enum(&operation.operator),
                 Some(ComputeOperator::Write)
             )
         {
             let items = operand_items(module, operation.operand?).ok()?;
-            return dyn_node(items.get(2)?.node).ok();
+            return Some(items.get(2)?.node);
         }
-        node = concrete_element(module, node)?;
+        node = concrete_element(module, current)?;
     }
     None
 }
@@ -2654,7 +2656,7 @@ where
 /// the wrapper's slot-read destructuring step, and the one the emitter makes
 /// before it reaches the operation behind a position.  `None` when `node` is not
 /// such an index.
-fn concrete_element<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
+fn concrete_element<P>(module: &Module<P>, node: NodeId) -> Option<AnyNodeId>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
@@ -2669,10 +2671,13 @@ where
     }
     let (target, index) = operand_pair(module, operation.operand).ok()?;
     let k = usize_value(module, index)?;
+    let target = target.dynamic()?;
     let array_value = value_of_node(module, target).or(Some(target))?;
     // SAFETY: `array_value` is a live node of `module`.
     let items = unsafe { module.array_items(array_value) }?;
-    dyn_node(items.get(k)?.node).ok()
+    // The element is an operand of the caller's own array value only in the
+    // spelling; a slot the checker filled from a frozen module keeps its ref.
+    Some(items.get(k)?.node)
 }
 
 /// A value of one class in a position that wants the other.
@@ -4409,6 +4414,121 @@ where
     None
 }
 
+/// The class a node's value is, read **with the kernel's parameter slots in
+/// hand** — the reading the emission makes, named once.
+///
+/// [`node_class`] is the value channel's own answer, and for a node whose value
+/// the graph decided it is the whole answer.  Two nodes it cannot answer are
+/// exactly the ones a body lowered from a template is made of, and both are
+/// answered here from the same facts the emission uses:
+///
+/// - **a parameter read.**  The template's parameter cell is an undecided `_`,
+///   so nothing about the node states a class — the class the read *is* is the
+///   ABI's, stated by the slot's own [`ParamSlot::shape`], which is what
+///   [`emit_node`] reads when it turns the read into a `local.get`.
+/// - **an arithmetic operator over such reads.**  The low-type pass cannot
+///   transfer through a read it has no shape for, so it declines and the answer
+///   falls back to the integer default; the class the emission gives the `Bin`
+///   is its operands' (see `emit_node`'s own rule), and that is the answer here.
+///   A comparison is the one exception and it is the emission's too: its result
+///   is the language's `Int` `0`/`1` whatever its operands are.
+///
+/// Everything else — a literal, a conversion — is [`node_class`]'s own answer,
+/// so this is a widening and not a second rule.
+fn node_class_in<P>(
+    module: &Module<P>,
+    params: &[ParamSlot],
+    node: impl Into<AnyNodeId>,
+) -> ScalarClass
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let node = node.into();
+    let Some(dynamic) = node.dynamic() else {
+        return node_class(module, node);
+    };
+    if let Ok(Some(offset)) = param_read_offset(module, params, dynamic)
+        && let Some(class) = slot_class(params, offset)
+    {
+        return class;
+    }
+    // **The peel the emission makes, in the emission's own order.**  A `value_of`
+    // extraction and a constant selection are answered *before* the operation
+    // behind them, so a class read that stopped at the extraction would be
+    // answering about a node the body never emits.
+    let peeled = resolve_literal_node(module, node);
+    if peeled != node {
+        return node_class_in(module, params, peeled);
+    }
+    // The emission's third answer for a read: a bare cell in one of the
+    // enclosing parameters' equality classes *is* a whole-parameter read
+    // (`emit_node`), and the class it is, is the slot's.
+    if module.node_operation(dynamic).is_none() {
+        for slot in params {
+            if equality_rep(module, dynamic) == equality_rep(module, slot.value) {
+                return scalar_class_of(&slot.shape);
+            }
+        }
+    }
+    if let Some(operation) = module.node_operation(dynamic)
+        && let Some(ty_op) = AsEnum::<TypeOperator>::as_enum(&operation.operator)
+        && let Some(bin) = kernel_bin(ty_op)
+    {
+        // The emission's own rule, read off the same operand array, so the two
+        // cannot disagree.
+        let Ok((left, right)) = operand_pair(module, operation.operand) else {
+            return node_class(module, node);
+        };
+        let operands = match (
+            node_class_in(module, params, left),
+            node_class_in(module, params, right),
+        ) {
+            (ScalarClass::Float, _) | (_, ScalarClass::Float) => ScalarClass::Float,
+            _ => ScalarClass::Int,
+        };
+        return match bin {
+            KernelBin::Lt
+            | KernelBin::Gt
+            | KernelBin::Leq
+            | KernelBin::Geq
+            | KernelBin::Eq
+            | KernelBin::Neq => ScalarClass::Int,
+            _ => operands,
+        };
+    }
+    node_class(module, node)
+}
+
+/// The class of the `offset`-th wasm local of the kernel's parameter slots —
+/// the slot the read landed in, and the flattened leaf within its domain.
+fn slot_class(params: &[ParamSlot], offset: u32) -> Option<ScalarClass> {
+    for slot in params {
+        let arity = flat_arity(&slot.shape) as u32;
+        if offset >= slot.base as u32 && offset < slot.base as u32 + arity {
+            return Some(class_at(&slot.shape, (offset - slot.base as u32) as usize));
+        }
+    }
+    None
+}
+
+/// The class of the `index`-th flattened leaf of a domain shape.
+fn class_at(shape: &LowShape, index: usize) -> ScalarClass {
+    let LowShape::Tuple(items) = shape else {
+        return scalar_class_of(shape);
+    };
+    let mut remaining = index;
+    for item in items {
+        let arity = flat_arity(item);
+        if remaining < arity {
+            return class_at(item, remaining);
+        }
+        remaining -= arity;
+    }
+    ScalarClass::Int
+}
+
 /// The class a node's value is.
 ///
 /// The node may be the `[value, type]` pair a term is, or an extraction over
@@ -4430,16 +4550,25 @@ where
 /// is the one the ABI typed the slot with (`param_shape`, read by
 /// [`param_classes`]).  A caller holding the slots must resolve a leaf
 /// through them first; this is the value-channel reading for every other node.
-fn node_class<P>(module: &Module<P>, node: NodeId) -> ScalarClass
+fn node_class<P>(module: &Module<P>, node: impl Into<AnyNodeId>) -> ScalarClass
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let value = resolve_literal_node(module, node);
-    if module.node_operation(value).is_none()
+    let node = node.into();
+    // A **frozen** node's structure belongs to its own module, so its *value* is
+    // the only thing that can state its class here — and a frozen module states
+    // one for every node it holds (a static module is fully solved).
+    let value = match node {
+        AnyNodeId::Dynamic(node) => resolve_literal_node(module, node),
+        AnyNodeId::Static(_) => node,
+    };
+    if value
+        .dynamic()
+        .is_none_or(|node| module.node_operation(node).is_none())
         && let Some(held) = module
-            .node_value(AnyNodeId::Dynamic(value))
+            .node_value(value)
             .and_then(|held| AsEnum::<LowValue>::as_enum(&held))
     {
         match held {
@@ -4448,8 +4577,9 @@ where
             _ => {}
         }
     }
-    module
-        .low_type_of_node(value)
+    value
+        .dynamic()
+        .and_then(|node| module.low_type_of_node(node))
         .map_or(ScalarClass::Int, |shape| scalar_class_of(&shape))
 }
 
@@ -4462,17 +4592,28 @@ where
 /// caller that wants the *node* rather than its class (the conversion fold, which
 /// reads the literal's own value) needs the same node, and two spellings of the
 /// walk would be two answers to one question.
-fn resolve_literal_node<P>(module: &Module<P>, node: NodeId) -> NodeId
+fn resolve_literal_node<P>(module: &Module<P>, node: impl Into<AnyNodeId>) -> AnyNodeId
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let mut value = value_of_node(module, node)
-        .or_else(|| pair_value_node(module, node))
-        .unwrap_or(node);
+    let node = node.into();
+    // A frozen node is where the walk stops: the structure a peel would read
+    // belongs to the module that wrote it.
+    let AnyNodeId::Dynamic(node) = node else {
+        return node;
+    };
+    let mut value = AnyNodeId::Dynamic(
+        value_of_node(module, node)
+            .or_else(|| pair_value_node(module, node))
+            .unwrap_or(node),
+    );
     for _ in 0..8 {
-        let Some(element) = concrete_element(module, value) else {
+        let Some(dynamic) = value.dynamic() else {
+            break;
+        };
+        let Some(element) = concrete_element(module, dynamic) else {
             break;
         };
         value = element;
@@ -4489,7 +4630,7 @@ where
 /// that value to be emitted as a constant of whichever class the body has, which
 /// for a float under an integer body is a bit pattern no backend was promised an
 /// answer for.
-fn scalar_literal<P>(module: &Module<P>, node: NodeId) -> Option<LowValue>
+fn scalar_literal<P>(module: &Module<P>, node: impl Into<AnyNodeId>) -> Option<LowValue>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
@@ -4497,7 +4638,7 @@ where
 {
     let value = resolve_literal_node(module, node);
     match module
-        .node_value(AnyNodeId::Dynamic(value))
+        .node_value(value)
         .and_then(|held| AsEnum::<LowValue>::as_enum(&held))?
     {
         held @ (LowValue::USize(_) | LowValue::Float(_)) => Some(held),
@@ -4701,20 +4842,14 @@ where
                 // target is a materialized array value.  `value_of` above only
                 // peels index 0, so handle every constant `k` here.
                 if let Some(k) = usize_value(module, index)
+                    && let Some(target) = target.dynamic()
                     && let Some(array_value) = value_of_node(module, target).or(Some(target))
                 {
                     // SAFETY: `array_value` is a live node of `module`.
                     if let Some(items) = unsafe { module.array_items(array_value) }
                         && let Some(item) = items.get(k)
                     {
-                        return emit_node(
-                            module,
-                            params,
-                            dyn_node(item.node)?,
-                            depth + 1,
-                            body,
-                            tally,
-                        );
+                        return emit_operand(module, params, item.node, depth + 1, body, tally);
                     }
                 }
                 // A conditional `if c then a else b` lowers to `[b, a][c]` — a
@@ -4722,14 +4857,15 @@ where
                 // selector, a wasm `select`.  The array may be reached through
                 // a value_of extraction; look through it.
                 if usize_value(module, index).is_none()
+                    && let Some(target) = target.dynamic()
                     && let Some(array_value) = value_of_node(module, target).or(Some(target))
                 {
                     // SAFETY: `array_value` is a live node of `module`.
                     if let Some(items) = unsafe { module.array_items(array_value) }
                         && items.len() == 2
                     {
-                        let then_node = dyn_node(items[1].node)?;
-                        let else_node = dyn_node(items[0].node)?;
+                        let then_node = items[1].node;
+                        let else_node = items[0].node;
                         // Each branch is emitted into its own vector so it can be
                         // inspected before the three parts are concatenated: a
                         // `compute.write` in a branch would be a *statement* in
@@ -4741,8 +4877,8 @@ where
                         let mut then_body = Vec::new();
                         let mut else_body = Vec::new();
                         let mut select_body = Vec::new();
-                        emit_node(module, params, then_node, depth + 1, &mut then_body, tally)?;
-                        emit_node(module, params, else_node, depth + 1, &mut else_body, tally)?;
+                        emit_operand(module, params, then_node, depth + 1, &mut then_body, tally)?;
+                        emit_operand(module, params, else_node, depth + 1, &mut else_body, tally)?;
                         if then_body
                             .iter()
                             .chain(else_body.iter())
@@ -4750,7 +4886,7 @@ where
                         {
                             return Err(CONDITIONAL_WRITE.into());
                         }
-                        emit_node(module, params, index, depth + 1, &mut select_body, tally)?;
+                        emit_operand(module, params, index, depth + 1, &mut select_body, tally)?;
                         body.append(&mut then_body);
                         body.append(&mut else_body);
                         body.append(&mut select_body);
@@ -4766,6 +4902,30 @@ where
             }
             LowOperator::Apply => {
                 let (callee, arg) = apply_pair(module, operation.operand)?;
+                // **A static callee is specialized away before the walk reads
+                // it.**  The apply of a frozen function is the one call the
+                // language lowers for an operator it routes — `x + 1` *is* the
+                // prelude's `add [x, 1]` (`docs/notes/operator-polymorphism.md`
+                // §7) — and the lowlevel's own apply has already written that
+                // callee's body, with this call's arguments substituted, as the
+                // apply's **value**: the residual clone, a member of the
+                // caller's template.  So what a static apply means *here* is
+                // exactly its residual, and the frozen callee is a body this
+                // module cannot walk (a static ref is a decided value).
+                if is_static_function(module, callee) {
+                    let residual = unsafe { module.array_items(node) }
+                        .and_then(|items| items.first())
+                        .map(|item| item.node);
+                    let Some(residual) = residual else {
+                        return Err(
+                            "a kernel body applied a frozen function whose result this module does \
+                             not hold: an apply of a static function is specialized to its own \
+                             value when the checker lowers it"
+                                .into(),
+                        );
+                    };
+                    return emit_operand(module, params, residual, depth + 1, body, tally);
+                }
                 // Style 2: a cross-kernel call — the callee is a kernel value
                 // (the result of an earlier `jit`).  Emit the (scalar)
                 // argument, then a call the launch-time assembler resolves to
@@ -4803,7 +4963,7 @@ where
                 items.len()
             ));
         }
-        let operand = dyn_node(items[0].node)?;
+        let operand = items[0].node;
         // **A literal converts here, in the language's own classes.**  The
         // conversion is the one instruction whose operand and result are
         // different classes, so a literal the checker already decided can be
@@ -4848,7 +5008,7 @@ where
             body.push(KernelInstr::Const(to, const_bits(to, number)));
             return Ok(());
         }
-        emit_node(module, params, operand, depth + 1, body, tally)?;
+        emit_operand(module, params, operand, depth + 1, body, tally)?;
         body.push(KernelInstr::Conv { from, to });
         return Ok(());
     }
@@ -4874,7 +5034,10 @@ where
         // `Int` whatever it is declared.  Making that honest is the
         // specialize-before-JIT work (`docs/notes/kernel-class-crossing-fixes.md`
         // §6), not this read.
-        let operand_class = match (node_class(module, left), node_class(module, right)) {
+        let operand_class = match (
+            node_class_in(module, params, left),
+            node_class_in(module, params, right),
+        ) {
             (ScalarClass::Float, _) | (_, ScalarClass::Float) => ScalarClass::Float,
             _ => ScalarClass::Int,
         };
@@ -4897,8 +5060,8 @@ where
                  four order comparisons, not `%` or the bitwise operators"
             ));
         }
-        emit_node(module, params, left, depth + 1, body, tally)?;
-        emit_node(module, params, right, depth + 1, body, tally)?;
+        emit_operand(module, params, left, depth + 1, body, tally)?;
+        emit_operand(module, params, right, depth + 1, body, tally)?;
         body.push(KernelInstr::Bin(operand_class, bin));
         return Ok(());
     }
@@ -4966,7 +5129,7 @@ where
                     ScalarClass::Int,
                     const_bits(ScalarClass::Int, pos as i64),
                 ));
-                emit_node(module, params, idx, depth + 1, body, tally)?;
+                emit_operand(module, params, idx, depth + 1, body, tally)?;
                 body.push(KernelInstr::BufferReadCall(element));
                 return Ok(());
             }
@@ -4990,14 +5153,14 @@ where
                     .operand
                     .ok_or_else(|| "write operand array is missing".to_string())?;
                 let items = operand_items(module, operand)?;
-                let idx = dyn_node(items[1].node)?;
-                let val = dyn_node(items[2].node)?;
+                let idx = items[1].node;
+                let val = items[2].node;
                 let out_pos = tally.writes;
                 tally.writes += 1;
                 // The element a write fills is the class of the value written —
                 // the same class the write's ordinal is declared with, and the
                 // one the buffer call names.
-                let element = node_class(module, val);
+                let element = node_class_in(module, params, val);
                 tally.write_classes.push(element);
                 // The ordinal is an `Int` for the same reason a read's position
                 // is: it is a compile-time ordinal in the output space.
@@ -5005,8 +5168,8 @@ where
                     ScalarClass::Int,
                     const_bits(ScalarClass::Int, out_pos as i64),
                 ));
-                emit_node(module, params, idx, depth + 1, body, tally)?;
-                emit_node(module, params, val, depth + 1, body, tally)?;
+                emit_operand(module, params, idx, depth + 1, body, tally)?;
+                emit_operand(module, params, val, depth + 1, body, tally)?;
                 body.push(KernelInstr::BufferWriteCall(element));
                 return Ok(());
             }
@@ -5043,7 +5206,7 @@ where
 fn parallel_buffer_pos<P>(
     module: &Module<P>,
     params: &[ParamSlot],
-    node: NodeId,
+    node: impl Into<AnyNodeId>,
 ) -> Result<Option<usize>, String>
 where
     P: Program,
@@ -5051,6 +5214,11 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let Some(slot) = params.first() else {
+        return Ok(None);
+    };
+    // A position is a *read* of the parameter, and the parameter is the
+    // caller's own node: a frozen node states no path, so it names no position.
+    let Some(node) = node.into().dynamic() else {
         return Ok(None);
     };
     if let Some(roles) = &slot.roles {
@@ -5073,6 +5241,9 @@ where
     let Some(k) = usize_value(module, index) else {
         return Ok(None);
     };
+    let Some(target) = target.dynamic() else {
+        return Ok(None);
+    };
     let Some(target_op) = module.node_operation(target) else {
         return Ok(None);
     };
@@ -5089,6 +5260,9 @@ where
     // (a read node) rather than the value node itself, so compare the two cfg
     // value slots by *equality class* (as the `emit_node` parameter-read path
     // does) instead of node identity.
+    let Some(tt) = tt.dynamic() else {
+        return Ok(None);
+    };
     if equality_rep(module, tt) != equality_rep(module, cfg_value)
         || usize_value(module, ti) != Some(1)
     {
@@ -5110,15 +5284,18 @@ where
 /// Bounded rather than recursive: the wrapper nests one level per argument, and
 /// a chain deeper than the bound is not a wrapper this walk understands, so it
 /// stops and lets its caller name the cause.
-fn peeled_argument<P>(module: &Module<P>, node: NodeId) -> Result<NodeId, String>
+fn peeled_argument<P>(module: &Module<P>, node: impl Into<AnyNodeId>) -> Result<AnyNodeId, String>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let mut value = node;
+    let mut value = node.into();
     for _ in 0..8 {
-        let target_oi = match module.node_operation(value).as_ref() {
+        let Some(value_node) = value.dynamic() else {
+            break;
+        };
+        let target_oi = match module.node_operation(value_node).as_ref() {
             Some(op)
                 if matches!(
                     AsEnum::<LowOperator>::as_enum(&op.operator),
@@ -5135,6 +5312,9 @@ where
         let Some(k) = usize_value(module, index) else {
             break;
         };
+        let Some(target) = target.dynamic() else {
+            break;
+        };
         let Some(array_value) = value_of_node(module, target).or(Some(target)) else {
             break;
         };
@@ -5143,7 +5323,7 @@ where
             break;
         };
         let Some(item) = items.get(k) else { break };
-        value = dyn_node(item.node)?;
+        value = item.node;
     }
     Ok(value)
 }
@@ -5529,25 +5709,26 @@ where
     let Ok((target, index)) = operand_pair(module, operation.operand) else {
         return false;
     };
-    if target != param_pair {
+    if target != AnyNodeId::Dynamic(param_pair) {
         return false;
     }
-    module
-        .node_value(AnyNodeId::Dynamic(index))
-        .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-        .is_some_and(|v| matches!(v, LowValue::USize(0)))
+    usize_value(module, index) == Some(0)
 }
 
 /// The constant `USize` value behind `node`, if it is one (an `Index`'s
 /// selector must be a compile-time constant in a kernel body).
-fn usize_value<P>(module: &Module<P>, node: NodeId) -> Option<usize>
+///
+/// A **frozen** node answers too: a selector the callee's body wrote is a
+/// reference into the frozen module, and its value is the constant it is
+/// ([`operand_pair`]).
+fn usize_value<P>(module: &Module<P>, node: impl Into<AnyNodeId>) -> Option<usize>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     match module
-        .node_value(AnyNodeId::Dynamic(node))
+        .node_value(node.into())
         .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
     {
         Some(LowValue::USize(n)) => Some(n),
@@ -5563,15 +5744,22 @@ where
 /// its *index* is left to the type, so the name is what a resolution walks the
 /// type with.  `Ok(None)` for a selector that is not a named read at all (a
 /// constant position, a computed index).
-fn field_name<P>(module: &Module<P>, selector: NodeId) -> Result<Option<&'static str>, String>
+fn field_name<P>(
+    module: &Module<P>,
+    selector: impl Into<AnyNodeId>,
+) -> Result<Option<&'static str>, String>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
+    let selector = selector.into();
     if usize_value(module, selector).is_some() {
         return Ok(None);
     }
+    let Some(selector) = selector.dynamic() else {
+        return Ok(None);
+    };
     let Some(operation) = module.node_operation(selector) else {
         return Ok(None);
     };
@@ -5581,7 +5769,7 @@ where
         _ => return Ok(None),
     };
     Ok(module
-        .node_value(AnyNodeId::Dynamic(key))
+        .node_value(key)
         .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
         .and_then(|v| match v {
             LowValue::Str(name) => Some(name),
@@ -5645,7 +5833,12 @@ where
         let Ok((target, selector)) = operand_pair(module, operation.operand) else {
             return Ok(None);
         };
-        if target == param_pair {
+        // A frozen node is not a step of a read of *this* parameter: the chain a
+        // path walks is the caller's own.
+        let Some(target_node) = target.dynamic() else {
+            return Ok(None);
+        };
+        if target == AnyNodeId::Dynamic(param_pair) {
             // `Index(param_pair, 0)` is the encoding's `[value, type]` pair read
             // — the parameter read whole, which is the empty path.  A non-zero
             // position is not a data read at all.
@@ -5663,12 +5856,12 @@ where
                 None => return Ok(None),
             },
         }
-        if is_param_value(module, param_pair, target) {
+        if is_param_value(module, param_pair, target_node) {
             // The innermost read: its target is the parameter's value, so the
             // chain ends here.
             break;
         }
-        current = target;
+        current = target_node;
     }
     if steps.is_empty() {
         return Ok(None);
@@ -5859,6 +6052,9 @@ where
     if usize_value(module, index)? != 0 {
         return None;
     }
+    // A frozen target is where this peel stops: the pair it names lives in the
+    // module that wrote it, and only a *value* crosses ([`emit_operand`]).
+    let target = target.dynamic()?;
     // A concrete `[value, type]` pair value → its value slot (element 0).
     // SAFETY: `target` is a live node of `module`.
     if let Some(items) = unsafe { module.array_items(target) } {
@@ -5912,6 +6108,7 @@ where
         && let Some(LowOperator::Index) = AsEnum::<LowOperator>::as_enum(&operation.operator)
             && let Ok((target, index)) = operand_pair(module, operation.operand)
             && usize_value(module, index) == Some(0)
+            && let Some(target) = target.dynamic()
             // SAFETY: `target` is a live node of `module`.
             && let Some(items) = (unsafe { module.array_items(target) })
             && let Ok(first) = dyn_node(items.first()?.node)
@@ -6359,8 +6556,19 @@ where
     <P::Value as From<LowValue>>::from(LowValue::Array(handle))
 }
 
-/// Read a binary op/Index operand array `[a, b]` as two dynamic node ids.
-fn operand_pair<P>(module: &Module<P>, operand: Option<NodeId>) -> Result<(NodeId, NodeId), String>
+/// Read a binary op/`Index` operand array `[a, b]` as two operand nodes.
+///
+/// An operand may be a node of a **frozen** module: an apply of a static
+/// function leaves the callee's unchanged subterms as references into the frozen
+/// module, so a constant the callee's body wrote (`operands[0]`'s `0`) arrives
+/// beside nodes of the caller's own.  Reading an operand is therefore not a
+/// question about *which* module it is in — [`emit_operand`] is where the walk
+/// decides what to do with the answer, and `dyn_node` is where a caller says it
+/// needs a node of its own.
+fn operand_pair<P>(
+    module: &Module<P>,
+    operand: Option<NodeId>,
+) -> Result<(AnyNodeId, AnyNodeId), String>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
@@ -6373,7 +6581,7 @@ where
     if items.len() != 2 {
         return Err("binary/Index operand array must have two elements".into());
     }
-    Ok((dyn_node(items[0].node)?, dyn_node(items[1].node)?))
+    Ok((items[0].node, items[1].node))
 }
 
 fn operand_items<P>(module: &Module<P>, node: NodeId) -> Result<&'static [ArrayItem], String>
@@ -7011,9 +7219,88 @@ where
 }
 
 fn dyn_node(id: AnyNodeId) -> Result<NodeId, String> {
-    match id {
-        AnyNodeId::Dynamic(n) => Ok(n),
-        AnyNodeId::Static(_) => Err("static refs are not kernel-compilable v1".into()),
+    id.dynamic()
+        .ok_or_else(|| "static refs are not kernel-compilable v1".to_string())
+}
+
+/// Whether `node` is (or holds) a **frozen** function value — the callee of a
+/// routed operator's apply.
+fn is_static_function<P>(module: &Module<P>, node: NodeId) -> bool
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    matches!(
+        module
+            .node_value(AnyNodeId::Dynamic(node))
+            .and_then(|value| AsEnum::<LowValue>::as_enum(&value)),
+        Some(LowValue::Function(AnyFunctionId::Static(_)))
+    )
+}
+
+/// Emit one **operand item** of a body node — the walk's entry for everything an
+/// operation's operand array names.
+///
+/// An operand may be a node of a **frozen** module.  An apply of a static
+/// function leaves the callee's unchanged subterms as references into the frozen
+/// module instead of copying them, so a constant inside a routed operator's body
+/// — the `0` and `1` of `operands[0] + operands[1]` — arrives with a node of the
+/// *caller's* own as its consumer.  A static module is fully solved, so such a
+/// node is a **value** and never a computation: it is emitted as the constant it
+/// holds, exactly as a literal of the caller's own is ([`emit_node`] reads a
+/// value before it reads an operation, for the same reason).
+fn emit_operand<P>(
+    module: &Module<P>,
+    params: &[ParamSlot],
+    item: AnyNodeId,
+    depth: usize,
+    body: &mut Vec<KernelInstr>,
+    tally: &mut Positions,
+) -> Result<(), String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let AnyNodeId::Dynamic(node) = item else {
+        return emit_static_operand(module, item, body);
+    };
+    emit_node(module, params, node, depth, body, tally)
+}
+
+/// Emit a **frozen** module's node as the constant it holds — the value half of
+/// [`emit_operand`].
+fn emit_static_operand<P>(
+    module: &Module<P>,
+    item: AnyNodeId,
+    body: &mut Vec<KernelInstr>,
+) -> Result<(), String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let held = module
+        .node_value(item)
+        .and_then(|held| AsEnum::<LowValue>::as_enum(&held));
+    match held {
+        Some(LowValue::USize(value)) => {
+            body.push(KernelInstr::Const(
+                ScalarClass::Int,
+                const_bits(ScalarClass::Int, value as i64),
+            ));
+            Ok(())
+        }
+        Some(LowValue::Float(value)) => {
+            body.push(KernelInstr::Const(ScalarClass::Float, float_bits(value)));
+            Ok(())
+        }
+        other => Err(format!(
+            "a kernel body reached a frozen module's node holding {other:?} where it needs a \
+             value: a static module is the callee of an apply, and the only part of it a kernel \
+             can carry across is a scalar constant"
+        )),
     }
 }
 

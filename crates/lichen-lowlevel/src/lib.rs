@@ -1014,6 +1014,24 @@ pub enum AnyNodeId {
     Dynamic(NodeId),
     Static(StaticNodeId),
 }
+
+impl From<NodeId> for AnyNodeId {
+    fn from(node: NodeId) -> Self {
+        Self::Dynamic(node)
+    }
+}
+
+impl AnyNodeId {
+    /// The node itself, when it is one of the *reading* module's own — `None`
+    /// for a frozen node, whose structure only its own module can walk.
+    pub fn dynamic(self) -> Option<NodeId> {
+        match self {
+            Self::Dynamic(node) => Some(node),
+            Self::Static(_) => None,
+        }
+    }
+}
+
 new_key_type! {pub struct BlockId;}
 new_key_type! {pub struct FunctionId;}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
