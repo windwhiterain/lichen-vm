@@ -97,6 +97,13 @@ macro_rules! for_each_kind_marker {
             /// The kind marker of table type expressions — the shape is
             /// `[key type, value type]`.
             TypeTable { 6, "TypeTable", table_type_marker, table_type_marker_node }
+            /// The kind marker of set type expressions — the shape is the
+            /// **element type alone**: a set has no length, so `set{a}` and
+            /// `set{a, b}` share one type, which is what separates the set kind
+            /// from `array<T, n>`.  This marker took tag `10`; the
+            /// class-domain *value* tag that briefly held it was removed before
+            /// release (the set's value is its members — no tag is needed).
+            TypeSet { 10, "SetType", set_type_marker, set_type_marker_node }
         }
     };
 }

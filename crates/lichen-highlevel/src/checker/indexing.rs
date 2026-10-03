@@ -252,6 +252,47 @@ where
         pair
     }
 
+    /// A set `set{a, b, …}` — every member shares one type, like an array's
+    /// elements, but the instance is typed by the **set kind**
+    /// (`[members, [[element type], [TypeSet, Type]]]`), not by
+    /// `array<T, n>`.
+    ///
+    /// The value *is* the members, so a set needs no value-level tag; what the
+    /// separate kind buys is that a set is not an array — [`Self::check_index`]
+    /// refuses `s[i]` (it pins its container to an array type), and a set can
+    /// never flow into an `array<T, n>` parameter.  See [`crate::set`].
+    ///
+    /// The shape is the element type alone: a set has no length, so `set{a}`
+    /// and `set{a, b}` are one type, which is what separates this kind from
+    /// `array<T, n>`.
+    pub(super) fn check_set_term(&mut self, e: ExprId) -> NodeId {
+        let members = self.range_children(e);
+        let mut vals = Vec::new();
+        let element_ty = self.fresh_cell();
+        for &member in &members {
+            self.check_expr(member);
+            vals.push(self.value_of(member));
+            // Found = this member's type, expected = the shared cell: the
+            // first member binds the cell, a later one that differs conflicts
+            // against it (a set is homogeneous, exactly like an array).
+            self.check_unify(
+                self.state[member].ty.unwrap(),
+                element_ty,
+                self.loc(member, 1),
+                DiagKind::ArrayElement,
+            );
+        }
+        let value = self.array_node(self.current_block, &vals);
+        let shape = self.array_node(self.current_block, &[element_ty]);
+        let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
+        let ty_node = self.array_node(self.current_block, &[shape, kind]);
+        let pair = self.pair_of(value, ty_node);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value);
+        self.state[e].ty = Some(ty_node);
+        pair
+    }
+
     /// A constant table literal `table { k1 ==> v1, k2 ==> v2, … }` — the
     /// entries (interleaved key/value ids in the children arena) are checked
     /// like an array's elements, against a shared key-type cell and a shared

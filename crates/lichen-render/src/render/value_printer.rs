@@ -143,6 +143,9 @@ where
                 self.printer.any_node(shape[0].node),
                 self.printer.any_node(shape[1].node)
             ));
+        } else if marker == P::Value::set_type_marker() && shape.len() == 1 {
+            // A set type value: the shape is the element type alone.
+            return Some(format!("set<{}>", self.printer.any_node(shape[0].node)));
         }
         // A struct type never reaches `compound_type` — its kind is a standard
         // `[marker, K]` pair whose marker is the two-field `TypeStruct`
@@ -191,6 +194,18 @@ where
                 out.push(self.element_any(v.node, shape[0].node));
             }
             return Some(format!("[{}]", out.join(", ")));
+        }
+        if marker == P::Value::set_type_marker() {
+            // The shape is the element type *alone* (a set has no length), so
+            // every member reads against `shape[0]`.
+            if shape.len() != 1 {
+                return None;
+            }
+            let mut out = Vec::with_capacity(values.len());
+            for v in values {
+                out.push(self.element_any(v.node, shape[0].node));
+            }
+            return Some(format!("set{{{}}}", out.join(", ")));
         }
         // A struct marker is the two-field `TypeStruct{id, names}` value, a
         // 2-element array.  No other kind's marker is an array, so an array

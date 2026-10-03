@@ -66,8 +66,9 @@ pub enum DiagKind {
     /// the name table — and so the definition-order reorder — is unavailable
     /// at check time.
     InstantiateNamesNotStatic,
-    /// An array literal's elements must share one type — expected = the
-    /// shared element type, found = this element's type.
+    /// A homogeneous literal's elements must share one type — an array's
+    /// elements or a set's members.  Expected = the shared element type,
+    /// found = this element's type.
     ArrayElement,
     /// A table literal's keys must share one type.
     TableKey,

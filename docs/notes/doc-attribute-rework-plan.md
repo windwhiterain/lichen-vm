@@ -50,7 +50,9 @@ arity-checked by the struct itself.
 ## Open sub-decisions (this span, and how they were resolved)
 
 1. **How the label render gets the type chain.** `AttrExt::render(module, slot)` only receives
-   the *value* node. To render field names from the struct type, the render needs the slot
+   the *value* node (the hook has since gained the composed attribute registry as a third
+   parameter, for a nested pair's name — see [operator-polymorphism](operator-polymorphism.md)
+   §8.1). To render field names from the struct type, the render needs the slot
    value's *type* node.
    - **RESOLVED (option b):** per the user — "attributes should be an array of exprs, so each
      slot should be a `[value, type]` or referencing to it." The runtime *render* slot for a

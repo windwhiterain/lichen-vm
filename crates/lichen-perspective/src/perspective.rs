@@ -262,7 +262,12 @@ where
     /// A leaf perspective spells `# n`; a compound's gcd meet (or an unbound
     /// value) has no single spelling and is not shown.  The slot is a
     /// `[value, type]` term pair, so the lattice value is its element 0.
-    fn render(&self, module: &Module<P>, slot: NodeId) -> Option<String> {
+    fn render(
+        &self,
+        module: &Module<P>,
+        slot: NodeId,
+        _attrs: &dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>,
+    ) -> Option<String> {
         let slot_value = self.slot_value(module, slot)?;
         let n = match slot_value {
             LowValue::USize(n) => n,

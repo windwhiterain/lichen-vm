@@ -12,13 +12,13 @@
 
 pub mod attr;
 pub mod checker;
-pub mod class_set;
 pub mod diagnostic;
 pub mod ir;
 pub mod native;
 pub mod plugin;
 pub mod program;
 pub mod refinement;
+pub mod set;
 pub mod shape;
 
 // The vocabularies are themselves extension points: a downstream composes

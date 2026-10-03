@@ -274,6 +274,13 @@ pub enum Expr {
     /// and deep-content-hashed when the table is built; a key that is not
     /// concrete (it depends on an unbound value) is dropped with an error.
     Table(Vec<(Expr, Expr)>, Span),
+    /// `set{a, b, …}` — a set of ordinary values.  The members are full
+    /// expressions and share one element type (a set is homogeneous, exactly
+    /// like an array literal); the *value* is the members themselves, and what
+    /// makes it a set rather than an array is its **type**
+    /// (`docs/notes/operator-polymorphism.md` §3): a set is not array-indexable
+    /// and is not an `array<T, n>`.
+    Set(Vec<Expr>, Span),
     /// `~n e` — a shallow-marked array position (parsed only inside array
     /// literals).  `n` is the marker depth: `usize::MAX` = the bare `~` (the
     /// whole subtree shallow), `0` = unmarked (a no-op), `n` = the value
@@ -496,6 +503,7 @@ impl Expr {
             Expr::StructInst { span, .. } => *span,
             Expr::Array(_, s) => *s,
             Expr::Table(_, s) => *s,
+            Expr::Set(_, s) => *s,
             Expr::Shallow(_, _, s) => *s,
             Expr::TypeArray { span, .. } => *span,
             Expr::Block { span, .. } => *span,

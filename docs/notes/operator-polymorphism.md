@@ -9,7 +9,8 @@
 > The implementation is an ordinary lichen function that selects a per-class
 > leaf and applies it (§4). The panic arm is dead by construction (§5).
 >
-> **Rejected on the way here: the class-set *type*.** A tenth kind marker whose
+> **Rejected on the way here: the set as a *type*.** A kind marker usable in
+> *type* position, whose
 > members are type values, with a narrowing rule in `unify_inner`, cannot work,
 > and each half of why is measured:
 >
@@ -225,16 +226,27 @@ principle is what keeps them apart:
 
 - The **check** is the refinement: one predicate function in the attribute slot,
   enforced by the inserted assert. This is §3's subject.
-- The **domain** is a *value*: a **class set** — a tagged list of member type
-  values, `[TypeSet, [members]]`. Kept, but demoted out of the type system: the
-  tag is a plain value constant (spelled beside `TypeId`, which is likewise
-  **not** a kind marker), and the encoding is deliberately *not* a kinded type
-  expression `[shape, [marker, K]]`. That is what makes "not a type" a property
-  of the representation rather than a convention: `low_type_of` reads slot 0 as
-  a shape, finds a tag that is no marker, then reads slot 1 as a kind, finds a
-  one-element list where a `[marker, K]` belongs, and answers `Unknown`. It is
-  what a reader that needs the **candidates** consumes — the kernel, which must
-  answer an open domain with a class, and the diagnostics.
+- The **domain** is a *value*: a **set** of type values, `set{Int, Float}`.  A
+  set is the language's own value form, not a type-level or domain-specific
+  construct: its *value* is its members (an ordinary array node, no tag) and its
+  *type* is `set<T>` — a kinded type whose shape is the element type **alone**,
+  so a set has no length and is not an `array<T, n>`.  That is what makes "not a
+  type" a property of the representation rather than a convention, and it is why
+  a class domain needs no encoding of its own: `set{Int, Float}` is a plain
+  binding a library can write, and the domain is simply that value.  It is what
+  a reader that needs the **candidates** consumes — the kernel, which must answer
+  an open domain with a class, and the diagnostics.  A reader that has to commit
+  to one class takes the set's **first member** (`Int` here, the arithmetic
+  operators' historical default); that is a convention of the reading, not a
+  stored element.
+
+  The *set kind* rather than the array kind is load-bearing, and the reason is
+  soundness: a set-typed value can never flow into an `array<T, n>` parameter,
+  so a set can never be indexed as an array inside a callee — where a
+  value-level tag would be invisible and `s[0]` would read the tag.  A set's
+  index read is refused at the *caller*, by the container unify
+  ([`check_index`](../../crates/lichen-highlevel/src/checker/indexing.rs)), which
+  is the same rule that refuses `t{i}` on an array.
 
 The domain is *data*, and the predicate is the *function that consults it*: the
 membership test reads the set. Nothing unifies against either, `+ : ?a -> ?a ->
@@ -242,14 +254,19 @@ membership test reads the set. Nothing unifies against either, `+ : ?a -> ?a ->
 
 ```lichen
 -- lichen-std, end state
-Num  = {Int, Float}                     -- the domain VALUE (a class set)
-in_num = v => type_of v ∈ Num           -- one predicate, consulting the domain
+Num  = set{Int, Float}                  -- the domain VALUE: a set of type values
+in_num = v => type_of v @in Num           -- one predicate, consulting the domain
 is_int = v => type_of v == Int
 iadd = …                                -- the machine leaves, today's TypeOperator
 fadd = …                                --   split per class (see §6)
 add  = x => y => { x : ?a{in_num}; y : ?a{in_num}      -- the contract
                    (fadd, iadd)(is_int (type_of x)) x y }
 ```
+
+`Num` is writable today (`set{Int, Float}` is an ordinary binding); what the
+snippet still needs is the *membership* spelling — the `@`-keyword **`@in`**,
+joining `@loop` and `@assert` (its arity and level are settled with the
+implementation) — and the leaf selection, both of which are Phase 3's (§8.7, §9).
 
 `x : ?a{in_num}` puts the predicate in the parameter's attribute slot and leaves
 its *type* cell open — that is the polymorphism. `add`'s printed type is
@@ -471,33 +488,49 @@ answered.
 
 ## 8. Open questions
 
-1. **The printer's spelling** of a refined cell.  The surface sigil is `!`
-   (§3), so the readable form is `x : Int ! in_num` and the contract's is
-   `?a ! in_num -> ?a`.  There is deliberately **no rule special to the
-   refinement** here: the slot holds a *function value*, which is not printable
-   on its own (the graph keeps a lambda as an opaque function, and a binding's
-   name is resolved away), so the refinement is spelled through the general
-   answer to "how is a value printed" — an attribute **naming** the value.
+1. *(Closed — **landed**.)* **The printer's spelling** of a refined cell.  The
+   surface sigil is `!` (§3), so the readable form is `x : Int ! in_num`.  There
+   is deliberately **no rule special to the refinement** here: the slot holds a
+   *function value*, which is not printable on its own (the graph keeps a lambda
+   as an opaque function, and a binding's name is resolved away), so the
+   refinement is spelled through the general answer to "how is a value printed" —
+   an attribute **naming** the value.
 
-   *Landed:* that general mechanism.  [`AttrExt::label`](../../crates/lichen-highlevel/src/attr.rs)
-   (default `None`) is "the name this attribute gives the value it attaches to";
-   `Doc` implements it for a **string** doc, so `f = (x => x) ? "fibo"; f` prints
-   `?fibo: ?a -> ?a` — the value replaced by its label, the type unchanged.  A
-   *struct* doc still describes through `render`, and the shared reader is
-   `render::value_label` (schema tail + pair, exactly like `render_attributes`),
-   which is what a future spelling of the refinement must go through too.
+   Two general pieces, both landed:
 
-   *Remaining, and the obstacle is a signature:* spelling the refinement as
-   `! <the predicate's name>` means reading the **doc slot of the predicate's own
-   pair** — the slot this attribute holds *is* that pair — and locating a slot
-   needs that pair's **schema tail**, which [`AttrExt::render`](../../crates/lichen-highlevel/src/attr.rs)
-   does not carry: it receives a module and one slot node, and a pair's arity is
-   in the graph while *which* attributes its tail lists is not (a one-entry tail
-   is `[Doc]` or `[Perspective]` and both are three elements long).  The lead is
-   that the tail *is* known where the slot is built — `Checker::check_ann`
-   compiles the predicate expression and has its schema — so either the render
-   hook gains the slot's tail, or the annotation records the predicate's name
-   beside the slot.  Neither is a big change; neither is this phase's.
+   - [`AttrExt::label`](../../crates/lichen-highlevel/src/attr.rs) (default
+     `None`) is "the **name** this attribute gives the value it attaches to", and
+     `Doc` implements it for a **string** doc.  The name is bare; a labelled value
+     *reads* as `?name` (the doc sigil), which is `render::value_label`'s
+     spelling — so `f = (x => x) ? "fibo"; f` still prints `?fibo: ?a -> ?a`.  A
+     *struct* doc describes instead, through `render`.
+   - The obstacle to using that name *inside* an attribute's slot was the hook's
+     **own signature**, and the fix is one parameter:
+     `AttrExt::render(module, slot, attrs)` now receives the composed extension
+     registry.  [`attr::pair_label`](../../crates/lichen-highlevel/src/attr.rs)
+     is the shared reader: a pair's **arity** is in the graph but *which*
+     attribute each of its tail slots belongs to is not (a one-entry tail is
+     `[Doc]` or `[Perspective]`, and both are three elements long), so it asks
+     **every** attribute of the composed set whether it names that slot, in
+     canonical order, first answer wins — the same rule `render_attributes` uses,
+     and sound because an attribute answers only about content it recognises as
+     its own.
+
+   `Refinement::render` is then three lines: `! ` plus the predicate's name.
+   Measured — `in_num = (v => v > 0) ? "in_num"; 5 : Int ! in_num` prints
+   `5 ! in_num: Int`; an unnamed predicate prints nothing (honest: a function
+   value has no source form, and a made-up one could not be spelled back); a
+   refinement on a *function* value prints `Function ! always: ?a -> ?a`.
+
+   **What this does *not* reach, and why.**  The contract's `?a ! in_num -> ?a` is
+   a *type* string, and a refinement is not in the type: it is the attribute of the
+   *parameter expression* inside the lambda, so `f = x : _ ! in_num => x` prints
+   `Int -> Int` with no refinement.  Showing it there needs the *lambda's* own
+   rendering (its parameter's attribute is reachable in the template, not in the
+   function type), which is a separate piece of work and no part of Phase 3.  The
+   refinement **is** shown beside the type wherever the annotated *value* is what
+   is printed, which is the operator's own end state (`add`'s body is refined, its
+   *signature* is `?a -> ?a`).
 2. **`Num`'s home**: std binding (the `type_of` precedent) vs keyword.
 3. **The panic arm's spelling**: the recorded-refusal channel needs a
    value-level form a library function can write; today only builtins record.
@@ -540,31 +573,37 @@ answered.
    the operator's end state (`x : ?a ! in_num`) plus a perspective on one
    parameter would.  Generalising the slot to a per-marker set is the fix, and it
    is not this phase's.
-7. **A class domain has no surface form — Phase 3's prerequisite.**  `Num` in
-   §3's end state is a *value* a library writes, and today nothing in the
-   language can spell one: `class_set::build` is called from exactly one place
-   (`check_binop`, the checker) and `TypeValue::TypeSet` has no syntax, so
-   `lichen-std` cannot write `Num = {Int, Float}` and the contract cannot move
-   out of Rust.  The options, in the language's own terms:
+7. *(Closed — **landed**.)* **A class domain's surface form.**  `Num` in §3's end
+   state is a *value* a library writes, and the language now spells one:
+   **`set{a, b, …}`** — a set of ordinary values, led by a word exactly like
+   `table{…}`, because angle brackets are the spelling of an expression in *type*
+   position and a set is not one.  `Num = set{Int, Float}` is a plain binding, so
+   the contract can leave Rust (Phase 3, §9).
 
-   - **A keyword-led form, `domain<Int, Float>`** — the idiom the language
-     already uses wherever a delimiter would be ambiguous (`array<T, n>`,
-     `struct<…>`, `table{…}` are all keyword-led for exactly that reason).
-     Pros: no new punctuation, reads as what it is, and `Num = domain<Int,
-     Float>` is a plain binding.  Cons: the encoding's **default** element needs
-     a story — either the surface form names it (`domain<Int, Float>` whose
-     default is the *first* member, a documented convention) or it grows a
-     slot for it, and the default is load-bearing (§8.4: it is what types the
-     specialize pass's placeholder and what the kernel picks).
-   - **A native operator, `$domain(Int, Float)`** — no new syntax at all, and
-     the `$name(args)` mechanism exists (`compute.lichen` is an embedded
-     source).  Cons: `$` is the *plugin-private* sigil — "a normal file never
-     lexes it as a valid call" — so this works only for a source the host
-     embeds, not for a std a *user* could write, which is the opposite of what
-     Phase 3 is for.
-   - **Reusing `{…}`** — refuted already: a glued `{` is a table lookup, and
-     making it a domain in type position would be the mode-dependence §2.1 of
-     the language spec exists to avoid.
+   The three options that were weighed, and why this one:
+
+   - `domain<Int, Float>` — the first recommendation.  Rejected on the operator's
+     own words: `<>` is the type-position spelling, and a set is a *value*.  It
+     also had no answer for the encoding's `default` element.
+   - `$domain(Int, Float)` — no new syntax, but `$` is the *plugin-private* sigil
+     ("a normal file never lexes it as a valid call"), so it works only for a
+     source the host embeds — the opposite of a std a *user* could write.
+   - Reusing `{…}` — a bare glued `{` is a table lookup.  A *keyword-led*
+     `set{…}` has no such ambiguity (`table{…}` is the precedent).
+
+   Two consequences of "a set is a value", both landed:
+
+   - **No tag, and a set is not an array.**  The set's *value* is its members and
+     its *type* is `set<T>` (shape = the element type alone).  The separate kind
+     is a soundness requirement, not a preference: with an array type, a set
+     reaching an `array<T, n>` parameter and indexed inside the callee would read
+     the members as an array — and a value-level tag could not be guarded there.
+     `set{}`'s index read is refused by the ordinary container unify.
+   - **The `default` element is gone.**  It was never read (`default_class` had no
+     caller), and a general set has no privileged member.  A reader that must
+     commit to a class takes the set's **first member** — which for
+     `set{Int, Float}` is `Int`, the operators' historical default, visible in the
+     source.
 8. **The kernel boundary is not this feature's to fix — it is a recorded
    dependency.**  Making `+` polymorphic leaves a kernel body's class open, and
    a kernel lowered from a *template* has no class to compile: two targets go red
@@ -596,21 +635,22 @@ than budgeting for it.)
 
 ## 9. Phases
 
-- **Phase 0 — the mechanism. Landed.** The class domain as a *value*
-  (`[TypeSet, [members], default]`, tag beside `TypeId`, three elements so no
-  silhouette reads it as a type), `TypeOperator::InDomain` as the structural
-  membership test (`==` cannot do it: `value_eq` compares array *handles*, so a
-  class node out of another module would compare unequal), and the condition
-  registered by `check_binop` through `register_assert`.  Measured: no existing
-  test regressed, and `add "a" "b"` went from *accepted* to refused.
+- **Phase 0 — the mechanism. Landed.** The class domain as a *value* — a set of
+  type values, whose *value* is its members and whose *type* is `set<T>`
+  (`crates/lichen-highlevel/src/set.rs`) — `TypeOperator::InDomain` as the
+  structural membership test (`==` cannot do it: `value_eq` compares array
+  *handles*, so a class node out of another module would compare unequal), and the
+  condition registered by `check_binop` through `register_assert`.  Measured: no
+  existing test regressed, and `add "a" "b"` went from *accepted* to refused.
+  The domain's surface form (`set{Int, Float}`) landed in Phase 1.
 - **Phase 1 — the contract on the builtin operators.** The operand tie, the
-  domain condition, the refinement attribute, `!` on a parameter, the static
-  class-naming fix, and the diagnostic flavour are landed.  What remains is the
-  printer's spelling (§8.1, which waits on the doc-overrides-a-value's-print
-  mechanism) and the `Num`/std migration.  The kernel boundary (§8.4) is **not**
-  in this phase: it is the specialize-before-JIT pass's, and the domain landed
-  here is that pass's input.  *The builtin operators are the user-visible
-  feature.*
+  domain condition, the refinement attribute, `!` on a parameter, the set value
+  and its type, the static class-naming fix, and the diagnostic flavour are
+  landed.  What remains is the printer's spelling (§8.1, which waits on the
+  doc-overrides-a-value's-print mechanism) and the `Num`/std migration.  The
+  kernel boundary (§8.4) is **not** in this phase: it is the
+  specialize-before-JIT pass's, and the domain landed here is that pass's input.
+  *The builtin operators are the user-visible feature.*
 - **Phase 2 — the dependent read. Measured and *rejected as a desugar*.**  `if`
   keeps desugaring to `[e, t][c]`, because the branch unification it performs is
   what the type system depends on: with a dynamic condition the dependent form's
@@ -621,4 +661,6 @@ than budgeting for it.)
   renders `"ten": string`.
 - **Phase 3 — the implementation moves to std.** The leaf-selection dispatch, the
   split leaves, `Num` and the operator bindings in `lichen-std`; routing R3 →
-  R2/R1.
+  R2/R1.  `Num = set{Int, Float}` is writable now; what Phase 3 still needs is the
+  *membership* spelling for the predicate — the keyword **`@in`**, decided, with
+  its arity and level to settle at the implementation.

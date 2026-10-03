@@ -158,7 +158,8 @@ pub(crate) fn shift_expr(
         }
         Expr::Tuple(elements, span)
         | Expr::TypeTuple(elements, span)
-        | Expr::Array(elements, span) => {
+        | Expr::Array(elements, span)
+        | Expr::Set(elements, span) => {
             shift(span, old_starts, new_starts, delta);
             for element in elements {
                 shift_expr(element, old_starts, new_starts, delta);

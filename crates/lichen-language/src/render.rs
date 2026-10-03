@@ -139,6 +139,37 @@ fn render_with_line_starts<P: lichen_lowlevel::Program>(
     out
 }
 
+/// A **class domain** — a set's *value*, its member type values — spelled
+/// `{Int, Float}`.
+///
+/// The domain is read as the member list it is ([`lichen_highlevel::set`]): a
+/// set's value carries no tag, and the *node* alone cannot say whether it is a
+/// domain or some array of type values, so the caller that holds it as a domain
+/// (the refinement's own registration) is the one that spells it.  A node that
+/// is not a member list falls back to the type printer, which is what the
+/// message read before the set existed.
+fn class_domain<P>(printer: &mut TypePrinter<'_, P>, domain: NodeId) -> String
+where
+    P: HighProgram,
+    P::Value: ValueType,
+{
+    let members = lichen_highlevel::set::members(
+        printer.module(),
+        lichen_lowlevel::AnyNodeId::Dynamic(domain),
+    );
+    match members {
+        Some(members) => format!(
+            "{{{}}}",
+            members
+                .into_iter()
+                .map(|member| printer.any_node(member))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        None => printer.node(domain),
+    }
+}
+
 /// Render a whole diagnostic list back to back, exactly as the CLI prints
 /// them: one caret block per diagnostic, no separator.
 pub fn render_all<P: lichen_lowlevel::Program>(source: &str, diags: &[Diag<P>]) -> String {
@@ -305,9 +336,9 @@ where
             // A *refinement* the contract declared: the value is outside the set
             // of classes the contract admits, and naming that set is what a
             // reader needs (`docs/notes/operator-polymorphism.md` §8.5).  The
-            // domain is a class-set value, so the type printer spells it
-            // `{Int, Float}`.
-            Some(domain) => format!("does not satisfy {}", printer.node(domain)),
+            // domain is a set's value, so it is spelled member by member
+            // (`{Int, Float}`) by [`class_domain`].
+            Some(domain) => format!("does not satisfy {}", class_domain(printer, domain)),
             // An explicit `@assert e`: the condition's own failed value, rendered
             // generically through the structural `LowValue` view.
             None => {

@@ -159,6 +159,8 @@ where
             Some("TypeArray".to_string())
         } else if value == &P::Value::type_struct_marker() {
             Some("TypeStruct".to_string())
+        } else if value == &P::Value::set_type_marker() {
+            Some("SetType".to_string())
         } else if let Some(n) = value.type_id() {
             Some(format!("TypeId({n})"))
         } else if let Some(render_ext) = self.render_ext {
@@ -169,15 +171,6 @@ where
     }
 
     fn elements(&mut self, node: NodeId, elements: &[ArrayItem]) -> String {
-        // A **class domain** value `[TypeSet, [members], default]` — a set of
-        // scalar classes a contract admits, rendered as `{Int, Float}`.  It is
-        // checked before the type-expression branches because it is not a type:
-        // its three elements match none of their shapes, and this is the one
-        // place a reader would otherwise see `raw[…]`.
-        if lichen_highlevel::class_set::is_domain(self.module, AnyNodeId::Dynamic(node)) {
-            let members = self.fields_any(elements[1].node);
-            return format!("{{{}}}", members.join(", "));
-        }
         // A bare struct kind `[TypeStruct{id, names}, K]` (a struct type
         // pair's type slot): render its tag `TypeStruct`.  Detected before the
         // `[head, K]` atomic branch, since its marker is a 2-element array
@@ -256,6 +249,20 @@ where
                             self.any_node(s[0].node),
                             self.any_node(s[1].node)
                         );
+                    }
+                }
+                Some(m) if m == P::Value::set_type_marker() => {
+                    // shape = the element type alone — render `set<T>`.  A set
+                    // has no length, which is exactly what separates it from
+                    // `array<T, n>`.
+                    if let Some(shape) = self.module.node_value(elements[0].node)
+                        && let Some(LowValue::Array(shape)) = shape.as_enum()
+                        // SAFETY: `shape` is the payload of a value read from
+                        // the live node `elements[0]`.
+                        && let s = unsafe { shape.items() }
+                        && s.len() == 1
+                    {
+                        return format!("set<{}>", self.any_node(s[0].node));
                     }
                 }
                 _ => {}

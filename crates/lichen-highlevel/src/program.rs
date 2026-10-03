@@ -428,16 +428,6 @@ macro_rules! define_type_value {
             /// different ids don't (nominal identity), and an id never unifies
             /// with the structural markers above.
             TypeId(usize),
-            /// The tag of a **class domain** value — a set of scalar classes a
-            /// contract admits, `[TypeSet, [members], default]`.
-            ///
-            /// Deliberately **not** a kind marker, for the same reason
-            /// [`TypeValue::TypeId`] is not: a domain is a *value*, not a type.
-            /// A kind marker would put it in type position, where unification
-            /// would have to decide what it means; a domain is read by whoever
-            /// needs the candidates and is otherwise inert
-            /// (`docs/notes/operator-polymorphism.md` §3).
-            TypeSet,
         }
     };
 }
@@ -724,11 +714,6 @@ macro_rules! define_type_value_codec {
                         w.u8(8);
                         w.u64(n as u64);
                     }
-                    // The class-domain tag.  Tag `10` is the next free one after
-                    // the registry's `9`, which `TypeFloat` holds — the registry
-                    // deliberately does not number by list position, so a marker
-                    // added to it later must not claim this.
-                    TypeValue::TypeSet => w.u8(10),
                 }
                 Ok(())
             }
@@ -743,7 +728,6 @@ macro_rules! define_type_value_codec {
                 Ok(match r.u8()? {
                     $($tag => TypeValue::$variant,)*
                     8 => TypeValue::TypeId(r.u64()? as usize),
-                    10 => TypeValue::TypeSet,
                     tag => return Err(format!("unknown type-value tag {tag}")),
                 })
             }
@@ -1098,12 +1082,13 @@ where
                     // side, which is what keeps a refinement on an open parameter
                     // *pending* until an application supplies the class.
                     TypeOperator::InDomain => {
-                        // Operand 1 is the domain, operand 0 the class being
-                        // tested; the decode is structural, so a class node out of
-                        // another module matches by its shape rather than by its
+                        // Operand 1 is the domain — a set's *value*, its
+                        // members — operand 0 the class being tested; the
+                        // decode is structural, so a class node out of another
+                        // module matches by its shape rather than by its
                         // allocation.
                         let member =
-                            crate::class_set::contains(module, operands[1].node, operands[0].node);
+                            crate::set::contains(module, operands[1].node, operands[0].node);
                         P::Value::from(LowValue::USize(member as usize))
                     }
                 }

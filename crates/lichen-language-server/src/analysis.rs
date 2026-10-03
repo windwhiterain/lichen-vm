@@ -1374,6 +1374,7 @@ fn classify_token_kind(
         }
         TokenKind::KwStruct
         | TokenKind::KwTable
+        | TokenKind::KwSet
         | TokenKind::KwArray
         | TokenKind::KwLet
         | TokenKind::KwIf
@@ -1582,7 +1583,10 @@ impl<'a> NameClass<'a> {
                 self.expr(parameter);
                 self.expr(r#return);
             }
-            Expr::Tuple(elems, _) | Expr::TypeTuple(elems, _) | Expr::Array(elems, _) => {
+            Expr::Tuple(elems, _)
+            | Expr::TypeTuple(elems, _)
+            | Expr::Array(elems, _)
+            | Expr::Set(elems, _) => {
                 for el in elems {
                     self.expr(el);
                 }
@@ -1832,7 +1836,10 @@ impl Walk {
                 self.expr(parameter);
                 self.expr(r#return);
             }
-            Expr::Tuple(elems, _) | Expr::TypeTuple(elems, _) | Expr::Array(elems, _) => {
+            Expr::Tuple(elems, _)
+            | Expr::TypeTuple(elems, _)
+            | Expr::Array(elems, _)
+            | Expr::Set(elems, _) => {
                 for el in elems {
                     self.expr(el);
                 }
@@ -2134,7 +2141,10 @@ impl<'a> ScopeCapture<'a> {
                 self.expr(parameter);
                 self.expr(r#return);
             }
-            Expr::Tuple(elems, _) | Expr::TypeTuple(elems, _) | Expr::Array(elems, _) => {
+            Expr::Tuple(elems, _)
+            | Expr::TypeTuple(elems, _)
+            | Expr::Array(elems, _)
+            | Expr::Set(elems, _) => {
                 for el in elems {
                     self.expr(el);
                 }

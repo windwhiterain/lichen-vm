@@ -1149,6 +1149,7 @@ where
             ExprKind::Tuple(range)
             | ExprKind::TypeTuple(range)
             | ExprKind::Array(range)
+            | ExprKind::Set(range)
             | ExprKind::ShallowArray { range, .. }
             | ExprKind::Table(range) => range,
             ExprKind::TypeStruct { fields, .. } => fields,
@@ -1375,6 +1376,7 @@ where
             ExprKind::TypeTuple(_) => self.check_tuple_type(e),
             ExprKind::TypeStruct { .. } => self.check_type_struct(e),
             ExprKind::Array(_) => self.check_array_term(e),
+            ExprKind::Set(_) => self.check_set_term(e),
             ExprKind::Table(_) => self.check_table_term(e),
             ExprKind::ShallowArray { .. } => self.check_shallow_array_term(e),
             ExprKind::ErrorBlock => {

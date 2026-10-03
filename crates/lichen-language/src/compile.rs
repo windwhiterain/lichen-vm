@@ -962,6 +962,7 @@ impl Compiler {
                         | Expr::StructInst { .. }
                         | Expr::Array(..)
                         | Expr::Table(..)
+                        | Expr::Set(..)
                         | Expr::TypeArray { .. }
                         | Expr::Block { .. }
                         | Expr::RecordBlock { .. }
@@ -987,6 +988,13 @@ impl Compiler {
                     pairs.push((self.compile_expr(key), self.compile_expr(value)));
                 }
                 self.alloc_table(&pairs, span)
+            }
+            Expr::Set(members, span) => {
+                // The members compile like an array's elements; the kind is
+                // what makes the checker type the instance as a set rather
+                // than as an `array<T, n>`.
+                let ids = self.compile_all(members);
+                self.alloc_set(&ids, span)
             }
             Expr::Shallow(inner, _, _) => {
                 // Unreachable through the parser (`~` is accepted only as an

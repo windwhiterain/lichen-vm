@@ -239,7 +239,10 @@ fn walk(expr: &Expr, deps: &mut Deps) {
             walk(parameter, deps);
             walk(r#return, deps);
         }
-        Expr::Tuple(elements, _) | Expr::TypeTuple(elements, _) | Expr::Array(elements, _) => {
+        Expr::Tuple(elements, _)
+        | Expr::TypeTuple(elements, _)
+        | Expr::Array(elements, _)
+        | Expr::Set(elements, _) => {
             for element in elements {
                 walk(element, deps);
             }

@@ -94,6 +94,7 @@ where
             ExprKind::Tuple(_)
             | ExprKind::TypeTuple(_)
             | ExprKind::Array(_)
+            | ExprKind::Set(_)
             | ExprKind::Table(_)
             | ExprKind::ShallowArray { .. } => self.range_children(e),
             ExprKind::TypeStruct { fields, .. } => {

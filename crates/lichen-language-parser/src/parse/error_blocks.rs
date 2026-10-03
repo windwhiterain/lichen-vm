@@ -119,7 +119,10 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 walk_expr(parameter, out);
                 walk_expr(r#return, out);
             }
-            Expr::Tuple(elems, _) | Expr::TypeTuple(elems, _) | Expr::Array(elems, _) => {
+            Expr::Tuple(elems, _)
+            | Expr::TypeTuple(elems, _)
+            | Expr::Array(elems, _)
+            | Expr::Set(elems, _) => {
                 for el in elems {
                     walk_expr(el, out);
                 }

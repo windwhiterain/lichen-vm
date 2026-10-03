@@ -99,7 +99,9 @@ where
         if let Some(slot) = slot
             && let Some(label) = attr_ext(marker).label(module, slot)
         {
-            return Some(label);
+            // A labelled value *reads* as `?name`: the name is the attribute's
+            // ([`AttrExt::label`]), the doc sigil is this reading's.
+            return Some(format!("?{label}"));
         }
     }
     None
@@ -143,7 +145,7 @@ where
                 AnyNodeId::Static(_) => None,
             });
         if let Some(slot) = slot
-            && let Some(spelling) = attr_ext(marker).render(module, slot)
+            && let Some(spelling) = attr_ext(marker).render(module, slot, attr_ext)
         {
             parts.push(spelling);
         }

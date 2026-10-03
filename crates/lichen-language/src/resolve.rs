@@ -342,7 +342,10 @@ impl Resolver {
                 self.resolve_expr(parameter);
                 self.resolve_expr(r#return);
             }
-            Expr::Tuple(elems, _) | Expr::TypeTuple(elems, _) | Expr::Array(elems, _) => {
+            Expr::Tuple(elems, _)
+            | Expr::TypeTuple(elems, _)
+            | Expr::Array(elems, _)
+            | Expr::Set(elems, _) => {
                 for el in elems {
                     self.resolve_expr(el);
                 }
