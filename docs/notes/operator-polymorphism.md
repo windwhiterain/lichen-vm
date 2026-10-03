@@ -185,6 +185,17 @@ between predicates (`fact ⊨ requirement`), which is the subtyping this languag
 does not have.  A unify never wrongly *accepts*, so the strictness costs
 expressiveness and buys soundness.
 
+**The surface spelling is `!`** — the annotation chain's fourth piece, beside
+`# p` and `? d`: `x : Int ! p`.  `!` was the prefix assert, and the assert moved
+to the keyword `@assert` (`@` being the language's keyword sigil, as in `@loop`)
+in the same change, so the two are never confusable: one is a word at the `@`
+sigil, the other marks an annotation's attribute.  `!` was chosen over the only
+other free symbols (`'`, `` ` ``, `\`) and over a keyword because it is the
+language's own "this must evaluate to `1`" mark — the refinement *is* an assert
+about the value — and because it needs no new lexer token.  The right side is one
+operand at the `->` level, like `#`/`?`, so the predicate is written explicitly:
+`e : T ! (x => x > 3)`.
+
 **Nothing unifies against a refinement.**  It is not in a type slot, no rule is
 added to `unify_inner`, and the type cell stays open — that is the polymorphism.
 The lowlevel apply does unify the parameter pair positionally, so the
@@ -415,10 +426,15 @@ answered.
 
 ## 8. Open questions
 
-1. **The printer's spelling** of a refined cell. The raw form is
-   `[Int, Type, x => x > 3]`, so `Int{x > 3}` is the literal reading, and
-   `AttrExt::render` is where it lands. For a *contract* the readable spelling is
-   the named predicate, not the lambda's text.
+1. **The printer's spelling** of a refined cell.  The surface sigil is `!`
+   (§3), so the readable form is `x : Int ! in_num` and the contract's is
+   `?a ! in_num -> ?a`.  One obstacle is structural: the slot holds a
+   **function value**, and a function is not printable — the graph keeps a
+   lambda as an opaque function, not as its source text, and the binding's name
+   is resolved away.  So `AttrExt::render` can spell a refinement only if the
+   slot (or a sibling slot) also carries the predicate's **name**; the `Doc`
+   attribute's named payload is the precedent.  Until that is decided the
+   printer should say nothing rather than print a raw handle.
 2. **`Num`'s home**: std binding (the `type_of` precedent) vs keyword.
 3. **The panic arm's spelling**: the recorded-refusal channel needs a
    value-level form a library function can write; today only builtins record.

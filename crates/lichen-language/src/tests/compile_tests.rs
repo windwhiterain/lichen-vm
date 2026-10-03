@@ -148,9 +148,9 @@ fn a_type_position_underscore_compiles_to_a_placeholder() {
 }
 
 #[test]
-fn a_bang_prefix_compiles_to_an_assert() {
-    // !(1 == 1) — the highlevel Assert form, whose condition is the operand.
-    let tokens = lex("!(1 == 1)").tokens;
+fn an_at_assert_prefix_compiles_to_an_assert() {
+    // @assert (1 == 1) — the highlevel Assert form, whose condition is the operand.
+    let tokens = lex("@assert (1 == 1)").tokens;
     let mut ast = parse(&tokens).program;
     let (ir, spans, _) = compile(&mut ast);
     let ExprKind::Assert { condition } = kind(&ir, ir.root) else {

@@ -359,7 +359,7 @@ n = 5 : std.type_of (1)
   output = "(1, 5): <Int, Int>"
 ---
 n = 5
-(! (n <= 5), n)
+(@assert (n <= 5), n)
 ```
 
 ### `assert_in_function.lichen`
@@ -369,7 +369,7 @@ n = 5
   order = "8"
   output = "1: Int"
 ---
-f = x => ! (x <= 10)
+f = x => @assert (x <= 10)
 f 5
 ```
 

@@ -1383,10 +1383,12 @@ fn classify_token_kind(
         | TokenKind::KwPub
         | TokenKind::KwCache
         | TokenKind::KwLoop
-        // The class conversions are prefix operators the lexer reserves words for,
-        // so they read as keywords rather than as the symbol operators below.
+        // The class conversions and the assert are prefix operators the lexer
+        // reserves words for, so they read as keywords rather than as the symbol
+        // operators below.
         | TokenKind::KwInt2Float
         | TokenKind::KwFloat2Int
+        | TokenKind::KwAssert
         // `_` — a placeholder is a reserved inference form, never a name.
         | TokenKind::Placeholder => Some((SemanticTokenType::KEYWORD, Vec::new())),
         // A `Name` is resolved by `classify_names` (or the `.` heuristic).

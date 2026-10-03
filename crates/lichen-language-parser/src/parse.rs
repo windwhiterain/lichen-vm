@@ -597,11 +597,12 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
             })
             .boxed();
 
-        // `! e` — a prefix assert.  It binds tighter than every binary
-        // operator but looser than application: `! f x` asserts `f x`,
-        // `! (x <= 3)` the comparison.  Asserting a comparison under the
-        // binary operators requires parens — `! x <= 3` is `(!x) <= 3`.
-        let unary = token(TokenKind::Bang)
+        // `@assert e` — a prefix assert.  It binds tighter than every binary
+        // operator but looser than application: `@assert f x` asserts `f x`,
+        // `@assert (x <= 3)` the comparison.  Asserting a comparison under the
+        // binary operators requires parens — `@assert x <= 3` is
+        // `(@assert x) <= 3`.
+        let unary = token(TokenKind::KwAssert)
             .ignore_then(application.clone())
             .map_with(|e, me| Expr::Assert {
                 value: Box::new(e),
@@ -945,7 +946,7 @@ fn starts_an_expression(kind: &TokenKind) -> bool {
             | TokenKind::KwTable
             | TokenKind::KwIf
             | TokenKind::KwArray
-            | TokenKind::Bang
+            | TokenKind::KwAssert
             // The prefix operators of the `unary` level, listed here beside the
             // assert for the same reason: they begin an expression without being
             // atoms, and `a > int2float b` must read its `>` as a comparison.

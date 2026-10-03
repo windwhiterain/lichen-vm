@@ -133,8 +133,8 @@ pub enum Expr {
     /// constraint, not a unify — the checker force-evaluates the condition
     /// and requires `USize(1)`, while the expression's own value stays the
     /// condition's (an assert checks its subject, it does not replace it).
-    /// `! 1 == 1` parses as `(!1) == 1`; assert a comparison by parenthesizing
-    /// it: `!(1 == 1)`.
+    /// `@assert 1 == 1` parses as `(@assert 1) == 1`; assert a comparison by parenthesizing
+    /// it: `@assert (1 == 1)`.
     Assert { value: Box<Expr>, span: Span },
     /// `int2float e` / `float2int e` — a prefix class conversion.  The only
     /// place the language's two scalar classes meet: `Int` and `Float` do not

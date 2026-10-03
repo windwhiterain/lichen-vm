@@ -3,4 +3,4 @@
   output = "(1, 5): <Int, Int>"
 ---
 n = 5
-(! (n <= 5), n)
+(@assert (n <= 5), n)

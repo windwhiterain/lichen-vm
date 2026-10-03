@@ -192,7 +192,7 @@ fn a_failed_assert_in_an_imported_package_still_reports_a_diagnostic() {
     // invariant — a failed build always carries a diagnostic — is what keeps
     // that from surfacing as an error with an empty diagnostic list.
     let dir = temp_dir("imported-assert");
-    write(&dir, "pkg.lichen", "x => ! (x == 1)\n");
+    write(&dir, "pkg.lichen", "x => @assert (x == 1)\n");
     let main = "---f = import \"pkg.lichen\"---f 2\n";
     let mut store = PackageStore::<LangProgram>::new();
     let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
@@ -209,7 +209,7 @@ fn an_unattributable_failure_in_a_dependency_names_the_package() {
     // importer's own build.  That seam takes the load's first diagnostic, which
     // the report invariant guarantees exists.
     let dir = temp_dir("dependency-unattributed");
-    write(&dir, "c.lichen", "x => ! (x == 1)\n");
+    write(&dir, "c.lichen", "x => @assert (x == 1)\n");
     write(&dir, "b.lichen", "---f = import \"c.lichen\"---f 2\n");
     let main = "---x = import \"b.lichen\"---x\n";
     let mut store = PackageStore::<LangProgram>::new();
