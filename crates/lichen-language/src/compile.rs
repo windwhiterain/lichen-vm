@@ -728,8 +728,19 @@ impl Compiler {
                 // `if c then t else e` ≡ `[e, t][c]` — the condition (0/1)
                 // selects the branch through the existing lazy `Index`, so
                 // the untaken branch is never evaluated.  The branch array
-                // is homogeneous (both branches share one type, like any
-                // conditional).
+                // is **homogeneous, and deliberately so**: the element cell is
+                // the two branches' unified type, which is what the type system
+                // depends on — a class question asked of the conditional reads
+                // that cell, and a kernel lowers it.
+                //
+                // The *dependent* reading is available to whoever writes it:
+                // `(e, t)(c)` — a positional slot read over a tuple — types as
+                // `Index(Index(type_of branches, 0), c)`, the taken branch's own
+                // type.  It is not what `if` desugars to, and the reason is
+                // measured: with a *dynamic* condition the dependent type is
+                // never decided, so `x => if x <= 3 then 10 else 20` inside a
+                // kernel rendered `10: ?a` instead of `10: Int`
+                // (`docs/notes/operator-polymorphism.md` §4).
                 let condition = self.compile_expr(condition);
                 let then_branch = self.compile_expr(then_branch);
                 let else_branch = self.compile_expr(else_branch);

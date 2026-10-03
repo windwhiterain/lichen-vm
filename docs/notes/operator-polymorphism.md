@@ -255,10 +255,10 @@ add  = x => y => { x : ?a{in_num}; y : ?a{in_num}      -- the contract
 its *type* cell open — that is the polymorphism. `add`'s printed type is
 `?a -> ?a -> ?a` with the refinement shown beside it (spelling in §8.1).
 
-## 4. The implementation: a dependent if that already exists
+## 4. The dispatch: a hand-written dependent read
 
-**Measured, not proposed: the dependent if needs no new checking rule.**  The
-positional slot read `a(k)` already types as
+**Measured: the dependent read needs no new checking rule**, and **`if` must not
+become it.**  The positional slot read `a(k)` already types as
 
 ```text
 ty = Index(Index(type_of a, 0), k)          -- `slot_read`, checker/structs.rs
@@ -268,48 +268,67 @@ so indexing a **tuple** with a dynamic key *is* `if c then type_of b else
 type_of a`:
 
 ```lichen
-(1, "1")(x)      -- Index([Int, string], x)
+(10, "ten")(1 == 1)      -- measured: `"ten": string` — the taken branch's type
 ```
 
 The first draft of this section proposed a rule for the same type slot while
-`if` kept desugaring to an array.  The rule is unnecessary; the desugar is what
-has to change, and the two load-bearing consequences fall out of encodings that
-already exist:
+`if` kept desugaring to an array; the rule is unnecessary.  Its *second* draft
+then proposed desugaring `if` to that tuple read, and **that was tried and
+rejected**: the branch unification an `if` performs is something the type system
+**depends on**.  `check_array_term` unifies both branches into one element cell,
+and a class question asked of the conditional reads that cell; a dynamic
+condition makes the tuple read's type `Index(Index(branches, 0), c)`, which is
+*never decided*.  Measured with the tuple desugar in place, inside a kernel:
 
-- **Branch types may differ.**  `check_tuple_term` gives every element its own
-  type slot, unlike the array literal today's `if` desugars to
-  (`check_array_term` unifies every element into one cell).  So the fix is to
-  desugar `if c then t else e` to the *tuple* read `(e, t)(c)` instead of the
-  array read `[e, t][c]` — one line in `crates/lichen-language/src/compile.rs`.
-- **The type slot is the lazy `Index`.**  Already what `slot_read` builds; the
-  `Index` resolves per instantiation, when `c` is concrete.
-- **An untaken arm's constraints do not fire — because the arm is an apply.**
+```lichen
+k = compute.jit (x => if x <= 3 then 10 else 20)
+compute.launch k 2          -- rendered `10: ?a`; `if` renders `10: Int`
+```
+
+Two tests caught it (`jit_conditional_then`/`jit_conditional_else`), and the
+kernel is where it matters most: a kernel body with an undecided type cannot be
+lowered at all — the same specialize-before-JIT boundary as §8.4, reached from
+the other side.  So:
+
+- **`if` stays the unifying conditional** — `[e, t][c]`, one element cell, the
+  branches' common type.  That is a *feature* of the type system, not a
+  limitation of the desugar.
+- **The dependent read is opt-in**: whoever needs it writes the tuple index
+  `(e, t)(c)` themselves, which the language already supports and which needs no
+  new rule.  It is the *conditional that does not unify*, and its type is the
+  taken branch's.
+
+What follows from that, and what the first draft got right:
+
+- **An unselected arm's constraints do not fire — because the arm is an apply.**
   `check_app` performs **no** argument/parameter unify: it builds the `Apply`
   node and leaves the unify to the lowlevel `apply_parameter_check`, which runs
   per call site on the parameter clone.  A function body is a template and is
-  never evaluated at definition, so an apply sitting in an unselected branch is
-  never forced.  Both spellings therefore defer:
+  never evaluated at definition, so an apply sitting in an unselected arm is
+  never forced:
 
   ```lichen
-  (fadd x y, iadd x y)(cond)      -- the `if` desugar
+  (fadd x y, iadd x y)(cond)      -- a hand-written dependent read
   (fadd, iadd)(cond) x y          -- select the leaf, then apply
   ```
 
-  This removes the *branch-pending* deferral cause the first draft proposed
-  (and with it the deferral-budget question): nothing new is needed, because the
-  one unify that used to fire eagerly was the **array literal's** shared element
-  cell, and the tuple desugar abandons that cell rather than loosening it.  The
-  claimed laziness is the first thing Phase 2 measures.
+  That is why no *branch-pending* deferral cause is needed (and with it, no
+  deferral budget): the arm is an apply, and an unforced apply is already the
+  existing behaviour.
+- **The arms' types may still differ** — as a *tuple's* elements do, which is
+  what makes the opt-in form expressible.  `iadd : Int -> Int -> Int` and
+  `fadd : Float -> Float -> Float` can sit in one tuple; they cannot sit in one
+  array element cell.
 
 And the exhaustiveness arm: `panic` (the language's recorded-refusal channel,
 the same one `operator.divide_by_zero` uses) has a free type cell that unifies
 with anything, so a chain always has a last arm. Under the §3 contract that arm
 is dead — see §5.
 
-What the dependent reading does **not** do: it does not constrain `?a` to
+What the dependent read does **not** do: it does not constrain `?a` to
 numerics.  `(1, "1")(c)` on a `string` operand still *checks* — the contract's
-job is §3's, and this is the separation principle again: the index rule makes
-the dispatch expressible, the refinement makes it safe.
+job is §3's, and this is the separation principle again: the read makes the
+dispatch expressible, the refinement makes it safe.
 
 ## 5. The worked example
 
@@ -521,6 +540,31 @@ answered.
    the operator's end state (`x : ?a ! in_num`) plus a perspective on one
    parameter would.  Generalising the slot to a per-marker set is the fix, and it
    is not this phase's.
+7. **A class domain has no surface form — Phase 3's prerequisite.**  `Num` in
+   §3's end state is a *value* a library writes, and today nothing in the
+   language can spell one: `class_set::build` is called from exactly one place
+   (`check_binop`, the checker) and `TypeValue::TypeSet` has no syntax, so
+   `lichen-std` cannot write `Num = {Int, Float}` and the contract cannot move
+   out of Rust.  The options, in the language's own terms:
+
+   - **A keyword-led form, `domain<Int, Float>`** — the idiom the language
+     already uses wherever a delimiter would be ambiguous (`array<T, n>`,
+     `struct<…>`, `table{…}` are all keyword-led for exactly that reason).
+     Pros: no new punctuation, reads as what it is, and `Num = domain<Int,
+     Float>` is a plain binding.  Cons: the encoding's **default** element needs
+     a story — either the surface form names it (`domain<Int, Float>` whose
+     default is the *first* member, a documented convention) or it grows a
+     slot for it, and the default is load-bearing (§8.4: it is what types the
+     specialize pass's placeholder and what the kernel picks).
+   - **A native operator, `$domain(Int, Float)`** — no new syntax at all, and
+     the `$name(args)` mechanism exists (`compute.lichen` is an embedded
+     source).  Cons: `$` is the *plugin-private* sigil — "a normal file never
+     lexes it as a valid call" — so this works only for a source the host
+     embeds, not for a std a *user* could write, which is the opposite of what
+     Phase 3 is for.
+   - **Reusing `{…}`** — refuted already: a glued `{` is a table lookup, and
+     making it a domain in type position would be the mode-dependence §2.1 of
+     the language spec exists to avoid.
 8. **The kernel boundary is not this feature's to fix — it is a recorded
    dependency.**  Making `+` polymorphic leaves a kernel body's class open, and
    a kernel lowered from a *template* has no class to compile: two targets go red
@@ -567,9 +611,14 @@ than budgeting for it.)
   in this phase: it is the specialize-before-JIT pass's, and the domain landed
   here is that pass's input.  *The builtin operators are the user-visible
   feature.*
-- **Phase 2 — the dependent if.** `if` desugars to the tuple read `(e, t)(c)`
-  instead of the array read `[e, t][c]`, and the claimed laziness of an
-  unselected arm is measured. Unlocks user-written generic numeric functions.
+- **Phase 2 — the dependent read. Measured and *rejected as a desugar*.**  `if`
+  keeps desugaring to `[e, t][c]`, because the branch unification it performs is
+  what the type system depends on: with a dynamic condition the dependent form's
+  type is never decided, and a kernel then cannot lower the body (§4 records the
+  measurement and the two tests that caught it).  The dependent read is
+  **opt-in** — `(e, t)(c)` — and needs no work: the positional slot read already
+  types it as the taken branch's type.  Verified by hand: `(10, "ten")(1 == 1)`
+  renders `"ten": string`.
 - **Phase 3 — the implementation moves to std.** The leaf-selection dispatch, the
   split leaves, `Num` and the operator bindings in `lichen-std`; routing R3 →
   R2/R1.
