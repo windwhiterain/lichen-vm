@@ -561,6 +561,43 @@ routing-agnostic: phases 0–2 below land the semantics under R3, and R2/R1 are 
 "operators are library functions" end state whenever the prelude question is
 answered.
 
+### 7.1 Measured: R1 works, and it is blocked by something *upstream* of kernels
+
+R1 was implemented on this branch (the resolver hands out the prelude's binders,
+the lowering turns a routed `BinOp` into an apply of that binding with the operand
+group `[l, r]`) and measured.  **Mechanically it works**: `1 + 2` is `3`,
+`1 + 1.5` is refused at the operator with the *contract's* tie
+(`expected Int, found Float`), `array<Int, add [1, 2]>` still decides to
+`array<Int, 3>`, and a kernel body's `y + y` becomes a static-ref apply — the
+kernel reports it (`static refs are not kernel-compilable v1`), which is the
+expected-and-accepted cost.
+
+**But it regresses polymorphism, and that is not a kernel error.**
+`f = x => x + x; (f 1, f 1.5)` was `(2, 3.0)` (the plan's own measured row:
+`(add 1 2, add 1.5 2.5)` = `(3, 4.0)` for `add = x => y => x + y`) and becomes
+`expected Int, found Float` at the *second* call.  Isolated, without any
+operator: `f = x => add [x, x]` fails the same way while the *same* apply at the
+top level — `(add [1, 2], add [1.5, 2.5])` — is `(3, 4.0)`.  So the cause is not
+arithmetic: **an apply of a *static* (imported) function unifies the caller's
+cells with the callee module's own**, and the first call fixes the class for every
+call.  A static ref is a decided leaf, so the callee's *type* is never
+instantiated per application.
+
+That is the same root as the recorded `type_of` monomorphism and as the shared-hole
+tie (§3), now on the path of *every* operator-using lambda.  So the dependency
+chain is not "routing, then kernel specialize":
+
+1. **static-signature instantiation** — an apply of a static function must
+   instantiate the callee's parameter *type* (deeply, per application), not unify
+   against the frozen module's own cells.  This also retires the `type_of`
+   monomorphism, the `raw[?a, ?b]` signature, and the shared-hole tie.
+2. **the routing** (§7's R1/R2, above), which the prelude's binders make a
+   lowering substitution.
+3. **kernel specialize** (the kernel workstream's specialize-before-JIT pass),
+   which folds step 2's static-ref apply back to a machine leaf.
+
+The R1 code is kept unlanded until step 1 exists.
+
 ## 8. Open questions
 
 1. *(Closed — **landed**.)* **The printer's spelling** of a refined cell.  The
