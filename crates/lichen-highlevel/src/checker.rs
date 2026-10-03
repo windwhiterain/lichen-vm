@@ -48,7 +48,7 @@ use stacksafe::stacksafe;
 
 use crate::attr::{AttrExtRegistry, AttrSet};
 use crate::diagnostic::{DiagKind, DiaryEntry};
-use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc};
+use crate::ir::{BinOp, ChildRange, ConvOp, ExprId, ExprKind, IR, Loc};
 use crate::native::{NativeArg, NativeOps, no_native_ops};
 use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
 use crate::shape::for_each_kind_marker;
@@ -1147,6 +1147,7 @@ where
             | ExprKind::Function { .. }
             | ExprKind::Apply { .. }
             | ExprKind::BinOp { .. }
+            | ExprKind::Convert { .. }
             | ExprKind::Instantiate { .. }
             | ExprKind::Record { .. }
             | ExprKind::Assert { .. }
@@ -1317,6 +1318,7 @@ where
                 left,
                 right,
             } => self.check_binop(e, operator, left, right),
+            ExprKind::Convert { operator, value } => self.check_convert(e, operator, value),
             ExprKind::Instantiate {
                 type_expr,
                 value,

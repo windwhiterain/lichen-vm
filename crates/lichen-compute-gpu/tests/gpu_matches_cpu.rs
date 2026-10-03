@@ -60,7 +60,7 @@ fn fragment(body: Vec<KernelInstr>) -> KernelFragment {
         outputs: 1,
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
-        result_classes: vec![ScalarClass::Int],
+        results: 1,
         int_width: IntWidth::I64,
     }
 }
@@ -72,19 +72,19 @@ fn fragment(body: Vec<KernelInstr>) -> KernelFragment {
 /// the two cheap operands go on the stack first and the value is computed last.
 fn adds() -> KernelFragment {
     fragment(vec![
-        KernelInstr::Const(ScalarClass::Int, 0), // out_pos
-        KernelInstr::LocalGet(1),                // idx
-        KernelInstr::Const(ScalarClass::Int, 0),
+        KernelInstr::Const(0),    // out_pos
+        KernelInstr::LocalGet(1), // idx
+        KernelInstr::Const(0),
         KernelInstr::LocalGet(1),
-        KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
-        KernelInstr::Const(ScalarClass::Int, 0),
+        KernelInstr::BufferReadCall, // in[i]
+        KernelInstr::Const(0),
         KernelInstr::LocalGet(1),
-        KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
-        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
-        KernelInstr::Const(ScalarClass::Int, 1),
-        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
-        KernelInstr::BufferWriteCall(ScalarClass::Int),
-        KernelInstr::Const(ScalarClass::Int, 0),
+        KernelInstr::BufferReadCall, // in[i]
+        KernelInstr::Bin(KernelBin::Add),
+        KernelInstr::Const(1),
+        KernelInstr::Bin(KernelBin::Add),
+        KernelInstr::BufferWriteCall,
+        KernelInstr::Const(0),
     ])
 }
 
@@ -99,23 +99,20 @@ fn adds() -> KernelFragment {
 /// branch values are pushed before the condition is even computed.
 fn conditional() -> KernelFragment {
     let read = |body: &mut Vec<KernelInstr>| {
-        body.push(KernelInstr::Const(ScalarClass::Int, 0));
+        body.push(KernelInstr::Const(0));
         body.push(KernelInstr::LocalGet(1));
-        body.push(KernelInstr::BufferReadCall(ScalarClass::Int));
+        body.push(KernelInstr::BufferReadCall);
     };
-    let mut body = vec![
-        KernelInstr::Const(ScalarClass::Int, 0),
-        KernelInstr::LocalGet(1),
-    ];
-    body.push(KernelInstr::Const(ScalarClass::Int, 7)); // then
+    let mut body = vec![KernelInstr::Const(0), KernelInstr::LocalGet(1)];
+    body.push(KernelInstr::Const(7)); // then
     read(&mut body); // else
     read(&mut body); // the condition's operand
-    body.push(KernelInstr::Const(ScalarClass::Int, 3));
-    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Leq));
+    body.push(KernelInstr::Const(3));
+    body.push(KernelInstr::Bin(KernelBin::Leq));
     body.push(KernelInstr::I32WrapI64); // a no-op on this target
     body.push(KernelInstr::Select);
-    body.push(KernelInstr::BufferWriteCall(ScalarClass::Int));
-    body.push(KernelInstr::Const(ScalarClass::Int, 0));
+    body.push(KernelInstr::BufferWriteCall);
+    body.push(KernelInstr::Const(0));
     fragment(body)
 }
 
@@ -129,25 +126,22 @@ fn conditional() -> KernelFragment {
 /// separates the two.
 fn arithmetic() -> KernelFragment {
     let read = |body: &mut Vec<KernelInstr>| {
-        body.push(KernelInstr::Const(ScalarClass::Int, 0));
+        body.push(KernelInstr::Const(0));
         body.push(KernelInstr::LocalGet(1));
-        body.push(KernelInstr::BufferReadCall(ScalarClass::Int));
+        body.push(KernelInstr::BufferReadCall);
     };
-    let mut body = vec![
-        KernelInstr::Const(ScalarClass::Int, 0),
-        KernelInstr::LocalGet(1),
-    ];
+    let mut body = vec![KernelInstr::Const(0), KernelInstr::LocalGet(1)];
     read(&mut body);
-    body.push(KernelInstr::Const(ScalarClass::Int, 3));
-    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Mul));
-    body.push(KernelInstr::Const(ScalarClass::Int, 7));
-    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Rem));
+    body.push(KernelInstr::Const(3));
+    body.push(KernelInstr::Bin(KernelBin::Mul));
+    body.push(KernelInstr::Const(7));
+    body.push(KernelInstr::Bin(KernelBin::Rem));
     read(&mut body);
-    body.push(KernelInstr::Const(ScalarClass::Int, 5));
-    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Div));
-    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Add));
-    body.push(KernelInstr::BufferWriteCall(ScalarClass::Int));
-    body.push(KernelInstr::Const(ScalarClass::Int, 0));
+    body.push(KernelInstr::Const(5));
+    body.push(KernelInstr::Bin(KernelBin::Div));
+    body.push(KernelInstr::Bin(KernelBin::Add));
+    body.push(KernelInstr::BufferWriteCall);
+    body.push(KernelInstr::Const(0));
     fragment(body)
 }
 
@@ -165,27 +159,24 @@ fn arithmetic() -> KernelFragment {
 /// comparison's own scalar, which is the shape a returned predicate has.
 fn predicates() -> KernelFragment {
     let read = |body: &mut Vec<KernelInstr>| {
-        body.push(KernelInstr::Const(ScalarClass::Int, 0));
+        body.push(KernelInstr::Const(0));
         body.push(KernelInstr::LocalGet(1));
-        body.push(KernelInstr::BufferReadCall(ScalarClass::Int));
+        body.push(KernelInstr::BufferReadCall);
     };
-    let mut body = vec![
-        KernelInstr::Const(ScalarClass::Int, 0),
-        KernelInstr::LocalGet(1),
-    ];
+    let mut body = vec![KernelInstr::Const(0), KernelInstr::LocalGet(1)];
     read(&mut body);
-    body.push(KernelInstr::Const(ScalarClass::Int, 3));
-    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt)); // in[i] < 3
+    body.push(KernelInstr::Const(3));
+    body.push(KernelInstr::Bin(KernelBin::Lt)); // in[i] < 3
     read(&mut body);
-    body.push(KernelInstr::Const(ScalarClass::Int, 0));
-    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Gt)); // in[i] > 0
-    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::BitAnd));
+    body.push(KernelInstr::Const(0));
+    body.push(KernelInstr::Bin(KernelBin::Gt)); // in[i] > 0
+    body.push(KernelInstr::Bin(KernelBin::BitAnd));
     read(&mut body);
-    body.push(KernelInstr::Const(ScalarClass::Int, 50));
-    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Eq)); // in[i] == 50
-    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::BitOr));
-    body.push(KernelInstr::BufferWriteCall(ScalarClass::Int));
-    body.push(KernelInstr::Const(ScalarClass::Int, 0));
+    body.push(KernelInstr::Const(50));
+    body.push(KernelInstr::Bin(KernelBin::Eq)); // in[i] == 50
+    body.push(KernelInstr::Bin(KernelBin::BitOr));
+    body.push(KernelInstr::BufferWriteCall);
+    body.push(KernelInstr::Const(0));
     fragment(body)
 }
 
@@ -204,27 +195,24 @@ fn predicates() -> KernelFragment {
 /// the `bool` the target's `select` takes (and, on wasm, an `i32`).
 fn unsigned_reading() -> KernelFragment {
     let read = |body: &mut Vec<KernelInstr>| {
-        body.push(KernelInstr::Const(ScalarClass::Int, 0));
+        body.push(KernelInstr::Const(0));
         body.push(KernelInstr::LocalGet(1));
-        body.push(KernelInstr::BufferReadCall(ScalarClass::Int));
+        body.push(KernelInstr::BufferReadCall);
     };
-    let mut body = vec![
-        KernelInstr::Const(ScalarClass::Int, 0),
-        KernelInstr::LocalGet(1),
-    ];
+    let mut body = vec![KernelInstr::Const(0), KernelInstr::LocalGet(1)];
     read(&mut body);
-    body.push(KernelInstr::Const(ScalarClass::Int, 2));
-    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Div)); // then: in[i] / 2
+    body.push(KernelInstr::Const(2));
+    body.push(KernelInstr::Bin(KernelBin::Div)); // then: in[i] / 2
     read(&mut body);
-    body.push(KernelInstr::Const(ScalarClass::Int, 2));
-    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Rem)); // else: in[i] % 2
+    body.push(KernelInstr::Const(2));
+    body.push(KernelInstr::Bin(KernelBin::Rem)); // else: in[i] % 2
     read(&mut body);
-    body.push(KernelInstr::Const(ScalarClass::Int, i64::MIN)); // 2^63, as a bit pattern
-    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt));
+    body.push(KernelInstr::Const(i64::MIN)); // 2^63, as a bit pattern
+    body.push(KernelInstr::Bin(KernelBin::Lt));
     body.push(KernelInstr::I32WrapI64);
     body.push(KernelInstr::Select);
-    body.push(KernelInstr::BufferWriteCall(ScalarClass::Int));
-    body.push(KernelInstr::Const(ScalarClass::Int, 0));
+    body.push(KernelInstr::BufferWriteCall);
+    body.push(KernelInstr::Const(0));
     fragment(body)
 }
 
@@ -335,7 +323,7 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
         let mut stack: Vec<Scalar> = Vec::new();
         for instruction in fragment.body.instrs() {
             match instruction {
-                KernelInstr::Const(_class, value) => stack.push(Scalar::Literal(*value)),
+                KernelInstr::Const(value) => stack.push(Scalar::Literal(*value)),
                 KernelInstr::LocalGet(local) => {
                     let value = if *local as usize == index {
                         element as i64
@@ -346,7 +334,7 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                 }
                 // A comparison yields 1 or 0 here, or 1.0 and 0.0 over floats; a
                 // `select` only tests it.
-                KernelInstr::Bin(_class, operator) => {
+                KernelInstr::Bin(operator) => {
                     let rhs = stack.pop().unwrap().as_class(class);
                     let lhs = stack.pop().unwrap().as_class(class);
                     stack.push(match (lhs, rhs) {
@@ -407,6 +395,22 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                     });
                 }
                 KernelInstr::I32WrapI64 => {}
+                // The language's class conversion.  **The number, not the
+                // bits**: `int2float` is the nearest `f32` and `float2int`
+                // truncates toward zero, which is what the two real backends
+                // answer for every value this reading is asked about — and the
+                // reason the emitter refuses the ones they would not
+                // (`docs/notes/floating-point.md` §4.2).
+                KernelInstr::Conv { from, to } => {
+                    let seen = stack.pop().unwrap().as_class(*from);
+                    stack.push(match (seen, *to) {
+                        (Scalar::Int(value), ScalarClass::Float) => Scalar::Float(value as f32),
+                        (Scalar::Float(value), ScalarClass::Int) => {
+                            Scalar::Int(value.trunc() as i64)
+                        }
+                        (seen, _) => seen,
+                    });
+                }
                 KernelInstr::Select => {
                     let condition = stack.pop().unwrap();
                     let otherwise = stack.pop().unwrap().as_class(class);
@@ -417,7 +421,7 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                         otherwise
                     });
                 }
-                KernelInstr::BufferReadCall(element_class) => {
+                KernelInstr::BufferReadCall => {
                     let element_index = stack.pop().unwrap().as_index();
                     let position = stack.pop().unwrap().as_index();
                     let value = if position == 0 {
@@ -425,7 +429,7 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                     } else {
                         output[element_index]
                     };
-                    stack.push(match element_class {
+                    stack.push(match class {
                         ScalarClass::Int => Scalar::Int(value),
                         // **This reading's own word layout, not the ABI's.** The
                         // reference is handed `i64` words, and a float element in
@@ -436,8 +440,8 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                         ScalarClass::Float => Scalar::Float(f32::from_bits(value as u32)),
                     });
                 }
-                KernelInstr::BufferWriteCall(element_class) => {
-                    let value = stack.pop().unwrap().as_class(*element_class);
+                KernelInstr::BufferWriteCall => {
+                    let value = stack.pop().unwrap().as_class(class);
                     let element_index = stack.pop().unwrap().as_index();
                     let position = stack.pop().unwrap().as_index();
                     if position == 0 {

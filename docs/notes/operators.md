@@ -3,16 +3,19 @@
 > Status: current.  The operator vocabulary a lichen program computes with, the
 > five layers one operator lives in, the three decisions that were made to add
 > it (precedence, the two tokens that are both a bracket and a comparison, and
-> the unsigned reading of `Int`), and the editor grammar's own reading of the
-> same set.
+> the unsigned reading of `Int`), the two prefix keywords that cross the
+> language's scalar classes, and the editor grammar's own reading of the same
+> set.
 > Points at: `crates/lichen-highlevel/src/ir.rs` (`BinOp`),
 > `crates/lichen-highlevel/src/program.rs` (`TypeOperator`: the vocabulary, its
 > codec tags, and its `run`),
-> `crates/lichen-highlevel/src/checker/operators.rs` (the check),
-> `crates/lichen-kernel-ir/src/lib.rs` (`KernelBin`),
-> `crates/lichen-compute/src/compute.rs` (`kernel_bin`, the lowering, and the
-> wasm emitter), `crates/lichen-compute-gpu/src/spirv.rs` (the SPIR-V emitter),
-> `tree-sitter-lichen/grammar.js` (the editor grammar, §9), and
+> `crates/lichen-highlevel/src/checker/operators.rs` (the check, and
+> `check_convert`),
+> `crates/lichen-kernel-ir/src/lib.rs` (`KernelBin`, `KernelInstr::Conv`),
+> `crates/lichen-compute/src/compute.rs` (`kernel_bin`, `conv_of`,
+> `emit_convert`, and the wasm emitter), `crates/lichen-compute-gpu/src/spirv.rs`
+> (the SPIR-V emitter),
+> `tree-sitter-lichen/grammar.js` (the editor grammar, §10), and
 > [language-spec](../language-spec.md) §2/§3 for the syntax and semantics a
 > user sees.
 
@@ -24,15 +27,20 @@ direction of the order comparisons. The set is now:
 
 | family | operators | result |
 |---|---|---|
-| arithmetic | `+` `-` `*` `/` `%` | `Int` |
+| arithmetic | `+` `-` `*` `/` `%` | the operands' class |
 | comparison | `<` `>` `<=` `>=` `==` `!=` | `Int` (`0`/`1`) |
 | bitwise | `&` `\|` `^` | `Int` |
+| class crossing | `int2float e`, `float2int e` (prefix keywords) | the direction's own class |
 
 There is no `Bool` value in the language, so a comparison yields the `0`/`1`
 scalar and drives an `if` directly; that is also what makes `&`/`|`/`^` the
 language's `and`/`or`/`xor` over two comparison results. `==`/`!=` are the
 **generalized** equality — any two same-typed values, `Int`s or type values —
-while every other operator is `Int`-only. See
+while every other operator is same-class-only. Arithmetic is `Int` over `Int`s
+and `Float` over `Float`s, and the two classes meet only at the two prefix
+conversions — see §5 of
+[floating-point](floating-point.md) for what a `Float` is and why nothing else
+crosses. See
 [language-spec §3](../language-spec.md#3-semantics) for the semantics as a user
 reads them; this note is about what it took to have them.
 
@@ -55,6 +63,14 @@ without their arm, which is deliberate: the language server's semantic-token
 classification (`lichen-language-server/src/analysis.rs`) and the
 `TypeOperator::ALL` round-trip the persist codec iterates.
 
+**A prefix keyword operator is the same five layers with a different shape in
+each of the first two.**  `int2float`/`float2int` are not an `ast::BinOp` variant
+at a new rung but an `ast::Expr::Convert` with a `ConvOp`, parsed inside the
+existing unary level (§3), and not a `KernelBin` variant but the
+target-neutral `KernelInstr::Conv { from, to }` — a stack machine cannot tell the
+two directions apart from its operand, so the IR carries the pair and each
+backend answers it alone (§7).
+
 The compiler's own error messages carry the vocabulary too: a `KernelBin` outside
 what a target can express is refused **by name** rather than approximated (see
 [compute-jit-low-types](compute-jit-low-types.md) for why the lowering is a
@@ -75,6 +91,8 @@ Loosest to tightest, which is the ladder `parse.rs` builds bottom-up:
 + -               sum
 * / %             product
 ! e               prefix assert
+int2float e       prefix crossing   (the same unary level)
+float2int e
 application       juxtaposition
 postfix, atoms
 ```
@@ -87,6 +105,12 @@ of C's. Both choices are pinned by `operator_precedence_and_associativity` in
 `crates/lichen-language/tests/pipeline.rs`.
 
 A comparison is one level, left-associative, so `1 < 2 == 1` is `(1 < 2) == 1`.
+
+The two conversions take the assert's level rather than a new rung: a prefix
+keyword takes its operand by juxtaposition and no infix token, so
+`int2float a + 1` converts `a` (tighter than every binary operator) and
+`int2float f x` converts `f x` (looser than application), which is the one
+reading that makes `a + int2float b` need no parentheses.
 
 ## 4. Two tokens, two jobs: `<` and `>`
 
@@ -177,7 +201,61 @@ oversight:
   `KernelBin`'s documentation, and a program that divides by a computed value
   owns that value's range.
 
-## 7. What is deliberately not here
+## 7. The two class crossings
+
+`int2float e` and `float2int e` are the only place the language's two scalar
+classes meet, and the only expression form whose result type is not its operand's:
+the operand is unified against the direction's **source** and the result is its
+**target** (`check_convert`). A wrong-class operand gets the refusal every other
+operator issues — the diagnostic names the class it expected, and nothing here
+converts silently. [floating-point §4](floating-point.md) owns why the rest of the
+language does not cross; this section is about what the crossing cost.
+
+- **The checker unifies only a class the operand already states.** A unify binds
+  every cell the operand's class shares, and a body's
+  `compute.write [n, i, int2float i]` is one array literal whose integer
+  positions and float value hold *one* element-type cell: pinning the index here
+  would bind the float written beside it and refuse the very program these two
+  words exist to write. So an undecided operand stays undecided and
+  `TypeOperator::run` answers the lazy marker at run time — a weaker message than
+  a parameter pinned at its apply, paid for by the conversion being usable where
+  the classes have not been decided yet.
+- **`int2float` is the nearest `f32`, so it is not injective.** `int2float
+  16777217` is `16777216.0`: the integer the language holds is machine-sized and
+  the float is not, and the rounding is IEEE's, not an error.
+- **`float2int` is partial, and the interpreter is the only layer that can say
+  so.** It truncates toward zero, and `NaN`, `±inf`, a negative, and anything the
+  unsigned `Int` cannot hold record `operator.out_of_range` and answer the lazy
+  marker — the same channel `operator.divide_by_zero` (§6) uses.
+- **A kernel cannot record a diagnostic**, so the emitter refuses at compile time
+  what the interpreter would refuse at run time: a `float2int` of a *literal* that
+  is negative, not finite, or too large is refused by name, since wasm would trap
+  and SPIR-V is undefined and neither is an answer the program can read.
+- **A fragment holds one representation, so a crossing has a limit.** A
+  parameter read, a literal and a callee's result all cross
+  (`int2float x` in a `Float` kernel over an `Int` parameter); an *expression*
+  computed in the parameter's own class does not (`int2float (x + 1)` there would
+  need the integer add), and a float literal has no form in an integer body at
+  all. Both refusals are the shared emitter's, so one program gets one answer
+  whichever backend it is then handed to.
+- **The two backends answer one crossing differently and agree on the number.**
+  A `Float` fragment's index rides in an `f32` holding the exact integer, so wasm
+  emits nothing for `int2float i` where SPIR-V emits `OpConvertUToF` on its 32-bit
+  invocation id; an integer SPIR-V module refuses the direction by name rather
+  than declaring the float type it does not carry. §5.1 of
+  [floating-point](floating-point.md) is the record of why that asymmetry is the
+  right one.
+
+Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
+`a_conversion_applied_to_the_other_class_is_refused_by_name` and
+`a_float_with_no_int_to_truncate_toward_is_recorded_rather_than_answered`
+(`crates/lichen-language/tests/pipeline.rs`), and on the kernel side by
+`a_jit_kernel_crosses_the_two_classes_both_ways`,
+`a_conversion_the_body_cannot_hold_is_refused_by_name` and
+`a_varying_float_element_is_seeded_from_the_index`
+(`crates/lichen-language/tests/compute.rs`).
+
+## 8. What is deliberately not here
 
 - **Shifts (`<<`, `>>`).** A `>>` token swallows the adjacent closers of nested
   angle types — `array<array<Int, 2>, 3>` ends `3>>` — and a `logos` lexer cannot
@@ -191,12 +269,15 @@ oversight:
 - **`and` / `or` / `not` keywords.** `&`/`|` over `0`/`1` results *are* them; a
   second spelling of one operation would need its own precedence and its own
   short-circuit rule, and there is no `Bool` type for it to be a rule about.
-- **`min`/`max`, floating point, and any operator a target cannot express
-  identically.** The kernel-safe subset is the intersection of what the two
-  backends compute the same way; an operator outside it would be a silent
-  divergence between backends, not a feature.
+- **`min`/`max`, and any operator a target cannot express identically.** The
+  kernel-safe subset is the intersection of what the two backends compute the
+  same way; an operator outside it would be a silent divergence between backends,
+  not a feature. Floating point is now in the set (`+ - * /` and the four order
+  comparisons over `Float`, plus §7's two crossings), and
+  [floating-point §5](floating-point.md) is the record of which of those the two
+  backends answer alike.
 
-## 8. Where the coverage is
+## 9. Where the coverage is
 
 - Interpreter: `the_extended_operator_set_evaluates` and
   `an_int_is_unsigned_where_the_two_readings_differ`
@@ -207,14 +288,20 @@ oversight:
 - SPIR-V, on a device: `arithmetic`, `predicates` and `unsigned_reading` in
   `crates/lichen-compute-gpu/tests/gpu_matches_cpu.rs`, each checked against a
   hand-written expectation **and** an independent CPU reading of the IR.
+- SPIR-V, without a device: `the_emitted_module_validates` and
+  `the_two_conversions_validate_in_a_float_module`
+  (`crates/lichen-compute-gpu/tests/spirv_validation.rs`) hand the emitted words
+  to `spirv-val`, and `an_integer_module_refuses_a_conversion_by_name`
+  (`crates/lichen-compute-gpu/tests/refusals.rs`) is the refusal that needs no
+  validator at all.
 - The example programs `examples/operators.lichen` and `examples/gcd.lichen` are
   the user-visible statement of the set, and `tests/examples.rs` runs them.
 - Editor grammar: `tree-sitter-lichen`'s own two tests, which parse every
   example — `operators.lichen` and `gcd.lichen` included — and assert no ERROR
   node, plus the `grammar-consistency` guard that every `.scm` query still
-  compiles. See §9.
+  compiles. See §10.
 
-## 9. The editor grammar
+## 10. The editor grammar
 
 `tree-sitter-lichen/grammar.js` is the language's *editor* face, and it is the
 one part of the operator set that does not share a parser with the compiler: it
@@ -264,6 +351,18 @@ form the grammar has always had, so `X<0>` and `array<Int, 3>` are an
 application of an atom to an `angle_tuple`. That is the tree it produced before
 the comparison operators existed, so nothing regresses; the node is only a
 coarser reading, and an editor grammar's job is colouring.
+
+**And the one thing it does not yet know is §7's two keywords.** `int2float` and
+`float2int` colour as identifiers there, because the rule would be a third
+`prec(PREC.assertion, seq(keyword, field('value', $.application)))` in a grammar
+this workspace cannot build: the generated parser is gitignored and
+`tree-sitter generate` needs a CLI that is not on this machine, and
+[tree-sitter-generated-files](tree-sitter-generated-files.md) puts a grammar
+change in the hands of whoever can test it. Nothing about the *language* waits
+for it — the compiler's own lexer, parser and checker have the two operators, the
+language server classifies them as keywords (the exhaustive `TokenKind` match in
+`lichen-language-server/src/analysis.rs` is what forces the arm), and an editor
+that highlights through the server's semantic tokens colours them today.
 
 Verified with `cargo test --manifest-path tree-sitter-lichen/Cargo.toml` and
 `cargo test -p lichen-language-zed --features grammar-consistency`; see

@@ -45,22 +45,22 @@ fn adds_one() -> KernelFragment {
             KernelShape::Scalar(ScalarClass::Int),
         ]),
         body: vec![
-            KernelInstr::Const(ScalarClass::Int, 0), // out_pos, in the *output* space
-            KernelInstr::LocalGet(1),                // the index
-            KernelInstr::Const(ScalarClass::Int, 0), // cfg_pos, in the *input* space
-            KernelInstr::LocalGet(1),                // the index
-            KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
-            KernelInstr::Const(ScalarClass::Int, 1),
-            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add), // in[i] + 1
-            KernelInstr::BufferWriteCall(ScalarClass::Int),
-            KernelInstr::Const(ScalarClass::Int, 0),
+            KernelInstr::Const(0),       // out_pos, in the *output* space
+            KernelInstr::LocalGet(1),    // the index
+            KernelInstr::Const(0),       // cfg_pos, in the *input* space
+            KernelInstr::LocalGet(1),    // the index
+            KernelInstr::BufferReadCall, // in[i]
+            KernelInstr::Const(1),
+            KernelInstr::Bin(KernelBin::Add), // in[i] + 1
+            KernelInstr::BufferWriteCall,
+            KernelInstr::Const(0),
         ]
         .into(),
         inputs: 1,
         outputs: 1,
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
-        result_classes: vec![ScalarClass::Int],
+        results: 1,
         int_width: IntWidth::I64,
     }
 }
@@ -84,39 +84,36 @@ fn adds_one() -> KernelFragment {
 /// a 32-bit one, since a float module's integers are indices.
 fn scales_a_float() -> KernelFragment {
     let read = |body: &mut Vec<KernelInstr>| {
-        body.push(KernelInstr::Const(ScalarClass::Int, 0));
+        body.push(KernelInstr::Const(0));
         body.push(KernelInstr::LocalGet(1));
-        body.push(KernelInstr::BufferReadCall(ScalarClass::Float));
+        body.push(KernelInstr::BufferReadCall);
     };
     // out_pos, then the index: the [position, index] a write takes.
-    let mut body = vec![
-        KernelInstr::Const(ScalarClass::Int, 0),
-        KernelInstr::LocalGet(1),
-    ];
+    let mut body = vec![KernelInstr::Const(0), KernelInstr::LocalGet(1)];
     // then: in[i] * 2.5
     read(&mut body);
-    body.push(KernelInstr::Const(ScalarClass::Float, TWO_POINT_FIVE));
-    body.push(KernelInstr::Bin(ScalarClass::Float, KernelBin::Mul));
+    body.push(KernelInstr::Const(TWO_POINT_FIVE));
+    body.push(KernelInstr::Bin(KernelBin::Mul));
     // … + (in[i] == 0.0), a comparison materialised into the float `1.0`/`0.0`
     read(&mut body);
-    body.push(KernelInstr::Const(ScalarClass::Float, 0)); // `0.0f32` is the bit pattern zero
-    body.push(KernelInstr::Bin(ScalarClass::Float, KernelBin::Eq));
-    body.push(KernelInstr::Bin(ScalarClass::Float, KernelBin::Add));
+    body.push(KernelInstr::Const(0)); // `0.0f32` is the bit pattern zero
+    body.push(KernelInstr::Bin(KernelBin::Eq));
+    body.push(KernelInstr::Bin(KernelBin::Add));
     // … + in[i] / 2.5
     read(&mut body);
-    body.push(KernelInstr::Const(ScalarClass::Float, TWO_POINT_FIVE));
-    body.push(KernelInstr::Bin(ScalarClass::Float, KernelBin::Div));
-    body.push(KernelInstr::Bin(ScalarClass::Float, KernelBin::Add));
+    body.push(KernelInstr::Const(TWO_POINT_FIVE));
+    body.push(KernelInstr::Bin(KernelBin::Div));
+    body.push(KernelInstr::Bin(KernelBin::Add));
     // else: 0.0
-    body.push(KernelInstr::Const(ScalarClass::Float, 0));
+    body.push(KernelInstr::Const(0));
     // the selector: in[0], a float value rather than a comparison's bool, read at
     // a constant index
-    body.push(KernelInstr::Const(ScalarClass::Int, 0));
-    body.push(KernelInstr::Const(ScalarClass::Int, 0));
-    body.push(KernelInstr::BufferReadCall(ScalarClass::Float));
+    body.push(KernelInstr::Const(0));
+    body.push(KernelInstr::Const(0));
+    body.push(KernelInstr::BufferReadCall);
     body.push(KernelInstr::Select);
-    body.push(KernelInstr::BufferWriteCall(ScalarClass::Float));
-    body.push(KernelInstr::Const(ScalarClass::Int, 0));
+    body.push(KernelInstr::BufferWriteCall);
+    body.push(KernelInstr::Const(0));
     KernelFragment {
         // `(config, index)`, integers, however the buffers are classed: this
         // target's index is the invocation id, not a value of that domain.
@@ -129,7 +126,7 @@ fn scales_a_float() -> KernelFragment {
         outputs: 1,
         input_classes: vec![ScalarClass::Float],
         output_classes: vec![ScalarClass::Float],
-        result_classes: vec![ScalarClass::Float],
+        results: 1,
         int_width: IntWidth::I64,
     }
 }
@@ -230,5 +227,126 @@ fn the_emitted_module_validates() {
     // two SKIPPED lines above are the record, and this says nothing more.
     if covered < 2 {
         eprintln!("only {covered} of 2 emitted module(s) were validated");
+    }
+}
+
+/// `out[i] = int2float i + in[i]` — the §5.1 crossing, hand-built.
+///
+/// The index is the invocation id, a 32-bit unsigned integer in this target even
+/// in a float module, so `int2float` of it is `OpConvertUToF` and not the no-op
+/// the wasm backend answers with (where the same number already rides in an
+/// `f32`).  One body, one crossing, one float buffer in and out.
+fn index_to_float() -> KernelFragment {
+    KernelFragment {
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body: vec![
+            KernelInstr::Const(0),    // out_pos
+            KernelInstr::LocalGet(1), // the index
+            KernelInstr::LocalGet(1), // the same index, what `int2float` reads
+            KernelInstr::Conv {
+                from: ScalarClass::Int,
+                to: ScalarClass::Float,
+            },
+            KernelInstr::Const(0),       // cfg_pos
+            KernelInstr::LocalGet(1),    // the index
+            KernelInstr::BufferReadCall, // in[i]
+            KernelInstr::Bin(KernelBin::Add),
+            KernelInstr::BufferWriteCall,
+            KernelInstr::Const(0),
+        ]
+        .into(),
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Float],
+        output_classes: vec![ScalarClass::Float],
+        results: 1,
+        int_width: IntWidth::I64,
+    }
+}
+
+/// `out[i] = int2float (float2int in[i])` — both directions in one float module.
+///
+/// The pair is what the IR's `Conv { from, to }` is for: read off the module the
+/// two directions look the same on a stack, and a backend that guessed them from
+/// the fragment's class would swap the two programs.  Here the float element
+/// truncates toward zero (`OpConvertFToU`) and the integer that leaves widens
+/// back (`OpConvertUToF`), so a body whose answer is the number it started with
+/// says so with both opcodes.
+fn crosses_both_ways() -> KernelFragment {
+    KernelFragment {
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body: vec![
+            KernelInstr::Const(0),       // out_pos
+            KernelInstr::LocalGet(1),    // the index
+            KernelInstr::Const(0),       // cfg_pos
+            KernelInstr::LocalGet(1),    // the index
+            KernelInstr::BufferReadCall, // in[i]
+            KernelInstr::Conv {
+                from: ScalarClass::Float,
+                to: ScalarClass::Int,
+            },
+            KernelInstr::Conv {
+                from: ScalarClass::Int,
+                to: ScalarClass::Float,
+            },
+            KernelInstr::BufferWriteCall,
+            KernelInstr::Const(0),
+        ]
+        .into(),
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Float],
+        output_classes: vec![ScalarClass::Float],
+        results: 1,
+        int_width: IntWidth::I64,
+    }
+}
+
+/// The opcode of every instruction of a module, walked by word count.
+///
+/// A search for the word `112` would find an operand that happens to hold it, so
+/// this reads the header's five words and then steps instruction by instruction.
+fn opcodes(words: &[u32]) -> Vec<u16> {
+    let mut out = Vec::new();
+    let mut at = 5;
+    while at < words.len() {
+        let word = words[at];
+        let (count, opcode) = ((word >> 16) as u16, (word & 0xffff) as u16);
+        assert!(count > 0, "an instruction occupies at least one word");
+        out.push(opcode);
+        at += count as usize;
+    }
+    out
+}
+
+#[test]
+fn the_two_conversions_validate_in_a_float_module() {
+    // `spirv::op` is private to the crate, so the two opcode numbers this test
+    // names are the SPIR-V specification's own: 112 `OpConvertUToF`, 109
+    // `OpConvertFToU`.
+    for (what, fragment, expected) in [
+        ("int2float of the index", index_to_float(), 112),
+        ("both directions at once", crosses_both_ways(), 109),
+    ] {
+        let words = spirv::compile(
+            &fragment,
+            Binding {
+                inputs: 1,
+                outputs: 1,
+            },
+        )
+        .unwrap_or_else(|reason| panic!("{what} is refused by the emitter: {reason}"));
+        let seen = opcodes(&words);
+        assert!(
+            seen.contains(&expected),
+            "{what} emits opcode {expected}: {seen:?}"
+        );
+        validate(what, &words);
     }
 }

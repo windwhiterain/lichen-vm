@@ -118,6 +118,14 @@ mod op {
     pub const LABEL: u16 = 248;
     pub const RETURN: u16 = 253;
     pub const U_CONVERT: u16 = 113;
+    /// `OpConvertFToU` — the `float2int` crossing: a 32-bit float to the
+    /// unsigned integer type, truncating toward zero (and undefined outside what
+    /// that type holds, which is why the language refuses what the interpreter
+    /// can see is out of range).
+    pub const CONVERT_F_TO_U: u16 = 109;
+    /// `OpConvertUToF` — the `int2float` crossing.  The **unsigned** source is
+    /// the language's `Int`, so this is the conversion and not `OpConvertSToF`.
+    pub const CONVERT_U_TO_F: u16 = 111;
     /// The reinterpretation an integer constant and a float operand meet
     /// through: same width, same bits, no conversion of the value.
     pub const BITCAST: u16 = 124;
@@ -241,6 +249,20 @@ pub enum SpirvRefusal {
     /// `Int` and `Float` do not convert (`docs/notes/floating-point.md` §4.2),
     /// so there is no second element type to emit and nothing to choose between.
     MixedElementClasses,
+    /// A class conversion this target cannot name.  SPIR-V holds one scalar type
+    /// per module — the 64-bit unsigned integer in an integer module, the 32-bit
+    /// float in a float one — and the module is built for the class its buffers
+    /// and parameter leaves state.  A conversion whose operand is not that class
+    /// has no type id to emit against, and declaring the other class would cost
+    /// the capability the fragment was built without
+    /// (`docs/notes/floating-point.md` §4.4).  The *other* direction is not this
+    /// case: a float module's `int2float` converts from the 32-bit element index,
+    /// which is a type it always has.
+    UnsupportedConversion {
+        from: ScalarClass,
+        to: ScalarClass,
+        at: usize,
+    },
     /// An operation over `Float` the language has no form for. A `Float` takes
     /// `+ - * /` and the four order comparisons and nothing else
     /// (`docs/notes/floating-point.md` §3.7), so `%` and the bitwise trio have
@@ -300,6 +322,15 @@ impl fmt::Display for SpirvRefusal {
                 f,
                 "the fragment was lowered for {bits}-bit integers, which this target does not \
                  represent."
+            ),
+            SpirvRefusal::UnsupportedConversion { from, to, at } => write!(
+                f,
+                "instruction {at} converts a {from:?} to a {to:?}, and this target holds one \
+                 scalar type per module: only the class the fragment's buffers and parameter \
+                 leaves state is declared, and the other is the capability the fragment was built \
+                 without (`docs/notes/floating-point.md` §4.4). The crossing is not refused for \
+                 being a conversion — it is refused because the operand's type is not in this \
+                 module."
             ),
             SpirvRefusal::MixedElementClasses => write!(
                 f,
@@ -1093,6 +1124,47 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                     vec![ids.scalar(), result, selector.id, then.id, otherwise.id],
                 ));
                 stack.push(scalar(result, ids.class));
+            }
+            // The language's two class crossings.  **The direction is the
+            // instruction's**, and that is the whole reason the IR carries the
+            // pair: `Int → Float` and `Float → Int` have the same operand shape,
+            // so a target that read the direction off the operand would be
+            // guessing — and the two targets could guess differently.
+            //
+            // The operand is the class the conversion is *from*, and a literal or
+            // a comparison's `0`/`1` is materialised into it here — the same two
+            // positions the rest of this emitter decides a class at.
+            KernelInstr::Conv { from, to } => {
+                let (from, to) = (*from, *to);
+                let seen = pop(&mut stack, at)?;
+                let seen = as_class(seen, from, &ids, &mut literals, &mut code, &mut next, at)?;
+                // A crossing between one class and itself is a reclassification:
+                // the value already holds the answer, and nothing is emitted.
+                if from == to {
+                    stack.push(seen);
+                    continue;
+                }
+                // **This target holds one scalar type per module**, so a
+                // conversion whose operand is not the module's class has no id to
+                // name: a module declares the float type in a float module and the
+                // 64-bit integer in an integer one, and the other class is the
+                // capability the fragment had no use for
+                // (`docs/notes/floating-point.md` §4.4).  Refused by name rather
+                // than emitting an instruction over a type this module does not
+                // have.
+                if from != ids.class {
+                    return Err(SpirvRefusal::UnsupportedConversion { from, to, at });
+                }
+                let result = next;
+                next += 1;
+                let opcode = match (from, to) {
+                    // The unsigned conversions, because an `Int` is unsigned.
+                    (ScalarClass::Int, ScalarClass::Float) => op::CONVERT_U_TO_F,
+                    (ScalarClass::Float, ScalarClass::Int) => op::CONVERT_F_TO_U,
+                    _ => unreachable!("a same-class crossing returned above"),
+                };
+                code.push(Inst::new(opcode, vec![ids.type_of(to), result, seen.id]));
+                stack.push(scalar(result, to));
             }
             KernelInstr::BufferReadCall(_) => {
                 let element = pop(&mut stack, at)?;

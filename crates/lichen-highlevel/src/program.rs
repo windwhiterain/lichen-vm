@@ -548,12 +548,7 @@ pub enum TypeOperator {
     /// [`HighGlobal::next_type_id`] and returns a `TypeId(n)` type value.
     /// Nullary — the checker emits it with no operand, so it fires once per
     /// source occurrence and the cached value is reused wherever the struct
-    /// type it tags is referenced.  Firing *once* is the checker's to enforce,
-    /// not this operator's: the apply clone walk copies an operation node the
-    /// deep pass never proved concrete and drops the copy's cached value, so
-    /// the struct-type construction evaluates the identity marker it is part
-    /// of while it builds it
-    /// (`docs/notes/applied-struct-nominal-id.md`).
+    /// type it tags is referenced.
     Fresh,
     /// Binary operators over `[left, right]`.
     ///
@@ -603,6 +598,28 @@ pub enum TypeOperator {
     BitAnd,
     BitOr,
     BitXor,
+    /// The two **class conversions** — unary, over `[value]`.
+    ///
+    /// `int2float` moves an `Int` into the float class; every `Int` up to
+    /// `2^24` maps to exactly one `f32`, and beyond that the float's 24-bit
+    /// significand keeps the magnitude and drops the low bits, so the result is
+    /// the nearest representable float.  That loss is the value's own fact, not
+    /// a refusal: an `Int` is machine-sized and an `f32` is not, and no
+    /// rounding mode was ever asked for.
+    ///
+    /// `float2int` truncates toward zero (`3.7` → `3`, `-3.7` → `-3`), and it is
+    /// the one partial operator in this vocabulary: a `NaN`, an infinity, a
+    /// negative (the language's `Int` is unsigned, so there is no value to land
+    /// on) or a magnitude at or past the machine integer has **no answer**, and
+    /// [`OUT_OF_RANGE`] records that and leaves the result lazy — the
+    /// [`DIVIDE_BY_ZERO`] shape, a run-time refusal rather than a check error,
+    /// because the operand is a runtime value the checker cannot see.
+    ///
+    /// The checker pins the operand to the direction's source class and the
+    /// result is the target class, so a conversion is the *only* expression
+    /// whose type differs from its operand's.
+    Int2Float,
+    Float2Int,
 }
 
 /// The category an **integer** `Div`/`Rem` by zero is recorded under.
@@ -626,6 +643,24 @@ pub enum TypeOperator {
 ///
 /// [`eval_errors`]: lichen_lowlevel::Module::eval_errors
 pub const DIVIDE_BY_ZERO: &str = "operator.divide_by_zero";
+
+/// A `Float2Int` whose operand has no `Int` to truncate toward: a `NaN`, an
+/// infinity, a negative, or a magnitude at or past the machine integer.
+///
+/// The same shape as [`DIVIDE_BY_ZERO`] — a **run-time refusal** recorded on the
+/// lowlevel's general extension channel, answered by the lazy marker, and for
+/// the same reason: whether a float is in range is a fact about a runtime
+/// value, so the checker cannot see it and [`eval_errors`] is a closed enum of
+/// structural value facts.  `Int2Float` never refuses; every `Int` has a float
+/// (the nearest one, past `2^24`).
+///
+/// Again only the interpreter refuses: a JIT'd float→int conversion is wasm's
+/// `i32.trunc_f32_s` (a trap out of the whole invocation) or SPIR-V's
+/// `OpConvertFToU` (undefined for an out-of-range operand), and a guard would
+/// need a branch.  See `docs/notes/operators.md`.
+///
+/// [`eval_errors`]: lichen_lowlevel::Module::eval_errors
+pub const OUT_OF_RANGE: &str = "operator.out_of_range";
 
 // --- the highlevel leaves' per-leaf artifact codec --------------------------
 //
@@ -732,6 +767,8 @@ define_type_operator_codec! {
     BitAnd = 12;
     BitOr = 13;
     BitXor = 14;
+    Int2Float = 15;
+    Float2Int = 16;
 }
 
 // The highlevel program's operator vocabulary: a flat union of the
@@ -812,6 +849,56 @@ where
             TypeOperator::Fresh => {
                 let id = AsField::<HighGlobal>::get_mut(&mut module.global_ext).next_type_id();
                 P::Value::type_id_value(id)
+            }
+            // The two class conversions — one operand, held the same way the
+            // binary operators hold theirs but in a one-element array.  The
+            // checker pinned the operand to the direction's source class, so a
+            // wrong shape here arrived through an argument unify that already
+            // failed (and already reported): stay lazy rather than guess.
+            TypeOperator::Int2Float | TypeOperator::Float2Int => {
+                if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
+                    return P::Value::from(LowValue::Parameterized);
+                }
+                let Some(LowValue::Array(operands)) = operand.as_enum() else {
+                    unreachable!("a conversion expects a one-element operand array")
+                };
+                // SAFETY: `operands` is the operand array the VM just evaluated
+                // for this operation node, so its home block is alive for the
+                // duration of the run.
+                let items = unsafe { operands.items() };
+                let value = module.node_value(items[0].node);
+                if is_unbound(value) {
+                    return P::Value::from(LowValue::Parameterized);
+                }
+                let Some(value) = value else {
+                    unreachable!("is_unbound covers the empty slot")
+                };
+                match (self, value.as_enum()) {
+                    // A machine-sized `Int` into an `f32`: exact up to `2^24`,
+                    // and the nearest float above it.  That is the float's own
+                    // fact rather than a refusal — no rounding was asked for,
+                    // and an `Int` is wider than an `f32`'s significand.
+                    (TypeOperator::Int2Float, Some(LowValue::USize(n))) => {
+                        P::Value::from(LowValue::Float(n as f32))
+                    }
+                    // Truncation toward zero, with the operand shapes that have
+                    // no `Int` to land on named instead of answered by a
+                    // saturated guess.
+                    (TypeOperator::Float2Int, Some(LowValue::Float(f))) => {
+                        let truncated = f.trunc();
+                        // `usize::MAX as f64` is `2^64` (the f64 rounds up), so
+                        // this is the exclusive ceiling of the language's
+                        // unsigned machine integer on either target width.
+                        if !f.is_finite()
+                            || truncated < 0.0
+                            || (truncated as f64) >= (usize::MAX as f64)
+                        {
+                            return out_of_range(module, f);
+                        }
+                        P::Value::from(LowValue::USize(truncated as usize))
+                    }
+                    _ => P::Value::from(LowValue::Parameterized),
+                }
             }
             TypeOperator::Add
             | TypeOperator::Sub
@@ -969,6 +1056,9 @@ where
                         P::Value::from(LowValue::USize((!left.value_eq(&right)) as usize))
                     }
                     TypeOperator::Fresh => unreachable!("Fresh is handled above"),
+                    TypeOperator::Int2Float | TypeOperator::Float2Int => {
+                        unreachable!("the conversions are unary, and handled above")
+                    }
                 }
             }
         }
@@ -1013,6 +1103,8 @@ where
             | TypeOperator::BitAnd
             | TypeOperator::BitOr
             | TypeOperator::BitXor => Some(LowShape::USize),
+            TypeOperator::Int2Float => Some(LowShape::Float),
+            TypeOperator::Float2Int => Some(LowShape::USize),
             TypeOperator::Fresh => None,
         }
     }
@@ -1034,6 +1126,37 @@ where
         DIVIDE_BY_ZERO,
         None,
         format!("the divisor of this {operation} evaluated to 0, and there is no value for a {operation} by zero"),
+    );
+    P::Value::from(LowValue::Parameterized)
+}
+
+/// A `Float2Int` whose operand has no `Int` to truncate toward: record which
+/// shape it was and stay lazy — the [`DIVIDE_BY_ZERO`] answer, for the same
+/// reason (in range is a fact about a runtime value, not a checkable type).
+///
+/// The four shapes are named rather than lumped together because the fix differs
+/// for each: a `NaN` came from a refused float computation, an infinity from an
+/// overflowing one, a negative needs the value re-derived (this language's `Int`
+/// is unsigned) and an out-of-range magnitude has no machine integer at all.
+fn out_of_range<P>(module: &mut Module<P>, value: f32) -> P::Value
+where
+    P: Program,
+    P::Value: ValueType,
+    P::GlobalExt: AsField<HighGlobal>,
+{
+    let reason = if value.is_nan() {
+        "a NaN, which is a number nowhere"
+    } else if value.is_infinite() {
+        "an infinity, wider than any machine integer"
+    } else if value < 0.0 {
+        "negative, and this language's Int is unsigned"
+    } else {
+        "at or past the widest machine integer"
+    };
+    module.record_extension_diagnostic(
+        OUT_OF_RANGE,
+        None,
+        format!("this float2int operand evaluated to {value}, which is {reason}, and there is no Int for it to truncate toward"),
     );
     P::Value::from(LowValue::Parameterized)
 }

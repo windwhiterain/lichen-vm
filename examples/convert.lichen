@@ -1,0 +1,13 @@
+---
+  order = "15"
+  doc = "The two class crossings. `Int` and `Float` never convert on their own —
+`int2float` and `float2int` are the only words that carry a value across, and
+each checks its operand against its own **source** class and yields its own
+**target**. A prefix conversion binds tighter than `+`, so `int2float 1 + 2.0`
+converts the `1` and not the sum. `float2int` truncates toward zero, and a float
+with no `Int` to truncate toward (`NaN`, an infinity, a negative) is refused at
+run time as `operator.out_of_range`."
+  output = "(3.0, 3, 1, 1.0, 3.0): <Float, Int, Int, Float, Float>"
+---
+half = int2float 1 + 2.0
+(int2float 3, float2int 3.7, float2int (3.0 / 2.0), int2float (2 > 1), half)

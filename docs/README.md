@@ -39,7 +39,7 @@ Every note opens with a `> Status:` line:
 |---|---|---|
 | [Architecture overview](notes/overview.md) | — | current |
 | [Lowlevel VM](notes/lowlevel-vm.md) | `lichen-lowlevel` | current |
-| [Floating point](notes/floating-point.md) | `lichen-lowlevel` (`LowValue`/`LowShape`/`codec`), `lichen-highlevel` (`shape`/`program`/`checker`), `lichen-language-lex`/`-parser`, `lichen-render`, `lichen-language` (`persist`), `lichen-kernel-ir` | phases 0–1 landed (`f32`, no conversion, `==` is `value_eq`, refused by kernels); phase 2 proposed |
+| [Floating point](notes/floating-point.md) | `lichen-lowlevel` (`LowValue`/`LowShape`/`codec`), `lichen-highlevel` (`shape`/`program`/`checker`), `lichen-language-lex`/`-parser`, `lichen-render`, `lichen-language` (`persist`), `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu` | phases 0–2 landed (`f32`, `==` is `value_eq`, a float kernel runs on both backends); the classes meet only at `int2float` / `float2int` — see [operators](notes/operators.md) §7 |
 | [A lichen program as a whiting scene](notes/whiting-scene-document.md) | `lichen-language` (`session`/`compile`), `lichen-lowlevel`, external `whiting-definition` | proposed (the seam is one scene document; no compiler impl, no device) |
 | [Static modules & registry](notes/static-modules.md) | `lichen-lowlevel`, `lichen-language` (`persist`) | current |
 | [The computational operators](notes/operators.md) | `lichen-language-lex`/`-parser`/`-language`, `lichen-highlevel` (`ir`/`program`/`checker`), `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu` | current |
@@ -47,10 +47,8 @@ Every note opens with a `> Status:` line:
 | [Low types for a lowlevel-based JIT](notes/lowlevel-low-types.md) | `lichen-lowlevel` (`LowShape`), `lichen-highlevel` (`shape`), `lichen-compute` | implemented (Phases 3a–3c) |
 | [Type-system cleanup plan](notes/type-system-cleanup-plan.md) | `lichen-lowlevel`, `lichen-highlevel`, `lichen-compute` | current (Phases 0–5 complete) |
 | [Checker encoding: unstable at the `lichen-compute` boundary](notes/checker-encoding-instability.md) | `lichen-highlevel` (`shape`), `lichen-compute` | current (narrowed: the domain read is on low types; the body walk is the residue) |
-| [Deferred unification does not recognise every form of a type value](notes/defer-pending-type-forms.md) | `lichen-lowlevel` (`equality`), `lichen-highlevel` (`shape`) | **fixed** — every row of the matrix builds with a decided field type; the open remainder is [universe-containment](notes/universe-containment.md), not this machinery |
+| [Deferred unification does not recognise every form of a type value](notes/defer-pending-type-forms.md) | `lichen-lowlevel` (`equality`), `lichen-highlevel` (`shape`) | current — **defect open**; the split outcome is measured, the mechanism behind it is not isolated |
 | [A type value's rendering depends on its form](notes/type-rendering-inconsistent.md) | `lichen-render` (`render/type_printer`), `lichen-language` (`render`) | current — **defect open**; the four-way split is measured, which path fires for each row is not traced |
-| [An applied struct type expression is not a function](notes/applied-struct-nominal-id.md) | `lichen-highlevel` (`checker`/`ir`), `lichen-lowlevel` (`function`/`static_module`) | current — **fixed** on `feature/applied-struct-nominal-id`; the identity marker `[id, names]` is pinned at construction, so one written occurrence is one nominal type |
-| ["Contains the universe" is not "is the universe"](notes/universe-containment.md) | `lichen-render` (`render`), `lichen-lowlevel` (`equality`) | **open — diagnosed, fixes verified, not landed**; the printer half is a one-function patch (the parked `type_of` render assertions are its acceptance test), the lowlevel half also merges two frozen kinds without comparing markers and is blocked on a compute-side question |
 | [The raw mark in the printer](notes/raw-rendering-mark.md) | `lichen-render` (`render/type_printer`, `render/value_printer`) | current |
 | [Extensible attributes](notes/attributes.md) | `lichen-highlevel` (`attr`/`shape`/`ir`/`checker`), `lichen-language` (`program`/`compile`) | current |
 | [Doc attribute rework plan](notes/doc-attribute-rework-plan.md) | `lichen-language`, `lichen-highlevel` (`attr`), `lichen-language-server` (`analysis`) | current |
@@ -59,7 +57,7 @@ Every note opens with a `> Status:` line:
 | [Raw index `X<e>`](notes/raw-index.md) | `lichen-language-lex`, `lichen-language-parser`, `lichen-language` (`compile`), `lichen-highlevel` (`ir`/`checker`), `lichen-render` | current |
 | [Raw named read `X::a`](notes/raw-field.md) | `lichen-language-lex`, `lichen-language-parser`, `lichen-language` (`compile`), `lichen-highlevel` (`ir`/`checker`) | current |
 | [Placeholder `_` anywhere](notes/placeholder-anywhere.md) | `lichen-language-lex`, `lichen-language-parser`, `lichen-language-server` (`analysis`) | current |
-| [`type_of` is a standard-library function](notes/type-of-in-std.md) | `lichen-language-lex`/`-parser`, `lichen-language` (`compile`/`resolve`), `lichen-highlevel` (`ir`/`checker`), `lichen-compute`, `lichen-std` | current — **one defect diagnosed, fix not landed**: the `.sig` mis-render is a printer misclassification of a frozen kind ([universe-containment](notes/universe-containment.md)); three render assertions parked as the acceptance test |
+| [`type_of` is a standard-library function](notes/type-of-in-std.md) | `lichen-language-lex`/`-parser`, `lichen-language` (`compile`/`resolve`), `lichen-highlevel` (`ir`/`checker`), `lichen-compute`, `lichen-std` | current — **one defect open**: a library type read in a field-type position resolves to the enclosing struct kind (two `compute` render assertions parked) |
 | [No type mode](notes/no-type-mode.md) | `lichen-language-parser` | current |
 | [Record programs (modules)](notes/record-program.md) | `lichen-language-parser`, `lichen-language` (`compile`/`session`), `lichen-language-server` (`analysis`) | current |
 | [Separating lexer & parser from the language](notes/frontend-syntax-separation.md) | `lichen-language-lex`, `lichen-language-parser`, `lichen-language`, `lichen-highlevel` | current |
@@ -77,13 +75,11 @@ Every note opens with a `> Status:` line:
 | [README example sync](notes/readme-sync.md) | `lichen-language` (`readme`) | current |
 | [lichen-compute: the JIT package](notes/lichen-compute.md) | `lichen-compute`, `lichen-language` (`program`/`package`), `lichen-highlevel` (`native`) | current |
 | [Kernels as `.native`/`.sig` structs](notes/compute-kernel-struct.md) | `lichen-compute`, `lichen-language` (`program`) | current |
-| [Handoff: a parallel kernel whose parameter is a struct](notes/compute-param-struct-handoff.md) | `lichen-compute` (`compute.lichen`, `compute.rs`), `lichen-highlevel` (`shape`) | open — **two blockers**; the type lambdas, the role table and the signature-carrying entry are measured working |
 | [Parallel buffer map (`range`/`read`/`write`)](notes/compute-parallel-buffer-read-write.md) | `lichen-compute` | current |
 | [Loop conversion: recursion into a loop nest](notes/loop-conversion.md) | `lichen-language-lex`/`-parser`, `lichen-highlevel` (`ir`/`checker`), `lichen-kernel-ir` (`KernelBody`/`Flow`/`Terminator`), `lichen-compute` (`lower_body`), `lichen-compute-gpu` (`spirv.rs`/`dispatch.rs`) | **in progress** — four decisions closed (unroll by default, `@loop` opts in, tail-recursive cycles only, no write in a loop body); the conversion runs in **evaluation**. Landed: the `KernelBody` IR + validator, the wasm emitter, and the `@loop` keyword. The evaluator's loop recording and the SPIR-V emitter are not written |
 | [The GPU backend for the lowered-kernel IR](notes/lichen-compute-gpu.md) | `lichen-compute-gpu`, `lichen-kernel-ir` | current |
 | [Graph JIT: a chain of dispatches as one submission](notes/compute-graph-jit.md) | `lichen-graph-ir`, `lichen-compute` (`compute/graph.rs`) | current |
 | [The compute JIT on low types](notes/compute-jit-low-types.md) | `lichen-compute` | current |
-| [Floating point: `Float` as a ninth kind marker](notes/floating-point.md) | `lichen-lowlevel`, `lichen-highlevel`, `lichen-language-*` | proposed — nothing implemented |
 | [The GPU algorithm roadmap](notes/gpu-algorithm-roadmap.md) | `lichen-compute`, `lichen-kernel-ir`, `lichen-compute-gpu` | **proposal** — the order the four axes go in |
 | [The GPU algorithm ladder](notes/gpu-algorithms-ladder.md) | `lichen-compute`, `lichen-compute-gpu` | exploration record — the evidence the roadmap argues from |
 | [Parallel primitives (`parallel`/`plrun`/`pget`/`pcollect`)](notes/lichen-compute-parallel.md) | `lichen-compute` | historical |

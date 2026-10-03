@@ -252,8 +252,9 @@ where
         // A binary operator's expected side is the class the operation
         // computes over — `Int` for the `Int`-only operators and the default
         // class, `Float` when an operand selected it — so the expected half is
-        // read from the report rather than spelled here.
-        DiagKind::BinOp => format!(
+        // read from the report rather than spelled here.  A conversion reads it
+        // the same way: its expected side is the direction's source class.
+        DiagKind::BinOp | DiagKind::Conv => format!(
             "expected {}, found {}",
             printer.node(d.b),
             printer.node(d.a)

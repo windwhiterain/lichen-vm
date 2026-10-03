@@ -189,8 +189,10 @@ The criterion is bit-for-bit agreement, checked three ways per run: against a
 IR. The expected vector is the point — comparing the GPU only against another
 implementation of the same reading would pass a fragment that both misread.
 
-`cargo test -p lichen-compute-gpu` on the target above: **16 passing** — 12 device runs
-(10 in `gpu_matches_cpu`, 2 graph runs in `graph_on_device`) and 4 refusals. The refusal
+`cargo test -p lichen-compute-gpu` on the target above: **19 passing** — 12 device runs
+(10 in `gpu_matches_cpu`, 2 graph runs in `graph_on_device`), 5 refusals, and 2
+`spirv_validation` runs; those two shell out to the SDK's `spirv-val`, so they are the
+only target that needs it installed. The refusal
 tests need no device, deliberately: a refusal that only appeared once a GPU was present
 would be untestable on a machine without one.
 

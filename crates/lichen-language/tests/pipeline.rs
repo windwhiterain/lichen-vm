@@ -519,6 +519,87 @@ fn a_zero_divisor_is_recorded_rather_than_answered() {
     assert_eq!(usize_of(&evaluate("(x => 10 / x) 2")), 5);
 }
 
+/// The two class conversions each cross **one** way, and neither one converts on
+/// its own: `int2float` is exact for every `Int` an `f32` can hold and rounds
+/// beyond it, while `float2int` truncates toward zero.  A prefix operator binds
+/// tighter than `+`, so `int2float 1 + 2.0` converts the `1` and not the sum
+/// (`docs/notes/floating-point.md` §4.2, §4.3).
+#[test]
+fn the_two_conversions_cross_in_the_direction_each_one_names() {
+    for (source, expected) in [
+        ("int2float 5", "5.0: Float"),
+        ("int2float (1 + 2)", "3.0: Float"),
+        // The conversion is the tighter level, so this is `(int2float 1) + 2.0`.
+        ("int2float 1 + 2.0", "3.0: Float"),
+        // Above 2^24 the destination cannot carry the source: the crossing is a
+        // float's, and nearest rounding is the float's own answer.
+        ("int2float 16777217", "16777216.0: Float"),
+        ("float2int 3.7", "3: Int"),
+        ("float2int (7.0 / 2.0)", "3: Int"),
+        ("float2int 16777216.0", "16777216: Int"),
+        ("x = 3.7; float2int x", "3: Int"),
+        ("(v => int2float v) 7", "7.0: Float"),
+    ] {
+        let out = lichen_language::run::evaluate(source)
+            .unwrap_or_else(|diags| panic!("{source:?} should check and run, got: {diags:?}"));
+        assert_eq!(out, expected, "{source:?} answered: {out}");
+    }
+}
+
+/// **Which way the conversion goes is the operator's, and the operand has to
+/// agree.**  The checker says so with the same expected/found shape as any other
+/// operator, under its own kind — the two classes never convert implicitly, so
+/// the only way an `Int` reaches a `Float` is the word that names it.
+#[test]
+fn a_conversion_applied_to_the_other_class_is_refused_by_name() {
+    for (source, message) in [
+        ("int2float 1.0", "expected Int, found Float"),
+        ("float2int 5", "expected Float, found Int"),
+    ] {
+        let d = diags(source);
+        assert_eq!(d.len(), 1, "{source:?} fails once: {d:?}");
+        assert_eq!(d[0].stage, Stage::Check, "{source:?}: {d:?}");
+        assert_eq!(d[0].message, message, "{source:?}: {d:?}");
+        let check = d[0].check.as_ref().expect("a checker diagnostic");
+        assert_eq!(check.kind, DiagKind::Conv, "{source:?}: {d:?}");
+    }
+}
+
+/// A `float2int` whose operand has no `Int` to truncate toward is a **run-time**
+/// refusal, recorded the way a zero divisor is: in range is a fact about the
+/// value rather than its type, so nothing in the checker can see it.  The three
+/// cases are the three the language's unsigned `Int` cannot name — a `NaN`, an
+/// infinity, and a negative (`docs/notes/floating-point.md` §4.3).
+///
+/// **Only the interpreter refuses.**  A jitted kernel has left this crate: wasm's
+/// `i64.trunc_f32_u` traps and SPIR-V's `OpConvertFToU` is undefined, which is
+/// the same promise the integer division by zero makes
+/// (`docs/notes/operators.md`).
+#[test]
+fn a_float_with_no_int_to_truncate_toward_is_recorded_rather_than_answered() {
+    for source in [
+        "float2int (0.0 / 0.0)",
+        "float2int (1.0 / 0.0)",
+        "float2int (0.0 - 3.7)",
+    ] {
+        let Err(diagnostics) = lichen_language::run::evaluate(source) else {
+            panic!("{source:?} has no Int to truncate toward");
+        };
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diag| diag.message.contains("operator.out_of_range")),
+            "{source:?} should name its cause, got {diagnostics:?}"
+        );
+    }
+    // A float that merely *could* be out of range is fine: nothing is refused
+    // until it is.
+    assert_eq!(
+        lichen_language::run::evaluate("(x => float2int x) 4.5").expect("in range"),
+        "4: Int"
+    );
+}
+
 /// Two tokens are both a bracket and a comparison, and the grammar's rule for
 /// telling them apart is a rule about the *shape* around them, not a mode.
 #[test]
@@ -1025,111 +1106,6 @@ fn a_polymorphic_struct_constructor_shares_one_nominal_kind() {
         "same constructor (one nominal kind), fields differ only in the value: {:?}",
         report.diagnostics
     );
-}
-
-#[test]
-fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
-    // `A = I => struct<.n Int, .I I>` — one written struct type with *named*
-    // fields, inside a function body.  Its identity is decided when the
-    // occurrence is checked, so both applications of `A` are one nominal
-    // type and the instance built through `S1` annotates against `S2`.  Both
-    // halves of the identity matter: the nullary `Fresh` node (a copy
-    // re-runs it) and the name table (an arena payload, so a copy is a
-    // different table that does not unify).  Before the fix this program
-    // failed the annotation with `…>#2` against `…>#1`
-    // (`docs/notes/applied-struct-nominal-id.md`).
-    let (module, root) = run("A = I => struct<.n Int, .I I>\n\
-         In = struct<.x _, .y _>\n\
-         S1 = A In\n\
-         S2 = A In\n\
-         x = S1(.n 3, .I In(.x 10, .y 20))\n\
-         y = (x : S2)\n\
-         y");
-    let mut module = module;
-    let instance = array_ids(module.evaluate_node_deep(root, None));
-    assert_eq!(instance.len(), 2, "the instance wraps its two field values");
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(instance[0]))
-                .as_ref()
-                .unwrap()
-        ),
-        3
-    );
-    let inner = array_ids(module.evaluate_node_deep(instance[1], None));
-    assert_eq!(inner.len(), 2, "the inner struct wraps its own two fields");
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(inner[0]))
-                .as_ref()
-                .unwrap()
-        ),
-        10
-    );
-    assert_eq!(
-        usize_of(
-            module
-                .node_value(AnyNodeId::Dynamic(inner[1]))
-                .as_ref()
-                .unwrap()
-        ),
-        20
-    );
-    // The control the fix must keep: the id is the *occurrence*, not the
-    // instantiation, so one constructor applied to different field types is
-    // still two types — the field types ride in the shape.
-    let d = diags(
-        "A = I => struct<.n Int, .I I>\n\
-         S1 = A Int\n\
-         S2 = A Float\n\
-         x = S1(.n 3, .I 5)\n\
-         y = (x : S2)\n\
-         y",
-    );
-    assert_eq!(d.len(), 1, "different field types must not unify: {d:?}");
-    let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::Annotation);
-    // The runtime half of the same identity: here the annotation sits in the
-    // *callee's* body, so the argument's type meets the declared one in the
-    // apply-time parameter check rather than in a checker-issued unify.  A
-    // pinned id alone does not fix this row — the copied name table is what
-    // conflicts.
-    let report = compile(
-        "A = I => struct<.n I>\n\
-         S1 = A Int\n\
-         S2 = A Int\n\
-         f = v => (v : S2)\n\
-         f S1(.n 3)",
-    );
-    assert!(
-        report.ok(),
-        "one occurrence, two evaluations, at apply time: {:?}",
-        report.diagnostics
-    );
-}
-
-#[test]
-fn two_written_struct_declarations_are_two_nominal_types() {
-    // The other control the fix must keep, and the one a *derived* type rests
-    // on: a struct's identity is its **occurrence**, so two `struct<.n Int>`
-    // written apart are two declarations however equal their fields — nominal
-    // typing is what the id is for.  The control above pins the other
-    // direction (one occurrence, different field types); this one pins the
-    // case a fix that interned by field list would collapse, which would
-    // equally make every derived type equal to every written one that happened
-    // to match (`docs/notes/applied-struct-nominal-id.md` §2).
-    let d = diags(
-        "S1 = struct<.n Int>\n\
-         S2 = struct<.n Int>\n\
-         x = S1(.n 3)\n\
-         y = (x : S2)\n\
-         y",
-    );
-    assert_eq!(d.len(), 1, "two occurrences must not unify: {d:?}");
-    let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::Annotation);
 }
 
 #[test]

@@ -2755,6 +2755,7 @@ fn assemble_module(
             read_index: &read_ty,
             write_index: &write_ty,
             class,
+            leaves: &param_classes(frag),
         };
         lower_body(frag, &mut state, &mut body)?;
         body.instruction(&Instruction::End);
@@ -2979,6 +2980,29 @@ fn check_instr(
                 _ => OperandClass::Scalar(class),
             });
         }
+        // The language's two class crossings (`int2float`/`float2int`) as one
+        // instruction.  **The pair is what makes it explicit**: `Int → Float` and
+        // `Float → Int` have the same shape on a stack machine, so a backend that
+        // read the direction off the operand would be guessing — and the two
+        // backends could guess differently (`docs/notes/floating-point.md` §5.1).
+        //
+        // The operand must be the class the instruction converts *from*, and
+        // nothing gives way: `1.5 + 1` and `int2float 1.0` are refusals made
+        // before any of this.
+        //
+        // `from == to` is a **reclassification, not a no-op**: it is what the
+        // emitter writes for a value that already holds its result's
+        // representation, so this walk reads it as a `to` rather than as the
+        // class it was.  A value the walk cannot name stays unnamed rather than
+        // being asserted into `to`.
+        KernelInstr::Conv { from, to } => {
+            let seen = pop_class(stack);
+            let seen = as_operand_class(seen, from, at)?;
+            stack.push(match seen {
+                OperandClass::Opaque => OperandClass::Opaque,
+                _ => OperandClass::Scalar(to),
+            });
+        }
         // **The stack is unknown from here on**, so it is emptied rather than
         // guessed at: the callee's arity is its own domain's, this walk has only
         // the fragment, and a value it cannot place is not a value of the other
@@ -3127,6 +3151,15 @@ struct WasmState<'a> {
     /// [`fragment_class`] before emission — the class of every local a loop
     /// carries and of every block type the body names.
     class: ScalarClass,
+    /// The **parameter leaves'** classes, in `LocalGet` order — what the ABI
+    /// typed each local with.
+    ///
+    /// A leaf's class is its own and does not follow the fragment's: a parallel
+    /// fragment's count and index are integers whatever the body computes, and a
+    /// scalar fragment's leaves are the classes its author annotated
+    /// ([`param_classes`]).  Reading one for a `LocalGet` is what lets a
+    /// [`KernelInstr::Conv`] see the representation the value actually holds.
+    leaves: &'a [ScalarClass],
 }
 
 impl WasmState<'_> {
@@ -3430,10 +3463,15 @@ fn buffered_classes(ordered: &[KernelFragment]) -> Vec<ScalarClass> {
 /// `i` is wasm index `base + i`).  `BufferReadCall`/`BufferWriteCall` lower to
 /// the `read` (index 0) and `write` (index 1) imports.
 ///
-/// The class the instructions are lowered in is the state's — the fragment's,
-/// decided before emission, so every constant is already in the representation
-/// its opcode reads ([`const_bits`]) and every arithmetic operator is the
-/// class's.
+/// **Every instruction carries its own class**, so nothing here is decided by
+/// the fragment: a constant is already in the representation its opcode reads
+/// ([`const_bits`]) and an arithmetic operator is its own class's.  What *is*
+/// tracked here is the **representation each value actually holds**, because one
+/// instruction cannot state it: a [`KernelInstr::Conv`] names the classes the
+/// *language* asked for, while the value on the stack was built by whatever
+/// emitted it — and at the ABI the two disagree, since a float fragment's index
+/// and count arrive in `f32` locals while the language's number is an `Int`.
+/// Lowering the crossing needs the representation, not the class name.
 fn lower_instrs(
     body: &[KernelInstr],
     state: &mut WasmState<'_>,
@@ -3441,6 +3479,10 @@ fn lower_instrs(
 ) -> Result<(), String> {
     use wasm_encoder::Instruction;
     let (index, base) = (state.index, state.base);
+    // The representation of each value the sequence has left on the stack, or
+    // `None` for one this lowering cannot name (a cross-kernel call's result —
+    // its domain is the callee's, which this crate does not read here).
+    let mut repr: Vec<Option<ScalarClass>> = Vec::new();
 
     for instr in body {
         // `KernelInstr` is `Copy`, so this matches it **by value**: an
@@ -3452,8 +3494,10 @@ fn lower_instrs(
                     ScalarClass::Int => Instruction::I64Const(n),
                     ScalarClass::Float => Instruction::F32Const(f32::from_bits(n as u32)),
                 });
+                repr.push(Some(class));
             }
-            KernelInstr::Bin(class, op) => match op {
+            KernelInstr::Bin(class, op) => {
+                match op {
                 KernelBin::Add => {
                     out.instruction(&arithmetic(class, Instruction::I64Add, Instruction::F32Add));
                 }
@@ -3522,21 +3566,43 @@ fn lower_instrs(
                 KernelBin::BitXor => {
                     out.instruction(&Instruction::I64Xor);
                 }
-            },
+                }
+                // The operand's class, unless this is a comparison: a comparison
+                // yields the language's `0`/`1` scalar, which is an `i64` in
+                // either class.
+                repr.pop();
+                repr.pop();
+                repr.push(Some(if is_comparison(op) {
+                    ScalarClass::Int
+                } else {
+                    class
+                }));
+            }
             KernelInstr::LocalGet(k) => {
                 out.instruction(&Instruction::LocalGet(k));
+                // A parameter leaf's class is the slot's, which the ABI typed —
+                // not the fragment's, and not the language's.
+                repr.push(state.leaves.get(k as usize).copied());
             }
             KernelInstr::I32WrapI64 => {
                 out.instruction(&Instruction::I32WrapI64);
             }
             KernelInstr::Select => {
                 out.instruction(&Instruction::Select);
+                let otherwise = repr.pop().flatten();
+                repr.pop();
+                repr.pop();
+                repr.push(otherwise);
             }
             KernelInstr::CallKernel(kid) => {
                 let target = *index.get(&kid).ok_or_else(|| {
                     format!("cross-kernel call to kernel {kid} is not in the assembled set")
                 })?;
                 out.instruction(&Instruction::Call(base + target));
+                // The callee's result class is its own domain's, which this
+                // crate does not read here: an unnamed value is not asserted to
+                // be either class.
+                repr.push(None);
             }
             KernelInstr::BufferReadCall(class) => {
                 // The `read` import for this element's class.
@@ -3544,6 +3610,9 @@ fn lower_instrs(
                     format!("compute.wasm: no `read` import was declared for {class:?} elements")
                 })?;
                 out.instruction(&Instruction::Call(target));
+                repr.pop();
+                repr.pop();
+                repr.push(Some(class));
             }
             KernelInstr::BufferWriteCall(class) => {
                 // The `write` import for this element's class.
@@ -3551,17 +3620,75 @@ fn lower_instrs(
                     format!("compute.wasm: no `write` import was declared for {class:?} elements")
                 })?;
                 out.instruction(&Instruction::Call(target));
+                repr.pop();
+                repr.pop();
+                repr.pop();
+            }
+            // The crossing.  `from` and `to` are what the **language** asked
+            // for; what wasm holds is the value the stack carries, and the two
+            // are different questions — which is why the emission reads one to
+            // answer the other.
+            //
+            // The classes are the language's, so this is the one place a
+            // representation can differ from the class a later instruction names:
+            // a float fragment's index and count are `f32` locals already, while
+            // the number the language means is an `Int`.
+            KernelInstr::Conv { to, .. } => {
+                let seen = repr.pop().flatten();
+                let mut convert = |opcode: Instruction<'static>| {
+                    out.instruction(&opcode);
+                    repr.push(Some(to));
+                };
+                match (seen, to) {
+                    // Already the target's representation: the conversion is a
+                    // reclassification and wasm is told nothing.
+                    (Some(seen), to) if seen == to => repr.push(Some(to)),
+                    // A value this lowering cannot name is not asserted to be
+                    // either class; the target's representation is what it now
+                    // reads as, and wasm's own validator is what checks that.
+                    (None, to) => repr.push(Some(to)),
+                    (Some(ScalarClass::Int), ScalarClass::Float) => {
+                        convert(Instruction::F32ConvertI64U);
+                    }
+                    (Some(ScalarClass::Float), ScalarClass::Int) => {
+                        convert(Instruction::I64TruncF32U);
+                    }
+                    (Some(seen), to) => {
+                        return Err(format!(
+                            "compute.wasm: a {seen:?} value cannot be lowered as a {to:?} conversion \
+                             — the instruction names a crossing this body's value is not on either \
+                             side of"
+                        ));
+                    }
+                }
             }
         }
     }
     Ok(())
 }
 
+/// Whether a binary operator yields the language's `0`/`1` scalar rather than a
+/// value of its operand class.
+///
+/// Both backends read this: a comparison's result is an `i64` in either class,
+/// so it is the one `Bin` output whose representation is not its class.
+fn is_comparison(operator: KernelBin) -> bool {
+    matches!(
+        operator,
+        KernelBin::Lt
+            | KernelBin::Gt
+            | KernelBin::Leq
+            | KernelBin::Geq
+            | KernelBin::Eq
+            | KernelBin::Neq
+    )
+}
+
 /// The opcode one arithmetic operator lowers to for a fragment's class.
 ///
-/// The class is the fragment's, and it is the same class for every operator in
-/// the body: the emitter refuses an operator whose operands are the other class,
-/// so a `Bin` never mixes the two families.
+/// The class is the instruction's own: the emitter refuses an operator whose
+/// operands are the other class, so a `Bin` never mixes the two families — but
+/// one body may hold operators of both, and this reads the one it is lowering.
 fn arithmetic<'a>(
     class: ScalarClass,
     int: wasm_encoder::Instruction<'a>,
@@ -4009,18 +4136,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let mut value = value_of_node(module, node)
-        .or_else(|| pair_value_node(module, node))
-        .unwrap_or(node);
-    // A constant selection over a materialized array is the wrapper's
-    // destructuring, and the element behind it is the value whose class is being
-    // asked for — the same step `emit_node` makes before it reaches it.
-    for _ in 0..8 {
-        let Some(element) = concrete_element(module, value) else {
-            break;
-        };
-        value = element;
-    }
+    let value = resolve_literal_node(module, node);
     if module.node_operation(value).is_none()
         && let Some(held) = module
             .node_value(AnyNodeId::Dynamic(value))
@@ -4035,6 +4151,58 @@ where
     module
         .low_type_of_node(value)
         .map_or(ScalarClass::Int, |shape| scalar_class_of(&shape))
+}
+
+/// The node whose **value or low type** states a term's class — the `[value,
+/// type]` pair an expression is, the extraction over one, and the element a
+/// constant selection picks out of a materialized array, walked to the term
+/// that states the answer.
+///
+/// This is the unwrap [`node_class`] makes at every emit site, named once: a
+/// caller that wants the *node* rather than its class (the conversion fold, which
+/// reads the literal's own value) needs the same node, and two spellings of the
+/// walk would be two answers to one question.
+fn resolve_literal_node<P>(module: &Module<P>, node: NodeId) -> NodeId
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let mut value = value_of_node(module, node)
+        .or_else(|| pair_value_node(module, node))
+        .unwrap_or(node);
+    for _ in 0..8 {
+        let Some(element) = concrete_element(module, value) else {
+            break;
+        };
+        value = element;
+    }
+    value
+}
+
+/// The scalar **literal** a term holds, if it is one: the `USize` or `Float`
+/// value the checker already decided.
+///
+/// **The value slot answers first**, exactly as [`emit_node`] reads it.  A node
+/// the checker concretised carries an operation *and* a value, and the emission
+/// uses the value — so a fold that asked about the operation first would leave
+/// that value to be emitted as a constant of whichever class the body has, which
+/// for a float under an integer body is a bit pattern no backend was promised an
+/// answer for.
+fn scalar_literal<P>(module: &Module<P>, node: NodeId) -> Option<LowValue>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let value = resolve_literal_node(module, node);
+    match module
+        .node_value(AnyNodeId::Dynamic(value))
+        .and_then(|held| AsEnum::<LowValue>::as_enum(&held))?
+    {
+        held @ (LowValue::USize(_) | LowValue::Float(_)) => Some(held),
+        _ => None,
+    }
 }
 
 /// The kernel-safe reading of a highlevel binary operator — the one conversion
@@ -4063,8 +4231,30 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
         TypeOperator::BitAnd => KernelBin::BitAnd,
         TypeOperator::BitOr => KernelBin::BitOr,
         TypeOperator::BitXor => KernelBin::BitXor,
+        // The two class conversions are **unary**, so they are not this
+        // mapping's question at all: they lower to [`KernelInstr::Conv`], which
+        // names both classes, and `emit_node` answers them before it reaches
+        // here.
+        TypeOperator::Int2Float | TypeOperator::Float2Int => return None,
         TypeOperator::Fresh => return None,
     })
+}
+
+/// The two classes a conversion operator crosses, and the word the language
+/// spells it with — its source, its destination, and the name a refusal is
+/// written in.
+///
+/// **The direction is the operator's, and nothing else's.**  A body's own class
+/// cannot answer it: `int2float` in a `Float` fragment and `float2int` in an
+/// `Int` one have that class as their *destination* in one case and as their
+/// *source* in the other, so a lowering that inferred the direction would
+/// silently swap the two programs.
+fn conv_of(operator: TypeOperator) -> Option<(ScalarClass, ScalarClass, &'static str)> {
+    match operator {
+        TypeOperator::Int2Float => Some((ScalarClass::Int, ScalarClass::Float, "int2float")),
+        TypeOperator::Float2Int => Some((ScalarClass::Float, ScalarClass::Int, "float2int")),
+        _ => None,
+    }
 }
 
 /// Emit wasm instructions for one lichen graph node — the scalar kernel-safe
@@ -4290,6 +4480,71 @@ where
                     .into(),
             ),
         }
+    }
+    // The two class conversions.  They are **unary**, so they are answered
+    // before the binary path below — and the crossing they name is the one thing
+    // a backend may not infer, which is why the IR carries both classes.
+    if let Some(ty_op) = AsEnum::<TypeOperator>::as_enum(op)
+        && let Some((from, to, name)) = conv_of(ty_op)
+    {
+        let operand = operation
+            .operand
+            .ok_or_else(|| format!("`{name}`'s operand array is missing"))?;
+        let items = operand_items(module, operand)?;
+        if items.len() != 1 {
+            return Err(format!(
+                "`{name}` takes one operand and its operand array has {}",
+                items.len()
+            ));
+        }
+        let operand = dyn_node(items[0].node)?;
+        // **A literal converts here, in the language's own classes.**  The
+        // conversion is the one instruction whose operand and result are
+        // different classes, so a literal the checker already decided can be
+        // folded to its result rather than emitted as a constant of the operand's
+        // class and converted at run time.  The classes folded are the ones the
+        // *language* names, not the body's: the direction is the operator's.
+        if let Some(literal) = scalar_literal(module, operand) {
+            let (held, number) = match literal {
+                LowValue::USize(n) => (ScalarClass::Int, n as i64),
+                LowValue::Float(f) => {
+                    let truncated = f.trunc();
+                    // The range rule the interpreter answers with
+                    // `operator.out_of_range`.  A kernel has no channel to record
+                    // a diagnostic — wasm traps and SPIR-V is undefined — so a
+                    // literal this layer can see is refused by name, where the
+                    // answer is the same for both backends.
+                    if !f.is_finite()
+                        || truncated < 0.0
+                        || (truncated as f64) >= (usize::MAX as f64)
+                    {
+                        return Err(format!(
+                            "`{name}` of {f} is out of range for the language's unsigned `Int`: a \
+                             kernel cannot record the diagnostic the interpreter would, so the \
+                             conversion is refused rather than answered with a trap or an \
+                             undefined value"
+                        ));
+                    }
+                    (ScalarClass::Float, truncated as i64)
+                }
+                _ => unreachable!("`scalar_literal` answers only the two scalar classes"),
+            };
+            // The direction is the operator's, and a literal of the class it does
+            // not name means the graph and the word disagree: folding by the
+            // literal's own class would answer `int2float 3.5` with `3`.
+            if held != from {
+                return Err(format!(
+                    "`{name}` converts a {from:?} and its operand is a {held:?} literal — the two \
+                     classes do not convert to each other on their own, so this graph names one \
+                     operator and carries a value of the other"
+                ));
+            }
+            body.push(KernelInstr::Const(to, const_bits(to, number)));
+            return Ok(());
+        }
+        emit_node(module, params, operand, depth + 1, body, tally)?;
+        body.push(KernelInstr::Conv { from, to });
+        return Ok(());
     }
     // The highlevel's type-level arithmetic over `[left, right]`.
     if let Some(ty_op) = AsEnum::<TypeOperator>::as_enum(op) {
