@@ -800,8 +800,8 @@ pub struct ResidentBuffer {
 /// `Float` element is an `f32`'s bits in the low 32 bits.
 ///
 /// The word-per-element shape is the **parallel interpreter's own state**, not
-/// the ABI's: its `read`/`write` imports are typed in the fragment's class, so a
-/// float run hands its bits over in a word and the imports read them.  What
+/// the ABI's: its `read`/`write` imports are typed in the class each call names,
+/// so a float run hands its bits over in a word and the imports read them.  What
 /// crosses the boundary — an arena payload, a graph argument, a [`BufferSlot`] —
 /// is packed at [`ScalarClass::byte_width`] bytes per element, and
 /// [`pack_elements`]/[`unpack_elements`] are the two places the two shapes are
@@ -1373,11 +1373,11 @@ where
                     // A count that is a **decided** `Float` is refused by name
                     // rather than left lazy.  Staying lazy here would mean the
                     // dispatch quietly does not run and nothing says so, which is
-                    // the one answer this channel exists to stop giving — the
-                    // positions and the written value now share one class
-                    // (`WriteOp`), so a float kernel's count is `Float` all the
-                    // way here and a `plrun k (4.0,)` used to be accepted and
-                    // then skipped.
+                    // the one answer this channel exists to stop giving — a
+                    // parallel parameter's scalar leaves are seeded `USize`
+                    // whatever the body computes in (`compile_parallel_fragment`),
+                    // so a count is an `Int` in every fragment and `plrun k (4.0,)`
+                    // used to be accepted and then skipped.
                     //
                     // An *undecided* count is still lazy: that is a program the
                     // language has not evaluated yet, not a mistake, and the arm
@@ -2094,15 +2094,12 @@ where
     // wasm signature and the value the launcher reads back are both a function
     // of the body's own value rather than of a hardcoded one.
     let leaves = codomain_leaves(module, ret_value)?;
-    // **The fragment's class, decided before anything is emitted.**  A body is
-    // written in one class (`docs/notes/floating-point.md` §4.2), and every
-    // instruction the emitter produces — a constant's representation, an
-    // arithmetic opcode, the result types — is lowered in it, so it has to be
-    // known before the first instruction rather than read off the finished body.
-    // **A codomain may mix the two.**  Every leaf is lowered in its own class, so
-    // there is no single class for the body to have, and the emitted function's
-    // result list is typed per position (`result_classes`) rather than one class
-    // repeated.
+    // **A codomain may mix the two.**  Every leaf is lowered in its own class
+    // (`docs/notes/floating-point.md` §4.2 gives the two classes their own
+    // values and makes every crossing between them explicit), so there is no
+    // single class for the body to have: the emitted function's result list is
+    // typed per position (`result_classes`), and the class read here is only the
+    // **filler** for what no leaf states.
     let result_classes: Vec<ScalarClass> = leaves
         .iter()
         .map(|leaf| node_class(module, *leaf))
@@ -2347,9 +2344,8 @@ where
     // for the write-only kernel.  That dummy is exactly **one** value, which is
     // what this fragment's `results` records — a parallel kernel's result
     // buffers are its outputs, not its wasm results, and the run reads them out
-    // of the buffers the `write` import filled.  It is a value of the fragment's
-    // class like every other value in the body, so the signature's result type
-    // follows the class too.
+    // of the buffers the `write` import filled.  It is a value of the class the
+    // first write states, so the signature's result type follows that class.
     body_instr.push(KernelInstr::Const(class, const_bits(class, 0)));
     // **The declared input count.**  A struct parameter declares it as `.in`'s
     // field count, and a `(n, (buffers…))` one as the highest position the body
@@ -3375,7 +3371,7 @@ fn lower_flow(
     }
 }
 
-/// The wasm value type a fragment's class is lowered to.
+/// The wasm value type a class is lowered to.
 fn value_type(class: ScalarClass) -> wasm_encoder::ValType {
     match class {
         ScalarClass::Int => wasm_encoder::ValType::I64,
@@ -3498,74 +3494,102 @@ fn lower_instrs(
             }
             KernelInstr::Bin(class, op) => {
                 match op {
-                KernelBin::Add => {
-                    out.instruction(&arithmetic(class, Instruction::I64Add, Instruction::F32Add));
-                }
-                KernelBin::Sub => {
-                    out.instruction(&arithmetic(class, Instruction::I64Sub, Instruction::F32Sub));
-                }
-                KernelBin::Mul => {
-                    out.instruction(&arithmetic(class, Instruction::I64Mul, Instruction::F32Mul));
-                }
-                // An `Int` is unsigned, so these are the unsigned division,
-                // remainder and comparisons (`I64DivS` would agree below 2^63
-                // and differ above).  A **float division is IEEE and unguarded**
-                // — the language does not specify a kernel's float division by
-                // zero and promises nothing about it, so no guard is added here
-                // (`docs/notes/floating-point.md` §4.4).
-                //
-                // The order comparisons yield an `i32` boolean in both classes
-                // (wasm's float comparisons are `i32` too), which is widened to
-                // the `0/1` scalar the language has instead of a `Bool` — the
-                // same widening `Eq` needs.
-                KernelBin::Div => {
-                    out.instruction(&arithmetic(
-                        class,
-                        Instruction::I64DivU,
-                        Instruction::F32Div,
-                    ));
-                }
-                KernelBin::Rem => {
-                    // `Rem` and the bitwise trio have no float form and the
-                    // emitter refuses a float operand by name, so these are
-                    // always the language's Int-scalar operators — including
-                    // over two comparison results, which are `0/1` scalars even
-                    // in a float fragment.
-                    out.instruction(&Instruction::I64RemU);
-                }
-                KernelBin::Lt => {
-                    out.instruction(&comparison(class, Instruction::I64LtU, Instruction::F32Lt));
-                    out.instruction(&Instruction::I64ExtendI32U);
-                }
-                KernelBin::Gt => {
-                    out.instruction(&comparison(class, Instruction::I64GtU, Instruction::F32Gt));
-                    out.instruction(&Instruction::I64ExtendI32U);
-                }
-                KernelBin::Leq => {
-                    out.instruction(&comparison(class, Instruction::I64LeU, Instruction::F32Le));
-                    out.instruction(&Instruction::I64ExtendI32U);
-                }
-                KernelBin::Geq => {
-                    out.instruction(&comparison(class, Instruction::I64GeU, Instruction::F32Ge));
-                    out.instruction(&Instruction::I64ExtendI32U);
-                }
-                KernelBin::Eq => {
-                    out.instruction(&comparison(class, Instruction::I64Eq, Instruction::F32Eq));
-                    out.instruction(&Instruction::I64ExtendI32U);
-                }
-                KernelBin::Neq => {
-                    out.instruction(&comparison(class, Instruction::I64Ne, Instruction::F32Ne));
-                    out.instruction(&Instruction::I64ExtendI32U);
-                }
-                KernelBin::BitAnd => {
-                    out.instruction(&Instruction::I64And);
-                }
-                KernelBin::BitOr => {
-                    out.instruction(&Instruction::I64Or);
-                }
-                KernelBin::BitXor => {
-                    out.instruction(&Instruction::I64Xor);
-                }
+                    KernelBin::Add => {
+                        out.instruction(&arithmetic(
+                            class,
+                            Instruction::I64Add,
+                            Instruction::F32Add,
+                        ));
+                    }
+                    KernelBin::Sub => {
+                        out.instruction(&arithmetic(
+                            class,
+                            Instruction::I64Sub,
+                            Instruction::F32Sub,
+                        ));
+                    }
+                    KernelBin::Mul => {
+                        out.instruction(&arithmetic(
+                            class,
+                            Instruction::I64Mul,
+                            Instruction::F32Mul,
+                        ));
+                    }
+                    // An `Int` is unsigned, so these are the unsigned division,
+                    // remainder and comparisons (`I64DivS` would agree below 2^63
+                    // and differ above).  A **float division is IEEE and unguarded**
+                    // — the language does not specify a kernel's float division by
+                    // zero and promises nothing about it, so no guard is added here
+                    // (`docs/notes/floating-point.md` §4.4).
+                    //
+                    // The order comparisons yield an `i32` boolean in both classes
+                    // (wasm's float comparisons are `i32` too), which is widened to
+                    // the `0/1` scalar the language has instead of a `Bool` — the
+                    // same widening `Eq` needs.
+                    KernelBin::Div => {
+                        out.instruction(&arithmetic(
+                            class,
+                            Instruction::I64DivU,
+                            Instruction::F32Div,
+                        ));
+                    }
+                    KernelBin::Rem => {
+                        // `Rem` and the bitwise trio have no float form and the
+                        // emitter refuses a float operand by name, so these are
+                        // always the language's Int-scalar operators — including
+                        // over two comparison results, which are `0/1` scalars even
+                        // in a float fragment.
+                        out.instruction(&Instruction::I64RemU);
+                    }
+                    KernelBin::Lt => {
+                        out.instruction(&comparison(
+                            class,
+                            Instruction::I64LtU,
+                            Instruction::F32Lt,
+                        ));
+                        out.instruction(&Instruction::I64ExtendI32U);
+                    }
+                    KernelBin::Gt => {
+                        out.instruction(&comparison(
+                            class,
+                            Instruction::I64GtU,
+                            Instruction::F32Gt,
+                        ));
+                        out.instruction(&Instruction::I64ExtendI32U);
+                    }
+                    KernelBin::Leq => {
+                        out.instruction(&comparison(
+                            class,
+                            Instruction::I64LeU,
+                            Instruction::F32Le,
+                        ));
+                        out.instruction(&Instruction::I64ExtendI32U);
+                    }
+                    KernelBin::Geq => {
+                        out.instruction(&comparison(
+                            class,
+                            Instruction::I64GeU,
+                            Instruction::F32Ge,
+                        ));
+                        out.instruction(&Instruction::I64ExtendI32U);
+                    }
+                    KernelBin::Eq => {
+                        out.instruction(&comparison(class, Instruction::I64Eq, Instruction::F32Eq));
+                        out.instruction(&Instruction::I64ExtendI32U);
+                    }
+                    KernelBin::Neq => {
+                        out.instruction(&comparison(class, Instruction::I64Ne, Instruction::F32Ne));
+                        out.instruction(&Instruction::I64ExtendI32U);
+                    }
+                    KernelBin::BitAnd => {
+                        out.instruction(&Instruction::I64And);
+                    }
+                    KernelBin::BitOr => {
+                        out.instruction(&Instruction::I64Or);
+                    }
+                    KernelBin::BitXor => {
+                        out.instruction(&Instruction::I64Xor);
+                    }
                 }
                 // The operand's class, unless this is a comparison: a comparison
                 // yields the language's `0`/`1` scalar, which is an `i64` in
@@ -3684,7 +3708,7 @@ fn is_comparison(operator: KernelBin) -> bool {
     )
 }
 
-/// The opcode one arithmetic operator lowers to for a fragment's class.
+/// The opcode one arithmetic operator lowers to for a class.
 ///
 /// The class is the instruction's own: the emitter refuses an operator whose
 /// operands are the other class, so a `Bin` never mixes the two families — but
@@ -3700,7 +3724,7 @@ fn arithmetic<'a>(
     }
 }
 
-/// The opcode one order/equality comparison lowers to for a fragment's class.
+/// The opcode one order/equality comparison lowers to for a class.
 ///
 /// Separate from [`arithmetic`] only to say why the two exist: a comparison's
 /// *result* is always the language's `0/1` scalar (the caller widens it with
@@ -4101,12 +4125,14 @@ fn fragment_class(fragment: &KernelFragment) -> ScalarClass {
         .unwrap_or(ScalarClass::Int)
 }
 
-/// A constant in the representation the fragment's class's opcode reads: an
-/// `Int` local takes the value, a `Float` local takes an `f32`'s bits.
+/// A constant in the representation the class's opcode reads: an `Int` local
+/// takes the value, a `Float` local takes an `f32`'s bits.
 ///
-/// Every `KernelInstr::Const` of one fragment is lowered in the fragment's own
-/// class, so an integer that a float fragment carries — a buffer position, a
-/// literal index — is converted here, once, rather than at each emission site.
+/// **The class is the instruction's own**, and one body may hold constants of
+/// both, so a class read off the fragment would be a second answer to a question
+/// the instruction already answers.  An integer a `Float` instruction carries —
+/// a buffer position, a literal index — is converted here, once, rather than at
+/// each emission site.
 fn const_bits(class: ScalarClass, value: i64) -> i64 {
     match class {
         ScalarClass::Int => value,
@@ -4319,8 +4345,9 @@ where
                 return Ok(());
             }
             // A float literal is a scalar like any other: its bits ride in the
-            // same `Const`, because the fragment's class is what says how the
-            // opcode reads them (`docs/notes/floating-point.md` §3.4, §4.4).
+            // same `Const`, and the class the instruction carries is what says
+            // how the opcode reads them (`docs/notes/floating-point.md` §3.4,
+            // §4.4).
             Some(LowValue::Float(f)) => {
                 body.push(KernelInstr::Const(ScalarClass::Float, float_bits(f)));
                 return Ok(());
@@ -4562,6 +4589,24 @@ where
             ));
         };
         let (left, right) = operand_pair(module, operation.operand)?;
+        // **The class a `Bin` carries is its operands', not its result's**: for
+        // arithmetic the two coincide, but a comparison's result is the
+        // language's `Int` `0`/`1` whatever its operands are, so reading the
+        // node's own class here would emit `Bin(Int, Gt)` over two `Float`s and
+        // the validator would refuse a mix the body does not have.  The checker
+        // refuses a genuine mix before lowering, so a disagreement between the
+        // two operands here is a decided `Float` beside an undecided leaf that
+        // defaulted to `Int` — the decided one wins.
+        //
+        // The undecided leaves this can still meet are a struct parameter's:
+        // the parallel ABI seeds every scalar leaf `USize`, so such a leaf reads
+        // `Int` whatever it is declared.  Making that honest is the
+        // specialize-before-JIT work (`docs/notes/kernel-class-crossing-fixes.md`
+        // §6), not this read.
+        let operand_class = match (node_class(module, left), node_class(module, right)) {
+            (ScalarClass::Float, _) | (_, ScalarClass::Float) => ScalarClass::Float,
+            _ => ScalarClass::Int,
+        };
         // **The operators a float does not have are refused by name.**  `%` and
         // the bitwise trio have no float form and are not in a float's operator
         // set (`docs/notes/floating-point.md` §3.7); a target's bitwise opcode
@@ -4570,11 +4615,11 @@ where
         // because the class is still visible — a class read off the finished
         // body could not tell this from the same operators over two comparison
         // results, which *are* integers and are emitted.
-        if matches!(
-            bin,
-            KernelBin::Rem | KernelBin::BitAnd | KernelBin::BitOr | KernelBin::BitXor
-        ) && (node_class(module, left) == ScalarClass::Float
-            || node_class(module, right) == ScalarClass::Float)
+        if operand_class == ScalarClass::Float
+            && matches!(
+                bin,
+                KernelBin::Rem | KernelBin::BitAnd | KernelBin::BitOr | KernelBin::BitXor
+            )
         {
             return Err(format!(
                 "`{ty_op:?}` has no float form: a kernel's float operators are `+ - * /` and the \
@@ -4583,7 +4628,7 @@ where
         }
         emit_node(module, params, left, depth + 1, body, tally)?;
         emit_node(module, params, right, depth + 1, body, tally)?;
-        body.push(KernelInstr::Bin(class, bin));
+        body.push(KernelInstr::Bin(operand_class, bin));
         return Ok(());
     }
     // The compute plugin's own operators: `Launch`/`Call` inside a kernel body
@@ -7660,7 +7705,7 @@ fn value_word(class: ScalarClass, value: &wasmi::Val) -> i64 {
     }
 }
 
-/// One buffer word as the wasm value the fragment's class takes.
+/// One buffer word as the wasm value a class takes.
 fn word_value(class: ScalarClass, word: i64) -> wasmi::Val {
     match class {
         ScalarClass::Int => wasmi::Val::I64(word),

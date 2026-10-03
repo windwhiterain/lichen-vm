@@ -231,27 +231,29 @@ language does not cross; this section is about what the crossing cost.
   what the interpreter would refuse at run time: a `float2int` of a *literal* that
   is negative, not finite, or too large is refused by name, since wasm would trap
   and SPIR-V is undefined and neither is an answer the program can read.
-- **A fragment holds one representation, so a crossing has a limit.** A
-  parameter read, a literal and a callee's result all cross
-  (`int2float x` in a `Float` kernel over an `Int` parameter); an *expression*
-  computed in the parameter's own class does not (`int2float (x + 1)` there would
-  need the integer add), and a float literal has no form in an integer body at
-  all. Both refusals are the shared emitter's, so one program gets one answer
-  whichever backend it is then handed to.
+- **Every value carries its own class, so a crossing has no operand-shaped
+  limit.** A parameter read, a literal and a callee's result all cross, and so
+  does an expression the body computes in the *other* class first: `int2float
+  (x + 1)` over an `Int` parameter is an integer add and then a crossing, and a
+  float literal has a form in an integer body. What stays refused is a genuine
+  mix inside one operation (`x + 0.5` with no crossing), which no conversion can
+  serve — and that refusal is the shared validator's, so one program gets one
+  answer whichever backend it is then handed to.
 - **The two backends answer one crossing differently and agree on the number.**
   A `Float` fragment's index rides in an `f32` holding the exact integer, so wasm
   emits nothing for `int2float i` where SPIR-V emits `OpConvertUToF` on its 32-bit
-  invocation id; an integer SPIR-V module refuses the direction by name rather
-  than declaring the float type it does not carry. §5.1 of
+  invocation id; an integer SPIR-V module declares the float type it needs and
+  emits the same `OpConvertUToF`, from its 64-bit integer. §5.1 of
   [floating-point](floating-point.md) is the record of why that asymmetry is the
-  right one.
+  right one, and of the width it costs when the two classes meet in a *float*
+  module — `Int` data is 32-bit there.
 
 Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
 `a_conversion_applied_to_the_other_class_is_refused_by_name` and
 `a_float_with_no_int_to_truncate_toward_is_recorded_rather_than_answered`
 (`crates/lichen-language/tests/pipeline.rs`), and on the kernel side by
 `a_jit_kernel_crosses_the_two_classes_both_ways`,
-`a_conversion_the_body_cannot_hold_is_refused_by_name` and
+`a_body_may_compute_in_one_class_and_cross` and
 `a_varying_float_element_is_seeded_from_the_index`
 (`crates/lichen-language/tests/compute.rs`).
 

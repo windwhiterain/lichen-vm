@@ -1,7 +1,15 @@
 # Proposal: one query surface for types and classes
 
-> Status: **proposal — not started.** Written for a session that will build it;
-> nothing here is implemented except where marked "exists".
+> Status: **superseded in diagnosis, deferred in construction.** Its claim that
+> the three failing conversion tests stem from a missing query surface was
+> measured and rejected — the three have three distinct causes, none of which
+> is a missing API (see
+> [kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) §0). Its
+> `shape.rs` accessor part (`TypeRef`, `field_list`/`field_type`/
+> `field_names`/`field_index`) is **not** built; it is deferred to the
+> specialize-before-JIT work recorded in the same note's §6, whose specialize
+> pass is the accessors' intended consumer. The boundary rules in §4 here still
+> hold.
 > Companions: [compute-param-struct-handoff](compute-param-struct-handoff.md)
 > (the in-flight kernel work this unblocks), [floating-point](floating-point.md)
 > §4.2/§4.4/§5.1 (the class model), [lowlevel-low-types](lowlevel-low-types.md)

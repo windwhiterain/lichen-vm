@@ -468,11 +468,11 @@ is spelled out in [operators](operators.md) §7.
 ### 4.3 The JIT converts across the IR, on demand
 
 **Where it can fire is the whole content of this decision, and it is narrower
-than "wherever a float meets an integer".** §4.2 means a fragment is homogeneous
-by construction: a kernel body is written in one type or the other, never both,
-so the lowering never *inserts* a conversion to square a body with itself. What
-it does carry is a conversion the source asked for — §4.2's two operators, one
-`KernelInstr::Conv` each — and this section is about the other kind, the
+than "wherever a float meets an integer".** §4.2 means nothing converts *unasked*:
+a kernel body holds values of both classes, each carrying its own, and the only
+crossing the lowering emits is the one the source wrote — §4.2's two operators,
+one `KernelInstr::Conv` each — so the lowering never *inserts* a conversion to
+square a body with itself. What this section is about is the other kind, the
 **boundary** conversion, at the two places where a class is not already agreed:
 
 - a buffer of floats reaching a fragment whose `LowShape` is `Unknown` — the
@@ -518,7 +518,7 @@ ABI had nowhere to put a class, not because a float there was meaningless.
 answers `1` for every non-scalar and non-tuple today, as a total function — an
 `array<Float, 3>` parameter is **one local of the element's class**, not three.
 That is what keeps `flat_arity`'s convention and `KernelShape`'s fold agreeing,
-and it means "one class per fragment" still holds.
+and it is why a *position* has one class even where a fragment's values do not.
 
 **The class rides in two places, not one.** The **parameter** class goes on
 `KernelShape`'s leaf, and `fragment_digest` already hashes `param_shape` whole, so
@@ -640,13 +640,32 @@ the wasm and the device backends agree element for element, at the same
 output can now be lane-constant, as varying as a float buffer read, or seeded
 from the index.
 
-**The limit is the same decision one level down, and it is a refusal, not a
-silence.** A fragment holds one representation of everything it computes, so it
-cannot work in the operand's class and cross afterwards: `int2float (x + 1)` over
-an `Int` parameter in a `Float` body is refused by name, and so is a float
-literal inside an `Int` body. Both refusals are in the shared emitter, so neither
-backend can be the quietly permissive one here. See
-[operators](operators.md) §7.
+**The limit this section used to record is gone.** A fragment no longer holds one
+representation of everything it computes: every value carries its own class
+(`KernelInstr`'s class fields), so a body may compute in the operand's class and
+cross afterwards. `int2float (x + 1)` over an `Int` parameter runs, a float
+literal inside an `Int` body runs, and a parallel body whose buffers are integers
+may cross up to `Float`, compute, and store the truncation. What stays refused is
+a **genuine** mix inside one operation — `x + 0.5` with no crossing — which no
+conversion can serve; the refusal is in the shared validator, so neither backend
+can be the quietly permissive one. See
+[kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) for the three
+causes this took, and [operators](operators.md) §7.
+
+**A crossing is always representable on both targets, and the width is what it
+costs.** Both element types are declared in every SPIR-V module, so only the
+64-bit integer — and its `Int64` capability — stays conditional. That is what
+makes the *other* class's data narrower in one direction:
+
+| Fragment class | `Int` data | `Float` data |
+|---|---|---|
+| an integer fragment | `i64` on both targets | `f32` on both targets |
+| a float fragment | `i64` on the CPU, `u32` on the GPU | `f32` on both targets |
+
+So a float fragment's integer data diverges between the two targets past 2³²,
+exactly as `int2float`'s `i64 → f32` rounding does past 2²⁴ (§4.3). It is the
+same kind of recorded price as a kernel computing `f32` while the interpreter
+computes `f64` — paid knowingly, not silently.
 
 The float cross-backend comparison that forwards a buffer still catches a
 host/device width disagreement through the interleaved half-words and the padded
