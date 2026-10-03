@@ -4,7 +4,7 @@
 > (§3 below, two independent blockers).  What is left is §5, which therefore comes
 > first: it is the only place a result's type can be stated, and the two red
 > targets the operator-polymorphism branch recorded
-> (`operator-polymorphism.md` §8.4) are its acceptance.  §4 then lands on top of
+> (`operator-polymorphism.md` §8.8) are its acceptance.  §4 then lands on top of
 > it.  §1 is the incoherence as first read; §2 and §3 record what measurement says
 > that first reading got wrong.
 > Worktree `.worktrees/kernel-param-struct`, branch `feature/kernel-param-struct`.
@@ -228,7 +228,7 @@ statement all become unnecessary rather than merely fixed.  That is the
 specialize-before-JIT direction
 ([kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) §6,
 [compute-param-struct-handoff](compute-param-struct-handoff.md) §7,
-[operator-polymorphism](operator-polymorphism.md) §8.4 — which records this as
+[operator-polymorphism](operator-polymorphism.md) §8.8 — which records this as
 another workstream and names the two red targets), and it also carries the class
 domain that workstream put in the graph as a *value*: that domain is what types
 the placeholder the specialization applies the kernel to.
@@ -310,7 +310,7 @@ cargo test -q -p lichen-language --test compute --test pipeline --test graph_jit
 ```
 
 §5's own acceptance is the two targets
-[operator-polymorphism](operator-polymorphism.md) §8.4 recorded as red:
+[operator-polymorphism](operator-polymorphism.md) §8.8 recorded as red:
 
 - `a_kernel_value_and_type_render_by_name` (`crates/lichen-language/tests/compute.rs:466`)
   — `.sig ?c -> ?c` must become `.sig Int -> Int`;

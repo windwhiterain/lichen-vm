@@ -2123,9 +2123,9 @@ where
 /// rather than compiling a domain it invented.
 ///
 /// **One exception, and it is not an invention: `open_class`.**  When the body
-/// itself left a class open, the operator that did so registered a *class domain*
-/// and its `default` member is the class a reader is meant to pick
-/// ([`open_class_of`], `docs/notes/operator-polymorphism.md` §8.4).  The caller
+/// itself left a class open, the operator that did so registered a *set* of the
+/// classes it admits, and a reader that must commit to one takes its **first
+/// member** ([`open_class_of`], `docs/notes/operator-polymorphism.md` §3).  The caller
 /// passes that class here and it stands in for the undecided type slot — **seeded
 /// on the class's low type, never written into any type cell**, so the function
 /// stays polymorphic for its other uses (`f = y => y + y; k = compute.jit f;
@@ -4325,7 +4325,7 @@ fn const_bits(class: ScalarClass, value: i64) -> i64 {
 /// (`checker/operators.rs`), and "a reader that must commit to one class takes
 /// the **first member**" — `set{Int, Float}` prefers `Int`, the arithmetic
 /// operators' historical default (`lichen_highlevel::set`,
-/// `docs/notes/operator-polymorphism.md` §8.4).
+/// `docs/notes/operator-polymorphism.md` §3).
 ///
 /// The answer is a **type value node** — the canonical marker node the set was
 /// built from — so it is what [`low_type_of`] reads a class from, and what a
