@@ -1,12 +1,15 @@
 # Runtime scalars in a parallel kernel: the per-leaf ABI and its two blockers
 
-> Status: **in progress.** The *lowering* half landed — a parallel fragment's
-> scalar leaves are typed by the parameter's own fields, so a runtime `Float`
-> scalar is a `Float` leaf (`scalar_leaf_classes`, `compute.rs`).  The *host*
-> half (decoding the leaves out of the launch's `cfg` and passing them to the
-> workers) is **not written**, and it is blocked on the two measured facts in §4
-> and §5: a struct-parameter kernel cannot write a `Float` element at all, and a
-> JIT'd signature can only be spelled with the shipped lambdas.
+> Status: **the CPU path is end to end.**  Both halves landed — a parallel
+> fragment's scalar leaves are typed by the parameter's own fields
+> (`scalar_leaf_classes`), and the launch decodes them out of `cfg` and hands them
+> to each worker beside the index (§3), so a runtime `Float` scalar reaches the
+> body's own argument.  Measured on §6's probe: values from the scalar, and a
+> wrongly-classed leaf refused by name.  Two things are **not** written, and both
+> are refused rather than mis-run: the device path pushes the extent alone
+> (`RunError::ScalarsNotPushed`), and a recorded body carries the extent alone.  §5's
+> blocker still applies to the *explicit* `parallel_sig … Sig` spelling; the
+> automatic `parallel` path needs no authored signature.
 > Companion: [compute-param-struct-handoff](compute-param-struct-handoff.md)
 > (the named-struct parameter this exists for),
 > [type-query-api-proposal](type-query-api-proposal.md) §7 (the accessors the
@@ -49,15 +52,22 @@ shape is untouched (one leaf, `Int`), which is why the existing suites stay gree
 — `lichen-compute` 17, `lichen-language --test compute` 58, `--test pipeline`
 134, `--test examples` 1.
 
-## 3. What the host half still needs (not written)
+## 3. The host half, landed
 
-| Step | Where |
-|---|---|
-| Decode `scalar_count` scalars out of `cfg`, then the input tuple | `ComputeOperator::ParLaunch`'s arm, `compute.rs:1329` |
-| Carry the scalar values on the state | `ParallelState`, `compute.rs:7173` |
-| Pass them beside the index as the `main` arguments | `run_parallel_range`, `compute.rs:7719`; `run_parallel_kernel`, `compute.rs:7434` |
-| Assemble the fragment's own signature | `assemble_parallel_fragment`, `compute.rs:7303` |
-| Push the scalar leaves to the shader | `lichen-compute-gpu/src/dispatch.rs:904` (today: "two leaves and one output, or refuse") |
+| Step | Where | State |
+|---|---|---|
+| Decode the leaf list out of `cfg`, then the input tuple | `ComputeOperator::ParLaunch`'s arm | **landed** — the leaves are the cfg's leading positions, the buffers follow them, and how many leaves there are is the fragment's (`parallel_leaf_classes`) |
+| Carry the leaf words and their classes on the state | `ParallelState` (`leaves`, `leaf_classes`) | **landed** |
+| Pass them beside the index as the `main` arguments | `run_parallel_range` | **landed** — the argument list is the leaves in field order with the index appended, and only the index moves per element |
+| Assemble the fragment's signature | `compile_parallel_fragment`'s `param_shape` | **landed with §2** — the assembler already derives `main`'s parameters from it, which is why the old host's two arguments were the wrong count |
+| Push the scalar leaves to the shader | `lichen-compute-gpu/src/dispatch.rs`'s `stage_run` | **refused by name** (`RunError::ScalarsNotPushed`): a dispatch pushes the extent alone, so a fragment with a runtime scalar is declined rather than dispatched with a leaf missing |
+| Carry a runtime scalar in a **recorded** body | `record_launch` | **refused by name**: a recording carries the extent alone, and a runtime scalar would have to be one of its edges |
+
+The decode reads each leaf at the class **its own field** declares, so a runtime
+`Float` scalar is an `f32` argument beside `i64` ordinals.  A decided leaf of the
+wrong class is refused by name — the count's own refusal generalised, and the
+reason is the one this channel exists for: staying lazy would mean the dispatch
+quietly does not run and nothing says so.
 
 The decode is **positional** and that is the ABI's rule, not a convenience: the
 host struct is the parameter's scalars in field order, then `.I`.  A parameter
@@ -226,9 +236,13 @@ cell for the lazy read to bind.  That is a checker question, and it is the same
 family as the decided-vs-lazy field type of `type-query-api-proposal` §7 — but it
 is **not** diagnosed yet, and this note does not claim a cause.
 
-Consequence for this feature: until (a) that path is fixed, or (b) the
-runtime-scalar shape is shipped as a lambda in `compute.lichen` beside
-`A`/`P`/`S`, a runtime scalar cannot be launched end to end.  (b) is a
+**Narrowed by measurement**: this blocks the *explicit* `parallel_sig f backend
+Sig` spelling only.  `compute.parallel f backend` derives the signature from the
+function's own type (`type_of f`), so a `Par` with a runtime scalar launches end
+to end through it — that is what §6's probe does.  What the author cannot do today
+is *state* such a signature themselves; until (a) that path is fixed, or (b) the
+runtime-scalar shape is shipped as a lambda in `compute.lichen` beside `A`/`P`/`S`,
+`parallel_sig` is limited to the shapes the shipped lambdas build.  (b) is a
 convention with a hardcoded scalar name; (a) is the honest fix and is unfinished.
 
 ## 6. The probe, and how to run it
@@ -249,23 +263,35 @@ kg = compute.parallel g "cpu"
 inbuf = compute.plrun kg (3,)
 In  = struct<.a _>
 Out = struct<.z _>
-Sig = compute.S (compute.KT _)(.I In, .O Out)
 Par = struct<.n Int, .alpha Float, .in In, .out Out>
 f = (k : Par) => {
   i = compute.range k.n
   v = compute.read ((compute.Read _)(.from k.in.a, .at i))
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value float2int (int2float v + k.alpha)))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value v + float2int k.alpha))
 }
-k = compute.parallel_sig f "cpu" Sig
-out = compute.plrun k ((compute.A In)(.n 3, .I In(.a inbuf)))
-compute.read ((compute.Read _)(.from out, .at 1))
+k = compute.parallel f "cpu"
+out = compute.plrun k (3, 2.0, (inbuf,))
+(compute.read ((compute.Read _)(.from out, .at 0)), compute.read ((compute.Read _)(.from out, .at 1)), compute.read ((compute.Read _)(.from out, .at 2)))
 ```
 
 ```bash
 cargo run -q -p lichen-compiler -- <probe>.lichen
 ```
 
-Today it reaches the assembler and refuses with
-`compute.parallel: encountered an incorrect number of parameters` (§3) — which is
-the host half missing, and the acceptance test for the rest of this work: the
-answer must be `11` (`v = 11`, `11 + 0.5` truncated is `11`).
+**Measured, and this is the acceptance**: the launch's `cfg` is the parameter's
+scalars in field order and then the buffers — `(3, 2.0, (inbuf,))` — and the
+answer is `(12, 13, 14): <?a, ?b, ?c>`: three indices (the extent reached
+`k.n`), `inbuf = [10, 11, 12]` (the first kernel), and each element plus
+`float2int k.alpha = 2` (the runtime scalar).  Before the host half it refused
+with `compute.parallel: encountered an incorrect number of parameters` — the
+fragment's `main` is `(extent, alpha, index)` while the host passed two.
+
+The refusal path is measured too: `compute.plrun k (3, 2, (inbuf,))` — an `Int`
+where the parameter declares `Float` — reports
+
+```text
+compute.parallel: a parallel parameter's scalar leaf is Float here and the launch
+passes an Int for it: Int and Float do not convert
+```
+
+rather than running with the bits reinterpreted.

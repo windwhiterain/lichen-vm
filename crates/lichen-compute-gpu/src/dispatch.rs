@@ -102,6 +102,13 @@ pub enum RunError {
     /// buffers. A wider shape is a real requirement and a real graph node, but
     /// it is not a linear chain.
     ChainNotLinear { inputs: usize, outputs: usize },
+    /// A fragment whose parameter declares a **runtime scalar** beside the
+    /// extent: the dispatch's push constant carries the extent alone, so a second
+    /// leaf has nowhere to go.  Refused by name rather than dispatched with the
+    /// argument missing, which would compute every lane from the wrong value —
+    /// the CPU path passes the whole leaf list
+    /// (`docs/notes/compute-runtime-scalars.md` §3).
+    ScalarsNotPushed { leaves: usize },
     /// A resident id this context is not holding — never issued, or already
     /// released.  Refused rather than read as empty: an id is a handle, and using
     /// a dead one means the host lost track of its own buffers, which reporting
@@ -161,6 +168,13 @@ impl fmt::Display for RunError {
                  previous one's result, and this fragment has {inputs} and {outputs}."
             ),
             RunError::Emit(refusal) => write!(f, "{refusal}"),
+            RunError::ScalarsNotPushed { leaves } => write!(
+                f,
+                "this fragment's parameter declares {leaves} leaf/leaves (the launch extent, \
+                 any runtime scalar, and the index), and a dispatch pushes the extent alone: \
+                 a runtime scalar needs the leaf list the CPU path passes, so this is refused \
+                 rather than dispatched with the argument missing"
+            ),
             RunError::InputShorterThanCount { buffer, len, count } => write!(
                 f,
                 "input buffer {buffer} holds {len} element(s) but the run covers {count} \
@@ -711,6 +725,16 @@ impl GpuContext {
         // (`spirv::module_class` refuses a mixed one), which is the same class the
         // emitted module's element type and `ArrayStride` are, so the bytes staged
         // here are the bytes that module reads.
+        //
+        // **The device path pushes the extent and nothing else**, so a parameter
+        // that declares a runtime scalar has no way to receive it here: refused
+        // by name rather than dispatched with a leaf missing, which would compute
+        // every lane from the wrong value
+        // (`docs/notes/compute-runtime-scalars.md` §3).
+        let leaves = fragment.param_shape.flat_arity();
+        if leaves > 2 {
+            return Err(RunError::ScalarsNotPushed { leaves });
+        }
         let class = spirv::module_class(fragment).map_err(RunError::Emit)?;
         let element = class.byte_width() as vk::DeviceSize;
         let binding = Binding {

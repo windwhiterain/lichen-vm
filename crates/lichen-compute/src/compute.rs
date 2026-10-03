@@ -1370,39 +1370,65 @@ where
                 let Some(cfg_items) = (unsafe { module.array_items(cfg_node) }) else {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 };
-                // count = cfg(0), an `Int`/`USize`.
-                let count = match cfg_items
-                    .first()
-                    .and_then(|item| module.node_value(item.node))
-                    .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-                {
-                    Some(LowValue::USize(n)) => n,
-                    // A count that is a **decided** `Float` is refused by name
-                    // rather than left lazy.  Staying lazy here would mean the
-                    // dispatch quietly does not run and nothing says so, which is
-                    // the one answer this channel exists to stop giving — a
-                    // parallel parameter's scalar leaves are seeded `USize`
-                    // whatever the body computes in (`compile_parallel_fragment`),
-                    // so a count is an `Int` in every fragment and `plrun k (4.0,)`
-                    // used to be accepted and then skipped.
-                    //
-                    // An *undecided* count is still lazy: that is a program the
-                    // language has not evaluated yet, not a mistake, and the arm
-                    // below leaves it exactly as it was.
-                    Some(LowValue::Float(_)) => {
-                        module.record_extension_diagnostic(
-                            PARALLEL_DIAGNOSTIC,
-                            None,
-                            "the launch count is Float, but a dispatch extent is Int: \
-                             Int and Float do not convert",
-                        );
+                // **The cfg is the parameter's scalar leaves in field order, then
+                // the input buffers**: the leaves are the leading positions (the
+                // launch extent first — `docs/notes/compute-runtime-scalars.md`
+                // §1), and how many there are is a property of the fragment, so
+                // the leaf classes are read from it.
+                let leaf_classes = match parallel_leaf_classes(id) {
+                    Ok(classes) => classes,
+                    Err(err) => {
+                        module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
                         return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                     }
-                    _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
                 };
-                // input buffers = cfg(1), a tuple of `Buffer` values.
+                let mut leaves: Vec<i64> = Vec::with_capacity(leaf_classes.len());
+                for (position, class) in leaf_classes.iter().enumerate() {
+                    let value = cfg_items
+                        .get(position)
+                        .and_then(|item| module.node_value(item.node))
+                        .and_then(|v| AsEnum::<LowValue>::as_enum(&v));
+                    // A leaf is read at the class its own field declares, and a
+                    // **decided** value of the wrong class is refused by name
+                    // rather than left lazy: staying lazy here would mean the
+                    // dispatch quietly does not run and nothing says so, which is
+                    // the one answer this channel exists to stop giving.  An
+                    // *undecided* leaf is still lazy — that is a program the
+                    // language has not evaluated yet, not a mistake.
+                    let word = match (class, value) {
+                        (ScalarClass::Int, Some(LowValue::USize(n))) => n as i64,
+                        (ScalarClass::Float, Some(LowValue::Float(x))) => float_bits(x),
+                        (ScalarClass::Int, Some(LowValue::Float(_))) => {
+                            module.record_extension_diagnostic(
+                                PARALLEL_DIAGNOSTIC,
+                                None,
+                                if position == 0 {
+                                    "the launch count is Float, but a dispatch extent is Int: \
+                                     Int and Float do not convert"
+                                } else {
+                                    "a parallel parameter's scalar leaf is Int here and the \
+                                     launch passes a Float for it: Int and Float do not convert"
+                                },
+                            );
+                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        }
+                        (ScalarClass::Float, Some(LowValue::USize(_))) => {
+                            module.record_extension_diagnostic(
+                                PARALLEL_DIAGNOSTIC,
+                                None,
+                                "a parallel parameter's scalar leaf is Float here and the \
+                                 launch passes an Int for it: Int and Float do not convert",
+                            );
+                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        }
+                        _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                    };
+                    leaves.push(word);
+                }
+                // input buffers = the position after the leaves, a tuple of
+                // `Buffer` values.
                 let mut inputs: Vec<RunInput> = Vec::new();
-                if let Some(buf_tuple) = cfg_items.get(1)
+                if let Some(buf_tuple) = cfg_items.get(leaf_classes.len())
                     && let Ok(buf_tuple_node) = dyn_node(buf_tuple.node)
                     // SAFETY: `buf_tuple_node` names a live node of `module`.
                     && let Some(buf_items) = (unsafe { module.array_items(buf_tuple_node) })
@@ -1456,7 +1482,7 @@ where
                         }
                     }
                 }
-                match run_parallel_kernel(id, backend, count, inputs) {
+                match run_parallel_kernel(id, backend, leaves, inputs) {
                     Ok(RunOutcome::Host(results)) => {
                         // Several outputs are the **tuple** of them, which
                         // `compute.read`/`compute.collect` address by ordinal.
@@ -4315,6 +4341,23 @@ fn const_bits(class: ScalarClass, value: i64) -> i64 {
     }
 }
 
+/// The **scalar leaves** of a registered parallel fragment's signature: its
+/// parameter's scalars in field order, the launch extent first, without the index
+/// the ABI appends ([`param_classes`] folds the shape into one list).
+///
+/// The host half of the per-leaf ABI ([`param_classes`]'s own reading, one layer
+/// out): a launch's `cfg` carries these positions, and how many there are is a
+/// property of the fragment rather than of the call, so the arm reads them here
+/// (`docs/notes/compute-runtime-scalars.md` §1, §3).
+fn parallel_leaf_classes(id: KernelId) -> Result<Vec<ScalarClass>, String> {
+    let fragments = kernels().lock().unwrap();
+    let fragment = fragments
+        .get(&id)
+        .ok_or_else(|| format!("parallel kernel {id} is not registered"))?;
+    let classes = param_classes(fragment);
+    Ok(classes[..classes.len().saturating_sub(1)].to_vec())
+}
+
 /// The class an **open** kernel body is lowered in — the first member of the
 /// class **set** the body's own polymorphic operator carries, or `None` when
 /// nothing in the body left a class open.
@@ -6481,8 +6524,25 @@ where
             );
         }
     };
+    // **The cfg's positions are the parameter's scalar leaves, then the buffers**
+    // (`docs/notes/compute-runtime-scalars.md` §1), so where the buffer tuple
+    // starts is the fragment's leaf count and not the constant `1` it used to be.
+    // A recorded dispatch carries the extent alone for now: a runtime scalar would
+    // have to be an edge like the extent is, so it is refused by name rather than
+    // read as the buffer tuple.
+    let leaf_count = param_classes(&fragment).len().saturating_sub(1);
+    if leaf_count > 1 {
+        return refuse(
+            module,
+            format!(
+                "this dispatch's kernel parameter declares {leaf_count} scalar leaves, and a \
+                 recorded body carries the extent alone: a runtime scalar would have to be an \
+                 edge of the recording, and that is not written yet"
+            ),
+        );
+    }
     let mut inputs: Vec<Placed> = Vec::new();
-    if let Some(tuple) = cfg_items.get(1)
+    if let Some(tuple) = cfg_items.get(leaf_count)
         && let Ok(tuple_node) = dyn_node(tuple.node)
         // SAFETY: `tuple_node` names a live node of `module`.
         && let Some(items) = (unsafe { module.array_items(tuple_node) })
@@ -7281,6 +7341,15 @@ struct ParallelState<'a> {
     /// The class the whole fragment is lowered in — the value type of the
     /// `read`/`write` imports and of the kernel's own parameters and result.
     class: ScalarClass,
+    /// The launch's **scalar leaves**, one word per leaf in field order: the
+    /// parameter's scalars as the ABI passes them, the launch extent first
+    /// (`docs/notes/compute-runtime-scalars.md` §1).  The index is not here — it
+    /// is the worker's loop variable, appended per element.
+    leaves: &'a [i64],
+    /// Each leaf's own class, so a leaf reaches `main` as the value its parameter
+    /// field declared rather than as the fragment's element class: a runtime
+    /// `Float` scalar is an `f32` argument beside `i64` ordinals.
+    leaf_classes: &'a [ScalarClass],
 }
 
 /// Hand a run to the installed [`lichen_kernel_ir::ParallelBackend`].
@@ -7528,9 +7597,20 @@ pub fn parallel_launch_workers() -> usize {
 fn run_parallel_kernel(
     id: KernelId,
     backend: Backend,
-    count: usize,
+    leaves: Vec<i64>,
     inputs: Vec<RunInput>,
 ) -> Result<RunOutcome, String> {
+    // The ABI's first leaf is the launch extent (`docs/notes/compute-runtime-scalars.md`
+    // §1): it is how many indices the dispatch covers, so it is also the one
+    // ordinal this side needs.
+    let Some(&extent) = leaves.first() else {
+        return Err(
+            "a parallel launch's signature has no scalar leaves, so there is no extent to \
+             dispatch over"
+                .to_string(),
+        );
+    };
+    let count = usize::try_from(extent).unwrap_or(usize::MAX);
     if count > MAX_PARALLEL_ELEMENTS {
         return Err(format!(
             "parallel launch count {count} exceeds the limit of {MAX_PARALLEL_ELEMENTS} elements"
@@ -7541,17 +7621,31 @@ fn run_parallel_kernel(
     // kernel id is content-addressed, so the fragment it names cannot be a
     // different one.  The lock is released before any emission or assembly,
     // which locks the same registry again.
-    let (outputs, class, input_classes) = {
+    let (outputs, class, input_classes, leaf_classes) = {
         let fragments = kernels().lock().unwrap();
         let fragment = fragments
             .get(&id)
             .ok_or_else(|| format!("parallel kernel {id} is not registered"))?;
+        let classes = param_classes(fragment);
         (
             fragment.outputs,
             fragment_class(fragment),
             fragment.input_classes.clone(),
+            // The ABI's leaves are the parameter's scalars followed by the
+            // index; the index is the worker's loop variable, so only the
+            // scalars are handed in.
+            classes[..classes.len().saturating_sub(1)].to_vec(),
         )
     };
+    if leaf_classes.len() != leaves.len() {
+        return Err(format!(
+            "this parallel kernel's parameter declares {} scalar leaf/leaves and the launch \
+             passes {}: a launch's `cfg` is the parameter's scalars in field order, so the two \
+             have to agree",
+            leaf_classes.len(),
+            leaves.len()
+        ));
+    }
     // A borrow of data already out of the registry, so the class check is a
     // function of the classes rather than a second reason to hold the lock.
     check_input_classes(&input_classes, &inputs)?;
@@ -7595,8 +7689,10 @@ fn run_parallel_kernel(
             outputs: output_spans(&mut outputs),
             base: 0,
             class,
+            leaves: &leaves,
+            leaf_classes: &leaf_classes,
         };
-        run_parallel_range(&engine, &module, count, state, 0, count)?;
+        run_parallel_range(&engine, &module, state, 0, count)?;
     } else {
         // Contiguous chunk bounds, a function of the count and the worker count
         // alone: the leading chunks carry the remainder elements, so the
@@ -7617,16 +7713,19 @@ fn run_parallel_kernel(
                 let engine = &engine;
                 let module = &module;
                 let inputs = &inputs;
+                let leaves = &leaves;
+                let leaf_classes = &leaf_classes;
                 let run = move || {
                     run_parallel_range(
                         engine,
                         module,
-                        count,
                         ParallelState {
                             inputs,
                             outputs: partition,
                             base,
                             class,
+                            leaves,
+                            leaf_classes,
                         },
                         base,
                         end,
@@ -7807,13 +7906,12 @@ fn split_spans<'a>(
 /// instance and the per-index call loop, for a worker that owns exactly
 /// `state.outputs`' slots.
 ///
-/// `count` is passed whole because `cfg(0)` is the whole launch's count: the
-/// index function is a function of the full extent, not of the chunk, so a
+/// The extent is the first of `state.leaves`, and it is the **whole launch's**:
+/// the index function is a function of the full extent, not of the chunk, so a
 /// worker must not see a narrowed one.
 fn run_parallel_range(
     engine: &wasmi::Engine,
     module: &wasmi::Module,
-    count: usize,
     state: ParallelState<'_>,
     base: usize,
     end: usize,
@@ -7898,16 +7996,34 @@ fn run_parallel_range(
     let main = instance
         .get_func(&store, "main")
         .ok_or_else(|| "parallel kernel has no export `main`".to_string())?;
+    // The leaves are fixed for the whole range and the index is the argument the
+    // loop rewrites, so the list is built once: a leaf is handed over as the
+    // value its own parameter field declared.
+    let mut args: Vec<wasmi::Val> = {
+        let state = store.data();
+        state
+            .leaf_classes
+            .iter()
+            .zip(state.leaves)
+            .map(|(class, word)| word_value(*class, *word))
+            .collect()
+    };
+    args.push(word_value(ScalarClass::Int, base as i64));
+    let mut results = [word_value(class, 0)];
     for i in base..end {
-        // **The count and the index are `i64`**, whatever class the body computes
-        // in: `compile_parallel_fragment` declares both leaves `Int`, because a
-        // launch extent and a lane number are not data.  The result is the dummy
-        // it leaves, in the fragment's own class.
-        let args = [
-            word_value(ScalarClass::Int, count as i64),
-            word_value(ScalarClass::Int, i as i64),
-        ];
-        let mut results = [word_value(class, 0)];
+        // **The ABI's arguments are the parameter's scalar leaves in field order,
+        // then the index** — so the index is the one argument that moves per
+        // element, and every leaf is handed over as the value *its own field*
+        // declared (`docs/notes/compute-runtime-scalars.md` §1).  The extent is
+        // leaf 0, which is why `count` is passed whole: the index function is a
+        // function of the full extent, not of the chunk.
+        //
+        // A leaf that is not data — the extent and the index — is `i64` whatever
+        // class the body computes in.  The result is the dummy the fragment leaves
+        // on the stack, in the fragment's own class.
+        if let Some(index) = args.last_mut() {
+            *index = word_value(ScalarClass::Int, i as i64);
+        }
         main.call(&mut store, &args, &mut results)
             .map_err(|e| e.to_string())?;
     }
@@ -8041,8 +8157,8 @@ mod parallel_launch_tests {
         });
         lichen_kernel_ir::install_parallel_backend(stub.clone());
         let id = intern_kernel(two_outputs());
-        let outputs =
-            run_parallel_kernel(id, Backend::Gpu, 8, vec![]).expect("the installed backend runs");
+        let outputs = run_parallel_kernel(id, Backend::Gpu, vec![8], vec![])
+            .expect("the installed backend runs");
         lichen_kernel_ir::clear_parallel_backend();
 
         assert_eq!(
@@ -8140,7 +8256,7 @@ mod parallel_launch_tests {
         let first = run_parallel_kernel(
             id,
             Backend::Gpu,
-            count,
+            vec![count as i64],
             vec![RunInput::Host(BufferWords::ints(
                 (0..count as i64).collect(),
             ))],
@@ -8152,7 +8268,7 @@ mod parallel_launch_tests {
         let second = run_parallel_kernel(
             id,
             Backend::Gpu,
-            count,
+            vec![count as i64],
             vec![RunInput::Resident(resident[0])],
         )
         .expect("the second run consumes the id");
@@ -8189,7 +8305,7 @@ mod parallel_launch_tests {
         run_parallel_kernel(
             id,
             Backend::Cpu,
-            count,
+            vec![count as i64],
             vec![RunInput::Resident(ResidentBuffer {
                 id: ResidentId(41),
                 count,
@@ -8215,7 +8331,7 @@ mod parallel_launch_tests {
         let _serialized = BACKEND_SLOT.lock().unwrap();
         lichen_kernel_ir::clear_parallel_backend();
         let id = intern_kernel(two_outputs());
-        let refusal = run_parallel_kernel(id, Backend::Gpu, 8, vec![])
+        let refusal = run_parallel_kernel(id, Backend::Gpu, vec![8], vec![])
             .expect_err("there is nothing to dispatch to");
         assert!(
             refusal.contains("gpu") && refusal.contains("installed"),
@@ -8252,8 +8368,8 @@ mod parallel_launch_tests {
         }
         lichen_kernel_ir::install_parallel_backend(std::sync::Arc::new(Stub));
         let id = intern_kernel(two_outputs());
-        let refusal =
-            run_parallel_kernel(id, Backend::Gpu, 8, vec![]).expect_err("the backend declined");
+        let refusal = run_parallel_kernel(id, Backend::Gpu, vec![8], vec![])
+            .expect_err("the backend declined");
         lichen_kernel_ir::clear_parallel_backend();
         assert!(
             refusal.contains("stub") && refusal.contains("no compute queue"),
@@ -8374,7 +8490,9 @@ mod parallel_launch_tests {
     /// anything on, so a resident outcome here would be a routing bug rather
     /// than a shape to allow.
     fn host_outputs(id: KernelId, count: usize) -> Vec<BufferWords> {
-        match run_parallel_kernel(id, Backend::Cpu, count, vec![]).expect("the run must succeed") {
+        match run_parallel_kernel(id, Backend::Cpu, vec![count as i64], vec![])
+            .expect("the run must succeed")
+        {
             RunOutcome::Host(outputs) => outputs,
             RunOutcome::Resident(_) => panic!("a \"cpu\" run must produce host buffers"),
         }
