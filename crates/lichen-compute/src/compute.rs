@@ -59,7 +59,10 @@ use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram, LeafKindMarkers, TypeOperator, ValueType};
-use lichen_highlevel::shape::{PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, low_type_of_slot};
+use lichen_highlevel::shape::{
+    PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, array_items as array_items_any, low_type_of_slot,
+    struct_fields_by_shape,
+};
 use lichen_kernel_ir::{
     BufferSlot, Flow, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
     ScalarClass, ScalarData, Terminator, fragment_digest,
@@ -1786,10 +1789,172 @@ where
 
 /// One parameter group of a kernel being emitted.
 ///
+/// The role of every field of a parallel kernel's parameter struct.
+///
+/// The parameter is `struct<.n Int, .in <inputs>, .out <outputs>>` — what
+/// `compute.K (compute.P _)(…)` builds.  `.in` and `.out` are the reserved
+/// field names; every other top-level field is a scalar parameter, a field under
+/// `.in` is an input buffer, and one under `.out` is an output.
+///
+/// # Why the paths, and not the field types
+///
+/// A field's *role* is a fact of where it sits, not of what it holds: a kernel
+/// written `struct<.x _, .y _>` gives its buffer fields **undecided** types
+/// (`raw[?a, ?b]`), so no type test could classify them.  The paths are
+/// [`param_path`]'s own shape — `[i]` for a top-level field, `[io, j]` for one
+/// under `.in`/`.out` — so the checker's name resolution stays the only thing
+/// that decides which field a body read, and this table only says what that
+/// field is *for*.
+///
+/// # The order is the ABI's
+///
+/// A path's index in [`Self::inputs`] is the `cfg_pos` the host `read` import
+/// takes; its index in [`Self::outputs`] is the `out_pos` the `write` import
+/// takes.  Both are declaration order, and the emitter reads them from here
+/// rather than counting, so the two sides cannot disagree about it.
+#[derive(Debug, Default, Clone)]
+struct ParallelRoles {
+    /// Scalar parameter paths, in the order they become wasm locals.
+    scalars: Vec<Vec<usize>>,
+    /// Input buffer paths, in declaration order.
+    inputs: Vec<Vec<usize>>,
+    /// Output buffer paths, in declaration order.
+    outputs: Vec<Vec<usize>>,
+}
+
+impl ParallelRoles {
+    /// The index of `path` among the input buffers — the `cfg_pos` a read of it
+    /// takes.
+    ///
+    /// Not yet called: the emitter still derives a read's position from
+    /// `cfg(1)(k)`, and a struct parameter is refused before emission
+    /// ([`PARALLEL_PARAM_EMISSION`]).  It lands with the emission side, and it
+    /// is written here because it is the table's own question rather than the
+    /// emitter's.
+    #[allow(dead_code)]
+    fn input_pos(&self, path: &[usize]) -> Option<usize> {
+        self.inputs.iter().position(|candidate| candidate == path)
+    }
+    /// The index of `path` among the outputs — the `out_pos` a write of it takes.
+    ///
+    /// Not yet called, for the same reason as [`Self::input_pos`].
+    #[allow(dead_code)]
+    fn output_pos(&self, path: &[usize]) -> Option<usize> {
+        self.outputs.iter().position(|candidate| candidate == path)
+    }
+    /// The wasm local offset of a scalar parameter read, within its slot.
+    fn scalar_offset(&self, path: &[usize]) -> Option<usize> {
+        self.scalars.iter().position(|candidate| candidate == path)
+    }
+}
+
+/// The role table of a parallel kernel's parameter struct, decoded from the
+/// parameter's **type slot**.
+///
+/// `Ok(None)` when the parameter is not a named struct term — the older
+/// `cfg = (n, (buffers…))` shape, whose reads name their position directly.
+/// `Err` when it *is* one but does not carry both reserved fields, because that
+/// is a kernel the author meant to be a parallel parameter and a fallback would
+/// silently read it as the old shape.
+///
+/// The type slot is read the way [`low_type_of_slot`] reads it: the slot itself
+/// may be the type value, or the pair's value slot may be.  `low_type_of` is
+/// *not* used to decide — it answers `Unknown` for every struct by design
+/// (`lichen_highlevel::shape`), because a nominal struct has no low shape.
+fn parallel_roles<P>(
+    module: &mut Module<P>,
+    cfg_pair: NodeId,
+) -> Result<Option<ParallelRoles>, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    // SAFETY: `cfg_pair` is a live node of `module`.
+    let Some(items) = (unsafe { module.array_items(cfg_pair) }) else {
+        return Ok(None);
+    };
+    let Some(type_slot) = items.get(PAIR_TYPE_SLOT).map(|item| item.node) else {
+        return Ok(None);
+    };
+    // The two indirections `low_type_of_slot` walks, tried in its order.
+    let fields = struct_fields_by_shape(module, type_slot).or_else(|| {
+        // SAFETY: `type_slot` is a live node of `module`.
+        let value_slot = unsafe { array_items_any(module, type_slot) }
+            .and_then(|items| items.first().map(|item| item.node))?;
+        struct_fields_by_shape(module, value_slot)
+    });
+    let Some((names, shape)) = fields else {
+        return Ok(None);
+    };
+    let named = |wanted: &str| names.iter().position(|name| *name == Some(wanted));
+    let (Some(inputs_at), Some(outputs_at)) = (named("in"), named("out")) else {
+        return Err(PARALLEL_PARAM_FIELDS.into());
+    };
+    // A field under `.in`/`.out` is a buffer; its count is that field's own
+    // struct's field count, which is all the paths need — the checker has
+    // already resolved each buffer's *name* to its index.
+    // SAFETY: `shape` is a live node of `module`.
+    let Some(field_types) = (unsafe { array_items_any(module, shape) }) else {
+        return Err(PARALLEL_PARAM_FIELDS.into());
+    };
+    let count_under = |module: &mut Module<P>, at: usize| -> Option<usize> {
+        let field = field_types.get(at)?.node;
+        struct_fields_by_shape(module, field)
+            .or_else(|| {
+                // SAFETY: `field` is a live node of `module`.
+                let value_slot = unsafe { array_items_any(module, field) }
+                    .and_then(|items| items.first().map(|item| item.node))?;
+                struct_fields_by_shape(module, value_slot)
+            })
+            .map(|(names, _)| names.len())
+    };
+    let Some(input_count) = count_under(module, inputs_at) else {
+        return Err(PARALLEL_PARAM_FIELDS.into());
+    };
+    let Some(output_count) = count_under(module, outputs_at) else {
+        return Err(PARALLEL_PARAM_FIELDS.into());
+    };
+    let mut roles = ParallelRoles::default();
+    for field in 0..names.len() {
+        if field == inputs_at {
+            roles
+                .inputs
+                .extend((0..input_count).map(|j| vec![inputs_at, j]));
+        } else if field == outputs_at {
+            roles
+                .outputs
+                .extend((0..output_count).map(|j| vec![outputs_at, j]));
+        } else {
+            roles.scalars.push(vec![field]);
+        }
+    }
+    Ok(Some(roles))
+}
+
+/// The `[value, type]` parameter pair of a parallel kernel whose parameter is a
+/// named struct term but which does not carry both of the reserved field names.
+const PARALLEL_PARAM_FIELDS: &str = "a parallel kernel's parameter is \
+     `struct<.n Int, .in <inputs>, .out <outputs>>`, and this one is a struct \
+     without both `.in` and `.out`";
+
+/// A parallel kernel whose parameter *is* the named struct term, which the
+/// lowering recognises but cannot yet emit for.
+///
+/// The two halves of the shape are decoded (`parallel_roles`), and the emission
+/// side is not: a read's position is still derived from `cfg(1)(k)` and a
+/// write's ordinal from its emission order, and a struct parameter has neither.
+/// The refusal names that gap rather than letting the old path report "not a cfg
+/// buffer tuple slot", which would blame the author for the wrong thing.
+const PARALLEL_PARAM_EMISSION: &str = "a parallel kernel's parameter is a named \
+     struct (`struct<.n Int, .in …, .out …>`), and lowering one is not written \
+     yet: a read's position and a write's ordinal still come from the \
+     `cfg = (n, (buffers…))` shape";
+
+/// A parameter slot in a kernel's wasm signature.
+///
 /// A scalar `jit` kernel has one slot (its single parameter).  A **parallel**
-/// kernel (`?a -> USize -> ?b` flattened to `(?a, USize) -> ?b`) has two: the
-/// config group (the domain `?a`, a scalar or tuple of scalars) followed by
-/// the index slot (the last scalar `USize`).  Each slot carries the
+/// kernel has the config slot followed by the index slot.  Each slot carries the
 /// `[value, type]` parameter pair, the parameter's value node (where the shape
 /// marker is stored), its flattened domain shape, and the wasm local base
 /// offset it starts at (the sum of the earlier slots' arities).
@@ -1804,6 +1969,11 @@ struct ParamSlot {
     /// The wasm local base offset — `0` for the first slot, the running sum of
     /// the earlier slots' [`flat_arity`] for a later one.
     base: usize,
+    /// The parameter struct's role table, when the parameter is a named struct
+    /// term (`struct<.n Int, .in …, .out …>`).  `None` for a scalar `jit` kernel
+    /// and for a parallel kernel in the older `(n, (buffers…))` shape, whose
+    /// reads name their position directly.
+    roles: Option<ParallelRoles>,
 }
 
 /// The wasm local offset of `node`, if it is a parameter read of one of
@@ -1816,9 +1986,20 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     for slot in params {
-        if let Some(path) = param_path(module, slot.pair, node)
-            && let Ok(offset) = flatten_offset(&slot.shape, &path)
-        {
+        let Some(path) = param_path(module, slot.pair, node) else {
+            continue;
+        };
+        // A struct parameter's scalars are addressed by the role table: the
+        // struct's *own* field order is what names their locals, and the
+        // slot's `shape` is the flat list of exactly those scalars, so the
+        // table's index is the offset within the slot.
+        if let Some(roles) = &slot.roles {
+            if let Some(offset) = roles.scalar_offset(&path) {
+                return Some((slot.base + offset) as u32);
+            }
+            continue;
+        }
+        if let Ok(offset) = flatten_offset(&slot.shape, &path) {
             return Some((slot.base + offset) as u32);
         }
     }
@@ -1905,6 +2086,9 @@ where
         value: param_value,
         shape: param_shape.clone(),
         base: 0,
+        // A scalar kernel's parameter is its domain, not a struct of named
+        // roles: there are no buffers to be an input or an output.
+        roles: None,
     }];
 
     let mut body: Vec<KernelInstr> = Vec::new();
@@ -2061,6 +2245,23 @@ where
         Some(items) if !items.is_empty() => dyn_node(items[0].node)?,
         _ => body,
     };
+    // **Which shape the parameter is.**  A kernel written against
+    // `compute.K (compute.P _)(…)` has a named struct parameter whose fields
+    // carry the roles; the older `cfg = (n, (buffers…))` has a tuple.
+    //
+    // The role table is decoded from the parameter's *type*, because
+    // `low_type_of` answers `Unknown` for every struct **by design** — a
+    // nominal struct has no low shape (`lichen_highlevel::shape`) — so the
+    // struct half cannot go through the seed → pass → read chain below.
+    let roles = parallel_roles(module, cfg_pair)?;
+    if roles.is_some() {
+        // Recognised, and not yet lowerable: the emission side still derives a
+        // read's position from `cfg(1)(k)` and a write's ordinal from its
+        // emission order, and a struct parameter has neither.  Refused by name
+        // rather than left to the old path's "not a cfg buffer tuple slot",
+        // which would name the wrong cause.
+        return Err(PARALLEL_PARAM_EMISSION.into());
+    }
     // The output count is the **codomain's arity**, read here as the body's own
     // value: a bare value is one output, a materialized tuple value is one
     // output per element.  It is a fact of the *function*, so it is fixed
@@ -2093,6 +2294,7 @@ where
         value: cfg_value,
         shape: cfg_shape,
         base: 0,
+        roles: None,
     }];
     let mut body_instr: Vec<KernelInstr> = Vec::new();
     // **The fragment's class, decided before anything is emitted.**  A parallel
