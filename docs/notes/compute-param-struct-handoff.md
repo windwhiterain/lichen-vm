@@ -1,8 +1,9 @@
 # Handoff: running a parallel kernel whose parameter is a struct
 
-> Status: **open — two blockers, both measured.** Everything else on this path
-> works and is verified; a fresh session can start at §4 (blocker 1) without
-> re-deriving anything above it.
+> Status: **open — one blocker left.** Blocker 1 (the named-read path) is
+> **fixed** and verified; blocker 2 (`parallel_sig`'s extra currying layer) is
+> still open, and a fresh session can start at §5 without re-deriving anything
+> above it.
 > Companion: [compute-kernel-struct](compute-kernel-struct.md) (the kernel
 > struct itself), [applied-struct-nominal-id](applied-struct-nominal-id.md) (the
 > identity property the design rests on), [floating-point](floating-point.md)
@@ -67,11 +68,21 @@ cargo test -q -p lichen-language --test examples
 ```
 
 The harness prints `actual:` for the failing file. Today it prints
-`parameterized: ?a`, and the module carries the refusal named in §4.
+`parameterized: ?a`, and the module carries the refusal named in §5.
 
-**The same probe with `compute.parallel f "cpu"` (no signature) reaches the
-lowering and reports §4's refusal instead.** That difference is §5's whole
-subject, and it is the cheapest way to isolate the two blockers from each other.
+**Blocker 1 is no longer reachable through this file**, because `parallel_sig`
+fails first (§5). To exercise the fixed path on its own, drop the `Sig`
+declaration and use the plain wrapper:
+
+```lichen
+k = compute.parallel f "cpu"
+out = compute.plrun k ((compute.A In)(.n 3, .I In(.a inbuf)))
+```
+
+That variant now **runs** and prints `22: ?a`: the reads resolve, the kernel
+compiles, and the only unresolved cell is the element class of a value read back
+from a buffer — the documented limit of `plrun`'s result type
+(`compute-kernel-struct.md` §"Runtime / codegen"), not a defect.
 
 ## 3. What already works, measured
 
@@ -116,76 +127,85 @@ subject, and it is the cheapest way to isolate the two blockers from each other.
   worst possible answer; the read arm's message is a cause, so the blanket one is
   no longer needed.)
 
-## 4. Blocker 1: `param_path` cannot resolve a named-field path
+- **A named read resolves to the parameter type's field order** — the fix in §4.
+  `k.n` → `[0]`, `k.in.a` → `[1, 0]`, `k.out.z` → `[2, 0]`, matched against the
+  role table's `inputs == [[1, 0]]` and the scalars' `scalar_offset`.
 
-**Symptom.** With `compute.parallel f "cpu"` (§2's variant), the lowering refuses
-with
+## 4. Blocker 1: `param_path` cannot resolve a named-field path — **FIXED**
+
+**Symptom (then).** With `compute.parallel f "cpu"` (§2's variant), the lowering
+refused with
 
 ```
 compute.parallel: read's buffer argument is not an input buffer of the parallel
 parameter (the parameter's inputs are [[1, 0]])
 ```
 
-The role table (right) and the resolution (failed) disagree while both are
+The role table (right) and the resolution (failed) disagreed while both were
 correct in their own terms.
 
-**Where.** `emit_node`'s `Read` arm (`compute.rs:4077` onward) calls
-`peeled_argument` (`compute.rs:4492`) and then `parallel_buffer_pos`
-(`compute.rs:4439`), whose struct branch is
+**Where.** `emit_node`'s `Read` arm calls `peeled_argument` and then
+`parallel_buffer_pos`, whose struct branch asked `param_path` for the node's
+index path. `param_path` asked `usize_value` for each `Index` selector's
+constant and got `None`, so it returned `None` before it could build a path.
 
-```rust
-let slot = params.first()?;
-if let Some(roles) = &slot.roles {
-    return roles.input_pos(&param_path(module, slot.pair, node)?);
-}
-```
+**The real cause — and it was not the selector form.** A named read's selector is
+a lazy `TableGet(name-table, "name")` (`Checker::check_named_field`), which the
+old `param_path` could not read. But folding that lookup is not enough, because
+**the type a named read resolves against is not reachable one level at a time**.
+`Index(target, selector)` states only that `selector` selects a field of `target`;
+the old walk threaded the *child's* type down, so `k.in.a`'s `a` was looked up in
+the parameter struct's own field list (`[n, in, out]`) and refused. Measured: the
+selector's table is a chain rooted at the **parameter's** type term, so
+`k.in.a`'s named step resolves against the *parameter's* names — the `.in` step —
+and only then does work descend into `In`.
 
-`param_path` is `compute.rs:5081`.
+**The fix (`compute.rs`).** `param_path` is now a two-pass walk:
 
-**The measured cause.** `param_path` asks `usize_value` (`compute.rs:4917`) for
-each `Index` selector's constant, and gets `None` — so it returns `None` before
-it can build a path. Instrumenting the node at the failure gives:
+1. **Collect.** Walk the value chain from the read inward, recording each level's
+   selector as an `IndexStep` — a `Position` when it is a constant (`a(0)`), a
+   `Named` name when it is a `TableGet` (a name is a compile-time string even
+   when its index is not). A chain whose outermost `Index` reads the parameter
+   pair's value slot is a whole-parameter read: the empty path.
+2. **Resolve.** Walk the steps outermost-first against the parameter's type,
+   carrying two parallel lists per level: the value's field *types* (`[shape,
+   kind]`'s shape, or a plain field array) and the same value's field *names*
+   (`struct_type_names`, read from the type term's name table). A named step is
+   its position in the names list; a positional step is taken as it stands.
 
-```
-node = Index whose target is also Index, index = None (usize_value)
-slot.value = a node with no operation
-```
+The path is therefore the parameter **type's** field order, never how the body
+spelled the read — `k.n` → `[0]`, `k.in.a` → `[1, 0]`, `k.out.z` → `[2, 0]` —
+which is exactly what the role table (`[[1, 0]]` for the probe's `.in`) holds.
 
-i.e. **neither the wrapper's own `x(0)` selector nor the author's `k.in.a`
-selector is an evaluated constant at that point.** The peel itself is fine:
-`peeled_argument` stops at the author's node, because a parameter read has no
-materialized array behind it, so it never reaches `param_value` and does not
-destroy the chain.
+**What it refuses, and why that matters.** A named read whose field is in no name
+table is an error by name, not a silent `None`: the index of a named field read
+must be a compile-time constant, and a kernel is compiled from a concrete
+instantiation, so an undetermined index is a compile error rather than something
+to defer.
 
-**Why the tuple shape never hit this.** Its position is not a path at all — it is
-the constant the *body* wrote, `cfg(1)(k)` — read off the node with the same
-`usize_value`, and a literal in the body *is* an evaluated constant. So the
-"selector must be a constant" assumption was the tuple shape's, and the struct
-shape is the first caller to break it.
+**Verified.** The plain-wrapper variant of §2's probe **runs** and prints
+`22: ?a`. `cargo test -p lichen-compute` (17), `-p lichen-kernel-ir` (14),
+`-p lichen-graph-ir` (3), `-p lichen-language --test compute` (51),
+`--test pipeline` (131), `--test examples` all pass.
 
-**Candidate fixes.**
+**The candidates below are kept as the record of what was considered; (a) was
+implemented, in the two-pass form described above.**
 
-- **(a) Resolve the selector through the name table.** A struct field read is a
-  *name* resolved to an index; the checker already does that (see
+- **(a) Resolve the selector through the name table.** *Chosen.* A struct field
+  read is a *name* resolved to an index; the checker already does that (see
   `a_named_struct_field_read_resolves_to_the_positional_index` in
-  `crates/lichen-language/tests/pipeline.rs`), and `struct_fields_by_shape`
-  (`lichen-highlevel/src/shape.rs`) reads a struct type's names. Reading the
-  index from there makes `param_path` a pure *structural* walk, which is what it
-  is documented to be. Cost: it needs the struct *type* at each level, so the
-  walk grows a type argument.
-- **(b) Force the selector's value.** Evaluate the node before reading it. Cost:
-  the walk would run evaluation during a compile-time shape read, which is the
-  kind of hidden work the surrounding code avoids; and it is unclear whether the
-  selector *has* a value in the frozen template, which is the state
-  `compile_parallel_fragment` works in.
-- **(c) Have the checker emit the resolved index.** Makes the IR carry the
-  constant and leaves `param_path` unchanged. Cost: it moves the problem into the
-  checker for one consumer, and the tuple shape proves a constant is not
-  generally required.
-
-**Recommendation: (a).** It matches what `param_path` claims to be ("the index
-*path* from the parameter to the value `node` reads"), and the name table is
-where a struct's index already lives.
+  `crates/lichen-language/tests/pipeline.rs`), and `struct_type_names` reads a
+  struct type's names. The cost the original note predicted was real — the walk
+  grew a type argument — but threading the *container* per level was the wrong
+  shape for it; the two passes above are what it needs.
+- **(b) Force the selector's value.** Rejected: evaluation during a compile-time
+  shape read, and measurement showed the selector cannot be folded this way —
+  forcing the parameter's type term does **not** fold the `TableGet`, because the
+  name table is not value-reachable.
+- **(c) Have the checker emit the resolved index.** Rejected: at check time the
+  kernel body's parameter type is an unbound cell, so the checker has no index to
+  emit; it is the apply that makes it concrete, which is why the resolution
+  belongs to the lowering.
 
 ## 5. Blocker 2: `parallel_sig`'s extra parameter makes the operand `Parameterized`
 
@@ -203,13 +223,18 @@ ComputeOperator::Parallel => {
 The operand here is the `[f, backend]` array `ParallelOp::build` allocates.
 
 **What is ruled out, measured.** `compute.parallel f "cpu"` with the *same*
-struct-shaped `f` passes this check and reaches the lowering. The third curried
-parameter is the only difference between the two wrappers. Reverting
-`parallel_sig`'s `.sig s` to `.sig (type_of f)` — i.e. making the signature
-declaration identical to the plain wrapper's — **does not move the failure**, so
-`.sig s` is not the cause. `f` alone evaluates concretely
-(`Function: struct<.n Int, .in struct<.a …>, .out struct<.z …>> -> raw[…]`), so
-the argument is not the `Parameterized` one either.
+struct-shaped `f` passes this check and reaches the lowering — and, now that §4
+is fixed, **runs**. The third curried parameter is the only difference between
+the two wrappers. Reverting `parallel_sig`'s `.sig s` to `.sig (type_of f)` —
+i.e. making the signature declaration identical to the plain wrapper's — **does
+not move the failure**, so `.sig s` is not the cause. `f` alone evaluates
+concretely (`Function: struct<.n Int, .in struct<.a …>, .out struct<.z …>> ->
+raw[…]`), so the argument is not the `Parameterized` one either.
+
+**The wrapper is not alone in this.** A *tuple*-shaped `f` through
+`compute.parallel_sig` fails the same way, so the extra currying layer is the
+cause rather than the parameter shape — which is what makes this a wrapper
+question and not a struct question.
 
 **Where.** `compute.lichen`'s `parallel_sig` (line 11) and
 `ComputeOperator::Parallel`'s run (`compute.rs:1283`).
@@ -221,17 +246,21 @@ and why the extra currying layer changes it**. Instrumenting the element (rather
 than the whole operand) is the first step, and it is not yet done. Note that the
 wrapper's `s` is *not* an operand of `$parallel` (only `f` and `b` are), so `s`
 cannot be it directly; the likely mechanism is in how the apply binds the
-wrapper's parameters across three currying layers.
+wrapper's parameters across three currying layers. Instrument at
+`ComputeOperator::Parallel`'s `Parameterized` branch: print
+`module.node_value` of the operand array's two elements and
+`module.node_evaluated_deep` of the operand node, then compare the two wrappers.
 
 ## 6. What must not break
 
 - **The tuple shape keeps working.** `compute.parallel`/`compute.jit` (no
   signature) are unchanged, and the existing tests exercise them heavily.
-- The suites that cover this work, all green at `8ac7736`:
+- The suites that cover this work, all green after §4's fix:
   `cargo test -p lichen-compute` (17), `cargo test -p lichen-kernel-ir` (14),
   `cargo test -p lichen-graph-ir` (3),
   `cargo test -p lichen-language --test compute` (51),
-  `--test pipeline` (131), `--test examples`.
+  `--test pipeline` (131), `--test examples` (the scratch probe is not committed,
+  so this suite passes; with the probe present, only its §5 failure shows).
 - The one pre-existing warning is `WasmState.at` being never read
   (`compute.rs:3104`); it is not related.
 
@@ -243,7 +272,7 @@ wrapper's parameters across three currying layers.
 | Role table | `parallel_roles`, `compute.rs:1856` |
 | Parallel lowering | `compile_parallel_fragment`, `compute.rs:2208` |
 | Instruction emitter (read/write arms) | `emit_node`, `compute.rs:4077` |
-| Position resolution | `parallel_buffer_pos` `:4439`, `peeled_argument` `:4492`, `param_path` `:5081`, `is_param_value` `:4888`, `usize_value` `:4917` |
+| Position resolution | `parallel_buffer_pos`, `peeled_argument`, `param_path` (`IndexStep`/`resolve_steps`), `is_param_value`, `usize_value`, `struct_type_names`, `param_value_shape` |
 | Launch walk (count and buffers) | `ComputeOperator::ParLaunch`, `compute.rs:1334` |
 | The `Parallel` gate and run | `ParallelOp::build` and `ComputeOperator::Parallel`, `compute.rs:1283` |
-| Struct type reading | `struct_fields_by_shape` and `struct_term_parts`, `crates/lichen-highlevel/src/shape.rs` |
+| Struct type reading | `struct_term_parts`, `struct_names_any`, `struct_fields_by_shape`, `crates/lichen-highlevel/src/shape.rs` |

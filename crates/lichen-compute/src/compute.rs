@@ -60,8 +60,9 @@ use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram, LeafKindMarkers, TypeOperator, ValueType};
 use lichen_highlevel::shape::{
-    PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, array_items as array_items_any,
-    low_type_of_slot, struct_fields_by_shape,
+    KIND_MARKER_SLOT, PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, STRUCT_MARKER_NAMES_SLOT,
+    TYPE_KIND_SLOT, TYPE_SHAPE_SLOT, array_items as array_items_any, low_type_of_slot,
+    struct_fields_by_shape,
 };
 use lichen_kernel_ir::{
     BufferSlot, Flow, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
@@ -1957,15 +1958,25 @@ struct ParamSlot {
 
 /// The wasm local offset of `node`, if it is a parameter read of one of
 /// `params` — the slot's base plus the flattened index path within the slot's
-/// domain.  `None` when `node` is not a parameter read of any slot.
-fn param_read_offset<P>(module: &Module<P>, params: &[ParamSlot], node: NodeId) -> Option<u32>
+/// domain.  `Ok(None)` when `node` is not a parameter read of any slot.
+///
+/// `Err` is [`param_path`]'s: a read that *is* a parameter read but whose index
+/// is not a constant.  It is propagated rather than swallowed — a parameter read
+/// nothing can resolve is the compile refusing to lower a read it cannot place,
+/// and the alternative (treating it as "not a read at all") is what would let it
+/// reach the emitter's catch-all and be reported as an *unsupported* index.
+fn param_read_offset<P>(
+    module: &Module<P>,
+    params: &[ParamSlot],
+    node: NodeId,
+) -> Result<Option<u32>, String>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     for slot in params {
-        let Some(path) = param_path(module, slot.pair, node) else {
+        let Some(path) = param_path(module, slot.pair, node)? else {
             continue;
         };
         // A struct parameter's scalars are addressed by the role table: the
@@ -1974,15 +1985,15 @@ where
         // table's index is the offset within the slot.
         if let Some(roles) = &slot.roles {
             if let Some(offset) = roles.scalar_offset(&path) {
-                return Some((slot.base + offset) as u32);
+                return Ok(Some((slot.base + offset) as u32));
             }
             continue;
         }
         if let Ok(offset) = flatten_offset(&slot.shape, &path) {
-            return Some((slot.base + offset) as u32);
+            return Ok(Some((slot.base + offset) as u32));
         }
     }
-    None
+    Ok(None)
 }
 
 /// Lower `[param_pair] → function.return` for the kernel-safe subset (scalar
@@ -3835,6 +3846,14 @@ const CONDITIONAL_WRITE: &str = "a `compute.write` inside a conditional is not s
 /// ([`Module::MAX_APPLY_DEPTH`], [`Module::MAX_APPLY_TOTAL`]) are constants too.
 const MAX_KERNEL_BODY_DEPTH: usize = 512;
 
+/// How deep a parameter's field nesting a named read's resolution follows.
+///
+/// A parameter's nesting is the type's own, and the bound is what keeps a type
+/// whose encoding re-enters (the universe's cycle is one) from spinning: a chain
+/// deeper than this is not a struct read the resolution understands, and it
+/// stops and lets its caller name the cause.
+const MAX_PARAMETER_DEPTH: usize = 32;
+
 /// The refusal [`emit_node`] gives past [`MAX_KERNEL_BODY_DEPTH`], naming the
 /// limit, what the limit is protecting, and the form that does not expand.
 ///
@@ -4166,7 +4185,7 @@ where
                 // A parameter read at some index path → a wasm `local.get`.
                 // (This must run before the value_of defuse: `Index(param_pair,
                 // 0)` is a node's value slot, not a general extraction.)
-                if let Some(offset) = param_read_offset(module, params, node) {
+                if let Some(offset) = param_read_offset(module, params, node)? {
                     body.push(KernelInstr::LocalGet(offset));
                     return Ok(());
                 }
@@ -4333,7 +4352,7 @@ where
                 // so `parallel_buffer_pos` recognizes it, exactly like the
                 // `Index` emitter peels a constant array element.
                 let buf = peeled_argument(module, buf)?;
-                let pos = parallel_buffer_pos(module, params, buf).ok_or_else(|| {
+                let pos = parallel_buffer_pos(module, params, buf)?.ok_or_else(|| {
                     // The path is named in the refusal: a struct parameter's
                     // positions are *paths*, so what the body spelled and what
                     // the role table holds are the two halves a reader needs.
@@ -4436,34 +4455,57 @@ where
 /// read enters into it.  A `(n, (buffers…))` parameter declares nothing, so the
 /// position is the constant the body wrote — `cfg(1)(k)` — and it is read off
 /// the node.
-fn parallel_buffer_pos<P>(module: &Module<P>, params: &[ParamSlot], node: NodeId) -> Option<usize>
+///
+/// `Ok(None)` is "this node does not name a buffer this walk can place" — the
+/// refusal the read arm words as "not an input buffer of the parallel
+/// parameter".  `Err` is [`param_path`]'s, and it is *not* that refusal: it says
+/// the node is a parameter read whose index is not a constant, which is a
+/// different fact about the program and would be misreported as "not an input".
+fn parallel_buffer_pos<P>(
+    module: &Module<P>,
+    params: &[ParamSlot],
+    node: NodeId,
+) -> Result<Option<usize>, String>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let slot = params.first()?;
+    let Some(slot) = params.first() else {
+        return Ok(None);
+    };
     if let Some(roles) = &slot.roles {
-        return roles.input_pos(&param_path(module, slot.pair, node)?);
+        return Ok(param_path(module, slot.pair, node)?.and_then(|path| roles.input_pos(&path)));
     }
     let cfg_value = slot.value;
-    let operation = module.node_operation(node)?;
+    let operation = match module.node_operation(node) {
+        Some(operation) => operation,
+        None => return Ok(None),
+    };
     if !matches!(
         AsEnum::<LowOperator>::as_enum(&operation.operator),
         Some(LowOperator::Index)
     ) {
-        return None;
+        return Ok(None);
     }
-    let (target, index) = operand_pair(module, operation.operand).ok()?;
-    let k = usize_value(module, index)?;
-    let target_op = module.node_operation(target)?;
+    let Some((target, index)) = operand_pair(module, operation.operand).ok() else {
+        return Ok(None);
+    };
+    let Some(k) = usize_value(module, index) else {
+        return Ok(None);
+    };
+    let Some(target_op) = module.node_operation(target) else {
+        return Ok(None);
+    };
     if !matches!(
         AsEnum::<LowOperator>::as_enum(&target_op.operator),
         Some(LowOperator::Index)
     ) {
-        return None;
+        return Ok(None);
     }
-    let (tt, ti) = operand_pair(module, target_op.operand).ok()?;
+    let Some((tt, ti)) = operand_pair(module, target_op.operand).ok() else {
+        return Ok(None);
+    };
     // The body's cfg reads reference the cfg value through `Index(cfg_pair, 0)`
     // (a read node) rather than the value node itself, so compare the two cfg
     // value slots by *equality class* (as the `emit_node` parameter-read path
@@ -4471,9 +4513,9 @@ where
     if equality_rep(module, tt) != equality_rep(module, cfg_value)
         || usize_value(module, ti) != Some(1)
     {
-        return None;
+        return Ok(None);
     }
-    Some(k)
+    Ok(Some(k))
 }
 
 /// The node a wrapped slot-read argument reaches.
@@ -4813,13 +4855,18 @@ where
 {
     for slot in params {
         let path = match param_path(module, slot.pair, node) {
-            Some(path) => path,
-            None if module.node_operation(node).is_none()
-                && equality_rep(module, node) == equality_rep(module, slot.value) =>
+            Ok(Some(path)) => path,
+            // A read whose index is not a constant is not a parameter read this
+            // walk can attribute to a position, and this walk answers *which
+            // position* — so it abstains, and the emitter's read arm is where
+            // the refusal belongs (it is the one that has to place the read).
+            Ok(None)
+                if module.node_operation(node).is_none()
+                    && equality_rep(module, node) == equality_rep(module, slot.value) =>
             {
                 Vec::new()
             }
-            None => continue,
+            _ => continue,
         };
         let Some(read) = sub_shape(&slot.shape, &path) else {
             continue;
@@ -4927,6 +4974,288 @@ where
         Some(LowValue::USize(n)) => Some(n),
         _ => None,
     }
+}
+
+/// The **name** a struct field read selects: the compile-time constant a named
+/// read's selector carries.
+///
+/// A named read `a.name` is `TableGet(name-table, "name")`
+/// (`Checker::check_named_field`) — the name is a string constant even though
+/// its *index* is left to the type, so the name is what a resolution walks the
+/// type with.  `Ok(None)` for a selector that is not a named read at all (a
+/// constant position, a computed index).
+fn field_name<P>(module: &Module<P>, selector: NodeId) -> Result<Option<&'static str>, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    if usize_value(module, selector).is_some() {
+        return Ok(None);
+    }
+    let Some(operation) = module.node_operation(selector) else {
+        return Ok(None);
+    };
+    let (_, key) = match AsEnum::<LowOperator>::as_enum(&operation.operator) {
+        Some(LowOperator::TableGet) => operand_pair(module, operation.operand)?,
+        // A computed index is a conditional's selector, not a field read.
+        _ => return Ok(None),
+    };
+    Ok(module
+        .node_value(AnyNodeId::Dynamic(key))
+        .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+        .and_then(|v| match v {
+            LowValue::Str(name) => Some(name),
+            _ => None,
+        }))
+}
+
+/// One level of a parameter read's index: the **position** it selects at that
+/// level, or the **name** it selects when the level was written with one.
+///
+/// The two forms are kept apart because they are resolved against different
+/// things: a position is already its own answer, while a name has to be looked
+/// up in the field list of the type that names the level — and *which* type that
+/// is, only the whole chain says.
+enum IndexStep {
+    Position(usize),
+    Named(&'static str),
+}
+
+/// The positional index **path** from the parameter to the value `node` reads,
+/// if `node` is a parameter read.
+///
+/// `Ok(None)` is "not a parameter read" (a structured-array conditional, an
+/// out-of-domain index, a value of the body's own).  `Err` is a read that *is*
+/// one but whose index is not a compile-time constant — the undetermined type a
+/// kernel compile refuses, since it runs on a concrete instantiation.
+fn param_path<P>(
+    module: &Module<P>,
+    param_pair: NodeId,
+    node: NodeId,
+) -> Result<Option<Vec<usize>>, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    // **Two passes, and the first is why the second can be right.**  A named
+    // read's index belongs to the field list of a type the *whole* chain names —
+    // `k.in.a`'s `a` is a position in `In`, which only the parameter's type says
+    // is what `.in` holds — so the steps are collected along the value chain
+    // first (innermost last), and only then walked against the parameter's type
+    // from the outside in.  Resolving each level as it is met would have to
+    // guess the type its neighbour was read from, and `Index(target, selector)`
+    // does not state it.
+    let mut steps: Vec<IndexStep> = Vec::new();
+    let mut current = node;
+    for _ in 0..MAX_PARAMETER_DEPTH {
+        let Some(operation) = module.node_operation(current) else {
+            // A bare value cell is not an `Index` path: a whole-parameter read
+            // reaches the emitter through its own branch, which compares the
+            // cell's equality class against the slot's (`emit_node`), so this
+            // walk declines it rather than spelling it as an empty path.
+            return Ok(None);
+        };
+        if !matches!(
+            AsEnum::<LowOperator>::as_enum(&operation.operator),
+            Some(LowOperator::Index)
+        ) {
+            return Ok(None);
+        }
+        let Ok((target, selector)) = operand_pair(module, operation.operand) else {
+            return Ok(None);
+        };
+        if target == param_pair {
+            // `Index(param_pair, 0)` is the encoding's `[value, type]` pair read
+            // — the parameter read whole, which is the empty path.  A non-zero
+            // position is not a data read at all.
+            return match usize_value(module, selector) {
+                Some(0) => Ok(Some(Vec::new())),
+                _ => Ok(None),
+            };
+        }
+        // The selector is a *name* when the read was written `a.name`, and a
+        // *position* when it was written `a(0)`.
+        match field_name(module, selector)? {
+            Some(name) => steps.push(IndexStep::Named(name)),
+            None => match usize_value(module, selector) {
+                Some(position) => steps.push(IndexStep::Position(position)),
+                None => return Ok(None),
+            },
+        }
+        if is_param_value(module, param_pair, target) {
+            // The innermost read: its target is the parameter's value, so the
+            // chain ends here.
+            break;
+        }
+        current = target;
+    }
+    if steps.is_empty() {
+        return Ok(None);
+    }
+    // Collected innermost-first; the path reads outermost-first.
+    steps.reverse();
+    resolve_steps(module, param_pair, &steps)
+}
+
+/// Resolve a read's collected index **steps** against the parameter's type,
+/// outermost first, producing the positional path.
+fn resolve_steps<P>(
+    module: &Module<P>,
+    param_pair: NodeId,
+    steps: &[IndexStep],
+) -> Result<Option<Vec<usize>>, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let Some(fields) = param_value_shape(module, param_pair) else {
+        // A scalar parameter has no field list, and a read of it is the value
+        // itself: the empty path.  It only needs the constant selectors it was
+        // handed, never a name lookup.
+        return resolve_without_type(steps);
+    };
+    // The walk descends one level per step, and every level carries **two**
+    // parallel lists: the value's field *types* (what the next step indexes
+    // into) and the same value's field *names* (what a named step is looked up
+    // in).  They are read from different places — the types from the shape, the
+    // names from the type term's name table — so keeping them together here is
+    // what stops a name being looked for in the wrong list.
+    let mut types = Some(fields);
+    let mut names = unsafe { module.array_items(param_pair) }
+        .and_then(|items| items.get(PAIR_TYPE_SLOT).map(|item| item.node))
+        .and_then(|type_slot| struct_type_names(module, type_slot));
+    let mut path = Vec::with_capacity(steps.len());
+    for step in steps {
+        let at = match step {
+            IndexStep::Position(position) => *position,
+            IndexStep::Named(name) => {
+                match names
+                    .as_ref()
+                    .and_then(|names| names.iter().position(|field| *field == Some(*name)))
+                {
+                    Some(at) => at,
+                    None => {
+                        return Err(format!(
+                            "a struct parameter field read names `{name}`, which is not a field of \
+                             the type it is read from — that type's fields are {names:?}"
+                        ));
+                    }
+                }
+            }
+        };
+        path.push(at);
+        // The level below: the entry this step selected, described the same way.
+        // An entry of a shape **is** the field's own field list, so it is taken
+        // as it stands rather than unwrapped again.
+        let entry = types
+            .and_then(|types| unsafe { array_items_any(module, types) })
+            .and_then(|entries| entries.get(at))
+            .map(|entry| entry.node);
+        types = entry;
+        names = entry.and_then(|entry| struct_type_names(module, entry));
+    }
+    Ok(Some(path))
+}
+
+/// Resolve a read whose parameter type states no field list — a scalar domain.
+///
+/// Only the constant form can be placed here, since a name has nothing to be
+/// looked up in; the resulting path is the positions themselves.
+fn resolve_without_type(steps: &[IndexStep]) -> Result<Option<Vec<usize>>, String> {
+    let mut path = Vec::with_capacity(steps.len());
+    for step in steps {
+        match step {
+            IndexStep::Position(position) => path.push(*position),
+            IndexStep::Named(name) => {
+                return Err(format!(
+                    "a struct parameter field read names `{name}`, which is not a field of the \
+                     type it is read from"
+                ));
+            }
+        }
+    }
+    Ok(Some(path))
+}
+
+/// A struct **type term**'s name→index table, in field order — the named-read
+/// resolution's read of the encoding, at the one site that needs only the names
+/// and no field types.
+///
+/// It walks the type/kind/marker/names chain one `array_items` at a time,
+/// exactly as `shape::struct_term_parts` does, so the two cannot disagree about
+/// the layout.  `None` when the term is not a named struct type: a positional
+/// struct's names slot is `Void`, and a term whose chain is not yet decided is
+/// a type this resolution has nothing to read.
+fn struct_type_names<P>(module: &Module<P>, term: AnyNodeId) -> Option<Vec<Option<&'static str>>>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let shape = type_term_slot(module, term, TYPE_SHAPE_SLOT)?;
+    let kind = type_term_slot(module, term, TYPE_KIND_SLOT)?;
+    let marker = type_term_slot(module, kind, KIND_MARKER_SLOT)?;
+    let names_at = type_term_slot(module, marker, STRUCT_MARKER_NAMES_SLOT)?;
+    let field_count = unsafe { array_items_any(module, shape) }?.len();
+    let mut names: Vec<Option<&'static str>> = vec![None; field_count];
+    let Some(LowValue::Table(table)) = module
+        .node_value(names_at)
+        .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+    else {
+        return None;
+    };
+    // SAFETY: `table` is the payload of the value read from the live node
+    // `names_at`, so its home block is alive.
+    for item in unsafe { table.items() } {
+        let name = module
+            .node_value(item.key)
+            .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+            .and_then(|v| match v {
+                LowValue::Str(name) => Some(name),
+                _ => None,
+            });
+        let index = module
+            .node_value(item.value)
+            .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+            .and_then(|v| match v {
+                LowValue::USize(n) => Some(n),
+                _ => None,
+            });
+        if let (Some(name), Some(index)) = (name, index)
+            && index < field_count
+        {
+            names[index] = Some(name);
+        }
+    }
+    Some(names)
+}
+
+/// One slot of a type term.
+///
+/// **The encoding mixes the two node homes freely within one term** — a struct
+/// term's shape is a module node while its kind is a frozen (static) one — so a
+/// reader that only accepted [`NodeId`] would decode half a type and fail on the
+/// other half.  This reads through [`AnyNodeId`] from end to end and never
+/// materializes: the value a static slot holds is already the answer, so copying
+/// it into the module would add graph for nothing.  `shape::array_items` is the
+/// same reader the type predicates in `lichen_highlevel::shape` use, so the walk
+/// cannot drift from the encoding authority.
+///
+/// `None` when the term is not an array with that slot, or the slot is unbound.
+fn type_term_slot<P>(module: &Module<P>, term: AnyNodeId, at: usize) -> Option<AnyNodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    // SAFETY: `term` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    unsafe { array_items_any(module, term) }?
+        .get(at)
+        .map(|item| item.node)
 }
 
 /// Follow a `value_of` extraction — `Index(pair, 0)`, where `pair` is a
@@ -5070,42 +5399,26 @@ where
     dyn_node(items.first()?.node).ok()
 }
 
-/// The index *path* from the parameter to the value `node` reads, if `node` is
-/// a parameter read:
-/// - `Index(param_pair, 0)` (a scalar domain value) → `[]`,
-/// - `Index(param_value, k)` (a flat tuple element) → `[k]`,
-/// - `Index(Index(param_value, a), b)` (a nested tuple element) → `[a, b]`.
+/// The **field-type list** of a parameter's value: the shape slot of the
+/// parameter's type expression.
 ///
-/// Any other `Index` (a structured-array conditional, an out-of-domain
-/// index) is `None`.
-fn param_path<P>(module: &Module<P>, param_pair: NodeId, node: NodeId) -> Option<Vec<usize>>
+/// A parameter's type expression states the value's *type*, so a struct
+/// parameter's shape is literally its list of field types — one entry per
+/// position, in declaration order.  That list is what a read of the parameter
+/// value indexes into, and what this walk descends one level per read.
+///
+/// `None` for a parameter whose type is not a struct — a scalar `jit` domain
+/// states no field list, and a read of it needs no name resolved.
+fn param_value_shape<P>(module: &Module<P>, param_pair: NodeId) -> Option<AnyNodeId>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let operation = module.node_operation(node)?;
-    if !matches!(
-        AsEnum::<LowOperator>::as_enum(&operation.operator),
-        Some(LowOperator::Index)
-    ) {
-        return None;
-    }
-    let (target, index) = operand_pair(module, operation.operand).ok()?;
-    let k = usize_value(module, index)?;
-    if target == param_pair {
-        // `Index(param_pair, k)`: the parameter's value node.  Read directly
-        // only for a scalar domain (`k == 0`), i.e. the empty path.
-        return Some(if k == 0 { vec![] } else { vec![k] });
-    }
-    if is_param_value(module, param_pair, target) {
-        // `Index(param_value, k)` — a direct tuple element read.
-        return Some(vec![k]);
-    }
-    // `target` is itself a deeper parameter read (a nested tuple element).
-    let mut path = param_path(module, param_pair, target)?;
-    path.push(k);
-    Some(path)
+    let type_slot = unsafe { module.array_items(param_pair) }?
+        .get(PAIR_TYPE_SLOT)
+        .map(|item| item.node)?;
+    type_term_slot(module, type_slot, TYPE_SHAPE_SLOT)
 }
 
 /// Flatten a parameter index `path` to a wasm local index, using the domain
