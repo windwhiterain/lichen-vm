@@ -62,7 +62,7 @@ use lichen_highlevel::program::{Ctx, HighProgram, LeafKindMarkers, TypeOperator,
 use lichen_highlevel::shape::{
     KIND_MARKER_SLOT, PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, STRUCT_MARKER_NAMES_SLOT,
     TYPE_KIND_SLOT, TYPE_SHAPE_SLOT, TypeRef, array_items as array_items_any, field_list,
-    field_names, low_type_of_slot,
+    field_names, field_type, low_type_of_slot,
 };
 use lichen_kernel_ir::{
     BufferSlot, Flow, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
@@ -1841,13 +1841,10 @@ impl ParallelRoles {
     }
 }
 
-/// The named fields and field-type list of the type a **type slot** names,
-/// whichever way that slot holds it.
-///
-/// The slot may be the `[shape, kind]` type **term** itself, or a node that
-/// holds one — an annotated parameter's type cell is the annotation's own
-/// `[value, type]` pair ([`low_type_of_slot`] resolves the same indirection for
-/// a low type).  Which of the two it is is the encoding's question, not this
+/// The way a **type slot** holds its type: the `[shape, kind]` term itself, or a
+/// node that holds one — an annotated parameter's type cell is the annotation's
+/// own `[value, type]` pair ([`low_type_of_slot`] resolves the same indirection
+/// for a low type).  Which of the two it is is the encoding's question, not this
 /// walk's, so both are asked and the **decode** decides ([`shape::TypeRef`]);
 /// a node that is neither answers `None` either way.
 ///
@@ -1855,6 +1852,22 @@ impl ParallelRoles {
 /// caller because the lowering has no universe handle: the universe is a `Ctx`
 /// fact and a kernel is lowered below the checker, so the gate here is the
 /// `[Type, ↺]` cycle.
+///
+/// The decode is the **strong** one — [`field_names`], whose name-table walk a
+/// node that is not a named struct type term fails — so every reader of the
+/// parameter's field list makes the same choice about which node it is reading.
+fn parameter_type_ref<P>(module: &mut Module<P>, slot: AnyNodeId) -> Option<TypeRef>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    [TypeRef::Term(slot), TypeRef::Slot(slot)]
+        .into_iter()
+        .find(|ty| field_names(module, *ty).is_some())
+}
+
+/// The named fields and field-type list of the type a **type slot** names.
 fn struct_fields_of_slot<P>(
     module: &mut Module<P>,
     slot: AnyNodeId,
@@ -1864,13 +1877,72 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    [TypeRef::Term(slot), TypeRef::Slot(slot)]
-        .into_iter()
-        .find_map(|ty| {
-            let names = field_names(module, ty)?;
-            let shape = field_list(module, ty)?;
-            Some((names, shape))
-        })
+    let ty = parameter_type_ref(module, slot)?;
+    let names = field_names(module, ty)?;
+    let shape = field_list(module, ty)?;
+    Some((names, shape))
+}
+
+/// The class of every scalar leaf of a parallel parameter, in signature order.
+///
+/// **The first leaf is the launch extent**, and an extent is not data: the host
+/// reads it as an `Int` ordinal, and a `Float` count is refused by name where a
+/// dispatch is decoded (`ComputeOperator::ParLaunch`).  So the first leaf is
+/// `Int` whatever the parameter declares, and a declared class that is not is
+/// refused **here**, where the message can name the field — rather than left to
+/// surface later as an apply-time class conflict with no span.
+///
+/// **Every other leaf is a runtime scalar, and its class is the parameter
+/// field's own**, which is the point of the type being annotated at all.  Seeding
+/// every leaf `USize` is what made `k.alpha` read `Int` under a `Float`
+/// annotation, and the conflict that produced against the body's own decided cell
+/// was a *hard* unify error rather than a fallback
+/// (`docs/notes/type-query-api-proposal.md` §7).  A field whose type is undecided
+/// (a `_`) keeps the integer default: the ABI's answer for an absent annotation.
+///
+/// The older `(n, (buffers…))` parameter shape states no types and has exactly
+/// one leaf, the count.
+fn scalar_leaf_classes<P>(
+    module: &mut Module<P>,
+    cfg_pair: NodeId,
+    roles: Option<&ParallelRoles>,
+) -> Result<Vec<ScalarClass>, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let Some(roles) = roles else {
+        return Ok(vec![ScalarClass::Int]);
+    };
+    // SAFETY: `cfg_pair` is a live node of `module`.
+    let ty = unsafe { module.array_items(cfg_pair) }
+        .and_then(|items| items.get(PAIR_TYPE_SLOT).map(|item| item.node))
+        .and_then(|slot| parameter_type_ref(module, slot));
+    // A scalar role is a **direct** field (`[field]`), so its one position is the
+    // field the class is read from.
+    let class_of_role = |module: &Module<P>, path: &[usize]| -> ScalarClass {
+        path.first()
+            .and_then(|&at| field_type(module, ty?, at))
+            .map(|field| scalar_class_of(&low_type_of_slot(module, field)))
+            .unwrap_or(ScalarClass::Int)
+    };
+    let classes: Vec<ScalarClass> = roles
+        .scalars
+        .iter()
+        .map(|path| class_of_role(module, path))
+        .collect();
+    if let Some(first) = classes.first()
+        && *first != ScalarClass::Int
+    {
+        return Err(format!(
+            "a parallel parameter's first scalar is the launch extent, and an extent is Int: \
+             this one is declared {first:?}. The extent is how many indices the dispatch runs \
+             over, so it is a host ordinal in every fragment, and a `Float` one is not a count \
+             (`docs/notes/floating-point.md` §4.4)"
+        ));
+    }
+    Ok(classes)
 }
 
 /// The role table of a parallel kernel's parameter struct, decoded from the
@@ -2268,26 +2340,27 @@ where
     // struct has no low shape (`lichen_highlevel::shape`) — so the struct half
     // cannot go through the seed → pass → read chain below.
     let roles = parallel_roles(module, cfg_pair)?;
-    // A struct parameter's scalar parameters are its fields other than `.in` and
-    // `.out`; a tuple parameter's one scalar is the count `n`.  The output count
-    // is the **codomain's arity** for both — a bare value is one output, a
-    // materialized tuple value one per element — because that is where the writes
-    // are: a `compute.write` is a value, so a body that writes several outputs
-    // returns a tuple of them.  Both counts are facts of the *function*, fixed
-    // before any index runs rather than discovered from which slots happened to
-    // be written.
-    let scalar_count = roles.as_ref().map_or(1, |roles| roles.scalars.len());
+    // The output count is the **codomain's arity** for both parameter shapes — a
+    // bare value is one output, a materialized tuple value one per element —
+    // because that is where the writes are: a `compute.write` is a value, so a
+    // body that writes several outputs returns a tuple of them.  The count is a
+    // fact of the *function*, fixed before any index runs rather than discovered
+    // from which slots happened to be written.
     let outputs = parallel_output_nodes(module, ret_value);
-    // The seed is the *host ABI's*, not a type fact: the parallel signature is
-    // the parameter's scalar leaves followed by the index, whatever the lichen
-    // type says, so it is stated here rather than decoded.  The pass then runs as
-    // usual, and the slot's shape is read back off the class — the same
-    // seed → pass → read chain `compile_fragment` uses.
+    // The slot is seeded with the ABI's own signature — the parameter's scalar
+    // leaves followed by the index — and each leaf's class is the parameter
+    // field's ([`scalar_leaf_classes`]).  The pass then runs as usual, and the
+    // slot's shape is read back off the class: the same seed → pass → read chain
+    // `compile_fragment` uses.
     let cfg_value = pair_value_node(module, cfg_pair)
         .ok_or_else(|| "parallel cfg parameter is not a [value, type] pair".to_string())?;
+    // **Each scalar leaf's class is the parameter's own**, read from the field it
+    // names — not the all-`Int` seed this used to state.  See
+    // [`scalar_leaf_classes`].
+    let scalar_classes = scalar_leaf_classes(module, cfg_pair, roles.as_ref())?;
     module.seed_class_low_type(
         cfg_value,
-        LowShape::Tuple(vec![LowShape::USize; scalar_count]),
+        LowShape::Tuple(scalar_classes.iter().copied().map(low_shape_of).collect()),
     );
     seed_template_term_low_types(module, fid);
     module.infer_template_low_types(fid);
@@ -2384,16 +2457,18 @@ where
         // `tally.reads` is what says that, and for a struct parameter so is
         // `.in`'s field count.
         //
-        // **Every leaf is `Int`, and that is the ABI's own statement rather than
-        // a language fact** (`cfg(0)`'s type is a fresh cell the body pins, if it
-        // uses it at all).  The count is a launch extent and the index is a lane
-        // number: neither is data, so neither takes a buffer's class.  A float
-        // fragment's index is an `i64` — the conversion that made it an `f32`
-        // existed only because the fragment had one class, and the host's
-        // `read`/`write` imports no longer convert it.
+        // **A scalar leaf's class is the parameter's own** ([`scalar_leaf_classes`]):
+        // a runtime scalar is data and takes the class its field is annotated
+        // with.  The two leaves that are *not* data stay `Int` — the launch
+        // extent, and the index, which is a lane number.  A float fragment's index
+        // is an `i64`: the conversion that made it an `f32` existed only because
+        // the fragment had one class, and the host's `read`/`write` imports no
+        // longer convert it.
         param_shape: KernelShape::Tuple(
-            (0..=scalar_count)
-                .map(|_| KernelShape::Scalar(ScalarClass::Int))
+            scalar_classes
+                .iter()
+                .map(|class| KernelShape::Scalar(*class))
+                .chain([KernelShape::Scalar(ScalarClass::Int)])
                 .collect(),
         ),
         body: body_instr.into(),
@@ -3868,6 +3943,15 @@ fn scalar_class_of(shape: &LowShape) -> ScalarClass {
         | LowShape::Function(..)
         | LowShape::Table(..)
         | LowShape::Unknown => ScalarClass::Int,
+    }
+}
+
+/// The low shape a **scalar leaf** seeds its parameter slot with — the inverse
+/// of [`scalar_class_of`] at the one position that function reads.
+fn low_shape_of(class: ScalarClass) -> LowShape {
+    match class {
+        ScalarClass::Int => LowShape::USize,
+        ScalarClass::Float => LowShape::Float,
     }
 }
 
