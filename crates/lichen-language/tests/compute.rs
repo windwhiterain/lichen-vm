@@ -1280,3 +1280,150 @@ out = compute.plrun k2 (3, (inbuf,))
 /// Serialises the tests that install a backend, because the slot is
 /// process-global and this binary runs its tests in parallel.
 static GPU_SLOT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The placeholder each program's backend name is written as, so **one source**
+/// is what both backends are given. Substituting the name is the only difference
+/// between the two runs.
+const BACKEND: &str = "BACKEND";
+
+/// Elements each run covers: one whole workgroup and five more.
+///
+/// **Not a multiple of [`LOCAL_SIZE_X`], and that is the point of the number.**
+/// A dispatch is `ceil(count / LOCAL_SIZE_X)` workgroups, so a count that
+/// divides the workgroup sends **no surplus lane** — and a wrong element width
+/// does not fail there, it corrupts the neighbour. A wrong width only becomes a
+/// wrong *answer* once a lane reads or writes past the end of what was bound.
+const ELEMENT_COUNT: usize = lichen_compute_gpu::LOCAL_SIZE_X as usize + 5;
+
+/// The two backends' answers to one program, or `None` when there is no device
+/// to run the second one on.
+///
+/// The oracle is the **other real backend**: the wasm one in `lichen-compute` and
+/// this crate's SPIR-V emitter implement the same IR and were written apart, so
+/// nothing else in the tree can say whether they agree. What an element occupies
+/// is [`ScalarClass::byte_width`], a promise only a comparison of the two
+/// answers keeps (`docs/notes/floating-point.md` §5.1) — which is why the
+/// comparison is over *values* and not over `installed_backend_name()`, a weaker
+/// claim that a silently-fallen-back run would also satisfy.
+///
+/// The CPU run goes first and always happens, whether or not a device opens: it
+/// is the answer being compared, not half of a comparison. It is run **before**
+/// the install on purpose, so a `"cpu"` run cannot be a `"gpu"` run's leftovers
+/// (`crates/lichen-language/examples/crossbackend.rs` is the probe for that).
+///
+/// The installed-backend slot is process-global, so the whole body holds the
+/// same mutex the device test above holds — a parallel test in this binary must
+/// not observe a device another test has just uninstalled.
+fn answer_from_each_backend(source: &str) -> Option<(String, String)> {
+    let _installed = GPU_SLOT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let cpu = run(&source.replace(BACKEND, "cpu"));
+    if let Err(reason) = lichen_compute_gpu::install_default() {
+        eprintln!(
+            "no device to run the second backend on, so the two backends are not compared \
+                    here: {reason}"
+        );
+        return None;
+    }
+    let gpu = run(&source.replace(BACKEND, "gpu"));
+    // Uninstalling drops the context, so every device buffer it was holding goes
+    // back at the same moment — the reason the device test above does it rather
+    // than leaving it to process exit.
+    lichen_compute_gpu::uninstall();
+    Some((cpu, gpu))
+}
+
+/// A float buffer, through two kernels, computed by both backends.
+///
+/// `k1` writes a `Float` element; `k2` reads that buffer and writes it doubled.
+/// This is the chain the integer case below runs and the chain a `"gpu"` run
+/// keeps on the device: the intermediate is handed to the second kernel as a
+/// resident id rather than coming home in between.
+///
+/// **The `0.0` is load-bearing, not decoration.** A parallel fragment's class is
+/// decided from the value a write fills before the body is emitted, and a body
+/// with no concrete `Float` operand is lowered in `Int` — so `a + a` alone
+/// declares an `Int` fragment, and the run refuses the `Float` input buffer by
+/// name (`docs/notes/floating-point.md` §5.1, point 3). `0.0 + a + a` anchors the
+/// class and computes the same number.
+///
+/// **Every element carries the same float**, and that is a property of the pair
+/// rather than of this program: a float that *varied* with the index would have
+/// to come out of an `Int` operation, and the SPIR-V emitter refuses a body that
+/// mixes the two classes in one operation, so a varying float buffer is not
+/// something these two backends can be handed at all.
+#[test]
+fn a_float_fragment_agrees_across_the_two_backends() {
+    let source = format!(
+        r#"
+--- compute = import "compute.lichen" ---
+f1 = cfg => {{
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, 1.5]
+}}
+k1 = compute.parallel f1 "{BACKEND}"
+inbuf = compute.plrun k1 ({ELEMENT_COUNT},)
+f2 = cfg => {{
+  n = cfg(0)
+  i = compute.range n
+  a = compute.read [cfg(1)(0), i]
+  compute.write [n, i, 0.0 + a + a]
+}}
+k2 = compute.parallel f2 "{BACKEND}"
+out = compute.plrun k2 ({ELEMENT_COUNT}, (inbuf,))
+(compute.read [out, 0], compute.read [out, {last}], compute.collect out)
+"#,
+        last = ELEMENT_COUNT - 1,
+    );
+    let Some((cpu, gpu)) = answer_from_each_backend(&source) else {
+        return;
+    };
+    println!("float  cpu: {cpu}\nfloat  gpu: {gpu}");
+    assert_eq!(
+        gpu, cpu,
+        "the two backends answered one float fragment differently"
+    );
+}
+
+/// The same two-kernel chain over `Int`, so the comparison is not only over a
+/// class whose every element is the same number.
+///
+/// `k1` writes `i + 10` and `k2` writes `a + a`, so the answer is
+/// `2 * (i + 10)` and **every element differs from its neighbour**. A width
+/// mistake therefore shows up at the first index it touches, rather than needing
+/// the tail to expose it.
+#[test]
+fn an_integer_fragment_agrees_across_the_two_backends() {
+    let source = format!(
+        r#"
+--- compute = import "compute.lichen" ---
+f1 = cfg => {{
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + 10]
+}}
+k1 = compute.parallel f1 "{BACKEND}"
+inbuf = compute.plrun k1 ({ELEMENT_COUNT},)
+f2 = cfg => {{
+  n = cfg(0)
+  i = compute.range n
+  a = compute.read [cfg(1)(0), i]
+  compute.write [n, i, a + a]
+}}
+k2 = compute.parallel f2 "{BACKEND}"
+out = compute.plrun k2 ({ELEMENT_COUNT}, (inbuf,))
+(compute.read [out, 0], compute.read [out, {last}], compute.collect out)
+"#,
+        last = ELEMENT_COUNT - 1,
+    );
+    let Some((cpu, gpu)) = answer_from_each_backend(&source) else {
+        return;
+    };
+    println!("int    cpu: {cpu}\nint    gpu: {gpu}");
+    assert_eq!(
+        gpu, cpu,
+        "the two backends answered one integer fragment differently"
+    );
+}

@@ -59,15 +59,16 @@ use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram, LeafKindMarkers, TypeOperator, ValueType};
-use lichen_highlevel::shape::{PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, low_type_of_slot};
+use lichen_highlevel::shape::{PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, low_type_of_slot};
 use lichen_kernel_ir::{
     BufferSlot, Flow, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
     ScalarClass, ScalarData, Terminator, fragment_digest,
 };
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, LowOperator, LowShape, LowValue,
-    Module, ModuleKey, NodeId, Operation, OperatorExt, Program, Release, StaticModule, ValueExt,
+    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, FunctionId, LowOperator, LowShape,
+    LowValue, Module, ModuleKey, NodeId, Operation, OperatorExt, Program, Release, StaticModule,
+    ValueExt,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -1359,6 +1360,27 @@ where
                     .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
                 {
                     Some(LowValue::USize(n)) => n,
+                    // A count that is a **decided** `Float` is refused by name
+                    // rather than left lazy.  Staying lazy here would mean the
+                    // dispatch quietly does not run and nothing says so, which is
+                    // the one answer this channel exists to stop giving — the
+                    // positions and the written value now share one class
+                    // (`WriteOp`), so a float kernel's count is `Float` all the
+                    // way here and a `plrun k (4.0,)` used to be accepted and
+                    // then skipped.
+                    //
+                    // An *undecided* count is still lazy: that is a program the
+                    // language has not evaluated yet, not a mistake, and the arm
+                    // below leaves it exactly as it was.
+                    Some(LowValue::Float(_)) => {
+                        module.record_extension_diagnostic(
+                            PARALLEL_DIAGNOSTIC,
+                            None,
+                            "the launch count is Float, but a dispatch extent is Int: \
+                             Int and Float do not convert",
+                        );
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    }
                     _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
                 };
                 // input buffers = cfg(1), a tuple of `Buffer` values.
@@ -1730,6 +1752,15 @@ where
     /// So does `BufferCollect`: it does produce an array of scalars, but of a
     /// length no low type can name — and a length nobody has decided is
     /// `Unknown`, not a guess.
+    ///
+    /// **The pass does not consult this table.**  The hook the fixed-point pass
+    /// calls is [`OperatorExt::low_type`], and this operator's impl of that trait
+    /// does not forward to this inherent method, so every compute operator
+    /// declines through the trait's default and a read's class is *undecided*,
+    /// not `USize`.  The `Read` arm is also the one claim here that a
+    /// measurement refutes: a read's class is the buffer's element class, which
+    /// a template does not carry, and which the decided cell beside the read
+    /// states instead ([`seed_template_term_low_types`]).
     fn low_type(&self, _arguments: &[Option<LowShape>]) -> Option<LowShape> {
         match self {
             ComputeOperator::Launch
@@ -2014,7 +2045,7 @@ fn compile_parallel_fragment<P>(
 ) -> Result<KernelFragment, String>
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let AnyFunctionId::Dynamic(fid) = function else {
@@ -2051,6 +2082,7 @@ where
     let cfg_value = pair_value_node(module, cfg_pair)
         .ok_or_else(|| "parallel cfg parameter is not a [value, type] pair".to_string())?;
     module.seed_class_low_type(cfg_value, LowShape::Tuple(vec![LowShape::USize]));
+    seed_template_term_low_types(module, fid);
     module.infer_template_low_types(fid);
     let Some(cfg_shape) = module.low_type_of_node(cfg_value) else {
         return Err(UNDECIDED_DOMAIN.into());
@@ -2157,6 +2189,74 @@ where
         results: 1,
         int_width: IntWidth::I64,
     })
+}
+
+/// Seed every class a **template's own terms** decide, from the type cell each
+/// term carries.
+///
+/// The seed is the parameter domain's, generalized to the body.  A template is
+/// never evaluated and an apply binds the clones, so nothing the body computes
+/// is ever *observed* — but the checker has already decided it, and it wrote the
+/// decision into every term's type cell.  The transfers cannot see those cells
+/// (the pass never learns the `[value, type]` layout) and observation is silent
+/// on a template, so without this the whole body reads `Unknown` and every
+/// class falls back to `Int`.
+///
+/// **What a term's type cell states is the class of its value**, and nothing
+/// else needs stating: the transfers then carry it through the body, so a float
+/// element makes `a + a` a float through the ordinary arithmetic transfer and
+/// the emitter needs to know nothing new.  Decoding the cell is the encoding
+/// authority's job, not this crate's — [`low_type_of_slot`] answers
+/// [`LowShape::Unknown`] for a cell that has not bound, and an undecided cell
+/// seeds nothing.
+///
+/// **Both places the channel reads the class are seeded, and the second one is
+/// the load-bearing half.**  A term is reached two ways: the emitter's
+/// `value_of` extraction reads the pair's *value slot* directly, while the
+/// pass's `Index` transfer — how a let-bound name reaches its value — reads the
+/// **container's** low type, which is the pair itself.  A pair's class is an
+/// *encoding* array: observation joins its two positions into one
+/// `Array(Unknown, 2)`, and the type half's class is an array of its own, so
+/// the join is `Unknown` and the extraction reads nothing
+/// (`docs/notes/lowlevel-low-types.md` §6 — a class whose writers disagree is a
+/// class the encoding arrays live on).  So the pair is seeded with the tuple
+/// view of its two positions: the value, whose class the type cell states, and
+/// the type, which states no shape.  That is what lets a decided element class
+/// reach a body that names it, which is the whole of a read: `compute.read`'s
+/// result is the *buffer's* element class, and a template does not carry the
+/// buffer.
+///
+/// A cell nothing decides stays undecided, so an integer body is seeded with
+/// the same `USize` its transfers already state, and a disagreement between a
+/// seed and a transfer degrades to `Unknown` — this pass's own safety argument,
+/// and today's answer wherever the two do disagree.
+fn seed_template_term_low_types<P>(module: &mut Module<P>, function: FunctionId)
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    for node in module.functions[function].nodes.clone() {
+        // A term is the node's **value**: the checker's `[value, type, attrs…]`
+        // array, which an operator node carries as well as a leaf does.
+        // SAFETY: `node` is a live node of `module`; nothing in this crate
+        // calls `Module::drop_block`.
+        let Some(items) = (unsafe { module.array_items(node) }) else {
+            continue;
+        };
+        if items.len() < PAIR_ATTR_BASE {
+            continue;
+        }
+        let shape = low_type_of_slot(module, items[PAIR_TYPE_SLOT].node);
+        if !shape.is_known() {
+            continue;
+        }
+        let Ok(value) = dyn_node(items[PAIR_VALUE_SLOT].node) else {
+            continue;
+        };
+        module.seed_class_low_type(value, shape.clone());
+        module.seed_class_low_type(node, LowShape::Tuple(vec![shape, LowShape::Unknown]));
+    }
 }
 
 /// The value a `compute.write` position writes — the expression whose class is
