@@ -8,36 +8,43 @@
 > `crates/lichen-render/src/render.rs`.  Syntax and semantics are the spec's business:
 > [language-spec.md §2, §2.1, §3](../language-spec.md).
 
-The glued `<` postfix — the delimiter the array type used to occupy — now reads element
-`e` of an expression's **value** with **no type validation**: `X<e>`.  The array type is
+The glued `<` postfix — the delimiter the array type used to occupy — reads component
+`e` of an expression's **value** from a **tuple type value**: `X<e>`.  The array type is
 spelled `array<T, n>` (keyword-led), so the two cannot be confused.
 
 ## What it does
 
-`X<e>` lowers to the lowlevel `Index` directly, bypassing every guard the typed forms
-apply:
+`X<e>` lowers to the lowlevel `Index` and resolves the component structurally, bypassing
+every *value* guard the typed forms apply:
 
 - no array-type pinning (unlike `e[i]` → `Index`),
 - no `IndexTarget` / shape-derived type (unlike `a(k)` → `Field`),
 - no bounds assert.
 
-So it reads a component of a *type-as-value*: `<Int, string><0>` is the `Int` type,
-`struct<Int, string><1>` is the `string` type.  Because it is unvalidated, an index into
-a concretely non-positional value (an atomic type, an `Int`) or an out-of-bounds index is
-a **runtime** lowlevel `Index` error, never a static diagnostic.
+The container's **type** is checked, though: it must be the tuple kind, stated once as a
+unify.  A decided container is refused where it stands:
 
-The result is the element's own pair — value slot element 0, type slot element 1 — both
-read lazily.  **The container may be any expression; its elements must be pairs.**  Every
-element of a type-as-value is one (a type constant *is* a `[value, type]` pair), which is
-what the form is for; a container of plain values — a runtime array or tuple — is not, and
-reading element 1 of an `Int` element is a runtime `Index` error, reported with its own
-wording ("this raw read found an element that is not a value/type pair", with the caret on
-the read).  A runtime array's element is read with `e[i]`; `X<e>` is not a second way to
+- a tuple *value* (`(1, 2)<0>`): its type is the tuple shape `<Int, Int>`, not the kind
+  `TypeTuple` — `expected TypeTuple, found <Int, Int>`;
+- a struct type value: its kind is `TypeStruct` and its components read by name (`X::a`)
+  — `expected TypeTuple, found TypeStruct`;
+- an array or an atomic type: `expected TypeTuple, found array<Int, 2>` / `found Int`;
+
+An undecided container (a parameter, a call result) is **pinned** to the tuple kind,
+so the apply that binds it refuses a wrong-kind actual per call.  It used to validate
+nothing, which is why an array container reached the element read at run time.
+
+So it reads a component of a *type-as-value*: `<Int, string><0>` is the `Int` type.  An
+out-of-bounds subscript is still an evaluation error, recorded during the definition
+pass, so the build is refused.
+
+The result is the component's own pair — value slot element 0, type slot element 1 — both
+read lazily.  Every component of a type-as-value is such a pair, which is what the form
+is for; a runtime array's element is read with `e[i]`, and `X<e>` is not a second way to
 spell it.
 
-An unbound container (a parameter, a call result) stays lazy and resolves at
-the apply, which is what makes it usable generically: `f = k => k<0>` reads the first
-field of whatever type `k` is applied to, exactly the laziness the compute-wrapper field
+The pin is what makes it usable generically: `f = k => k<0>` reads the first component of
+whatever *tuple type* `k` is applied to, exactly the laziness the compute-wrapper field
 reads rely on (see [compute-kernel-struct.md](compute-kernel-struct.md)).
 
 ## Why

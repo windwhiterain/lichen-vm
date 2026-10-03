@@ -6,7 +6,10 @@
 //!
 //! Both are read *kinds*, which is why they live together: `a(k)` over a
 //! struct, `a.name` over a tuple, and an unnamed field are one rule seen from
-//! three sides (`docs/language-spec.md` §Indexing, §Structs).
+//! three sides (`docs/language-spec.md` §Indexing, §Structs).  The last section
+//! pins the same rule for the two **raw** reads, which now state their accepted
+//! container kind too: `X<e>` takes a tuple type value, `X::a` a struct type
+//! value, and `.a`/`::a` over an array are the two named sides of the refusal.
 
 use lichen_highlevel::diagnostic::DiagKind;
 
@@ -131,4 +134,51 @@ fn a_named_struct_and_a_named_block_read_by_name() {
         output("a = { x = 1; y = Int }\n(a.x, a.y)"),
         "(1, Int): <Int, Type>"
     );
+}
+
+// --- the raw reads state their kind too -----------------------------------
+
+/// `X<e>` reads a component of a **tuple type value**: the container's type is
+/// unified against the tuple kind, so a *struct* type value — whose kind is
+/// `TypeStruct` (it reads by name, `X::a`) — is refused where it stands.
+#[test]
+fn a_raw_index_of_a_struct_type_value_is_refused() {
+    let (message, kind) = refused("struct<.a Int, .b string><0>");
+    assert_eq!(kind, DiagKind::Guard);
+    assert_eq!(message, "expected TypeTuple, found TypeStruct");
+}
+
+/// A tuple *value* is not a tuple *type* value: `(1, 2)`'s type is the tuple
+/// shape `<Int, Int>`, not the type-value kind `TypeTuple`, so the read is
+/// refused.  It used to answer `none: none` with no diagnostic.
+#[test]
+fn a_raw_index_of_a_tuple_value_is_refused() {
+    let (message, kind) = refused("(1, 2)<0>");
+    assert_eq!(kind, DiagKind::Guard);
+    assert_eq!(message, "expected TypeTuple, found <Int, Int>");
+}
+
+/// The named forms over an array: `.a` states the container's *kind*
+/// (`TypeArray`), `::a` the container's whole type — the same refusal, because
+/// an array is neither a struct instance nor a struct type value.
+#[test]
+fn a_named_read_of_an_array_is_refused() {
+    let (message, kind) = refused("l = [10, 20]\nl.a");
+    assert_eq!(kind, DiagKind::Guard);
+    assert_eq!(message, "expected TypeStruct, found TypeArray");
+    let (message, kind) = refused("l = [10, 20]\nl::a");
+    assert_eq!(kind, DiagKind::Guard);
+    assert_eq!(message, "expected TypeStruct, found array<Int, 2>");
+}
+
+/// A deferred container reaches `::a` the same way as `a(k)` reaches its tuple
+/// read: the unify is stated at the read and reconciled by the apply that binds
+/// the container, so the array is refused at the argument.  This used to be an
+/// internal panic at the apply (`unreachable!("TableGet target must be a
+/// table")`), not a refusal.
+#[test]
+fn a_raw_named_read_of_a_deferred_array_is_refused_at_the_application() {
+    let (message, kind) = refused("f = x => x::a\nf [10, 20]");
+    assert_eq!(kind, DiagKind::Runtime);
+    assert_eq!(message, "expected TypeStruct, found array<Int, 2>");
 }

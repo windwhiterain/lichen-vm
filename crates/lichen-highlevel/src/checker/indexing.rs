@@ -106,12 +106,13 @@ where
     /// pairs printed a silent `none` where the value should be.  See the
     /// item's Outcome in [code-audit.md].
     ///
-    /// An out-of-bounds index, a non-container, or a container whose element is
-    /// not a pair at all are runtime `Index` evaluation errors — recorded
-    /// during the definition pass, so the build is rejected; only the container
-    /// *kind* is checked statically.  The element case gets its own wording
-    /// ([`DiagKind::RuntimeRawElement`]) because the generic one blames the
-    /// container the user wrote rather than the element the read produced.
+    /// With the container kind stated above, the remaining failures are
+    /// evaluation errors — an out-of-bounds subscript, recorded during the
+    /// definition pass, so the build is rejected.  The element case keeps its
+    /// own wording ([`DiagKind::RuntimeRawElement`]) because the generic one
+    /// blames the container the user wrote rather than the element the read
+    /// produced; it now sits behind the kind check, since every component of a
+    /// tuple type value is a pair.
     pub(super) fn check_raw_index(
         &mut self,
         e: ExprId,

@@ -2,4 +2,4 @@
   order = "11"
   output = "(Int, string, Int, string): <Type, Type, Type, Type>"
 ---
-(<Int, string><0>, <Int, string><1>, struct<.a Int, .b string><0>, struct<.a Int, .b string><1>)
+(<Int, string><0>, <Int, string><1>, struct<.a Int, .b string>::a, struct<.a Int, .b string>::b)

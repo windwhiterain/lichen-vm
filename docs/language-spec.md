@@ -77,8 +77,8 @@ block    := (bstmt sep)* ['return' expr]            -- statements + an explicit 
           | (bstmt sep)*                            -- struct-returning block (no tail): an anonymous struct
 bstmt    := ['pub'] stmt                            -- a block statement (`pub` marks one as a struct field)
 postfix  := glue ( '[' expr ']'                     -- index  e[i]
-                 | '<' expr '>'                     -- raw index  X<e>  (no type validation)
-                 | '::' name                        -- raw named read  X::a  (TypeStruct type)
+                 | '<' expr '>'                     -- raw index  X<e>  (a tuple type value's component)
+                 | '::' name                        -- raw named read  X::a  (a struct type value's field)
                  | '{' expr '}'                     -- table lookup  t{k}
                  | '(' fields ')' )                 -- field read  a(k)  or instantiation  A(…)
            | '.' name                               -- named field read  a.name
@@ -286,12 +286,14 @@ delimiter is a fresh atom — an argument of an application:
   branch.  An array
   literal in argument position needs no parens when glued, but a spaced
   `f ([1, 2])` applies `f` to the array.
-- `X<e>` (glued `<`) is a **raw index**: element `e` of `X`'s *value*, read
-  with **no type validation** (see §3).  It reads a component of a type-as-value
-  (`<Int, string><0>`, `struct<.f Int, .g string><1>`) — any expression may be the
-  container, and it stays lazy on an unbound one, but the element it reads must
-  itself be a value/type pair, which is what every element of a type-as-value
-  is.  A spaced `<` is a fresh tuple-type
+- `X<e>` (glued `<`) is a **raw index**: component `e` of `X`'s *value*, read
+  from a **tuple type value** (see §3).  It reads a component of a type-as-value
+  (`<Int, string><0>`), and the container's *type* must be the tuple kind.  A
+  struct type value's kind is `TypeStruct` (its components read by name,
+  `X::a`), a tuple *value*'s type is the tuple shape `<Int, Int>` rather than
+  the kind, and an atomic type's kind is `Type` — none of the three is accepted,
+  and the requirement is stated as a unify, so an unbound container is refused by
+  the apply that binds it.  A spaced `<` is a fresh tuple-type
   atom — an application argument (`f <3>` is a parse error, a single-element
   tuple type; a two-element one, `f <Int, Type>`, applies `f` to it).  A type
   tuple in argument position is parenthesized: `f (<Int, Type>)`.  The array
@@ -307,8 +309,8 @@ delimiter is a fresh atom — an argument of an application:
     by something that cannot begin an expression (a separator, a closer, the end
     of the program) closes the bracket it is in, and so does a `>` followed by a
     *glued* delimiter — a glued `(` or `<` belongs to the angle form
-    (`struct<.f Int, .g Int>(1, 2)` instantiates, `struct<.f Int, .g string><0>` reads a
-    field of the type as a value).
+    (`struct<.f Int, .g Int>(1, 2)` instantiates, `<Int, string><0>` reads a
+    component of the tuple type as a value).
   - **Application wins over comparison for `<`.**  `f <Int, Type>` is still `f`
     applied to the tuple type; `a < b` is the comparison only because `<b>` is
     not a tuple type (one element), so the application is tried, fails, and the
@@ -317,10 +319,13 @@ delimiter is a fresh atom — an argument of an application:
 - `X::a` (glued `::`) is a **raw named read**: field `a` of a **TypeStruct value**,
   whose type must itself be a TypeStruct kind (the name table lies there, at
   `container_ty[0][1]`).  It reads the field's *type* as a value — `struct<.a
-  Int, .b string>::a` is `Int : Type` — and is check-time: a concretely
-  non-struct container is a diagnostic, an unbound one stays lazy.  It is the
+  Int, .b string>::a` is `Int : Type`.  The requirement is a unify for **both**
+  tiers: a decided non-struct container is refused where it stands
+  (`expected TypeStruct, found array<Int, 2>`), and an undecided one is pinned
+  and refused by the apply that binds it.  It is the
   named sibling of `X<e>`; `.` (`.a`) is the guarded field read over a struct
-  *instance*, whose kind (not type) must be TypeStruct.  A spaced `::` is not a
+  *instance*, whose kind (not type) must be TypeStruct — the same kind unify,
+  read off the kind slot.  A spaced `::` is not a
   postfix (it would be a bare infix, now ungrammatical since the table
   separator is `==>`).
 - `A(1, 2)` (glued `(`) is a struct instantiation (see §3); `f (1, 2)` (spaced
@@ -563,14 +568,18 @@ maps every span back to the original file.
 - **Indexing.**  `e[i]` reads the `i`-th element of an **array**, and `a(k)` —
   the adjacent single-expression paren — reads position `k` of a **tuple**
   (`(0, 1)(1)` is `1`).  A struct instance's fields are read **by name**
-  (`s.x`, `X::a`), so a struct type is refused by `a(k)` like any other
+  (`s.x`), and a struct *type* value's components with `X::a`, so a struct type
+  is refused by `a(k)` like any other
   non-tuple: the operator is chosen by syntax, never by a runtime kind dispatch,
-  and each read form states the container kind it accepts.  Both state it as a
-  **pin** — the container's type is unified with a fresh array / tuple type —
-  so a container that is not decided yet is refused by the *application* that
-  supplies it, per call, rather than skipped: `x(0)` over an array is
+  and each read form states the container kind it accepts.  `e[i]` and `a(k)`
+  state it as a **pin** — the container's type is unified with a fresh array /
+  tuple type — so a container that is not decided yet is refused by the
+  *application* that supplies it, per call, rather than skipped: `x(0)` over an array is
   `expected <?a, …>, found array<Int, 2>`, and `x[0]` over a tuple is
-  `expected array<…>, found <Int, Int>`.  A
+  `expected array<…>, found <Int, Int>`.  The named reads state the same
+  requirement as a unify on the corresponding slot: `.a` needs the container's
+  *kind* to be a struct kind, `X::a` needs its *type* to be one (§3, *the raw
+  named read*).  A
   literal index into a statically-known array is checked against its length
   at check time (an out-of-bounds index is an `IndexOutOfBounds`
   diagnostic); an index known only at runtime (a parameter, a call result)
@@ -581,31 +590,36 @@ maps every span back to the original file.
   `[then, else][i]` is the mechanism under the conditional form
   (`if c then e1 else e2` desugars to it) — an integer index selects a branch, and the untaken
   branch is never evaluated (the lowlevel `Index` stays lazy on it).
-- **The raw index `X<e>`.**  The glued `<` postfix reads element `e` of `X`'s
-  **value** with **no type validation** — no array-type pinning, no
-  `IndexTarget` guard, no bounds assert.  It is the way to read a component of
-  a *type-as-value* directly: `<Int, string><0>` is the `Int` type (the tuple
-  type's first element), `struct<.f Int, .g string><1>` the `string` type, and any
-  expression may be the container (a bound name, a parameter, a call result).
-  The read's result is **the element's own pair**, its value in the value slot
-  and its type in the type slot, both read lazily.  Because it is unvalidated,
-  an index into a concretely non-positional value (an atomic type, an `Int`) or
-  an out-of-bounds index is a **runtime** lowlevel `Index` evaluation error,
-  never a static diagnostic; an unbound container stays lazy and resolves at the
-  apply.  That includes the element's own type slot: the *container* may be any
-  expression, but its elements must be value/type pairs — which is what every
-  element of a type-as-value is, and what a plain runtime array or tuple is
-  not.  `[1, 2]<0>` therefore reads an `Int` element whose type slot does not
-  exist and is a runtime error (*"this raw read found an element that is not a
-  value/type pair"*), not a silent `none`; `e[i]` is how a runtime array's
-  element is read.  This is the syntax the
+- **The raw index `X<e>`.**  The glued `<` postfix reads component `e` of `X`'s
+  **value**, and the container's *type* must be the **tuple kind** — a tuple *type
+  value* is what the form is for, and its components are read structurally.  It
+  is the way to read a component of a *type-as-value* directly: `<Int, string><0>`
+  is the `Int` type (the tuple type's first component), and the container may be
+  a bound name, a parameter or a call result.  The requirement is stated once, as
+  a **unify**: a decided container is refused where it stands
+  (`expected TypeTuple, found <Int, Int>` for the tuple *value* `(1, 2)`, whose
+  type is the tuple shape rather than the kind; `expected TypeTuple, found
+  TypeStruct` for a struct type value, whose components are read by name —
+  `X::a`; `expected TypeTuple, found array<Int, 2>` for an array), and an
+  undecided one is pinned, refused by the apply that binds it.  Nothing else is
+  a container.
+  The read's result is **the component's own pair**, its value in the value slot
+  and its type in the type slot, both read lazily — which is what every component
+  of a type-as-value is, and what a plain runtime array or tuple is not.  The
+  read is *raw* only in that it does not pin an array type, guard an index target
+  or assert bounds: an out-of-bounds subscript is still an evaluation error,
+  recorded during the definition pass, so the build is refused.  `e[i]` is how a
+  runtime array's element is read.  This is the syntax the
   array type used to occupy — the array type is now the keyword-led
   `array<T, n>`.
 - **The raw named read `X::a`.**  The glued `::` postfix reads field `a` from a
   **TypeStruct value** — the container's *type* must itself be a TypeStruct
   kind (`[TypeStruct{id, names}, K]`, the name→index table centred right there
-  at `container_ty[0][1]`) — a *check-time* requirement, not the no-validation
-  of `X<e>`.  It yields the field's *type* as a value, so
+  at `container_ty[0][1]`) — the named sibling of the tuple-kind requirement
+  `X<e>` states, and likewise a **unify**: a decided container is refused where
+  it stands, an undecided one is pinned and refused by the apply that binds it
+  (this is what removed the `TableGet` panic a deferred non-struct used to hit).
+  It yields the field's *type* as a value, so
   `struct<.a Int, .b string>::a` is `Int : Type`; its sibling `.a` reads a
   field *value* from a struct instance (whose *kind* must be TypeStruct, table
   at `container_ty[1][0][1]`).  Because `::` now means this read, the table
@@ -749,14 +763,14 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `<T1, …, Tn>` | `TypeTuple(range)` |
 | `struct<.a T1, .b T2>` | `TypeStruct { fields, names }` — nominal, fresh id per occurrence; the kind is a `[marker, K]` pair whose marker is the two-field `TypeStruct{id, names}` value.  A field without a `.name` (`struct<T1, …>`) is a `StructFieldName` check error |
 | `a.name` | `NamedField { container, name }` — the checker resolves `name` through the struct's name→index table to the positional index, then reads the field's type out of the field list |
-| `X::a` | `RawNamedField { container, name }` — a raw named read over a **TypeStruct value**: the container type (a TypeStruct kind) supplies the name table at `container_ty[0][1]`; yields the field's *type* as a value |
+| `X::a` | `RawNamedField { container, name }` — a raw named read over a **TypeStruct value**: the container type (a TypeStruct kind) supplies the name table at `container_ty[0][1]`; yields the field's *type* as a value.  The kind is stated as a unify, so a non-struct container is refused at check time, or at the apply that binds it when the container is not decided yet |
 | `s(1, 2)` / `s(.x 1, .y 2)` (callee a struct type) | `Instantiate { type_expr, value, names }` — `names` is index-aligned with `value`'s tuple elements (a `.x 1` argument is `Some("x")`, a positional `1` is `None`); the checker reorders named arguments to the definition's positional order |
 | `[e1, …, en]` | `Array(range)` |
 | `[e1, ~e2, ~2 e3]` | `ShallowArray { range, depths }` — any `~`-marked element makes the array shallow: per-element marker depths (0 = unmarked, `usize::MAX` = the bare `~`, n = the value slot shallow at the first n levels of the element's type spine) |
 | `array<T, n>` | `TypeArray { element_type, length }` |
 | `table { k1 ==> v1, … }` | `Table(range)` — the entries interleaved `[k1, v1, k2, v2, …]`; keys share one key cell, values one value cell, and a key that is not concrete is dropped with an error |
 | `t{k}` | `Find { container, key }` — the adjacent brace form; the entry whose stored key is deep-content-equal to `k` |
-| `X<e>` | `RawIndex { container, index }` — a raw, unvalidated element read |
+| `X<e>` | `RawIndex { container, index }` — a raw read of a **tuple type value**'s component: the container's type is unified against the tuple kind, so a non-tuple container is refused at check time, or at the apply that binds it when the container is not decided yet |
 | `$name(args)` | `NativeCall { op, args }` — a native operator registered by the compiling module's plugin; `op` is a private name resolved only against that module's registry, and the checker adopts the `[value, type]` pair the plugin's builder returns |
 | a use of an `---…---`-imported package name, or of one of its direct exports | `Static { export }` — the value is read out of the shared registry by its export ref; the checker materializes the pair and leaves the payload in the package's static arena |
 | `{ a = e; …; e }` | the final expression's own node — statements are scope-entered (bindings), then popped; a non-final statement list is wired into the root as `Index(Tuple([…, e]), n)` |

@@ -279,19 +279,25 @@ fn an_unattributable_failure_in_a_dependency_names_the_package() {
 }
 
 #[test]
-fn a_raw_read_of_a_one_element_array_reports_the_out_of_bounds_slot_read() {
-    // `[[1]]<0>` reads the inner `[1]` — a one-element array, so the read's
-    // *type slot* (element 1) is out of bounds.  The package's own build
-    // records it, and the import reports that: an honest refusal rather than an
-    // index-out-of-bounds panic inside the importer's checker.
+fn a_raw_read_of_a_non_tuple_container_in_a_package_is_refused_by_kind() {
+    // `[[1]]<0>` reads a component of an array — not of a type value — so the
+    // package's own build refuses it where it stands, stating the tuple kind.
+    // The package's own failure is the one reported, through the import: an
+    // honest refusal rather than a panic inside the importer's checker.
+    //
+    // This used to be the out-of-bounds *slot* read (the container's element
+    // was a one-element array whose type slot 1 is missing).  That shape is
+    // unreachable now that the container's type must be the tuple kind: a
+    // tuple-kinded value's components are always `[value, type]` pairs.
     let dir = temp_dir("short-export");
     write(&dir, "short.lichen", "[[1]]<0>\n");
     let main = "---x = import \"short.lichen\"---x\n";
     let mut store = PackageStore::<LangProgram>::new();
     let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
     assert!(
-        err.iter()
-            .any(|d| d.message.contains("index 1 out of bounds (array length 1)")),
+        err.iter().any(|d| d
+            .message
+            .contains("expected TypeTuple, found array<array<Int, 1>, 1>")),
         "the package's own failure is the one reported: {err:?}"
     );
     assert_eq!(

@@ -175,12 +175,13 @@ pub enum Expr {
     },
     /// `X<e>` — a *raw* positional read.  The glued `<` (was the array-type
     /// postfix; the array type is now spelled `array<T, n>`, see
-    /// [`Expr::TypeArray`]) reads element `e` of `X`'s **value** directly
-    /// through the lowlevel `Index`, with **no type validation** — no
-    /// array-type pinning, no `IndexTarget` guard, no bounds assert.  It reads
-    /// a component of a type-as-value (`<Int, string><0>`,
-    /// `struct<Int, string><1>`), and stays lazy on an unbound container
-    /// (a parameter, a call result) so it resolves at the apply.
+    /// [`Expr::TypeArray`]) reads component `e` of `X`'s **value** directly
+    /// through the lowlevel `Index`, without an `IndexTarget` guard or a bounds
+    /// assert.  The container's *type* must be the tuple kind: it reads a
+    /// component of a *tuple* type-as-value (`<Int, string><0>`), a struct type
+    /// value's components read by name (`X::a`), and an unbound container
+    /// (a parameter, a call result) is pinned to the kind, so the apply that
+    /// binds it refuses a wrong-kind actual.
     RawIndex {
         container: Box<Expr>,
         index: Box<Expr>,

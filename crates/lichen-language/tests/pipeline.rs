@@ -639,10 +639,11 @@ fn comparisons_share_their_tokens_with_the_angle_bracket_forms() {
     );
     // A `>` with no expression after it closes the bracket it is in, so every
     // angle-bracket form still parses — including ones followed by another
-    // form's glued delimiter.
+    // form's glued delimiter.  The struct form states the *tuple* kind, so a
+    // struct type value is read by name (`::a`) rather than positionally.
     assert_eq!(usize_of(&evaluate("<Int, string><1> == string")), 1);
     assert_eq!(
-        usize_of(&evaluate("struct<.a Int, .b string><0> == Int")),
+        usize_of(&evaluate("struct<.a Int, .b string>::a == Int")),
         1
     );
     assert_eq!(usize_of(&evaluate("a = <Int, string>; a<0> == Int")), 1);
@@ -1272,26 +1273,32 @@ fn a_named_field_miss_suggests_a_close_field() {
 
 #[test]
 fn a_named_field_read_on_a_non_struct_is_rejected() {
-    // reading `a.b` on a non-struct (an int) is an index-target error.
+    // reading `a.b` on a non-struct (an int) is a kind refusal: the read states
+    // that the container's *kind* must be a struct kind, and an atomic type's
+    // kind is `Type`.  It used to be the generic index-target guard
+    // ("expected a tuple, array, or struct").
     let d = diags("a = 1; a.b");
     let check = d[0]
         .check
         .as_ref()
         .expect("a named-field read on an int is a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::IndexTarget);
+    assert_eq!(check.kind, DiagKind::Guard);
+    assert_eq!(d[0].message, "expected TypeStruct, found Type");
 }
 
 #[test]
 fn a_raw_named_read_requires_a_type_struct_container() {
     // `X::a` requires the container's *type* to be a TypeStruct kind, so a
-    // concretely non-struct container is a check-time error (unlike the truly
-    // raw `X<e>`, which never validates).
+    // concretely non-struct container is a check-time error — the counterpart
+    // of the tuple-kind requirement the positional `X<e>` now states (which
+    // used to validate nothing).
     let d = diags("a = 5; a::x");
     let check = d[0]
         .check
         .as_ref()
         .expect("a raw named read on a non-struct is a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::IndexTarget);
+    assert_eq!(check.kind, DiagKind::Guard);
+    assert_eq!(d[0].message, "expected TypeStruct, found Int");
 }
 
 #[test]
@@ -1306,8 +1313,11 @@ fn a_raw_read_of_a_type_value_reads_the_components_pair() {
         LangValue::TypeValue(TypeValue::TypeInt)
     );
     assert_eq!(usize_of(&evaluate("<Int, string><0> == Int")), 1);
+    // A struct type value states the *tuple* kind for `X<e>`, so its components
+    // are read by name (`X::a`), which is the same pair read at the name
+    // table's index.
     assert_eq!(
-        usize_of(&evaluate("struct<.a Int, .b string><1> == string")),
+        usize_of(&evaluate("struct<.a Int, .b string>::b == string")),
         1
     );
     // The element's own *value* slot, which is what a `Type`-valued element
@@ -1321,44 +1331,34 @@ fn a_raw_read_of_a_type_value_reads_the_components_pair() {
 }
 
 #[test]
-fn a_raw_read_of_a_runtime_container_reports_the_non_pair_element() {
-    // `X<e>` reads the element's own pair, so a container of scalars has no
-    // type slot to read.  It used to print `none: none` with no diagnostic at
-    // all: the read compiled to the bare read operation rather than to a pair,
-    // so the failing slot read happened after the build had decided `ok`.
+fn a_raw_read_of_a_non_tuple_container_is_refused_by_kind() {
+    // `X<e>` reads a component of a *type value*, so the container's type must
+    // be the tuple kind: a plain array is refused where it stands, by the kind
+    // wording, rather than reaching the element read (which used to report
+    // "not a value/type pair" — or print `none` — after the build had decided
+    // `ok`).
     let d = diags("[1, 2]<0>");
-    assert!(
-        d.iter()
-            .any(|diag| diag.message.contains("not a value/type pair")),
-        "the raw element failure must be reported: {d:?}"
-    );
-    // A span, too — the read is what the user wrote.
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::Guard);
+    assert_eq!(d[0].message, "expected TypeTuple, found array<Int, 2>");
+    // A span, too — the container is what the user wrote.
     assert_eq!(d[0].span, Some((1, 1)));
-    // The same read through a bound name.
-    assert!(
-        diags("x = [1, 2]; x<0>")
-            .iter()
-            .any(|diag| diag.message.contains("not a value/type pair")),
-        "a bound container reports it too"
-    );
-    // …and through a deferred parameter, where it is reported with the generic
-    // wording and no caret: the failure lands on an apply clone, which has no
-    // expression of its own to blame — the same limitation `RuntimeApplyTarget`
-    // has.  It used to be silent (`none`), so the reporting is what is new.
+    // The same read through a bound name is refused at the name.
+    let d = diags("x = [1, 2]; x<0>");
+    assert_eq!(d[0].message, "expected TypeTuple, found array<Int, 2>");
+    assert_eq!(d[0].span, Some((1, 5)));
+    // …and through a deferred parameter, where the apply that binds it states
+    // the same requirement: the pin's own parameter check (`Runtime`, the tier
+    // every pin is enforced at), refused where the argument is.
     let d = diags("f = k => k<0>; f [1, 2]");
-    assert!(
-        d.iter()
-            .any(|diag| diag.message.contains("not a container")),
-        "the cloned read is reported too: {d:?}"
-    );
-    // The generic message is still there for a container that is not a
-    // container at all — a different failure, blaming the other side.
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::Runtime);
+    assert_eq!(d[0].message, "expected TypeTuple, found array<Int, 2>");
+    assert_eq!(d[0].span, Some((1, 18)));
+    // A scalar is not a container at all, and gets the same kind refusal.
     let d = diags("5<0>");
-    assert!(
-        d.iter()
-            .any(|diag| diag.message.contains("not a container")),
-        "a non-container keeps its own wording: {d:?}"
-    );
+    assert_eq!(d[0].message, "expected TypeTuple, found Int");
+    assert_eq!(d[0].span, Some((1, 1)));
 }
 
 #[test]
@@ -1405,19 +1405,18 @@ fn a_raw_named_read_yields_the_field_type() {
 }
 
 #[test]
-fn a_raw_read_of_a_non_container_reports_a_runtime_index_target_error() {
-    // A raw read `X<e>` never validates its target, so `s<0>` over an int is
-    // not a check-time diagnostic: the lowlevel records the runtime failure
-    // and it reaches the diagnostics as `RuntimeIndexTarget` — the value
-    // itself is the fact, with no type to print.
+fn a_raw_read_of_a_deferred_non_tuple_is_refused_at_the_application() {
+    // `s<0>` over an int: the container is a parameter, so the tuple-kind
+    // requirement is deferred and the apply that binds it states it — the
+    // pin's own parameter check (`Runtime`, the tier every pin is enforced
+    // at), refused where the argument is.  It used to reach the lowlevel as a
+    // `RuntimeIndexTarget`, blaming the target's value node with no caret.
     let d = diags("f = s => s<0>; f (1)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::RuntimeIndexTarget);
-    // The blamed node is the target's *value* node, which the checker never
-    // gives a source edge (only the subscript gets one), so this diagnostic
-    // carries no caret.
-    assert_eq!(d[0].span, None, "the target's value node has no location");
+    assert_eq!(check.kind, DiagKind::Runtime);
+    assert_eq!(d[0].message, "expected TypeTuple, found Int");
+    assert_eq!(d[0].span, Some((1, 19)), "the caret is on the argument");
 }
 
 #[test]
@@ -1425,8 +1424,10 @@ fn a_raw_read_whose_subscript_is_not_an_index_reports_a_runtime_subscript_error(
     // `a<i>` reads element `i` structurally, so a string subscript is not a
     // check-time diagnostic either: the lowlevel records it and it arrives as
     // `RuntimeIndexSubscript`.  The caret is on the subscript, the one node
-    // the raw read does give a source edge.
-    let d = diags("a = [1, 2, 3]\ni = \"x\"\na<i>");
+    // the raw read does give a source edge.  The container has to be a *type
+    // value* of tuple kind to get here at all: an array container is refused
+    // by the kind check before the subscript is read.
+    let d = diags("a = <Int, string>\ni = \"x\"\na<i>");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::RuntimeIndexSubscript);

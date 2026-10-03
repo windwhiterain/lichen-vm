@@ -1091,7 +1091,8 @@ fn atom_parser<'a>(
 
     // The postfix forms, chained left.  A `[` after an expression is always
     // an index, a `<` after an expression is the **raw** component read
-    // `X<e>` (no type validation) — the glued `<` no longer builds an array
+    // `X<e>` (the container's type must be the tuple kind) — the glued `<` no
+    // longer builds an array
     // type (that is now the keyword-led `array<T, n>` atom, see
     // [`array_type`]) — and a glued `::name` is the **raw** named read
     // `X::a` (the container's type must be a TypeStruct).  A `(` or a `{` is

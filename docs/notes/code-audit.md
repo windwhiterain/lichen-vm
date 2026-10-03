@@ -2766,9 +2766,11 @@ source**; it survives only for hand-built IR.
 
 **The raw form is not an available substitute, and that is its own item.** The
 tempting answer — "spell it `s<0>`" — does not work on a runtime container: see
-`P1-35`, where `[1, 2]<0>` and `(1, 2)<0>` read a container whose elements are
-not value/type pairs and are therefore a **reported** runtime error (they used
-to print `none: none` silently; see that item's Outcome). `X<e>` reads a
+`P1-35`, where `[1, 2]<0>` and `(1, 2)<0>` read a container that is not a tuple
+*type value* and are refused — today **at check time** (`expected TypeTuple,
+found array<Int, 2>` / `found <Int, Int>`), and on the tree this passage was
+written on as a **reported** runtime error (before that, `none: none`
+silently — see that item's Outcome). `X<e>` reads a
 component of a *type-as-value* (`<Int, string><0>` is `Int : Type`); over a
 runtime array or tuple it produces no value.
 
@@ -2793,6 +2795,9 @@ read is *"a **runtime** lowlevel `Index` error, never a static diagnostic"*
 | `x = [1, 2]; x<0>` | **`none: none`** |
 | `(1, 2)<0>` | **`none: none`** |
 | `x = (1, 2); x<0>` | **`none: none`** |
+
+(Kept as the record of that tree.  The last four rows refuse at check time on the
+current tree — see the later addendum at the end of this item.)
 
 So the read over a *runtime* container produces no value and no type, and no
 diagnostic of any kind: not the runtime `Index` error the note promises, and not a
@@ -2867,30 +2872,55 @@ reverted shape broke. Two `registry.rs` tests that pinned the *old* behaviour
 are re-pinned, both watched to fail before: a package exporting `[1, 2]<0>` now
 fails in **its own** build (`cannot load package 'raw.lichen': …`) rather than
 reaching the importer and tripping the `ImportExport` guard, and `[[1]]<0>`
-reports its out-of-bounds type slot (`index 1 out of bounds (array length 1)`).
+reported its out-of-bounds type slot (`index 1 out of bounds (array length 1)`).
 `<Int, string><0>` as a package export imports as `Int : Type` on both trees, so
 the fix buys no new capability there — only the honest diagnostic. The stale
 comments that credited the raw read's missing pair as the `ImportExport`
 guard's reason (`checker.rs`'s `Static` arm, `DiagKind::ImportExport`) were
 corrected; the guard itself stays. `lichen-highlevel`, `lichen-language`,
 `lichen-compute`, `lichen-lowlevel` and `lichen-language-server` are green.
+(The first test is re-pinned by the later kind check and is now
+`a_raw_read_of_a_non_tuple_container_is_refused_by_kind`: the same four programs,
+asserting the tuple-kind refusal; and `[[1]]<0>` is now pinned as the kind
+refusal `expected TypeTuple, found array<array<Int, 1>, 1>`, its out-of-bounds
+type slot being unreachable from source once the container must be a tuple type
+value.)
 
 **Residual — attribution only.** Through a *deferred* container
-(`f = k => k<0>; f [1, 2]`) the failure is reported but with the generic wording
+(`f = k => k<0>; f [1, 2]`) the failure was reported with the generic wording
 and no caret: it lands on an apply clone, which has no expression of its own to
 blame — the same limitation `RuntimeApplyTarget` has (`P1-6`). It used to be
-silent, so what is new is that it is reported at all.
+silent, so what is new is that it is reported at all.  The later kind check
+closes the attribution half: the apply now states the requirement itself, so the
+diagnostic reads `expected TypeTuple, found array<Int, 2>` with the caret on the
+argument the container was bound to.
 
 **The fork this item does not close.** The audit's preferred falsifier was
 `1: Int`. That answer is *not derivable* under the raw form's contract: the
-element's type comes from reading its type slot, and `1` has none. Producing it
+component's type comes from reading its type slot, and `1` has none. Producing it
 would mean deriving the result's type from the container's array type instead —
 the validated `e[i]`'s derivation, with its bounds assert — which is the
 language change `D16` declined to make for `e[i]`, not a fix. The queue takes
-the contract as it is written: the container may be any expression, its elements
-must be pairs, and anything else is a reported runtime error. `raw-index.md` and
-the spec (§2.1 and §3) now say exactly that, replacing the claim that `X<e>`
-reads "a component … of any expression's value".
+the contract as it is written: the container must be a tuple type value, its
+components must be pairs, and anything else is refused. `raw-index.md` and
+the spec (§2.1 and §3) said "the container may be any expression" at the time;
+the later kind check replaced that with the accepted set above.
+
+**Later addendum — the read states its kind, so the failure is static.** `X<e>`
+now unifies the container's type against the **tuple kind**
+(`check_raw_index`, `checker/indexing.rs`) — the positional sibling of the
+`X::a`/`.a` struct-kind requirements — so the runtime rows above are no longer
+runtime at all: `[1, 2]<0>` is `expected TypeTuple, found array<Int, 2>` and
+`(1, 2)<0>` is `expected TypeTuple, found <Int, Int>`, both `DiagKind::Guard`
+with the caret on the container.  A struct type value states `found TypeStruct`
+and reads by name (`X::a`, which was the `TableGet` panic on a deferred one);
+the named field read `.a` over an array is `expected TypeStruct, found TypeArray`
+on the container's kind slot, while `::a` (its type) is
+`found array<Int, 2>`.  The
+measured rows and their wording stay as the record of the tree they were taken
+on; the `RuntimeRawElement` wording this Outcome added now sits behind the kind
+check — every container that reaches it is a tuple type value, whose components
+are pairs.
 
 ### P1-36 — A duplicate kind-marker tag shadows a codec arm and warns instead of failing `verified`
 
@@ -6669,9 +6699,11 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
 
   One adjacent fact belongs with the decision rather than the item: the raw form
   `X<e>` *looks* like it could have spelled the spec's meaning without touching
-  `check_index`, and it cannot — over a runtime container it reads elements that
-  are not value/type pairs, which is now a **reported** runtime error where it
-  used to print `none` silently (`P1-35`). So the choice really was between the
+  `check_index`, and it cannot — over a runtime container it reads components of
+  something that is not a tuple type value, which is refused at check time (the
+  container's type must be the tuple kind; `P1-35`), and on the tree this was
+  written on was a **reported** runtime error where it used to print `none`
+  silently (`P1-35`). So the choice really was between the
   two sides above; there is no third spelling available today.
 
 ## Checked and found clean
