@@ -31,7 +31,8 @@
 > effect is being relied on), [type-query-api-proposal](type-query-api-proposal.md)
 > §7 (the same "decide it where it is decided" principle one layer up),
 > [kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) §6 (the
-> specialize-before-JIT direction §5 here belongs to).
+> compiler-side "specialize before JIT" direction §5 here **supersedes**: the
+> author specializes, and §6's placeholder apply is the rejected alternative).
 
 ## 1. The incoherence
 
@@ -244,17 +245,22 @@ stop being late: **the signature must be concrete before `build` runs**.  Then t
 result type is stated where types are stated, with a `ctx` in hand (so the
 canonical `Int`/`Float` type value is reachable, which it is not from a `Module`),
 and the fresh cell, the deferral side-effect dependency, and any run-time
-statement all become unnecessary rather than merely fixed.  That is the
-specialize-before-JIT direction
-([kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) §6,
-[compute-param-struct-handoff](compute-param-struct-handoff.md) §7,
-[operator-polymorphism](operator-polymorphism.md) §8.8 — which records this as
-another workstream and names the two red targets), and it also carries the class
-domain that workstream put in the graph as a *value*: that domain is what types
-the placeholder the specialization applies the kernel to.
+statement all become unnecessary rather than merely fixed.
+
+**Superseded naming: "specialize before JIT" means the *author* specializes.**
+The direction recorded at the time
+([kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) §6) described a
+*compiler-side* pass — "at `jit`/`parallel` time the function is applied to a
+placeholder typed by the annotated domain".  That is **not** the requirement: the
+requirement is that the **user states the class before `jit`** (the parameter's
+type), and the lowering reads that statement and nothing else (§5.1).  No
+placeholder apply, no call-time evaluation, and no reading of the class domain is
+part of it; the compiler-side framing is kept only as the rejected alternative
+§6 names, because it is where the residual question below was once expected to be
+answered.
 
 **Measured: the gap is exactly the open class.**  With the parameter annotated
-there is nothing to specialize —
+there is nothing left for the lowering to decide —
 
 ```lichen
 annotated = compute.jit ((y : Int) => y + y)
@@ -458,9 +464,10 @@ cargo test -q -p lichen-language --test compute --test pipeline --test graph_jit
 
 **Where the tree stands after §5.1 and §5.1.1** (`--test compute`, 60 cases): 58
 pass.  The two reds are one shape each, and neither is a printer:
+
 | case | what it needs |
 |---|---|
-| `jit_cross_kernel_call`, `jit_cross_kernel_wrapper` | a cross-kernel call or `compute.launch` whose **argument** is a routed operator (`k0 (x + 1)`): the emitter reaches the argument's cell and its equality class holds a *bare cell*, not a computation, so there is nothing to emit.  **Measured root**: the routed apply inside a kernel **template is never evaluated** — `wire_apply_result` (the lowlevel's own wiring, whose doc says "the apply node *is* the return pair") is never called for it, so no edge exists between the apply and the residual its clone computed.  Three things were tried and measured: (a) reading the residual from the apply's own value — nothing is written there for a template apply; (b) merging the apply with the applied body in `wire_apply_result`'s scalar/undecided arm — **breaks** `lichen-highlevel --test dependent` (`dependent_type_resolves_per_argument_via_laziness`), so it cannot be unconditional; (c) forcing the body once at `jit` time (`evaluate_node_deep(ret_value)`) — the class still does not hold the residual.  The fix is the specialize pass itself: apply the function at `jit`/`parallel` time to a placeholder typed by the **stated** class, so every routed apply inside it is evaluated and its residual aliased, which is §6's direction |
+| `jit_cross_kernel_call`, `jit_cross_kernel_wrapper` | a cross-kernel call or `compute.launch` whose **argument** is a routed operator (`k0 (x + 1)`): the emitter reaches the argument's cell and its equality class holds a *bare cell*, not a computation, so there is nothing to emit.  **This is not a class question and no author-side specialization answers it** — the parameter is annotated and the body still has the shape.  **Measured root**: the *routing* lowered `x + 1` to a **call of the prelude's binding** (`Apply(Static(add), [x, 1])`), and inside a kernel **template that call is never evaluated** — `wire_apply_result` (the lowlevel's own wiring, whose doc says "the apply node *is* the return pair") is never called for it — so the body the call stands for has no edge from the call.  Three routes were tried and measured: (a) reading the residual from the call's own value — nothing is written there for a template call; (b) merging call with body in `wire_apply_result`'s scalar/undecided arm — **breaks** `lichen-highlevel --test dependent` (`dependent_type_resolves_per_argument_via_laziness`), so it cannot be unconditional; (c) forcing the body once at `jit` time (`evaluate_node_deep(ret_value)`) — the class still does not hold the residual.  What is left is the operator workstream's own recorded alternative: **expand the binding's body at the call site** instead of calling it (`operator-polymorphism` §7.1), which leaves `x + 1` an `Add` node in the body and removes the question entirely; until then the refusal stands |
 | `examples/compute_jit.lichen` (`--test examples`) | the same shape through a `compute.launch` argument |
 
 The `jit_cross_kernel_*` cases and the example are annotated as the rule requires;

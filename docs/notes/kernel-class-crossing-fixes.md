@@ -163,6 +163,16 @@ stays).
 
 ## 6. What comes after (recorded direction, not this task)
 
+> **Superseded (the *mechanism*; the bullets below that landed still stand).**  The
+> requirement is now stated the other way round: **the author specializes** — a
+> kernel is lowered for the class its **parameter's type** states, and a body
+> whose class is open is refused by name
+> ([class-channel](class-channel.md) §5.1).  The compiler-side framing this
+> section opens with — "the function is applied to a placeholder typed by the
+> annotated domain" — is **not** part of it and is the rejected alternative; it is
+> kept here as the record of what was weighed.  The bullets that landed (the
+> parallel ABI's per-field leaf classes) landed on their own merits.
+
 The structural direction, settled in discussion, is **specialize before JIT**:
 a kernel is never compiled from a template — at `jit`/`parallel` time the
 function is applied to a placeholder typed by the annotated domain, so every
