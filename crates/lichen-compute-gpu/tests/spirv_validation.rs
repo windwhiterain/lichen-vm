@@ -45,22 +45,22 @@ fn adds_one() -> KernelFragment {
             KernelShape::Scalar(ScalarClass::Int),
         ]),
         body: vec![
-            KernelInstr::Const(0),       // out_pos, in the *output* space
-            KernelInstr::LocalGet(1),    // the index
-            KernelInstr::Const(0),       // cfg_pos, in the *input* space
-            KernelInstr::LocalGet(1),    // the index
-            KernelInstr::BufferReadCall, // in[i]
-            KernelInstr::Const(1),
-            KernelInstr::Bin(KernelBin::Add), // in[i] + 1
-            KernelInstr::BufferWriteCall,
-            KernelInstr::Const(0),
+            KernelInstr::Const(ScalarClass::Int, 0), // out_pos, in the *output* space
+            KernelInstr::LocalGet(1),                // the index
+            KernelInstr::Const(ScalarClass::Int, 0), // cfg_pos, in the *input* space
+            KernelInstr::LocalGet(1),                // the index
+            KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
+            KernelInstr::Const(ScalarClass::Int, 1),
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add), // in[i] + 1
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
+            KernelInstr::Const(ScalarClass::Int, 0),
         ]
         .into(),
         inputs: 1,
         outputs: 1,
         input_classes: vec![ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
-        results: 1,
+        result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
     }
 }
@@ -84,36 +84,39 @@ fn adds_one() -> KernelFragment {
 /// a 32-bit one, since a float module's integers are indices.
 fn scales_a_float() -> KernelFragment {
     let read = |body: &mut Vec<KernelInstr>| {
-        body.push(KernelInstr::Const(0));
+        body.push(KernelInstr::Const(ScalarClass::Int, 0));
         body.push(KernelInstr::LocalGet(1));
-        body.push(KernelInstr::BufferReadCall);
+        body.push(KernelInstr::BufferReadCall(ScalarClass::Float));
     };
     // out_pos, then the index: the [position, index] a write takes.
-    let mut body = vec![KernelInstr::Const(0), KernelInstr::LocalGet(1)];
+    let mut body = vec![
+        KernelInstr::Const(ScalarClass::Int, 0),
+        KernelInstr::LocalGet(1),
+    ];
     // then: in[i] * 2.5
     read(&mut body);
-    body.push(KernelInstr::Const(TWO_POINT_FIVE));
-    body.push(KernelInstr::Bin(KernelBin::Mul));
+    body.push(KernelInstr::Const(ScalarClass::Float, TWO_POINT_FIVE));
+    body.push(KernelInstr::Bin(ScalarClass::Float, KernelBin::Mul));
     // … + (in[i] == 0.0), a comparison materialised into the float `1.0`/`0.0`
     read(&mut body);
-    body.push(KernelInstr::Const(0)); // `0.0f32` is the bit pattern zero
-    body.push(KernelInstr::Bin(KernelBin::Eq));
-    body.push(KernelInstr::Bin(KernelBin::Add));
+    body.push(KernelInstr::Const(ScalarClass::Float, 0)); // `0.0f32` is the bit pattern zero
+    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Eq));
+    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Add));
     // … + in[i] / 2.5
     read(&mut body);
-    body.push(KernelInstr::Const(TWO_POINT_FIVE));
-    body.push(KernelInstr::Bin(KernelBin::Div));
-    body.push(KernelInstr::Bin(KernelBin::Add));
+    body.push(KernelInstr::Const(ScalarClass::Float, TWO_POINT_FIVE));
+    body.push(KernelInstr::Bin(ScalarClass::Float, KernelBin::Div));
+    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Add));
     // else: 0.0
-    body.push(KernelInstr::Const(0));
+    body.push(KernelInstr::Const(ScalarClass::Int, 0));
     // the selector: in[0], a float value rather than a comparison's bool, read at
     // a constant index
-    body.push(KernelInstr::Const(0));
-    body.push(KernelInstr::Const(0));
-    body.push(KernelInstr::BufferReadCall);
+    body.push(KernelInstr::Const(ScalarClass::Int, 0));
+    body.push(KernelInstr::Const(ScalarClass::Int, 0));
+    body.push(KernelInstr::BufferReadCall(ScalarClass::Float));
     body.push(KernelInstr::Select);
-    body.push(KernelInstr::BufferWriteCall);
-    body.push(KernelInstr::Const(0));
+    body.push(KernelInstr::BufferWriteCall(ScalarClass::Float));
+    body.push(KernelInstr::Const(ScalarClass::Int, 0));
     KernelFragment {
         // `(config, index)`, integers, however the buffers are classed: this
         // target's index is the invocation id, not a value of that domain.
@@ -126,7 +129,7 @@ fn scales_a_float() -> KernelFragment {
         outputs: 1,
         input_classes: vec![ScalarClass::Float],
         output_classes: vec![ScalarClass::Float],
-        results: 1,
+        result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
     }
 }
@@ -243,26 +246,26 @@ fn index_to_float() -> KernelFragment {
             KernelShape::Scalar(ScalarClass::Int),
         ]),
         body: vec![
-            KernelInstr::Const(0),    // out_pos
-            KernelInstr::LocalGet(1), // the index
-            KernelInstr::LocalGet(1), // the same index, what `int2float` reads
+            KernelInstr::Const(ScalarClass::Int, 0), // out_pos
+            KernelInstr::LocalGet(1),                // the index
+            KernelInstr::LocalGet(1),                // the same index, what `int2float` reads
             KernelInstr::Conv {
                 from: ScalarClass::Int,
                 to: ScalarClass::Float,
             },
-            KernelInstr::Const(0),       // cfg_pos
-            KernelInstr::LocalGet(1),    // the index
-            KernelInstr::BufferReadCall, // in[i]
-            KernelInstr::Bin(KernelBin::Add),
-            KernelInstr::BufferWriteCall,
-            KernelInstr::Const(0),
+            KernelInstr::Const(ScalarClass::Int, 0), // cfg_pos
+            KernelInstr::LocalGet(1),                // the index
+            KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
+            KernelInstr::Const(ScalarClass::Int, 0),
         ]
         .into(),
         inputs: 1,
         outputs: 1,
         input_classes: vec![ScalarClass::Float],
         output_classes: vec![ScalarClass::Float],
-        results: 1,
+        result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
     }
 }
@@ -282,11 +285,11 @@ fn crosses_both_ways() -> KernelFragment {
             KernelShape::Scalar(ScalarClass::Int),
         ]),
         body: vec![
-            KernelInstr::Const(0),       // out_pos
-            KernelInstr::LocalGet(1),    // the index
-            KernelInstr::Const(0),       // cfg_pos
-            KernelInstr::LocalGet(1),    // the index
-            KernelInstr::BufferReadCall, // in[i]
+            KernelInstr::Const(ScalarClass::Int, 0),       // out_pos
+            KernelInstr::LocalGet(1),                      // the index
+            KernelInstr::Const(ScalarClass::Int, 0),       // cfg_pos
+            KernelInstr::LocalGet(1),                      // the index
+            KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
             KernelInstr::Conv {
                 from: ScalarClass::Float,
                 to: ScalarClass::Int,
@@ -295,15 +298,15 @@ fn crosses_both_ways() -> KernelFragment {
                 from: ScalarClass::Int,
                 to: ScalarClass::Float,
             },
-            KernelInstr::BufferWriteCall,
-            KernelInstr::Const(0),
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
+            KernelInstr::Const(ScalarClass::Int, 0),
         ]
         .into(),
         inputs: 1,
         outputs: 1,
         input_classes: vec![ScalarClass::Float],
         output_classes: vec![ScalarClass::Float],
-        results: 1,
+        result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
     }
 }

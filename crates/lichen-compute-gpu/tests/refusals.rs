@@ -16,8 +16,8 @@ use lichen_kernel_ir::{IntWidth, KernelFragment, KernelInstr, KernelShape, Scala
 /// (`docs/notes/floating-point.md` §3.8).
 fn body_with(inputs: usize, tail: Vec<KernelInstr>) -> KernelFragment {
     let mut body = vec![
-        KernelInstr::Const(0),    // out_pos, in the *output* space
-        KernelInstr::LocalGet(1), // idx
+        KernelInstr::Const(ScalarClass::Int, 0), // out_pos, in the *output* space
+        KernelInstr::LocalGet(1),                // idx
     ];
     body.extend(tail);
     KernelFragment {
@@ -30,7 +30,7 @@ fn body_with(inputs: usize, tail: Vec<KernelInstr>) -> KernelFragment {
         outputs: 1,
         input_classes: vec![ScalarClass::Int; inputs],
         output_classes: vec![ScalarClass::Int],
-        results: 1,
+        result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
     }
 }
@@ -45,12 +45,12 @@ fn a_cross_kernel_call_is_refused_by_name() {
     let fragment = body_with(
         1,
         vec![
-            KernelInstr::Const(0),
+            KernelInstr::Const(ScalarClass::Int, 0),
             KernelInstr::LocalGet(1),
-            KernelInstr::BufferReadCall,
+            KernelInstr::BufferReadCall(ScalarClass::Int),
             KernelInstr::CallKernel(7),
-            KernelInstr::BufferWriteCall,
-            KernelInstr::Const(0),
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
+            KernelInstr::Const(ScalarClass::Int, 0),
         ],
     );
     let refusal = spirv::compile(&fragment, ONE_IN_ONE_OUT).expect_err("refused");
@@ -71,8 +71,8 @@ fn reading_a_non_index_parameter_is_refused_by_name() {
         0,
         vec![
             KernelInstr::LocalGet(0),
-            KernelInstr::BufferWriteCall,
-            KernelInstr::Const(0),
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
+            KernelInstr::Const(ScalarClass::Int, 0),
         ],
     );
     let refusal = spirv::compile(&fragment, ONE_IN_ONE_OUT).expect_err("refused");
@@ -102,20 +102,20 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
             KernelShape::Scalar(ScalarClass::Int),
         ]),
         body: vec![
-            KernelInstr::Const(0),    // out_pos, in the *output* space
-            KernelInstr::LocalGet(1), // idx
-            KernelInstr::Const(1),    // cfg_pos, in the *input* space
+            KernelInstr::Const(ScalarClass::Int, 0), // out_pos, in the *output* space
+            KernelInstr::LocalGet(1),                // idx
+            KernelInstr::Const(ScalarClass::Int, 1), // cfg_pos, in the *input* space
             KernelInstr::LocalGet(1),
-            KernelInstr::BufferReadCall,
-            KernelInstr::BufferWriteCall,
-            KernelInstr::Const(0),
+            KernelInstr::BufferReadCall(ScalarClass::Int),
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
+            KernelInstr::Const(ScalarClass::Int, 0),
         ]
         .into(),
         inputs: 2,
         outputs: 1,
         input_classes: vec![ScalarClass::Int, ScalarClass::Int],
         output_classes: vec![ScalarClass::Int],
-        results: 1,
+        result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
     };
     let binding = Binding {
@@ -128,11 +128,11 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
     // says which space was addressed.
     let beyond = KernelFragment {
         body: vec![
-            KernelInstr::Const(1), // out_pos 1, but there is one output
+            KernelInstr::Const(ScalarClass::Int, 1), // out_pos 1, but there is one output
             KernelInstr::LocalGet(1),
-            KernelInstr::Const(5),
-            KernelInstr::BufferWriteCall,
-            KernelInstr::Const(0),
+            KernelInstr::Const(ScalarClass::Int, 5),
+            KernelInstr::BufferWriteCall(ScalarClass::Int),
+            KernelInstr::Const(ScalarClass::Int, 0),
         ]
         .into(),
         ..fragment
@@ -159,15 +159,15 @@ fn an_unbalanced_body_is_refused() {
             KernelShape::Scalar(ScalarClass::Int),
         ]),
         body: vec![
-            KernelInstr::Bin(lichen_kernel_ir::KernelBin::Add),
-            KernelInstr::Const(0),
+            KernelInstr::Bin(ScalarClass::Int, lichen_kernel_ir::KernelBin::Add),
+            KernelInstr::Const(ScalarClass::Int, 0),
         ]
         .into(),
         inputs: 0,
         outputs: 1,
         input_classes: Vec::new(),
         output_classes: vec![ScalarClass::Int],
-        results: 1,
+        result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
     };
     let refusal = spirv::compile(&fragment, ONE_IN_ONE_OUT).expect_err("refused");
