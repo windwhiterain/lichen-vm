@@ -277,21 +277,47 @@ add  = x => y => { x : ?a{in_num}; y : ?a{in_num}      -- the contract
                    (fadd, iadd)(is_int (type_of x)) x y }
 ```
 
-`Num` is writable, and so is the predicate: `@in` **landed** in Phase 3 — a
-keyword operator at the comparison level, infix and left-associative, joining
-`@loop` and `@assert` at the `@` sigil ([operators](operators.md) §3; the
-language spec's *Membership*) — so every piece of the snippet is now expressible
-in the language.  What is left of Phase 3 is the leaf selection and the routing
-(§8.7, §9).
+`Num` is writable, and so is the predicate — and the predicate goes **on the
+type**, which is what makes it a class contract:
 
-One thing the snippet spells more simply than it can be written *today*:
-`v => type_of v @in Num` is **monomorphic**, because a read that a lambda returns
-shares the argument's type cell across applications.  That is a pre-existing
-`type_of` defect, not a property of the contract
-([type-of-in-std](type-of-in-std.md), *The monomorphism a wrapping lambda
-induces*), and until it is fixed the predicate is written through one opaque
-combinator: `in_num = compose (t => t @in Num) type_of` — measured `(1, 1, 0)`
-for `(in_num 1, in_num 1.5, in_num "a")`.
+```lichen
+Num    = set{Int, Float}
+in_num = t => t @in Num              -- t is a *type value*
+add    = x => y => { x : (_ ! in_num); y : (_ ! in_num); x + y }
+```
+
+`x : (_ ! in_num)` is the annotation chain with the refinement written **inside
+the type position**: the checker applies the predicate to the type expression's
+value — the class — instead of to the operand's value, so `in_num` receives a
+type value and needs no type read of its own (§9 Phase 3 settled this; the
+`type_of v @in Num` spelling of the first draft needs the read, and a read inside
+a predicate is monomorphic, [type-of-in-std](type-of-in-std.md)).  Measured:
+`(add 1 2, add 1.5 2.5)` is `(3, 4.0)`, `add "a" "b"` is refused by the class
+refinement *and* by the builtin's domain assert, and the printed signature is
+`raw[?a, ?b] -> raw[?a, ?b] -> raw[?a, ?b]` — an open class's annotated type is
+the placeholder's `[shape, kind]` pair of cells, which the printer marks raw
+([raw-rendering-mark](raw-rendering-mark.md)); a *concrete* class refinement
+(`x : (Int ! in_num)`) prints `Int -> …`.
+
+Two mechanism points fell out of the measurement, and both are load-bearing:
+
+- **The annotation names a type expression's *denotation*.**  An attribute-carrying
+  type expression's term is the `[type, …, attribute]` group the attributes live
+  in, and the type it names is the *annotated expression's own term* (a
+  placeholder's cell pair, a type constant's `[marker, kind]`).  Binding the
+  parameter's slot to the group instead is a type error (measured:
+  `expected raw[?a, ?b, raw[Function, ?c -> Int]], found Int`), and binding it to
+  the group's first slot alone loses the per-call re-check (measured: `f "a"` was
+  then *accepted* — the class cell must stay reachable from the parameter pair for
+  the apply clone to re-instantiate the condition).
+- **The refinement is enforced where it was written,** so a class refinement on a
+  parameter rides the enclosing function and is re-checked per application
+  (`(f 5, f 1.5)` both pass, `f "a"` is refused), exactly as the value form is.
+
+`@in` **landed** in Phase 3 as a keyword operator at the comparison level —
+infix and left-associative, joining `@loop` and `@assert` at the `@` sigil
+([operators](operators.md) §3; the language spec's *Membership*).  What is left
+of Phase 3 is the leaf selection and the routing (§8.7, §9).
 
 `x : ?a{in_num}` puts the predicate in the parameter's attribute slot and leaves
 its *type* cell open — that is the polymorphism. `add`'s printed type is
@@ -686,19 +712,19 @@ than budgeting for it.)
   renders `"ten": string`.
 - **Phase 3 — the implementation moves to std. Started.**  Landed: the membership
   keyword **`@in`** — the comparison rung, infix and left-associative, with the
-  membership reader made representation-agnostic (§3 above) — and with it the
-  plan's whole contract is **writable in the language**.  Measured, with `Num`,
-  `in_num` and an `add` whose parameters carry `! in_num` all written in lichen:
-  `(add 1 2, add 1.5 2.5)` is `(3, 4.0)`, `add "a" "b"` is refused with the domain
-  named, and `add` prints `?a -> ?a -> ?a`.  One spelling decision fell out of
-  that measurement: the operand annotation is written `x ! in_num`, **not**
-  `x : _ ! in_num` — a `: _` annotation unifies the parameter's type with the
-  placeholder's term *pair*, which prints as `raw[?a, ?b] -> …` and loses the
-  clean signature.
+  membership reader made representation-agnostic (§3 above) — and the **class
+  refinement**, a refinement written inside a type position (`x : (_ ! in_num)`)
+  whose predicate is applied to the type value, with the annotation naming the
+  type expression's *denotation* (§3 above).  With those, the plan's whole
+  contract is writable in lichen and measured: `(add 1 2, add 1.5 2.5)` is
+  `(3, 4.0)`, `add "a" "b"` is refused with the domain named, and the signature
+  prints `raw[?a, ?b] -> …` — the honest raw mark for an open class, where a
+  concrete class reads `Int -> …`.
 
-  Two things stay open, both recorded: the read's monomorphism when a lambda
-  returns it ([type-of-in-std](type-of-in-std.md)), and the **routing** — the
-  leaf-selection dispatch, the split leaves, and `Num` and the operator bindings
-  in a built-in `core` prelude module, which is what makes the surface operator
-  resolve to the library function (R3 → R2/R1), and which needs the kernel
-  workstream's specialize-before-JIT pass to land first (§8.4).
+  What stays open: the read's monomorphism
+  ([type-of-in-std](type-of-in-std.md)) — no longer on the contract's path, since
+  the class refinement needs no read — and the **routing**: the leaf-selection
+  dispatch, the split leaves, and `Num` and the operator bindings in a built-in
+  `core` prelude module, which is what makes the surface operator resolve to the
+  library function (R3 → R2/R1), and which needs the kernel workstream's
+  specialize-before-JIT pass to land first (§8.4).

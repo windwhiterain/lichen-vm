@@ -109,13 +109,30 @@ it.
   "expected Int, found Float" while the tie existed).  The test itself is
   `TypeOperator::InDomain`, so `@in` and the builtin contract consult the domain
   through the identical operator.
+- **A refinement may be written on a *type*** (Phase 3, Stage 1): `x : (_ ! in_num)`
+  puts the predicate inside the type position, and the checker applies it to the
+  **type value** — the class — instead of to the operand's value.  That is what
+  makes a class contract expressible with no type read: `in_num = t => t @in Num`,
+  `add = x => y => { x : (_ ! in_num); y : (_ ! in_num); x + y }`, measured
+  `(3, 4.0)` for `(add 1 2, add 1.5 2.5)` and refused for `add "a" "b"`.  The
+  mechanism is one rule, in both the annotation chain
+  (`Checker::type_denotation`, `checker/annotations.rs`) and the annotated
+  parameter (`checker/lambda.rs`): **an annotation names a type expression's
+  *denotation*** — the annotated expression's own term, not the
+  `[type, …, attribute]` group the attribute lives in.  Enforcement rides the
+  enclosing function, so an open class is re-checked per application (`(f 5,
+  f 1.5)` pass, `f "a"` is refused) and a concrete one is decided at the
+  definition.  An open class's annotated type is the placeholder's
+  `[shape, kind]` pair of cells, so its printed signature carries the printer's
+  honest raw mark (`raw[?a, ?b] -> …`); a concrete class prints `Int -> …`.
 - **The membership reader is representation-agnostic**, and that is a fix `@in`
   forced: a *source* set's members are `LowValue::TypeValue` nodes (the runtime's
   own value for a type constant), while the domain the checker builds for the
   builtin operators is the array-encoded type expression, and `ValueExt::value_eq`
   compares array *handles* — so a structural-only reader refused every
   source-written domain.  `set::contains` now matches a member **by the class it
-  denotes when it denotes one (the `low_type_of` decode) and by the language's
+  denotes when it denotes one (the `low_type_of` decode, which also reads a bare
+  marker now: a source type constant *is* its marker leaf) and by the language's
   own value equality otherwise** (a `TypeValue` is nominal, not allocated; an
   ordinary value compares by value).
 
@@ -157,7 +174,11 @@ it.
 | the plan's `add` with `x ! in_num`; `(add 1 2, add 1.5 2.5)` | — | `(3, 4.0): <Int, Float>` |
 | the same `add "a" "b"` | — | refused: `does not satisfy {Int, Float}` |
 | the same `add` alone | — | `?a -> ?a -> ?a` (`x ! in_num`, no `:`) |
-| the same with `x : _ ! in_num` | — | `raw[?a, ?b] -> raw[?a, ?b] -> raw[?a, ?b]` (do not write the `: _`) |
+| the class refinement: `x : (_ ! in_num)`; `(f 5, f 1.5)` | — | `(5, 1.5): <Int, Float>` (open class, re-checked per application) |
+| the same `f "a"` | — | refused: `assertion failed: expected 1, found 0` |
+| the same `f` alone | — | `raw[?a, ?b] -> raw[?a, ?b]` (an open class is the placeholder's cell pair) |
+| `x : (Int ! in_num)`; `g 7` | — | `7: Int` (a concrete class prints clean) |
+| `x : (string ! in_num)`; `g "a"` | — | refused: `assertion failed: expected 1, found 0` |
 
 Two mechanism facts that came out of measuring, and both are load-bearing:
 
@@ -219,10 +240,10 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
    `core.lichen`, embedded by the compiler and seeded into every program's base
    scope, rather than `lichen-std/_.lichen` (which stays the *fetched* library the
    package manager is tested with):
-   - It carries `Num`, `in_num`, `is_int`, and the operator bindings (`add`,
-     `sub`, `mul`, `div`, and the four order comparisons), each with its operands
-     refined by `! in_num` — **not** `x : _ ! in_num`, which prints the parameter
-     type raw (measured, §3).
+   - It carries `Num`, `in_num`, and the operator bindings (`add`, `sub`, `mul`,
+     `div`, and the four order comparisons), each with its operands refined by
+     the **class** refinement — `x : (_ ! in_num)`, the predicate on the type —
+     which needs no type read and is enforced per application (both landed, §2).
    - The open sub-decision is how the module reaches a program: a prelude seeding
      the exported names as base-scope binders (the `ResolvedImport.direct` shape
      the resolver already understands), against a built-in module served by the
@@ -314,11 +335,24 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
   which is what `low_type_of` decodes.  `set::contains` handles both (class decode
   when both sides decode, value equality otherwise); anything else that asks "are
   these the same class" must decide which representation it is looking at.
-- **An annotated *statement* with a placeholder type prints raw.**  `x : _ ! p`
-  unifies the parameter's type with the placeholder's term *pair*, so the
-  function's domain prints `raw[?a, ?b]` instead of `?a`.  A refinement-only
-  annotation (`x ! p`) keeps the clean `?a -> ?a -> ?a` and is the spelling the
-  contract uses.
+- **An annotation names a type expression's *denotation*, not its term.**  A
+  type expression that carries attributes (`x : (_ ! in_num)`) has a *pair* as
+  its term, and binding a parameter's type slot to that pair — the obvious
+  reading — is a type error (measured: `expected raw[?a, ?b, raw[Function, ?c ->
+  Int]], found Int`).  The type it names is the **annotated expression's own
+  term** (`Checker::type_denotation`), and the attribute is enforced by its own
+  assert instead.  Taking the group's *first slot* alone (the placeholder's value
+  cell) is the opposite trap: the signature reads clean but the class cell is no
+  longer reachable from the parameter pair, so the apply clone stops
+  re-instantiating the condition and `f "a"` is **accepted** (measured).  A
+  refinement written on a type must keep the placeholder's `[shape, kind]` pair.
+- **A placeholder type prints raw.**  `x : _` binds the parameter's type to the
+  placeholder's `[shape, kind]` pair of cells, so a signature prints
+  `raw[?a, ?b]` rather than `?a` — the printer's honest mark for a pair no form
+  explains ([raw-rendering-mark](raw-rendering-mark.md)).  That is why an *open*
+  class refinement's signature is `raw[?a, ?b] -> …` while a *concrete* one reads
+  `Int -> …`; a clean `?a` comes from an unannotated parameter, or from a value
+  refinement written `x ! p` (which refines the value, not the class).
 - **`@in` on a set operand that is not a set is refused, but a mismatched *left*
   is not.**  The right operand is pinned (`Guard`: `expected set<?a>, found Int`);
   the left is unconstrained by design, so `5 @in Num` is accepted and answers `0`

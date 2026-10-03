@@ -112,12 +112,17 @@ where
         // when it happens, not in what it binds.
         if let Some(parameter_type) = parameter_type {
             self.check_expr(parameter_type);
-            let type_pair = self.state[parameter_type]
-                .term
-                .expect("the type expression must compile to a pair");
+            // The type the annotation **names**: a type expression's term is the
+            // type value itself, unless the expression carries attributes — a
+            // refinement written *on a type*, `x : (_ ! in_num) => e` — in which
+            // case the term is the `[type, …, attribute]` pair the attribute
+            // lives in and the parameter's slot takes the *denotation*
+            // ([`Checker::type_denotation`]).  The attribute is enforced where it
+            // was written (the type expression's own assert, on this function).
+            let denotation = self.type_denotation(parameter_type);
             self.check_unify(
                 type_cell,
-                type_pair,
+                denotation,
                 self.loc(parameter_type, 1),
                 DiagKind::Annotation,
             );

@@ -42,6 +42,31 @@ fn a_membership_test_compares_a_value_with_a_sets_members() {
     assert_eq!(usize_of(&evaluate("2 @in set{1, 5}")), 0);
 }
 
+/// A refinement written **on a type** — `x : (_ ! in_num)` — is a **class**
+/// refinement: the predicate is applied to the type value, so `in_num` needs no
+/// type read at all.  The class is open in the template, so each application
+/// re-checks its own class: `Int` and `Float` pass, a `string` does not.
+#[test]
+fn a_refinement_written_on_a_type_refines_the_class() {
+    let open = "Num = set{Int, Float}\nin_num = t => t @in Num\nf = x => { x : (_ ! in_num); x }\n";
+    let checked = |argument: &str| compile(&format!("{open}f {argument}")).ok();
+    assert!(checked("5"), "`Int` is in the domain");
+    assert!(
+        checked("1.5"),
+        "`Float` is in the domain, and the open class re-checks per application"
+    );
+    assert!(!checked("\"a\""), "`string` is not in the domain");
+
+    // A *concrete* class is enforced at the definition, not per application.
+    let closed = |class: &str| {
+        format!(
+            "Num = set{{Int, Float}}\nin_num = t => t @in Num\ng = x => {{ x : ({class} ! in_num); x }}\ng 5"
+        )
+    };
+    assert_eq!(usize_of(&evaluate(&closed("Int"))), 5);
+    assert!(!compile(&closed("string")).ok(), "`string` is not in `Num`");
+}
+
 /// A set of **type values** — the class domain a contract is written over.  The
 /// members and the tested value are both type values, and they are compared
 /// structurally: `ValueExt::value_eq` cannot answer this, because it compares

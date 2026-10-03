@@ -223,6 +223,43 @@ where
         slot
     }
 
+    /// The **type value** an expression in type position denotes.
+    ///
+    /// A type expression's term *is* the type value — unless the expression
+    /// carries attributes.  A refinement written on a type (`x : (_ ! in_num)`)
+    /// makes the term the `[type, …, attribute]` pair the attribute lives in, and
+    /// the type it denotes is the **annotated value's** own term: a placeholder's
+    /// cell (what will hold the class), or a type constant's `[marker, kind]`
+    /// pair.  Taking the pair's first slot instead would answer a *shape* for a
+    /// type constant, and unifying a shape with a parameter's type slot makes
+    /// `g 7` fail against `Int` while printing `expected Int, found Int`
+    /// (measured).
+    ///
+    /// The attributes are not lost by taking the denotation: the annotation
+    /// registered its own assert where it was written, so it rides the enclosing
+    /// function and is re-checked per call
+    /// (`docs/notes/operator-polymorphism.md` §3).
+    ///
+    /// One consequence is visible in a printed signature, and it is honest
+    /// rather than a defect: an **open** class refinement's annotated type is the
+    /// placeholder's `[shape, kind]` pair of cells — the pair is what makes the
+    /// class reachable from the parameter pair, so the apply clone re-instantiates
+    /// the refinement's condition per call (taking the placeholder's *value cell*
+    /// alone loses that, measured: `f "a"` was then accepted) — and a type the
+    /// printer cannot read as a form is marked raw
+    /// ([raw-rendering-mark](raw-rendering-mark.md)).  So `x : (_ ! in_num) => e`
+    /// prints `raw[?a, ?b] -> …` where `x : (Int ! in_num) => e` prints
+    /// `Int -> …`.
+    pub(super) fn type_denotation(&self, type_expr: ExprId) -> NodeId {
+        let mut expr = type_expr;
+        while let ExprKind::Annotation { value, .. } = self.ir[expr].kind {
+            expr = value;
+        }
+        self.state[expr]
+            .term
+            .expect("a type expression is compiled before its denotation is read")
+    }
+
     pub(super) fn check_ann(&mut self, e: ExprId, value: ExprId, r#type: Option<ExprId>) -> NodeId {
         self.check_expr(value);
         // `: T` — the value expression's type must unify with the type
@@ -234,14 +271,24 @@ where
         let type_pair = match r#type {
             Some(type_expr) => {
                 self.check_expr(type_expr);
-                let type_pair = self.state[type_expr].term.unwrap();
+                // The type the annotation **names**.  A type expression's term
+                // is the type value itself — unless the expression carries
+                // attributes, which is how a refinement is written *on a type*:
+                // `x : (_ ! in_num)` makes the type expression's term the
+                // `[type, …, attribute]` pair the attribute lives in, and the
+                // type it denotes is the annotated value's own term
+                // ([`Checker::type_denotation`]).  The attribute is enforced
+                // where it was written — that annotation registered its own
+                // assert on the type value — so the outer annotation needs no
+                // slot of its own.
+                let denotation = self.type_denotation(type_expr);
                 self.check_unify(
                     self.state[value].ty.unwrap(),
-                    type_pair,
+                    denotation,
                     self.loc(value, 1),
                     DiagKind::Annotation,
                 );
-                type_pair
+                denotation
             }
             None => self.state[value].ty.unwrap(),
         };
