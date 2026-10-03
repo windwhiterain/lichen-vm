@@ -2866,6 +2866,17 @@ fn check_flow(
         // A jump hands its values to a label this walk does not resolve; the
         // values were checked where they were computed.
         Flow::Jump { .. } => Ok(()),
+        // A `Seq` is a loop body computing its carried values and then handing
+        // them back — the same instruction-then-terminator shape as a `Block`,
+        // so the walk is the same.
+        Flow::Seq {
+            instrs, terminator, ..
+        } => {
+            for (at, instruction) in instrs.iter().enumerate() {
+                check_instr(instruction, params, stack, at)?;
+            }
+            check_terminator(terminator, params, stack)
+        }
         Flow::Block {
             instrs, terminator, ..
         } => {
