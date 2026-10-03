@@ -113,32 +113,46 @@ The constraint is not a type. It is a **refinement** — classical
 predicate `p` required to evaluate to `1`.
 
 The attribute's slot holds **exactly one function**, an ordinary lichen value.
-The raw lowering of an annotated expression is the pair's third element:
+The surface spelling is the annotation chain's `!` piece (§3's last paragraph),
+and the raw lowering of an annotated expression is the pair's third element:
 
 ```text
-Int{x > 3}   ≡   [Int, Type, x => x > 3]
-                 └────┬────────┘ └──┬──┘
-              the pair's value,     the refinement slot
-              type, and tail
+x : Int ! (v => v > 3)   ≡   [x, Int, v => v > 3]
+                             └────┬────────┘ └──┬──┘
+                          the pair's value,     the refinement slot
+                          type, and tail
 ```
 
 One function is enough because a conjunction is one function written with `*`
 (`0 * 1 = 0`, so `*` is conjunction over this language's `0`/`1` scalars):
-`Int{x > 3}{x < 10}` is `x => (x > 3) * (x < 10)`. "No refinement" is the
-attribute's **missing value**, one concrete shared constant (`Void`), so an
-unrefined expression costs a shared node and nothing else.
+`x : Int ! (v => v > 3) ! (v => v < 10)` is `v => (v > 3) * (v < 10)`.
 
 It is carried as an **attribute** (`AttrExt`), which is the one mechanism here
 that already carries a non-equality constraint on an expression across every
-journey the graph takes. `Perspective` is the proof it works end to end, and the
-refinement is its shape with the propagation removed:
+journey the graph takes.  `Perspective` and `Doc` are the two proofs it works end
+to end, and the refinement sits between them:
 
-| | [`Perspective`](../../crates/lichen-perspective/src/perspective.rs) | refinement |
-|---|---|---|
-| slot holds | a lattice value (a thread count) | **one predicate function** |
-| `combine` | `Gcd` — the meet, propagated from the children | **none: no propagation** |
-| `missing_value` | `0`, the `gcd` identity | **`Void`**, "no refinement" |
-| reconcile | `check_unify_relaxed` + `is_subtype` | **a plain unify** |
+| | [`Perspective`](../../crates/lichen-perspective/src/perspective.rs) | [`Doc`](../../crates/lichen-doc/src/doc.rs) | refinement |
+|---|---|---|---|
+| slot holds | a lattice value (a thread count) | the doc's own pair | **one predicate function** |
+| `combine` | `Gcd` — the meet, propagated from the children | a fresh unbound cell | **a fresh unbound cell: no propagation** |
+| `missing_value` | `0`, the `gcd` identity | `Parameterized` | **`Parameterized`** |
+| `share_missing_slot` | `true` (its absent value is concrete) | `false` | **`false`** |
+| `unify_slots` | an equality unify | relaxed, `is_subtype` always true (a later doc overrides) | **a plain unify — over-strict, by decision** |
+| `is_label` | `false` | `true` | **`false`** |
+
+The `missing_value` row is not a free choice, and it corrects an earlier draft of
+this section (which said `Void`): an absent refinement has to be an **unbound
+cell**, because the reconciliation is a *plain unify*.
+[`AttrExt::share_missing_slot`](../../crates/lichen-highlevel/src/attr.rs)'s own contract
+states why — a unify *writes* whichever side is unbound, so a concrete absent
+value can be shared and an unbound one must not be — and a concrete absent value
+is wrong on its own terms anyway, because `unify(Void, predicate)` conflicts and
+no refinement could ever pass from one side to the other.  Being an unbound cell
+is exactly what lets an annotation's predicate flow into an argument's slot,
+which is the propagation the language already has for types ("`a : b; a : c`
+makes `b` and `c` unify"): an unrefined expression costs a fresh cell and
+nothing else.
 
 **Why nothing propagates, and this is the load-bearing negative.**  The tempting
 reading is Perspective's: derive an expression's refinement from its children's,
@@ -428,13 +442,16 @@ answered.
 
 1. **The printer's spelling** of a refined cell.  The surface sigil is `!`
    (§3), so the readable form is `x : Int ! in_num` and the contract's is
-   `?a ! in_num -> ?a`.  One obstacle is structural: the slot holds a
-   **function value**, and a function is not printable — the graph keeps a
-   lambda as an opaque function, not as its source text, and the binding's name
-   is resolved away.  So `AttrExt::render` can spell a refinement only if the
-   slot (or a sibling slot) also carries the predicate's **name**; the `Doc`
-   attribute's named payload is the precedent.  Until that is decided the
-   printer should say nothing rather than print a raw handle.
+   `?a ! in_num -> ?a`.  There is deliberately **no rule special to the
+   refinement** here: the slot holds a *function value*, which is not printable
+   on its own (the graph keeps a lambda as an opaque function, and a binding's
+   name is resolved away), so the refinement is spelled through the general
+   answer to "how is a value printed" — the **doc attribute overriding the
+   value's print**, so that `f ? "fibo" = x => …` prints `f` as `?fibo`.  A
+   predicate carrying a doc therefore prints as that doc, and until the override
+   exists `AttrExt::render` should say nothing rather than print a raw handle.
+   Implementing the override is its own change, and it is what makes the
+   refinement visible in a hover at all.
 2. **`Num`'s home**: std binding (the `type_of` precedent) vs keyword.
 3. **The panic arm's spelling**: the recorded-refusal channel needs a
    value-level form a library function can write; today only builtins record.
