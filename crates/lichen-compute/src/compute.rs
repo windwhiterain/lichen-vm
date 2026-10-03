@@ -8742,12 +8742,14 @@ where
     /// `?a` rather than as the class the value turns out to be
     /// (`docs/notes/floating-point.md` §3.7, §4.2, §4.4).
     ///
-    /// **The index is that same cell rather than a committed `Int`.**  The ABI's
-    /// `read` import is `(class, class) -> class` — the buffer ordinal, the
-    /// index and the element are one class — so the host converts the two
-    /// ordinal roles back from it (`import_index`).  An `Int` here would pin
-    /// every cell the index shares a container with, the written value
-    /// included, which is what refused a float kernel's index.
+    /// **The index is `Int`, and that is the ABI's own statement.**  The `read`
+    /// import's signature is `(i64, i64) -> element`, with the buffer ordinal and
+    /// the index `i64` **in every class** and only the element's type following
+    /// the class (`assemble_module`; `run_parallel_range` declares the same
+    /// closures).  A position and a lane number are ordinals, not data, so the
+    /// language's `Int` is what they are — pinning them to the element's cell
+    /// instead made an index "the class the buffer is", which is exactly what a
+    /// `Float` buffer beside a decided `Int` count could not express.
     fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let b = &args[0];
         let i = &args[1];
@@ -8758,7 +8760,7 @@ where
         let buf_kind = ctx.kind_expr(buf_marker);
         let buf_ty = ctx.array_node(&[elem, buf_kind]);
         ctx.check_unify(b.ty, buf_ty, loc.clone(), DiagKind::Guard);
-        ctx.check_unify(i.ty, elem, loc.clone(), DiagKind::Guard);
+        ctx.check_unify(i.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
         let operands = ctx.array_node(&[b.value, i.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Read), Some(operands));
         let pair = ctx.array_node(&[op, elem]);
@@ -8795,19 +8797,21 @@ where
     /// class is read off the buffer at run time, and its emission defaults to
     /// `Int` exactly as it always did.
     ///
-    /// **The length and the index take that same cell rather than `Int`.**  The
-    /// ABI's `write` import is `(class, class, class)`, the length is the count
-    /// and the index the loop index, and the host converts both back from the
-    /// class (`const_bits`, `import_index`); a committed `Int` here would pin
-    /// the written value's cell with it, which is what refused a float write
-    /// (`docs/notes/floating-point.md` §4.2, §4.4).
+    /// **The length and the index are `Int`, and the ABI says so.**  The `write`
+    /// import is `(i64, i64, element)`: the count and the loop index are `i64` in
+    /// **every** class and only the written value follows the element's class
+    /// (`assemble_module`; `run_parallel_range` declares the same closures).  A
+    /// length and a lane number are ordinals rather than data, so pinning them to
+    /// the *value's* cell — which is what this used to do — made an ordinal "the
+    /// class the data is", and that is what refused a float write beside a
+    /// decided `Int` count.
     fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let n = &args[0];
         let i = &args[1];
         let val = &args[2];
         let elem = ctx.fresh();
-        ctx.check_unify(n.ty, elem, loc.clone(), DiagKind::Guard);
-        ctx.check_unify(i.ty, elem, loc.clone(), DiagKind::Guard);
+        ctx.check_unify(n.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
+        ctx.check_unify(i.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
         ctx.check_unify(val.ty, elem, loc.clone(), DiagKind::Guard);
         let write_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
             ComputeValue::TypeWrite,
