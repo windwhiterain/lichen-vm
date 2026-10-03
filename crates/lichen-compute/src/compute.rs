@@ -3820,7 +3820,7 @@ fn lower_instrs(
             KernelInstr::Const(class, n) => {
                 out.instruction(&match class {
                     ScalarClass::Int => Instruction::I64Const(n),
-                    ScalarClass::Float => Instruction::F32Const(f32::from_bits(n as u32)),
+                    ScalarClass::Float => Instruction::F32Const(f32::from_bits(n as u32).into()),
                 });
                 repr.push(Some(class));
             }

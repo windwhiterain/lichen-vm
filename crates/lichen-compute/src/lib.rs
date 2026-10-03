@@ -22,6 +22,9 @@
 
 pub mod compute;
 
+#[cfg(test)]
+mod waffle_spike;
+
 pub use lichen_highlevel::native::{NativeOp, NativeOps};
 
 pub use compute::{

@@ -99,10 +99,11 @@ distributed across every construct that emits a branch. This is what LLVM's, Cra
 and Binaryen's wasm backends all do — Binaryen's pass for it is literally called
 `Stackify` — and it is why none of them track a height by hand.
 
-There is **no library that does this for us**: wasm has no IR at the level of MLIR's
-`scf`/`cf`, and no crate lowers a structured CFG onto the stack machine. `wasm-encoder`
-is an instruction emitter, `wat`/`wast` parse text, and Binaryen is C++. The mapping is
-everyone's own work; what is not everyone's own work is doing it slot-first.
+There is **no library that lowers an arbitrary CFG onto wasm's stack machine** in the
+way MLIR's `scf`/`cf` dialects structure the problem for SPIR-V: `wasm-encoder` is an
+instruction emitter, `wat`/`wast` parse text, and Binaryen (which has the pass, called
+`Stackify`) is C++. **What does exist is `waffle`, which owns the whole slot-first
+pipeline** — see §5, which is where this work ended up rather than hand-writing §4.
 
 ### 4.1 A cheaper variant, if the full slot-based pass is too much
 
@@ -112,13 +113,87 @@ an integer**: a small `Stack` type that every helper must go through (`push`, `p
 construct that the model agrees with the construct's declared type. That catches §2's
 defects 2 and 3 at emission and turns the withdrawn attempt into something reviewable.
 It does not make 1 and 4 unrepresentable, which is the argument for the full version.
+**This variant was not taken**: §5's spike settled the question in favour of the
+library, and hand-writing either version is now off the table.
 
-### 4.2 What the existing machinery already is
+## 5. Adopting `waffle`, and the spike that settles it
 
-`crates/lichen-compute/src/compute.rs` still holds the loop emitter's prerequisites:
-`Frame::Header` with its locals range, `WasmState::{set_locals, get_locals,
-loop_locals}`, `count_carried`, and the `carried_locals` reservation. They are marked
-`#[allow(dead_code)]` with a pointer here, and they are the *slot* model's skeleton —
-a slot-based emitter subsumes them rather than discarding them. `lower_terminator`'s
-`While` arm **refuses a loop by name** until that emitter lands, so no body with a loop
-is half-emitted.
+**Decision: the wasm backend lowers through [`waffle`](https://github.com/bytecodealliance/waffle)
+(a Bytecode Alliance crate, Apache-2.0 WITH LLVM-exception, v0.3.2).** It defines
+an SSA IR with **block params**, and its backend is a table of contents for exactly
+the work §2 lists as gone wrong:
+
+```
+waffle/backend/
+  reducify.rs   // makes the CFG reducible (so an irreducible input is not a wall)
+  treeify.rs    // trees
+  stackify.rs   // → WasmBlock::{Block, Loop, If, Br, Select, BlockParams, …}
+  localify.rs   // which values need locals
+```
+
+`StackifyContext::compute()` is the CFG→structured-wasm mapping; `Localify` is the
+"which value survives a backedge" question; `lower_value`/`lower_set_value` are the
+`local.get`/`local.set` discipline. **Block params are the loop-carried value**, so
+`Terminator::While`'s `carried`/`passed_out` map onto `FunctionBody::add_blockparam`
+and a `BlockTarget`'s `args` — no `OpPhi` to place and no locals to allocate by hand.
+
+### 5.1 The spike, and what it proved
+
+A spike (`crates/lichen-compute/src/waffle_spike.rs`) built the countdown loop as a
+CFG — `entry(n) → head(c) → {done(c) | body(c)}, body(c) → head(c-1)` — with the
+carried value as `head`'s blockparam, compiled it, and ran it through `wasmi`. It
+passes for `n ∈ {0, 1, 4, 64, 1000}`, and `waffle` emitted:
+
+```wat
+(func $countdown (param i64) (result i64)
+  (local i64 i64 i32)
+  local.get 0
+  local.set 2
+  loop                       ;; no block type: a backedge carries no operands
+    local.get 2
+    i64.eqz
+    local.set 3
+    local.get 3
+    if
+      local.get 2
+      local.set 1
+      local.get 1
+      return
+    else
+      local.get 2
+      local.set 2
+      local.get 2
+      i64.const 1
+      i64.sub
+      local.set 1
+      local.get 1
+      local.set 2
+      br 1
+    end
+  end
+  unreachable)
+```
+
+That is §1's four rules already obeyed, and §4's slot-based strategy already
+implemented — with more `local.set` traffic than is ideal, which is what a later
+peeling pass (`basic_opt`, or our own) is for. **Correctness first.** Note also that
+`i64.eqz` produces an `i32`, so a `CondBr` condition needs the narrowing the kernel
+IR spells `KernelInstr::I32WrapI64`; the type checker states that fact here, where
+the hand-written emitter had to remember it.
+
+### 5.2 The two facts that had to be checked first, both settled
+
+1. **A loop's state may not live in the entry block.** `FunctionBody::new` builds the
+   entry block's blockparams *from the function signature*, and a `CondBr`'s two
+   targets must pass the same number of args — so a loop needs a block of its own,
+   entered through a preheader. **That is the kernel IR's own shape** (`Flow::While`'s
+   header is a block inside the fragment, and the entry block is the preheader), so
+   the two agree rather than one bending to the other.
+2. **The version gap between `waffle`'s `wasm-encoder`/`wasmparser` 0.248 and the
+   `wasmparser` 0.228 that `wasmi` 2.0.0 validates with is not a problem.** The spike
+   proves it end to end: `wasmi`'s own validator accepts and runs 0.248's output. And
+   our existing emitter moves to 0.248 with **one mechanical change**
+   (`Instruction::F32Const(..)` now takes an `Ieee32`, so `..into()`), after which the
+   whole kernel-execution suite — 62 tests that assemble and run real kernels through
+   `wasmi` — passes.
+
