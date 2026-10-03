@@ -1,4 +1,6 @@
 let type_of = x => {t = _; x: t; t}
+P = _x => struct<.I _, .O _>
+K = T: P T => struct<.n Int, .in T.I, .out T.O>
 jit = f => (struct<.native _, .sig (type_of f)>)(.native $jit(f), .sig _)
 launch = k => a => $launch(k.native, k.sig, a)
 call = k => a => $call(k.native, a)
