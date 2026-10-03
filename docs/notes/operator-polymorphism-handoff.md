@@ -17,12 +17,14 @@ it.
   attribute's shape · `e92a75f` the refinement attribute · `d910f49` the
   single-constraint-slot record · `27cfc27` static class naming · `debbdef` the
   diagnostic flavour · `f253724` an attribute naming a value · `d6ebe8f` the
-  `if` desugar reverted.
+  `if` desugar reverted · `5d0d213` the set value.
 - Scratch samples used for every measurement are in `.scratch-poly/` (excluded
   through the repository's local `info/exclude`, never committed): operators
   (`a_ints` … `f_both_sites`), refinement attribute (`g_refinement_ok`,
   `h_refinement_refused`), the doc label (`i_label`), the `if` measurements
-  (`j_if_hetero`, `k_if_lazy`, `l_tuple_if`).
+  (`j_if_hetero`, `k_if_lazy`, `l_tuple_if`), and the set measurements
+  (`n_set`, `o_set_types`, `p_set_index`, `q_set_hetero`, `r_set_empty`,
+  `s_set_eq`, `t_set_sig`).
 
 ## 2. What is landed
 
@@ -32,12 +34,18 @@ it.
 - `check_binop` (`crates/lichen-highlevel/src/checker/operators.rs`) pins the
   operands to one class only when one of them has **stated** a class; when
   neither has, the two cells are made one class instead (the polymorphic case).
-- The class domain is a **value**: `[TypeSet, [members], default]`
-  (`crates/lichen-highlevel/src/class_set.rs`), tag `TypeValue::TypeSet` (codec
-  tag `10`, deliberately **not** a kind marker).  Three elements on purpose —
-  `shape::node_holds_type` decides "is this a type value" by silhouette once tags
-  fail and `is_struct_marker_any` accepts any two-element array, so a two-element
-  domain reads as a kinded type expression.
+- The class domain is a **value**, and the language spells it: **`set{Int,
+  Float}`** (`crates/lichen-highlevel/src/set.rs`, `crates/lichen-language-parser`
+  for the form).  A set's *value* is its members — an ordinary array node, **no
+  tag** — and its *type* is `set<T>`, a kinded type whose shape is the element
+  type alone (`TypeSet`, kind-marker codec tag `10`).  The separate kind is a
+  soundness requirement: an array-typed set passed into an `array<T, n>`
+  parameter and indexed inside the callee would read its element 0, and a
+  value-level tag is invisible there.  `s[i]` is refused by the ordinary
+  container unify.  The old encoding's `default` element is **gone** — nothing
+  read it (`class_set::default_class` had no caller) and a general set has no
+  privileged member; a reader that must commit takes the **first** member, which
+  for `set{Int, Float}` is `Int`, the operators' historical default.
 - `TypeOperator::InDomain` (codec tag `17`) is the **structural** membership test
   (`==` cannot do it: `TypeOperator::Eq` goes through `ValueExt::value_eq`, which
   for an array is *handle* identity, so a class node out of another module would
@@ -81,6 +89,13 @@ it.
 | `(10, "ten")(1 == 1)` | — | `"ten": string` (the opt-in dependent read) |
 | `if (1 == 1) then 7 else 1 / 0` | — | `7: Int` (the untaken arm is not evaluated) |
 | `f = (x => x) ? "fibo"; f` | — | `?fibo: ?a -> ?a` |
+| `s = set{1, 2}; s` | — | `set{1, 2}: set<Int>` |
+| `num = set{Int, Float}; num` | — | `set{Int, Float}: set<Type>` (the domain value) |
+| `s = set{1, 2}; s[0]` | — | refused: `expected array<?a, ?b>, found set<Int>` |
+| `s = set{1, "a"}` | — | refused: `expected Int, found string` (a set is homogeneous) |
+| `s = set{}` | — | `set{}: set<?a>` |
+| `a = set{1, 2}; b = set{1, 2}; (a == b, a == a)` | — | `(0, 1)` — membership is handle identity, the array rule |
+| `f = x => set{1, 2}; f` | — | `?a -> set<Int>` (the type prints; it has no source spelling) |
 
 Two mechanism facts that came out of measuring, and both are load-bearing:
 
@@ -95,8 +110,9 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
 
 ## 4. Rejected, with the measurement (do not retry these)
 
-- **The class-set *type*** (a tenth kind marker in type position, unifying a
-  member at every use).  A set in type position must commit a member, and that
+- **The set used as a *type*** (a kind marker in *type* position, unifying a
+  member at every use — not to be confused with the landed `set<T>`, which is the
+  type a set *value* has).  A set in type position must commit a member, and that
   unify is the lowlevel's, so the rule has to be a `Program` hook consulted from
   `unify_inner` — which, being a merge, folds a per-occurrence domain node into
   the member's *canonical* class, and `class_committed_value` then scans past the
@@ -134,19 +150,19 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
 
 ## 6. What to do next, in order
 
-1. **Decide the class domain's surface form** (§8.7 of the plan note) — it is
-   Phase 3's prerequisite, because a library cannot write `Num = {Int, Float}`
-   today (`class_set::build` is called only from `check_binop`, and
-   `TypeValue::TypeSet` has no syntax).  Recommendation: a keyword-led
-   `domain<Int, Float>`, which is the language's own idiom wherever a delimiter
-   would be ambiguous; the open point is the **default** element the encoding
-   carries (name it as the first member, or grow a slot for it) — it is
-   load-bearing, since it is what the specialize pass types its placeholder with
-   and what a kernel picks.
-2. **Phase 3**: move `Num` and the operator bindings into `lichen-std`, routing
+1. **Phase 3**: move `Num` and the operator bindings into `lichen-std`, routing
    R3 → R2/R1 (§7 of the plan note).  The refinement and the domain value are
-   routing-agnostic.
-3. **§8.1's second half**: spell a refinement as `! <the predicate's name>`.
+   routing-agnostic, and the domain's surface form is landed: `Num = set{Int,
+   Float}` is an ordinary binding.  Two things Phase 3 still needs, and both are
+   decisions, not work:
+   - **A membership spelling for the predicate.**  `in_num = v => type_of v ∈ Num`
+     needs `∈` (or a *native* leaf, the way §6 makes the arithmetic leaves
+     native) — `TypeOperator::InDomain` has no source form today, and `$` is the
+     plugin-private sigil, so it cannot carry a user-writable std.
+   - **How std reaches a program at all** (R2's intrinsic registry vs R1's
+     implicit prelude import).  This is the real fork: R1 is the principled end
+     state and needs the language's first implicit import.
+2. **§8.1's second half**: spell a refinement as `! <the predicate's name>`.
    The obstacle is a *signature*: the slot this attribute holds **is** the
    predicate's pair, and locating a slot needs that pair's **schema tail**, which
    `AttrExt::render` does not carry (a pair's arity is in the graph, but *which*
@@ -155,8 +171,21 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
    the slot is built (`Checker::check_ann` has the predicate expression's
    schema), so either hand the render hook the slot's tail or record the
    predicate's name beside the slot.
-4. Then §8.2 (`Num`'s home), §8.3 (the panic arm's spelling), §8.6
+3. Then §8.2 (`Num`'s home), §8.3 (the panic arm's spelling), §8.6
    (generalising the single constraint slot to a per-marker set).
+4. **Set follow-ups, none of them needed by this feature** (recorded so a
+   successor does not read them as bugs): the set *type* has no source spelling
+   (`f = x => set{1, 2}` prints `?a -> set<Int>`, but `x : set<Int>` does not
+   parse — a `set<T>` type form is the follow-up if a parameter ever needs one);
+   a set has no membership, no dedup, no order-insensitivity and no content
+   equality (`==` is the array rule, *handle* identity: two `set{1, 2}`s compare
+   `0`, one binding to itself compares `1`); and the members are homogeneous,
+   like an array literal.
+5. **The editor grammar is stale, and this is not new.**  `tree-sitter-lichen/
+   grammar.js` still spells the assert as the prefix `!` (this branch moved it to
+   `@assert`) and has no `set{…}`; nothing in the Rust workspace compiles it, and
+   no generated `parser.c` is committed.  Whoever owns the editor grammar should
+   take both at once.
 
 ## 7. Traps a successor will hit
 
@@ -168,8 +197,22 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
 - **`ValueExt::value_eq` compares array *handles*.**  Anything that must ask "are
   these the same type/class" has to decode structurally
   (`shape::low_type_of_slot`) — never `==`.
-- **A value's encoding must not look like a type.**  Three elements, because
-  `is_struct_marker_any` accepts any two-element array.
+- **A value's encoding must not look like a type.**  The class domain used to
+  need three elements for that reason (the tag is gone now, and the *set's* value
+  is an ordinary array, so nothing new can be misread); `is_struct_marker_any`
+  still accepts any two-element array, which is why a kinded type's shape is
+  wrapped in an array rather than placed bare in the shape slot.
+- **`set` is a keyword, so it is reserved.**  A program that bound a variable
+  named `set` no longer parses; that is the one breaking change the set form
+  introduced (the `!` → `@assert` move was the other, earlier one).
+- **A set's type is `[shape, [TypeSet, K]]` with a 1-element shape.**  A parser
+  form for the *type* does not exist, so `set<Int>` in source is a parse error
+  ("expected `{`") even though the printer produces exactly that spelling.
+- **The domain's spelling is the caller's, not the printer's.**  A set's value
+  carries no tag, so the type printer cannot tell a class domain from any array
+  of type values; `lichen-language/src/render.rs`'s `class_domain` is the one
+  place that formats `{Int, Float}`, because only the refinement's registration
+  knows it holds a domain.
 - **`path.rs`'s child indices are reserved role slots** and the attribute order
   is a compatibility contract: a new attribute is **appended** (the refinement
   took slot 4; `Perspective` stays 2 and `Doc` stays 3), which the
