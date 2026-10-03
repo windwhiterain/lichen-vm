@@ -28,6 +28,12 @@ where
     /// bit pattern in this language, so a float operand is a check error for
     /// them and for them alone.
     ///
+    /// `@in` is the one operator that is not arithmetic at all: it is set
+    /// **membership**, so its operands are a value and a set of values rather
+    /// than two members of one class, and it consults the set rather than a
+    /// class (`docs/notes/operator-polymorphism.md` §3).  Its arm below is the
+    /// only one that pins nothing to a class.
+    ///
     /// An operand's type is unified against the class the operation computes
     /// over — a concretely wrong operand is a check error, and an unbound
     /// operand (a parameter) is *pinned* to that class, so a later apply at the
@@ -75,6 +81,45 @@ where
             BinOp::Rem | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
                 self.check_unify(left_ty, self.int_type, self.loc(left, 1), DiagKind::BinOp);
                 self.check_unify(right_ty, self.int_type, self.loc(right, 1), DiagKind::BinOp);
+            }
+            // `value @in set` — membership, the one binary operator that is not
+            // arithmetic: it pins nothing to a class and it ties nothing to the
+            // other operand's type, because the two sides are deliberately of
+            // different shapes — the left is a value and the right is a **set**
+            // of such values.
+            //
+            // The right operand is pinned to a fresh set type (the same
+            // container pin `check_index` and `check_table_find` apply, with the
+            // same `Guard` diagnostic: "this operand must be a set"), and that is
+            // the whole check.  **The left operand is deliberately
+            // unconstrained** — not even unified with the set's element cell —
+            // and that is the load-bearing negative, not an omission.
+            //
+            // A membership test is a fact about a **value**, so it is answered
+            // by evaluating it ([`crate::set::contains`]), never by reconciling
+            // types ("the contract is a fact about values — 'this operand's value
+            // is one of the numeric classes' — and a fact about a value is
+            // checked by evaluating it, not by unifying types":
+            // `docs/notes/operator-polymorphism.md` §2–§3).  Unifying the left
+            // against the set's element cell *would* look like a friendlier
+            // diagnostic and would break the very case this operator exists for:
+            // `in_num = v => type_of v @in Num` must stay polymorphic, and
+            // `type_of`'s result cell is the argument's own type cell, so the
+            // unify would write the argument's class — refusing `in_num 1.5`
+            // with "expected Int, found Float" after `in_num 1` had bound it.
+            // The predicate must constrain nothing, exactly like a user-written
+            // `v => v > 3`.
+            //
+            // What that costs is the *static* refusal of a mismatched left
+            // (`5 @in Num` is accepted and answers `0`, since the value `5` is
+            // not the type `Int`); what it buys is that the operator works where
+            // a set is consulted about a value nobody has decided yet.
+            BinOp::In => {
+                let element_cell = self.fresh_cell();
+                let shape = self.array_node(self.current_block, &[element_cell]);
+                let kind = self.kind_expr(self.current_block, self.markers.set_type_marker);
+                let set_ty = self.array_node(self.current_block, &[shape, kind]);
+                self.check_unify(right_ty, set_ty, self.loc(right, 1), DiagKind::Guard);
             }
             BinOp::Add
             | BinOp::Sub

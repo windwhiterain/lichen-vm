@@ -114,6 +114,14 @@ pub enum TokenKind {
     /// word at the `@` keyword sigil, and `!` sits in the annotation's
     /// attribute chain.
     KwAssert,
+    /// `@in` -- set membership, `value @in set`: the predicate form a class
+    /// domain is consulted with (`type_of v @in Num`).  It is the one keyword
+    /// that is an **infix operator** instead of a prefix form — it takes the
+    /// operand the comparison level has already parsed and answers the
+    /// language's `0`/`1` scalar — so `@` is the sigil of a keyword and the
+    /// keyword is the operator, the way `!` is a symbol and the annotation is
+    /// the attribute (`docs/notes/operator-polymorphism.md` §3).
+    KwIn,
     /// The pub keyword -- a block statement marked as a struct field.
     KwPub,
     /// The cache keyword -- a binding whose value is a *retained cell*
@@ -242,6 +250,7 @@ impl TokenKind {
             TokenKind::KwReturn => "'return'".to_string(),
             TokenKind::KwLoop => "'@loop'".to_string(),
             TokenKind::KwAssert => "'@assert'".to_string(),
+            TokenKind::KwIn => "'@in'".to_string(),
             TokenKind::KwPub => "'pub'".to_string(),
             TokenKind::KwCache => "'cache'".to_string(),
             TokenKind::KwArray => "'array'".to_string(),
@@ -800,12 +809,13 @@ fn raw_to_kind(
         RawToken::AtNameLit => match &slice[1..] {
             "loop" => Some(TokenKind::KwLoop),
             "assert" => Some(TokenKind::KwAssert),
+            "in" => Some(TokenKind::KwIn),
             other => {
                 errors.push(LexDiag {
                     span: Some(lc),
                     message: format!(
-                        "'@{other}' is not a keyword. `@` prefixes keywords, and `@loop` and \
-                         `@assert` are the ones that exist"
+                        "'@{other}' is not a keyword. `@` prefixes keywords, and `@loop`, \
+                         `@assert` and `@in` are the ones that exist"
                     ),
                 });
                 None

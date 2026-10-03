@@ -7,14 +7,18 @@ it.
 
 ## 1. Where things are
 
-- **The branch is closed.**  Every commit below is on **`dev`** (the mainline —
-  this repository has no `main`); the worktree `.worktrees/operator-polymorphism`
-  and the branch `feature/operator-polymorphism` were deleted once the agreed
-  scope (Phases 0–2) plus the two extras that followed it (the set value and
-  §8.1) were landed and synced.  Phase 3 is a **new workstream**: open a fresh
-  worktree for it — the decisions it needs are already recorded (the set value it
-  must write, the `@in` keyword it must implement, and the R2/R1 routing fork of
-  §7 of the plan note).
+- **Phases 0–2 are closed and on `dev`.**  The worktree
+  `.worktrees/operator-polymorphism` and the branch
+  `feature/operator-polymorphism` were deleted once the agreed scope (Phases 0–2)
+  plus the two extras that followed it (the set value and §8.1) were landed and
+  synced.
+- **Phase 3 is open on `feature/operator-std`** (worktree
+  `.worktrees/operator-std`, branched from `dev` at `b1b1d8e`).  Its scope, as
+  agreed: **Stage 1** the membership keyword `@in` — *landed* — and **Stage 2**
+  the contract written in lichen as a built-in **`core`** module that is also a
+  **prelude** (every program sees its names), with the **routing** (R3 → R2/R1)
+  left to a later workstream because it needs the kernel workstream's
+  specialize-before-JIT pass (§8.4 of the plan note).
 - Commit trail (oldest first): `674d048` operand tie · `9a3983d` the class domain
   as a value + `InDomain` + the condition · `7e33938` kernel-boundary record +
   example declarations · `78fa33e` `@assert` frees `!` · `ec480fc` the
@@ -22,17 +26,21 @@ it.
   single-constraint-slot record · `27cfc27` static class naming · `debbdef` the
   diagnostic flavour · `f253724` an attribute naming a value · `d6ebe8f` the
   `if` desugar reverted · `5d0d213` the set value · `1c291a1` its documentation ·
-  `c8cdd2a` the refinement's spelling · `bc0c4d4` §8.1's documentation.
-- The scratch samples every measurement below was taken with lived in the closed
+  `c8cdd2a` the refinement's spelling · `bc0c4d4` §8.1's documentation ·
+  `ad7aea1` the closure record · `0171937` the merge into `dev` · `b1b1d8e` the
+  kernel workstream's citations · *Phase 3*: `@in` (this branch's first commit).
+- The scratch samples every measurement below was taken with lived in a closed
   worktree's `.scratch-poly/` (excluded through the repository's local
-  `info/exclude`, never committed) and went with it.  §3's table **is** the
-  record: each row is a whole program, so recreate the ones a successor needs —
-  operators (`a_ints` … `f_both_sites`), refinement attribute (`g_refinement_ok`,
-  `h_refinement_refused`), the doc label (`i_label`), the `if` measurements
-  (`j_if_hetero`, `k_if_lazy`, `l_tuple_if`), the set measurements (`n_set` …
-  `t_set_sig`), the refinement's spelling (`u_refinement_name`,
-  `v_refinement_unnamed`), and the two rendering regressions (`w_perspective`,
-  `aa_struct_doc`).
+  `info/exclude`, never committed) and went with it; Phase 3's live in
+  `.worktrees/operator-std/.scratch-core/`, excluded the same way.  §3's table
+  **is** the record: each row is a whole program, so recreate the ones a
+  successor needs — operators (`a_ints` … `f_both_sites`), refinement attribute
+  (`g_refinement_ok`, `h_refinement_refused`), the doc label (`i_label`), the
+  `if` measurements (`j_if_hetero`, `k_if_lazy`, `l_tuple_if`), the set
+  measurements (`n_set` … `t_set_sig`), the refinement's spelling
+  (`u_refinement_name`, `v_refinement_unnamed`), the two rendering regressions
+  (`w_perspective`, `aa_struct_doc`), and Phase 3's `@in` rows
+  (`01_int_in` … `10_contract_open`).
 
 ## 2. What is landed
 
@@ -89,6 +97,27 @@ it.
   (`Module::static_equality_representative` + the type printer).  The operator
   pin had been hiding it — a pinned class renders its committed value, so both
   members of a class printed `Int`.
+- **`@in` is a language form** (Phase 3, Stage 1): the membership predicate
+  `value @in set`, a keyword at the `@` sigil and the language's only **infix
+  keyword** — it sits at the comparison rung, left-associative, so
+  `x @in S == 1` is `(x @in S) == 1`, and it yields the same `0`/`1` a comparison
+  yields.  Its right operand is pinned to a set (`Guard`, the same container pin
+  `e[i]` applies); its **left operand is deliberately unconstrained** — no unify
+  against the set's element cell — because a membership test is a fact about a
+  *value*, and a check-time unify would write the argument's class and make the
+  predicate mono-class (measured: `in_num 1` then `in_num 1.5` refused with
+  "expected Int, found Float" while the tie existed).  The test itself is
+  `TypeOperator::InDomain`, so `@in` and the builtin contract consult the domain
+  through the identical operator.
+- **The membership reader is representation-agnostic**, and that is a fix `@in`
+  forced: a *source* set's members are `LowValue::TypeValue` nodes (the runtime's
+  own value for a type constant), while the domain the checker builds for the
+  builtin operators is the array-encoded type expression, and `ValueExt::value_eq`
+  compares array *handles* — so a structural-only reader refused every
+  source-written domain.  `set::contains` now matches a member **by the class it
+  denotes when it denotes one (the `low_type_of` decode) and by the language's
+  own value equality otherwise** (a `TypeValue` is nominal, not allocated; an
+  ordinary value compares by value).
 
 ## 3. Measured behaviour (the acceptance table)
 
@@ -118,6 +147,17 @@ it.
 | `always = (v => 1) ? "always"; (x => x) : _ ! always` | — | `Function ! always: ?a -> ?a` |
 | `5 ? {name = "five"}` | `5 ? name = "five": Int` | identical (a struct doc still describes) |
 | `5 # 4` | `5 # 4: Int` | identical (the render hook's new parameter changed nothing) |
+| `type_of 5 @in Num` (Phase 3) | — | `1: Int` (the `Int` class is a member) |
+| `type_of 1.5 @in Num` | — | `1: Int` |
+| `type_of "a" @in Num` | — | `0: Int` |
+| `(2 @in set{1, 2}, 3 @in set{1, 2}, 2 @in set{1, 5})` | — | `(1, 0, 0)` (a set of ordinary values) |
+| `Int @in set{Int, Float} == 1` | — | `1: Int` (membership is at the comparison rung) |
+| `Num = 7; Int @in Num` | — | refused: `expected set<?a>, found Int` |
+| `in_num = compose (t => t @in Num) type_of; (in_num 1, in_num 1.5, in_num "a")` | — | `(1, 1, 0)` |
+| the plan's `add` with `x ! in_num`; `(add 1 2, add 1.5 2.5)` | — | `(3, 4.0): <Int, Float>` |
+| the same `add "a" "b"` | — | refused: `does not satisfy {Int, Float}` |
+| the same `add` alone | — | `?a -> ?a -> ?a` (`x ! in_num`, no `:`) |
+| the same with `x : _ ! in_num` | — | `raw[?a, ?b] -> raw[?a, ?b] -> raw[?a, ?b]` (do not write the `: _`) |
 
 Two mechanism facts that came out of measuring, and both are load-bearing:
 
@@ -172,20 +212,37 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
 
 ## 6. What to do next, in order
 
-1. **Phase 3**: move `Num` and the operator bindings into `lichen-std`, routing
-   R3 → R2/R1 (§7 of the plan note).  The refinement and the domain value are
-   routing-agnostic, and the domain's surface form is landed: `Num = set{Int,
-   Float}` is an ordinary binding.  Two things Phase 3 still needs, and both are
-   decisions, not work:
-   - **A membership spelling for the predicate.**  Decided: the `@`-keyword
-     **`@in`** (`in_num = v => type_of v @in Num`), joining `@loop` and `@assert`
-     — not a new binary operator, and not a `$` native (that sigil is
-     plugin-private, so it cannot carry a user-writable std).  `@in`'s arity and
-     level are settled with the implementation.
-   - **How std reaches a program at all** (R2's intrinsic registry vs R1's
-     implicit prelude import).  This is the real fork: R1 is the principled end
-     state and needs the language's first implicit import.
-2. **A refinement in a *type* string is not reachable, and this is understood,
+1. **Phase 3, Stage 2 — the contract moves into the language.**  Stage 1 (`@in`)
+   is landed; the domain's surface form (`Num = set{Int, Float}`) and every other
+   piece of the contract are written in lichen and measured (§3's last rows).  The
+   agreed destination is a **built-in `core` module that is also a prelude** —
+   `core.lichen`, embedded by the compiler and seeded into every program's base
+   scope, rather than `lichen-std/_.lichen` (which stays the *fetched* library the
+   package manager is tested with):
+   - It carries `Num`, `in_num`, `is_int`, and the operator bindings (`add`,
+     `sub`, `mul`, `div`, and the four order comparisons), each with its operands
+     refined by `! in_num` — **not** `x : _ ! in_num`, which prints the parameter
+     type raw (measured, §3).
+   - The open sub-decision is how the module reaches a program: a prelude seeding
+     the exported names as base-scope binders (the `ResolvedImport.direct` shape
+     the resolver already understands), against a built-in module served by the
+     package store (the `compute.lichen` plug shape) — which is the language's
+     first implicit import.
+2. **Phase 3, Stage 3 — the routing (R3 → R2/R1), a later workstream.**  The
+   leaf-selection dispatch, the split leaves, and the surface operator resolving
+   to the `core` binding.  It needs the kernel workstream's
+   specialize-before-JIT pass first: a kernel body's operator would become an
+   apply of a library dispatch, and the emitter has to recognise that shape and
+   fold it back to `KernelBin` (§7 of the plan note, §8.4 of the design record).
+3. **The read's monomorphism is a blocker for a *plainly written* predicate, and
+   it is a separate fix.**  `in_num = v => type_of v @in Num` is monomorphic
+   (measured: `(in_num 1, in_num 1.5)` refused with `expected Int, found Float`),
+   so the predicate goes through one opaque combinator until the per-call
+   instantiation remaps the cells an annotation tied to the parameter's type
+   slot — the analysis, the workaround and the preferred fix are in
+   [type-of-in-std](type-of-in-std.md) (*The monomorphism a wrapping lambda
+   induces*).  Reproduces on `dev` with no `@in` in the program.
+4. **A refinement in a *type* string is not reachable, and this is understood,
    not pending.**  `f = x : _ ! in_num => x` prints `Int -> Int`: a refinement is
    the attribute of the parameter *expression* inside the lambda, and a function
    type is just `[domain, codomain]`, so `?a ! in_num -> ?a` cannot be built from
@@ -193,21 +250,21 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
    attribute lives in the template), which is a separate piece of work.  The
    refinement **is** shown wherever the annotated *value* is printed (§3's
    `Function ! always: ?a -> ?a`), which is the operator's own end state.
-3. Then §8.2 (`Num`'s home), §8.3 (the panic arm's spelling), §8.6
+5. Then §8.2 (`Num`'s home), §8.3 (the panic arm's spelling), §8.6
    (generalising the single constraint slot to a per-marker set).
-4. **Set follow-ups, none of them needed by this feature** (recorded so a
+6. **Set follow-ups, none of them needed by this feature** (recorded so a
    successor does not read them as bugs): the set *type* has no source spelling
    (`f = x => set{1, 2}` prints `?a -> set<Int>`, but `x : set<Int>` does not
    parse — a `set<T>` type form is the follow-up if a parameter ever needs one);
-   a set has no membership, no dedup, no order-insensitivity and no content
-   equality (`==` is the array rule, *handle* identity: two `set{1, 2}`s compare
-   `0`, one binding to itself compares `1`); and the members are homogeneous,
-   like an array literal.
-5. **The editor grammar is stale, and this is not new.**  `tree-sitter-lichen/
+   a set has no dedup, no order-insensitivity and no content equality (`==` is the
+   array rule, *handle* identity: two `set{1, 2}`s compare `0`, one binding to
+   itself compares `1`); and the members are homogeneous, like an array literal.
+   Membership *is* available, as `@in`.
+7. **The editor grammar is stale, and this is not new.**  `tree-sitter-lichen/
    grammar.js` still spells the assert as the prefix `!` (this branch moved it to
-   `@assert`) and has no `set{…}`; nothing in the Rust workspace compiles it, and
-   no generated `parser.c` is committed.  Whoever owns the editor grammar should
-   take both at once.
+   `@assert`), has no `set{…}`, and has no `@in`; nothing in the Rust workspace
+   compiles it, and no generated `parser.c` is committed.  Whoever owns the editor
+   grammar should take all three at once.
 
 ## 7. Traps a successor will hit
 
@@ -243,9 +300,36 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
   the two `examples/import/*.lichen` `output =` declarations (via the repo's own
   `sync-readme`, which mirrors them into `README.md`) and
   `imported_field_access_hovers_with_value_and_type` (asserted per field now).
-- `cargo fix --allow-dirty` + `cargo fmt` before committing.  (In the closed
-  worktree the `.git` file was a pointer — never append to it; a fresh worktree
-  has the same shape.)
+- **`@in`'s left operand must stay unconstrained.**  Pinning it to the set's
+  element cell (or to `Type`) looks like a better diagnostic and is a trap: a
+  membership test that a *refinement* uses is applied to a parameter whose class
+  is open, so the unify writes the argument's class into the template and the
+  predicate becomes mono-class — measured as `in_num 1` then `in_num 1.5` refused
+  with `expected Int, found Float`.  The test is a fact about the value and is
+  answered by the runtime operator, never by a check-time unify.
+- **A type value has two representations, and only one of them decodes.**  A
+  *source* type constant is `LowValue::TypeValue(TypeInt)` — a nominal variant, so
+  `value_eq` compares it by value and a cross-module class matches — while a type
+  *slot* is the checker's array-encoded expression (`[int_marker, universe]`),
+  which is what `low_type_of` decodes.  `set::contains` handles both (class decode
+  when both sides decode, value equality otherwise); anything else that asks "are
+  these the same class" must decide which representation it is looking at.
+- **An annotated *statement* with a placeholder type prints raw.**  `x : _ ! p`
+  unifies the parameter's type with the placeholder's term *pair*, so the
+  function's domain prints `raw[?a, ?b]` instead of `?a`.  A refinement-only
+  annotation (`x ! p`) keeps the clean `?a -> ?a -> ?a` and is the spelling the
+  contract uses.
+- **`@in` on a set operand that is not a set is refused, but a mismatched *left*
+  is not.**  The right operand is pinned (`Guard`: `expected set<?a>, found Int`);
+  the left is unconstrained by design, so `5 @in Num` is accepted and answers `0`
+  (the value `5` is not the type `Int`).  That asymmetry is the price of the
+  previous trap.
+- `cargo fix --allow-dirty` + `cargo fmt` before committing.  (In a worktree the
+  `.git` file is a pointer — never append to it.)  **Copying files into a worktree
+  preserves their mtimes**, and a source whose mtime is older than the recorded
+  build stays "fresh" to cargo: after a `Copy-Item` into a worktree, touch the
+  copied files (or edit them in place) or the build silently reuses the old
+  artifacts.
 
 ## 8. Verification, in commands
 

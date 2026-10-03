@@ -84,7 +84,7 @@ Loosest to tightest, which is the ladder `parse.rs` builds bottom-up:
 =>            lambda
 : # ?         annotations
 ->            function type
-< > <= >= == !=   comparison
+< > <= >= == != @in   comparison and set membership
 |                 bitwise or
 ^                 bitwise exclusive or
 &                 bitwise and
@@ -105,6 +105,13 @@ of C's. Both choices are pinned by `operator_precedence_and_associativity` in
 `crates/lichen-language/tests/pipeline.rs`.
 
 A comparison is one level, left-associative, so `1 < 2 == 1` is `(1 < 2) == 1`.
+
+`@in` (set membership, [operator-polymorphism](operator-polymorphism.md) §3) shares
+that rung: it yields the same `0`/`1` a comparison yields, so `x @in S == 1` reads
+`(x @in S) == 1`, and its right operand is an ordinary expression at this level —
+the set being tested. It is the one *keyword* operator: the word carries the `@`
+sigil the language's reserved words live at, because it is a predicate over a set
+rather than punctuation.
 
 The two conversions take the assert's level rather than a new rung: a prefix
 keyword takes its operand by juxtaposition and no infix token, so
@@ -262,11 +269,13 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
 - **Class-polymorphic arithmetic as a *library*.** The operators themselves are
   polymorphic now — `+ - * /` and the four order comparisons accept either scalar
   class and never mix them, with the operand tie and a refinement condition
-  ([operator-polymorphism](operator-polymorphism.md) §3, §9 Phase 1). What is not
-  here is the *end state*: `+` is still the checker's special case (routing R3)
-  rather than a binding in `lichen-std`, and a library cannot yet write the
-  predicate's membership test (the `@in` keyword is decided, not yet
-  implemented).
+  ([operator-polymorphism](operator-polymorphism.md) §3, §9 Phase 1) — and a
+  library *can* now write the predicate's membership test: `@in` is implemented
+  (§3 above). What is still not here is the *routing*: `+` remains the checker's
+  special case (R3) rather than a binding the surface operator resolves to, so a
+  std-written `add` is a wrapper over the builtin's contract rather than the
+  contract itself ([operator-polymorphism](operator-polymorphism.md) §5, §9
+  Phase 3).
 - **Shifts (`<<`, `>>`).** A `>>` token swallows the adjacent closers of nested
   angle types — `array<array<Int, 2>, 3>` ends `3>>` — and a `logos` lexer cannot
   split it back; the fix is parser-level token splitting, which is a change to
@@ -292,6 +301,12 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
 - Interpreter: `the_extended_operator_set_evaluates` and
   `an_int_is_unsigned_where_the_two_readings_differ`
   (`crates/lichen-language/tests/pipeline.rs`).
+- Membership: `a_membership_test_compares_a_value_with_a_sets_members` and
+  `a_membership_test_matches_a_type_value_against_a_class_domain`
+  (`crates/lichen-language/tests/membership.rs`); its parse (the comparison rung
+  and the left-associativity) is pinned by
+  `an_at_in_membership_test_parses_at_the_comparison_level`
+  (`crates/lichen-language-parser/src/tests/parse_tests.rs`).
 - wasm JIT: `jit_lowers_the_arithmetic_comparison_and_bitwise_operators`
   (`crates/lichen-language/tests/compute.rs`) — one kernel per operator, so each
   is on the lowering path.

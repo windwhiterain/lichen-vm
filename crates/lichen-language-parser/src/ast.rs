@@ -28,6 +28,15 @@ pub enum TypeConst {
 /// generalized equality over any two same-typed values; every other operator
 /// is `Int`-only, and an `Int` is **unsigned**, so `/` and `%` are the unsigned
 /// division and remainder.
+///
+/// `@in` is the one member that is not arithmetic: it is the **membership
+/// test** `value @in set`, which asks whether a value *is one of* a set's
+/// members and answers the same `0`/`1` scalar the comparisons do.  It is
+/// spelled as a keyword operator rather than as a symbol because it is a
+/// predicate over a set, and it is `@`-led for the same reason `@assert` and
+/// `@loop` are: the sigil is reserved for keywords
+/// (`docs/notes/operator-polymorphism.md` §3).  It sits at the comparison
+/// level, so `x @in S == 1` reads as `(x @in S) == 1`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BinOp {
     Add,
@@ -44,6 +53,8 @@ pub enum BinOp {
     BitAnd,
     BitOr,
     BitXor,
+    /// `value @in set` — membership in a set.
+    In,
 }
 
 /// The two class conversions, `int2float` and `float2int`.

@@ -28,7 +28,7 @@
 //! privileges a member, and an explicit preferred member would be a second
 //! concept to learn for one reader's benefit.
 
-use lichen_lowlevel::{AnyNodeId, LowShape, Module, Program};
+use lichen_lowlevel::{AnyNodeId, LowShape, Module, Program, ValueExt};
 
 use crate::program::ValueType;
 use crate::shape::{array_items, low_type_of};
@@ -48,28 +48,59 @@ where
     Some(items.iter().map(|item| item.node).collect())
 }
 
-/// Whether `class`'s class is a member of the set whose value is `set` — the
-/// membership test [`crate::program::TypeOperator::InDomain`] runs, and the one
-/// a class domain is read with.
+/// Whether `value` is a member of the set whose value is `set` — the membership
+/// test [`crate::program::TypeOperator::InDomain`] runs, which is both the
+/// class-domain read and the source form's meaning (`value @in set`,
+/// `docs/notes/operator-polymorphism.md` §3).
 ///
-/// Both sides are *structural*: a member is matched through [`low_type_of`], so
-/// two structurally identical class nodes from different modules match and no
-/// node identity is involved.  A class or member the low type vocabulary cannot
-/// classify is not a member — the conservative answer, and the one that keeps a
-/// domain from admitting a type nobody can classify (a `string` answers
-/// `Unknown` and is therefore refused, which is `add "a" "b"`).
-pub fn contains<P: Program>(module: &Module<P>, set: AnyNodeId, class: AnyNodeId) -> bool
+/// A member is matched **by the class it denotes when it denotes one, and by
+/// the language's own value equality otherwise** — the one rule that answers
+/// both readings of a set:
+///
+/// - **A set of type values** (`Num = set{Int, Float}`) is compared
+///   structurally, through [`low_type_of`], so a class node out of another
+///   module matches by its shape and no node identity is involved.  That is why
+///   this reader exists at all: [`ValueExt::value_eq`] compares array
+///   *handles*, so two spellings of `Int` from different modules are unequal
+///   under it, and an `==`-based membership test would refuse a valid class.
+/// - **A set of ordinary values** (`set{1, 2}`) is compared with
+///   [`ValueExt::value_eq`], which for a machine scalar *is* the value itself —
+///   so `2 @in set{1, 2}` holds and `3 @in set{1, 2}` does not.  A member the
+///   low type vocabulary cannot classify stays on this side too, which is what
+///   keeps a `string` type a non-member of a class domain (`add "a" "b"`).
+pub fn contains<P: Program>(module: &Module<P>, set: AnyNodeId, value: AnyNodeId) -> bool
 where
     P::Value: ValueType,
 {
-    let Some(class) = known_shape(module, class) else {
-        return false;
-    };
     members(module, set).is_some_and(|members| {
         members
             .into_iter()
-            .any(|member| known_shape(module, member).is_some_and(|member| member == class))
+            .any(|member| same_member(module, member, value))
     })
+}
+
+/// Whether a set's member and the tested value are the same member: the class
+/// each denotes when **both** denote one, and [`ValueExt::value_eq`] otherwise.
+fn same_member<P: Program>(module: &Module<P>, member: AnyNodeId, value: AnyNodeId) -> bool
+where
+    P::Value: ValueType,
+{
+    match (known_shape(module, member), known_shape(module, value)) {
+        (Some(member), Some(value)) => member == value,
+        _ => same_value(module, member, value),
+    }
+}
+
+/// [`ValueExt::value_eq`] over two nodes' values; `false` when either has none
+/// (an unbound cell, or a node that is not a value at all).
+fn same_value<P: Program>(module: &Module<P>, left: AnyNodeId, right: AnyNodeId) -> bool
+where
+    P::Value: ValueType,
+{
+    match (module.node_value(left), module.node_value(right)) {
+        (Some(left), Some(right)) => left.value_eq(&right),
+        _ => false,
+    }
 }
 
 /// [`low_type_of`]'s answer for a type value, `None` when it is undecided.

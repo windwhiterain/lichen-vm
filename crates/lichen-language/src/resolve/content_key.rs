@@ -206,6 +206,7 @@ impl KeyWriter {
                     crate::ast::BinOp::BitAnd => 11,
                     crate::ast::BinOp::BitOr => 12,
                     crate::ast::BinOp::BitXor => 13,
+                    crate::ast::BinOp::In => 14,
                 });
                 self.expr(left);
                 self.expr(right);
