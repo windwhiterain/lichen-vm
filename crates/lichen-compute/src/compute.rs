@@ -4130,6 +4130,14 @@ fn const_bits(class: ScalarClass, value: i64) -> i64 {
 /// its class; a *computed* node is the one the transfer answers for.  A node
 /// neither states — a bare cell, an undecided operand — is `Int`, the same
 /// default the language's own class-free transfer states.
+/// The class a node's value is, read off the node's own value or low type.
+///
+/// **A parameter leaf is the one node this cannot answer.**  A kernel is lowered
+/// from a template, so the parameter's type cell is an undecided `_` and the
+/// low-type channel below states nothing for it — while the class the value *is*
+/// is the one the ABI typed the slot with (`param_shape`, read by
+/// [`param_leaf_classes`]).  A caller holding the slots must resolve a leaf
+/// through them first; this is the value-channel reading for every other node.
 fn node_class<P>(module: &Module<P>, node: NodeId) -> ScalarClass
 where
     P: Program,
