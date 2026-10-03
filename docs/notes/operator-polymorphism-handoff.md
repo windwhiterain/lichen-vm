@@ -19,8 +19,11 @@ it.
   **prelude** (every program sees its names) — *landed*, with the class
   refinement that made the contract expressible
   ([core-prelude](core-prelude.md) is the module's own note).  The **routing**
-  (R3 → R2/R1) stays in a later workstream because it needs the kernel
-  workstream's specialize-before-JIT pass (§8.4 of the plan note).
+  (R3 → R2/R1) is implemented and withdrawn twice — the first blocker, an apply of a
+  *static* function not instantiating its signature per call, is **fixed and
+  landed** (`6e9c409`); the second is representational, so the recommended form is
+  an expansion of the binding's body rather than a call
+  ([operator-polymorphism](operator-polymorphism.md) §7.1).
 - Commit trail (oldest first): `674d048` operand tie · `9a3983d` the class domain
   as a value + `InDomain` + the condition · `7e33938` kernel-boundary record +
   example declarations · `78fa33e` `@assert` frees `!` · `ec480fc` the
@@ -193,11 +196,12 @@ it.
 | the same `f` alone | — | `raw[?a, ?b] -> raw[?a, ?b]` (an open class is the placeholder's cell pair) |
 | `x : (Int ! in_num)`; `g 7` | — | `7: Int` (a concrete class prints clean) |
 | `x : (string ! in_num)`; `g "a"` | — | refused: `assertion failed: expected 1, found 0` |
-| the prelude, no import at all: `(add 1 2, add 1.5 2.5, sub 5 3, mul 2 3, div 7 2, less 1 2, greater 2 1, less_or_equal 2 2, greater_or_equal 1 2)` | — | `(3, 4.0, 2, 6, 3, 1, 1, 1, 0): <Int, Float, Int, Int, Int, Int, Int, Int, Int>` |
+| the prelude, no import at all: `(add [1, 2], add [1.5, 2.5], sub [5, 3], mul [2, 3], div [7, 2], less [1, 2], greater [2, 1], less_or_equal [2, 2], greater_or_equal [1, 2])` | — | `(3, 4.0, 2, 6, 3, 1, 1, 1, 0): <Int, Float, Int, Int, Int, Int, Int, Int, Int>` (each binding takes the operand group: the array's homogeneity is the operand tie, its length the arity) |
+| `add [1, 1.5]` (the tie) and `add [1, 2, 3]` (the arity) | — | refused: `expected Int, found Float`, and `expected array<…, 2>, found array<Int, 3>` |
 | `(Num, in_num Int, in_num Float, in_num string)` | — | `(set{Int, Float}, 1, 1, 0)` |
-| `core.add 1 2` | — | `3: Int` (the module value is reachable too) |
+| `core.add [1, 2]` | — | `3: Int` (the module value is reachable too) |
 | `add = x => y => 99; add 1 2` | — | `99: Int` (the prelude is shadowed) |
-| `add "a" "b"` through the prelude | — | refused, and attributed: three diagnostics pointing into the built-in's own file (`…/builtin/core.lichen:3:24`, `:3:42` for the two class refinements, `:3:55` for the builtin's domain assert) |
+| `add ["a", "b"]` through the prelude | — | refused, and attributed: two diagnostics pointing into the built-in's own file (`…/builtin/core.lichen:3:39` for the element's refinement, `:3:56` for the body's `+`) |
 
 Two mechanism facts that came out of measuring, and both are load-bearing:
 
@@ -270,12 +274,16 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
    - the **call site**: the diagnostic names the built-in's line, not the
      application that failed it (`AssertError` records its template, not the
      apply that cloned it).
-2. **Phase 3, Stage 3 — the routing (R3 → R2/R1), a later workstream.**  The
-   leaf-selection dispatch, the split leaves, and the surface operator resolving
-   to the `core` binding.  It needs the kernel workstream's
-   specialize-before-JIT pass first: a kernel body's operator would become an
-   apply of a library dispatch, and the emitter has to recognise that shape and
-   fold it back to `KernelBin` (§7 of the plan note, §8.4 of the design record).
+2. **Phase 3, Stage 3 — the routing (R3 → R2/R1): implemented, withdrawn, with a
+   recommended form.**  The surface operator resolving to the `core` binding was
+   measured on top of the static-signature instantiation fix (`6e9c409`, §7): `1 + 2` = `3`, `1 + 1.5` refused by the
+   contract's tie, `f = x => x + x` polymorphic — but as a *call* it moves the
+   `raw` mark into values and editor snapshots (the binding's operand-group element
+   is the placeholder's `[class, kind]` pair), and a kernel body cannot compile it
+   at all (`static refs are not kernel-compilable v1`).  Recommended instead:
+   expand *the binding's body* at the call site, which keeps the builtin operator
+   in the caller's body and was measured kernel-clean
+   ([operator-polymorphism](operator-polymorphism.md) §7.1).
 3. **The read's monomorphism is off the contract's path, and stays a separate
    fix.**  `in_num = v => type_of v @in Num` is monomorphic (measured: `(in_num 1,
    in_num 1.5)` refused with `expected Int, found Float`) — which is why the class
@@ -353,6 +361,19 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
   still gets positions.  Doctrine to keep: the record holds *positions*, not
   checker facts, so the domain spelling and the call site are still the other
   module's (and the document's) business.
+- **A static apply's residual clones must carry the caller's owner tag.**  An
+  imported (frozen) function's residual clone was created unowned, so a caller
+  applied again could not re-instantiate the type cell that ended up in *its*
+  template: the class became module-global and the first call bound it for good
+  (`f = x => add [x, x]` then `(f 1, f 1.5)` refused with `expected Int, found
+  Float`, while the *same* apply at the top level was fine).  Fixed in
+  `crates/lichen-lowlevel/src/static_module/apply.rs` by tagging the residual clone
+  with the apply node's enclosing template (`StaticApplyCtx::tag`); a `baked` clone
+  stays untagged so a concrete leaf keeps its fast path.  The trap to keep: the
+  defect needs the checker's definition pass — it is what writes the residual's
+  *type* value into the caller's template — and the fix rests on `evaluated_deep ==
+  None` reading as parameterized in `node_apply`; if `None` ever reads as concrete,
+  an untagged residual is referenced in place again and the bug returns silently.
 - **`@in`'s left operand must stay unconstrained.**  Pinning it to the set's
   element cell (or to `Type`) looks like a better diagnostic and is a trap: a
   membership test that a *refinement* uses is applied to a parameter whose class
