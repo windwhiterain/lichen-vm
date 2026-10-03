@@ -1,9 +1,12 @@
 # One channel for a class's value and its low type
 
-> Status: **§2 refuted by measurement** (below), §3 still open and now specified
-> more sharply, §4 waits on §3, §5 is the structural change that would delete the
-> need for both.  §1 is the incoherence as first read; §2 records what the
-> measurement says that first reading got wrong.
+> Status: **§2 refuted by measurement**, and **§3 has no receiver on the run side**
+> (§3 below, two independent blockers).  What is left is §5, which therefore comes
+> first: it is the only place a result's type can be stated, and the two red
+> targets the operator-polymorphism branch recorded
+> (`operator-polymorphism.md` §8.4) are its acceptance.  §4 then lands on top of
+> it.  §1 is the incoherence as first read; §2 and §3 record what measurement says
+> that first reading got wrong.
 > Worktree `.worktrees/kernel-param-struct`, branch `feature/kernel-param-struct`.
 > Companions: [compute-runtime-scalars](compute-runtime-scalars.md) (the measured
 > case that exposed this — its §4.4 is the symptom, this note is the fix),
@@ -108,55 +111,77 @@ can be routed to it — but only once §3 has made a run state one, and only as 
 *class* (a scalar answer), never as a type.  That reader-side routing is therefore
 part of §3's landing, not a step of its own.
 
-## 3. Half two — the decider states the fact, in both vocabularies
+## 3. Half two — the decider states the fact, and where that is not possible today
 
 **What**: the layer that decided a class states it on the class, instead of
-leaving it to a deferral's side effect.  §2's measurement splits the one action
-into the two statements the two readers need.
+leaving it to a deferral's side effect.  Two measurements say the statement has no
+receiver on the *run* side, and that a low type would not be enough if it had one.
 
-- **Where the parallel run decides it**: `ComputeOperator::ParLaunch`'s arm
-  (`compute.rs:1329`ff) builds the result values (bare `Buffer` /
-  `DeviceBuffer`, or a tuple of them); each carries its element `class`.
-- **A class reader needs the low type**:
-  `seed_class_low_type(node, low_shape_of(element_class))` — what the value's
-  class *is*, readable by anything that asks a class question.
-- **The printer needs the value**, and this is the part the earlier plan got
-  wrong: `type_printer::node` (`crates/lichen-render/src/render/type_printer.rs:62`)
-  renders an unbound cell as its `class_name`, and **the printer never consults
-  low types at all**.  So `array<Int, ?b>` is a claim about the element cell's
-  *class value*, and only a value write through the choke-point
-  (`Module::write_node_value`, `equality.rs:258`) can state it: the type value
-  `Int` (the `[int, K]` node the checker's own `int_type` is) written into the
-  result's element cell.  A seed alone changes what a *compiler* sees and nothing
-  about what a program prints.
-- **Where the scalar path decides it**: `kernel_results_value`
-  (`compute.rs:6195`) already creates a node per scalar result; the same two
-  statements belong there for the multi-result form.
-- **The rule to state in the doc comment**: a run that decided a class declares it,
-  in the vocabulary each reader asks in — the low type for a class question, the
-  value for a type question.  A reader must never have to hope a pending read sits
-  in the same class.  The existing seeding discipline is the precedent:
-  `compile_parallel_fragment` seeds the parameter slot (`compute.rs:2361`),
-  `seed_template_term_low_types` seeds the template's decided terms.
-- `low_shape_of` (`compute.rs`, the inverse of `scalar_class_of`) already exists
-  for the class → shape step; the type value for a class is the checker's own
-  `int_type`/`float_type` and must be reachable from the module at run time
-  (open question: the arm holds `module`, not `ctx`).
-- The reader-side routing §2 could not justify on its own — `names_float_class`
-  and the conversion gate — lands here, where a run has actually stated a class;
-  it is added **only** as a class question (`class_scalar_of_slot`-style, scalar
-  answers only), never as a type read.
+**(i) The run cannot name the type cell.**  `NativeOp` has exactly one method,
+`build` (`native.rs:55-65`), and the run half is
+`OperatorExt::run(operand, _block, module)` (`program.rs:830-835`) — an arm
+receives the *evaluated* operand array and no node id for its own expression.
+`ParLaunchOp::build` creates `out_ty` (`compute.rs:8676`) and references it only
+from the pair `[op, out_ty]`; nothing at run time can name that cell, so
+"`seed_class_low_type(node, …)` at the `ParLaunch` arm" has no `node` to receive
+it.  The one node the arm *does* create for a several-output result
+(`compute.rs:1467`) is the buffer **value**, and the observation sites derive
+nothing from it (`observed_low_shape`, `equality.rs:1190`: a `Buffer` is not a
+`LowValue`).
 
-**Acceptance**: the GPU chain test's collected array is `array<Int, ?d>` again with
-the **struct/tuple** argument spelling (i.e. without the array's homogeneity), and
-the single-kernel `collect` probe becomes decided too.  That second one is the
-cleaner assertion: today it is undecided even with the array API.
+**(ii) A low-type seed cannot change the printed type.**  The failing reader here
+is the printer, and `type_printer::node` (`type_printer.rs:62-79`) renders a cell
+that holds no value as its **class name** (`class_name` keys on
+`representative`) and never consults low types.  `array<?a, ?b>` →
+`array<Int, ?b>` therefore requires the element cell's **class to hold the `Int`
+type value** — a `write_node_value`, not a seed.  This is §2's lesson applied to
+§3: the reader asks for a value.
+
+**What today's `array<Int, ?d>` actually is** (measured on a "cpu" probe pair,
+scratch files, deleted):
+
+| spelling | printed |
+|---|---|
+| a two-kernel chain with the reads **and** the collect in one tuple | `(20, 22, 24, [20, 22, 24]): <?a, ?b, ?c, array<Int, ?d>>` |
+| the same chain, `collect` alone | `[10, 11, 12]: array<?a, ?b>` |
+
+The `Int` exists only where a *consumer's array literal* is present, and the
+printer renders it at a node created during that consumer's check — the array
+literal's homogeneity puts the buffer's type cell and the ordinal's `Int` type
+cell in one class, and the deferral's `pin_committed_value` then replicates that
+committed type value into the element cell.  Read strictly, the `Int` printed
+there may be the **ordinal's** type rather than the buffer element's, which is
+exactly "accidental rather than stated".  So the struct-argument migration does
+not lose an answer when it prints `array<?d, ?e>`; it removes a coincidence, and
+the decided answer it needs is the one §5 states.
+
+**Where a statement is possible today**: only where types are stated — a
+`build` with concrete argument types and a `ctx`, i.e. **after** the signature is
+concrete.  That is §5, and it is why §5 now comes first.
+
+**The remaining specification, for whoever lands it** (either as §5 or, if the
+extension-private operand route is taken, in `ParLaunchOp::build`):
+
+- the fact for a class reader is `seed_class_low_type(node, low_shape_of(class))`;
+  the fact for the printer is the **type value** for that class written through
+  `Module::write_node_value` (`equality.rs:273`), into the element cell of the
+  result's type rather than into the result's type cell (its class holds
+  `[element, BufferKind]`, so writing the element type there would conflict);
+- a canonical type value is needed at that point (`Int`/`Float`), and one is
+  reachable from `ctx` (`ctx.int_type()`) but **not** from a `Module` at run time:
+  the compute extension never touches `HighGlobal`, and the universe
+  `K = [Type, ↺]` is self-referential so `alloc_array` cannot build one;
+- `kernel_results_value` (`compute.rs:6200`) needs none of this for the scalar
+  form: `add_node` already observes `USize`/`Float` from the scalar value
+  (`observed_low_shape`), which is why a scalar result's class is stated today.
 
 ## 4. The carrier: the struct-argument migration
 
-The migration that exposed all of this, and the reason to do §2/§3 now: replacing
+The migration that exposed all of this, and the reason to do §5 now: replacing
 the raw array arguments of `compute.read`/`compute.write` with struct instances
-(approved direction, explicit constructors).
+(approved direction, explicit constructors — and the construction site is worth
+trying with `_` in place of the explicit `(Read _)`, since each site would then
+get its own inferred type rather than sharing one lambda application).
 
 **The recipe, verified** ([compute-runtime-scalars](compute-runtime-scalars.md)
 §4.3): the types must be **lambdas**, because a type *value* has one occurrence
@@ -174,15 +199,17 @@ with call sites `compute.read ((compute.Read _)(.from buf, .at i))` and
 213 scripted call sites give **57 of 58** `--test compute` green, the frozen-module
 panic gone and the `raw[…]` field-type leak gone (fields render concretely).
 
-**Order**: §3 → this.  §2 is refuted, so §3 is the first landed step, and §3 is
-what should turn the 57 into 58; if it does not, the remaining difference is a
-second commit path and belongs back in §1's terms.
+**Order**: §5 → this.  The one remaining failure after the migration is the
+element cell that §3 could not state (§3 above) and that §5 states, so the
+migration's 57 becomes 58 with §5, not before it — and until then the honest
+answer for the struct spelling is `array<?d, ?e>`, which is *more* correct than
+the array spelling's accidental `Int`.
 
 **Not to forget**: the migration touches `crates/lichen-language/tests/*`,
 `crates/lichen-language/examples/*`, and the docs' code blocks; the script must
 handle nested occurrences innermost-first (`compute.write [a, b, compute.read [c, d]]`).
 
-## 5. The structural removal this makes unnecessary
+## 5. The structural removal, and why it is now the first step
 
 `ParLaunchOp::build` (`compute.rs:8623`, `out_ty` at `:8676`) leaves the result
 type a **fresh cell**, and its own doc says why:
@@ -192,15 +219,19 @@ type a **fresh cell**, and its own doc says why:
 > the arity cannot be read here: `build` runs once, on the frozen `plrun` template,
 > where `.sig` is an unbound cell that only resolves at run time."
 
-So the class of a `plrun` result is knowable only at run time — which is *why* §3
-exists at all.  If the signature were concrete **before** `build` runs, the result
-type would be stated where types are stated, and the fresh cell, the deferral
-side-effect dependency, and §3's run-time statement would all be unnecessary
-rather than merely fixed.  That is the specialize-before-JIT direction
+§3 established that the run cannot repair that cell afterwards, so the cell has to
+stop being late: **the signature must be concrete before `build` runs**.  Then the
+result type is stated where types are stated, with a `ctx` in hand (so the
+canonical `Int`/`Float` type value is reachable, which it is not from a `Module`),
+and the fresh cell, the deferral side-effect dependency, and any run-time
+statement all become unnecessary rather than merely fixed.  That is the
+specialize-before-JIT direction
 ([kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) §6,
-[compute-param-struct-handoff](compute-param-struct-handoff.md) §7), and it is why
-§3 is worth doing as a *step*: it is the honest state of the model while the
-signature is late, and it is the check that tells us when it has arrived.
+[compute-param-struct-handoff](compute-param-struct-handoff.md) §7,
+[operator-polymorphism](operator-polymorphism.md) §8.4 — which records this as
+another workstream and names the two red targets), and it also carries the class
+domain that workstream put in the graph as a *value*: that domain is what types
+the placeholder the specialization applies the kernel to.
 
 ## 6. How to verify, at each step
 
@@ -211,11 +242,20 @@ cargo test -q -p lichen-language --test compute --test pipeline --test graph_jit
   --test graph_structure --test examples --test defer_pending
 ```
 
-The probes that pin the remaining half (scratch files, not committed):
+§5's own acceptance is the two targets
+[operator-polymorphism](operator-polymorphism.md) §8.4 recorded as red:
 
-- **§3's own assertion**: a single-kernel `plrun` + `collect` must print
-  `array<Int, ?b>` — today it prints `array<?a, ?b>` on the array API and on every
-  other spelling.
+- `a_kernel_value_and_type_render_by_name` (`crates/lichen-language/tests/compute.rs:466`)
+  — `.sig ?c -> ?c` must become `.sig Int -> Int`;
+- `an_imported_package_that_jits_at_its_top_level_still_runs`
+  (`crates/lichen-language/tests/runtime_only_package.rs:41`) — the `launch` gate
+  must resolve the domain of an open `.sig`.
+
+The probes that pin the rest (scratch files, not committed):
+
+- **§5's own probe** (the decided element cell, stated where types are stated): a
+  single-kernel `plrun` + `collect` must print `array<Int, ?b>`; today it prints
+  `array<?a, ?b>` on the array API and on every other spelling.
 - **§4's assertion**: `a_gpu_program_chains_two_kernels_on_a_device`
   (`crates/lichen-language/tests/compute.rs:1308-1345`) must keep its
   `array<Int, ?d>` with the struct spelling.
