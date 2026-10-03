@@ -12,7 +12,7 @@ use crate::ir::ExprId;
 use crate::program::{HighProgram, TypeOperator, ValueType};
 use crate::shape;
 
-use super::{ApplyEdge, Binding, Checker};
+use super::{ApplyEdge, Binding, Checker, LoopSite};
 
 impl<P: HighProgram> Checker<P>
 where
@@ -315,6 +315,23 @@ where
                 apply_expr: e,
             },
         );
+        // A call that **enters** a `@loop`-marked cycle is where the trip
+        // count is decided, and so where a loop would be recorded.  Recorded
+        // for every entering call, whoever makes it; the cycle's own recursive
+        // step is not one, because its argument is the next state and is
+        // undecided for every trip count.  Whether this one's state is decided
+        // is read after the definition pass (see
+        // `Checker::report_open_loop_sites`); here it is only classified.
+        if let Some(cycle) = self.loop_cycle_entered(function)
+            && !self.loop_cycles.inside_cycle.contains(&e)
+        {
+            self.loop_sites.push(LoopSite {
+                cycle,
+                node,
+                argument_value,
+                loc: self.loc(e, 0),
+            });
+        }
         self.state[e].term = Some(node);
         self.state[e].val = None;
         self.state[e].ty = Some(c);

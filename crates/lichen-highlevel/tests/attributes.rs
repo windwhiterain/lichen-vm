@@ -122,6 +122,7 @@ fn an_annotated_parameter_without_an_attribute_extension_is_reported_once() {
             parameter_attribute: Some(declared),
             r#return: x,
             parent: None,
+            looping: false,
         },
     );
     let five = ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(5))));

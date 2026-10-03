@@ -1,21 +1,5 @@
 # Loop conversion: compiling a marked recursive function into a loop nest
 
-> Status: **in progress.** The design below is settled, and the parts [§8.2](#82-landed-on-dev)
-> lists are landed on `dev` — the `KernelBody` IR with `Flow::Seq`, the validator,
-> the `@loop` keyword, the wasm emitter, and the depth refusal. **The conversion
-> itself is not written.** Three of [§8.3](#83-known-broken-and-by-whom)'s items are now
-> **closed** — the `passed_out` contract, a loop body that can compute its state and
-> reach the backedge (`Terminator::Jump`, and a validator that lets a body name the
-> loop's landmarks), and the graph-dispatch item — and the wasm `While` fix is
-> **withdrawn**: serving a loop in wasm goes through **`waffle`**, which owns the
-> slot-first pipeline ([wasm-control-flow](wasm-control-flow.md) §5), and until its
-> control-flow step lands the backend refuses a loop **by name** rather than
-> mis-compiling one. `feature/waffle-spike` has lowered every non-looping kernel
-> body through `waffle` already; what is missing is `If`/`Jump`/`While`
-> ([wasm-backend-handoff](wasm-backend-handoff.md) §3.2).
-> [§8.4](#84-unmerged-branches-and-exactly-what-each-needs) is what the two unmerged
-> branches need, and [§8.5](#85-the-critical-path-to-the-acceptance-case) is the
-> critical path to the acceptance case.
 >
 > **Four decisions are closed** and are not to be re-opened without a new
 > reason: the **surface** is a `loop` keyword on the function; the **scope** is
@@ -107,6 +91,12 @@ would otherwise have expanded:
 So the keyword is not "compile this to a loop"; it is "this recursion is allowed
 to need one". The last row is the only new capability, and it is the row the two
 ceilings above live in.
+
+**The last row is the row Stage 2 fills; today it is a refusal.** What has landed
+is everything the row *except* the loop: the marker is read, the call that would
+carry the count is found, and a count the evaluator cannot decide is refused **by
+name** — see [§8](#8-the-order-of-the-work) for what "decide" reads at this
+stage and for the conservative edge that costs.
 
 **And this is why the conversion belongs in evaluation, not in the emitter.** An
 earlier draft put it in `lichen-compute`, at the `Style 1` seam, as a separate
@@ -335,6 +325,7 @@ a change to one program. A silent fallback cannot offer either.
 > against `dev` at the merge of `fix/adds-cfg-pos`. Read this section first; the
 > rest of the note is the design and is not a description of the code.
 
+<<<<<<< HEAD
 ### 8.1 What is settled, and one thing that was settled wrong
 
 The **four decisions** hold: `@loop` is the surface; scope is tail-recursive
@@ -508,6 +499,47 @@ list now turns on:**
 **Do not start 3 before 1.** Doing SPIR-V first against a contract that is already
 known to be wrong is how the `br_if` bug above came about, and it is the one
 mistake this section exists to prevent.
+=======
+- **The IR** — `KernelBody` with structured transfers over the same pure stack
+  machine, and a validator that a backend calls before it reads one. A label
+  defined twice, arrived at but never defined, or shared as two loops' exit is
+  refused, and a loop's declared header must be the entry of the block holding
+  it — which is what makes a zero-trip loop correct rather than a dropped
+  branch.
+- **The wasm backend** — it walks the structure and emits it. An `if` frame is
+  the join, a `while` is a `loop` wrapped in a `block` (so its two exits agree),
+  and a loop-carried value is a local, because a `br` to a loop label takes no
+  operands. The straight-line path is byte-identical to `dev`.
+- **The `@loop` keyword** — through the lexer, parser, AST and frontend, with
+  `@` reserved as the sigil so the next keyword is free. The absence of it is
+  still the unroll, and that is unchanged.
+- **The evaluator's reading of the marker** — the mark reaches the highlevel IR
+  as `ExprKind::Function`'s `looping`, the checker finds the marked functions
+  that are **on a cycle**, and every call that **enters** one becomes a
+  *loop site* (`lichen-highlevel/src/checker/loops.rs`). Its argument is the
+  state the trip count is read from, so a site whose state the module has not
+  decided is refused by name — `DiagKind::LoopNotRecorded` — instead of
+  reaching a backend as a node nothing can name. The refusal is issued between
+  the definition pass and the statement pass, so the opaque emitter complaint
+  it replaces is never produced.
+
+Not written: the loop the marker currently refuses to record (Stage 2), and the
+SPIR-V emitter (Stage 1c). The SPIR-V half is where the `single-`invariant
+actually has to be replaced, and it is the largest single piece left.
+
+**What "decidable" means at this stage, and what it costs.** A site's trip
+count counts as decided when the whole of its argument is a **decided value**
+in the module the checker built — an array counts as decided only when every
+element is. That is the same fact the unroll depends on (§1), so a decided
+state is expanded before the check ever runs and a marked recursion the
+unroll handles is never refused. It is deliberately **coarser** than the count
+alone: `sum_to (3, i)` has a decided count and a run-time accumulator, and
+this test refuses it. Separating the count from the rest of a state is
+step 2 of [§3](#3-the-shape-of-the-transformation) — the defunctionalisation —
+and until it exists the checker can only read the state whole. The failure is
+a *refusal*, never a silent fallback, so the conservative edge costs a program
+one diagnostic rather than a miscompile.
+>>>>>>> a709c2d (eval: the `@loop` marker's first effect is a refusal that names itself)
 
 **Stage 0 — the `loop` keyword and the evaluator's choice.** The surface lands
 first, and it is the smallest thing that can be observed working: a `loop` keyword

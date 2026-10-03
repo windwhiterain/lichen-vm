@@ -167,10 +167,11 @@ compute.collect (compute.plrun p (4,))
 
 /// The same, with the trip count the **kernel's own count** — a runtime value.
 /// This is the case §4.1 says is refused, and `loop` is supposed to be worse,
-/// not better: `n` is not decided when the body is lowered.
+/// not better: `n` is not decided when the body is lowered.  The `@loop` mark
+/// is what makes the refusal name itself.
 const LOOP_RUNTIME_COUNT: &str = r#"
 --- compute = import "compute.lichen" ---
-loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
+@loop loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
 inc = x => x + 1
 p = compute.parallel (cfg => {
   n = cfg(0)
@@ -178,6 +179,37 @@ p = compute.parallel (cfg => {
   compute.write ((compute.Write _)(.to n, .at i, .value loop inc n i))
 }) "BACKEND"
 compute.read ((compute.Read _)(.from compute.plrun p (4,), .at 3))
+"#;
+
+/// The same, `@loop`-marked, with the trip count a **literal** — the marker as
+/// permission rather than a command.  This is the control for the row above:
+/// the marker must not turn a recursion the unroll already handles into a
+/// refusal.
+const LOOP_RUNTIME_COUNT_MARKED_DECIDABLE: &str = r#"
+--- compute = import "compute.lichen" ---
+@loop loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
+inc = x => x + 1
+p = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, loop inc 3 i]
+}) "BACKEND"
+compute.read [compute.plrun p (4,), 3]
+"#;
+
+/// A `@loop`-marked recursion whose trip count is **decided** and whose whole
+/// state is decided too — the shape the unroll handles, marked.  This is the
+/// row that must keep answering, and the proof that the marker is permission
+/// and not a command.
+const RECURSIVE_LITERAL_MARKED: &str = r#"
+--- compute = import "compute.lichen" ---
+@loop steps = k => if k == 0 then 0 else steps (k - 1) + 1
+p = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, steps 4 + compute.range n * 0]
+}) "BACKEND"
+compute.read [compute.plrun p (8,), 3]
 "#;
 
 /// Two-stage **curried** recursion — `sum_to (n - 1) (x + 1)` is *two*
@@ -315,7 +347,7 @@ const RECURSIVE_INLINE: &str = r#"
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  count_up = s => k => if k == 0 then s else count_up (s + 1) (k - 1)
+  @loop count_up = s => k => if k == 0 then s else count_up (s + 1) (k - 1)
   compute.write ((compute.Write _)(.to n, .at i, .value count_up 0 i))
 }) "BACKEND"
 compute.read ((compute.Read _)(.from compute.plrun p (8,), .at 3))
@@ -376,6 +408,10 @@ fn main() {
         probe(
             "loop, trip count = the kernel count",
             &LOOP_RUNTIME_COUNT.replace("BACKEND", backend),
+        );
+        probe(
+            "loop marked, decidable trip count",
+            &LOOP_RUNTIME_COUNT_MARKED_DECIDABLE.replace("BACKEND", backend),
         );
         probe(
             "two-stage curried recursion",
@@ -442,6 +478,10 @@ fn main() {
         probe(
             "recursive helper, literal count",
             &RECURSIVE_LITERAL.replace("BACKEND", backend),
+        );
+        probe(
+            "the same, @loop-marked",
+            &RECURSIVE_LITERAL_MARKED.replace("BACKEND", backend),
         );
         probe(
             "body-local helper in a body",

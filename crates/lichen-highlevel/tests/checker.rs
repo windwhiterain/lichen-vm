@@ -65,6 +65,7 @@ fn lam_at_typed(
         parameter_attribute: None,
         r#return: body,
         parent,
+        looping: false,
     })
 }
 /// A lambda nested inside another that is **not allocated yet**: reserves the
@@ -87,6 +88,7 @@ fn lam_nested(
             parameter_attribute: None,
             r#return: inner,
             parent: None,
+            looping: false,
         },
     );
     (reserved, inner)
@@ -672,6 +674,7 @@ fn let_bound_functions_are_polymorphic() {
             parameter_attribute: None,
             r#return: inner,
             parent: None,
+            looping: false,
         },
     );
     let whole = app(&mut ir, outer_lam, id);
@@ -2486,6 +2489,7 @@ fn countdown(argument: u64) -> (ExprId, IR) {
             parameter_attribute: None,
             r#return: body,
             parent: None,
+            looping: false,
         },
     );
     let argument = int(&mut ir, argument);
