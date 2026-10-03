@@ -1111,6 +1111,28 @@ fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
 }
 
 #[test]
+fn two_written_struct_declarations_are_two_nominal_types() {
+    // The other control the fix must keep, and the one a *derived* type rests
+    // on: a struct's identity is its **occurrence**, so two `struct<.n Int>`
+    // written apart are two declarations however equal their fields — nominal
+    // typing is what the id is for.  The control above pins the other
+    // direction (one occurrence, different field types); this one pins the
+    // case a fix that interned by field list would collapse, which would
+    // equally make every derived type equal to every written one that happened
+    // to match (`docs/notes/applied-struct-nominal-id.md` §2).
+    let d = diags(
+        "S1 = struct<.n Int>\n\
+         S2 = struct<.n Int>\n\
+         x = S1(.n 3)\n\
+         y = (x : S2)\n\
+         y",
+    );
+    assert_eq!(d.len(), 1, "two occurrences must not unify: {d:?}");
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::Annotation);
+}
+
+#[test]
 fn a_named_struct_field_read_resolves_to_the_positional_index() {
     // `A = struct<.x Int, .y Type>` carries a name→index table; `a.x`
     // reads field `x` (index 0), `a.y` field `y` (index 1).
