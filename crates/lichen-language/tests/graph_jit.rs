@@ -192,14 +192,14 @@ const KERNELS: &str = r#"
 f1 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 10]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
 }
 k1 = compute.parallel f1 "gpu"
 f2 = cfg => {
   n = cfg(0)
   i = compute.range n
-  a = compute.read [cfg(1)(0), i]
-  compute.write [n, i, a + a]
+  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value a + a))
 }
 k2 = compute.parallel f2 "gpu"
 "#;
@@ -420,7 +420,7 @@ compute.collect (compute.graphrun built (3,))
 ---
 {KERNELS}
 step = ins => {{
-  at_zero = compute.read (compute.plrun k1 (ins(0),), 0)
+  at_zero = compute.read ((compute.Read _)(.from compute.plrun k1 (ins(0),), .at 0))
   compute.plrun k2 (at_zero, (compute.plrun k1 (ins(0),),))
 }}
 built = compute.graph step
@@ -512,14 +512,14 @@ fn one_backend_for_the_whole_graph_is_checked_while_it_is_built() {
 f1 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i]
+  compute.write ((compute.Write _)(.to n, .at i, .value i))
 }
 k1 = compute.parallel f1 "gpu"
 f2 = cfg => {
   n = cfg(0)
   i = compute.range n
-  a = compute.read [cfg(1)(0), i]
-  compute.write [n, i, a]
+  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value a))
 }
 k2 = compute.parallel f2 "cpu"
 step = ins => {
@@ -638,14 +638,14 @@ fn a_graph_recorded_for_one_backend_runs_on_another() {
 f1 = cfg => {{
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 10]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
 }}
 k1 = compute.parallel f1 "{backend}"
 f2 = cfg => {{
   n = cfg(0)
   i = compute.range n
-  a = compute.read [cfg(1)(0), i]
-  compute.write [n, i, a + a]
+  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value a + a))
 }}
 k2 = compute.parallel f2 "{backend}"
 step = ins => {{

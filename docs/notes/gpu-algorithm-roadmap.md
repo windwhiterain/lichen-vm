@@ -132,7 +132,7 @@ square = x => x * x
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, square (i + 1)]
+  compute.write ((compute.Write _)(.to n, .at i, .value square (i + 1)))
 }) "gpu"
 -- [1, 4, 9, 16]
 ```
@@ -650,7 +650,7 @@ instead of worked around.
 
 **A decided non-buffer was answered `parameterized` — fixed.**
 `compute.read`, `compute.collect` and a launch's `cfg(1)` all took the lazy
-fallback for a value that was not a buffer, so `compute.read [data, i]` on a
+fallback for a value that was not a buffer, so `compute.read ((compute.Read _)(.from data, .at i))` on a
 plain array ran to completion, printed `parameterized`, and still showed the
 type `array<?a, ?b>`. The fallback is right for an *undecided* value and wrong
 for a decided one; all three refuse by name now.

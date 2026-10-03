@@ -138,7 +138,7 @@ test, e.g. `a_body_may_compute_in_one_class_and_cross`:
 - jit half (CPU): `compute.jit (x : Int => int2float (x + 1))`, launch `5`,
   expect `"6.0: Float"`.
 - parallel half (both backends, via `answer_from_each_backend` like its
-  neighbours): `compute.write [n, i, float2int (int2float i + 0.5)]` — every
+  neighbours): `compute.write ((compute.Write _)(.to n, .at i, .value float2int (int2float i + 0.5)))` — every
   element comes back equal to its index, and `gpu == cpu`. This half exercises
   float arithmetic **inside an int module** on the GPU, which is what work
   item 3.1/3.2 buys.
@@ -253,7 +253,7 @@ acceptance list of §8 is green with them: `lichen-compute` 17, `lichen-kernel-i
 `--test examples` 1.
 
 **The parallel half of the new test is the case §3.1/§3.2 exists for, and it runs
-on the device**: `compute.write [n, i, float2int (int2float i + 0.5)]` over
+on the device**: `compute.write ((compute.Write _)(.to n, .at i, .value float2int (int2float i + 0.5)))` over
 `LOCAL_SIZE_X + 5` elements is an *integer* fragment that computes in `Float`, so
 its SPIR-V module holds both element types at once — and every element comes back
 equal to its index, `gpu == cpu`. The module was also read back with

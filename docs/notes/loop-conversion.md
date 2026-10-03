@@ -400,7 +400,7 @@ not a compile-time constant:
 
 ```lichen
 --- compute = import "compute.lichen" ---
-loop sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + compute.read [buf, s(0) - 1])
+loop sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + compute.read ((compute.Read _)(.from buf, .at s(0) - 1)))
 p = compute.parallel (cfg => { ... sum_to (cfg(0), 0) ... }) "BACKEND"
 ```
 

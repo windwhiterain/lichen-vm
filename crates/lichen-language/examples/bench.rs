@@ -25,19 +25,19 @@ const ONE: &str = r#"
 mk = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i % 97]
+  compute.write ((compute.Write _)(.to n, .at i, .value i % 97))
 }
 kx = compute.parallel mk "BACKEND"
 x = compute.plrun kx (COUNT,)
 axpy = cfg => {
   n = cfg(0)
   i = compute.range n
-  xv = compute.read [cfg(1)(0), i]
-  compute.write [n, i, 3 * xv]
+  xv = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value 3 * xv))
 }
 ka = compute.parallel axpy "BACKEND"
 out = compute.plrun ka (COUNT, (x,))
-compute.read [out, COUNT / 2]
+compute.read ((compute.Read _)(.from out, .at COUNT / 2))
 "#;
 
 /// The same input, then sixteen dependent links recorded as one `compute.graph`.
@@ -46,20 +46,20 @@ const CHAIN: &str = r#"
 mk = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i % 97]
+  compute.write ((compute.Write _)(.to n, .at i, .value i % 97))
 }
 kx = compute.parallel mk "BACKEND"
 k1 = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  v = compute.read [cfg(1)(0), i]
-  compute.write [n, i, v + 1]
+  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value v + 1))
 }) "BACKEND"
 k2 = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  v = compute.read [cfg(1)(0), i]
-  compute.write [n, i, v + v]
+  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value v + v))
 }) "BACKEND"
 grow = ins => {
   a = compute.plrun k1 (ins(0), (ins(1),))
@@ -81,7 +81,7 @@ grow = ins => {
 }
 built = compute.graph grow
 seed = compute.plrun kx (COUNT,)
-compute.read [compute.graphrun built (COUNT, seed), COUNT / 2]
+compute.read ((compute.Read _)(.from compute.graphrun built (COUNT, seed), .at COUNT / 2))
 "#;
 
 fn timed(template: &str, backend: &str, count: usize, repeats: usize) -> Result<f64, String> {

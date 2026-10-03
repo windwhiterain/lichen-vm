@@ -20,16 +20,16 @@ const PLAIN: &str = r#"
 k = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  v = compute.read [cfg(1)(0), i]
-  compute.write [n, i, v + 1]
+  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value v + 1))
 }) "BACKEND"
 seed = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i]
+  compute.write ((compute.Write _)(.to n, .at i, .value i))
 }) "BACKEND"
 s = compute.plrun seed (4,)
-compute.read [compute.plrun k (4, (s,)), 2]
+compute.read ((compute.Read _)(.from compute.plrun k (4, (s,)), .at 2))
 "#;
 
 /// The same `v + 1` body, twice over, recorded as a graph.
@@ -38,18 +38,18 @@ const GRAPHED: &str = r#"
 k = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  v = compute.read [cfg(1)(0), i]
-  compute.write [n, i, v + 1]
+  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value v + 1))
 }) "BACKEND"
 seed = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i]
+  compute.write ((compute.Write _)(.to n, .at i, .value i))
 }) "BACKEND"
 grow = ins => compute.plrun k (ins(0), (ins(1),))
 built = compute.graph grow
 s = compute.plrun seed (4,)
-compute.read [compute.graphrun built (4, s), 2]
+compute.read ((compute.Read _)(.from compute.graphrun built (4, s), .at 2))
 "#;
 
 /// The bench's 16-link chain, verbatim, which is the shape that broke.
@@ -58,20 +58,20 @@ const CHAIN: &str = r#"
 mk = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i % 97]
+  compute.write ((compute.Write _)(.to n, .at i, .value i % 97))
 }
 kx = compute.parallel mk "BACKEND"
 k1 = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  v = compute.read [cfg(1)(0), i]
-  compute.write [n, i, v + 1]
+  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value v + 1))
 }) "BACKEND"
 k2 = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  v = compute.read [cfg(1)(0), i]
-  compute.write [n, i, v + v]
+  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value v + v))
 }) "BACKEND"
 grow = ins => {
   a = compute.plrun k1 (ins(0), (ins(1),))
@@ -81,7 +81,7 @@ grow = ins => {
 }
 built = compute.graph grow
 seed = compute.plrun kx (4,)
-compute.read [compute.graphrun built (4, seed), 1]
+compute.read ((compute.Read _)(.from compute.graphrun built (4, seed), .at 1))
 "#;
 
 fn probe(label: &str, template: &str, backend: &str) {

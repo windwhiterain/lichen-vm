@@ -22,7 +22,7 @@ const PROGRAMS: &[(&str, &str)] = &[
 f = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, 7]
+  compute.write ((compute.Write _)(.to n, .at i, .value 7))
 }
 k = compute.parallel f "BACKEND"
 b = compute.plrun k (8,)
@@ -36,7 +36,7 @@ compute.collect b
 mk = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 1]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 1))
 }
 kx = compute.parallel mk "BACKEND"
 x = compute.plrun kx (8,)
@@ -45,9 +45,9 @@ y = compute.plrun ky (8,)
 axpy = cfg => {
   n = cfg(0)
   i = compute.range n
-  xv = compute.read [cfg(1)(0), i]
-  yv = compute.read [cfg(1)(1), i]
-  compute.write [n, i, 3 * xv + yv]
+  xv = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  yv = compute.read ((compute.Read _)(.from cfg(1)(1), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value 3 * xv + yv))
 }
 ka = compute.parallel axpy "BACKEND"
 out = compute.plrun ka (8, (x, y))
@@ -61,15 +61,15 @@ compute.collect out
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i]
+  compute.write ((compute.Write _)(.to n, .at i, .value i))
 }
 k0 = compute.parallel n0 "BACKEND"
 src = compute.plrun k0 (8,)
 tr = cfg => {
   n = cfg(0)
   i = compute.range n
-  v = compute.read [cfg(1)(0), i % 4]
-  compute.write [n, i, v]
+  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i % 4))
+  compute.write ((compute.Write _)(.to n, .at i, .value v))
 }
 kt = compute.parallel tr "BACKEND"
 out = compute.plrun kt (8, (src,))
@@ -83,7 +83,7 @@ compute.collect out
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, 1]
+  compute.write ((compute.Write _)(.to n, .at i, .value 1))
 }
 k0 = compute.parallel n0 "BACKEND"
 src = compute.plrun k0 (8,)
@@ -91,8 +91,8 @@ st = cfg => {
   n = cfg(0)
   i = compute.range n
   left = if i == 0 then 0 else i - 1
-  v = compute.read [cfg(1)(0), left]
-  compute.write [n, i, v]
+  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at left))
+  compute.write ((compute.Write _)(.to n, .at i, .value v))
 }
 ks = compute.parallel st "BACKEND"
 out = compute.plrun ks (8, (src,))
@@ -106,7 +106,7 @@ compute.collect out
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, 1]
+  compute.write ((compute.Write _)(.to n, .at i, .value 1))
 }
 k0 = compute.parallel n0 "BACKEND"
 src = compute.plrun k0 (8,)
@@ -114,8 +114,8 @@ st = cfg => {
   n = cfg(0)
   i = compute.range n
   j = i - (i == 0) * i
-  v = compute.read [cfg(1)(0), j]
-  compute.write [n, i, v]
+  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at j))
+  compute.write ((compute.Write _)(.to n, .at i, .value v))
 }
 ks = compute.parallel st "BACKEND"
 out = compute.plrun ks (8, (src,))
@@ -129,22 +129,22 @@ compute.collect out
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, 1]
+  compute.write ((compute.Write _)(.to n, .at i, .value 1))
 }
 k0 = compute.parallel n0 "BACKEND"
 src = compute.plrun k0 (4,)
 dot = cfg => {
   n = cfg(0)
   i = compute.range n
-  a = compute.read [cfg(1)(0), 0]
-  b = compute.read [cfg(1)(0), 1]
-  c = compute.read [cfg(1)(0), 2]
-  d = compute.read [cfg(1)(0), 3]
-  compute.write [n, i, a * a + b * b + c * c + d * d]
+  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at 0))
+  b = compute.read ((compute.Read _)(.from cfg(1)(0), .at 1))
+  c = compute.read ((compute.Read _)(.from cfg(1)(0), .at 2))
+  d = compute.read ((compute.Read _)(.from cfg(1)(0), .at 3))
+  compute.write ((compute.Write _)(.to n, .at i, .value a * a + b * b + c * c + d * d))
 }
 kd = compute.parallel dot "BACKEND"
 out = compute.plrun kd (1, (src,))
-compute.read [out, 0]
+compute.read ((compute.Read _)(.from out, .at 0))
 "#,
     ),
     (
@@ -154,7 +154,7 @@ compute.read [out, 0]
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 1]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 1))
 }
 k0 = compute.parallel n0 "BACKEND"
 src = compute.plrun k0 (4,)
@@ -163,14 +163,14 @@ mm = cfg => {
   i = compute.range n
   row = i / 2
   col = i % 2
-  a00 = compute.read [cfg(1)(0), 0]
-  a01 = compute.read [cfg(1)(0), 1]
-  a10 = compute.read [cfg(1)(0), 2]
-  a11 = compute.read [cfg(1)(0), 3]
-  b0 = compute.read [cfg(1)(1), col * 2 + 0]
-  b1 = compute.read [cfg(1)(1), col * 2 + 1]
-  (compute.write [n, i, a00 * b0 + a01 * b1],
-   compute.write [n, i, a10 * b0 + a11 * b1])
+  a00 = compute.read ((compute.Read _)(.from cfg(1)(0), .at 0))
+  a01 = compute.read ((compute.Read _)(.from cfg(1)(0), .at 1))
+  a10 = compute.read ((compute.Read _)(.from cfg(1)(0), .at 2))
+  a11 = compute.read ((compute.Read _)(.from cfg(1)(0), .at 3))
+  b0 = compute.read ((compute.Read _)(.from cfg(1)(1), .at col * 2 + 0))
+  b1 = compute.read ((compute.Read _)(.from cfg(1)(1), .at col * 2 + 1))
+  (compute.write ((compute.Write _)(.to n, .at i, .value a00 * b0 + a01 * b1)),
+   compute.write ((compute.Write _)(.to n, .at i, .value a10 * b0 + a11 * b1)))
 }
 km = compute.parallel mm "BACKEND"
 outs = compute.plrun km (4, (src, src))
@@ -184,19 +184,19 @@ outs = compute.plrun km (4, (src, src))
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, 1]
+  compute.write ((compute.Write _)(.to n, .at i, .value 1))
 }
 k0 = compute.parallel n0 "BACKEND"
 src = compute.plrun k0 (8,)
 red = cfg => {
   n = cfg(0)
   i = compute.range n
-  a = compute.read [cfg(1)(0), i]
-  compute.write [n, i, a + 1]
+  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value a + 1))
 }
 kr = compute.parallel red "BACKEND"
 out = compute.plrun kr (8, (src,))
-compute.read [out, 3]
+compute.read ((compute.Read _)(.from out, .at 3))
 "#,
     ),
     (
@@ -206,20 +206,20 @@ compute.read [out, 3]
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, 2]
+  compute.write ((compute.Write _)(.to n, .at i, .value 2))
 }
 k0 = compute.parallel n0 "BACKEND"
 src = compute.plrun k0 (8,)
 mix = cfg => {
   n = cfg(0)
   i = compute.range n
-  a = compute.read [cfg(1)(0), i]
-  b = compute.read [cfg(1)(0), i - i]
-  compute.write [n, i, a + b]
+  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  b = compute.read ((compute.Read _)(.from cfg(1)(0), .at i - i))
+  compute.write ((compute.Write _)(.to n, .at i, .value a + b))
 }
 km = compute.parallel mix "BACKEND"
 out = compute.plrun km (8, (src,))
-compute.read [out, 3]
+compute.read ((compute.Read _)(.from out, .at 3))
 "#,
     ),
     (
@@ -229,23 +229,23 @@ compute.read [out, 3]
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, 1]
+  compute.write ((compute.Write _)(.to n, .at i, .value 1))
 }
 k0 = compute.parallel n0 "BACKEND"
 a = compute.plrun k0 (16,)
 pair = cfg => {
   n = cfg(0)
   i = compute.range n
-  x = compute.read [cfg(1)(0), i * 2]
-  y = compute.read [cfg(1)(0), i * 2 + 1]
-  compute.write [n, i, x + y]
+  x = compute.read ((compute.Read _)(.from cfg(1)(0), .at i * 2))
+  y = compute.read ((compute.Read _)(.from cfg(1)(0), .at i * 2 + 1))
+  compute.write ((compute.Write _)(.to n, .at i, .value x + y))
 }
 kp = compute.parallel pair "BACKEND"
 b = compute.plrun kp (8, (a,))
 c = compute.plrun kp (4, (b,))
 d = compute.plrun kp (2, (c,))
 e = compute.plrun kp (1, (d,))
-compute.read [e, 0]
+compute.read ((compute.Read _)(.from e, .at 0))
 "#,
     ),
     (
@@ -255,18 +255,18 @@ compute.read [e, 0]
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, 1]
+  compute.write ((compute.Write _)(.to n, .at i, .value 1))
 }
 k0 = compute.parallel n0 "BACKEND"
 src = compute.plrun k0 (4,)
 scan = cfg => {
   n = cfg(0)
   i = compute.range n
-  a = compute.read [cfg(1)(0), 0]
-  b = compute.read [cfg(1)(0), 1]
-  c = compute.read [cfg(1)(0), 2]
-  d = compute.read [cfg(1)(0), 3]
-  compute.write [n, i, a + b + c + d]
+  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at 0))
+  b = compute.read ((compute.Read _)(.from cfg(1)(0), .at 1))
+  c = compute.read ((compute.Read _)(.from cfg(1)(0), .at 2))
+  d = compute.read ((compute.Read _)(.from cfg(1)(0), .at 3))
+  compute.write ((compute.Write _)(.to n, .at i, .value a + b + c + d))
 }
 ks = compute.parallel scan "BACKEND"
 out = compute.plrun ks (4, (src,))
@@ -280,15 +280,15 @@ compute.collect out
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 1]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 1))
 }
 k0 = compute.parallel n0 "BACKEND"
 src = compute.plrun k0 (4,)
 oob = cfg => {
   n = cfg(0)
   i = compute.range n
-  v = compute.read [cfg(1)(0), 4]
-  compute.write [n, i, v]
+  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at 4))
+  compute.write ((compute.Write _)(.to n, .at i, .value v))
 }
 ko = compute.parallel oob "BACKEND"
 out = compute.plrun ko (2, (src,))
@@ -302,15 +302,15 @@ compute.collect out
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 1]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 1))
 }
 k0 = compute.parallel n0 "BACKEND"
 src = compute.plrun k0 (4,)
 sc = cfg => {
   n = cfg(0)
   i = compute.range n
-  v = compute.read [cfg(1)(0), i]
-  compute.write [n, i, v * cfg(2)]
+  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value v * cfg(2)))
 }
 ks = compute.parallel sc "BACKEND"
 out = compute.plrun ks (4, (src, 5))
@@ -325,15 +325,15 @@ helper = compute.jit (v : Int => v * v : Int)
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 1]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 1))
 }
 k0 = compute.parallel n0 "BACKEND"
 src = compute.plrun k0 (8,)
 use = cfg => {
   n = cfg(0)
   i = compute.range n
-  v = compute.read [cfg(1)(0), i]
-  compute.write [n, i, helper.native v]
+  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value helper.native v))
 }
 ku = compute.parallel use "BACKEND"
 out = compute.plrun ku (8, (src,))
@@ -347,19 +347,19 @@ compute.collect out
 n0 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i % 3]
+  compute.write ((compute.Write _)(.to n, .at i, .value i % 3))
 }
 k0 = compute.parallel n0 "BACKEND"
 src = compute.plrun k0 (64,)
 hist = cfg => {
   n = cfg(0)
   i = compute.range n
-  key = compute.read [cfg(1)(0), i]
-  compute.write [3, key, 1]
+  key = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to 3, .at key, .value 1))
 }
 kh = compute.parallel hist "BACKEND"
 out = compute.plrun kh (64, (src,))
-(compute.read [out, 0], compute.read [out, 1], compute.read [out, 2])
+(compute.read ((compute.Read _)(.from out, .at 0)), compute.read ((compute.Read _)(.from out, .at 1)), compute.read ((compute.Read _)(.from out, .at 2)))
 "#,
     ),
     (
@@ -370,8 +370,8 @@ data = [3, 1, 4, 1, 5, 9, 2, 6]
 k = cfg => {
   n = cfg(0)
   i = compute.range n
-  v = compute.read [cfg(1)(0), i]
-  compute.write [n, i, v + 1]
+  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value v + 1))
 }
 kk = compute.parallel k "BACKEND"
 out = compute.plrun kk (8, (data,))
@@ -392,14 +392,14 @@ x + 1
 f1 = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 10]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
 }
 k1 = compute.parallel f1 "BACKEND"
 f2 = cfg => {
   n = cfg(0)
   i = compute.range n
-  a = compute.read [cfg(1)(0), i]
-  compute.write [n, i, a + a]
+  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+  compute.write ((compute.Write _)(.to n, .at i, .value a + a))
 }
 k2 = compute.parallel f2 "BACKEND"
 step = ins => compute.plrun k2 (ins(0), (compute.plrun k1 (ins(0),),))

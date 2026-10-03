@@ -2990,7 +2990,7 @@ k0 = compute.jit (v : Int => v + 1)
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, compute.call k0 i]
+  compute.write ((compute.Write _)(.to n, .at i, .value compute.call k0 i))
 }) "gpu"
 -- compute.parallel: kernel body hits a node with neither value nor operation
    (node=NodeId(394v1))

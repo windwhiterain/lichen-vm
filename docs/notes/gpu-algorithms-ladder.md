@@ -102,7 +102,7 @@ The symptom is worse than a missing feature, because it is **silent**:
 ```lichen
 data = [3, 1, 4, 1, 5, 9, 2, 6]
 k = cfg => { n = cfg(0); i = compute.range n
-             compute.write [n, i, compute.read [cfg(1)(0), i] + 1] }
+             compute.write ((compute.Write _)(.to n, .at i, .value compute.read ((compute.Read _)(.from cfg(1)(0), .at i)) + 1)) }
 out = compute.plrun k (8, (data,))
 compute.collect out
 ```
@@ -142,8 +142,8 @@ a constant; `alpha * xv` with `alpha` a program value does not.
 
 ```lichen
 hist = cfg => { n = cfg(0); i = compute.range n
-                key = compute.read [cfg(1)(0), i]
-                compute.write [3, key, 1] }
+                key = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
+                compute.write ((compute.Write _)(.to 3, .at key, .value 1)) }
 ```
 
 64 elements into 3 buckets answers `(1, 1, 1)` — last writer wins, on **both**
@@ -156,7 +156,7 @@ confirms it is reachable from ordinary-looking code. There are no atomics.
 ### 6. An out-of-range read is undefined, and differs per backend
 
 ```lichen
-v = compute.read [cfg(1)(0), 4]   -- the buffer has four elements
+v = compute.read ((compute.Read _)(.from cfg(1)(0), .at 4))   -- the buffer has four elements
 ```
 
 reads element 4 of a four-element buffer. CPU answers `0`; the GPU answers

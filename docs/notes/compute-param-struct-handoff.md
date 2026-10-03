@@ -16,7 +16,7 @@
 A parallel kernel's parameter is being moved from the positional
 `cfg = (n, (buffers…))` to a named struct, so that
 
-- a read names its buffer (`compute.read [k.in.x, i]`) instead of counting a
+- a read names its buffer (`compute.read ((compute.Read _)(.from k.in.x, .at i))`) instead of counting a
   position, and
 - the kernel can take **runtime scalars** (`k.alpha`) beside its count.
 
@@ -41,7 +41,7 @@ tuple-shaped producer first, so the consumer has a real input buffer.
 g = cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, i + 10]
+  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
 }
 kg = compute.parallel g "cpu"
 inbuf = compute.plrun kg (3,)
@@ -51,12 +51,12 @@ Par = compute.P (compute.KT _)(.I In, .O Out)
 Sig = compute.S (compute.KT _)(.I In, .O Out)
 f = (k : Par) => {
   i = compute.range k.n
-  v = compute.read [k.in.a, i]
-  compute.write [k.out.z, i, v * 2]
+  v = compute.read ((compute.Read _)(.from k.in.a, .at i))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value v * 2))
 }
 k = compute.parallel_sig f "cpu" Sig
 out = compute.plrun k ((compute.A In)(.n 3, .I In(.a inbuf)))
-compute.read [out, 1]
+compute.read ((compute.Read _)(.from out, .at 1))
 ```
 
 `inbuf` is `[10, 11, 12]`, so the answer is `22`.

@@ -213,7 +213,7 @@ language does not cross; this section is about what the crossing cost.
 
 - **The checker unifies only a class the operand already states.** A unify binds
   every cell the operand's class shares, and a body's
-  `compute.write [n, i, int2float i]` is one array literal whose integer
+  `compute.write ((compute.Write _)(.to n, .at i, .value int2float i))` is one array literal whose integer
   positions and float value hold *one* element-type cell: pinning the index here
   would bind the float written beside it and refuse the very program these two
   words exist to write. So an undecided operand stays undecided and

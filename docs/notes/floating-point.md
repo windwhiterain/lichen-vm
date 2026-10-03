@@ -620,7 +620,7 @@ words.
   sides — the language says `Int`, the buffer holds `Float` — and the author's
   fix is the annotation, which is now a **lowering** fact and not only a checker
   one. What did close is the case it used to share a cause with: a **pure
-  forward** (`compute.write [n, i, a]`) now lowers in the body's class and runs
+  forward** (`compute.write ((compute.Write _)(.to n, .at i, .value a))`) now lowers in the body's class and runs
   on both backends, because each template term's type cell is seeded onto the
   low-type channel (see
   [compute-jit-low-types](compute-jit-low-types.md) §"Seed, pass, read").
@@ -634,7 +634,7 @@ which is an `Int`. While `Int` and `Float` had no operator between them, that
 meant **no expression could create a varying float out of the index**, and a
 parallel kernel's float output was either lane-constant or exactly as varying as
 the float buffer it had read. §4.2's `int2float` is the crossing, so the case now
-runs: `compute.write [n, i, int2float i + 0.5]` seeds `[0.5, 1.5, …, 68.5]` and
+runs: `compute.write ((compute.Write _)(.to n, .at i, .value int2float i + 0.5))` seeds `[0.5, 1.5, …, 68.5]` and
 the wasm and the device backends agree element for element, at the same
 `LOCAL_SIZE_X + 5` length the layout tests use. So a parallel kernel's float
 output can now be lane-constant, as varying as a float buffer read, or seeded
