@@ -236,23 +236,35 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
 
 ## 5. Known reds, and whose they are
 
-- `lichen-language`'s `compute`: `a_kernel_value_and_type_render_by_name` — `.sig`
-  renders `?c -> ?c` with a `none` artifact.
-- `lichen-language`'s `runtime_only_package` — `launch`'s signature gate reads
-  the domain lazily out of an open `.sig` and cannot resolve it.
-  Both are **the same missing piece**: a kernel is currently lowered from a
-  *template*, and the specialize-before-JIT pass
-  ([kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) §6) is what
-  fixes it — another workstream, explicitly not this one's.  **The interface is
-  one-way and clean: the class domain this branch puts in the graph as a value is
-  what types that pass's placeholder** ("applied to a placeholder typed by the
-  annotated domain").  Do **not** paper over it by writing a defaulted class into
-  the parameter cell at `jit`: that is both the other workstream's job and
-  unsound, because the cell is shared while the kernel is not
-  (`f = y => y + y; k = compute.jit f; f 1.5` must keep working).
-- `lichen-compute-gpu`'s tests do not compile on `dev` (pre-existing, and
-  `kernel-class-crossing-fixes` §7 says not to repair them here).  Run the
-  workspace with `--exclude lichen-compute-gpu`.
+**None.**  The three items this section used to carry are closed, and the two
+that were this branch's own costs are pinned rather than re-pinned silently
+([operator-polymorphism](operator-polymorphism.md) §7.1):
+
+- `lichen-language`'s `compute` — `a_kernel_value_and_type_render_by_name` (`.sig`
+  rendered `?c -> ?c` with a `none` artifact) and `runtime_only_package`
+  (`launch`'s signature gate could not resolve the domain out of an open `.sig`)
+  are **green**: the class a kernel's operands carry now reaches the read that
+  consumes it (`c44aeb0`, `6be23a8`).
+- The routing's kernel cost is a **named refusal**, not a red test: an operator
+  inside a cross-kernel call's argument or inside `compute.launch`'s argument is
+  refused, and both refusals are pinned in
+  `crates/lichen-language/tests/compute.rs`.
+- `lichen-compute-gpu`'s test targets **compile and run**; the device-backed ones
+  skip by themselves on a machine with no adapter, and a fragment that declares a
+  runtime scalar is refused by name and pinned
+  (`tests/graph_on_device.rs::a_parameter_with_a_runtime_scalar_is_refused_by_name`).
+
+The design constraint behind the second item stands and is the reason the
+refusals are honest: a kernel is lowered from a *template*, and the
+specialize-before-JIT pass
+([kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) §6) is what widens
+what a kernel body may contain — another workstream, explicitly not this one's.
+**The interface is one-way and clean: the class domain this branch puts in the
+graph as a value is what types that pass's placeholder** ("applied to a
+placeholder typed by the annotated domain").  Do **not** paper over it by writing
+a defaulted class into the parameter cell at `jit`: that is both the other
+workstream's job and unsound, because the cell is shared while the kernel is not
+(`f = y => y + y; k = compute.jit f; f 1.5` must keep working).
 
 ## 6. What to do next, in order
 
@@ -280,15 +292,14 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
    only inside the built-in module's own source.  Measured: `1 + 2` = `3`,
    `1 + 1.5` refused by the contract's tie, `f = x => x + x` polymorphic
    (`(2, 3.0)`), `array<Int, add [1, 2]>` = `array<Int, 3>`.  It needed the
-   static-signature instantiation first (`6e9c409`) and it carries three measured
-   costs: a kernel body (`static refs are not kernel-compilable v1` — the kernel
-   workstream's specialize pass, and this apply is the shape it specializes); an
-   open class rendering `raw[?a, ?b]` (the printer's honest mark on the
-   placeholder's pair — the expectations that pinned `?a -> ?a` are
-   printer-dependent tests, being converted separately); and a routed statement's
-   value snapshot reading `None` (the builtin folded it eagerly, a call stays
-   lazy — the body-expansion form recorded in
-   [operator-polymorphism](operator-polymorphism.md) §7.1 is the alternative).
+   static-signature instantiation first (`6e9c409`).  Its three costs are **closed
+   and pinned**: an operator inside a kernel call's argument is refused by name
+   (the kernel workstream's specialize pass widens this, and the apply is the shape
+   it specializes); an open class renders `raw[?a, ?b]`, and the expectations that
+   pinned `?a -> ?a` are now semantic assertions
+   ([operator-polymorphism](operator-polymorphism.md) §7.1 cost 2); and a routed
+   statement's value snapshot reads `None`, which the tests now assert as the
+   approved behaviour, with the body-expansion form recorded as the alternative.
 3. **The read's monomorphism is off the contract's path, and stays a separate
    fix.**  `in_num = v => type_of v @in Num` is monomorphic (measured: `(in_num 1,
    in_num 1.5)` refused with `expected Int, found Float`) — which is why the class

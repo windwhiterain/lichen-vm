@@ -126,14 +126,18 @@ mod op {
     pub const LABEL: u16 = 248;
     pub const RETURN: u16 = 253;
     pub const U_CONVERT: u16 = 113;
-    /// `OpConvertFToU` — the `float2int` crossing: a 32-bit float to the
+    /// `OpConvertFToU` (109) — the `float2int` crossing: a 32-bit float to the
     /// unsigned integer type, truncating toward zero (and undefined outside what
     /// that type holds, which is why the language refuses what the interpreter
     /// can see is out of range).
     pub const CONVERT_F_TO_U: u16 = 109;
-    /// `OpConvertUToF` — the `int2float` crossing.  The **unsigned** source is
-    /// the language's `Int`, so this is the conversion and not `OpConvertSToF`.
-    pub const CONVERT_U_TO_F: u16 = 111;
+    /// `OpConvertUToF` (112) — the `int2float` crossing.  The **unsigned** source
+    /// is the language's `Int`, so this is the conversion and not
+    /// `OpConvertSToF` (111): the two read the same bits and answer different
+    /// numbers past the signed range, so the wrong one is a wrong *answer* rather
+    /// than a failed shape.  The wasm backend's `F32ConvertI64U` is the same
+    /// unsigned reading, and `tests/spirv_validation.rs` pins this opcode.
+    pub const CONVERT_U_TO_F: u16 = 112;
     /// The reinterpretation an integer constant and a float operand meet
     /// through: same width, same bits, no conversion of the value.
     pub const BITCAST: u16 = 124;

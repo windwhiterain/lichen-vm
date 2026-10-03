@@ -190,9 +190,13 @@ both are the reason the record exists:
   `6e9c409` (an apply of a *static* function did not instantiate its signature per
   call, so the first call pinned an open class); what it costs now is measured in
   [operator-polymorphism](operator-polymorphism.md) §7.1.
-- **A kernel body cannot call a binding.**  A routed operator *is* an apply of a
-  static function, and the kernel path refuses it
-  (`compute.jit: static refs are not kernel-compilable v1`), so
-  `examples/compute_jit.lichen` — whose `y + y` is exactly that shape — is red until
-  the kernel workstream's specialize-before-JIT pass folds the apply back to a
-  machine leaf.
+- **A kernel body cannot call a binding *in an argument position*.**  A routed
+  operator *is* an apply of a static function, and a kernel body may use one where
+  it is the body's own result, on a call's result, or inside an inlined helper —
+  but an operator inside a cross-kernel call's argument (`k0 (x + 1)`) or inside
+  `compute.launch`'s argument has no machine node behind it and is **refused by
+  name**, which `crates/lichen-language/tests/compute.rs` pins.  Widening the
+  boundary is the kernel workstream's specialize-before-JIT pass, which folds the
+  apply back to a machine leaf; the shape it specializes is still
+  `Apply(Static(<this module's binding>), [y, y])`
+  ([operator-polymorphism](operator-polymorphism.md) §7.1, cost 1).

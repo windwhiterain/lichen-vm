@@ -1,7 +1,7 @@
 ---
   order = "1"
   math = import "math.lichen"
-  output = "(Function, Function): struct<.double ?a -> ?a, .inc_twice Int -> Int>"
+  output = "(Function, Function): struct<.double raw[?a, ?b] -> raw[?a, ?b], .inc_twice Int -> Int>"
 ---
 double = x => math.add x x
 inc_twice = x => math.succ (math.succ x)

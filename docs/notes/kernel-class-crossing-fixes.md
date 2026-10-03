@@ -2,8 +2,9 @@
 
 > Status: **landed.** All three work items are implemented and the three tests
 > are green, both backends included; §9 records what was measured and the one
-> addition the plan did not name.
-> Worktree: `.worktrees/kernel-param-struct`, branch `feature/kernel-param-struct`.
+> addition the plan did not name, and §10 what the landing on `dev` surfaced.  The
+> worktree and branch this ran on (`feature/kernel-param-struct`) are merged and
+> deleted.
 > Supersedes the diagnosis (not the accessor part) of
 > [type-query-api-proposal](type-query-api-proposal.md) — see §6.
 
@@ -225,9 +226,9 @@ the direction above, both measured on this tree:
 - **Do not build** `TypeRef`, `class_of`, or any new `shape.rs` accessor.
 - **Do not** change `refuse_mixed_classes` / `mixed_classes`: a genuine
   same-operation mix is still refused.
-- **Do not** repair the stale `lichen-compute-gpu` test suite (pre-existing,
-  this branch); only remove the one test named in work item 3. Follow-up:
-  port that suite to the per-value `KernelInstr`.
+- **Do not** re-open the stale `lichen-compute-gpu` test suite question: it is
+  ported to the per-value `KernelInstr` and runs (work item 3's one removal
+  included).
 - **Do not** touch the wasm block-type question (`WasmState.class`) or
   `parallel_sig`'s blocker 2.
 - `cargo fmt` + `cargo fix --allow-dirty` before commit; keep the existing
@@ -322,17 +323,22 @@ Three things the merge surfaced that were not part of the plan, all repaired:
   same hover now renders `?e`..`?h` (and `launch`'s `?n`..`?p`). The letters are
   positional, which
   [checker-encoding-instability](checker-encoding-instability.md) records as an
-  open defect, so the test now pins the property it means — the cells are
-  *named* and shared between `.sig`'s domain and codomain — and says why the
-  letters are what they are.
+  open defect, so the test was updated to pin the property it means — the cells
+  are *named* and shared between `.sig`'s domain and codomain.  That update
+  re-pinned the **new** letters (`?e`..`?h`), so it broke again as soon as two more
+  cells were claimed ahead of them; the assertion now reads the names out and
+  compares the *relation* instead
+  (`crates/lichen-language-server/tests/statement_values.rs`, `type_variables`),
+  which is the property it always meant and is insensitive to the letters.
 
 **Measured on `dev` after the merge.** `cargo check --workspace` is clean but
 for the pre-existing `WasmState.at` warning; `cargo test --workspace --exclude
 lichen-compute-gpu` is green (631 tests across 45 targets, the branch's list of
 §8 included); the emitted integer module still passes `spirv-val --target-env
-vulkan1.1`. The `lichen-compute-gpu` **test** targets are the one thing that does
-not compile (57 + 36 + 19 errors in `gpu_matches_cpu.rs`,
-`spirv_validation.rs`, `refusals.rs`) — now a regression *for `dev`* rather than
-only for the branch, since `dev`'s copies of those files were written against
-the old `KernelInstr`. **Porting them to the per-value IR is the next task**; §7
-already records it.
+vulkan1.1`. The `lichen-compute-gpu` **test** targets did not compile at that
+point (57 + 36 + 19 errors in `gpu_matches_cpu.rs`, `spirv_validation.rs`,
+`refusals.rs`), since `dev`'s copies of those files were written against the old
+`KernelInstr`.  **They are ported and run**: 19 tests across the suite, the
+device-backed ones included (they skip by themselves where no adapter is
+present), and `spirv_validation.rs`'s opcode assertion is the reason
+`spirv::op::CONVERT_U_TO_F` is 112 rather than 111.

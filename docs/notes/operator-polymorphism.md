@@ -4,10 +4,11 @@
 > `@in`, the **class refinement** `x : (_ ! in_num)`, the contract as the
 > built-in [`core`](core-prelude.md) prelude, the static-signature instantiation a
 > frozen module needs, and the **routing** — `+`, `-`, `*`, `/` and the four order
-> comparisons lower onto the prelude's bindings).  What that routing costs — kernel
-> bodies until the kernel workstream's specialize pass, an open class's honest
-> `raw[?a, ?b]` rendering, and a routed statement's missing value snapshot — is
-> measured in §7.1.
+> comparisons lower onto the prelude's bindings).  The routing's three costs —
+> which kernel-body shapes are refused by name, an open class's honest
+> `raw[?a, ?b]` rendering, and a routed statement's missing value snapshot — are
+> measured, closed and pinned in §7.1: **no test on `dev` is red for any of
+> them**.
 >
 > The architecture was settled in discussion before any code: **an operator's
 > contract and its implementation are separate artifacts, and the contract may be
@@ -565,13 +566,14 @@ routing-agnostic: phases 0–2 below land the semantics under R3, and R2/R1 are 
 "operators are library functions" end state whenever the prelude question is
 answered.
 
-### 7.1 Measured: the two things R1 needed, and why it is still withdrawn
+### 7.1 Measured: the two things R1 needed, withdrawn twice, landed as the call form
 
 R1 has been implemented twice — the resolver hands out the prelude's binders and
 the lowering turns a routed `BinOp` into an apply of that binding with the operand
 group `[l, r]` — and **withdrawn twice**, each time for a measured reason that is
-not the routing's syntax.  It is kept as a one-command patch
-(`.scratch-core/routing.patch`) rather than landed.
+not the routing's syntax.  The third attempt is the one that landed: the first
+withdrawal's cause is fixed (`6e9c409`), and the three costs below are each
+refused by name or asserted as the property they were about.
 
 **First withdrawal: it regressed polymorphism.**  `f = x => x + x; (f 1, f 1.5)`
 was `(2, 3.0)` and became `expected Int, found Float` at the second call — and the
@@ -591,7 +593,7 @@ hand-written static function that returns a structure with no operator involved
 failed identically.  That fix stands on its own — it is what makes an apply of *any*
 static function instantiate its signature per call.
 
-**Landed: the routing is the call form**, and it carries three costs.  The resolver
+**Landed: the routing is the call form**, and it carried three costs.  The resolver
 hands out the prelude's binders and the lowering turns a routed `BinOp` into an
 apply of that binding with the operand group `[l, r]` — so the surface operator
 *is* the binding (its contract and its body), and the checker's builtin operator
@@ -602,34 +604,57 @@ expansion terminates).  Measured: `1 + 2` is `3`, `1 + 1.5` is refused by the
 `f = x => x + x; (f 1, f 1.5)` is `(2, 3.0)` — the polymorphism the first
 withdrawal had cost.
 
-What it costs, who owns each, and why the first is not a defect:
+The three costs, and what closed each.  **No test on `dev` is red for any of
+them**: each is either refused by name and pinned, or asserted as the property it
+was always about.
 
-1. **A kernel body cannot call the binding** — `compute.jit: static refs are not
-   kernel-compilable v1`.  This is the kernel workstream's specialize-before-JIT
-   pass, and this shape is *what it was waiting for*: `y + y` now lowers to
-   `Apply(Static(<the prelude's add>), [y, y])`, whose inlined form
-   (`operands = [y, y]; operands[0] + operands[1]`) was measured kernel-clean
-   (`6: Int` inside `compute.jit`).
+1. **A kernel body cannot call the binding.**  `y + y` lowers to
+   `Apply(Static(<the prelude's add>), [y, y])`, which has no machine node behind
+   it, so the shapes that need one *in an argument position* are refused by name
+   and stay refused: an operator inside a cross-kernel call's argument
+   (`k0 (x + 1)`) and one inside `compute.launch`'s argument.  Both refusals are
+   pinned (`jit_an_operator_inside_a_cross_kernel_argument_is_refused`,
+   `jit_an_operator_inside_a_launch_argument_is_refused`,
+   `crates/lichen-language/tests/compute.rs`).  Everything else a kernel body
+   needs works and is pinned green: the operator as the body's own result, one
+   applied to a call's *result* (`k0 x + 1`), a helper's inlined body, and
+   cross-kernel calls whose argument is read directly (`k0 x`, `k0 (x, 1)`,
+   `k0 q`).  `examples/compute_jit.lichen` launches through the wrapper with the
+   parameter read directly.  Widening this is the kernel workstream's
+   specialize-before-JIT pass, and this apply is the shape that pass specializes:
+   its inlined form (`operands = [y, y]; operands[0] + operands[1]`) was measured
+   kernel-clean (`6: Int` inside `compute.jit`).
 2. **An open class renders `raw[?a, ?b]`** — the operator's operand-group element
    is the placeholder's `[class, kind]` pair, so every arithmetic lambda's
-   signature now prints the mark the *refined* form printed all along
+   signature prints the mark the *refined* form printed all along
    (`x : (_ ! in_num)`).  That is the printer's **honest** reading of two cells the
    type chain never explained ([raw-rendering-mark](raw-rendering-mark.md) §2), not
-   a new defect; the expectations that pinned `?a -> ?a` are printer-dependent
-   tests, which are being converted to semantic assertions by a separate piece of
-   work ([tests-do-not-render](tests-do-not-render.md)).
-   The one *real* printer defect this surfaced is fixed: a universe read out of a
-   frozen module (a replica whose tail names the canonical self-loop in the module
-   that wrote it) fell back to `raw[Int, Type]` where `<Int, Int>` was meant
-   (`8805020`).
+   a new defect.  The expectations that pinned `?a -> ?a` are now **semantic**
+   assertions, per [tests-do-not-render](tests-do-not-render.md): the
+   imported-field hover asserts that the two sides are the *same* open cell and
+   that both are named rather than how the pair is spelled
+   (`crates/lichen-language-server/src/analysis.rs`), and the wrapper hover
+   asserts that `.sig`'s domain and codomain are the wrapper's own two cells
+   rather than the letters the checker numbered them
+   ([checker-encoding-instability](checker-encoding-instability.md)).  The two
+   `examples/import/*.lichen` `output =` declarations were re-pinned to the new
+   reading in the same change, because an example's declared output is the
+   language's observable behaviour and it is asserted as such; converting *those*
+   to a semantic form is still the open half the rule records.  The one *real*
+   printer defect this surfaced is fixed: a universe read out of a frozen module
+   (a replica whose tail names the canonical self-loop in the module that wrote
+   it) fell back to `raw[Int, Type]` where `<Int, Int>` was meant (`8805020`).
+   The open class behind the mark is [type-of-in-std](type-of-in-std.md)'s defect.
 3. **A routed statement's concrete value is not in the snapshot** —
    `Doc::statement_values` reports `None` for `y = x + 4` because the builtin
    operator folded it *eagerly* at check time while a call stays lazy (the
    snapshot deliberately never forces a value: a recursive binding must not
    diverge).  The value is still computed at run time; only the static snapshot is
-   lost.  Fixing it without the eager fold is what the *body-expansion* form would
-   do — expand the binding's own body at the call site — which is recorded here as
-   the open alternative, not as the landed shape.
+   lost, and the tests now assert the type-only report rather than the old value
+   (`crates/lichen-language-server/tests/statement_values.rs`).  Fixing it without
+   the eager fold is what the *body-expansion* form would do — expand the binding's
+   own body at the call site — which is recorded here as the open alternative, not
+   as the landed shape.
 
 So the chain's three steps: **static-signature instantiation** (landed,
 `6e9c409`), **the routing** (landed, the call form), **kernel specialize** (the
@@ -753,13 +778,17 @@ kernel workstream's, for cost 1).
      commit to a class takes the set's **first member** — which for
      `set{Int, Float}` is `Int`, the operators' historical default, visible in the
      source.
-8. **The kernel boundary is not this feature's to fix — it is a recorded
-   dependency.**  Making `+` polymorphic leaves a kernel body's class open, and
-   a kernel lowered from a *template* has no class to compile: two targets go red
-   (`a_kernel_value_and_type_render_by_name` renders `.sig ?c -> ?c` with a
-   `none` artifact; `runtime_only_package`'s `launch` gate reads the domain
-   lazily out of an open `.sig` and cannot resolve it).  **The fix is the
-   specialize-before-JIT pass, and it is another workstream**
+8. *(Closed — the two targets are green, and what remains is a recorded
+   dependency.)* **The kernel boundary is not this feature's to fix.**  Making `+`
+   polymorphic left a kernel body's class open, and a kernel lowered from a
+   *template* has no class to compile — which is what made
+   `a_kernel_value_and_type_render_by_name` render `.sig ?c -> ?c` with a `none`
+   artifact and `runtime_only_package`'s `launch` gate unable to resolve the
+   domain.  Both targets are **green**: the class a kernel's operands carry now
+   reaches the read that consumes it (`c44aeb0`, `6be23a8`), and §7.1 cost 1
+   records which operator shapes a kernel body may use and which are refused by
+   name.  What is still owed is the widen-the-boundary work, and it is the
+   specialize-before-JIT pass's
    ([kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) §6: "a kernel
    is never compiled from a template — at `jit`/`parallel` time the function is
    applied to a placeholder typed by the annotated domain, so every term's type
@@ -772,8 +801,9 @@ kernel workstream's, for cost 1).
    workstream's job and unsound (`f = y => y + y; k = jit f; f 1.5` must keep
    working: the cell is shared, the kernel is not).
 
-   A third red target, `examples`, is this feature in public output — two
-   declared signatures become `?a -> ?a` — and is updated in this branch.
+   The `examples` target — this feature in public output — is green too: the
+   declarations the routing changed are re-pinned in the same change, and §7.1
+   cost 2 records why the reading is the printer's honest one.
 
 (Closed since the first draft: the narrowing rule and its `Program` hook, and the
 refinement *record* plus its `Program` hook — §3 rejects the set's type role, and
@@ -828,8 +858,10 @@ than budgeting for it.)
   in the built-in's build) and the **call site** (`AssertError` records the
   template it came from, not the apply that cloned it) —
   [core-prelude](core-prelude.md) §5; the **kernel side of the routing** (a routed
-  operator is an apply of the `core` binding, so a kernel body waits on the kernel
-  workstream's specialize-before-JIT pass to fold it back to a machine leaf — the
-  surface routing itself is landed, §7.1); and the read's monomorphism
+  operator is an apply of the `core` binding, so an operator *inside a kernel
+  call's argument* is refused by name and waits on the kernel workstream's
+  specialize-before-JIT pass to be folded back to a machine leaf — the surface
+  routing itself is landed and the shapes a kernel body may use are listed in
+  §7.1 cost 1); and the read's monomorphism
   ([type-of-in-std](type-of-in-std.md)), which is off the contract's path now that
-  the class refinement needs no read.
+  the class refinement needs no read and is visible as §7.1 cost 2's `raw[?a, ?b]`.
