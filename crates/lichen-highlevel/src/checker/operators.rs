@@ -108,8 +108,15 @@ where
                     // non-numeric use is not refused at all — `run` answers the
                     // lazy marker for a class it cannot compute, so `add "a" "b"`
                     // would yield an undecided value.
+                    //
+                    // The domain is a **set's value**: the members themselves
+                    // ([`crate::set`]), which is exactly what `Num = set{Int,
+                    // Float}` lowers to, so the check reads the same graph a
+                    // library-written contract will.  Its first member is the
+                    // class a reader that must commit picks — `Int` here, the
+                    // operators' historical default.
                     let (int_type, float_type) = (self.int_type, self.float_type);
-                    let domain = crate::class_set::build(self, &[int_type, float_type], int_type);
+                    let domain = self.array_node(self.current_block, &[int_type, float_type]);
                     let operands = self.array_node(self.current_block, &[left_ty, domain]);
                     let condition = self.op_node(
                         self.current_block,

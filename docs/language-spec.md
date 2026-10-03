@@ -67,6 +67,7 @@ primary  := int_literal
           | '(' expr (sep expr)* sep? ')'           -- tuple value (always a Tuple)
           | '[' element (sep element)* ']'          -- array literal
           | 'table' '{' pair (sep pair)* '}'        -- constant table literal
+          | 'set' '{' expr (sep expr)* '}'          -- set value (members are values; the instance is a Set, not an array)
           | '{' block '}'                           -- block: statements, then the block's value (or a struct-returning block)
           | '<' expr (sep expr)+ '>'                -- tuple type  (always TypeTuple; >= 2 elements)
           | 'struct' '<' sfield (sep sfield)* '>'     -- struct type  (nominal, optional field names)
@@ -90,7 +91,7 @@ farg     := '.' name expr                         -- named instantiation argumen
            | expr                                 -- positional argument
 ```
 
-- **Keywords:** `Int`, `Float`, `string`, `Type`, `struct`, `array`, `table`, `let`, `if`, `then`,
+- **Keywords:** `Int`, `Float`, `string`, `Type`, `struct`, `array`, `table`, `set`, `let`, `if`, `then`,
   `else`, `return`, `pub`, `cache`, `int2float`, `float2int`, `=>`, `->`, `:`.  The
   two conversion keywords open a prefix expression and so cannot be used as
   names; the rest are reserved as words.  `=` binds a name in a statement; `#`, `?`,
@@ -121,7 +122,7 @@ farg     := '.' name expr                         -- named instantiation argumen
   as `=>` (`x =>\n  x + 1` is a parse error), and a tuple or array cannot be
   broken across lines without parens.
 - **Names:** lowercase or mixed-case identifiers (`x`, `id`, `n2`).  The keywords
-  (`Int`, `Float`, `string`, `Type`, `struct`, `array`, `table`, `let`, `if`, `then`,
+  (`Int`, `Float`, `string`, `Type`, `struct`, `array`, `table`, `set`, `let`, `if`, `then`,
   `else`, `return`, `pub`) are reserved — they cannot be bound or used
   as names.
 - **The `_` placeholder.**  `_` is an inference placeholder hole in *any*
@@ -209,6 +210,19 @@ farg     := '.' name expr                         -- named instantiation argumen
   of the expression grammar, so it unambiguously separates the pair).
   `table {}` is the empty table.  `t{k}` (a glued `{`) is a table lookup
   returning the entry whose stored key is deep-content-equal to `k`.
+- **Sets.**  `set{a, b, …}` is a set of ordinary values — a *value* form led by a
+  word, exactly like the table literal, because angle brackets are the spelling
+  of an expression in *type* position and a set is not one.  The members are full
+  expressions and share one element type (a set is homogeneous, like an array
+  literal); `set{}` is the empty set.  A set's **value is its members**, and what
+  makes it a set is its **type** — `set<T>`, whose shape is the element type
+  *alone*: a set has no length, so `set{a}` and `set{a, b}` are one type.  That is
+  what separates it from `array<T, n>`: a set is not indexable (`s[i]` is a
+  diagnostic — the container unify refuses it exactly as it refuses `t{k}` on an
+  array) and can never flow into an `array<T, n>` parameter.  A set of *type
+  values* is how a contract names the classes it admits:
+  `Num = set{Int, Float}` ([operator-polymorphism](notes/operator-polymorphism.md)
+  §3).
 - **Shallow markers.**  Inside an array literal, an element may be prefixed
   with `~` (`~e`, `~2 e`): a *shallow* marker that keeps the value slot at
   each of the first `n` levels of the element's type spine shallow (a bare
@@ -292,9 +306,9 @@ delimiter is a fresh atom — an argument of an application:
   e.g. the annotation `x :(Int, Type)` — a tuple *value* of the type-values
   `Int` and `Type` (a tuple type is `x : <Int, Type>`).
 - `t{k}` (glued `{`) is a table lookup; `t {k}` (spaced `{`) applies `t` to
-  `{k}`.  A table literal (`table{…}`) and a struct type (`struct<…>`) and an
-  array type (`array<…>`) are *keyword-led*, so their delimiter sits directly
-  after the keyword.
+  `{k}`.  A table literal (`table{…}`), a set value (`set{…}`), a struct type
+  (`struct<…>`) and an array type (`array<…>`) are *keyword-led*, so their
+  delimiter sits directly after the keyword.
 
 ### 2.2 The `---...---` preprocessor block
 

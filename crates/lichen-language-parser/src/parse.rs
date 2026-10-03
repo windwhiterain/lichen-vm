@@ -990,6 +990,7 @@ fn starts_an_expression(kind: &TokenKind) -> bool {
             | TokenKind::KwType
             | TokenKind::KwStruct
             | TokenKind::KwTable
+            | TokenKind::KwSet
             | TokenKind::KwIf
             | TokenKind::KwArray
             | TokenKind::KwAssert
@@ -1075,6 +1076,7 @@ fn atom_parser<'a>(
             paren(tokens, expr.clone()),
             array_literal(tokens, expr.clone()),
             table_literal(tokens, expr.clone()),
+            set_literal(tokens, expr.clone()),
             block(tokens, expr.clone()),
             angle_tuple(tokens, expr.clone()),
             struct_type(tokens, expr.clone()),
@@ -1391,6 +1393,23 @@ fn table_literal<'a>(
         .ignore_then(comma_list(entry))
         .then_ignore(token(TokenKind::RBrace))
         .map_with(|(entries, _), me| Expr::Table(entries, span_at(tokens, me.span().start)))
+}
+
+/// `set{a, b, …}` — a set of ordinary values.  The form is keyword-led in
+/// *value* position, exactly like `table{…}`: angle brackets are the spelling
+/// of an expression in type position, and a set is not one.  The members are
+/// full expressions, comma-separated with a tolerated trailing comma;
+/// `set{}` is the empty set.
+fn set_literal<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    token(TokenKind::KwSet)
+        .ignore_then(token(TokenKind::Glue).ignored().or_not())
+        .ignore_then(token(TokenKind::LBrace))
+        .ignore_then(comma_list(expr))
+        .then_ignore(token(TokenKind::RBrace))
+        .map_with(|(members, _), me| Expr::Set(members, span_at(tokens, me.span().start)))
 }
 
 /// An array element with an optional `~` prefix: `~ e`, `~2 e`, or a plain

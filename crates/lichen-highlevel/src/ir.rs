@@ -444,6 +444,14 @@ pub enum ExprKind<L> {
     /// (unlike a [`Self::Tuple`]'s per-element slots).  Elements stored in
     /// [`IR::children`].
     Array(ChildRange),
+    /// A set `set{a, b, …}` — every member shares one type (a set is
+    /// homogeneous, like an [`Self::Array`]), but the instance is typed by the
+    /// set kind, not by `array<T, n>`: the *value* is the members themselves
+    /// and the set's identity is its type.  That is what keeps a set out of
+    /// array indexing, and it is why no value-level tag is needed
+    /// (`docs/notes/operator-polymorphism.md` §3).  Members in
+    /// [`IR::children`].
+    Set(ChildRange),
     /// A constant table instance `table { k1 ==> v1, k2 ==> v2, … }` — every
     /// key shares one key type and every value one value type (checked
     /// against two shared cells, like an array's single element cell).  The
@@ -525,6 +533,7 @@ impl<L> ExprKind<L> {
             | ExprKind::TypeTuple(_)
             | ExprKind::TypeStruct { .. }
             | ExprKind::Array(_)
+            | ExprKind::Set(_)
             | ExprKind::Table(_)
             | ExprKind::ShallowArray { .. }
             | ExprKind::NativeCall { .. } => {}
@@ -735,6 +744,12 @@ impl<A: AttrSpec, L> IR<A, L> {
 
     pub fn alloc_array(&mut self, elements: &[ExprId]) -> ExprId {
         self.alloc_variadic(elements, ExprKind::Array)
+    }
+
+    /// Allocate a set literal: the members are variadic children like an
+    /// array's elements; the kind alone decides the type the checker gives it.
+    pub fn alloc_set(&mut self, members: &[ExprId]) -> ExprId {
+        self.alloc_variadic(members, ExprKind::Set)
     }
 
     /// Allocate a constant table literal: each `(key, value)` pair is

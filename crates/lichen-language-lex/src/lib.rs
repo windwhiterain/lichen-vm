@@ -90,6 +90,11 @@ pub enum TokenKind {
     KwStruct,
     /// The table keyword -- a constant table literal.
     KwTable,
+    /// The set keyword -- a set value, `set{a, b}`, and the set type a reader
+    /// sees for one.  A set's members are ordinary values, so the form is a
+    /// value form led by a word, exactly like `table{…}`: angle brackets stay
+    /// the spelling of an expression in *type* position, and a set is not one.
+    KwSet,
     /// The let keyword -- a restrictive binding.
     KwLet,
     /// The if keyword -- a conditional expression.
@@ -229,6 +234,7 @@ impl TokenKind {
             TokenKind::KwType => "'Type'".to_string(),
             TokenKind::KwStruct => "'struct'".to_string(),
             TokenKind::KwTable => "'table'".to_string(),
+            TokenKind::KwSet => "'set'".to_string(),
             TokenKind::KwLet => "'let'".to_string(),
             TokenKind::KwIf => "'if'".to_string(),
             TokenKind::KwThen => "'then'".to_string(),
@@ -340,6 +346,8 @@ enum RawToken {
     KwStruct,
     #[token("table")]
     KwTable,
+    #[token("set")]
+    KwSet,
     #[token("let")]
     KwLet,
     #[token("if")]
@@ -810,6 +818,7 @@ fn raw_to_kind(
             "Type" => TokenKind::KwType,
             "struct" => TokenKind::KwStruct,
             "table" => TokenKind::KwTable,
+            "set" => TokenKind::KwSet,
             "let" => TokenKind::KwLet,
             "if" => TokenKind::KwIf,
             "then" => TokenKind::KwThen,
@@ -854,6 +863,7 @@ fn raw_to_kind(
         RawToken::KwType => Some(TokenKind::KwType),
         RawToken::KwStruct => Some(TokenKind::KwStruct),
         RawToken::KwTable => Some(TokenKind::KwTable),
+        RawToken::KwSet => Some(TokenKind::KwSet),
         RawToken::KwLet => Some(TokenKind::KwLet),
         RawToken::KwIf => Some(TokenKind::KwIf),
         RawToken::KwThen => Some(TokenKind::KwThen),

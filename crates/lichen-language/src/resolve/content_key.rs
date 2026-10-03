@@ -10,7 +10,7 @@ use super::*;
 /// bump invalidates every cached key, so every [`crate::session::BufferSession`]
 /// rebuilds on its next compile.  That is the intended answer — a stale key
 /// must never be silently reusable.
-const KEY_FORMAT_VERSION: u64 = 4;
+const KEY_FORMAT_VERSION: u64 = 5;
 
 /// The **resolved content key** of a resolved program: an exact, digest-free
 /// serialization of the name-resolved, beyond-error structure that the lowering
@@ -326,6 +326,13 @@ impl KeyWriter {
                 self.u(elems.len() as u64);
                 for el in elems {
                     self.expr(el);
+                }
+            }
+            Expr::Set(members, _) => {
+                self.u(35);
+                self.u(members.len() as u64);
+                for member in members {
+                    self.expr(member);
                 }
             }
             Expr::StructType(fields, _) => {
