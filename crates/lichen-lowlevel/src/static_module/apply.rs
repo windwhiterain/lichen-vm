@@ -29,6 +29,7 @@ impl<P: Program> Module<P> {
                 applied: function.index,
                 parameter,
                 branch_top: None,
+                tag: module.nodes[node].function,
             };
             let applied = module.static_node_apply(r#return, &mut ctx);
             // The parameter is an entry point of the walk, not just a node the
@@ -101,6 +102,16 @@ impl<P: Program> Module<P> {
         let clone = self.add_node(ctx.target, None, None);
         ctx.remap.insert(local, clone);
         if parameterized {
+            // The residual clone joins the template of the code that performed
+            // the apply, exactly as a dynamic apply's clones do: a residual the
+            // apply materialized may end up inside a *value* of the caller's
+            // template (an open parameter's type, for instance), and only a
+            // template member is re-instantiated by a later clone of that
+            // caller.  An unowned residual is referenced in place forever, so
+            // the first call's argument binds its cell for every later call.
+            // A baked clone (the `else` arm) is final per call and stays
+            // unowned, so a genuinely concrete leaf keeps its fast path.
+            self.nodes[clone].function = ctx.tag;
             // Residual: the operation (if any) is kept with its operand
             // walked — the computation re-runs against the argument — and a
             // stale cached value on an operation node is dropped (it was
@@ -388,8 +399,9 @@ fn static_function_captures<P: Program>(
 /// its dynamic clone), the static function being applied (its own value
 /// node is the recursion self-reference and must stay baked, while any
 /// *other* same-module function value that captures the applied parameter
-/// is re-homed as a dynamic closure), and the applied function's parameter
-/// node (the capture that must bind to the argument).
+/// is re-homed as a dynamic closure), the applied function's parameter
+/// node (the capture that must bind to the argument), and the owner tag the
+/// residual clones carry.
 struct StaticApplyCtx<P: Program> {
     target: BlockId,
     module: Arc<StaticModule<P>>,
@@ -412,4 +424,10 @@ struct StaticApplyCtx<P: Program> {
     /// reading the *outer* apply's generation of a capture cell — a cell
     /// the outer apply's own unify bound only a clone of.
     branch_top: Option<FunctionId>,
+    /// The owner tag stamped on the residual clones this pass creates — the
+    /// enclosing template of the code that performed the apply (`Node::function`
+    /// of the apply node), the static mirror of the dynamic path's
+    /// `ApplyCtx::tag`.  [`None`] for an apply at the top level.  A baked clone
+    /// is not tagged: it is final per call and is referenced in place.
+    tag: Option<FunctionId>,
 }

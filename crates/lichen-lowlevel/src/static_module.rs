@@ -17,9 +17,11 @@
 //!   dynamic clones: baked (concrete) nodes become leaves holding the shared
 //!   value, residual nodes keep their operations with remapped
 //!   operands so the parameter-dependent spine re-runs against the argument;
-//!   static function values are always baked (frozen templates).  The apply
-//!   tail (parameter unify, `ApplyError`, cell wiring) is shared with
-//!   [`Module::function_apply`] in `apply.rs`.
+//!   static function values are always baked (frozen templates).  A residual
+//!   clone carries the enclosing template's owner tag, so a caller applied
+//!   again re-instantiates it; a baked clone stays unowned and is referenced
+//!   in place.  The apply tail (parameter unify, `ApplyError`, cell wiring) is
+//!   shared with [`Module::function_apply`] in `apply.rs`.
 
 use std::collections::{HashMap, HashSet};
 use std::ptr;
