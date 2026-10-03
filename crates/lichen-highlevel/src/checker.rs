@@ -47,7 +47,7 @@ use lichen_utils::extend::AsEnum;
 use stacksafe::stacksafe;
 
 use crate::attr::{AttrExtRegistry, AttrSet};
-use crate::diagnostic::{DiagKind, DiaryEntry};
+use crate::diagnostic::{AssertSpelling, DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ChildRange, ConvOp, ExprId, ExprKind, IR, Loc};
 use crate::native::{NativeArg, NativeOps, no_native_ops};
 use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
@@ -254,6 +254,11 @@ where
     /// layer renders only these as `DiagKind::Assert`; a bounds guard fires
     /// a separate `EvalError::Index`, so rendering both would double report.
     user_asserts: HashSet<NodeId>,
+    /// How a failed assert of each registered condition should read — keyed by
+    /// the **template** condition, so a per-call failure (recorded against the
+    /// template) is spelled by the registration that created it.  Absent means
+    /// the channel's generic wording.
+    assert_spellings: HashMap<NodeId, AssertSpelling>,
     /// The value node of **every** lambda in the program, collected by
     /// [`Checker::check_lam`].  [`Checker::build`] deep-evaluates all of
     /// them before the definition pass (proving them concrete), so a
@@ -454,6 +459,10 @@ where
     pub node_edges: HashMap<NodeId, Loc>,
     /// The user-facing assert condition nodes (see [`Checker::user_asserts`]).
     pub user_asserts: HashSet<NodeId>,
+    /// How a failed assert of each registered condition should read — see
+    /// [AssertSpelling].  Keyed by the **template** condition, which is what a
+    /// per-call failure records.
+    pub assert_spellings: HashMap<NodeId, AssertSpelling>,
     /// The top-level statements the definition pass found non-terminating (see
     /// [`Checker::nonterminating`]) — the source-blind locations of the
     /// user-written bindings the build reports as non-termination errors.
@@ -616,6 +625,7 @@ where
             apply_edges: HashMap::new(),
             node_edges: HashMap::new(),
             user_asserts: HashSet::new(),
+            assert_spellings: HashMap::new(),
             lambda_value_nodes: Vec::new(),
             nonterminating: Vec::new(),
             force_failed: false,
@@ -807,6 +817,7 @@ where
             apply_edges: checker.apply_edges,
             node_edges: checker.node_edges,
             user_asserts: checker.user_asserts,
+            assert_spellings: checker.assert_spellings,
             nonterminating: checker.nonterminating,
             ok,
         }

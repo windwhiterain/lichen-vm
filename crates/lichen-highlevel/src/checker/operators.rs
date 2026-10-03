@@ -116,7 +116,12 @@ where
                         P::Operator::from(TypeOperator::InDomain),
                         Some(operands),
                     );
-                    self.register_assert(condition, self.loc(e, 1), true);
+                    self.register_assert(
+                        condition,
+                        self.loc(e, 1),
+                        true,
+                        AssertSpelling::Refinement { domain },
+                    );
                 }
             }
         }

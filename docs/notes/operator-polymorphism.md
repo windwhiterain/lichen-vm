@@ -475,12 +475,26 @@ answered.
    is the same channel `f = x => x + 1; f Type` already uses, so it is the
    language's existing answer to a per-call mismatch, but it is a visible change
    of diagnostic kind and position.
-5. **The refinement's diagnostic flavour.** A refinement's assert must not read
-   as `assert failed`; it is a contract failure and should name the domain. The
-   lowlevel's `AssertError` carries `{condition, template, value}` and the
-   checker already keeps `user_asserts` to tell an explicit `assert` from a
-   generated guard — so a refinement is a third flavour on that same
-   discrimination, and the wording lands in the language layer.
+5. *(Closed — **landed**.)* **The refinement's diagnostic flavour.**  A
+   refinement's failure no longer reads as `assert failed`.  The assert channel
+   keeps its one shape, because an explicit `@assert e` means exactly that, so
+   the *registration* now says how a failure reads:
+   [`AssertSpelling`](../../crates/lichen-highlevel/src/diagnostic.rs) is
+   `Condition` (an explicit assert, or a generated guard) or
+   `Refinement { domain }`; it is keyed by the **template** condition, which is
+   what a per-call failure records.  `Diag` carries the domain as
+   `refinement_domain`, and
+   [`crates/lichen-language/src/render.rs`](../../crates/lichen-language/src/render.rs)
+   spells it in place of the generic wording — the domain is a class-set value,
+   so the type printer's own `{Int, Float}` arm renders it.  Measured:
+   `add "a" "b"` reports `does not satisfy {Int, Float}` at the operator.
+
+   A refinement a **user** wrote still reads generically
+   (`assertion failed: expected 1, found 0`), and that is not a gap: its
+   predicate consults whatever it likes — `in_num` reads a set, `v => v > 3`
+   reads a literal — so there is no domain to name.  Naming one is something
+   only the *registrar* can do, which is why the spelling travels with the
+   registration rather than being inferred at render time.
 6. **One constraint slot per expression, at apply time — a pre-existing limit,
    now reachable.**  `Checker::check_ann` records a single `state[e].attr` (the
    last constraint attribute in canonical order) and `check_app`/`check_lam`
@@ -531,19 +545,13 @@ than budgeting for it.)
   registered by `check_binop` through `register_assert`.  Measured: no existing
   test regressed, and `add "a" "b"` went from *accepted* to refused.
 - **Phase 1 — the contract on the builtin operators.** The operand tie, the
-  domain condition, the `!` surface spelling and the **refinement attribute**
-  itself are landed; the assert is inserted through the new
-  [`AttrExt::constraint`](../../crates/lichen-highlevel/src/attr.rs), so the
-  checker stays attribute-agnostic and the enforcement is the ordinary assert
-  channel.  A **parameter** refinement (`x ! p => e`) is desugared to a body
-  statement rather than an IR parameter field — the general form, which needs no
-  new field and gets per-application re-checking for free.  Measured:
-  `f = x : Int ! (v => v > 3) => x` yields `f 5` as `5: Int` and refuses `f 2`
-  with `expected 1, found 0` attributed to the annotation.  What remains is the
-  refinement's diagnostic flavour (§8.5), the printer's spelling (§8.1), and the
-  `Num`/std migration.  The kernel boundary (§8.4) is **not** in this phase: it
-  is the specialize-before-JIT pass's, and the domain landed here is that pass's
-  input.  *The builtin operators are the user-visible feature.*
+  domain condition, the refinement attribute, `!` on a parameter, the static
+  class-naming fix, and the diagnostic flavour are landed.  What remains is the
+  printer's spelling (§8.1, which waits on the doc-overrides-a-value's-print
+  mechanism) and the `Num`/std migration.  The kernel boundary (§8.4) is **not**
+  in this phase: it is the specialize-before-JIT pass's, and the domain landed
+  here is that pass's input.  *The builtin operators are the user-visible
+  feature.*
 - **Phase 2 — the dependent if.** `if` desugars to the tuple read `(e, t)(c)`
   instead of the array read `[e, t][c]`, and the claimed laziness of an
   unselected arm is measured. Unlocks user-written generic numeric functions.

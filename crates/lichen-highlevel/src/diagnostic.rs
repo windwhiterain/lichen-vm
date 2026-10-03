@@ -208,6 +208,25 @@ pub struct DiaryEntry {
 /// message: the language layer derives the wording and the caret from these
 /// fields, mapping a [`Diag::loc`] (when present) back to a source span
 /// through its own source↔IR record.
+/// What a failed assert of a condition should *say*, beyond the channel's
+/// generic "expected 1, found …".
+///
+/// The channel reports one shape because an explicit `@assert e` means exactly
+/// that: this condition is not `1`.  A **refinement** failure means something
+/// more specific to a reader — the value is outside the set of classes the
+/// contract admits — so when whoever registers it knows that set, it says so
+/// (`docs/notes/operator-polymorphism.md` §8.5).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AssertSpelling {
+    /// An explicit `@assert e`, or a generated guard: the condition's own text.
+    Condition,
+    /// A refinement whose contract names the class **domain** in `domain`, to be
+    /// rendered beside the failure.  An operator's checker built that domain, so
+    /// it has it; a refinement a *user* wrote names no set, and reads as the
+    /// channel's generic failure.
+    Refinement { domain: NodeId },
+}
+
 #[derive(Clone, Debug)]
 pub struct Diag<P: Program> {
     /// The source-blind location of the diagnostic — the IR expression and its
@@ -228,6 +247,13 @@ pub struct Diag<P: Program> {
     /// The resolved value of a failed assert (meaningful when
     /// `kind == DiagKind::Assert`).
     pub assert_value: Option<P::Value>,
+    /// The **domain** a failed refinement admits — a class-domain value, present
+    /// only when the failure came from a refinement whose contract names one (an
+    /// operator's `{Int, Float}`, which its checker built and therefore knows).
+    /// The renderer spells it in place of the assert channel's generic wording;
+    /// `None` for every other failure, including a refinement a *user* wrote,
+    /// whose predicate consults whatever it likes and names no set.
+    pub refinement_domain: Option<NodeId>,
     /// The offending index of an out-of-bounds read (meaningful when
     /// `kind == DiagKind::IndexOutOfBounds`).
     pub index: Option<usize>,
@@ -266,6 +292,7 @@ impl<P: Program> Diag<P> {
             value_a: None,
             value_b: None,
             assert_value: None,
+            refinement_domain: None,
             index: None,
             length: None,
             field: None,
@@ -379,6 +406,7 @@ where
                     value_a: Some(P::Value::from(LowValue::USize(*index_value))),
                     value_b: Some(P::Value::from(LowValue::USize(*length))),
                     assert_value: None,
+                    refinement_domain: None,
                     index: Some(*index_value),
                     length: Some(*length),
                     field: None,
@@ -430,8 +458,17 @@ where
                 continue; // cloned out of a static module: no location to attribute
             };
             if self.user_asserts.contains(&template) {
+                // A refinement may name the class domain it refused; the
+                // renderer spells that in place of the channel's generic
+                // wording.  Keyed by the *template*, exactly as the registration
+                // was (a per-call failure records the template).
+                let refinement_domain = match self.assert_spellings.get(&template) {
+                    Some(AssertSpelling::Refinement { domain }) => Some(*domain),
+                    _ => None,
+                };
                 out.push(Diag {
                     assert_value: Some(err.value),
+                    refinement_domain,
                     ..Diag::factual(DiagKind::Assert, self.node_edges.get(&template).cloned())
                 });
             }
@@ -527,6 +564,7 @@ where
                 value_a: err.value_a,
                 value_b: err.value_b,
                 assert_value: None,
+                refinement_domain: None,
                 index: None,
                 length: None,
                 field: None,
@@ -556,6 +594,7 @@ where
             value_a,
             value_b,
             assert_value: None,
+            refinement_domain: None,
             index: None,
             length: None,
             field,

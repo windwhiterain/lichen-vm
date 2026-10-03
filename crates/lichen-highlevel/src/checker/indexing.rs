@@ -10,6 +10,7 @@ use crate::ir::{BinOp, ExprId};
 use crate::program::{HighProgram, TypeOperator, ValueType};
 
 use super::Checker;
+use crate::diagnostic::AssertSpelling;
 
 impl<P: HighProgram> Checker<P>
 where
@@ -71,7 +72,7 @@ where
             P::Operator::from(TypeOperator::from(BinOp::Eq)),
             Some(in_range_ops),
         );
-        self.register_assert(in_range, self.loc(e, 0), false);
+        self.register_assert(in_range, self.loc(e, 0), false, AssertSpelling::Condition);
         let pair = self.pair_of(value_node, elem_cell);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);

@@ -13,6 +13,7 @@ use crate::program::{HighProgram, TypeOperator, ValueType};
 use crate::shape;
 
 use super::Checker;
+use crate::diagnostic::AssertSpelling;
 
 impl<P: HighProgram> Checker<P>
 where
@@ -366,7 +367,12 @@ where
                     // check.  An attribute that constrains nothing returns `None`
                     // and the checker names no concrete attribute.
                     if let Some(condition) = ext.constraint(self, value_term, slot) {
-                        self.register_assert(condition, self.loc(e, 0), true);
+                        self.register_assert(
+                            condition,
+                            self.loc(e, 0),
+                            true,
+                            AssertSpelling::Condition,
+                        );
                     }
                 }
             } else {
