@@ -71,32 +71,85 @@ signature lambdas, the probe now reaches the assembler and fails there —
 fragment's `main` is `(extent, alpha, index)` while the host still passes
 `(extent, index)`.
 
-## 4. Blocker A: `compute.write [buffer, index, value]` is a homogeneous array
+## 4. Blocker A, and what the struct-argument API has to do with it
 
-A `compute.write` argument is an **array literal**, and lichen's array literals
-are homogeneous: every element unifies into one element-type cell
+A `compute.write [...]` argument is an **array literal**, and lichen's array
+literals are homogeneous: every element unifies into one element-type cell
 (`check_array_term`).  With the *positional* parameter shape the count and index
 cells are undecided, so a `Float` value simply drags the whole cell to `Float`
 and the program checks — that is how
-`a_varying_float_element_is_seeded_from_the_index` works, and the ABI's all-`Int`
-seed fiction is what absorbs the difference at lowering.
+`a_varying_float_element_is_seeded_from_the_index` works today.
 
 An **annotated** parameter decides those cells, and then the same program is
-refused.  Measured, plain lichen plus the compute module, `Par =
+refused.  Measured (before §4.2 landed), plain lichen, `Par =
 struct<.n Int, .alpha Float, .in In, .out Out>`:
 
 | Body | Result |
 |---|---|
 | `compute.write [k.out.z, 0, int2float v + k.alpha]` | `expected Int, found Float` at the array element (a located `ArrayElement` diagnostic) |
-| `compute.write [k.out.z, i, int2float v + k.alpha]` with `i = compute.range k.n` | the same conflict, but surfacing **span-less** through `range`'s count/index class unify (`RangeOp::build` unifies the index's cell with the count's) |
+| `compute.write [k.out.z, i, int2float v + k.alpha]` with `i = compute.range k.n` | the same refusal, surfacing **span-less** through the write wrapper's operand destructuring |
 | `compute.write [k.out.z, i, float2int (int2float v + k.alpha)]` | checks — the value is `Int` again, so the array is homogeneous |
 
-So a struct-parameter (annotated) kernel **cannot write a `Float` element today**;
-it can only write a `Float` computation converted back to `Int`.  The real fix is
-the one `operator-polymorphism` §4 already names: remove the homogeneous
-array/branch desugar so that a `write`'s elements are positions of their own
-rather than one cell.  Until then, this note's end-to-end probe uses the
-`float2int`-wrapped form, and that is a **workaround, not the design**.
+So a struct-parameter (annotated) kernel **cannot write a `Float` element** while
+the argument is an array.  Two layers, and they are different fixes:
+
+- **4.1 the argument container.**  The elements of one array literal share a cell,
+  so the index (`Int`) and the value (`Float`) cannot sit in one.  A container
+  whose elements have *independent* types — a tuple, or a struct instance — has no
+  such cell.  This is the layer the struct API removes, and it is what
+  `operator-polymorphism` §4's desugar removal would remove for the array form
+  itself.
+- **4.2 the ordinals' class — landed.**  `ReadOp`/`WriteOp` unified the index
+  (and, for a write, the length) with the **element's** cell, so an ordinal was
+  "the class the data is".  The ABI never said that: `assemble_module` declares
+  `(i64, i64) -> element` and `(i64, i64, element)`, with the position and the
+  index `i64` **in every class** and only the element following the class
+  (`run_parallel_range` declares the same closures).  They are now unified with
+  the language's `Int`, which is what a length and a lane number are.  The
+  undecided positional shape is unchanged (all the suites are green); what
+  changed is that an `Int` count no longer drags the written value's cell with
+  it, so what remains is a class question about the *container*.
+
+### 4.3 The struct-argument API: what landed, and what it met
+
+Approved direction: `compute.read`/`compute.write` take a **struct instance**
+built with an explicit constructor —
+`compute.write (compute.Write(.to b, .at i, .value v))` — so the elements are
+named fields with independent types.
+
+**Landed**: a named field read on a **concrete** container now folds to its
+constant position (`Checker::check_named_field`, `f51e4eb`) — the other half of
+`slot_read`'s decided type read, and the property a lowering needs to walk a
+struct argument's fields as positions (`Index(value, k)`).  An unbound container
+keeps the lazy `TableGet`, which is the case the two-pass `param_path` exists for.
+All suites green.
+
+**Met, measured, and not yet resolved.**  With `Read = struct<.from _, .at _>` /
+`Write = struct<.to _, .at _, .value _>` in the frozen `compute.lichen` and the
+wrappers annotated (`read = (x : Read) => $read(x.from, x.at)`):
+
+1. **Instantiating** such a type is fine: `compute.Read(.from 1, .at 0)` checks
+   and evaluates to `(1, 0) : struct<.from raw[?a, ?b], .at raw[?c, ?d]>`.
+2. **The field of a `_` is the placeholder's pair**, so a read whose element type
+   comes from a `_` field renders `raw[?a, ?b]` where it used to render `?a`.
+   That is a second, independent problem in the same convention
+   (`check_type_element` puts the field expression's *term* in the shape, and a
+   `_`'s term is a two-cell pair) — 5 of the 6 failures below are this.
+3. **Applying a frozen wrapper whose parameter is annotated with such a type
+   panics the checker**: `invalid SlotMap key` at `lichen-lowlevel/src/utils.rs:24`,
+   through `checker::record_unify` → `shape::tag_descent` → `slot0_is_shape` →
+   `array_items`.  A *dynamic* program's annotated struct parameter applied to an
+   instance is fine (`S = struct<.a _>; f = (x : S) => x.a; f (S(.a 1))` answers
+   `1: Int`), so the panic is specific to the frozen-module path.
+4. Migrating the call sites (213 of them, scripted) with that spelling leaves
+   **52 of 58** `--test compute` green, one hard failure
+   (`expected raw[?a, ?b], found ?c`) and the five renderings of (2).
+
+So the struct spelling is blocked on (2) and (3), and the **tuple** spelling
+(`compute.write (b, i, v)`) removes layer 4.1 without either: the wrapper stays
+unannotated and positional (`x(0)`), a tuple's element types are independent, and
+nothing static is instantiated with a `_` field.  It is not the named API, but it
+is the same de-arraying.
 
 ## 5. Blocker B: only the shipped lambdas can spell a JIT'd signature
 
