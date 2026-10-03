@@ -2336,6 +2336,29 @@ const MIXED_CLASS_BODY: &str = "a kernel body must compute one class: this body'
 const MIXED_CLASS_BUFFERS: &str = "a parallel index function must read and write one class: this \
      one names both Int and Float buffers, and the fragment's buffer ABI is one class";
 
+/// A value of one class in a position that wants the other.
+///
+/// **The sentence is the SPIR-V emitter's, byte for byte** — the one
+/// `SpirvRefusal::MixedClasses` renders in
+/// `crates/lichen-compute-gpu/src/spirv.rs`.  The two emitters read the same
+/// untyped IR and reach this answer independently, and a program that runs on
+/// both backends must not be told two different things about the same fragment —
+/// so the wording is a contract between the two crates rather than a constant
+/// one of them owns, neither crate depending on the other.
+///
+/// `at` is **the index of the instruction in its own block**, which is what
+/// SPIR-V's `at` is: the position the refusal was raised at, not a line of the
+/// program.  It is why a mix is reported where the two classes actually meet —
+/// a `write` storing an integer into a float buffer is refused at the write, and
+/// the arithmetic that computed the integer is not where the reader should look.
+fn mixed_classes(at: usize) -> String {
+    format!(
+        "instruction {at} mixed an integer and a float in one operation. `Int` and `Float` do not \
+         convert in either direction, so nothing here can make the two operands meet: this is a \
+         malformed fragment rather than an unsupported shape."
+    )
+}
+
 /// Resolve an index function's return value into its per-position output
 /// nodes — the codomain's arity, as a list.
 ///
@@ -2394,6 +2417,14 @@ fn assemble_module(
         CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection,
         ImportSection, Instruction, Module as WasmModule, TypeSection,
     };
+
+    // **Every fragment is read before the module's first section is written.**
+    // A class is a property of the lowered IR rather than of anything this
+    // function emits, so the whole launch set is checked in one pass here — and
+    // a refusal costs nothing: no section exists yet, let alone an instruction.
+    for fragment in ordered {
+        refuse_mixed_classes(fragment)?;
+    }
 
     // A fragment that lowers buffer `read`/`write` calls declares the two host
     // imports (function indices 0 and 1); the defined functions then start at
@@ -2522,6 +2553,259 @@ fn assemble_module(
     }
     wasm.section(&code);
     Ok(wasm.finish())
+}
+
+/// The class a value on the fragment's stack has, as far as a walk of the
+/// lowered body can see it.
+///
+/// **The same cases the SPIR-V emitter's `Kind` names**
+/// (`crates/lichen-compute-gpu/src/spirv.rs`).**  The IR is untyped and each
+/// emitter supplies the types, so a refusal that meant one thing in one of them
+/// and another in the other would be the very disagreement this walk exists to
+/// remove.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperandClass {
+    /// A `Const`: **the IR does not fix its class**, and the position that
+    /// consumes it decides — the same `Const(0)` is a buffer position in one
+    /// place and a float's bit pattern in another.
+    Literal,
+    /// A value of the class it was computed in, read from a buffer, or read from
+    /// a parameter.
+    Scalar(ScalarClass),
+    /// A comparison's `0`/`1` scalar, which is `1`/`0` in either class.
+    Condition,
+    /// A value this walk cannot classify: a cross-kernel call's results (the
+    /// arity is the callee's domain, not this fragment's) and a loop's carried
+    /// values (which arrive from a label this walk does not resolve).
+    ///
+    /// **Unclassifiable is not the other class.**  It is the absence of an
+    /// answer, and a check that read it as one would refuse a fragment the IR
+    /// says nothing about — so it is carried, never judged.
+    Opaque,
+}
+
+/// The class a binary operator runs over, from its two operands.
+///
+/// **A literal follows the other operand** — `Const(1)` beside the index is the
+/// integer `1` and beside a float is the `f32` whose bits are `1` — and with
+/// neither operand stating a class the fragment's own is what there is.  This is
+/// the SPIR-V emitter's `bin_class`, term for term, and it is why `1.0 + i`
+/// computes in the *index's* class: the `1.0` is the operand that moves, and the
+/// index is the one that fixes it.
+fn operand_class(lhs: OperandClass, rhs: OperandClass, module: ScalarClass) -> ScalarClass {
+    match (lhs, rhs) {
+        (OperandClass::Scalar(class), _) => class,
+        (_, OperandClass::Scalar(class)) => class,
+        _ => module,
+    }
+}
+
+/// `operand` in a position that wants `want`, or the refusal when the two
+/// classes meet and neither gives way.
+///
+/// **The refusal is the whole point of the walk.**  `Int` and `Float` do not
+/// convert in either direction (`docs/notes/floating-point.md` §4.2), so a value
+/// of one class in a position of the other is a malformed fragment rather than a
+/// shape a conversion could serve.
+fn as_operand_class(
+    operand: OperandClass,
+    want: ScalarClass,
+    at: usize,
+) -> Result<OperandClass, String> {
+    match operand {
+        // A constant is materialised in the class its position wants and a
+        // comparison's `0`/`1` is `1`/`0` in it: the two cases the IR leaves open
+        // on purpose, and the two the other emitter converts rather than refuses.
+        OperandClass::Literal | OperandClass::Condition => Ok(OperandClass::Scalar(want)),
+        OperandClass::Scalar(seen) if seen == want => Ok(OperandClass::Scalar(want)),
+        OperandClass::Scalar(_) => Err(mixed_classes(at)),
+        OperandClass::Opaque => Ok(OperandClass::Opaque),
+    }
+}
+
+/// Refuse a fragment whose body meets an `Int` and a `Float` in one operation.
+///
+/// **A read of the lowered IR, not an emission, and it runs before the module's
+/// first section exists** (see [`assemble_module`]).  That placement is the whole
+/// design: the class is a property of what the body *computes*, while this
+/// emitter lowers a fragment in one class throughout and so cannot see a mix
+/// while emitting — it would have `F32Add` the `1.0` and the index, because both
+/// are floats in the module it is building.  A branch inside [`lower_instrs`]
+/// would therefore be too late to be correct and early enough to cost the
+/// compiler everything it had already emitted.
+///
+/// The two backends can only agree because they agree on *what the IR means*:
+/// the fragment's class ([`fragment_class`], the same answer
+/// `spirv::module_class` gives for a compiler-built fragment), a `Const` and a
+/// comparison's `0`/`1` taking the class of the position that reads them, and
+/// everything else the class it was computed in.
+fn refuse_mixed_classes(fragment: &KernelFragment) -> Result<(), String> {
+    let module = fragment_class(fragment);
+    // A function's parameters are locals rather than stack values, so the stack a
+    // body starts from is empty and `LocalGet` is what puts a value on it.
+    let mut stack = Vec::new();
+    check_flow(&fragment.body.entry, module, &mut stack)
+}
+
+/// Walk one flow, carrying the classes the enclosing block left on the stack.
+fn check_flow(
+    flow: &Flow,
+    module: ScalarClass,
+    stack: &mut Vec<OperandClass>,
+) -> Result<(), String> {
+    match flow {
+        // A jump hands its values to a label this walk does not resolve; the
+        // values were checked where they were computed.
+        Flow::Jump { .. } => Ok(()),
+        Flow::Block {
+            instrs, terminator, ..
+        } => {
+            // `at` is the index within this block's own instruction list, which is
+            // what the SPIR-V refusal's `at` counts: the same numbering the other
+            // emitter reports, over the same list.
+            for (at, instruction) in instrs.iter().enumerate() {
+                check_instr(instruction, module, stack, at)?;
+            }
+            check_terminator(terminator, module, stack)
+        }
+    }
+}
+
+/// Pop the top of the walk's stack, or [`OperandClass::Opaque`] if it is empty.
+///
+/// **An underflow is a question, not an answer**, and the honest one to give back
+/// is that this walk does not know what was there: the emitter's own
+/// `UnbalancedStack` is the refusal for a body this shape cannot happen in, and
+/// inventing one here would be a second cause for a single defect.
+fn pop_class(stack: &mut Vec<OperandClass>) -> OperandClass {
+    stack.pop().unwrap_or(OperandClass::Opaque)
+}
+
+/// Check one instruction's effect on the stack.
+fn check_instr(
+    instruction: &KernelInstr,
+    module: ScalarClass,
+    stack: &mut Vec<OperandClass>,
+    at: usize,
+) -> Result<(), String> {
+    match instruction {
+        KernelInstr::Const(_) => {
+            stack.push(OperandClass::Literal);
+        }
+        // **An integer, whatever the fragment's class**: the index is the
+        // invocation id, and an access chain indexes with an integer on every
+        // target.  A float fragment's index local is the same number in `f32`,
+        // which is why this is the class the two emitters agree on and not the
+        // module's.
+        KernelInstr::LocalGet(_) => {
+            stack.push(OperandClass::Scalar(ScalarClass::Int));
+        }
+        // The narrowing a `0`/`1` scalar takes to become a `select` condition.
+        KernelInstr::I32WrapI64 => {
+            if let Some(top) = stack.last_mut() {
+                *top = OperandClass::Condition;
+            }
+        }
+        KernelInstr::Select => {
+            pop_class(stack);
+            let otherwise = pop_class(stack);
+            let then = pop_class(stack);
+            // A `select`'s arms are the language's scalars, so the module's class
+            // is what both have to be.
+            as_operand_class(otherwise, module, at)?;
+            as_operand_class(then, module, at)?;
+            stack.push(OperandClass::Scalar(module));
+        }
+        KernelInstr::BufferReadCall => {
+            let element = pop_class(stack);
+            pop_class(stack);
+            // An access chain's index is an integer.
+            as_operand_class(element, ScalarClass::Int, at)?;
+            // A buffer's element is the module's class, which is what
+            // `Positions::input_classes` declares every read position to be.
+            stack.push(OperandClass::Scalar(module));
+        }
+        KernelInstr::BufferWriteCall => {
+            let value = pop_class(stack);
+            let element = pop_class(stack);
+            pop_class(stack);
+            // A buffer element is the module's class whatever the body computed
+            // the value as, and an access chain's index is an integer — so this
+            // is where `1.0 + i`, computed in the index's class, meets the float
+            // buffer it was going into.
+            as_operand_class(value, module, at)?;
+            as_operand_class(element, ScalarClass::Int, at)?;
+        }
+        KernelInstr::Bin(operator) => {
+            let rhs = pop_class(stack);
+            let lhs = pop_class(stack);
+            let class = operand_class(lhs, rhs, module);
+            as_operand_class(lhs, class, at)?;
+            as_operand_class(rhs, class, at)?;
+            // A comparison yields the language's `0`/`1` scalar rather than a
+            // value of the operand class, and a target whose `select` takes a
+            // narrower condition (this one) narrows it here.
+            stack.push(match operator {
+                KernelBin::Lt
+                | KernelBin::Gt
+                | KernelBin::Leq
+                | KernelBin::Geq
+                | KernelBin::Eq
+                | KernelBin::Neq => OperandClass::Condition,
+                _ => OperandClass::Scalar(class),
+            });
+        }
+        // **The stack is unknown from here on**, so it is emptied rather than
+        // guessed at: the callee's arity is its own domain's, this walk has only
+        // the fragment, and a value it cannot place is not a value of the other
+        // class.
+        KernelInstr::CallKernel(_) => stack.clear(),
+    }
+    Ok(())
+}
+
+/// Check one terminator, and walk into the flows it opens.
+fn check_terminator(
+    terminator: &Terminator,
+    module: ScalarClass,
+    stack: &mut Vec<OperandClass>,
+) -> Result<(), String> {
+    match terminator {
+        Terminator::Return => Ok(()),
+        Terminator::If {
+            on_one,
+            on_zero,
+            passes,
+            ..
+        } => {
+            // The `0`/`1` selector is on top and each arm runs on what is below
+            // it, so each arm is checked against its own copy of that stack.
+            pop_class(stack);
+            let mut arm = stack.clone();
+            check_flow(on_one, module, &mut arm)?;
+            if let Some(on_zero) = on_zero {
+                let mut arm = stack.clone();
+                check_flow(on_zero, module, &mut arm)?;
+            }
+            // The join receives `passes` values whose class depends on which arm
+            // ran, so what is left on the stack is how many there are and not
+            // what they are.
+            stack.resize(stack.len() + passes, OperandClass::Opaque);
+            Ok(())
+        }
+        Terminator::While { body, carried, .. } => {
+            // **The loop's inherited values are unclassified.** The values the
+            // backedge brings back arrive from a label rather than from an
+            // instruction here, so nothing the body inherits from the header's
+            // entry stack can be judged — only what the body computes from it.
+            let mut body_stack = vec![OperandClass::Opaque; stack.len() + carried];
+            let result = check_flow(body, module, &mut body_stack);
+            // The loop leaves through its `exit` label, which this walk does not
+            // resolve, so the enclosing block continues from nothing known.
+            stack.clear();
+            result
+        }
+    }
 }
 
 /// The block arities a flow needs: every `If`'s join and every `While`'s exit.
