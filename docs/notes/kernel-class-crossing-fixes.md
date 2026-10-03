@@ -171,7 +171,10 @@ term's type cell is decided in the graph itself. Consequences, when that lands:
 - named reads fold to constant indices during specialization (the emitter's
   two-pass `param_path` dies);
 - the parallel ABI's all-`Int` seed fiction (`compute.rs:2268-2271`) dies —
-  scalar parameter leaves get their real classes;
+  scalar parameter leaves get their real classes.  **Landed**: see
+  [compute-runtime-scalars](compute-runtime-scalars.md) §2 — every leaf is now
+  typed by its parameter field, and the host half that consumes them is the
+  rest of that note;
 - the `shape.rs` field accessors from the superseded proposal are built then,
   consumed by the specialize pass;
 - `low_type_of` learns to read a struct as its positional tuple **as a JIT

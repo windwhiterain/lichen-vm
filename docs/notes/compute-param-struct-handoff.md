@@ -267,7 +267,12 @@ tests: `a_tuple_kernel_runs_through_the_signature_carrying_wrapper` and
 
 ## 7. Orientation
 
+The runtime scalars this parameter shape exists for are their own work item:
+their state, the two measured blockers, and the acceptance probe are in
+[compute-runtime-scalars](compute-runtime-scalars.md).
+
 | Item | Where |
+|---|---|
 |---|---|
 | The type lambdas and the wrappers | `crates/lichen-compute/src/compute.lichen` |
 | Role table | `parallel_roles`, `compute.rs:1856` |
