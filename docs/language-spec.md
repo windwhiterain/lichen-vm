@@ -45,7 +45,7 @@ sep      := newline | ';' | ','                      -- one uniform Separator to
 
 expr     := lambda
 lambda   := annotated ('=>' expr)?                  -- lambda; right-assoc; lhs is a (possibly annotated) name
-annotated:= arrow ((':' arrow) | ('#' arrow) | ('?' arrow))*   -- type (':'), perspective ('#'), and/or doc ('?') annotation, right-assoc
+annotated:= arrow ((':' arrow) | ('#' arrow) | ('!' arrow) | ('?' arrow))*   -- type (':'), perspective ('#'), refinement ('!'), and/or doc ('?') annotation, right-assoc
 arrow    := cmp ('->' cmp)*                         -- function type; right-assoc
 cmp      := bits (('<' | '>' | '<=' | '>=' | '==' | '!=') bits)*   -- comparison, left-assoc; yields 0/1
 bits     := bitxor ('|' bitxor)*                    -- bitwise or
@@ -53,8 +53,8 @@ bitxor   := bitand ('^' bitand)*                    -- bitwise exclusive or
 bitand   := sum ('&' sum)*                          -- bitwise and
 sum      := product (('+' | '-') product)*          -- arithmetic, left-assoc
 product  := prefix (('*' | '/' | '%') prefix)*      -- product, left-assoc; tighter than '+'/'-'
-prefix   := '!' apply | ('int2float' | 'float2int') apply | apply
-                                                  -- prefix assert `!e`, and the two class crossings; tighter than every binary operator, looser than application
+prefix   := '@assert' apply | ('int2float' | 'float2int') apply | apply
+                                                  -- prefix assert `@assert e`, and the two class crossings; tighter than every binary operator, looser than application
 apply    := atom atom*                              -- application; left-assoc, tightest
 atom     := primary postfix*                        -- a primary, then glued postfix forms
 primary  := int_literal
@@ -161,23 +161,34 @@ farg     := '.' name expr                         -- named instantiation argumen
   perspective and replaces the doc.  A comparison
   yields `0` or `1`, driving an `if` branch; the bitwise operators nest C-style
   (`&` in `^` in `|`) but bind **tighter** than a comparison, so `a & b == c` is
-  `(a & b) == c`.  `!`
-  is a prefix assert: `!e` compiles to the highlevel `assert(e)` — a side
+  `(a & b) == c`.  `@assert`
+  is a prefix assert: `@assert e` compiles to the highlevel `assert(e)` — a side
   constraint, not a unify.  The checker force-evaluates `e` after the
   definition pass (ignoring laziness) and requires `USize(1)`; a condition
   that stays lazy (an unbound parameter) is not triggered, and the apply
   clone re-checks the instantiated condition per call.  The expression
   itself *is* the condition — an assert checks its subject, it does not
-  replace it — so `!e`'s value and type are `e`'s.  It binds tighter than the binary
-  operators but looser than application, so `! f x` asserts `f x` and `! x <= 3`
-  is `(!x) <= 3`; assert a comparison by parenthesizing it (`!(x <= 3)`).
+  replace it — so `@assert e`'s value and type are `e`'s.  It binds tighter than the binary
+  operators but looser than application, so `@assert f x` asserts `f x` and
+  `@assert x <= 3` is `(@assert x) <= 3`; assert a comparison by parenthesizing
+  it (`@assert (x <= 3)`).  The keyword replaced the `!` sigil, which now marks
+  a **refinement annotation** (`e : T ! p`) — see
+  [operator-polymorphism](notes/operator-polymorphism.md) §3.
 - **Annotated parameters.**  `x : T => e` is a lambda whose parameter is
   annotated with `T` — the frontend desugars it to `x => { x : T; e }`, so the
   annotation is a leading body statement that unifies the parameter's slot in
   body scope (so a `T` referring to `x` itself is in scope, e.g. `x : x -> Int`)
   while the codomain is inferred from the body.  Likewise `x # n => e` desugars
   to `x => { x # n; e }` — the parameter's perspective slot, checked at each
-  apply against the argument's perspective.  The body still extends maximally:
+  apply against the argument's perspective; the IR keeps it as a parameter
+  field (`parameter_attribute`) so the apply can compare the argument's own
+  attribute against the declared one.  A **refinement** parameter, `x ! p => e`,
+  takes the same desugar *without* the optimization — `x => { x ! p; e }` — which
+  is the general form and needs no IR field: the annotation rule then registers
+  the predicate's assertion on the function being built, so an apply clone
+  re-checks it against the call's argument
+  ([operator-polymorphism](notes/operator-polymorphism.md) §3).  The body still
+  extends maximally:
   `x : T => e : U` is `x : T => (e : U)`.  `x : T` without a following `=>`
   stays an ordinary annotation.
 - **One grammar, no type mode.**  Types are expressions, so term and type forms
@@ -629,13 +640,14 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `x # n => e` | `Function { parameter, parameter_type: None, parameter_attribute: Some(compile(n)), return }` — the annotated parameter's perspective, also body-scope |
 | `e1 e2` | `Apply { function, argument }` |
 | `a op b` (`+`, `-`, `*`, `/`, `%`, `<`, `>`, `<=`, `>=`, `==`, `!=`, `&`, `\|`, `^`) | `BinOp { operator, left, right }` |
-| `!e` | `Assert { condition }` — a side constraint: the expression's pair is the condition's own; the condition's value node registers as an assert point the checker force-evaluates to `USize(1)` |
+| `@assert e` | `Assert { condition }` — a side constraint: the expression's pair is the condition's own; the condition's value node registers as an assert point the checker force-evaluates to `USize(1)` |
 | `int2float e` / `float2int e` | `Convert { operator, value }` — the only form whose type is not its operand's: the operand checks against the direction's source class, the result's type is its target |
 | `if c then t else e` | `Index { array: [e, t], index: c }` — desugared to the lazy branch index; there is no `If` kind |
 | `e[i]` | `Index { array, index }` |
 | `a(k)` | `Field { container, key }` — the adjacent single-expression paren form; a positional slot read over a tuple element or struct field |
 | `e : T` | `Annotation { value, type: Some(compile(T)), attributes: <an empty range> }` — `attributes` holds one value expression per schema-tail entry, and a bare `:` annotation has no tail, so the range is empty |
 | `# p` / `e : T # p` | `Annotation { value, type: Some(compile(T))?, attributes: <a range over compile(p)> }` — the attribute expression lands in the children range **positionally aligned** with the schema tail it annotates (an `e : T # p ? d` pairs `attributes[0]` with `[Perspective]` and `attributes[1]` with `[Doc]`), and the tail is stamped onto the annotated node's schema |
+| `! p` / `e : T ! p` | the same `Annotation` chain's **refinement** piece: `p` is a predicate on the annotated *value*, held in one attribute slot and required to evaluate to `1`.  Like `#`/`?` the right side is one operand at the `->` level, so `e : T ! (x => x > 3)` writes the predicate explicitly; see [operator-polymorphism](notes/operator-polymorphism.md) §3 |
 | `_` (any position — type or value) | `Placeholder` |
 | `T1 -> T2` | `TypeFunction { parameter, return }` (domain, codomain) |
 | `(e1, …, en)` | `Tuple(range)` |

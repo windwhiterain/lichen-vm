@@ -133,8 +133,8 @@ pub enum Expr {
     /// constraint, not a unify — the checker force-evaluates the condition
     /// and requires `USize(1)`, while the expression's own value stays the
     /// condition's (an assert checks its subject, it does not replace it).
-    /// `! 1 == 1` parses as `(!1) == 1`; assert a comparison by parenthesizing
-    /// it: `!(1 == 1)`.
+    /// `@assert 1 == 1` parses as `(@assert 1) == 1`; assert a comparison by parenthesizing
+    /// it: `@assert (1 == 1)`.
     Assert { value: Box<Expr>, span: Span },
     /// `int2float e` / `float2int e` — a prefix class conversion.  The only
     /// place the language's two scalar classes meet: `Int` and `Float` do not
@@ -220,14 +220,18 @@ pub enum Expr {
         key: Box<Expr>,
         span: Span,
     },
-    /// `e : T`, `e # p`, and/or `e ? d` — a type, perspective, and/or doc
-    /// (label) annotation.  `: T` fills `r#type`, `# p` fills `perspective`,
-    /// `? d` fills `doc`.  Any may be absent (`e # p`, `e : T`, `e ? d`);
-    /// at most one of each.
+    /// `e : T`, `e # p`, `e ! r`, and/or `e ? d` — a type, perspective,
+    /// refinement, and/or doc (label) annotation.  `: T` fills `r#type`,
+    /// `# p` fills `perspective`, `! r` fills `refinement`, `? d` fills
+    /// `doc`.  Any may be absent (`e # p`, `e : T`, `e ? d`); at most one of
+    /// each.  A refinement is the one annotation that is not metadata: `r` is
+    /// a predicate on the annotated value required to evaluate to `1`
+    /// (`docs/notes/operator-polymorphism.md` §3).
     Annotation {
         value: Box<Expr>,
         r#type: Option<Box<Expr>>,
         perspective: Option<Box<Expr>>,
+        refinement: Option<Box<Expr>>,
         doc: Option<Box<Expr>>,
         span: Span,
     },

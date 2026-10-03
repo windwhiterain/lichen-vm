@@ -32,7 +32,7 @@ use crate::diag::Diag;
 
 pub use lichen_render::{
     TypePrinter, ValuePrinter, print_type, print_value, render_attributes,
-    render_struct_fields_named, struct_type_named_fields,
+    render_struct_fields_named, struct_type_named_fields, value_label,
 };
 
 // --- the extension-vocabulary render hooks ---------------------------------
@@ -301,17 +301,25 @@ where
             "this expression carries an attribute, but this build has no attribute extension to lower it"
                 .to_string()
         }
-        DiagKind::Assert => {
-            // The assert's failed value, rendered generically through the
-            // structural `LowValue` view.
-            let value = match d.assert_value.as_ref().and_then(|v| v.as_enum()) {
-                Some(LowValue::USize(n)) => n.to_string(),
-                Some(LowValue::None | LowValue::Void) => "none".to_string(),
-                Some(other) => format!("{other:?}"),
-                None => "—".to_string(),
-            };
-            format!("assertion failed: expected 1, found {value}")
-        }
+        DiagKind::Assert => match d.refinement_domain {
+            // A *refinement* the contract declared: the value is outside the set
+            // of classes the contract admits, and naming that set is what a
+            // reader needs (`docs/notes/operator-polymorphism.md` §8.5).  The
+            // domain is a class-set value, so the type printer spells it
+            // `{Int, Float}`.
+            Some(domain) => format!("does not satisfy {}", printer.node(domain)),
+            // An explicit `@assert e`: the condition's own failed value, rendered
+            // generically through the structural `LowValue` view.
+            None => {
+                let value = match d.assert_value.as_ref().and_then(|v| v.as_enum()) {
+                    Some(LowValue::USize(n)) => n.to_string(),
+                    Some(LowValue::None | LowValue::Void) => "none".to_string(),
+                    Some(other) => format!("{other:?}"),
+                    None => "—".to_string(),
+                };
+                format!("assertion failed: expected 1, found {value}")
+            }
+        },
         DiagKind::NonTerminating => match d.budget {
             // The lowlevel recorded which guard refused and what it was
             // bounded by, so the diagnostic names them instead of guessing:

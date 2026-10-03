@@ -113,32 +113,46 @@ The constraint is not a type. It is a **refinement** — classical
 predicate `p` required to evaluate to `1`.
 
 The attribute's slot holds **exactly one function**, an ordinary lichen value.
-The raw lowering of an annotated expression is the pair's third element:
+The surface spelling is the annotation chain's `!` piece (§3's last paragraph),
+and the raw lowering of an annotated expression is the pair's third element:
 
 ```text
-Int{x > 3}   ≡   [Int, Type, x => x > 3]
-                 └────┬────────┘ └──┬──┘
-              the pair's value,     the refinement slot
-              type, and tail
+x : Int ! (v => v > 3)   ≡   [x, Int, v => v > 3]
+                             └────┬────────┘ └──┬──┘
+                          the pair's value,     the refinement slot
+                          type, and tail
 ```
 
 One function is enough because a conjunction is one function written with `*`
 (`0 * 1 = 0`, so `*` is conjunction over this language's `0`/`1` scalars):
-`Int{x > 3}{x < 10}` is `x => (x > 3) * (x < 10)`. "No refinement" is the
-attribute's **missing value**, one concrete shared constant (`Void`), so an
-unrefined expression costs a shared node and nothing else.
+`x : Int ! (v => v > 3) ! (v => v < 10)` is `v => (v > 3) * (v < 10)`.
 
 It is carried as an **attribute** (`AttrExt`), which is the one mechanism here
 that already carries a non-equality constraint on an expression across every
-journey the graph takes. `Perspective` is the proof it works end to end, and the
-refinement is its shape with the propagation removed:
+journey the graph takes.  `Perspective` and `Doc` are the two proofs it works end
+to end, and the refinement sits between them:
 
-| | [`Perspective`](../../crates/lichen-perspective/src/perspective.rs) | refinement |
-|---|---|---|
-| slot holds | a lattice value (a thread count) | **one predicate function** |
-| `combine` | `Gcd` — the meet, propagated from the children | **none: no propagation** |
-| `missing_value` | `0`, the `gcd` identity | **`Void`**, "no refinement" |
-| reconcile | `check_unify_relaxed` + `is_subtype` | **a plain unify** |
+| | [`Perspective`](../../crates/lichen-perspective/src/perspective.rs) | [`Doc`](../../crates/lichen-doc/src/doc.rs) | refinement |
+|---|---|---|---|
+| slot holds | a lattice value (a thread count) | the doc's own pair | **one predicate function** |
+| `combine` | `Gcd` — the meet, propagated from the children | a fresh unbound cell | **a fresh unbound cell: no propagation** |
+| `missing_value` | `0`, the `gcd` identity | `Parameterized` | **`Parameterized`** |
+| `share_missing_slot` | `true` (its absent value is concrete) | `false` | **`false`** |
+| `unify_slots` | an equality unify | relaxed, `is_subtype` always true (a later doc overrides) | **a plain unify — over-strict, by decision** |
+| `is_label` | `false` | `true` | **`false`** |
+
+The `missing_value` row is not a free choice, and it corrects an earlier draft of
+this section (which said `Void`): an absent refinement has to be an **unbound
+cell**, because the reconciliation is a *plain unify*.
+[`AttrExt::share_missing_slot`](../../crates/lichen-highlevel/src/attr.rs)'s own contract
+states why — a unify *writes* whichever side is unbound, so a concrete absent
+value can be shared and an unbound one must not be — and a concrete absent value
+is wrong on its own terms anyway, because `unify(Void, predicate)` conflicts and
+no refinement could ever pass from one side to the other.  Being an unbound cell
+is exactly what lets an annotation's predicate flow into an argument's slot,
+which is the propagation the language already has for types ("`a : b; a : c`
+makes `b` and `c` unify"): an unrefined expression costs a fresh cell and
+nothing else.
 
 **Why nothing propagates, and this is the load-bearing negative.**  The tempting
 reading is Perspective's: derive an expression's refinement from its children's,
@@ -184,6 +198,17 @@ a weaker one is over-strict, and deliberately so: weakening needs implication
 between predicates (`fact ⊨ requirement`), which is the subtyping this language
 does not have.  A unify never wrongly *accepts*, so the strictness costs
 expressiveness and buys soundness.
+
+**The surface spelling is `!`** — the annotation chain's fourth piece, beside
+`# p` and `? d`: `x : Int ! p`.  `!` was the prefix assert, and the assert moved
+to the keyword `@assert` (`@` being the language's keyword sigil, as in `@loop`)
+in the same change, so the two are never confusable: one is a word at the `@`
+sigil, the other marks an annotation's attribute.  `!` was chosen over the only
+other free symbols (`'`, `` ` ``, `\`) and over a keyword because it is the
+language's own "this must evaluate to `1`" mark — the refinement *is* an assert
+about the value — and because it needs no new lexer token.  The right side is one
+operand at the `->` level, like `#`/`?`, so the predicate is written explicitly:
+`e : T ! (x => x > 3)`.
 
 **Nothing unifies against a refinement.**  It is not in a type slot, no rule is
 added to `unify_inner`, and the type cell stays open — that is the polymorphism.
@@ -293,15 +318,51 @@ add = x => y => { x : ?a{in_num}; y : ?a{in_num}
                   (fadd, iadd)(is_int (type_of x)) x y }
 ```
 
-Measured on `dev` before any of this — the behaviours this has to preserve or
-fix, taken with `lichen-compiler`:
+Measured on `dev` before any of this, and again with §6's operand tie plus the
+§3 refinement condition landed, taken with `lichen-compiler`:
 
-| program | today |
-|---|---|
-| `add 1 2` | `3: Int` |
-| `add 1.5 2.5` | **fails**: `expected Int, found Float` at the `1.5` |
-| `add "a" "b"` | fails: `expected Int, found string` |
-| `add 1 1.5` | fails: `expected Int, found Float` at the `1.5` |
+| program | today | landed |
+|---|---|---|
+| `add 1 2` | `3: Int` | `3: Int` |
+| `add 1.5 2.5` | **fails**: `expected Int, found Float` at the `1.5` | **`4.0: Float`** |
+| `add 1 1.5` | fails: `expected Int, found Float` at the `1.5` | **identical**, same text and position |
+| `add "a" "b"` | fails: `expected Int, found string` | **refused**: `assertion failed: expected 1, found 0` at the `x + y` |
+| `(add, add 1.5 2.5)` | — | `<?a -> ?a -> ?a, Float>` |
+
+Three mechanism facts fell out of that measurement, and all three are
+load-bearing:
+
+- **The apply clone preserves equality classes.**  Tying the two operands into
+  one class *in the template* therefore makes the arguments of a single
+  application share one class, which is why `add 1 1.5` is still refused with
+  today's exact message: the first argument commits the shared class and the
+  second meets it.  So §8.3 is not a problem — "the operands are one class" is
+  free, not a condition that has to be built and asserted.
+- **An unknown class is not an error, it is an undecided value.**
+  `TypeOperator::run` answers `Parameterized` for a pair it cannot compute, so
+  before the refinement `add "a" "b"` *ran* and yielded an unresolved value.
+  That is what the condition closes, and it is why the condition is registered
+  as an assert *on the operand*: the assert is the only channel that turns
+  "undecided" into "refused".
+- **A condition undecided at definition time stays pending, and resolves per
+  application.**  `add`'s condition names the parameter's *cell*, which is open
+  while the definition is checked; the apply clone re-checks the instantiated
+  condition against the argument, which is what makes one polymorphic definition
+  refuse `"a"` and accept `1.5`.  No new machinery: it is
+  `register_assert`'s documented behaviour, the same one `check_index`'s bounds
+  constraint already relies on.
+- **The pin was also hiding a printer bug.**  A type printer names an unbound
+  cell by its **equality class** — `TypePrinter::class_name` keys its name table
+  by the class representative — but `static_class_name` (a *frozen* module's
+  cell) keyed by the ref alone, with no representative walk, and the lowlevel had
+  no static representative query to walk with.  Under the pin every member of a
+  class holds a committed value, so both cells printed `Int` and the difference
+  was invisible; with the class open, an imported `?a -> ?a` printed `?a -> ?b`
+  (`geo.double`'s hover) while the same type rendered dynamically printed
+  `?a -> ?a` (the example's own `output =`).  Fixed by
+  `Module::static_equality_representative` — the freeze keeps the class of a node
+  whose own value is unbound *whole*, so following `parent` over the artifact's
+  local ids is well defined — and the printer now mirrors `class_name` exactly.
 
 - **Definition.** `x : ?a{in_num}` and `y : ?a{in_num}` put the predicate in the
   parameters' attribute slots; the *type* cells stay open, so the signature is
@@ -391,10 +452,33 @@ answered.
 
 ## 8. Open questions
 
-1. **The printer's spelling** of a refined cell. The raw form is
-   `[Int, Type, x => x > 3]`, so `Int{x > 3}` is the literal reading, and
-   `AttrExt::render` is where it lands. For a *contract* the readable spelling is
-   the named predicate, not the lambda's text.
+1. **The printer's spelling** of a refined cell.  The surface sigil is `!`
+   (§3), so the readable form is `x : Int ! in_num` and the contract's is
+   `?a ! in_num -> ?a`.  There is deliberately **no rule special to the
+   refinement** here: the slot holds a *function value*, which is not printable
+   on its own (the graph keeps a lambda as an opaque function, and a binding's
+   name is resolved away), so the refinement is spelled through the general
+   answer to "how is a value printed" — an attribute **naming** the value.
+
+   *Landed:* that general mechanism.  [`AttrExt::label`](../../crates/lichen-highlevel/src/attr.rs)
+   (default `None`) is "the name this attribute gives the value it attaches to";
+   `Doc` implements it for a **string** doc, so `f = (x => x) ? "fibo"; f` prints
+   `?fibo: ?a -> ?a` — the value replaced by its label, the type unchanged.  A
+   *struct* doc still describes through `render`, and the shared reader is
+   `render::value_label` (schema tail + pair, exactly like `render_attributes`),
+   which is what a future spelling of the refinement must go through too.
+
+   *Remaining, and the obstacle is a signature:* spelling the refinement as
+   `! <the predicate's name>` means reading the **doc slot of the predicate's own
+   pair** — the slot this attribute holds *is* that pair — and locating a slot
+   needs that pair's **schema tail**, which [`AttrExt::render`](../../crates/lichen-highlevel/src/attr.rs)
+   does not carry: it receives a module and one slot node, and a pair's arity is
+   in the graph while *which* attributes its tail lists is not (a one-entry tail
+   is `[Doc]` or `[Perspective]` and both are three elements long).  The lead is
+   that the tail *is* known where the slot is built — `Checker::check_ann`
+   compiles the predicate expression and has its schema — so either the render
+   hook gains the slot's tail, or the annotation records the predicate's name
+   beside the slot.  Neither is a big change; neither is this phase's.
 2. **`Num`'s home**: std binding (the `type_of` precedent) vs keyword.
 3. **The panic arm's spelling**: the recorded-refusal channel needs a
    value-level form a library function can write; today only builtins record.
@@ -406,18 +490,58 @@ answered.
    is the same channel `f = x => x + 1; f Type` already uses, so it is the
    language's existing answer to a per-call mismatch, but it is a visible change
    of diagnostic kind and position.
-5. **The refinement's diagnostic flavour.** A refinement's assert must not read
-   as `assert failed`; it is a contract failure and should name the domain. The
-   lowlevel's `AssertError` carries `{condition, template, value}` and the
-   checker already keeps `user_asserts` to tell an explicit `assert` from a
-   generated guard — so a refinement is a third flavour on that same
-   discrimination, and the wording lands in the language layer.
-6. **The kernel's committed default.** §5 makes it load-bearing that
-   `compute.jit` writes the defaulted class into the parameter cell (or builds
-   `.sig` from what it compiled), so the launch gate refuses the other class.
-   *How* — a write into the frozen template, or a `.sig` built from the lowered
-   classes — is open, and it is the one place this feature reaches into the
-   kernel boundary.
+5. *(Closed — **landed**.)* **The refinement's diagnostic flavour.**  A
+   refinement's failure no longer reads as `assert failed`.  The assert channel
+   keeps its one shape, because an explicit `@assert e` means exactly that, so
+   the *registration* now says how a failure reads:
+   [`AssertSpelling`](../../crates/lichen-highlevel/src/diagnostic.rs) is
+   `Condition` (an explicit assert, or a generated guard) or
+   `Refinement { domain }`; it is keyed by the **template** condition, which is
+   what a per-call failure records.  `Diag` carries the domain as
+   `refinement_domain`, and
+   [`crates/lichen-language/src/render.rs`](../../crates/lichen-language/src/render.rs)
+   spells it in place of the generic wording — the domain is a class-set value,
+   so the type printer's own `{Int, Float}` arm renders it.  Measured:
+   `add "a" "b"` reports `does not satisfy {Int, Float}` at the operator.
+
+   A refinement a **user** wrote still reads generically
+   (`assertion failed: expected 1, found 0`), and that is not a gap: its
+   predicate consults whatever it likes — `in_num` reads a set, `v => v > 3`
+   reads a literal — so there is no domain to name.  Naming one is something
+   only the *registrar* can do, which is why the spelling travels with the
+   registration rather than being inferred at render time.
+6. **One constraint slot per expression, at apply time — a pre-existing limit,
+   now reachable.**  `Checker::check_ann` records a single `state[e].attr` (the
+   last constraint attribute in canonical order) and `check_app`/`check_lam`
+   re-check exactly one marker, so an expression spelled with *both* a
+   perspective and a refinement reconciles both slots at the annotation but only
+   the later one is re-validated against a provider.  It does not bite this
+   feature — the refinement's *enforcement* is an assert and a parameter
+   refinement rides the desugar, neither of which goes through that slot — but
+   the operator's end state (`x : ?a ! in_num`) plus a perspective on one
+   parameter would.  Generalising the slot to a per-marker set is the fix, and it
+   is not this phase's.
+8. **The kernel boundary is not this feature's to fix — it is a recorded
+   dependency.**  Making `+` polymorphic leaves a kernel body's class open, and
+   a kernel lowered from a *template* has no class to compile: two targets go red
+   (`a_kernel_value_and_type_render_by_name` renders `.sig ?c -> ?c` with a
+   `none` artifact; `runtime_only_package`'s `launch` gate reads the domain
+   lazily out of an open `.sig` and cannot resolve it).  **The fix is the
+   specialize-before-JIT pass, and it is another workstream**
+   ([kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) §6: "a kernel
+   is never compiled from a template — at `jit`/`parallel` time the function is
+   applied to a placeholder typed by the annotated domain, so every term's type
+   cell is decided in the graph itself").
+
+   The two halves meet at one interface: **the domain this note puts in the graph
+   as a value is what types that placeholder.**  So this phase owes the domain
+   and its readability, and owes *nothing* at the `jit` call site — writing a
+   defaulted class into the parameter cell there would be both the other
+   workstream's job and unsound (`f = y => y + y; k = jit f; f 1.5` must keep
+   working: the cell is shared, the kernel is not).
+
+   A third red target, `examples`, is this feature in public output — two
+   declared signatures become `?a -> ?a` — and is updated in this branch.
 
 (Closed since the first draft: the narrowing rule and its `Program` hook, and the
 refinement *record* plus its `Program` hook — §3 rejects the set's type role, and
@@ -428,19 +552,21 @@ than budgeting for it.)
 
 ## 9. Phases
 
-- **Phase 0 — the mechanism.** The `AttrExt` refinement: one function in the
-  slot, `missing_value = Void` and shared, **no** propagation, a plain-unify
-  reconciliation, a `render`; registered in the language's `AttrSet` with an
-  append-only codec tag. The highlevel's insertion of one lowlevel assert per
-  refined expression (the predicate applied to that expression's value,
-  `register_assert` with the expression's loc and a refinement flavour). The
-  domain value demoted to a value: tag, encoding, codec tag, printer. Nothing
-  user-visible.
-- **Phase 1 — the contract on the builtin operators.** The `T{…}` surface
-  spelling and its lowering; `check_binop` gives `+ - * /` and the order
-  comparisons the domain refinement instead of the pin (R3); the kernel's
-  committed default (§8.6). `add` is polymorphic; a wrong-class use is refused.
-  *This is the user-visible feature.*
+- **Phase 0 — the mechanism. Landed.** The class domain as a *value*
+  (`[TypeSet, [members], default]`, tag beside `TypeId`, three elements so no
+  silhouette reads it as a type), `TypeOperator::InDomain` as the structural
+  membership test (`==` cannot do it: `value_eq` compares array *handles*, so a
+  class node out of another module would compare unequal), and the condition
+  registered by `check_binop` through `register_assert`.  Measured: no existing
+  test regressed, and `add "a" "b"` went from *accepted* to refused.
+- **Phase 1 — the contract on the builtin operators.** The operand tie, the
+  domain condition, the refinement attribute, `!` on a parameter, the static
+  class-naming fix, and the diagnostic flavour are landed.  What remains is the
+  printer's spelling (§8.1, which waits on the doc-overrides-a-value's-print
+  mechanism) and the `Num`/std migration.  The kernel boundary (§8.4) is **not**
+  in this phase: it is the specialize-before-JIT pass's, and the domain landed
+  here is that pass's input.  *The builtin operators are the user-visible
+  feature.*
 - **Phase 2 — the dependent if.** `if` desugars to the tuple read `(e, t)(c)`
   instead of the array read `[e, t][c]`, and the claimed laziness of an
   unselected arm is measured. Unlocks user-written generic numeric functions.

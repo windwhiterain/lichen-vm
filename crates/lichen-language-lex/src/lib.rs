@@ -34,7 +34,8 @@
 //! an integer and `x.5` is a field read, and there is no exponent form --
 //! `1.5e3` is a float then the name `e3`.  '->'
 //! is the function-type arrow, '=>' a lambda, '::' the raw named-read
-//! separator, '==>' the table key/value separator, '!' a prefix assert.  A
+//! separator, '==>' the table key/value separator, '@assert' the prefix assert,
+//! '!' the refinement annotation's sigil.  A
 //! bare '~' folds into Tilde(usize::MAX) and '~' with adjacent digits into
 //! Tilde(n); a run that overflows is a lex error with no token.  Any other
 //! character is a lex error -- errors accumulate (the
@@ -102,6 +103,12 @@ pub enum TokenKind {
     /// `@loop` -- a binding whose recursion may become a loop. The keyword
     /// sigil is `@`; this is the first keyword to carry it.
     KwLoop,
+    /// `@assert` -- the prefix assert, `@assert e`.  It replaced the `!`
+    /// sigil (which `docs/notes/operator-polymorphism.md` §3 gives to a
+    /// refinement annotation), so the two are not confusable: `@assert` is a
+    /// word at the `@` keyword sigil, and `!` sits in the annotation's
+    /// attribute chain.
+    KwAssert,
     /// The pub keyword -- a block statement marked as a struct field.
     KwPub,
     /// The cache keyword -- a binding whose value is a *retained cell*
@@ -137,7 +144,10 @@ pub enum TokenKind {
     Hash,
     /// '?' -- the label (doc) annotation: `e ? expr`.
     Question,
-    /// '!' -- a prefix assert: `!e` asserts `e`.
+    /// `!` -- the refinement annotation's sigil, `e : T ! p`: `p` is a
+    /// predicate on the annotated value's *value*, required to evaluate to
+    /// `1`.  The assert, which that sigil used to spell, is the keyword
+    /// [`TokenKind::KwAssert`] (`@assert`).
     Bang,
     /// '$' -- a native-operator call prefix: `$jit(f)`.  Reserved for a
     /// plugin's own embedded source; a normal file never lexes it as a valid
@@ -225,6 +235,7 @@ impl TokenKind {
             TokenKind::KwElse => "'else'".to_string(),
             TokenKind::KwReturn => "'return'".to_string(),
             TokenKind::KwLoop => "'@loop'".to_string(),
+            TokenKind::KwAssert => "'@assert'".to_string(),
             TokenKind::KwPub => "'pub'".to_string(),
             TokenKind::KwCache => "'cache'".to_string(),
             TokenKind::KwArray => "'array'".to_string(),
@@ -780,12 +791,13 @@ fn raw_to_kind(
         }
         RawToken::AtNameLit => match &slice[1..] {
             "loop" => Some(TokenKind::KwLoop),
+            "assert" => Some(TokenKind::KwAssert),
             other => {
                 errors.push(LexDiag {
                     span: Some(lc),
                     message: format!(
-                        "'@{other}' is not a keyword. `@` prefixes keywords, and `@loop` is the \
-                         only one so far"
+                        "'@{other}' is not a keyword. `@` prefixes keywords, and `@loop` and \
+                         `@assert` are the ones that exist"
                     ),
                 });
                 None

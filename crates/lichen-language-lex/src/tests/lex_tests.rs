@@ -331,11 +331,11 @@ fn an_overflowing_shallow_depth_is_a_lex_error() {
 }
 
 #[test]
-fn a_bang_is_a_prefix_assert_token() {
+fn an_at_assert_is_the_prefix_assert_token() {
     assert_eq!(
-        kinds("! (1 == 1)"),
+        kinds("@assert (1 == 1)"),
         vec![
-            TokenKind::Bang,
+            TokenKind::KwAssert,
             TokenKind::LParen,
             TokenKind::Int(1),
             TokenKind::Eq,

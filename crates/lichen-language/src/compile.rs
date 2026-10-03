@@ -57,7 +57,7 @@ use crate::cells::CellStore;
 use crate::diag::Diag;
 use crate::path::Path;
 use crate::preprocess::ResolvedImport;
-use crate::program::{LangAttr, LangProgram, Perspective};
+use crate::program::{LangAttr, LangProgram, Perspective, Refinement};
 use lichen_doc::Doc;
 use lichen_lowlevel::StaticNodeId;
 
@@ -787,6 +787,7 @@ impl Compiler {
                 value,
                 r#type,
                 perspective,
+                refinement,
                 doc,
                 span,
             } => {
@@ -806,6 +807,9 @@ impl Compiler {
                 }
                 if let Some(d) = &doc {
                     spelled.push((LangAttr::Doc(Doc), self.compile_expr(d)));
+                }
+                if let Some(r) = &refinement {
+                    spelled.push((LangAttr::Refinement(Refinement), self.compile_expr(r)));
                 }
                 spelled.sort_by_key(|(marker, _)| marker.order_index());
                 let tail: Vec<LangAttr> = spelled.iter().map(|(marker, _)| *marker).collect();

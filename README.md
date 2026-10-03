@@ -309,7 +309,7 @@ t = table{ [1, 2] ==> 10, [3, 4] ==> 20 }
 ```text
 ---
   order = "0"
-  output = "(Function, Function): struct<.succ Int -> Int, .add Int -> Int -> Int>"
+  output = "(Function, Function): struct<.succ Int -> Int, .add ?a -> ?a -> ?a>"
 ---
 succ = x => x + 1
 add = x => y => x + y
@@ -321,7 +321,7 @@ add = x => y => x + y
 ---
   order = "1"
   math = import "math.lichen"
-  output = "(Function, Function): struct<.double Int -> Int, .inc_twice Int -> Int>"
+  output = "(Function, Function): struct<.double ?a -> ?a, .inc_twice Int -> Int>"
 ---
 double = x => math.add x x
 inc_twice = x => math.succ (math.succ x)
@@ -359,7 +359,7 @@ n = 5 : std.type_of (1)
   output = "(1, 5): <Int, Int>"
 ---
 n = 5
-(! (n <= 5), n)
+(@assert (n <= 5), n)
 ```
 
 ### `assert_in_function.lichen`
@@ -369,7 +369,7 @@ n = 5
   order = "8"
   output = "1: Int"
 ---
-f = x => ! (x <= 10)
+f = x => @assert (x <= 10)
 f 5
 ```
 

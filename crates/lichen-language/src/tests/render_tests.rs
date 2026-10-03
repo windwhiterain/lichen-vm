@@ -93,9 +93,9 @@ fn a_struct_conflict_keeps_the_nominal_ids() {
 
 #[test]
 fn a_failed_assert_renders_its_message() {
-    // `!(1 == 2)` — the condition resolves to 0, a failed assert (a runtime
+    // `@assert (1 == 2)` — the condition resolves to 0, a failed assert (a runtime
     // evaluation failure, not a unify): the message and the caret at the `!`.
-    let report = crate::compile("!(1 == 2)");
+    let report = crate::compile("@assert (1 == 2)");
     assert_eq!(report.diagnostics.len(), 1);
     let d = &report.diagnostics[0];
     assert_eq!(d.stage, Stage::Check);

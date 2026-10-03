@@ -46,37 +46,35 @@ where
     ) -> NodeId {
         self.check_expr(left);
         self.check_expr(right);
+        let left_ty = self.state[left].ty.unwrap();
+        let right_ty = self.state[right].ty.unwrap();
         // Whether this operation computes over floats: a concretely `Float`
         // operand says so, and any other operand — an `Int`, a not-yet-decided
         // parameter, a non-scalar — leaves the operation on the `Int` default
         // it had before floats existed.
-        let float = self.names_float_class(self.state[left].ty.unwrap())
-            || self.names_float_class(self.state[right].ty.unwrap());
+        let float = self.names_float_class(left_ty) || self.names_float_class(right_ty);
+        // Whether *either* operand has stated a class yet.  When one has, the
+        // operation computes over that class and the other operand is pinned to
+        // it, exactly as before.  When neither has, the operation is
+        // **polymorphic**: pinning both to `Int` here is what used to refuse
+        // `add 1.5 2.5`, so the two cells are made one class instead and each
+        // use commits the whole operation to a single class.  Nothing is lost
+        // in the reported cases: a stated operand is what the diagnostics name,
+        // and the undecided pair is precisely the case with no operand to name.
+        let stated = self.class_is_stated(left_ty) || self.class_is_stated(right_ty);
         match operator {
             // The generalized equality: the operands must be the same type, so
             // a type value (`: Type`) can be compared with a type constant and
             // a cross-class comparison is the operand unify's refusal.
-            BinOp::Eq | BinOp::Neq => self.check_unify(
-                self.state[left].ty.unwrap(),
-                self.state[right].ty.unwrap(),
-                self.loc(left, 1),
-                DiagKind::BinOp,
-            ),
+            BinOp::Eq | BinOp::Neq => {
+                self.check_unify(left_ty, right_ty, self.loc(left, 1), DiagKind::BinOp)
+            }
             // The `Int`-only operators: a float operand is refused here, by the
-            // same unify that refuses every other non-`Int`.
+            // same unify that refuses every other non-`Int`.  Their domain is a
+            // single class, so there is no polymorphism to keep open.
             BinOp::Rem | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
-                self.check_unify(
-                    self.state[left].ty.unwrap(),
-                    self.int_type,
-                    self.loc(left, 1),
-                    DiagKind::BinOp,
-                );
-                self.check_unify(
-                    self.state[right].ty.unwrap(),
-                    self.int_type,
-                    self.loc(right, 1),
-                    DiagKind::BinOp,
-                );
+                self.check_unify(left_ty, self.int_type, self.loc(left, 1), DiagKind::BinOp);
+                self.check_unify(right_ty, self.int_type, self.loc(right, 1), DiagKind::BinOp);
             }
             BinOp::Add
             | BinOp::Sub
@@ -86,29 +84,53 @@ where
             | BinOp::Gt
             | BinOp::Leq
             | BinOp::Geq => {
-                let scalar = if float {
-                    self.float_type
+                if stated {
+                    let scalar = if float {
+                        self.float_type
+                    } else {
+                        self.int_type
+                    };
+                    self.check_unify(left_ty, scalar, self.loc(left, 1), DiagKind::BinOp);
+                    self.check_unify(right_ty, scalar, self.loc(right, 1), DiagKind::BinOp);
                 } else {
-                    self.int_type
-                };
-                self.check_unify(
-                    self.state[left].ty.unwrap(),
-                    scalar,
-                    self.loc(left, 1),
-                    DiagKind::BinOp,
-                );
-                self.check_unify(
-                    self.state[right].ty.unwrap(),
-                    scalar,
-                    self.loc(right, 1),
-                    DiagKind::BinOp,
-                );
+                    // The two operands are one class, so a use at either class
+                    // is a use for the whole operation: `add 1 1.5` stays a
+                    // refusal because `1` commits the shared cell first — the
+                    // apply clone preserves the class, so the arguments of one
+                    // application meet.
+                    self.check_unify(right_ty, left_ty, self.loc(right, 1), DiagKind::BinOp);
+                    // That shared class must lie in the operation's **domain**,
+                    // and the check is a refinement rather than a unify: the
+                    // condition `left_ty ∈ {Int, Float}` is registered as an
+                    // assert, so it stays *pending* while the class is open and
+                    // the apply clone re-checks it per call
+                    // (`docs/notes/operator-polymorphism.md` §3).  Without it a
+                    // non-numeric use is not refused at all — `run` answers the
+                    // lazy marker for a class it cannot compute, so `add "a" "b"`
+                    // would yield an undecided value.
+                    let (int_type, float_type) = (self.int_type, self.float_type);
+                    let domain = crate::class_set::build(self, &[int_type, float_type], int_type);
+                    let operands = self.array_node(self.current_block, &[left_ty, domain]);
+                    let condition = self.op_node(
+                        self.current_block,
+                        P::Operator::from(TypeOperator::InDomain),
+                        Some(operands),
+                    );
+                    self.register_assert(
+                        condition,
+                        self.loc(e, 1),
+                        true,
+                        AssertSpelling::Refinement { domain },
+                    );
+                }
             }
         }
         // A comparison yields the `0`/`1` scalar whatever its operands are; the
-        // four arithmetic operators yield the class they computed over.
+        // four arithmetic operators yield the class they computed over — the
+        // operands' own shared cell while it is still open.
         let result = match operator {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div if float => self.float_type,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div if !stated => left_ty,
             _ => self.int_type,
         };
         let operator = P::Operator::from(TypeOperator::from(operator));
@@ -123,6 +145,18 @@ where
         pair
     }
 
+    /// Whether a type slot has **stated a class** — anything the low type
+    /// vocabulary can name, as opposed to an inference cell that has not bound
+    /// yet.
+    ///
+    /// This is the decode [`crate::shape::low_type_of_slot`], the same authority
+    /// the kernel boundary reads a parameter's domain with.  It is what tells
+    /// `x + 1` (one operand stated, so `x` is pinned to `Int`) from `x + y`
+    /// (neither stated, so the operation stays polymorphic).
+    fn class_is_stated(&self, ty: NodeId) -> bool {
+        crate::shape::low_type_of_slot(&self.module, AnyNodeId::Dynamic(ty)).is_known()
+    }
+
     /// Whether an expression's type slot names the `Float` class — the one
     /// operand shape that selects float arithmetic and the float order
     /// comparisons.
@@ -132,8 +166,7 @@ where
     /// [`LowShape::Float`] for a slot naming the float type — directly, or
     /// through the pair an annotated parameter's type cell holds — and
     /// [`LowShape::Unknown`] for a cell that has not bound yet.  So an
-    /// undecided operand selects no class and is pinned to `Int`, exactly as
-    /// every numeric operand was before floats existed.
+    /// undecided operand selects no class.
     fn names_float_class(&self, ty: NodeId) -> bool {
         crate::shape::low_type_of_slot(&self.module, AnyNodeId::Dynamic(ty)) == LowShape::Float
     }

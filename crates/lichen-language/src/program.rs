@@ -28,6 +28,8 @@ pub use lichen_perspective::{GcdOp, Perspective, divides, gcd, persp_attr_ext};
 use lichen_doc::Doc;
 pub use lichen_doc::doc_attr_ext;
 
+pub use lichen_highlevel::refinement::{Refinement, refinement_attr_ext};
+
 /// The position of the tokens counted so far, as a constant expression —
 /// `macro_rules!` cannot add a metavariable, so the index of a manifest entry
 /// is spelled as a sum of ones (the expansion is a literal expression, which
@@ -697,10 +699,12 @@ crate::lang_compose_vocabulary! {
     attrs = [
         Perspective as Perspective;
         Doc as Doc;
+        Refinement as Refinement;
     ]
     // A `Perspective` emits a `Gcd` operator, so its `AttrExt` needs the
-    // operator bound; a `Doc` label needs none.
-    [ P::Operator: From<GcdOp> ];
+    // operator bound; a `Doc` label needs none; a `Refinement` builds the
+    // `Apply` that enforces it, so it needs the core operator.
+    [ P::Operator: From<GcdOp> + From<LowOperator> ];
     values = [
         LowValue as LowValue;
         TypeValue as TypeValue;

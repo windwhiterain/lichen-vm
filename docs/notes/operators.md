@@ -90,7 +90,7 @@ Loosest to tightest, which is the ladder `parse.rs` builds bottom-up:
 &                 bitwise and
 + -               sum
 * / %             product
-! e               prefix assert
+@assert e         prefix assert
 int2float e       prefix crossing   (the same unary level)
 float2int e
 application       juxtaposition

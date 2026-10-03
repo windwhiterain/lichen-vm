@@ -223,10 +223,11 @@ fn walk(expr: &Expr, deps: &mut Deps) {
             r#type,
             perspective,
             doc,
+            refinement,
             ..
         } => {
             walk(value, deps);
-            for attribute in [r#type, perspective, doc].into_iter().flatten() {
+            for attribute in [r#type, perspective, doc, refinement].into_iter().flatten() {
                 walk(attribute, deps);
             }
         }

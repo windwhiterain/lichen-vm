@@ -60,6 +60,51 @@ where
     TypePrinter::new(module).node(root)
 }
 
+/// The **label** an expression reads as, when one of the attributes it carries
+/// names it — the general answer to "how is a value printed" for a value with no
+/// spelling of its own (a function, which is what a refinement's slot holds).
+///
+/// `tail` and `pair` are the same schema-tail/pair pair [`render_attributes`]
+/// reads, and the label is looked for the same way: one spelling per *present*
+/// attribute, first answer wins.  `None` means the expression prints as it
+/// always did.
+pub fn value_label<P: HighProgram>(
+    module: &Module<P>,
+    pair: NodeId,
+    tail: &[P::Attr],
+    attr_ext: &dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>,
+) -> Option<String>
+where
+    P::Value: ValueType,
+{
+    if tail.is_empty() {
+        return None;
+    }
+    let values = module
+        .node_value(AnyNodeId::Dynamic(pair))
+        .and_then(|v| v.as_enum())
+        .and_then(|v| match v {
+            // SAFETY: `a` is the payload of a value read from a live node of
+            // the module being rendered; this printer releases no block.
+            LowValue::Array(a) => Some(unsafe { a.items() }.to_vec()),
+            _ => None,
+        })?;
+    for (i, marker) in tail.iter().enumerate() {
+        let slot = values
+            .get(shape::attr_slot(i))
+            .and_then(|item| match item.node {
+                AnyNodeId::Dynamic(n) => Some(n),
+                AnyNodeId::Static(_) => None,
+            });
+        if let Some(slot) = slot
+            && let Some(label) = attr_ext(marker).label(module, slot)
+        {
+            return Some(label);
+        }
+    }
+    None
+}
+
 /// Render the attributes an expression actually carries, from its schema tail
 /// (the expression's attribute *set*) and its runtime pair.  Returns empty when
 /// the expression carries no attribute; otherwise one spelling per *present*

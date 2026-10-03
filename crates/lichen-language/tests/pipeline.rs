@@ -707,20 +707,20 @@ fn if_selects_a_branch() {
 }
 
 #[test]
-fn a_bang_prefix_asserts_and_evaluates() {
+fn an_at_assert_prefix_asserts_and_evaluates() {
     // A passing assert keeps the condition's own value (it checks, not
     // replaces); the condition's type is the assert's type.
-    assert_eq!(usize_of(&evaluate("! (1 == 1)")), 1);
-    assert_eq!(usize_of(&evaluate("! (1 <= 2)")), 1);
-    // `!` binds tighter than the comparison: `! 1 == 1` is `(!1) == 1`.
-    assert_eq!(usize_of(&evaluate("!1 == 1")), 1);
+    assert_eq!(usize_of(&evaluate("@assert (1 == 1)")), 1);
+    assert_eq!(usize_of(&evaluate("@assert (1 <= 2)")), 1);
+    // `@assert` binds tighter than the comparison: `@assert 1 == 1` is `(@assert 1) == 1`.
+    assert_eq!(usize_of(&evaluate("@assert 1 == 1")), 1);
 }
 
 #[test]
 fn a_failed_assert_is_a_checker_diagnostic() {
-    // `!(1 == 2)` — the condition resolves to 0, not 1: a failed assert, not
+    // `@assert (1 == 2)` — the condition resolves to 0, not 1: a failed assert, not
     // a unification failure, and not a panic.
-    let d = diags("!(1 == 2)");
+    let d = diags("@assert (1 == 2)");
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].stage, Stage::Check);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
@@ -737,7 +737,7 @@ fn a_failed_assert_is_a_checker_diagnostic() {
 #[test]
 fn an_assert_on_a_non_one_value_fails() {
     // `!2` asserts that the literal's own value is `USize(1)` — it is 2.
-    let d = diags("!2");
+    let d = diags("@assert 2");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Assert);
@@ -749,7 +749,7 @@ fn an_assert_on_a_failed_read_fails_with_none() {
     // `!([1, 2][5])` — the condition is a failed read: its residue is the
     // concrete computed-nothing value, so the assert FAILS (an unbound
     // condition would stay untriggered) and the value spells `none`.
-    let d = diags("!([1, 2][5])");
+    let d = diags("@assert ([1, 2][5])");
     assert!(
         d.iter().any(|d| {
             d.check.as_ref().is_some_and(|c| c.kind == DiagKind::Assert)
@@ -764,7 +764,7 @@ fn an_assert_in_a_function_body_checks_per_call() {
     // The body's assert cannot resolve at normalize (x is unbound), so the
     // apply clones it and re-checks against the argument — the failure is
     // rendered, not silently dropped, and the caret points at the body's `!`.
-    let d = diags("f = x => ! (x == 1); f 2");
+    let d = diags("f = x => @assert (x == 1); f 2");
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].stage, Stage::Check);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
@@ -785,7 +785,7 @@ fn an_assert_in_a_function_body_checks_per_call() {
 
     // A satisfying argument passes.
     assert!(
-        lichen_language::run::evaluate("f = x => ! (x == 1); f 1").is_ok(),
+        lichen_language::run::evaluate("f = x => @assert (x == 1); f 1").is_ok(),
         "f 1 must satisfy the body assert"
     );
 }

@@ -167,7 +167,7 @@ fn statement_errors_carry_spans() {
     let err = parse_err("a = ; 5");
     assert_eq!(
         err.message,
-        "expected '!', 'int2float', 'float2int', or an expression, found a separator"
+        "expected '@assert', 'int2float', 'float2int', or an expression, found a separator"
     );
     assert_eq!(err.span, Some((1, 5)));
 }
@@ -704,7 +704,7 @@ fn index_errors_carry_spans() {
     let err = parse_err("a[]");
     assert_eq!(
         err.message,
-        "expected '~', '!', 'int2float', 'float2int', or an expression, found ']'"
+        "expected '~', '@assert', 'int2float', 'float2int', or an expression, found ']'"
     );
     let err = parse_err("a[0");
     assert_eq!(err.span, Some((1, 4)));
@@ -721,7 +721,7 @@ fn parse_errors_carry_spans() {
     let err = parse_err("x =>");
     assert_eq!(
         err.message,
-        "expected '!', 'int2float', 'float2int', or an expression, found the end of the program"
+        "expected '@assert', 'int2float', 'float2int', or an expression, found the end of the program"
     );
     assert_eq!(err.span, Some((1, 5)));
     let err = parse_err("(x");
@@ -764,8 +764,8 @@ fn an_underscore_is_a_placeholder_in_type_and_term_position() {
 }
 
 #[test]
-fn a_bang_prefix_parses_as_an_assert() {
-    let e = parse_ok("!(1 == 1)");
+fn an_at_assert_prefix_parses_as_an_assert() {
+    let e = parse_ok("@assert (1 == 1)");
     let Expr::Assert { value, span } = e else {
         panic!("expected an assert, got {e:?}")
     };
@@ -780,15 +780,15 @@ fn a_bang_prefix_parses_as_an_assert() {
 }
 
 #[test]
-fn a_bang_binds_a_full_application_but_tighter_than_a_binary_operator() {
+fn an_at_assert_binds_a_full_application_but_tighter_than_a_binary_operator() {
     // `! f x` asserts `f x` — the application is the operand.
-    let e = parse_ok("!f x");
+    let e = parse_ok("@assert f x");
     assert!(matches!(
         e,
         Expr::Assert { value, .. } if matches!(*value, Expr::Apply { .. })
     ));
-    // `! x <= 3` is `(!x) <= 3`, not `!(x <= 3)` — `!` binds tighter than `<=`.
-    let e = parse_ok("!x <= 3");
+    // `@assert x <= 3` is `(@assert x) <= 3`, not `@assert (x <= 3)` — `@assert` binds tighter than `<=`.
+    let e = parse_ok("@assert x <= 3");
     assert!(matches!(
         e,
         Expr::BinOp {
@@ -930,7 +930,7 @@ fn broken_statements_are_recovered() {
     assert_eq!(errors.len(), 1, "the broken binding's error");
     assert_eq!(
         errors[0].message,
-        "expected '!', 'int2float', 'float2int', or an expression, found a separator"
+        "expected '@assert', 'int2float', 'float2int', or an expression, found a separator"
     );
     assert_eq!(program.statements.len(), 2);
     assert!(matches!(program.expr, Some(Expr::Int(5, _))));

@@ -317,6 +317,7 @@ impl Resolver {
                 r#type,
                 perspective,
                 doc,
+                refinement,
                 ..
             } => {
                 self.resolve_expr(value);
@@ -325,6 +326,9 @@ impl Resolver {
                 }
                 if let Some(p) = perspective {
                     self.resolve_expr(p);
+                }
+                if let Some(r) = refinement {
+                    self.resolve_expr(r);
                 }
                 if let Some(d) = doc {
                     self.resolve_expr(d);

@@ -428,6 +428,16 @@ macro_rules! define_type_value {
             /// different ids don't (nominal identity), and an id never unifies
             /// with the structural markers above.
             TypeId(usize),
+            /// The tag of a **class domain** value — a set of scalar classes a
+            /// contract admits, `[TypeSet, [members], default]`.
+            ///
+            /// Deliberately **not** a kind marker, for the same reason
+            /// [`TypeValue::TypeId`] is not: a domain is a *value*, not a type.
+            /// A kind marker would put it in type position, where unification
+            /// would have to decide what it means; a domain is read by whoever
+            /// needs the candidates and is otherwise inert
+            /// (`docs/notes/operator-polymorphism.md` §3).
+            TypeSet,
         }
     };
 }
@@ -620,6 +630,22 @@ pub enum TypeOperator {
     /// whose type differs from its operand's.
     Int2Float,
     Float2Int,
+    /// Whether a value's class is a member of a **class domain** —
+    /// `[class value, domain value]`, answering `USize(0/1)`.
+    ///
+    /// This is the refinement's membership test, and it exists as an operator
+    /// rather than as a combination of `==` for one measured reason:
+    /// [`TypeOperator::Eq`] compares through [`ValueExt::value_eq`], which for
+    /// an array is *handle* identity — so a structurally identical class node
+    /// out of another module (an imported artifact's `int` type) would compare
+    /// unequal and the refinement would refuse a value it should admit.  This
+    /// operator decodes **structurally**, the same way
+    /// [`crate::shape::low_type_of`] does.
+    ///
+    /// A side whose class is still undecided leaves the whole operator lazy
+    /// (`Parameterized`), which is what keeps a refinement on an open parameter
+    /// **pending** rather than failed until an application supplies the class.
+    InDomain,
 }
 
 /// The category an **integer** `Div`/`Rem` by zero is recorded under.
@@ -698,6 +724,11 @@ macro_rules! define_type_value_codec {
                         w.u8(8);
                         w.u64(n as u64);
                     }
+                    // The class-domain tag.  Tag `10` is the next free one after
+                    // the registry's `9`, which `TypeFloat` holds — the registry
+                    // deliberately does not number by list position, so a marker
+                    // added to it later must not claim this.
+                    TypeValue::TypeSet => w.u8(10),
                 }
                 Ok(())
             }
@@ -712,6 +743,7 @@ macro_rules! define_type_value_codec {
                 Ok(match r.u8()? {
                     $($tag => TypeValue::$variant,)*
                     8 => TypeValue::TypeId(r.u64()? as usize),
+                    10 => TypeValue::TypeSet,
                     tag => return Err(format!("unknown type-value tag {tag}")),
                 })
             }
@@ -769,6 +801,7 @@ define_type_operator_codec! {
     BitXor = 14;
     Int2Float = 15;
     Float2Int = 16;
+    InDomain = 17;
 }
 
 // The highlevel program's operator vocabulary: a flat union of the
@@ -913,7 +946,8 @@ where
             | TypeOperator::Neq
             | TypeOperator::BitAnd
             | TypeOperator::BitOr
-            | TypeOperator::BitXor => {
+            | TypeOperator::BitXor
+            | TypeOperator::InDomain => {
                 // The VM already deep-evaluates the operand and gates on its
                 // parameterized subtree, so an unbound operand is the lazy
                 // marker (the definition pass flags the node).
@@ -1059,6 +1093,19 @@ where
                     TypeOperator::Int2Float | TypeOperator::Float2Int => {
                         unreachable!("the conversions are unary, and handled above")
                     }
+                    // `[class value, domain value]` — the refinement's membership
+                    // test.  The outer arm has already gated on an undecided
+                    // side, which is what keeps a refinement on an open parameter
+                    // *pending* until an application supplies the class.
+                    TypeOperator::InDomain => {
+                        // Operand 1 is the domain, operand 0 the class being
+                        // tested; the decode is structural, so a class node out of
+                        // another module matches by its shape rather than by its
+                        // allocation.
+                        let member =
+                            crate::class_set::contains(module, operands[1].node, operands[0].node);
+                        P::Value::from(LowValue::USize(member as usize))
+                    }
                 }
             }
         }
@@ -1105,6 +1152,9 @@ where
             | TypeOperator::BitXor => Some(LowShape::USize),
             TypeOperator::Int2Float => Some(LowShape::Float),
             TypeOperator::Float2Int => Some(LowShape::USize),
+            // A membership test answers `0`/`1`, so its own class is the machine
+            // scalar whatever its operands are.
+            TypeOperator::InDomain => Some(LowShape::USize),
             TypeOperator::Fresh => None,
         }
     }

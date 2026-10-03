@@ -95,16 +95,18 @@ where
     }
 
     /// The stable name of an unbound **static** cell: `?a`, `?b`, … — a frozen
-    /// module's type variable.  Keyed by the absolute ref so the same cell
-    /// keeps one name (and two refs to it — e.g. a kernel's signature cells —
-    /// share it), mirroring [`Self::class_name`].
+    /// module's type variable.  Keyed by the cell's **equality class**, exactly
+    /// as [`Self::class_name`] is: the artifact keeps a class whole, so two refs
+    /// in one class are one variable, and naming them by ref alone would print
+    /// an imported polymorphic `?a -> ?a` as `?a -> ?b`.
     pub fn static_class_name(&mut self, sref: lichen_lowlevel::StaticNodeId) -> String {
-        if let Some(name) = self.static_names.get(&sref) {
+        let representative = self.module.static_equality_representative(sref);
+        if let Some(name) = self.static_names.get(&representative) {
             return name.clone();
         }
         let name = letter_name(self.next);
         self.next += 1;
-        self.static_names.insert(sref, name.clone());
+        self.static_names.insert(representative, name.clone());
         name
     }
 
@@ -167,6 +169,15 @@ where
     }
 
     fn elements(&mut self, node: NodeId, elements: &[ArrayItem]) -> String {
+        // A **class domain** value `[TypeSet, [members], default]` — a set of
+        // scalar classes a contract admits, rendered as `{Int, Float}`.  It is
+        // checked before the type-expression branches because it is not a type:
+        // its three elements match none of their shapes, and this is the one
+        // place a reader would otherwise see `raw[…]`.
+        if lichen_highlevel::class_set::is_domain(self.module, AnyNodeId::Dynamic(node)) {
+            let members = self.fields_any(elements[1].node);
+            return format!("{{{}}}", members.join(", "));
+        }
         // A bare struct kind `[TypeStruct{id, names}, K]` (a struct type
         // pair's type slot): render its tag `TypeStruct`.  Detected before the
         // `[head, K]` atomic branch, since its marker is a 2-element array

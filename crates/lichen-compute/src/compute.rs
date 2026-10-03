@@ -4405,6 +4405,11 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
         // names both classes, and `emit_node` answers them before it reaches
         // here.
         TypeOperator::Int2Float | TypeOperator::Float2Int => return None,
+        // A membership test is a *refinement's* check, not a computation a
+        // kernel body contains: the checker registers it as an assert beside
+        // the body, and a kernel lowers the operand's own arithmetic.  Nothing
+        // in a kernel reads a class, so it has no machine op.
+        TypeOperator::InDomain => return None,
         TypeOperator::Fresh => return None,
     })
 }
