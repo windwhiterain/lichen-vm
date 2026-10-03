@@ -3,27 +3,50 @@
 > Status: **proposed** — nothing here is implemented. The architecture was
 > settled in discussion before any code: **the type and the implementation of
 > an operator are separate, and the type is allowed to be stricter than the
-> implementation** (§2). The type contract is a first-class class-set value
-> (§3); the implementation is an ordinary lichen function that dispatches with
-> `if t == Int then … else if t == Float then … else panic`, checked under a
-> new dependent-if rule (§4); the panic arm is dead by construction (§5).
+> implementation** (§2). The contract is a **refinement** (§3): a predicate on
+> the operand's *value* that must evaluate to `1`, carried as an ordinary
+> **attribute** and enforced by the lowlevel. The implementation is an ordinary
+> lichen function that selects a per-class leaf and applies it (§4). The panic
+> arm is dead by construction (§5).
+>
+> **Rejected on the way here: the class-set *type*.** A tenth kind marker whose
+> members are type values, with a narrowing rule in `unify_inner`, cannot work,
+> and each half of why is measured:
+>
+> - A set in *type* position has to commit a member at every use, and the unify
+>   that does it is the **lowlevel's** (`apply_parameter_check`), so the rule
+>   must be a `Program` hook consulted from `unify_inner` — which, being a
+>   `Merge`, folds a per-occurrence domain node into the *canonical* class of
+>   the member. `class_committed_value` then scans past the set, the deferral
+>   path reconciles against it, and the domain node's own slot can be written
+>   over. Every kernel test that reads a domain goes wrong, in ways that are
+>   order-dependent and so differ between a fresh and an incremental build.
+> - More fundamentally, a set that *is* a type makes **unification** the
+>   enforcement mechanism. The contract is a fact about **values** — "this
+>   operand's value is one of the numeric classes" — and a fact about a value is
+>   checked by *evaluating* it, not by reconciling types. That is a refinement.
+>
+> A refinement needs no narrowing and no new type: the operand's cell stays an
+> ordinary unbound `?a`, narrowed by the plain let-polymorphic cloning that
+> already makes `x => x` polymorphic.
 >
 > Points at: `crates/lichen-highlevel/src/checker/operators.rs` (`check_binop`,
-> the pin this removes), `crates/lichen-language/src/compile.rs` (the
-> homogeneous branch-array desugar §4 replaces), `crates/lichen-highlevel/src/
-> checker/indexing.rs` (`check_index`, the lazy `Index` the dependent if
-> reuses), `crates/lichen-lowlevel/src/equality.rs` (`unify_inner`, where the
-> narrowing rule lives), `crates/lichen-highlevel/src/shape.rs`
-> (`for_each_kind_marker!`, the set value's encoding), `crates/lichen-compute`
-> (the defaulting point), and `lichen-std/_.lichen` (the operators' end-state
-> home).
+> the pin this removes), `crates/lichen-highlevel/src/attr.rs` (`AttrExt`, the
+> carrier §3 takes `Perspective`'s shape from), `crates/lichen-highlevel/src/
+> checker/asserts.rs` (`register_assert`, the enforcement `assert.rs` already
+> provides), `crates/lichen-lowlevel/src/assert.rs` (`check_asserts`, the
+> force-and-require-`USize(1)` discipline), `crates/lichen-highlevel/src/
+> checker/indexing.rs` (`check_index`, whose bounds constraint is already a
+> refinement in all but name), `crates/lichen-language/src/compile.rs` (the
+> homogeneous branch-array desugar §4 replaces), `crates/lichen-compute` (the
+> defaulting point), and `lichen-std/_.lichen` (the operators' end-state home).
 >
 > Companions: [operators](operators.md) (the operator set this edits),
 > [floating-point](floating-point.md) §4.2 (the no-conversion rule this must
 > not weaken), [type-of-in-std](type-of-in-std.md) (the precedent for moving a
 > language form into the library),
 > [defer-pending-type-forms](defer-pending-type-forms.md) (the deferred
-> unification machinery the dependent if builds on).
+> unification the dispatch relies on).
 
 ## 1. What is missing
 
@@ -83,148 +106,241 @@ Two measured facts bound what the implementation can look like:
   branches share `x`/`y`, so even the operands cannot satisfy both branches
   in one definition. §4 is the rule that loosens exactly this.
 
-## 3. The type contract: a class-set value
+## 3. The contract: a refinement on the operand's value
 
-The constraint `a ∈ {Int, Float}` must survive the three journeys the graph
-takes without the checker — apply-time cloning, persistence, incremental
-retention — so it lives **in the graph, as a value**: a *class-set type* whose
-members are ordinary type values, encoded as a tenth kind marker
-`[members, [TypeSet, K]]` so the printer, codec, and checker dispatch derive
-from `for_each_kind_marker!` (`floating-point.md` §3.2 is the field guide;
-`TypeId` holds codec tag `8`, so the next marker is `10`). A set is never a
-runtime value — no runtime value is "an Int or a Float, not yet decided" — it
-only ever sits in *type* position, which the kind-marker encoding states in
-the representation.
+The constraint is not a type. It is a **refinement** — classical
+`{v | p v}`, with the base type left as the ordinary inference cell and the
+predicate `p` required to evaluate to `1`:
 
-One additive rule in `unify_inner`, matched on the `TypeSet` marker:
+> A refinement is **one predicate**, a function of the refined value; a
+> conjunction of refinements is one predicate written with `*` (`0 * 1 = 0`,
+> so `*` is the conjunction over this language's `0`/`1` scalars), and `1` —
+> the `*` identity — is "no constraint".
 
-| unify | rule |
-|---|---|
-| set ∩ concrete member | membership check; commit the concrete type |
-| set ∩ concrete non-member | the ordinary unify error — `add "a" "b"` fails at check |
-| set ∩ set | intersect; empty is the error, singleton commits |
-| set ∩ unbound cell | the cell commits to the set |
+It attaches to a value as an **attribute** (`AttrExt`), which is the one
+mechanism in this codebase that already carries a non-equality constraint on an
+expression across every journey the graph takes. `Perspective` is the proof it
+works end to end, and the refinement is its shape with three parameters
+changed:
 
-No existing arm changes; no program today contains a set node, so every old
-path runs verbatim. Narrowing is **not** subtyping: a set cell that narrows
-commits to the member, there is no widening and no value conversion —
-`1 + 1.5` still fails exactly as `floating-point.md` §4.2 demands.
+| | [`Perspective`](../../crates/lichen-perspective/src/perspective.rs) | refinement |
+|---|---|---|
+| slot holds | a lattice value (a thread count) | **a `0`/`1` condition** |
+| `combine` | `Gcd` — the meet | **`*` — conjunction** |
+| `missing_value` | `0`, the `gcd` identity | **`1`, the `*` identity** |
+| reconcile | `check_unify_relaxed` + `is_subtype` | **a plain unify** |
 
-The contract attaches to the implementation as an ordinary annotation, because
-a type is a value and an annotation is a unify:
+What each row buys:
+
+- **The carrier is free.** The slot is element `2 + i` of the term's
+  `[value, type, attrs…]` pair (`shape.rs`'s `PAIR_ATTR_BASE`/`attr_slot`). The
+  pair is an array value, so it is cloned by the apply walk, serialized into the
+  artifact arena, and kept alive by the block that owns it — with **no new
+  cloning, codec, or GC obligation**, which is exactly what a `TypeSet` marker
+  would have needed.
+- **Propagation is free, and wanted.** `combine` derives an expression's slot
+  from its direct sub-expressions', so the refinements of a subtree accumulate
+  into one condition at its root: for `x + y` that is `p x * q y`. This is a
+  *fact* lattice and it is monotone in the safe direction — a refinement that
+  holds of the parts is required of the whole.
+- **Reconciliation is a plain unify.** Requiring the *same* refinement rather
+  than a weaker one is over-strict, and deliberately so: weakening would need
+  implication between predicates (`fact ⊨ requirement`), which is the subtyping
+  this language does not have. Unify never wrongly *accepts*, so the strictness
+  costs expressiveness and buys soundness.
+- **Enforcement is the lowlevel's, and mostly already written.** The check is
+  "force the condition, require `USize(1)`; a condition that stays lazy is
+  pending, and the apply clone re-checks the instantiated condition per call" —
+  [`Module::check_asserts`](../../crates/lichen-lowlevel/src/assert.rs), with
+  `AssertError`'s `{condition, template, value}` provenance already carrying
+  what a diagnostic needs to attribute a span. What the lowlevel does **not**
+  have is the *association*: "this constraint refines that value". That record,
+  and the `Program` hook that tells the lowlevel where a node's refinement is
+  (so a frozen callee's is recovered from the graph rather than duplicated
+  beside it), is the whole of the new mechanism.
+- **Rendering is free.** `AttrExt::render` is what spells `# 4` today; §8.1's
+  spelling question lands there.
+
+Two consequences follow, both accepted:
+
+- `check_index`'s bounds constraint (`i < length`, registered as an assert on
+  the parameter and re-checked per call) is **already a refinement** in all but
+  name. This mechanism generalises that path rather than opening a parallel one,
+  which is why the lowlevel half is small.
+- The lowlevel apply unifies the parameter pair **positionally**, so the
+  parameter's live refinement slot must stay *unbound* — the same trick
+  `check_lam` already plays for a perspective, and for the same reason: binding
+  it would let the deep pass bake it and make the apply enforce the declared
+  refinement by equality. Kept unbound, the slot binds what the call carries,
+  and the declared refinement is enforced where the value is: at the parameter.
+
+The contract has **two halves**, and §2's separation principle is what keeps
+them apart:
+
+- The **domain** is a *value*: a **class set** — a tagged list of member type
+  values, `[TypeSet, [members]]`. Kept, but demoted out of the type system: the
+  tag is a plain value constant (spelled beside `TypeId`, which is likewise
+  **not** a kind marker), and the encoding is deliberately *not* a kinded type
+  expression `[shape, [marker, K]]`. That is what makes "not a type" a property
+  of the representation rather than a convention: `low_type_of` reads slot 0 as
+  a shape, finds a tag that is no marker, then reads slot 1 as a kind, finds a
+  one-element list where a `[marker, K]` belongs, and answers `Unknown`. The set
+  is what a declaration *names* and what a reader that needs the **candidates**
+  consumes — the kernel (below) and the diagnostics.
+- The **check** is a refinement: the predicate of the refined value, which must
+  evaluate to `1`. This is the half that is enforced, and it is §3's subject.
+
+A set is never a runtime value's type and never a member of a type spine. Nothing
+unifies against it: `+ : ?a -> ?a -> ?a` stays exactly that, and no rule is added
+to `unify_inner`.
+
+The contract attaches to a parameter as an ordinary annotation:
 
 ```lichen
 -- lichen-std, end state
-Num  = …                        -- the {Int, Float} set value
+Num  = {Int, Float}             -- the domain VALUE (a class set)
+in_num = v => type_of v ∈ Num   -- the refinement (the check)
+is_int = v => type_of v == Int
 iadd = …                        -- the machine leaves, today's TypeOperator
 fadd = …                        --   split per class (see §6)
-add  = x => y => {
-  x: Num                                    -- the contract
-  t = type_of x
-  if t == Int then iadd x y else if t == Float then fadd x y else panic
-}
+add  = x => y => { x: Num; y: Num      -- the contract
+                   (fadd, iadd)(is_int (type_of x)) x y }
 ```
 
-`x: Num` constrains the parameter's cell through the existing annotation
-machinery; `y` and the result share that cell through the dispatch's applies
-and the signature. `add`'s printed type is the contract, not the dispatch:
-`?a -> ?a -> ?a where ?a ∈ Num` (spelling bikeshed in §8).
+`x: Num` is an attribute on the parameter, so `x`'s *type* cell stays open —
+that is the polymorphism. `add`'s printed type is `?a -> ?a -> ?a` with the
+refinement shown beside it (spelling in §8.1).
 
-## 4. The implementation: a dependent if
+## 4. The implementation: a dependent if that already exists
 
-The one new checking rule. Today `if c then a else b` is `[b, a][c]` with a
-homogeneous element cell. The dependent reading keeps the **value** exactly as
-it is — the lazy `Index` already evaluates only the taken branch — and changes
-only the **type slot**: the branch array's element *type* is itself the lazy
-read
+**Measured, not proposed: the dependent if needs no new checking rule.**  The
+positional slot read `a(k)` already types as
 
 ```text
-elem_ty = Index([type_of b, type_of a], c)
+ty = Index(Index(type_of a, 0), k)          -- `slot_read`, checker/structs.rs
 ```
 
-i.e. the type of `if c then a else b` is `if c then type_of a else type_of b`
-— the same `Index`, one level up. This is the dependent-types answer to a
-conditional (Bool elimination with the motive computed from the scrutinee),
-and it is cheap here precisely because types are values computed by the same
-lazy machinery the values use.
+so indexing a **tuple** with a dynamic key *is* `if c then type_of b else
+type_of a`:
 
-Its two consequences, each load-bearing:
+```lichen
+(1, "1")(x)      -- Index([Int, string], x)
+```
 
-- **Branch types may differ.** The `Int` branch and the `Float` branch no
-  longer meet in one cell; per instantiation `c` is concrete, the `Index`
-  resolves, and the result's type is the taken branch's.
-- **An untaken branch's constraints do not fire.** Both branches are still
-  *built* (the checker walks them), but a unify that only the untaken branch
-  demands — `$fadd x y` with `x` an `Int` — must defer, and fire only if its
-  branch is ever taken. This is the deferred-unification machinery of
-  [defer-pending-type-forms](defer-pending-type-forms.md) given one more
-  deferral cause: *branch-pending*. The existing apply-clone re-check then
-  gives the right behaviour per call site: for `add 1.5 2.5` the `Int` arm's
-  constraints never fire; for `add 1 1.5` the taken arm's operand unify fires
-  and reports `expected Int, found Float` — the same refusal as today, at the
-  same concreteness.
+The first draft of this section proposed a rule for the same type slot while
+`if` kept desugaring to an array.  The rule is unnecessary; the desugar is what
+has to change, and the two load-bearing consequences fall out of encodings that
+already exist:
+
+- **Branch types may differ.**  `check_tuple_term` gives every element its own
+  type slot, unlike the array literal today's `if` desugars to
+  (`check_array_term` unifies every element into one cell).  So the fix is to
+  desugar `if c then t else e` to the *tuple* read `(e, t)(c)` instead of the
+  array read `[e, t][c]` — one line in `crates/lichen-language/src/compile.rs`.
+- **The type slot is the lazy `Index`.**  Already what `slot_read` builds; the
+  `Index` resolves per instantiation, when `c` is concrete.
+- **An untaken arm's constraints do not fire — because the arm is an apply.**
+  `check_app` performs **no** argument/parameter unify: it builds the `Apply`
+  node and leaves the unify to the lowlevel `apply_parameter_check`, which runs
+  per call site on the parameter clone.  A function body is a template and is
+  never evaluated at definition, so an apply sitting in an unselected branch is
+  never forced.  Both spellings therefore defer:
+
+  ```lichen
+  (fadd x y, iadd x y)(cond)      -- the `if` desugar
+  (fadd, iadd)(cond) x y          -- select the leaf, then apply
+  ```
+
+  This removes the *branch-pending* deferral cause the first draft proposed
+  (and with it the deferral-budget question): nothing new is needed, because the
+  one unify that used to fire eagerly was the **array literal's** shared element
+  cell, and the tuple desugar abandons that cell rather than loosening it.  The
+  claimed laziness is the first thing Phase 2 measures.
 
 And the exhaustiveness arm: `panic` (the language's recorded-refusal channel,
 the same one `operator.divide_by_zero` uses) has a free type cell that unifies
-with anything, so the chain always has a last arm. Under the §3 contract that
-arm is dead — see §5.
+with anything, so a chain always has a last arm. Under the §3 contract that arm
+is dead — see §5.
 
-What the dependent if does **not** do: it does not constrain `?a` to numerics.
-`if t == Int then … else …` on a `string` operand still *checks* — the type
-layer's job is §3's, and this is the separation principle again: the if rule
-makes the dispatch expressible, the set value makes it safe.
+What the dependent reading does **not** do: it does not constrain `?a` to
+numerics.  `(1, "1")(c)` on a `string` operand still *checks* — the contract's
+job is §3's, and this is the separation principle again: the index rule makes
+the dispatch expressible, the refinement makes it safe.
 
 ## 5. The worked example
 
 ```lichen
-add = x => y => { x: Num; t = type_of x
-                  if t == Int then iadd x y else if t == Float then fadd x y else panic }
+add = x => y => { x: Num; y: Num
+                  (fadd, iadd)(is_int (type_of x)) x y }
 ```
 
-- **Definition.** The contract commits `x`'s cell to the set; the signature is
-  `?a -> ?a -> ?a where ?a ∈ Num`. Both real arms build; their branch-pending
-  unifies wait. The panic arm's free cell closes the chain.
-- **`add 1 2`.** Apply clones; `1` narrows the clone to `Int`; `t` evaluates to
-  the `Int` type constant; the `Index` takes arm 1; `iadd 1 2` is `2: Int`.
-  The float arm's unifies never fire.
-- **`add 1.5 2.5`.** The clone narrows to `Float`; arm 2 runs; `3.0: Float`.
-- **`add "a" "b"`.** The argument's type meets the contract's set: non-member —
-  **a check error naming the domain** (`expected a numeric class (Int or
-  Float), found string`). The dispatch never runs; the panic arm is
-  unreachable for any use the contract admits. *This is "the type is stricter
-  than the implementation" made concrete.*
-- **`add 1 1.5`.** Contract admits both operands one at a time, but they share
-  one cell: `1` commits it to `Int`, `1.5` is then a non-member — the same
-  refusal as today.
-- **`compute.jit (y => y + y)`.** At lowering the body's class is the set, and
-  the kernel answers an undecided-or-set domain with `Int` — today's default,
-  arrived at honestly. With the class concrete the condition `t == Int` is a
-  constant, the if folds to arm 1, and `iadd` lowers to `KernelBin::Add`:
-  byte-identical kernels, no new optimizer — the fold is the class read the
-  lowering already does ([compute-jit-low-types](compute-jit-low-types.md)),
-  applied to a constant condition.
+Measured on `dev` before any of this — the behaviours this has to preserve or
+fix, taken with `lichen-compiler`:
+
+| program | today |
+|---|---|
+| `add 1 2` | `3: Int` |
+| `add 1.5 2.5` | **fails**: `expected Int, found Float` at the `1.5` |
+| `add "a" "b"` | fails: `expected Int, found string` |
+| `add 1 1.5` | fails: `expected Int, found Float` at the `1.5` |
+
+- **Definition.** `x: Num` and `y: Num` attach the domain as an attribute; the
+  *type* cells stay open, so the signature is `?a -> ?b -> ?r` until a leaf's
+  contract closes it (`?a -> ?a -> ?a` for a leaf `?a -> ?a -> ?a`). The
+  refinement conditions build, stay lazy, and register for enforcement.
+- **`add 1 2`.** Apply clones; `1` binds the clone's type to `Int`;
+  `is_int (type_of x)` is `1`, so the `Index` takes `iadd`; `iadd 1 2` is
+  `2: Int`, and the refinement `in_num` holds.
+- **`add 1.5 2.5`.** The clone binds `Float`, the `Index` takes `fadd`, and the
+  result is `3.0: Float`. **This is the feature**: today the pin refuses it.
+- **`add "a" "b"`.** The refinement's condition resolves to `0` — a refusal
+  naming the domain (`does not satisfy {Int, Float}`), which is §2's "the type is
+  stricter than the implementation" made concrete. The dispatch never matters.
+- **`add 1 1.5`.** The one case the refinement does **not** reproduce on its own,
+  and it is worth stating because it is the price of dropping the set's type
+  role. Today's refusal comes from the *pin*: `x + y` puts both cells in the
+  canonical `Int` class, whose committed value every clone replicates — so the
+  `y` clone starts at `Int` and `1.5` conflicts at the argument. A refinement
+  binds nothing, and each application instantiates the parameter cell
+  independently — that *is* let-polymorphism — so both clones satisfy `Num`.
+  Under the end state the refusal is the **selected leaf's own contract**:
+  `iadd`'s parameter is `Int`, so `iadd 1 1.5` is refused at `iadd`. That is an
+  apply-time (runtime-channel) refusal rather than a check error at the argument,
+  and §8.5 records the choice.
+- **`compute.jit (y => y + y)`.** The parameter's type cell is open, so the
+  domain is undecided — but its refinement names the **set**, whose candidates
+  are data. The kernel reads them and takes the default class, `Int`: today's
+  default, now authorised by the declared domain instead of by a pin that had to
+  be erased. With the class concrete the `Index` selects one leaf and it lowers
+  to `KernelBin::Add` — byte-identical kernels, no new optimizer.
 
 ## 6. The leaves
 
-The dispatch's arms call per-class machine leaves. Today's `TypeOperator::Add`
-is *already* class-polymorphic at run time (it reads the operand values), so
-two shapes work:
+The dispatch selects a per-class machine **leaf** and applies it. Today's
+`TypeOperator::Add` is *already* class-polymorphic at run time (it reads the
+operand values), so two shapes work:
 
 - **Keep the unified leaf**: `iadd` and `fadd` are both the existing operator;
-  the `if` chain is then the *specification* of the dispatch (and the place a
+  the selection is then the *specification* of the dispatch (and the place a
   future class plugs in), while `run` keeps doing what it does. Zero lowlevel
   change.
-- **Split the leaf per class**: each arm names its machine op, the `run` arm
-  for a wrong-class leaf records a refusal, and the dispatch is load-bearing
-  all the way down. Cleaner failure isolation, one more `TypeOperator`
-  variant per operator per class (codec tags append-only, as ever).
+- **Split the leaf per class**: each leaf names its machine op, the `run` arm for
+  a wrong-class leaf records a refusal, and the dispatch is load-bearing all the
+  way down. Cleaner failure isolation, one more `TypeOperator` variant per
+  operator per class (codec tags append-only, as ever).
 
-Either satisfies the design; the split is the honest end state because it
-makes the arms' types (`Int -> Int -> Int`, `Float -> Float -> Float`)
-concrete and independent, which is what lets an untaken arm's unify be
-*wrong* and deferred rather than accidentally right. `%` and the bitwise trio
-keep the singleton contract `{Int}` — behaviour identical to today's pin, one
-uniform mechanism. `==`/`!=` stay unconstrained (the generalized equality).
+Either satisfies the design; **the split is the honest end state** because it
+gives each leaf a *concrete* parameter type (`Int -> Int -> Int`,
+`Float -> Float -> Float`). That is what replaces the pin as the thing that
+refuses a cross-class use — §5's `add 1 1.5` — and it is what makes the selected
+leaf's contract enforceable by the ordinary apply, with no new rule.
+
+The **`Int`-only** operators (`%`, the bitwise trio) are not polymorphic at all:
+their domain is a single class, so they keep today's pin
+(`unify(operand, int_type)`). A one-member domain is a pin, not a refinement —
+no uniform mechanism is bought by pretending otherwise, and pinning is what makes
+their *result* a machine scalar rather than an open cell. `==`/`!=` stay
+unconstrained (the generalized equality).
 
 ## 7. Routing a surface operator to the function
 
@@ -232,37 +348,60 @@ How `a + b` reaches the std function, unchanged from the earlier analysis and
 still phased: **R1** a prelude desugar (principled end state; needs the
 language's first implicit import), **R2** an intrinsic registry (the checker
 resolves `ir::BinOp` to the registered function value and checks an ordinary
-apply; the emitter recognises "apply of an intrinsic whose dispatch folds to
-one leaf" so kernels see `KernelBin` as today), **R3** the checker's special
-case stays but *reads the contract from the std binding's type* instead of
-restating `{Int, Float}` in Rust (waypoint). The dependent if and the set
-value are routing-agnostic: phases 0–2 below land the semantics under R3, and
-R2/R1 are the "operators are library functions" end state whenever the prelude
-question is answered.
+apply; the emitter recognises "apply of an intrinsic whose dispatch selects one
+leaf" so kernels see `KernelBin` as today), **R3** the checker's special case
+stays but *reads the contract from the std binding* instead of restating
+`{Int, Float}` in Rust (waypoint). The refinement and the domain value are
+routing-agnostic: phases 0–2 below land the semantics under R3, and R2/R1 are the
+"operators are library functions" end state whenever the prelude question is
+answered.
 
 ## 8. Open questions
 
-1. **The printer's spelling** of a constrained cell: `?a ∈ Num` vs
-   `Num -> Num -> Num` once `Num` is importable.
+1. **The printer's spelling** of a refined cell: `?a -> ?a -> ?a where ?a ∈ Num`
+   vs `Num -> Num -> Num` once `Num` is importable. `AttrExt::render` is where it
+   lands.
 2. **`Num`'s home**: std binding (the `type_of` precedent) vs keyword.
 3. **The panic arm's spelling**: the recorded-refusal channel needs a
    value-level form a library function can write; today only builtins record.
    A `$panic` leaf with a free type cell is the minimal answer.
-4. **Deferral budget.** Branch-pending unifies defer work the checker today
-   does eagerly; a deeply nested `if` chain (three or more classes, one day)
-   composes deferrals, and the error a user sees must still name the arm that
-   fired.
+4. **What the attribute's slot holds.** §3 settles the *shape* — one `0`/`1`
+   condition, combined by `*`, missing value `1`, reconciled by a plain unify —
+   but the **domain set** still has to be reachable from it for the kernel and
+   the diagnostics (§5's last bullet). Two workable layouts: the slot holds a
+   pair `[condition, domain]` (`combine` multiplies the first half and
+   intersects the second — the intersection logic the rejected design had in
+   `unify_inner`, moved to where it is pure value computation); or the slot holds
+   only the condition and the domain rides on the declared side, which then has
+   to reach a frozen callee from the graph rather than from the checker.
+5. **Which channel refuses `add 1 1.5`.** §5 shows the refinement does not, by
+   itself. The end state's answer — the selected leaf's concrete parameter type,
+   refused by the ordinary apply — is an *apply-time* refusal
+   (`DiagKind::Runtime`), where today it is a check error at the argument. That
+   is the same channel `f = x => x + 1; f Type` already uses, so it is the
+   language's existing answer to a per-call mismatch, but it is a visible change
+   of diagnostic kind and position.
+
+(Closed since the first draft: the narrowing rule and its `Program` hook — §3
+rejects the set's type role, so nothing unifies against a domain. The
+branch-pending **deferral budget** — §4 removed the deferral cause rather than
+budgeting for it.)
 
 ## 9. Phases
 
-- **Phase 0 — the set value.** The `TypeSet` marker, the narrowing rule, shape
-  decode treating a set as undecided, printer spelling, persist round-trip.
-  Nothing user-visible.
-- **Phase 1 — the contract on the builtin operators.** `check_binop` builds
-  the §3/§6 domains (R3); the kernel default. `add` is polymorphic; wrong
-  classes are check errors. *This is the user-visible feature.*
-- **Phase 2 — the dependent if.** The type-slot `Index` and branch-pending
-  deferral. Unlocks user-written generic numeric functions.
-- **Phase 3 — the implementation moves to std.** The `if`-chain dispatch, the
+- **Phase 0 — the mechanism.** The refinement record and the `Program` hook that
+  tells the lowlevel where a node's refinement is; the force-and-require-`1`
+  pass (generalising `check_asserts`) with its own error record and provenance;
+  the `AttrExt` refinement with `combine = *`, `missing_value = 1`, a plain-unify
+  reconciliation, and a `render`. The domain value kept as a *value*: tag,
+  encoding, codec tag, printer. Nothing user-visible.
+- **Phase 1 — the contract on the builtin operators.** `check_binop` gives
+  `+ - * /` and the order comparisons the domain refinement instead of the pin
+  (R3); the kernel reads the domain value for its default. `add` is polymorphic;
+  a wrong-class use is refused. *This is the user-visible feature.*
+- **Phase 2 — the dependent if.** `if` desugars to the tuple read `(e, t)(c)`
+  instead of the array read `[e, t][c]`, and the claimed laziness of an
+  unselected arm is measured. Unlocks user-written generic numeric functions.
+- **Phase 3 — the implementation moves to std.** The leaf-selection dispatch, the
   split leaves, `Num` and the operator bindings in `lichen-std`; routing R3 →
   R2/R1.
