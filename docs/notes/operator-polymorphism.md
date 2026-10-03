@@ -710,21 +710,24 @@ than budgeting for it.)
   **opt-in** — `(e, t)(c)` — and needs no work: the positional slot read already
   types it as the taken branch's type.  Verified by hand: `(10, "ten")(1 == 1)`
   renders `"ten": string`.
-- **Phase 3 — the implementation moves to std. Started.**  Landed: the membership
-  keyword **`@in`** — the comparison rung, infix and left-associative, with the
-  membership reader made representation-agnostic (§3 above) — and the **class
-  refinement**, a refinement written inside a type position (`x : (_ ! in_num)`)
-  whose predicate is applied to the type value, with the annotation naming the
-  type expression's *denotation* (§3 above).  With those, the plan's whole
-  contract is writable in lichen and measured: `(add 1 2, add 1.5 2.5)` is
-  `(3, 4.0)`, `add "a" "b"` is refused with the domain named, and the signature
-  prints `raw[?a, ?b] -> …` — the honest raw mark for an open class, where a
-  concrete class reads `Int -> …`.
+- **Phase 3 — the implementation moves to std. Stages 1–2 landed.**  Landed: the
+  membership keyword **`@in`** (the comparison rung, infix and left-associative,
+  with the membership reader made representation-agnostic — §3 above); the
+  **class refinement**, a refinement written inside a type position
+  (`x : (_ ! in_num)`) whose predicate is applied to the type value, with the
+  annotation naming the type expression's *denotation* (§3); and the **`core`
+  prelude** — the contract is lichen source in a built-in module seeded into
+  every program, so `add 1.5 2.5` is `4.0` in an otherwise empty file
+  ([core-prelude](core-prelude.md)).  Measured through `lichen-compiler`:
+  `(add 1 2, add 1.5 2.5)` is `(3, 4.0)`, `add "a" "b"` is refused, `Num` and
+  `in_num` are in scope with no import, and a program's own `add` shadows the
+  prelude's.
 
-  What stays open: the read's monomorphism
-  ([type-of-in-std](type-of-in-std.md)) — no longer on the contract's path, since
-  the class refinement needs no read — and the **routing**: the leaf-selection
-  dispatch, the split leaves, and `Num` and the operator bindings in a built-in
-  `core` prelude module, which is what makes the surface operator resolve to the
-  library function (R3 → R2/R1), and which needs the kernel workstream's
-  specialize-before-JIT pass to land first (§8.4).
+  What stays open: the **attribution** a prelude failure needs (the assert's
+  template belongs to `core`, so a refusal reads *"could not be attributed"* —
+  the pre-existing behaviour for an imported assert, now met by every program);
+  the **routing** (the leaf-selection dispatch, the split leaves, and the surface
+  operator resolving to the `core` binding — R3 → R2/R1), which needs the kernel
+  workstream's specialize-before-JIT pass first (§8.4); and the read's
+  monomorphism ([type-of-in-std](type-of-in-std.md)), which is off the contract's
+  path now that the class refinement needs no read.

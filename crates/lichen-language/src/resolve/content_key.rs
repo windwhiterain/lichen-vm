@@ -10,7 +10,13 @@ use super::*;
 /// bump invalidates every cached key, so every [`crate::session::BufferSession`]
 /// rebuilds on its next compile.  That is the intended answer — a stale key
 /// must never be silently reusable.
-const KEY_FORMAT_VERSION: u64 = 5;
+///
+/// `5` → `6`: the built-in **prelude** is seeded into every source
+/// (`docs/notes/core-prelude.md`), so a program's resolved *binders* — which the
+/// key encodes by [`BinderId`] — are numbered after the prelude's.  The key stays
+/// injective; the bump is the honest signal that the same source no longer
+/// resolves to the same ids.
+const KEY_FORMAT_VERSION: u64 = 6;
 
 /// The **resolved content key** of a resolved program: an exact, digest-free
 /// serialization of the name-resolved, beyond-error structure that the lowering

@@ -85,11 +85,17 @@ impl GlobalExt for HighGlobalExt {}
 /// stores the single exported `[value, type]` pair ref here; the lowlevel's
 /// [`Package`] only carries this as an opaque `Default` slot, keeping
 /// highlevel concepts out of the lowlevel registry machinery.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HighPackageMeta {
     /// The package's exported final-expression pair, filled by the language
     /// package store after freezing.  `None` until a higher layer records it.
     pub export: Option<lichen_lowlevel::StaticNodeId>,
+    /// The package's directly-exposed `(name, export)` bindings
+    /// (`crate::preprocess::ResolvedImport::direct`), recorded so a *later* store
+    /// over the same shared registry can rebuild the handle instead of
+    /// recompiling the module — which the registry refuses, a key naming one
+    /// artifact.  Empty for an ordinary package.
+    pub direct: Vec<(String, lichen_lowlevel::StaticNodeId)>,
 }
 
 /// The result of building a literal: the compiled `[value, type]` pair plus

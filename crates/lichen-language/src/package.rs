@@ -25,15 +25,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use lichen_compute::WRAPPER_SOURCE;
+use lichen_highlevel::checker::Build;
 use lichen_highlevel::native::NativeOps;
 use lichen_highlevel::program::{HighPackageMeta, TypeOperator, ValueType};
-use lichen_lowlevel::{ModuleKey, Registry, StaticModule, StaticNodeId};
+use lichen_lowlevel::{LocalNodeId, ModuleKey, NodeId, Registry, StaticModule, StaticNodeId};
 use lichen_preprocess::{ImportResolver, PreprocessDiag, ResolvedPackage};
 
 use crate::LangProgramShape;
 use crate::diag::{Diag, Stage};
 use crate::persist::{self, DeviceRegistry, Hash, ProgramCodecOf};
-use crate::preprocess::preprocess;
+use crate::preprocess::{ResolvedImport, preprocess};
 use crate::program::GcdOp;
 
 mod vendored;
@@ -42,7 +43,116 @@ use vendored::{vendored_alias, vendored_entry_file};
 /// The virtual path of the `lichen-compute` native package.  Imported as
 /// `compute.lichen`, it is served from a registered native module (see
 /// [`PackageStore::register_compute`]) rather than a source file on disk.
-const COMPUTE_PATH: &str = "compute.lichen";
+pub(crate) const COMPUTE_PATH: &str = "compute.lichen";
+
+/// The virtual path of the built-in **`core`** module — the language's
+/// **prelude**: imported implicitly into every source a host compiles (see
+/// [`PackageStore::prelude_import`]), and explicitly as `core = import "core"`
+/// when a program wants the module *value* rather than its names.  Served from a
+/// registered built-in module (see [`PackageStore::register_core`]), never from a
+/// source file on disk.
+pub(crate) const CORE_PATH: &str = "core.lichen";
+
+/// The `core` module's source: the operator **contract**, written in lichen —
+/// the class domain `Num`, the predicate `in_num` that consults it, and one
+/// binding per polymorphic operator, each refining its operands' **classes**
+/// with `x : (_ ! in_num)` (`docs/notes/operator-polymorphism.md` §3, §9).
+///
+/// It is the prelude because an operator's contract is a fact about the
+/// language, not about a program: every source sees these names without an
+/// import, and a program that wants different ones shadows them (a later binder
+/// wins over a seeded import, and the prelude is seeded first).
+const CORE_SOURCE: &str = include_str!("core.lichen");
+
+/// The names [`CORE_SOURCE`] binds at the top level, in source order — the
+/// record fields of its export struct.  A record's *value* carries its fields in
+/// definition order, which is what pairs a name with the field's frozen node.
+fn core_exports() -> Vec<String> {
+    let tokens = crate::lex::lex(CORE_SOURCE).tokens;
+    let parsed = crate::parse::parse(&tokens);
+    parsed
+        .program
+        .statements
+        .iter()
+        .filter_map(|bs| match &bs.stmt {
+            crate::ast::Stmt::Binding(binding) => Some(binding.name.clone()),
+            crate::ast::Stmt::Expr(_) => None,
+        })
+        .collect()
+}
+
+/// Whether `import` is the built-in **prelude** ([`CORE_PATH`]) rather than an
+/// import a program wrote.
+///
+/// The distinction matters to a reader that shows a program's *own* names: the
+/// prelude is seeded into every source (`crate::preprocess::preprocess`), and its
+/// entries carry a synthetic span because no directive produced them — so an
+/// editor's document symbols, completions, and hover skip them, while a written
+/// `import` stays a document definition (its span is the directive's).
+pub fn is_prelude_import(import: &ResolvedImport) -> bool {
+    import
+        .path
+        .file_name()
+        .is_some_and(|name| name == CORE_PATH)
+}
+
+/// The `(name, term)` pairs [`CORE_SOURCE`] exposes **directly**: one per
+/// top-level binding, each the binding's own `[value, type]` pair.
+///
+/// A record's *value* holds its fields' **values** — their types live in the
+/// struct's kind — so the pair a name must resolve to is not recoverable from
+/// the frozen struct: it is the checked build's term for that binding.  The names
+/// come from the source in the same order, so a mismatch is a bug in this pairing
+/// rather than a quietly missing name — it is reported, not truncated.
+///
+/// Read **before** the module is moved into the freeze, and mapped to static refs
+/// afterwards (see [`core_direct`]).
+fn core_terms<P>(build: &Build<P>) -> Result<Vec<(String, NodeId)>, String>
+where
+    P: LangProgramShape,
+    P::Value: ValueType,
+{
+    let names = core_exports();
+    let statements = &build.ir.stmt_roots;
+    if names.len() != statements.len() {
+        return Err(format!(
+            "the core module binds {} names but the build has {} statements",
+            names.len(),
+            statements.len()
+        ));
+    }
+    names
+        .into_iter()
+        .zip(statements.iter())
+        .map(|(name, &statement)| {
+            let term = build
+                .state
+                .get(statement.0 as usize)
+                .and_then(|state| state.term)
+                .ok_or_else(|| format!("the core binding `{name}` has no pair"))?;
+            Ok((name, term))
+        })
+        .collect()
+}
+
+/// Map [`core_terms`] through a freeze: each binding's pair becomes the static
+/// ref `direct` binds the name to.
+fn core_direct(
+    terms: Vec<(String, NodeId)>,
+    key: ModuleKey,
+    node_map: &std::collections::HashMap<NodeId, LocalNodeId>,
+) -> Result<Vec<(String, StaticNodeId)>, String> {
+    terms
+        .into_iter()
+        .map(|(name, term)| {
+            let index = node_map
+                .get(&term)
+                .copied()
+                .ok_or_else(|| format!("the core binding `{name}` was not frozen"))?;
+            Ok((name, StaticNodeId { module: key, index }))
+        })
+        .collect()
+}
 
 /// The `lichen-compute` plugin's private native registry, built by the
 /// plugin over a host's concrete program marker.  Attached only to the
@@ -276,6 +386,15 @@ where
                 .map_err(|e| vec![Diag::unattributed(Stage::Preprocess, e)])?;
             return Ok(handle);
         }
+        // The built-in `core` module — the prelude.  Served from a registered
+        // module too, and self-registering the same way, so the implicit prelude
+        // import and an explicit `import "core"` are one code path.
+        if path.file_name().is_some_and(|n| n == CORE_PATH) {
+            let handle = self
+                .register_core()
+                .map_err(|e| vec![Diag::unattributed(Stage::Preprocess, e)])?;
+            return Ok(handle);
+        }
         // Only `.lichen` files are packages.  Reject any other extension up
         // front so the cache invariant holds by construction — an artifact's
         // file ID is always a `.lichen` path (or a `virtual:` path for an
@@ -328,6 +447,14 @@ where
     /// deliberately cannot serialize, so it is always compiled fresh in
     /// memory rather than cached on the device.
     fn register_compute(&mut self) -> Result<PackageHandle, String> {
+        // Reuse an already-registered module, like [`Self::register_core`]: a
+        // host that builds a store per run over one registry must not freeze the
+        // same content twice.
+        if let Some(handle) = self.registered_builtin(COMPUTE_PATH) {
+            self.native
+                .insert(PathBuf::from(COMPUTE_PATH), handle.clone());
+            return Ok(handle);
+        }
         let source = WRAPPER_SOURCE;
         let (preprocessed, mut diags) = preprocess(source, Some(Path::new(COMPUTE_PATH)), self);
         if !diags.is_empty() {
@@ -381,6 +508,7 @@ where
                 freeze.key,
                 HighPackageMeta {
                     export: Some(export),
+                    ..Default::default()
                 },
             );
         let handle = PackageHandle {
@@ -393,6 +521,143 @@ where
             .insert(PathBuf::from(COMPUTE_PATH), handle.clone());
         self.compiled += 1;
         Ok(handle)
+    }
+
+    /// A built-in module this registry already holds, as a handle — the reuse
+    /// path for a host that builds a store per run over one shared registry (see
+    /// [`Self::register_core`]).  The recorded meta carries what a handle needs:
+    /// the exported pair and the directly-exposed names.
+    fn registered_builtin(&mut self, path: &str) -> Option<PackageHandle> {
+        let (key, _is_new) = self.alloc_key(&persist::virtual_file_id(path));
+        let registry = self
+            .registry
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let package = registry.get(key)?;
+        let export = package.meta.export?;
+        Some(PackageHandle {
+            path: PathBuf::from(path),
+            key,
+            export,
+            direct: package.meta.direct.clone(),
+        })
+    }
+
+    /// Register the built-in **`core`** module: compile its embedded source into
+    /// a frozen module, file it in the shared registry, and remember the handle
+    /// so `core.lichen` is served from here (no disk file).  Unlike
+    /// [`Self::register_compute`], `core` calls no native operator: it is
+    /// ordinary lichen, so it compiles against the **empty** native registry.
+    ///
+    /// Its `direct` list is what makes it a *prelude* rather than a package:
+    /// every name it binds at the top level is bound as a base-scope **name**
+    /// ([`crate::preprocess::ResolvedImport`]'s `direct`), the mechanism the
+    /// import path already carries for a package that exposes names alongside its
+    /// module value.  A record's *value* holds its fields in definition order, so
+    /// the names (read from the source) pair with the frozen field nodes
+    /// positionally.
+    fn register_core(&mut self) -> Result<PackageHandle, String> {
+        // **Reuse** when this registry already holds the module.  A host may build
+        // a store per run over one shared registry — the editor's worker does
+        // exactly that — and recompiling would freeze the same content under the
+        // same key, which the registry refuses, one key naming one artifact.  The
+        // recorded meta carries what a handle needs, so the later store adopts the
+        // earlier one's module.
+        if let Some(handle) = self.registered_builtin(CORE_PATH) {
+            self.native.insert(PathBuf::from(CORE_PATH), handle.clone());
+            return Ok(handle);
+        }
+        let source = CORE_SOURCE;
+        let (preprocessed, mut diags) = preprocess(source, Some(Path::new(CORE_PATH)), self);
+        if !diags.is_empty() {
+            return Err(diags
+                .drain(..)
+                .map(|d| d.message)
+                .collect::<Vec<_>>()
+                .join("\n"));
+        }
+        let line_starts = crate::lex::line_starts(preprocessed.code);
+        let report = crate::compile_with_imports_at::<P>(
+            preprocessed.code,
+            &preprocessed.imports,
+            Some(self.registry()),
+            preprocessed.code_base,
+            &line_starts,
+            lichen_highlevel::native::no_native_ops::<P>(),
+        );
+        if !report.diagnostics.is_empty() || report.build.as_ref().is_none_or(|b| !b.ok) {
+            return Err(report
+                .diagnostics
+                .into_iter()
+                .map(|d| d.message)
+                .collect::<Vec<_>>()
+                .join("\n"));
+        }
+        let build = report.build.unwrap();
+        // The names' pairs are read from the checked build, before the module
+        // moves into the freeze (`core_terms`).
+        let terms = core_terms(&build)?;
+        let mut module = build.module;
+        module.evaluate_node_deep(build.root_val, None);
+        module.evaluate_node_deep(build.root_ty, None);
+        // The module imports nothing of its own, so its identity is its source
+        // hash alone.  The prelude it *is* is not a dependency of the artifact.
+        let hash = persist::artifact_hash(persist::sha256(source.as_bytes()), &[]);
+        let (key, _is_new) = self.alloc_key(&persist::virtual_file_id(CORE_PATH));
+        let freeze = self
+            .registry
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .freeze_mapped(&module, key, hash);
+        let export = StaticNodeId {
+            module: freeze.key,
+            index: freeze.node_map[&build.root_term],
+        };
+        let direct = core_direct(terms, freeze.key, &freeze.node_map)?;
+        self.registry
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_package_meta(
+                freeze.key,
+                HighPackageMeta {
+                    export: Some(export),
+                    direct: direct.clone(),
+                },
+            );
+        let handle = PackageHandle {
+            path: PathBuf::from(CORE_PATH),
+            key: freeze.key,
+            export,
+            direct,
+        };
+        self.native.insert(PathBuf::from(CORE_PATH), handle.clone());
+        // **Not counted** in [`Self::compiled`].  That counter observes the
+        // packages a *program* asked for (an explicit `import`, a `depend`), which
+        // is what the cache and identity tests measure; the prelude is the
+        // language compiling itself, and every store pays it exactly once.
+        Ok(handle)
+    }
+
+    /// The **prelude import**: the built-in `core` module, bound as the bare
+    /// names it exports.  Every source a host compiles is seeded with it (see
+    /// [`crate::preprocess::preprocess`]), so the operator contract — `Num`,
+    /// `in_num`, `add`, … — is in scope without an import.  A later binder of the
+    /// same name wins, which is what makes the prelude *shadowable* rather than
+    /// reserved.
+    pub fn prelude_import(&mut self) -> Result<ResolvedImport, Vec<Diag<P>>> {
+        let handle = self.load_package(Path::new(CORE_PATH))?;
+        Ok(ResolvedImport {
+            // The module is also reachable as `core` — the same handle serves an
+            // explicit `import "core"` — seeded first, so a program's own binder
+            // of that name shadows it.
+            name: "core".to_string(),
+            // A seeded import has no source position — the resolver records the
+            // span of the directive it came from, and this one came from none.
+            span: (1, 1),
+            export: handle.export,
+            path: handle.path,
+            direct: handle.direct,
+        })
     }
 
     /// The load path behind the cache: incremental verification first, then
@@ -498,6 +763,7 @@ where
                 key,
                 HighPackageMeta {
                     export: Some(export),
+                    ..Default::default()
                 },
             );
         }
@@ -589,6 +855,7 @@ where
                 freeze.key,
                 HighPackageMeta {
                     export: Some(export),
+                    ..Default::default()
                 },
             );
 
@@ -806,6 +1073,7 @@ where
                 freeze.key,
                 HighPackageMeta {
                     export: Some(export),
+                    ..Default::default()
                 },
             );
         // File it under its file name so `load_package` serves it by the name
