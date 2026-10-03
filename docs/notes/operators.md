@@ -273,11 +273,13 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
   library form is **landed**: the built-in [prelude `core`](core-prelude.md)
   carries `Num`, `in_num` and one binding per polymorphic operator (`add`, `sub`,
   `mul`, `div`, `less`, `greater`, `less_or_equal`, `greater_or_equal`), each
-  refining its operands' **classes** (`x : (_ ! in_num)`).  What is still not
-  here is the *routing*: `+` remains the checker's special case (R3) rather than
-  a binding the surface operator resolves to, so `core`'s bindings are wrappers
-  over the builtin's contract rather than the contract itself
-  ([operator-polymorphism](operator-polymorphism.md) §5, §9 Phase 3).
+  taking the **operand group** and refining its elements' **classes**
+  (`array<(_ ! in_num), 2>` — the array's homogeneity is the operand tie and its
+  length the arity).  The *routing* — the surface operator resolving to a binding
+  instead of the checker's builtin — is implemented and **withdrawn**: as a call it
+  moves the `raw` mark into values and snapshots, so the recommended form expands
+  the binding's body at the call site instead
+  ([operator-polymorphism](operator-polymorphism.md) §7.1).
 - **Shifts (`<<`, `>>`).** A `>>` token swallows the adjacent closers of nested
   angle types — `array<array<Int, 2>, 3>` ends `3>>` — and a `logos` lexer cannot
   split it back; the fix is parser-level token splitting, which is a change to

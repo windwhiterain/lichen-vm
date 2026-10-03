@@ -178,9 +178,23 @@ both are the reason the record exists:
   virtual module (`persist::virtual_file_id`), compiled fresh in memory like
   `compute`; its values are ordinary (functions and a set of type values), so
   caching it is *possible* and simply not done.
-- **The contract is enforced twice while the routing is the checker's.**  `+`
-  still lowers to the machine leaf and the checker still registers the builtin's
-  domain assert (routing R3, [operator-polymorphism](operator-polymorphism.md)
-  §7), so a wrong-class operand reports the class refinement *and* the builtin's
-  assert — both now pointing into `core.lichen`.  Moving the surface operator
-  onto this binding (R3 → R2/R1) is what would make `core` the single authority.
+- **The surface operators do not route here yet.**  `core`'s bindings are the
+  contract, and the *checker's* builtin still implements the surface operators
+  (routing R3, [operator-polymorphism](operator-polymorphism.md) §7).  Routing them
+  onto these bindings has been implemented and withdrawn twice: first because an
+  apply of a *static* function did not instantiate its signature per call — a root
+  since **fixed** (`6e9c409`; a static apply's residual clones now belong to the
+  caller's template) — and second because the routed form is a *call*, and the
+  binding's operand-group element is the placeholder's `[class, kind]` pair, so an
+  arithmetic result's type surfaces that pair (`(43, 44): <raw[Int, Type],
+  raw[Int, Type]>`) and a statement's concrete-value snapshot disappears.  The
+  recommended form is therefore an *expansion of the binding's body* at the call
+  site, which keeps the builtin operator in the caller's body — no representation
+  cost, no lost folding, and nothing for the kernel path to learn
+  ([operator-polymorphism](operator-polymorphism.md) §7.1).
+- **A kernel body cannot call into a built-in.**  A routed operator *as a call* is
+  an apply of a static function and the kernel path refuses it
+  (`compute.jit: static refs are not kernel-compilable v1`), so the call form would
+  leave `examples/compute_jit.lichen` (whose `y + y` is that shape) red until the
+  kernel workstream's specialize-before-JIT pass folds the apply back to a machine
+  leaf.  An expanded body has no such cost: it *is* the machine-leaf shape.
