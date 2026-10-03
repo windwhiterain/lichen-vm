@@ -12,13 +12,15 @@ it.
   `feature/operator-polymorphism` were deleted once the agreed scope (Phases 0–2)
   plus the two extras that followed it (the set value and §8.1) were landed and
   synced.
-- **Phase 3 is open on `feature/operator-std`** (worktree
+- **Phase 3's Stages 1–2 are landed on `feature/operator-std`** (worktree
   `.worktrees/operator-std`, branched from `dev` at `b1b1d8e`).  Its scope, as
   agreed: **Stage 1** the membership keyword `@in` — *landed* — and **Stage 2**
   the contract written in lichen as a built-in **`core`** module that is also a
-  **prelude** (every program sees its names), with the **routing** (R3 → R2/R1)
-  left to a later workstream because it needs the kernel workstream's
-  specialize-before-JIT pass (§8.4 of the plan note).
+  **prelude** (every program sees its names) — *landed*, with the class
+  refinement that made the contract expressible
+  ([core-prelude](core-prelude.md) is the module's own note).  The **routing**
+  (R3 → R2/R1) stays in a later workstream because it needs the kernel
+  workstream's specialize-before-JIT pass (§8.4 of the plan note).
 - Commit trail (oldest first): `674d048` operand tie · `9a3983d` the class domain
   as a value + `InDomain` + the condition · `7e33938` kernel-boundary record +
   example declarations · `78fa33e` `@assert` frees `!` · `ec480fc` the
@@ -135,6 +137,18 @@ it.
   marker now: a source type constant *is* its marker leaf) and by the language's
   own value equality otherwise** (a `TypeValue` is nominal, not allocated; an
   ordinary value compares by value).
+- **The contract is a built-in module *and* a prelude** (Phase 3, Stage 2):
+  `crates/lichen-language/src/core.lichen` binds `Num`, `in_num` and one function
+  per polymorphic operator, and `PackageStore::register_core` compiles it into a
+  virtual package like `compute.lichen`.  `crate::preprocess::preprocess` seeds
+  the module into **every** source (`prelude_import`), binding both the module
+  name `core` and each exported name — the `direct` mechanism the import path
+  already declared and nothing had used.  Measured: an empty file with
+  `(add 1 2, add 1.5 2.5, …)` is `(3, 4.0, …)`, `(Num, in_num Int, in_num
+  Float, in_num string)` is `(set{Int, Float}, 1, 1, 0)`, `core.add 1 2` is `3`,
+  and `add = x => y => 99; add 1 2` is `99` (the prelude is **shadowable**, seeded
+  before the program's own binders).  [core-prelude](core-prelude.md) is the
+  note: the three decisions, the seeding mechanism, and what it costs.
 
 ## 3. Measured behaviour (the acceptance table)
 
@@ -179,6 +193,11 @@ it.
 | the same `f` alone | — | `raw[?a, ?b] -> raw[?a, ?b]` (an open class is the placeholder's cell pair) |
 | `x : (Int ! in_num)`; `g 7` | — | `7: Int` (a concrete class prints clean) |
 | `x : (string ! in_num)`; `g "a"` | — | refused: `assertion failed: expected 1, found 0` |
+| the prelude, no import at all: `(add 1 2, add 1.5 2.5, sub 5 3, mul 2 3, div 7 2, less 1 2, greater 2 1, less_or_equal 2 2, greater_or_equal 1 2)` | — | `(3, 4.0, 2, 6, 3, 1, 1, 1, 0): <Int, Float, Int, Int, Int, Int, Int, Int, Int>` |
+| `(Num, in_num Int, in_num Float, in_num string)` | — | `(set{Int, Float}, 1, 1, 0)` |
+| `core.add 1 2` | — | `3: Int` (the module value is reachable too) |
+| `add = x => y => 99; add 1 2` | — | `99: Int` (the prelude is shadowed) |
+| `add "a" "b"` through the prelude | — | **refused, but unattributed** — "the failing check could not be attributed to an expression in this source" (the assert lives in `core`; §7) |
 
 Two mechanism facts that came out of measuring, and both are load-bearing:
 
@@ -233,36 +252,28 @@ Two mechanism facts that came out of measuring, and both are load-bearing:
 
 ## 6. What to do next, in order
 
-1. **Phase 3, Stage 2 — the contract moves into the language.**  Stage 1 (`@in`)
-   is landed; the domain's surface form (`Num = set{Int, Float}`) and every other
-   piece of the contract are written in lichen and measured (§3's last rows).  The
-   agreed destination is a **built-in `core` module that is also a prelude** —
-   `core.lichen`, embedded by the compiler and seeded into every program's base
-   scope, rather than `lichen-std/_.lichen` (which stays the *fetched* library the
-   package manager is tested with):
-   - It carries `Num`, `in_num`, and the operator bindings (`add`, `sub`, `mul`,
-     `div`, and the four order comparisons), each with its operands refined by
-     the **class** refinement — `x : (_ ! in_num)`, the predicate on the type —
-     which needs no type read and is enforced per application (both landed, §2).
-   - The open sub-decision is how the module reaches a program: a prelude seeding
-     the exported names as base-scope binders (the `ResolvedImport.direct` shape
-     the resolver already understands), against a built-in module served by the
-     package store (the `compute.lichen` plug shape) — which is the language's
-     first implicit import.
+1. **Phase 3, Stages 1–2 — landed.**  `@in` is the membership operator, the
+   **class refinement** `x : (_ ! in_num)` made the contract expressible with no
+   type read, and the contract now lives in the built-in **`core`** prelude
+   (`crates/lichen-language/src/core.lichen`, seeded into every source).  Measured
+   in §3's last rows; the module's own note is [core-prelude](core-prelude.md).
+   The remaining work on this leg is the **attribution** a prelude failure needs
+   (§7, the "unattributed" trap) — a diagnostics task, not a contract one.
 2. **Phase 3, Stage 3 — the routing (R3 → R2/R1), a later workstream.**  The
    leaf-selection dispatch, the split leaves, and the surface operator resolving
    to the `core` binding.  It needs the kernel workstream's
    specialize-before-JIT pass first: a kernel body's operator would become an
    apply of a library dispatch, and the emitter has to recognise that shape and
    fold it back to `KernelBin` (§7 of the plan note, §8.4 of the design record).
-3. **The read's monomorphism is a blocker for a *plainly written* predicate, and
-   it is a separate fix.**  `in_num = v => type_of v @in Num` is monomorphic
-   (measured: `(in_num 1, in_num 1.5)` refused with `expected Int, found Float`),
-   so the predicate goes through one opaque combinator until the per-call
-   instantiation remaps the cells an annotation tied to the parameter's type
-   slot — the analysis, the workaround and the preferred fix are in
-   [type-of-in-std](type-of-in-std.md) (*The monomorphism a wrapping lambda
-   induces*).  Reproduces on `dev` with no `@in` in the program.
+3. **The read's monomorphism is off the contract's path, and stays a separate
+   fix.**  `in_num = v => type_of v @in Num` is monomorphic (measured: `(in_num 1,
+   in_num 1.5)` refused with `expected Int, found Float`) — which is why the class
+   refinement exists — and the same reachability question is what makes an *open*
+   class's signature print `raw[?a, ?b]` instead of `?a` (both are §2's denotation
+   rule).  The preferred fix — the per-call instantiation remapping the cells an
+   annotation tied to the parameter's type slot — would retire both; the analysis
+   and the workaround are in [type-of-in-std](type-of-in-std.md) (*The monomorphism
+   a wrapping lambda induces*).  Reproduces on `dev` with no `@in` in the program.
 4. **A refinement in a *type* string is not reachable, and this is understood,
    not pending.**  `f = x : _ ! in_num => x` prints `Int -> Int`: a refinement is
    the attribute of the parameter *expression* inside the lambda, and a function

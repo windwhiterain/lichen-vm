@@ -50,6 +50,13 @@ annotation already unifies a cell with a type). A form that the language can
 express has no business in the language definition, so it was deleted rather
 than kept as a primitive.
 
+The read is **not** in the built-in [prelude `core`](core-prelude.md), and the
+split is deliberate: the prelude carries the operators' *contract* (`Num`,
+`in_num`, and a binding per operator), which every program needs, while the read
+is a library function a program imports when it wants one — and a contract no
+longer needs it at all, because a class refinement's predicate receives the type
+directly ([operator-polymorphism](operator-polymorphism.md) §3).
+
 What changed for a user: `type_of` is **no longer reserved** — it can be bound,
 shadowed, and passed like any name — and a program that wants the read imports
 it (`std.type_of`) instead of getting it from the grammar.

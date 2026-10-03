@@ -269,13 +269,15 @@ Checked by `the_two_conversions_cross_in_the_direction_each_one_names`,
 - **Class-polymorphic arithmetic as a *library*.** The operators themselves are
   polymorphic now — `+ - * /` and the four order comparisons accept either scalar
   class and never mix them, with the operand tie and a refinement condition
-  ([operator-polymorphism](operator-polymorphism.md) §3, §9 Phase 1) — and a
-  library *can* now write the predicate's membership test: `@in` is implemented
-  (§3 above). What is still not here is the *routing*: `+` remains the checker's
-  special case (R3) rather than a binding the surface operator resolves to, so a
-  std-written `add` is a wrapper over the builtin's contract rather than the
-  contract itself ([operator-polymorphism](operator-polymorphism.md) §5, §9
-  Phase 3).
+  ([operator-polymorphism](operator-polymorphism.md) §3, §9 Phase 1) — and the
+  library form is **landed**: the built-in [prelude `core`](core-prelude.md)
+  carries `Num`, `in_num` and one binding per polymorphic operator (`add`, `sub`,
+  `mul`, `div`, `less`, `greater`, `less_or_equal`, `greater_or_equal`), each
+  refining its operands' **classes** (`x : (_ ! in_num)`).  What is still not
+  here is the *routing*: `+` remains the checker's special case (R3) rather than
+  a binding the surface operator resolves to, so `core`'s bindings are wrappers
+  over the builtin's contract rather than the contract itself
+  ([operator-polymorphism](operator-polymorphism.md) §5, §9 Phase 3).
 - **Shifts (`<<`, `>>`).** A `>>` token swallows the adjacent closers of nested
   angle types — `array<array<Int, 2>, 3>` ends `3>>` — and a `logos` lexer cannot
   split it back; the fix is parser-level token splitting, which is a change to

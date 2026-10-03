@@ -238,7 +238,16 @@ fn a_corrupted_body_is_rejected_by_the_header_digest() {
             .join(format!("{}.module", hex(&file_id_hash(&file_id)))),
     )
     .unwrap();
-    let hash = artifact_hash(sha256(source.as_bytes()), &[]);
+    // Every source is seeded with the prelude, so a package's artifact records
+    // the built-in `core` module as a dependency.  The device gives an *embedded*
+    // dependency — one with no artifact record of its own, like `core` and
+    // `compute` — the all-zero sentinel, on both sides of the fold, so the
+    // importer's cache still hits (`DeviceRegistry::artifact_identity`).
+    let prelude = store.prelude_import().unwrap();
+    let hash = artifact_hash(
+        sha256(source.as_bytes()),
+        &[(prelude.export.module, [0u8; 32])],
+    );
     let modules = HashMap::new();
 
     // A valid artifact the writer produced still loads: a digest read or

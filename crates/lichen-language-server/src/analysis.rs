@@ -1664,9 +1664,22 @@ fn index_names(
     // compiler's import frame below the block-wide binding frames: a use of an
     // imported module resolves to its `@import` directive, and a local binding
     // may shadow an imported name (the local frame sits above the import one).
-    if !imports.is_empty() {
+    //
+    // The built-in **prelude** is skipped: every source is seeded with it
+    // (`lichen_language::package::is_prelude_import`), but it is not *this
+    // document's* — its entries have no directive and no span in the file, so a
+    // definition, a document symbol, or a completion item for one would be a
+    // location that does not exist.  Names it provides simply stay unresolved
+    // here; the compiler, which does see it, reports nothing about them.
+    if imports
+        .iter()
+        .any(|import| !lichen_language::package::is_prelude_import(import))
+    {
         walk.scopes.push(HashMap::new());
         for imp in imports {
+            if lichen_language::package::is_prelude_import(imp) {
+                continue;
+            }
             walk.enter(&imp.name, imp.span);
         }
     }

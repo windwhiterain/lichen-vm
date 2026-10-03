@@ -1,0 +1,10 @@
+Num = set{Int, Float}
+in_num = t => t @in Num
+add = x => y => { x : (_ ! in_num); y : (_ ! in_num); x + y }
+sub = x => y => { x : (_ ! in_num); y : (_ ! in_num); x - y }
+mul = x => y => { x : (_ ! in_num); y : (_ ! in_num); x * y }
+div = x => y => { x : (_ ! in_num); y : (_ ! in_num); x / y }
+less = x => y => { x : (_ ! in_num); y : (_ ! in_num); x < y }
+greater = x => y => { x : (_ ! in_num); y : (_ ! in_num); x > y }
+less_or_equal = x => y => { x : (_ ! in_num); y : (_ ! in_num); x <= y }
+greater_or_equal = x => y => { x : (_ ! in_num); y : (_ ! in_num); x >= y }

@@ -376,6 +376,16 @@ maps every span back to the original file.
   definition pass (so apply-time type checks fire), and the program's value is
   the evaluation of its root: an `Int`, a `string`, a tuple, an array, a table,
   a function, or a type expression.
+- **The prelude.**  Every source is seeded with the built-in **`core`** module
+  ([core-prelude](notes/core-prelude.md)), whose names are in scope with no
+  import: the class domain `Num`, the predicate `in_num`, and one binding per
+  polymorphic operator — `add`, `sub`, `mul`, `div`, `less`, `greater`,
+  `less_or_equal`, `greater_or_equal`.  Each is an ordinary lichen function whose
+  operands carry the **class** refinement `x : (_ ! in_num)`, so `add 1.5 2.5` is
+  `4.0` and `add "a" "b"` is refused, in an otherwise empty file.  The prelude is
+  **shadowable, not reserved**: it is seeded *before* a program's own imports and
+  bindings, so a program that binds `add` gets its own.  The module is also
+  reachable as a value (`core = import "core"`, then `core.add`).
 - **Statements and bindings.**  A program is a **block body**: a list of
   (possibly `pub`-marked) statements — a `name = expr` binding or a bare
   expression — followed by an optional **tail** expression.  The top level is
