@@ -45,7 +45,7 @@ use std::collections::HashMap;
 use stacksafe::stacksafe;
 
 use lichen_highlevel::attr::AttrSet;
-use lichen_highlevel::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Schema};
+use lichen_highlevel::ir::{BinOp, ChildRange, ConvOp, ExprId, ExprKind, IR, Schema};
 use lichen_highlevel::program::{
     FloatLit, FloatTypeLit, HighProgramLiteral, IntLit, IntTypeLit, StrLit, StringTypeLit,
     TypeTypeLit,
@@ -753,6 +753,21 @@ impl Compiler {
                 let condition = self.compile_expr(value);
                 self.alloc(ExprKind::Assert { condition }, span)
             }
+            Expr::Convert {
+                operator,
+                value,
+                span,
+            } => {
+                // `int2float e` / `float2int e` — the direction rides along and
+                // the checker does the class work: it pins the operand to the
+                // source class and gives the expression the target one.
+                let operator = match operator {
+                    crate::ast::ConvOp::Int2Float => ConvOp::Int2Float,
+                    crate::ast::ConvOp::Float2Int => ConvOp::Float2Int,
+                };
+                let value = self.compile_expr(value);
+                self.alloc(ExprKind::Convert { operator, value }, span)
+            }
             Expr::NativeCall { op, args, span } => {
                 // `$name(args…)` — compile each arg into the children arena,
                 // intern the op name, and alloc the NativeCall IR.  The name
@@ -916,6 +931,7 @@ impl Compiler {
                         | Expr::BinOp { .. }
                         | Expr::If { .. }
                         | Expr::Assert { .. }
+                        | Expr::Convert { .. }
                         | Expr::NativeCall { .. }
                         | Expr::Index { .. }
                         | Expr::RawIndex { .. }

@@ -46,6 +46,21 @@ pub enum BinOp {
     BitXor,
 }
 
+/// The two class conversions, `int2float` and `float2int`.
+///
+/// They are spelled as prefix keywords rather than as an infix `as` because
+/// there is nothing to choose: a conversion has one operand and one direction,
+/// and the direction is the name (`docs/notes/operators.md` §1's set, and §4.2
+/// of `docs/notes/floating-point.md` — the classes never convert implicitly, so
+/// these two words are the only way one class becomes the other).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConvOp {
+    /// `int2float e` — the `Int`'s value as the nearest `f32`.
+    Int2Float,
+    /// `float2int e` — the `Float` truncated toward zero.
+    Float2Int,
+}
+
 #[derive(Clone, Debug)]
 pub enum Expr {
     /// An integer literal.
@@ -121,6 +136,17 @@ pub enum Expr {
     /// `! 1 == 1` parses as `(!1) == 1`; assert a comparison by parenthesizing
     /// it: `!(1 == 1)`.
     Assert { value: Box<Expr>, span: Span },
+    /// `int2float e` / `float2int e` — a prefix class conversion.  The only
+    /// place the language's two scalar classes meet: `Int` and `Float` do not
+    /// convert implicitly (`docs/notes/floating-point.md` §4.2), so the
+    /// direction is in the word and there is nothing to infer.  It binds at the
+    /// prefix level beside `!`, so `int2float a + 1` converts `a` and
+    /// `int2float f x` converts `f x`.
+    Convert {
+        operator: ConvOp,
+        value: Box<Expr>,
+        span: Span,
+    },
     /// `$name(args…)` — a call to a native operator registered by the compiling
     /// module's plugin (a private, per-file naming contract).  `name` resolves
     /// only against the module's native registry; the args are ordinary
@@ -450,6 +476,7 @@ impl Expr {
             Expr::BinOp { span, .. } => *span,
             Expr::If { span, .. } => *span,
             Expr::Assert { span, .. } => *span,
+            Expr::Convert { span, .. } => *span,
             Expr::NativeCall { span, .. } => *span,
             Expr::Index { span, .. } => *span,
             Expr::RawIndex { span, .. } => *span,

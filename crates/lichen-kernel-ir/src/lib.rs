@@ -123,9 +123,10 @@ impl ScalarClass {
 /// # The bits, not a conversion
 ///
 /// The payload is the buffer's bytes, and the variant says how to read them.
-/// No conversion happens here: this is the ABI's carrier, not a lowerer. The
-/// one conversion the design has is a **boundary** conversion a lowering
-/// chooses later, at a place nothing above the backend decided
+/// No conversion happens here: this is the ABI's carrier, not a lowerer.  What
+/// conversions exist are decided below it — the language's own crossing, which
+/// reaches a backend as a [`KernelInstr::Conv`] in a body, and the **boundary**
+/// conversion a lowering chooses at a place nothing above the backend decided
 /// (`docs/notes/floating-point.md` §4.3).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScalarData {
@@ -570,6 +571,50 @@ pub enum KernelInstr {
     /// a backend resolves this to a call to the callee. The arity is the
     /// callee's own domain, not known here.
     CallKernel(KernelId),
+    /// The language's two class conversions — `int2float` and `float2int` — as
+    /// one instruction: the stack holds a `from` and this leaves behind the same
+    /// number as a `to`.
+    ///
+    /// # Why the pair, when only the two crossing directions are ever written
+    ///
+    /// Because *which* of the two it is cannot be read off the operand: `Int →
+    /// Float` and `Float → Int` are the same shape on a stack machine, and the
+    /// direction is the language's decision, not a target's. A backend that had
+    /// to re-derive it from the fragment's class would be guessing, and the two
+    /// backends could guess differently — which is the exact failure
+    /// `docs/notes/floating-point.md` §5.1 records the wasm backend producing.
+    ///
+    /// `from == to` is a **reclassification and not a no-op**: it is what the
+    /// emitter writes when the operand already carries the answer in the target
+    /// representation, so that the walk of the body ([`KernelBody`] consumption in
+    /// each backend) sees a value of `to` where it would otherwise see one of
+    /// `from`. A backend lowers it to nothing.
+    ///
+    /// # What each backend emits
+    ///
+    /// Neither opcode is named here, because the two targets hold the same number
+    /// in genuinely different places:
+    ///
+    /// - wasm's locals are the fragment's own classes, so a `Float` fragment's
+    ///   parameter leaves are `f32` and its `Int` ones `i64`: the conversion is
+    ///   the opcode that crosses them (`f32.convert_i64_u`, `i64.trunc_f32_u`)
+    ///   and **nothing at all** when the value on the stack is already a `to`.
+    /// - SPIR-V's index is the invocation id — a 32-bit integer in every module,
+    ///   float included — so `Int → Float` there is always `OpConvertUToF`, and a
+    ///   module that has not declared the other class's type refuses the
+    ///   direction by name rather than declaring a type it did not need.
+    ///
+    /// **`Float → Int` truncates toward zero in neither backend's promise**: the
+    /// interpreter refuses what it cannot represent (see
+    /// `docs/notes/operators.md`), wasm traps, and SPIR-V is undefined. A kernel
+    /// is the intersection of what the backends compute *the same way*, and this
+    /// conversion is in it only for the values both answer identically.
+    Conv {
+        /// The class the stack holds.
+        from: ScalarClass,
+        /// The class this leaves behind.
+        to: ScalarClass,
+    },
     /// Read one element of one input buffer: the stack holds
     /// `[buffer_position, index]`.
     BufferReadCall,

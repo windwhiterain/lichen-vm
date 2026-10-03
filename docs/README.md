@@ -39,7 +39,7 @@ Every note opens with a `> Status:` line:
 |---|---|---|
 | [Architecture overview](notes/overview.md) | — | current |
 | [Lowlevel VM](notes/lowlevel-vm.md) | `lichen-lowlevel` | current |
-| [Floating point](notes/floating-point.md) | `lichen-lowlevel` (`LowValue`/`LowShape`/`codec`), `lichen-highlevel` (`shape`/`program`/`checker`), `lichen-language-lex`/`-parser`, `lichen-render`, `lichen-language` (`persist`), `lichen-kernel-ir` | phases 0–1 landed (`f32`, no conversion, `==` is `value_eq`, refused by kernels); phase 2 proposed |
+| [Floating point](notes/floating-point.md) | `lichen-lowlevel` (`LowValue`/`LowShape`/`codec`), `lichen-highlevel` (`shape`/`program`/`checker`), `lichen-language-lex`/`-parser`, `lichen-render`, `lichen-language` (`persist`), `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu` | phases 0–2 landed (`f32`, `==` is `value_eq`, a float kernel runs on both backends); the classes meet only at `int2float` / `float2int` — see [operators](notes/operators.md) §7 |
 | [A lichen program as a whiting scene](notes/whiting-scene-document.md) | `lichen-language` (`session`/`compile`), `lichen-lowlevel`, external `whiting-definition` | proposed (the seam is one scene document; no compiler impl, no device) |
 | [Static modules & registry](notes/static-modules.md) | `lichen-lowlevel`, `lichen-language` (`persist`) | current |
 | [The computational operators](notes/operators.md) | `lichen-language-lex`/`-parser`/`-language`, `lichen-highlevel` (`ir`/`program`/`checker`), `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu` | current |
@@ -80,7 +80,6 @@ Every note opens with a `> Status:` line:
 | [The GPU backend for the lowered-kernel IR](notes/lichen-compute-gpu.md) | `lichen-compute-gpu`, `lichen-kernel-ir` | current |
 | [Graph JIT: a chain of dispatches as one submission](notes/compute-graph-jit.md) | `lichen-graph-ir`, `lichen-compute` (`compute/graph.rs`) | current |
 | [The compute JIT on low types](notes/compute-jit-low-types.md) | `lichen-compute` | current |
-| [Floating point: `Float` as a ninth kind marker](notes/floating-point.md) | `lichen-lowlevel`, `lichen-highlevel`, `lichen-language-*` | proposed — nothing implemented |
 | [The GPU algorithm roadmap](notes/gpu-algorithm-roadmap.md) | `lichen-compute`, `lichen-kernel-ir`, `lichen-compute-gpu` | **proposal** — the order the four axes go in |
 | [The GPU algorithm ladder](notes/gpu-algorithms-ladder.md) | `lichen-compute`, `lichen-compute-gpu` | exploration record — the evidence the roadmap argues from |
 | [Parallel primitives (`parallel`/`plrun`/`pget`/`pcollect`)](notes/lichen-compute-parallel.md) | `lichen-compute` | historical |

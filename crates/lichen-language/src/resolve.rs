@@ -286,6 +286,7 @@ impl Resolver {
                 self.resolve_expr(else_branch);
             }
             Expr::Assert { value, .. } => self.resolve_expr(value),
+            Expr::Convert { value, .. } => self.resolve_expr(value),
             Expr::NativeCall { args, .. } => {
                 for a in args {
                     self.resolve_expr(a);

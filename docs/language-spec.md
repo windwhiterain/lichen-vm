@@ -53,7 +53,8 @@ bitxor   := bitand ('^' bitand)*                    -- bitwise exclusive or
 bitand   := sum ('&' sum)*                          -- bitwise and
 sum      := product (('+' | '-') product)*          -- arithmetic, left-assoc
 product  := prefix (('*' | '/' | '%') prefix)*      -- product, left-assoc; tighter than '+'/'-'
-prefix   := '!' apply | apply                       -- prefix assert: `!e` asserts `e`; tighter than binary ops
+prefix   := '!' apply | ('int2float' | 'float2int') apply | apply
+                                                  -- prefix assert `!e`, and the two class crossings; tighter than every binary operator, looser than application
 apply    := atom atom*                              -- application; left-assoc, tightest
 atom     := primary postfix*                        -- a primary, then glued postfix forms
 primary  := int_literal
@@ -90,7 +91,9 @@ farg     := '.' name expr                         -- named instantiation argumen
 ```
 
 - **Keywords:** `Int`, `Float`, `string`, `Type`, `struct`, `array`, `table`, `let`, `if`, `then`,
-  `else`, `return`, `pub`, `cache`, `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `?`,
+  `else`, `return`, `pub`, `cache`, `int2float`, `float2int`, `=>`, `->`, `:`.  The
+  two conversion keywords open a prefix expression and so cannot be used as
+  names; the rest are reserved as words.  `=` binds a name in a statement; `#`, `?`,
   `$`, `::`, `==>`,
   `~`, `!`, and the
   operators `+ - * / % < > <= >= == != & | ^` are punctuation.  A binding is **block-wide** by
@@ -439,9 +442,17 @@ maps every span back to the original file.
   interpreter, CPU-JIT, GPU-JIT — reads them the same way.  A `Float` takes
    `+ - * /` and the four order comparisons, and **no `%`**.  Each yields a
    `Float` except a comparison, which yields an `Int` like every other.  `Int`
-   and `Float` are **unrelated types**: there is no conversion in either
-   direction and no operator mixes them, so `1.5 + 1` and `1 == 1.5` do not
-   check.  `==` / `!=` over two `Float`s are the generalized equality — which is
+   and `Float` are **unrelated types**: no operator mixes them, so `1.5 + 1` and
+   `1 == 1.5` do not check, and nothing converts silently.  The only crossings
+   are the two prefix keywords `int2float e` / `float2int e`, each of which
+   checks its operand against its own **source** class and yields its **target**
+   — so `int2float 1` is `Float` and `float2int 1.5` is `Int`, and the wrong
+   operand class is refused by name.  `int2float` is the nearest `f32` (so
+   `int2float 16777217` is `16777216.0`); `float2int` truncates toward zero and
+   is **partial** — a `NaN`, an infinity, or a value the unsigned `Int` cannot
+   hold records `operator.out_of_range` and answers the lazy marker.  See
+   [operators](notes/operators.md) §7.
+   `==` / `!=` over two `Float`s are the generalized equality — which is
    the same relation the rest of the language uses for "these are one value" —
    so they compare a float by its bits: `0.0 == -0.0` is `0` and
    `NaN == NaN` is `1`.  See [notes/floating-point](notes/floating-point.md) for
@@ -619,6 +630,7 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `e1 e2` | `Apply { function, argument }` |
 | `a op b` (`+`, `-`, `*`, `/`, `%`, `<`, `>`, `<=`, `>=`, `==`, `!=`, `&`, `\|`, `^`) | `BinOp { operator, left, right }` |
 | `!e` | `Assert { condition }` — a side constraint: the expression's pair is the condition's own; the condition's value node registers as an assert point the checker force-evaluates to `USize(1)` |
+| `int2float e` / `float2int e` | `Convert { operator, value }` — the only form whose type is not its operand's: the operand checks against the direction's source class, the result's type is its target |
 | `if c then t else e` | `Index { array: [e, t], index: c }` — desugared to the lazy branch index; there is no `If` kind |
 | `e[i]` | `Index { array, index }` |
 | `a(k)` | `Field { container, key }` — the adjacent single-expression paren form; a positional slot read over a tuple element or struct field |

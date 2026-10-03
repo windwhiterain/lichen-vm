@@ -77,8 +77,8 @@ use diagnostics::diag_from;
 pub use error_blocks::collect_error_blocks;
 
 use crate::ast::{
-    BinOp, Binding, BlockStmt, Expr, Program, RecordField, Stmt, StructField, StructInstArg,
-    TypeConst,
+    BinOp, Binding, BlockStmt, ConvOp, Expr, Program, RecordField, Stmt, StructField,
+    StructInstArg, TypeConst,
 };
 
 /// A parse diagnostic: a message plus the source position it is grounded in.
@@ -549,6 +549,31 @@ fn operand<'a>(
     ))
 }
 
+/// One prefix conversion: `int2float e` / `float2int e`.
+///
+/// The keyword is a word rather than an operator token, so the conversion takes
+/// its operand by juxtaposition exactly like an application's head, and the
+/// caller passes the level it should bind to ([`application`] in
+/// [`expression`] — looser than application, tighter than every binary
+/// operator, so `int2float f x` converts `f x` while `int2float a + 1`
+/// converts `a`).  The two directions share this parser and differ only in the
+/// token and the [`ConvOp`] they map to.
+fn prefix_conv<'a>(
+    tokens: &'a [Token],
+    kind: TokenKind,
+    operator: ConvOp,
+    operand: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    token(kind)
+        .ignore_then(operand)
+        .map_with(move |e, me| Expr::Convert {
+            operator,
+            value: Box::new(e),
+            span: span_at(tokens, me.span().start),
+        })
+        .boxed()
+}
+
 /// An expression: the precedence chain over atoms, with `=>` as the loosest
 /// (right-associative) operator, validated into a lambda.
 fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
@@ -582,6 +607,25 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                 value: Box::new(e),
                 span: span_at(tokens, me.span().start),
             })
+            // `int2float e` / `float2int e` — the two prefix conversions, at the
+            // same level as the assert: they take one operand and no infix
+            // token, so they need no new precedence rung, and the word is the
+            // direction (`a + int2float b` converts `b`, `int2float a + 1`
+            // converts `a`).
+            .or(choice((
+                prefix_conv(
+                    tokens,
+                    TokenKind::KwInt2Float,
+                    ConvOp::Int2Float,
+                    application.clone(),
+                ),
+                prefix_conv(
+                    tokens,
+                    TokenKind::KwFloat2Int,
+                    ConvOp::Float2Int,
+                    application.clone(),
+                ),
+            )))
             .or(application.clone())
             .boxed();
 
@@ -902,6 +946,11 @@ fn starts_an_expression(kind: &TokenKind) -> bool {
             | TokenKind::KwIf
             | TokenKind::KwArray
             | TokenKind::Bang
+            // The prefix operators of the `unary` level, listed here beside the
+            // assert for the same reason: they begin an expression without being
+            // atoms, and `a > int2float b` must read its `>` as a comparison.
+            | TokenKind::KwInt2Float
+            | TokenKind::KwFloat2Int
             | TokenKind::Dollar
             | TokenKind::LParen
             | TokenKind::LBracket

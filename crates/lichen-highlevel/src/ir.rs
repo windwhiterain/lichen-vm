@@ -98,6 +98,33 @@ impl From<BinOp> for TypeOperator {
     }
 }
 
+/// A prefix **class conversion**: `int2float e` and `float2int e`, the two
+/// directions between the language's two scalar classes.
+///
+/// These are the only place `Int` and `Float` meet at all — every other
+/// operator computes *within* one class and the checker refuses a mixture
+/// (`docs/notes/floating-point.md` §4.2).  Each direction is a total function
+/// on values but not on types: `int2float` widens without loss, `float2int`
+/// truncates toward zero and has no answer for a `NaN` or a magnitude past the
+/// machine integer (see [`crate::program::OUT_OF_RANGE`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConvOp {
+    Int2Float,
+    Float2Int,
+}
+
+/// Every [`ConvOp`] names the [`TypeOperator`] it runs, exactly as
+/// [`BinOp`](Self::BinOp) does: the two spell the same computation, so the
+/// checker converts once here.
+impl From<ConvOp> for TypeOperator {
+    fn from(operator: ConvOp) -> Self {
+        match operator {
+            ConvOp::Int2Float => TypeOperator::Int2Float,
+            ConvOp::Float2Int => TypeOperator::Float2Int,
+        }
+    }
+}
+
 /// A dense index into [`IR::expr`].  References are pre-resolved: a
 /// use of a parameter *is* the [`ExprKind::Parameter`]'s own `ExprId` (the
 /// checker's scope stack is keyed by it), so the IR carries no name strings.
@@ -313,6 +340,14 @@ pub enum ExprKind<L> {
     /// re-checks the instantiated condition per call.  The expression
     /// compiles to the condition itself — the assert is a side constraint.
     Assert { condition: ExprId },
+    /// `int2float e` / `float2int e` — a **class conversion**, the one
+    /// construct that crosses between `Int` and `Float`.  The checker pins the
+    /// operand to the direction's source class and gives the expression the
+    /// target class, so `int2float x` on a float `x` is a check error rather
+    /// than a no-op; the value is the single operand (a one-element operand
+    /// array, since [`TypeOperator`](crate::program::TypeOperator)'s unary
+    /// forms read `operands[0]`).
+    Convert { operator: ConvOp, value: ExprId },
     /// `{ array, index }` — an element read `a[i]`; the container is *pinned*
     /// to an array type (its element type is the pinned shape's element cell
     /// and the read registers an `i < length` bounds assert), so this form
@@ -529,6 +564,7 @@ impl<L> ExprKind<L> {
             }
             ExprKind::Record { value, .. } => fix(value),
             ExprKind::Assert { condition } => fix(condition),
+            ExprKind::Convert { value, .. } => fix(value),
             ExprKind::Index { array, index } => {
                 fix(array);
                 fix(index);

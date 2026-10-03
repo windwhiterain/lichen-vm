@@ -118,6 +118,11 @@ mod op {
     pub const LABEL: u16 = 248;
     pub const RETURN: u16 = 253;
     pub const U_CONVERT: u16 = 113;
+    /// The two class crossings: `OpConvertUToF` widens an unsigned integer to the
+    /// float, `OpConvertFToU` truncates a float toward zero to an unsigned
+    /// integer — which is the language's `float2int`, whose `Int` is unsigned.
+    pub const CONVERT_U_TO_F: u16 = 112;
+    pub const CONVERT_F_TO_U: u16 = 109;
     /// The reinterpretation an integer constant and a float operand meet
     /// through: same width, same bits, no conversion of the value.
     pub const BITCAST: u16 = 124;
@@ -249,10 +254,25 @@ pub enum SpirvRefusal {
     /// computes something nobody wrote is worse than one that does not run.
     UnsupportedFloatOperator { operator: &'static str, at: usize },
     /// A value and a buffer index of different classes met in one operation.
-    /// `Int` and `Float` do not convert in either direction
-    /// (`docs/notes/floating-point.md` §4.2), so this is a malformed fragment
+    /// `Int` and `Float` do not meet in one operation without saying so — the
+    /// two conversions are the only crossing the language has
+    /// (`docs/notes/floating-point.md` §4.2) — so this is a malformed fragment
     /// rather than a shape a conversion could serve.
     MixedClasses { at: usize },
+    /// A class conversion in a module that declares one numeric class only.
+    ///
+    /// **Both directions need the type the module does not have.**  An integer
+    /// module declares `OpTypeInt 64 0` and no float at all, and `OpTypeFloat 32`
+    /// stays out of it on purpose — `docs/notes/floating-point.md` §4.4 — because
+    /// that is what keeps `needs_int64` answering the question a device chooser
+    /// asks.  A float module has both types and emits `OpConvertUToF` /
+    /// `OpConvertFToU`; an integer one refuses here rather than declaring a type
+    /// its class never chose to carry.
+    UnsupportedConversion {
+        from: ScalarClass,
+        to: ScalarClass,
+        at: usize,
+    },
     /// The body does not leave exactly the one value a compute shader needs.
     ResultArity { results: usize, left: usize },
     /// The stack did not balance: an instruction popped more than it pushed.
@@ -318,8 +338,15 @@ impl fmt::Display for SpirvRefusal {
             SpirvRefusal::MixedClasses { at } => write!(
                 f,
                 "instruction {at} mixed an integer and a float in one operation. `Int` and `Float` \
-                 do not convert in either direction, so nothing here can make the two operands \
-                 meet: this is a malformed fragment rather than an unsupported shape."
+                 meet only where `int2float` or `float2int` says so, so nothing here can make the \
+                 two operands meet: this is a malformed fragment rather than an unsupported shape."
+            ),
+            SpirvRefusal::UnsupportedConversion { from, to, at } => write!(
+                f,
+                "instruction {at} converts a {from:?} to a {to:?}, and this fragment's module \
+                 declares only the integer type: `OpTypeFloat 32` is not in it, and a conversion \
+                 is where the body meets the class the module does not carry. See \
+                 `docs/notes/floating-point.md` §4.4 for why an integer module keeps it out."
             ),
             SpirvRefusal::ResultArity { results, left } => write!(
                 f,
@@ -1041,6 +1068,49 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                     return Err(SpirvRefusal::NonIndexParameter { local: *local, at });
                 }
                 stack.push(scalar(index_value, ScalarClass::Int));
+            }
+            // The language's class conversion.  **This target always emits it**, and
+            // always has both types to emit it with in the module where it can appear:
+            // a `Float` module declares `OpTypeFloat 32` *and* the 32-bit integer its
+            // index is, so `Int → Float` is `OpConvertUToF` and `Float → Int` is
+            // `OpConvertFToU` — and the index a fragment converts is a `uint` holding
+            // the invocation id, which is the number `int2float` asks for
+            // (`docs/notes/floating-point.md` §5.1).
+            //
+            // An **integer module refuses it by name** rather than declaring
+            // `OpTypeFloat 32` for the occasion: §4.4 keeps that type out of an
+            // integer module because its absence is what `needs_int64` reads to
+            // answer a device chooser, and a body that reaches this point has not
+            // decided to be a float module — it has met the other class inside
+            // itself, which is the shape §4.2 says a kernel does not have.
+            KernelInstr::Conv { from, to } => {
+                let seen = pop(&mut stack, at)?;
+                // The operand is the class the operator converts *from*, and a
+                // literal or a comparison's `0`/`1` is materialised into it here —
+                // the same two positions the rest of this emitter decides the class
+                // at, and the reason the IR carries `from` rather than leaving it
+                // to be read off the module.
+                let seen = as_class(seen, *from, &ids, &mut literals, &mut code, &mut next, at)?;
+                if from == to {
+                    stack.push(seen);
+                    continue;
+                }
+                if ids.class != ScalarClass::Float {
+                    return Err(SpirvRefusal::UnsupportedConversion {
+                        from: *from,
+                        to: *to,
+                        at,
+                    });
+                }
+                let result = next;
+                next += 1;
+                let opcode = if *from == ScalarClass::Int {
+                    op::CONVERT_U_TO_F
+                } else {
+                    op::CONVERT_F_TO_U
+                };
+                code.push(Inst::new(opcode, vec![ids.type_of(*to), result, seen.id]));
+                stack.push(scalar(result, *to));
             }
             // The condition a `select` needs.  **Not a no-op here**: wasm's
             // `i32.wrap_i64` narrows an `i64` condition to the `i32` its

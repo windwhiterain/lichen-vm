@@ -459,14 +459,21 @@ out of a `let`. This is the strongest form of the no-subtyping stance in the roo
 takes — its `Int` and `Float` are distinct kinds and an `Int` value does not
 satisfy a `Float` schema.
 
+**"Do not convert" means do not convert *unasked*.** There is one operator per
+direction — `int2float e`, `float2int e` — and nothing will insert it for the
+author: each names its own direction's class, checks its operand in the other,
+and no implicit rule anywhere in the language reaches across. What the two cost
+is spelled out in [operators](operators.md) §7.
+
 ### 4.3 The JIT converts across the IR, on demand
 
 **Where it can fire is the whole content of this decision, and it is narrower
 than "wherever a float meets an integer".** §4.2 means a fragment is homogeneous
 by construction: a kernel body is written in one type or the other, never both,
-so there is no intra-expression conversion for the lowering to insert. The
-conversion is a **boundary** conversion, at the two places where a class is not
-already agreed:
+so the lowering never *inserts* a conversion to square a body with itself. What
+it does carry is a conversion the source asked for — §4.2's two operators, one
+`KernelInstr::Conv` each — and this section is about the other kind, the
+**boundary** conversion, at the two places where a class is not already agreed:
 
 - a buffer of floats reaching a fragment whose `LowShape` is `Unknown` — the
   conservative bottom, where the backend was always going to pick something;
@@ -478,12 +485,18 @@ place a conversion can honestly be a lowering's choice rather than a type
 system's.
 
 **The invariant that has to be written down with this, not after:** the checker
-never sees a conversion, so a wrong one is a wrong number and not a type error.
+never sees *these*, so a wrong one is a wrong number and not a type error.
 And `i64 → f32` is exact only below 2^24, so a large `Int` that reaches a kernel
 as a float is a rounded answer that checked perfectly. This is the same class of
 failure the whiting notes keep returning to — a wrong image nobody sees until the
 render finishes — and the answer is the one they settled on: a note that says so,
 beside the value, not silence.
+
+**§4.2's operators are deliberately not in that class.** The checker sees them,
+their two classes are pinned by the front end, and what is left uncheckable is
+the *value*: `int2float` rounds to the nearest `f32`, and `float2int` truncates
+toward zero and is partial off the integer range. Neither is a boundary
+conversion, and neither can be quietly wrong about which class it crossed.
 
 ### 4.4 The phase-2 decisions, taken before any of it is written
 
@@ -615,23 +628,32 @@ words.
   whose body calls a float kernel and adds nothing float decides no class, and is
   refused. `+ 0.0` makes it run.
 
-**One consequence of the mixed-class decision that is worth stating plainly.**
-The only per-index-varying value a kernel body can reach is the index, which is an
-`Int`; `Int` and `Float` may not meet inside one operation (§4.2), so **no
-expression can create a varying float out of the index.** What survives is
-arithmetic over a float a `read` brought in — `0.0 + a + a` is legal, is what the
-cross-backend float test uses, and varies exactly as much as its input buffer does.
-So a user can write a constant float, forward one that already varies, and
-**cannot seed a varying float buffer from an index** — there is no `Int → Float`
-conversion in the language, and inventing one is a language decision rather than
-an emitter one. A parallel kernel's float output is therefore either lane-constant
-or as varying as the float buffer it read.
+**One consequence of the mixed-class decision, and the crossing that closed
+it.** The only per-index-varying value a kernel body can reach is the index,
+which is an `Int`. While `Int` and `Float` had no operator between them, that
+meant **no expression could create a varying float out of the index**, and a
+parallel kernel's float output was either lane-constant or exactly as varying as
+the float buffer it had read. §4.2's `int2float` is the crossing, so the case now
+runs: `compute.write [n, i, int2float i + 0.5]` seeds `[0.5, 1.5, …, 68.5]` and
+the wasm and the device backends agree element for element, at the same
+`LOCAL_SIZE_X + 5` length the layout tests use. So a parallel kernel's float
+output can now be lane-constant, as varying as a float buffer read, or seeded
+from the index.
 
-The float cross-backend comparison consequently catches a host/device width
-disagreement through the interleaved half-words and the padded tail rather than
-through differing values; **the integer case is the one that carries a
-wrong-stride alarm where the values themselves vary.** That is a real limit on the
-float test and not a property of the float path.
+**The limit is the same decision one level down, and it is a refusal, not a
+silence.** A fragment holds one representation of everything it computes, so it
+cannot work in the operand's class and cross afterwards: `int2float (x + 1)` over
+an `Int` parameter in a `Float` body is refused by name, and so is a float
+literal inside an `Int` body. Both refusals are in the shared emitter, so neither
+backend can be the quietly permissive one here. See
+[operators](operators.md) §7.
+
+The float cross-backend comparison that forwards a buffer still catches a
+host/device width disagreement through the interleaved half-words and the padded
+tail rather than through differing values, and **the integer case is the one that
+carried a wrong-stride alarm where the values themselves vary** — which an
+index-seeded float now does too, on both backends. That was a real limit on the
+float test, not a property of the float path.
 
 **What refusing this caught is larger than a disagreement.** The wasm backend was
 not merely permissive here — it emitted a *valid* module computing `1.0f32 +

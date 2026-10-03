@@ -2353,9 +2353,9 @@ const MIXED_CLASS_BUFFERS: &str = "a parallel index function must read and write
 /// the arithmetic that computed the integer is not where the reader should look.
 fn mixed_classes(at: usize) -> String {
     format!(
-        "instruction {at} mixed an integer and a float in one operation. `Int` and `Float` do not \
-         convert in either direction, so nothing here can make the two operands meet: this is a \
-         malformed fragment rather than an unsupported shape."
+        "instruction {at} mixed an integer and a float in one operation. `Int` and `Float` meet \
+         only where `int2float` or `float2int` says so, so nothing here can make the two operands \
+         meet: this is a malformed fragment rather than an unsupported shape."
     )
 }
 
@@ -2546,6 +2546,7 @@ fn assemble_module(
             next_local: params,
             block_types: &block_types,
             class,
+            leaves: param_classes(frag),
         };
         lower_body(frag, &mut state, &mut body)?;
         body.instruction(&Instruction::End);
@@ -2623,6 +2624,31 @@ fn as_operand_class(
     }
 }
 
+/// The class a `LocalGet` reads, as far as this walk can see it.
+///
+/// **A parallel fragment's leaves are all integers, and a scalar fragment's are
+/// its own domain's classes.**  The two are one rule seen from the fragment: a
+/// parallel kernel's parameters are the launch count and the invocation id, both
+/// of which are `Int` whatever the body computes — the ABI may well hold the
+/// index in an `f32` local, because a float fragment's parameter leaves are its
+/// own class and the host converts, but the *number* it carries is an integer,
+/// and it is the number the language names.  A scalar kernel's parameters are
+/// the domain the author annotated, whose classes are its own, so a `Float`
+/// parameter is a `Float` here and `float2int` of one is the conversion it says
+/// it is (`docs/notes/floating-point.md` §5.1).
+///
+/// A local this fragment declares no class for is the ABI's integer default, the
+/// same answer [`fragment_class`] gives for a hand-built fragment.
+fn local_class(fragment: &KernelFragment, local: u32) -> ScalarClass {
+    if fragment.outputs > 0 {
+        return ScalarClass::Int;
+    }
+    param_classes(fragment)
+        .into_iter()
+        .nth(local as usize)
+        .unwrap_or(ScalarClass::Int)
+}
+
 /// Refuse a fragment whose body meets an `Int` and a `Float` in one operation.
 ///
 /// **A read of the lowered IR, not an emission, and it runs before the module's
@@ -2644,12 +2670,13 @@ fn refuse_mixed_classes(fragment: &KernelFragment) -> Result<(), String> {
     // A function's parameters are locals rather than stack values, so the stack a
     // body starts from is empty and `LocalGet` is what puts a value on it.
     let mut stack = Vec::new();
-    check_flow(&fragment.body.entry, module, &mut stack)
+    check_flow(&fragment.body.entry, fragment, module, &mut stack)
 }
 
 /// Walk one flow, carrying the classes the enclosing block left on the stack.
 fn check_flow(
     flow: &Flow,
+    fragment: &KernelFragment,
     module: ScalarClass,
     stack: &mut Vec<OperandClass>,
 ) -> Result<(), String> {
@@ -2664,9 +2691,9 @@ fn check_flow(
             // what the SPIR-V refusal's `at` counts: the same numbering the other
             // emitter reports, over the same list.
             for (at, instruction) in instrs.iter().enumerate() {
-                check_instr(instruction, module, stack, at)?;
+                check_instr(instruction, fragment, module, stack, at)?;
             }
-            check_terminator(terminator, module, stack)
+            check_terminator(terminator, fragment, module, stack)
         }
     }
 }
@@ -2684,6 +2711,7 @@ fn pop_class(stack: &mut Vec<OperandClass>) -> OperandClass {
 /// Check one instruction's effect on the stack.
 fn check_instr(
     instruction: &KernelInstr,
+    fragment: &KernelFragment,
     module: ScalarClass,
     stack: &mut Vec<OperandClass>,
     at: usize,
@@ -2692,13 +2720,10 @@ fn check_instr(
         KernelInstr::Const(_) => {
             stack.push(OperandClass::Literal);
         }
-        // **An integer, whatever the fragment's class**: the index is the
-        // invocation id, and an access chain indexes with an integer on every
-        // target.  A float fragment's index local is the same number in `f32`,
-        // which is why this is the class the two emitters agree on and not the
-        // module's.
-        KernelInstr::LocalGet(_) => {
-            stack.push(OperandClass::Scalar(ScalarClass::Int));
+        // **An integer in a parallel fragment, the parameter's own class in a
+        // scalar one** — see [`local_class`].
+        KernelInstr::LocalGet(local) => {
+            stack.push(OperandClass::Scalar(local_class(fragment, *local)));
         }
         // The narrowing a `0`/`1` scalar takes to become a `select` condition.
         KernelInstr::I32WrapI64 => {
@@ -2736,6 +2761,23 @@ fn check_instr(
             as_operand_class(value, module, at)?;
             as_operand_class(element, ScalarClass::Int, at)?;
         }
+        // The language's class conversion, crossing at the one place the
+        // fragment's own class does not decide: the operand has to be the class
+        // the operator says it converts *from*, and nothing gives way.  Which
+        // class the *body* holds the operand as is the emitter's business —
+        // [`emit_convert`] lowers it in the fragment's own class, so a float
+        // fragment's `int2float` of its index meets the walk's `Int` (the number
+        // the language names) and the backend's `f32` (the representation the ABI
+        // carries) one level apart, and both answer the same fragment
+        // (`docs/notes/floating-point.md` §5.1).
+        KernelInstr::Conv { from, to } => {
+            let seen = pop_class(stack);
+            let seen = as_operand_class(seen, *from, at)?;
+            stack.push(match seen {
+                OperandClass::Opaque => OperandClass::Opaque,
+                _ => OperandClass::Scalar(*to),
+            });
+        }
         KernelInstr::Bin(operator) => {
             let rhs = pop_class(stack);
             let lhs = pop_class(stack);
@@ -2767,6 +2809,7 @@ fn check_instr(
 /// Check one terminator, and walk into the flows it opens.
 fn check_terminator(
     terminator: &Terminator,
+    fragment: &KernelFragment,
     module: ScalarClass,
     stack: &mut Vec<OperandClass>,
 ) -> Result<(), String> {
@@ -2782,10 +2825,10 @@ fn check_terminator(
             // it, so each arm is checked against its own copy of that stack.
             pop_class(stack);
             let mut arm = stack.clone();
-            check_flow(on_one, module, &mut arm)?;
+            check_flow(on_one, fragment, module, &mut arm)?;
             if let Some(on_zero) = on_zero {
                 let mut arm = stack.clone();
-                check_flow(on_zero, module, &mut arm)?;
+                check_flow(on_zero, fragment, module, &mut arm)?;
             }
             // The join receives `passes` values whose class depends on which arm
             // ran, so what is left on the stack is how many there are and not
@@ -2799,7 +2842,7 @@ fn check_terminator(
             // instruction here, so nothing the body inherits from the header's
             // entry stack can be judged — only what the body computes from it.
             let mut body_stack = vec![OperandClass::Opaque; stack.len() + carried];
-            let result = check_flow(body, module, &mut body_stack);
+            let result = check_flow(body, fragment, module, &mut body_stack);
             // The loop leaves through its `exit` label, which this walk does not
             // resolve, so the enclosing block continues from nothing known.
             stack.clear();
@@ -2895,6 +2938,15 @@ struct WasmState<'a> {
     /// [`fragment_class`] before emission — the class of every local a loop
     /// carries and of every block type the body names.
     class: ScalarClass,
+    /// The parameter leaves' classes, in `LocalGet` order — the types the
+    /// function's own parameters are declared with.
+    ///
+    /// **A [`KernelInstr::Conv`] reads these and nothing else.**  The instruction
+    /// says what class the value on the stack is and what class it becomes;
+    /// whether that is an opcode or nothing at all is a fact of the local it was
+    /// read from, and a float fragment's index leaf is an `f32` that already
+    /// carries the exact integer (`docs/notes/floating-point.md` §5.1).
+    leaves: Vec<ScalarClass>,
 }
 
 impl WasmState<'_> {
@@ -3191,6 +3243,19 @@ fn buffered_class(ordered: &[KernelFragment]) -> Result<Option<ScalarClass>, Str
 /// decided before emission, so every constant is already in the representation
 /// its opcode reads ([`const_bits`]) and every arithmetic operator is the
 /// class's.
+///
+/// # The running representation, and why only a `Conv` reads it
+///
+/// Every other opcode here takes its operands from the fragment's one class, so
+/// the emission needs no second type system.  A [`KernelInstr::Conv`] is the
+/// exception: whether the crossing is an opcode or *nothing* depends on the
+/// representation the value actually has, and that is a fact this function can
+/// see and the emitter could not — a `Float` fragment's index and count locals
+/// are `f32`s carrying exact integers, so `int2float` of one converts no bits at
+/// all, while the same instruction over an `Int` parameter leaf is
+/// `f32.convert_i64_u`.  The list below tracks the wasm type of each stack value
+/// for exactly that question, and an operand whose representation is neither
+/// side of the crossing is refused rather than reinterpreted.
 fn lower_instrs(
     body: &[KernelInstr],
     state: &mut WasmState<'_>,
@@ -3199,6 +3264,9 @@ fn lower_instrs(
     use wasm_encoder::Instruction;
     let (index, base) = (state.index, state.base);
     let class = state.class;
+    // The wasm type of each value the sequence has left on the stack, or [`None`]
+    // for one this lowering cannot name (a cross-kernel call's result).
+    let mut stack: Vec<Option<ScalarClass>> = Vec::new();
 
     for instr in body {
         match instr {
@@ -3301,6 +3369,105 @@ fn lower_instrs(
                 // The host `write(out_pos, idx, val)` import — function index 1.
                 out.instruction(&Instruction::Call(1));
             }
+            // The crossing.  `from` and `to` are what the *language* conversion
+            // states; what this target holds is the value below, and the two are
+            // not the same question — which is why the emission reads one to
+            // answer the other.
+            KernelInstr::Conv { from, to } => {
+                let seen = stack.pop().flatten();
+                match (seen, *from, *to) {
+                    // A crossing between one class and itself is the IR's way of
+                    // saying "reclassify, and change nothing".
+                    (_, from, to) if from == to => {}
+                    // The value is already carried in the class this is going to.
+                    // A `Float` fragment's index and count locals are this case:
+                    // an `f32` holding the exact integer below 2^24, so
+                    // `int2float` of it is the number and not the bits
+                    // (`docs/notes/floating-point.md` §5.1).
+                    (Some(seen), _, to) if seen == to => {}
+                    // The crossing the operator states, over an operand that
+                    // holds its source — and over an operand this walk could not
+                    // type (a cross-kernel call's result), where emitting the
+                    // opcode is the conservative answer: a module whose callee
+                    // turned out to hand back the destination class already fails
+                    // to *validate* rather than answer with a reinterpreted
+                    // number.
+                    (Some(seen), from, _) if seen == from => match from {
+                        ScalarClass::Int => {
+                            out.instruction(&Instruction::F32ConvertI64U);
+                        }
+                        ScalarClass::Float => {
+                            out.instruction(&Instruction::I64TruncF32U);
+                        }
+                    },
+                    (None, from, _) => match from {
+                        ScalarClass::Int => {
+                            out.instruction(&Instruction::F32ConvertI64U);
+                        }
+                        ScalarClass::Float => {
+                            out.instruction(&Instruction::I64TruncF32U);
+                        }
+                    },
+                    (Some(seen), from, to) => {
+                        return Err(format!(
+                            "compute.wasm: a {from:?}→{to:?} conversion met a {seen:?} value, and \
+                             three classes where the language has two is not a fragment either \
+                             backend can lower"
+                        ));
+                    }
+                }
+                stack.push(Some(*to));
+            }
+        }
+        // The stack effect, recorded so the crossing above can read the
+        // representation of what its operand left behind.  A body that never
+        // converts pays a `Vec` push per instruction for that.
+        match instr {
+            KernelInstr::Const(_) => stack.push(Some(class)),
+            KernelInstr::LocalGet(local) => {
+                stack.push(state.leaves.get(*local as usize).copied().or(Some(class)))
+            }
+            KernelInstr::Bin(op) => {
+                stack.pop();
+                stack.pop();
+                // An order or equality comparison yields the `0/1` scalar in the
+                // integer reading (`I64ExtendI32U` widens it), and `%` and the
+                // bitwise trio have no float opcode and are the integer ones
+                // whatever the fragment computes — so only the four arithmetic
+                // operators answer in the fragment's class.
+                stack.push(Some(match op {
+                    KernelBin::Add | KernelBin::Sub | KernelBin::Mul | KernelBin::Div => class,
+                    _ => ScalarClass::Int,
+                }));
+            }
+            KernelInstr::I32WrapI64 => {
+                let kept = stack.pop().flatten();
+                stack.push(kept.or(Some(ScalarClass::Int)));
+            }
+            KernelInstr::Select => {
+                stack.pop();
+                stack.pop();
+                stack.pop();
+                stack.push(Some(class));
+            }
+            // The callee's arity is its own domain and this fragment does not
+            // carry it, so what a call leaves behind is unknown rather than
+            // guessed: the walk empties and names one untyped value.
+            KernelInstr::CallKernel(_) => {
+                stack.clear();
+                stack.push(None);
+            }
+            KernelInstr::BufferReadCall => {
+                stack.pop();
+                stack.pop();
+                stack.push(Some(class));
+            }
+            KernelInstr::BufferWriteCall => {
+                stack.pop();
+                stack.pop();
+                stack.pop();
+            }
+            KernelInstr::Conv { .. } => {}
         }
     }
     Ok(())
@@ -3732,6 +3899,57 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
+    if let Some(held) = scalar_literal(module, node) {
+        return match held {
+            LowValue::USize(_) => ScalarClass::Int,
+            _ => ScalarClass::Float,
+        };
+    }
+    let value = resolve_literal_node(module, node);
+    module
+        .low_type_of_node(value)
+        .map_or(ScalarClass::Int, |shape| scalar_class_of(&shape))
+}
+
+/// The scalar a node holds, if it holds one: a `USize` or a `Float`, found by
+/// [`resolve_literal_node`]'s look-through.
+///
+/// **The two questions — "what class is this" and "is this a number I can read
+/// now" — are one walk**, and [`node_class`] and the conversion emitter ask them
+/// at the same position.  Separate walks would be two answers to whether a
+/// position is a literal, which is the shape where one says "fold it" and the
+/// other says "it is computed".
+fn scalar_literal<P>(module: &Module<P>, node: NodeId) -> Option<LowValue>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let value = resolve_literal_node(module, node);
+    // **The value slot answers first, exactly as [`emit_node`] reads it.**  A
+    // node the checker already concretised carries an operation *and* a value,
+    // and the emission uses the value — so a fold that asked about the operation
+    // first would leave that value to be emitted as a constant of whichever
+    // class the body has, which for a float under an integer body is a bit
+    // pattern no backend was promised an answer for.
+    let held = module
+        .node_value(AnyNodeId::Dynamic(value))
+        .and_then(|held| AsEnum::<LowValue>::as_enum(&held))?;
+    match held {
+        LowValue::USize(_) | LowValue::Float(_) => Some(held),
+        _ => None,
+    }
+}
+
+/// The node whose value or low type states `node`'s class — the `[value, type]`
+/// pair or the `value_of` extraction unwrapped, and the constant selection over a
+/// materialized array stepped into as far as it goes.
+fn resolve_literal_node<P>(module: &Module<P>, node: NodeId) -> NodeId
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
     let mut value = value_of_node(module, node)
         .or_else(|| pair_value_node(module, node))
         .unwrap_or(node);
@@ -3744,20 +3962,7 @@ where
         };
         value = element;
     }
-    if module.node_operation(value).is_none()
-        && let Some(held) = module
-            .node_value(AnyNodeId::Dynamic(value))
-            .and_then(|held| AsEnum::<LowValue>::as_enum(&held))
-    {
-        match held {
-            LowValue::USize(_) => return ScalarClass::Int,
-            LowValue::Float(_) => return ScalarClass::Float,
-            _ => {}
-        }
-    }
-    module
-        .low_type_of_node(value)
-        .map_or(ScalarClass::Int, |shape| scalar_class_of(&shape))
+    value
 }
 
 /// The kernel-safe reading of a highlevel binary operator — the one conversion
@@ -3786,8 +3991,223 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
         TypeOperator::BitAnd => KernelBin::BitAnd,
         TypeOperator::BitOr => KernelBin::BitOr,
         TypeOperator::BitXor => KernelBin::BitXor,
+        // The two class conversions are unary, so they are not this mapping's
+        // question at all: [`emit_node`] answers them before it reaches here.
+        TypeOperator::Int2Float | TypeOperator::Float2Int => return None,
         TypeOperator::Fresh => return None,
     })
+}
+
+/// The two classes of a conversion operator, and the word the language spells it
+/// with — its source, its destination, and the name a refusal is written in.
+///
+/// **The direction is the operator's, and nothing else's.**  A body's class
+/// cannot answer it: `int2float` in a `Float` fragment and `float2int` in an
+/// `Int` one have the fragment's class as their *destination* in one case and
+/// as their *source* in the other, and a backend that inferred the direction
+/// from the class would silently swap the two programs.
+fn conv_of(operator: TypeOperator) -> Option<(ScalarClass, ScalarClass, &'static str)> {
+    match operator {
+        TypeOperator::Int2Float => Some((ScalarClass::Int, ScalarClass::Float, "int2float")),
+        TypeOperator::Float2Int => Some((ScalarClass::Float, ScalarClass::Int, "float2int")),
+        _ => None,
+    }
+}
+
+/// Emit one class conversion — `int2float` or `float2int` — into a body lowered
+/// in `class`.
+///
+/// # The two answers, and why there are two
+///
+/// A body computes in one class (`docs/notes/floating-point.md` §4.2), so a
+/// conversion is the one place where the class of the *value* and the class of
+/// the *body* legitimately differ.  What the difference resolves to, in order:
+///
+/// 1. **A literal of the class the operator converts from, and to the class the
+///    body computes in, converts here.**  `float2int 3.5` is `3`, and the emitter
+///    says so rather than pushing an `f32`'s bits into an `Int` local for a
+///    backend to reinterpret: a conversion of a constant is a constant, and
+///    deferring it is how two backends came to answer one program with two
+///    numbers depending on which position materialised the literal.  Both halves
+///    of that condition matter — the body's class is the only representation this
+///    fragment's `Const` is lowered in, and a literal of the *other* class is a
+///    graph that contradicts its own operator, which is refused rather than
+///    silently folded the other way.
+/// 2. **Anything else crosses at the IR**, as [`KernelInstr::Conv`] carrying the
+///    operator's own two classes.  Each backend emits the opcode that crosses the
+///    representation *it* holds, and nothing at all where it already holds the
+///    answer — a `Float` fragment's index local is an `f32` carrying the exact
+///    integer, which is what closes §5.1's "no varying float can be seeded from
+///    an index".
+///
+/// **The operand lowers in the body's class, in both answers.**  Asking the
+/// graph instead would read the *language* class of the operand, and the two
+/// questions are not the same: `compute.read`, `compute.range` and a kernel call
+/// are `USize` at the language level whatever the fragment computes, while the
+/// value they leave on the stack is the body's own.  The one place the difference
+/// is not cosmetic is a scalar kernel's annotated domain — see
+/// [`needs_two_representations`], which is where this emitter, and so both
+/// backends, answer it the same way.
+#[stacksafe]
+fn emit_convert<P>(
+    module: &Module<P>,
+    params: &[ParamSlot],
+    operand: NodeId,
+    from: ScalarClass,
+    to: ScalarClass,
+    name: &str,
+    depth: usize,
+    class: ScalarClass,
+    body: &mut Vec<KernelInstr>,
+    tally: &mut Positions,
+) -> Result<(), String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let items = operand_items(module, operand)?;
+    if items.len() != 1 {
+        return Err(format!(
+            "`{name}` takes one operand and its operand array has {}",
+            items.len()
+        ));
+    }
+    let value = dyn_node(items[0].node)?;
+    // 1. A literal, converted here into the body's own representation.
+    if to == class {
+        if let Some(literal) = scalar_literal(module, value) {
+            let (held, number) = match literal {
+                LowValue::USize(n) => (ScalarClass::Int, n as i64),
+                LowValue::Float(f) => {
+                    // The same range rule the interpreter answers with its
+                    // `operator.out_of_range` diagnostic.  A kernel has no
+                    // channel to record one — wasm traps and SPIR-V is undefined
+                    // — so a literal this crate can see is refused here, where
+                    // the answer is the same for both backends.
+                    let truncated = f.trunc();
+                    if !f.is_finite()
+                        || truncated < 0.0
+                        || (truncated as f64) >= (usize::MAX as f64)
+                    {
+                        return Err(format!(
+                            "`{name}` of {f} is out of range for the language's unsigned `Int`: \
+                             a kernel cannot record the diagnostic the interpreter would, so the \
+                             conversion is refused rather than answered with a trap or an \
+                             undefined value"
+                        ));
+                    }
+                    (ScalarClass::Float, truncated as i64)
+                }
+                _ => unreachable!("`scalar_literal` answers only the two scalar classes"),
+            };
+            // The direction is the operator's, and a literal of the class it does
+            // not name means the graph and the word disagree.  Folding by the
+            // literal's own class would answer `int2float 3.5` with `3`.
+            if held != from {
+                return Err(format!(
+                    "`{name}` converts a {from:?} and its operand is a {held:?} literal — the \
+                     two classes do not convert to each other on their own, so this graph names \
+                     one operator and carries a value of the other"
+                ));
+            }
+            body.push(KernelInstr::Const(const_bits(class, number)));
+            return Ok(());
+        }
+    }
+    // 2. The crossing, as the IR's own instruction.
+    //
+    // **The operand lowers in the body's class, whatever the conversion names.**
+    // A fragment holds one representation for its whole body: a `Const` is read
+    // in it and every `Bin` opcode is picked from it, so an operand lowered in
+    // the other class would be a body with two of them, which no backend can
+    // emit.  Whether the crossing then costs an opcode or nothing at all is a
+    // fact of the target rather than of this walk — the representation of the
+    // local the operand was read from here, SPIR-V's integer index there — which
+    // is why [`KernelInstr::Conv`] carries the pair and each backend answers it
+    // alone.
+    //
+    // **What that leaves open is a scalar kernel's own domain.**  Its locals keep
+    // the classes the author annotated, so `int2float x` over an `Int` parameter
+    // crosses a leaf the body never computed: a `LocalGet` carries no opcode, so
+    // it has no class to get wrong, and the same holds of a literal and of a
+    // callee's result.  An *expression* over that parameter is the other case —
+    // `int2float (x + 1)` in a `Float` kernel asks for the integer add, and one
+    // fragment has one opcode family for its whole body — so it is refused here,
+    // by name, where the refusal is the shared emitter's and so one answer for
+    // both backends.
+    //
+    // A parallel fragment is not this case whatever its operand holds: its leaves
+    // arrive in the fragment's own class, so an integer-shaped operand — its
+    // index, its count — was computed in that representation from the start, and
+    // that is the §5.1 identity a backend answers with no instruction at all.
+    let mut operand_body = Vec::new();
+    emit_node(
+        module,
+        params,
+        value,
+        depth + 1,
+        class,
+        &mut operand_body,
+        tally,
+    )?;
+    if from != class && params.len() == 1 && needs_two_representations(params, class, &operand_body)
+    {
+        return Err(format!(
+            "`{name}` of an expression computed as a {from:?} inside a {class:?} kernel body: one \
+             fragment has one representation for everything it computes, so an operator over a \
+             {from:?} parameter has no form here — a {from:?} parameter read, a literal and a \
+             callee's result all cross, and an expression of them does not until the kernel's \
+             own class is {from:?}"
+        ));
+    }
+    body.append(&mut operand_body);
+    body.push(KernelInstr::Conv { from, to });
+    Ok(())
+}
+
+/// Whether `body` computes over a local the fragment does not itself hold in
+/// `class` — the one shape a single-class fragment cannot carry.
+///
+/// **The emission is read, not the graph**, because the emission is what the
+/// backends receive: a `LocalGet` has no opcode, so crossing a leaf of the other
+/// class is exactly what [`KernelInstr::Conv`] exists for, while every operator
+/// takes the fragment's own class for its operands ([`lower_instrs`] picks one
+/// family per body) and would leave the same body holding two of them.
+fn needs_two_representations(
+    params: &[ParamSlot],
+    class: ScalarClass,
+    body: &[KernelInstr],
+) -> bool {
+    let leaves = param_leaf_classes(params);
+    let foreign_leaf = body.iter().any(|instr| {
+        matches!(instr, KernelInstr::LocalGet(local)
+            if leaves.get(*local as usize).copied().is_some_and(|leaf| leaf != class))
+    });
+    let computed = body.iter().any(|instr| {
+        matches!(
+            instr,
+            KernelInstr::Bin(_) | KernelInstr::Select | KernelInstr::I32WrapI64
+        )
+    });
+    foreign_leaf && computed
+}
+
+/// The classes of the locals the emitter reads, in `LocalGet` order — the same
+/// list [`param_classes`] takes off a finished fragment, built here from the
+/// parameter slots the walk still holds.
+fn param_leaf_classes(params: &[ParamSlot]) -> Vec<ScalarClass> {
+    fn walk(shape: &KernelShape, out: &mut Vec<ScalarClass>) {
+        match shape {
+            KernelShape::Scalar(class) => out.push(*class),
+            KernelShape::Tuple(items) => items.iter().for_each(|item| walk(item, out)),
+        }
+    }
+    let mut classes = Vec::new();
+    for slot in params {
+        walk(&kernel_shape(&slot.shape), &mut classes);
+    }
+    classes
 }
 
 /// Emit wasm instructions for one lichen graph node — the scalar kernel-safe
@@ -3845,7 +4265,23 @@ where
             // A float literal is a scalar like any other: its bits ride in the
             // same `Const`, because the fragment's class is what says how the
             // opcode reads them (`docs/notes/floating-point.md` §3.4, §4.4).
+            //
+            // **Which is why an `Int` body cannot hold one at all**: the bits have
+            // no integer reading, and the `Const` the IR carries says nothing
+            // about which of the two they are.  Every path that reaches this
+            // refusal with the literal on its own has already crossed it by name
+            // — [`emit_convert`] folds a `float2int` of a literal into the body's
+            // own number — so a body that gets here is one asked to compute a
+            // float in the class that has no form for it.
             Some(LowValue::Float(f)) => {
+                if class == ScalarClass::Int {
+                    return Err(format!(
+                        "`{f}` has no form in an Int kernel body: a fragment's `Const` is read in \
+                         the body's own class, so a float literal here would be answered as the \
+                         integer its bits happen to spell — convert it where the body computes \
+                         floats, or write the number the kernel should hold"
+                    ));
+                }
                 body.push(KernelInstr::Const(float_bits(f)));
                 return Ok(());
             }
@@ -4040,6 +4476,17 @@ where
     }
     // The highlevel's type-level arithmetic over `[left, right]`.
     if let Some(ty_op) = AsEnum::<TypeOperator>::as_enum(op) {
+        // The two class conversions first: they are unary, so they are not this
+        // branch's binary question, and they are the one place where the value's
+        // class and the body's differ on purpose.
+        if let Some((from, to, name)) = conv_of(ty_op) {
+            let Some(operand) = operation.operand else {
+                return Err(format!("`{name}` operand is missing"));
+            };
+            return emit_convert(
+                module, params, operand, from, to, name, depth, class, body, tally,
+            );
+        }
         let Some(bin) = kernel_bin(ty_op) else {
             return Err(format!(
                 "unsupported highlevel operator in kernel body: {ty_op:?}"

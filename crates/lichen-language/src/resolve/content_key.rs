@@ -10,7 +10,7 @@ use super::*;
 /// bump invalidates every cached key, so every [`crate::session::BufferSession`]
 /// rebuilds on its next compile.  That is the intended answer — a stale key
 /// must never be silently reusable.
-const KEY_FORMAT_VERSION: u64 = 3;
+const KEY_FORMAT_VERSION: u64 = 4;
 
 /// The **resolved content key** of a resolved program: an exact, digest-free
 /// serialization of the name-resolved, beyond-error structure that the lowering
@@ -223,6 +223,20 @@ impl KeyWriter {
             }
             Expr::Assert { value, .. } => {
                 self.u(11);
+                self.expr(value);
+            }
+            // The direction is content, not decoration: `int2float x` and
+            // `float2int x` are different computations of the same operand, so
+            // a key that hashed only the operand would reuse one build for the
+            // other.
+            Expr::Convert {
+                operator, value, ..
+            } => {
+                self.u(34);
+                self.u(match operator {
+                    crate::ast::ConvOp::Int2Float => 0,
+                    crate::ast::ConvOp::Float2Int => 1,
+                });
                 self.expr(value);
             }
             Expr::NativeCall { op, args, .. } => {
