@@ -28,12 +28,14 @@ fn adds() -> KernelFragment {
             KernelShape::Scalar(ScalarClass::Int),
         ]),
         body: vec![
-            KernelInstr::Const(ScalarClass::Int, 0),
+            KernelInstr::Const(ScalarClass::Int, 0), // out_pos
+            KernelInstr::LocalGet(1),                // the write's index
+            KernelInstr::Const(ScalarClass::Int, 0), // cfg_pos, the *input* space
             KernelInstr::LocalGet(1),
-            KernelInstr::BufferReadCall(ScalarClass::Int),
-            KernelInstr::Const(ScalarClass::Int, 0),
+            KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
+            KernelInstr::Const(ScalarClass::Int, 0),       // cfg_pos again
             KernelInstr::LocalGet(1),
-            KernelInstr::BufferReadCall(ScalarClass::Int),
+            KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
             KernelInstr::Const(ScalarClass::Int, 1),
             KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
