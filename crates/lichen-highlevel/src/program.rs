@@ -17,8 +17,9 @@ use std::sync::Arc;
 
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    AnyNodeId, BlockId, Deferral, GlobalExt, LowOperator, LowShape, LowValue, Module, ModuleKey,
-    NodeId, OperatorExt, PendingSides, Program, StaticModule, ValueExt, is_unbound,
+    AnyNodeId, BlockId, Deferral, FunctionTypeUnify, GlobalExt, LowOperator, LowShape, LowValue,
+    Module, ModuleKey, NodeId, OperatorExt, PendingSides, Program, StaticModule, ValueExt,
+    is_unbound,
 };
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
@@ -1387,6 +1388,20 @@ where
     /// through to the lowlevel's generic (untyped) rules.
     fn defer_pending(module: &mut Module<Self>, sides: &PendingSides) -> Option<Deferral> {
         crate::shape::defer_pending(module, sides)
+    }
+
+    /// The highlevel's function-type unify policy — see
+    /// [`crate::shape::unify_function_type`]: a function-type node
+    /// `[Function(fid), ↺]` (a function's own type, `f : f`) is unified by
+    /// cloning the function's signature, never binding the template's shared
+    /// cells. "Is this a function-type node" and "where its signature lives"
+    /// are facts about the encoding this crate owns.
+    fn unify_function_type(
+        module: &mut Module<Self>,
+        a: NodeId,
+        b: NodeId,
+    ) -> FunctionTypeUnify {
+        crate::shape::unify_function_type(module, a, b)
     }
 }
 

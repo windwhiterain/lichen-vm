@@ -203,6 +203,71 @@ impl<P: Program> Module<P> {
         })
     }
 
+    /// Clone a function template's **signature** — its parameter and return
+    /// pairs — into the template's own block, preserving the template's
+    /// internal class topology among the fresh clones, *without* evaluating
+    /// the body or re-registering asserts.
+    ///
+    /// This is the type-level clone-on-unify primitive, used by
+    /// [`Program::unify_function_type`](crate::Program::unify_function_type)
+    /// when a function-type node `[Function(fid), ↺]` (a function's own type,
+    /// `f : f`) is unified against another type: the fresh clone's signature
+    /// cells are bound against the counterpart, so the *template's* shared
+    /// cells are never bound and the function stays let-polymorphic. It
+    /// reuses the apply clone walk ([`Self::function_apply`]'s `node_apply`
+    /// setup) verbatim — the same `Function` re-homing and the same
+    /// `unify_clone_groups` topology re-establishment — scoped to the two
+    /// signature entry points and shedding the apply-specific frame (no
+    /// argument, no body evaluation, no assert re-registration).
+    ///
+    /// Returns the cloned parameter and return pairs (the signature), or
+    /// `None` when `function` is not a dynamic function of this module.
+    pub fn clone_signature(&mut self, function: FunctionId) -> Option<(NodeId, NodeId)> {
+        let (block, r#return, parameter) = {
+            let function = &self.functions[function];
+            (function.block, function.r#return, function.parameter)
+        };
+        let mut remap = HashMap::new();
+        let mut ctx = ApplyCtx {
+            target: block,
+            // The signature's own template is the membership anchor: its
+            // parameter/return pairs and the cells they reference are members,
+            // cloned fresh; captured cells (from an enclosing scope) are
+            // outside the chain and referenced as-is, exactly as an apply
+            // treats a capture.
+            anchor: function,
+            branch_top: function,
+            closure_scope: None,
+            // `applied` is the function being cloned, so its own self-reference
+            // (a recursive type) is referenced in place rather than re-homed
+            // into a fresh closure — the same rule an apply applies.
+            applied: function,
+            parameter,
+            // The signature clones carry no template role: a later apply of the
+            // enclosing scope reaches them (if at all) through a unified class,
+            // not through `Function::nodes`, so no owner tag is stamped.
+            tag: None,
+            remap: &mut remap,
+        };
+        let return_clone = self.node_apply(r#return, &mut ctx);
+        let param_clone = self.node_apply(parameter, &mut ctx);
+        // Re-establish the template's internal class topology among the fresh
+        // clones, so a signature whose template unified two cells at definition
+        // time (e.g. identity's shared param/return type cell) keeps them
+        // unified after cloning — the clone carries the same internal
+        // constraints as the template. A single clone has no topology.
+        if ctx.remap.len() > 1 {
+            let groups = crate::apply::regroup_clones(
+                ctx.remap.iter().map(|(&t, &c)| (t, c)),
+                |t| disjoint::find(&mut self.nodes, t),
+            );
+            crate::apply::unify_clone_groups(groups, |first, clone| {
+                self.unify(first, clone);
+            });
+        }
+        Some((param_clone, return_clone))
+    }
+
     /// Evaluate `argument` to the structural depth `pattern` (the cloned
     /// parameter) references, so the apply's unify sees the argument's
     /// element values instead of unbound slots.  Only array positions in

@@ -33,8 +33,8 @@
 //!   unaffected.
 
 use lichen_lowlevel::{
-    AnyHandle, AnyNodeId, ArrayItem, Deferral, LowShape, LowValue, Module, NodeId, PendingSides,
-    Program, StaticNodeId, TableItem, UnifyStep,
+    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, Deferral, FunctionTypeUnify, LowShape, LowValue,
+    Module, NodeId, PendingSides, Program, StaticNodeId, TableItem, UnifyStep,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -553,10 +553,12 @@ where
     kind_marker_is_any(module, universe, AnyNodeId::Dynamic(kind), marker)
 }
 
-/// Whether `ty` is a concrete function type expression:
-/// `[shape, [FunctionType, K]]`.  The checker's function-ness guard skips
-/// these — only concretely *non*-function types are caught statically.
-pub fn is_function_type_any<P: Program>(
+/// Whether `ty` is a concrete **arrow-term** function type:
+/// `[shape, [FunctionType, K]]` — the spelling a written `A -> B` lowers to.
+/// Distinct from a function-type *node* `[Function(fid), ↺]` (a function's
+/// own type, `f : f`), which has no `[dom, cod]` shape: its signature lives
+/// in the function template. Use [`is_function_type_any`] to recognise both.
+fn is_arrow_type_any<P: Program>(
     module: &mut Module<P>,
     universe: NodeId,
     ty: AnyNodeId,
@@ -578,6 +580,37 @@ where
         )
 }
 
+/// Whether `ty`'s class holds a **function-type node** `[Function(fid), ↺]`
+/// — a function's own type (`f : f`). The lowlevel recognition lives in
+/// [`Module::is_function_type_node`]; this is the `AnyNodeId` wrapper that
+/// admits a static ref (a frozen module's function-types are dynamic clones
+/// after materialisation, so a raw static ref is not one).
+fn is_function_type_node_any<P: Program>(module: &mut Module<P>, ty: AnyNodeId) -> bool
+where
+    P::Value: ValueType,
+{
+    match ty {
+        AnyNodeId::Dynamic(node) => module.is_function_type_node(node),
+        AnyNodeId::Static(_) => false,
+    }
+}
+
+/// Whether `ty` is a concrete function type — either an **arrow term**
+/// `[shape, [FunctionType, K]]` (a written `A -> B`) or a **function-type
+/// node** `[Function(fid), ↺]` (a function's own type, `f : f`). The
+/// checker's function-ness guard skips these — only concretely *non*-function
+/// types are caught statically.
+pub fn is_function_type_any<P: Program>(
+    module: &mut Module<P>,
+    universe: NodeId,
+    ty: AnyNodeId,
+) -> bool
+where
+    P::Value: ValueType,
+{
+    is_arrow_type_any(module, universe, ty) || is_function_type_node_any(module, ty)
+}
+
 /// [`is_function_type_any`] over a dynamic node.
 pub fn is_function_type<P: Program>(module: &mut Module<P>, universe: NodeId, ty: NodeId) -> bool
 where
@@ -586,17 +619,19 @@ where
     is_function_type_any(module, universe, AnyNodeId::Dynamic(ty))
 }
 
-/// The two halves of a concrete function type expression
-/// `[[domain, codomain], [FunctionType, K]]` — the reader symmetric with
-/// the encoding every arrow build site produces.  `None` when `ty` is not a
-/// concrete function type: an unbound cell, a type of another kind, or a
-/// function type whose kind does not close on the universe.
+/// The two halves of a concrete **arrow-term** function type
+/// `[[domain, codomain], [FunctionType, K]]` — the reader symmetric with the
+/// encoding every arrow build site produces.  `None` when `ty` is not an
+/// arrow term: an unbound cell, a type of another kind, an arrow whose kind
+/// does not close on the universe, or a **function-type node** (whose
+/// signature lives in the function template, not in a shape — read it via
+/// [`function_type_signature`]).
 ///
 /// The **shape is returned unwrapped** — the `[domain, codomain]` node
 /// itself, not a futures pair — because every caller either reads its two
 /// elements or inserts it into the checker's `arrows` set, which keys on that
-/// node's identity (see [`is_function_type_any`] for the recognition
-/// contract this mirrors).
+/// node's identity (see [`is_arrow_type_any`] for the recognition contract
+/// this mirrors).
 pub fn function_type_parts_any<P: Program>(
     module: &mut Module<P>,
     universe: NodeId,
@@ -605,7 +640,7 @@ pub fn function_type_parts_any<P: Program>(
 where
     P::Value: ValueType,
 {
-    if !is_function_type_any(module, universe, ty) {
+    if !is_arrow_type_any(module, universe, ty) {
         return None;
     }
     shape_of(module, ty)
@@ -623,6 +658,202 @@ where
     P::Value: ValueType,
 {
     function_type_parts_any(module, universe, AnyNodeId::Dynamic(ty))
+}
+
+// --- function-type nodes (a function's own type, `f : f`) ---------------------
+//
+// A function-type node is the self-referential `[Function(fid), ↺]` — a
+// function's own type, the `f : f` representation (see
+// `docs/notes/function-type-as-function.md`). Its signature (domain/codomain,
+// and in Phase 2 the attribute slots) lives in the function *template*
+// (`Function::parameter` / `Function::r#return`), reached through `fid`, not
+// in a `[dom, cod]` shape. Unifying a function-type therefore clones the
+// signature (so the template's shared cells are never bound) rather than doing
+// a positional array unify — the mechanism `unify_function_type` below owns.
+
+/// The `AnyFunctionId` a function-type node `[Function(fid), ↺]` carries, or
+/// `None` when `ty` is not a function-type node. Reads the class's committed
+/// carrier (a bare merge may leave the value on a member other than the
+/// representative) and its slot 0.
+fn function_type_function<P: Program>(
+    module: &mut Module<P>,
+    ty: AnyNodeId,
+) -> Option<AnyFunctionId>
+where
+    P::Value: ValueType,
+{
+    let AnyNodeId::Dynamic(node) = ty else {
+        return None;
+    };
+    let rep = module.equality_representative(node);
+    let carrier = module.class_committed_node(rep)?;
+    // SAFETY: `carrier` is a live node of `module`; nothing here drops a block.
+    let items = unsafe { array_items(module, AnyNodeId::Dynamic(carrier)) }?;
+    if items.len() != 2 {
+        return None;
+    }
+    module
+        .node_value(items[0].node)
+        .and_then(|v| match v.as_enum()? {
+            LowValue::Function(fid) => Some(fid),
+            _ => None,
+        })
+}
+
+/// The type slot (element [`PAIR_TYPE_SLOT`]) of a dynamic `pair`, as a
+/// dynamic node — the `[value, type, attrs…]` layout's type cell. `None` when
+/// `pair` is not a 2+-element array or its type slot is a static ref (a
+/// function-type's cloned signature is fully dynamic).
+fn pair_type_slot<P: Program>(module: &Module<P>, pair: NodeId) -> Option<NodeId>
+where
+    P::Value: AsEnum<LowValue>,
+{
+    // SAFETY: `pair` is a live node of `module`; nothing here drops a block.
+    let items = unsafe { array_items(module, AnyNodeId::Dynamic(pair)) }?;
+    match items.get(PAIR_TYPE_SLOT)?.node {
+        AnyNodeId::Dynamic(n) => Some(n),
+        AnyNodeId::Static(_) => None,
+    }
+}
+
+/// The `[domain, codomain]` pair a type carries for the clone-on-unify, as
+/// two dynamic nodes — the signature the function-type is unified against.
+///
+/// - a **function-type node** `[Function(fid), ↺]`: clone the function
+///   template's signature and read the clone's parameter and return *type*
+///   cells (fresh cells, so the template's shared cells stay unbound);
+/// - an **arrow term** `[[dom, cod], [FunctionType, K]]`: read its `[dom,
+///   cod]` shape directly (the counterpart is a concrete type value, not a
+///   shared template, so no clone is needed);
+/// - anything else: `None` — unifying a function-type against a non-function
+///   type is a conflict the caller records.
+///
+/// The universe is recognised by its self-referential cycle
+/// ([`Module::is_self_referential`]) rather than by a caller-supplied handle,
+/// because this runs inside the lowlevel's unify policy hook, which has no
+/// checker universe to pass — the same reason [`field_names`] reads the cycle.
+fn signature_pair<P: Program>(
+    module: &mut Module<P>,
+    ty: AnyNodeId,
+) -> Option<(NodeId, NodeId)>
+where
+    P::Value: ValueType,
+{
+    // A function-type node: clone its signature, read the clone's type slots.
+    if let AnyNodeId::Dynamic(node) = ty
+        && module.is_function_type_node(node)
+    {
+        let fid = function_type_function(module, ty)?;
+        let (param_clone, return_clone) = clone_signature_dynamic(module, fid)?;
+        let dom = pair_type_slot(module, param_clone)?;
+        let cod = pair_type_slot(module, return_clone)?;
+        return Some((dom, cod));
+    }
+    // An arrow term `[[dom, cod], [FunctionType, K]]` recognised without a
+    // universe handle (K by its self-cycle): read its shape's two halves.
+    // SAFETY: `ty` is a live node of `module`; nothing here drops a block.
+    let Some(items) = (unsafe { array_items(module, ty) }) else {
+        return None;
+    };
+    if items.len() != 2 {
+        return None;
+    }
+    // The kind `[marker, K]`.
+    // SAFETY: the kind node is a live node of `module`.
+    let Some(kind_items) = (unsafe { array_items(module, items[TYPE_KIND_SLOT].node) }) else {
+        return None;
+    };
+    if kind_items.len() != 2 {
+        return None;
+    }
+    let is_function_kind = module
+        .node_value(kind_items[KIND_MARKER_SLOT].node)
+        .is_some_and(|v| v == P::Value::function_type_marker())
+        && module.is_self_referential(kind_items[KIND_UNIVERSE_SLOT].node);
+    if !is_function_kind {
+        return None;
+    }
+    let shape = items[TYPE_SHAPE_SLOT].node;
+    // SAFETY: `shape` is a live node of `module`.
+    let Some(halves) = (unsafe { array_items(module, shape) }) else {
+        return None;
+    };
+    if halves.len() != 2 {
+        return None;
+    }
+    let dom = dynamic_of(halves[FUNCTION_TYPE_DOMAIN_SLOT].node)?;
+    let cod = dynamic_of(halves[FUNCTION_TYPE_CODOMAIN_SLOT].node)?;
+    Some((dom, cod))
+}
+
+/// [`Module::clone_signature`] over an [`AnyFunctionId`], dynamic only: a
+/// static function-type (a frozen module's) is a Phase 1 gap — its clone needs
+/// the static materialise path, not yet wired — so it answers `None` and the
+/// caller treats the unify as unhandled.
+fn clone_signature_dynamic<P: Program>(
+    module: &mut Module<P>,
+    fid: AnyFunctionId,
+) -> Option<(NodeId, NodeId)>
+where
+    P::Value: ValueType,
+{
+    match fid {
+        AnyFunctionId::Dynamic(function) => module.clone_signature(function),
+        AnyFunctionId::Static(_) => None,
+    }
+}
+
+/// The dynamic [`NodeId`] of an [`AnyNodeId`], or `None` for a static ref.
+fn dynamic_of(id: AnyNodeId) -> Option<NodeId> {
+    match id {
+        AnyNodeId::Dynamic(n) => Some(n),
+        AnyNodeId::Static(_) => None,
+    }
+}
+
+/// The highlevel's [`Program::unify_function_type`] policy: when a
+/// function-type node `[Function(fid), ↺]` (a function's own type, `f : f`)
+/// is unified against another type, **clone the function's signature and unify
+/// the clone's fresh cells against the counterpart's `[dom, cod]`** — never
+/// binding the template's shared cells, so the function stays let-polymorphic
+/// and the type chain stays `f : f : f …`.
+///
+/// Both sides are reduced to a `[dom, cod]` pair by [`signature_pair`]: a
+/// function-type node contributes a *cloned* signature, an arrow term
+/// contributes its shape directly, and a non-function type contributes
+/// nothing (a conflict). The two domains and the two codomains are then
+/// unified. On success the two sides are resolved **without merging classes**
+/// — the function-type node stays a distinct, polymorphic class; only the
+/// per-site clone's cells were bound.
+///
+/// See [`function-type-as-function`](../notes/function-type-as-function.md).
+pub fn unify_function_type<P: Program>(
+    module: &mut Module<P>,
+    a: NodeId,
+    b: NodeId,
+) -> FunctionTypeUnify
+where
+    P::Value: ValueType,
+{
+    let sa = signature_pair(module, AnyNodeId::Dynamic(a));
+    let sb = signature_pair(module, AnyNodeId::Dynamic(b));
+    match (sa, sb) {
+        (Some((dom_a, cod_a)), Some((dom_b, cod_b))) => {
+            let pre = module.unify_errors.len();
+            module.unify(dom_a, dom_b);
+            module.unify(cod_a, cod_b);
+            if module.unify_errors.len() > pre {
+                FunctionTypeUnify::Conflict
+            } else {
+                FunctionTypeUnify::Handled
+            }
+        }
+        // One side is a function-type (or arrow) and the other is a
+        // non-function type: a function's type does not unify with a
+        // non-function type.
+        (Some(_), None) | (None, Some(_)) => FunctionTypeUnify::Conflict,
+        (None, None) => FunctionTypeUnify::NotFunctionType,
+    }
 }
 
 /// Whether `ty` is a struct type:

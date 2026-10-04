@@ -3,9 +3,9 @@ use std::collections::{HashMap, HashSet};
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, Deferral, LowOperator, LowShape, LowValue,
-    Module, Node, NodeId, Operation, PendingSide, PendingSides, Program, StaticModuleCache,
-    StaticNodeId, ValueExt as _, ancestors::AncestorPairs, is_unbound,
+    AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, Deferral, FunctionTypeUnify, LowOperator,
+    LowShape, LowValue, Module, Node, NodeId, Operation, PendingSide, PendingSides, Program,
+    StaticModuleCache, StaticNodeId, ValueExt as _, ancestors::AncestorPairs, is_unbound,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -487,6 +487,40 @@ impl<P: Program> Module<P> {
             && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
     }
 
+    /// Whether `node`'s class holds a **function-type node**: the
+    /// self-referential `[Function(fid), ↺]` that *is* a function's own type
+    /// (`f : f`). Recognised by the same self-cycle the universe
+    /// `[Type, ↺]` uses, distinguished from it by slot 0 holding a
+    /// [`LowValue::Function`] (the universe holds the `Type` marker). This is
+    /// the lowlevel half of the recognition — the highlevel's `shape` module
+    /// reads the signature out of the function template the `Function` value
+    /// names, and the [`Program::unify_function_type`] hook clones that
+    /// signature rather than letting a positional unify bind the template's
+    /// shared cells.
+    ///
+    /// Reads the class's committed carrier (a bare merge may leave the
+    /// decided value on a member other than the representative), so a class
+    /// unified against a function-type is recognised through whichever member
+    /// carries it.
+    pub fn is_function_type_node(&mut self, node: NodeId) -> bool {
+        let rep = self.equality_representative(node);
+        let Some(carrier) = self.class_committed_node(rep) else {
+            return false;
+        };
+        if !self.is_self_referential(AnyNodeId::Dynamic(carrier)) {
+            return false;
+        }
+        // SAFETY: `carrier` is a live node of this module; nothing here drops
+        // a block.
+        let Some(items) = (unsafe { self.array_items(carrier) }) else {
+            return false;
+        };
+        items.len() == 2
+            && self
+                .node_value(items[0].node)
+                .is_some_and(|v| matches!(v.as_enum(), Some(LowValue::Function(_))))
+    }
+
     /// Recursive core of [`Self::unify`]; `path` holds the class pairs on
     /// the current recursion, so a mutually recursive structure (an array
     /// unified with itself) records an error instead of looping.
@@ -621,6 +655,29 @@ impl<P: Program> Module<P> {
         }
         let ra = disjoint::find(&mut self.nodes, ra);
         let rb = disjoint::find(&mut self.nodes, rb);
+        // A function-type node — the self-referential `[Function(fid), ↺]`
+        // that is a function's own type (`f : f`) — on either side is handled
+        // by the program's clone-on-unify policy before the positional match.
+        // The positional match would otherwise either wrongly *merge* two
+        // self-referential function-types (binding the shared template's
+        // cells, the defect this fixes) or clash a `Function` slot 0 against
+        // an array. The policy clones the function's signature and unifies the
+        // clone, leaving the template untouched; on success the two sides are
+        // resolved *without* merging classes (the function-type stays a
+        // distinct, polymorphic class).
+        if self.is_function_type_node(ra) || self.is_function_type_node(rb) {
+            match P::unify_function_type(self, ra, rb) {
+                FunctionTypeUnify::Handled => return true,
+                FunctionTypeUnify::Conflict => {
+                    self.record_error(ra, rb, steps, root);
+                    return false;
+                }
+                // One side is a self-referential `[Function, ↺]` the program
+                // does not treat as a function-type (a build with no highlevel,
+                // which never builds one): fall through to the positional rules.
+                FunctionTypeUnify::NotFunctionType => {}
+            }
+        }
         let va = self.nodes[ra].value;
         let vb = self.nodes[rb].value;
         let pair = (
