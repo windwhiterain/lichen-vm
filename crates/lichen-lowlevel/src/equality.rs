@@ -91,7 +91,7 @@ impl<P: Program> Module<P> {
             && self.nodes[representative].meta().next().is_some()
             && let Some(value) = self.class_committed_value(representative)
         {
-            self.replicate_class_value(representative, value);
+            self.propagate_class_value(representative, value);
         }
         representative
     }
@@ -279,20 +279,29 @@ impl<P: Program> Module<P> {
         deepened
     }
 
-    /// The controlled value-write API: write `value` onto `node`, then — if
-    /// the value is concrete — replicate it to every unbound *pure-cell*
-    /// member of `node`'s class, so a read of any member (or a later
-    /// `bind`/`unify`, which reads the representative's slot) sees it
-    /// regardless of which member resolved it.
+    /// The controlled value-write API: write `value` onto `node` — its own
+    /// answer — then, if the value is concrete, propagate it to the rest of
+    /// `node`'s class, so a read of any member (or a later `bind`/`unify`,
+    /// which reads through the class) sees it regardless of which member
+    /// resolved it.
     ///
     /// This is the single choke-point for value writes: every place a value
     /// lands on a node that might be a member of a unified class goes through
-    /// here, so the class-consistency invariant (the linked-list replication
-    /// `bind`/`force_pending` perform) is maintained at exactly one site.  A
-    /// `None`/`Parameterized` value only sets the node's own slot — a marker is
-    /// not a fact to propagate.  A singleton class is a no-op (the walk visits
-    /// only the node itself).  Only operation-free (pure) cells are touched,
-    /// matching `force_pending`, so a pending computation is never overridden.
+    /// here, so the class-consistency invariant is maintained at exactly one
+    /// site.  A `None`/`Parameterized` value only sets the node's own slot — a
+    /// marker is not a fact to propagate.
+    ///
+    /// **The rule is member-local, and the write is unconditional**
+    /// ([`docs/notes/class-channel.md`] §1.1).  A unification must write: the
+    /// write is *not* gated on the slot being unbound, and the test it puts to
+    /// a member is that member's own value against the propagated one — never
+    /// the class's.  A class here routinely holds *different* values on
+    /// different members (a term pair on one, the resolved value on another, a
+    /// type cell on a third), so a class-level read turns every ordinary write
+    /// into a conflict; that was measured, and it is why the read is
+    /// member-local.  The comparison happens in
+    /// [`Self::propagate_class_value`]; a member that cannot take the value
+    /// keeps the one it has.
     ///
     /// It is also one of the two **observation** sites of the low-type layer:
     /// a concrete value refines its class's low type from the value's variant
@@ -301,37 +310,156 @@ impl<P: Program> Module<P> {
     pub fn write_node_value(&mut self, node: NodeId, value: Option<P::Value>) {
         self.nodes[node].value = value;
         if let Some(value) = value.filter(|v| !is_unbound(Some(*v))) {
-            // A class whose sole member is `node` — `parent` and `next` both
-            // `None`, `disjoint::Meta`'s contract for a representative with no
-            // second member — holds nobody to replicate to, so the write above
-            // is the whole effect.  See `P4-2` in `docs/notes/code-audit.md`.
             if self.nodes[node].equality.parent().is_none()
                 && self.nodes[node].equality.next().is_none()
             {
                 return;
             }
             let representative = self.equality_representative(node);
-            self.replicate_class_value(representative, value);
+            self.propagate_class_value(representative, value);
             self.observe_class_low_type(representative, value);
         }
     }
 
-    /// Replicate a concrete `value` over the **unbound pure cells** of
-    /// `representative`'s class — the second half of
-    /// [`Self::write_node_value`], shared with [`Self::add_equality`], where a
-    /// merge carries the class's decided value to the members it adds exactly
-    /// as a write carries it to the members it finds.
+    /// Propagate a concrete `value` over `representative`'s class — the second
+    /// half of [`Self::write_node_value`], shared with [`Self::add_equality`],
+    /// where a merge carries the class's decided value to the members it adds
+    /// exactly as a write carries it to the members it finds.
     ///
-    /// An **operation-bearing** member is deliberately not written: its own
-    /// computation is what settles it, and a value arriving from elsewhere is
-    /// not a proof of what that computation will produce.
-    fn replicate_class_value(&mut self, representative: NodeId, value: P::Value) {
+    /// The walk is **member-local** ([`docs/notes/class-channel.md`] §1.1): a
+    /// member that knows nothing takes the value; a member that already holds
+    /// one has `existing ⊔ propagated`, the value-to-value unification
+    /// ([`Self::reconcile_held_value`]) that has no class to write into and so
+    /// cannot cascade — which is what makes this walk one pass over the class.
+    /// A member whose value cannot be the propagated one is **left as it is**:
+    /// the write itself is not gated on the slot being unbound (the rule's
+    /// "a unification must write"), but a class here routinely holds
+    /// *different* values on different members, so a disagreement is the
+    /// tolerated case rather than a failure to record.  The arithmetic is not
+    /// lost: the member keeps the value it had, and the incoming value is
+    /// distributed to the members that can take it.
+    ///
+    /// An **operation-bearing** member is the one veto: its own computation is
+    /// what settles it, and a value arriving from elsewhere is not a proof of
+    /// what that computation will produce.
+    ///
+    /// The walk visits the representative too, and deliberately: the write site
+    /// wrote *its own* node, which need not be the representative — a class
+    /// whose representative is a value-less operation node is exactly the case
+    /// [`Self::add_equality`] exists for — so the representative's slot is an
+    /// ordinary member slot here and is asked the same question.
+    fn propagate_class_value(&mut self, representative: NodeId, value: P::Value) {
+        // A class whose sole member is the representative — `parent` and `next`
+        // both `None`, `disjoint::Meta`'s contract for a representative with no
+        // second member — holds nobody to propagate to, so the write site's own
+        // slot write is the whole effect.  See `P4-2` in
+        // `docs/notes/code-audit.md`.
+        if self.nodes[representative].equality.parent().is_none()
+            && self.nodes[representative].equality.next().is_none()
+        {
+            return;
+        }
         let members: Vec<NodeId> = self.class_members(representative).collect();
         for member in members {
-            if self.nodes[member].operation.is_none() && is_unbound(self.nodes[member].value) {
+            if self.nodes[member].operation.is_some() {
+                continue;
+            }
+            if self.reconcile_held_value(self.nodes[member].value, Some(value)) {
                 self.nodes[member].value = Some(value);
             }
         }
+    }
+
+    /// **Value-to-value** unification: whether the two decided values can be
+    /// one value, with no class to write into — the comparison a
+    /// member-local propagation asks ([`Self::propagate_class_value`]).
+    ///
+    /// The recursion is unification's, not a comparison's: an array is a
+    /// structure whose elements are nodes, so two arrays descend positionally
+    /// through their **element nodes** and each position is asked the
+    /// value-to-value question in turn; a function compares by identity; a leaf
+    /// agrees by value equality.  A free cell on either side is a wildcard
+    /// (it resolves by binding) and a `None` side is an absence rather than a
+    /// pattern.
+    ///
+    /// It **writes nothing**, which is why propagation cannot trigger
+    /// propagation again: the whole effect of a disagreement is the `false`
+    /// the caller leaves the member on.  `path` walks the element-node pairs on
+    /// the current descent, so a **self-referential** structure — the
+    /// `[cell, self]` term pair a type is, which repeats the same node pair at
+    /// every level — is cut at the second visit; `depth` bounds the descent in
+    /// the static case, where there is no class to name a repeated pair with.
+    fn unify_values(
+        &mut self,
+        path: &mut AncestorPairs<AnyNodeId>,
+        a: Option<P::Value>,
+        b: Option<P::Value>,
+        depth: usize,
+    ) -> bool {
+        // The depth bound is the static case's only cycle guard: a static leaf
+        // has no class to name a repeated pair with, so its value comparison
+        // has to be bounded on its own.
+        const MAX_VALUE_DEPTH: usize = 64;
+        if depth >= MAX_VALUE_DEPTH {
+            return true;
+        }
+        let (Some(a), Some(b)) = (a, b) else {
+            return true;
+        };
+        if is_unbound(Some(a)) || is_unbound(Some(b)) {
+            return true;
+        }
+        match (a.as_enum(), b.as_enum()) {
+            (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
+                // SAFETY: `pa`/`pb` are payloads of values read out of live
+                // nodes of this module, so their home blocks have not been
+                // dropped.
+                let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
+                left.len() == right.len()
+                    && left.iter().zip(right.iter()).all(|(ia, ib)| {
+                        if ia.node == ib.node {
+                            return true;
+                        }
+                        // A static ref has no class to guard on and no position
+                        // to bind; its value is the whole question, exactly as
+                        // the unifier treats a materialized static leaf.
+                        let (AnyNodeId::Dynamic(na), AnyNodeId::Dynamic(nb)) = (ia.node, ib.node)
+                        else {
+                            let (va, vb) = (self.node_value(ia.node), self.node_value(ib.node));
+                            return self.unify_values(path, va, vb, depth + 1);
+                        };
+                        let (pa, pb) = (Dyn(na), Dyn(nb));
+                        if path.contains(pa, pb) {
+                            return true;
+                        }
+                        path.insert(pa, pb);
+                        let ok = self.unify_values(
+                            path,
+                            self.node_value(ia.node),
+                            self.node_value(ib.node),
+                            depth + 1,
+                        );
+                        path.remove(pa, pb);
+                        ok
+                    })
+            }
+            // Two function values name one logical function when they are one
+            // function — a materialized static closure and the frozen function
+            // it came from included, as `unify_inner`'s own arm decides.
+            (Some(LowValue::Function(a)), Some(LowValue::Function(b))) => {
+                self.function_identity_equal(a, b)
+            }
+            _ => a.value_eq(&b),
+        }
+    }
+
+    /// A member's already-held `held` against the `incoming` value a
+    /// unification carries — the member-local half of [`Self::write_node_value`]
+    /// and its only reader.  Pure: it answers whether the two can be one value,
+    /// and the caller decides what that means for the member's slot.
+    fn reconcile_held_value(&mut self, held: Option<P::Value>, incoming: Option<P::Value>) -> bool {
+        let mut path = AncestorPairs::new();
+        self.unify_values(&mut path, held, incoming, 0)
     }
 
     /// [`Self::unify`], reporting the range of [`Self::unify_errors`] this
