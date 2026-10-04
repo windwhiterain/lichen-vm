@@ -1,3 +1,3 @@
 {
-  sort = a => $sort(a)
+  sort = a => {a: array<Int, _>; r = $sort(a); r: array<Int, _>; r}
 }

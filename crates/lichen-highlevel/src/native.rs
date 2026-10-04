@@ -4,10 +4,11 @@
 //! that its own embedded lichen source calls through the `$name(args…)` form,
 //! compiled by the frontend to [`ExprKind::NativeCall`](crate::ir::ExprKind).
 //! The checker is a bystander: it compiles the arguments, looks `name` up in
-//! the *current module's* private [`NativeOps`] registry, and adopts the
-//! `[value, type]` pair the operator's [`NativeOp::build`] returns.  It has no
-//! knowledge of what the operator does or what its types are — the plugin's
-//! registration owns that, as a private contract with its own source.
+//! the *current module's* private [`NativeOps`] registry, and adopts the value
+//! node the operator's [`NativeOp::build`] returns, typing the call with a
+//! fresh cell of its own.  It has no knowledge of what the operator does or
+//! what its types are — the plugin's registration owns that, as a private
+//! contract with its own source.
 //!
 //! The extension point mirrors [`AttrExt`](crate::attr::AttrExt): the checker
 //! knows only the shape — "a `$name(args)` call should delegate to your
@@ -23,20 +24,21 @@ use crate::ir::{ExprId, Loc};
 use crate::program::{Ctx, HighProgram, ValueType};
 
 /// The result of a native operator's [`NativeOp::build`]: the expression's
-/// **value** node and **type** node, plus whether the value is already decided.
+/// **value** node, plus whether that value is already decided.
 ///
-/// A builder states the two slots of the expression's term, never the term
-/// itself: the `[value, type]` pair is this crate's encoding, so the checker
-/// builds it (through the same site every other expression goes through).  A
-/// builder that assembled the pair by hand would be a second source of truth
-/// for the encoding — which the boundary used to require, and which is exactly
-/// the mistake that put a value in a type slot.
+/// A native operator is an operator: raw operands in, one raw result node out,
+/// and no type anywhere.  The expression's **type** is the framework's, minted
+/// unconditionally as a fresh cell for every native call ([`crate::checker`]'s
+/// `check_native_call`) and paired with `value` through the crate's one
+/// `[value, type]` construction site.  An operator therefore cannot state a
+/// type, cannot assemble the pair, and cannot get the encoding wrong; the
+/// lichen wrapper around `$name` states the types it knows, as ordinary
+/// annotations.
 #[derive(Debug, Clone, Copy)]
 pub struct NativeApply {
-    /// The term pair's **value** slot (element 0) — the expression's value node.
+    /// The expression's value node — element 0 of the term pair the checker
+    /// builds around it.
     pub value: NodeId,
-    /// The term pair's **type** slot (element 1) — the expression's type node.
-    pub ty: NodeId,
     /// Whether `value` is a decided value the checker may cache in
     /// [`ExprState::val`](crate::checker::ExprState), or a computation whose
     /// value the runtime reads — the latter being what the old `val: None`
@@ -44,34 +46,33 @@ pub struct NativeApply {
     pub decided: bool,
 }
 
-/// A native operator's compiled argument: the expression id plus its value and
-/// type nodes.  The checker compiles each argument before calling
-/// [`NativeOp::build`] and hands the value/type nodes over, so the operator
-/// builds without re-reading per-expression internals (the curated [`Ctx`]
-/// does not expose them).
+/// A native operator's compiled argument: the expression id plus its **value**
+/// node.  The checker compiles each argument before calling
+/// [`NativeOp::build`] and hands the value node over, so the operator builds
+/// without re-reading per-expression internals (the curated [`Ctx`] does not
+/// expose them).  The argument's type is not handed over: an operator sees raw
+/// values only, exactly as an operator node's operands are raw.
 #[derive(Debug, Clone, Copy)]
 pub struct NativeArg {
     pub expr: ExprId,
     pub value: NodeId,
-    pub ty: NodeId,
 }
 
 /// The compile-time lowering behaviour of one native operator.
 ///
 /// `build` is called by [`Checker::check_native_call`](crate::checker::Checker)
 /// for an [`ExprKind::NativeCall`](crate::ir::ExprKind).  The arguments have
-/// already been compiled, so the implementation receives their value/type
-/// nodes, checks the operator's types, emits the operator's operation node
-/// (through the curated [`Ctx`]), and returns the compiled pair.
+/// already been compiled, so the implementation receives their value nodes,
+/// emits the operator's operation node (through the curated [`Ctx`]), and
+/// returns it.  No type: the checker mints the call's result type.
 pub trait NativeOp<P: HighProgram>: Sync
 where
     P::Value: ValueType,
 {
-    /// Check and emit this native operator's call.  `e` is the `NativeCall`
-    /// expression being compiled; `args` are its compiled arguments; `loc` is
-    /// the call's source location.  `ctx` is the curated context — the
-    /// operator builds through the highlevel's encoding ([`Ctx`]), never raw
-    /// lowlevel nodes.
+    /// Emit this native operator's call.  `e` is the `NativeCall` expression
+    /// being compiled; `args` are its compiled arguments; `loc` is the call's
+    /// source location.  `ctx` is the curated context — the operator builds
+    /// through the highlevel's encoding ([`Ctx`]), never raw lowlevel nodes.
     fn build(&self, ctx: &mut dyn Ctx<P>, e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply;
 }
 

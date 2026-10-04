@@ -1600,17 +1600,6 @@ where
         Checker::pair_of(self, value, ty)
     }
 
-    /// The value slot of a term: `Index(term, PAIR_VALUE_SLOT)`, built exactly
-    /// as [`Checker::value_of`] builds it for an expression's own term.
-    fn value_slot(&mut self, term: NodeId) -> NodeId {
-        let operands = self.array_node(self.current_block, &[term, self.zero()]);
-        self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(operands),
-        )
-    }
-
     fn kind_expr(&mut self, marker: NodeId) -> NodeId {
         Checker::kind_expr(self, self.current_block, marker)
     }

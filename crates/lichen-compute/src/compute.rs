@@ -56,7 +56,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use lichen_graph_ir::Policy;
-use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram, LeafKindMarkers, TypeOperator, ValueType};
@@ -7755,10 +7754,9 @@ macro_rules! compute_native_ops {
 /// `$jit`/`$launch` names stay private to the plugin's own embedded source.
 pub struct JitOp;
 
-/// `$launch(native, i, o, a)` — run kernel `native` on `a`, where `i` and `o`
-/// are the kernel's input and output **types** (the `.I`/`.O` fields the kernel
-/// struct carries).  The wrapper reads them; this op gates the argument against
-/// `i` and types the result as `o`.
+/// `$launch(native, a)` — run kernel `native` on `a`.  The wrapper reads the
+/// kernel's `.I`/`.O` fields and states the gate and the result type; this op
+/// only emits the `Launch` node over the two raw values.
 pub struct LaunchOp;
 
 impl<P> NativeOp<P> for JitOp
@@ -7767,28 +7765,21 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
-    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
         let f = &args[0];
-        // Function-ness gate: the argument's type must be a function (an arrow),
-        // binding the domain/codomain the signature value carries.
-        let d = ctx.fresh();
-        let c = ctx.fresh();
-        // Built through the highlevel's single arrow construction point: the
-        // three nodes it allocates (shape, kind, pair) are the same three this
-        // site allocated before, in the same order.
-        let fn_ty = ctx.arrow(d, c);
-        ctx.check_unify(f.ty, fn_ty, loc, DiagKind::Guard);
-
         // The bare native kernel artifact — the lichen wrapper wraps this value
-        // into a `kernel` struct (`.native`).  It is opaque: its type is a fresh
-        // cell (the signature rides in the struct's `.sig` field, not here).
+        // into a `kernel` struct (`.native`).  It is opaque: its type is the
+        // call's fresh cell, and the signature rides in the struct's `.I`/`.O`
+        // fields, which the wrapper binds from its own annotation `f: I -> O`.
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Jit), Some(f.value));
-        let kernel_ty = ctx.fresh();
-        // The expression's `term` must evaluate to a `[value, type]` pair, so
-        // `value_of` can `Index` it; the op's own result is the bare `Kernel`.
         NativeApply {
             value: op,
-            ty: kernel_ty,
             decided: false,
         }
     }
@@ -7800,29 +7791,26 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator> + From<LowOperator>,
 {
-    /// `$launch(native, i, o, a)` — run kernel `native` on `a`, where `i` and
-    /// `o` are the kernel's input and output **types**.  The lichen wrapper
-    /// reads the `.I`/`.O` fields out of the kernel struct and hands them over;
-    /// this op gates the argument against `i` and types the result as `o`, and
-    /// never re-parses the struct.
-    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+    /// `$launch(native, a)` — run kernel `native` on `a`.  The lichen wrapper
+    /// reads `.native` out of the kernel struct, gates `a` against `.I` and
+    /// types the result as `.O`; this op emits the `Launch` node and nothing
+    /// else, and never re-parses the struct.
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
         let native = &args[0];
-        let i = &args[1];
-        let o = &args[2];
-        let a = &args[3];
-        // The argument must be the kernel's domain.  Both operands are decoded
-        // slots — `a.ty` is the argument's type, `i.value` the type the kernel
-        // struct holds in `.I` — so the comparison is like for like.
-        ctx.check_unify(a.ty, i.value, loc.clone(), DiagKind::Guard);
-        // Emit the `Launch` operator over `[native, a]`.  The domain value rides
-        // along as a third (inert) operand element so it is reachable from the
-        // application's return graph and therefore cloned + resolved at apply
-        // time; the operator itself only reads elements 0 and 1.
-        let operands = ctx.array_node(&[native.value, a.value, i.value]);
+        let a = &args[1];
+        // Emit the `Launch` operator over `[native, a]`.  The operator reads
+        // exactly those two elements; the kernel's declared domain reaches the
+        // application's return graph through the wrapper's own `a : k.I` gate.
+        let operands = ctx.array_node(&[native.value, a.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Launch), Some(operands));
         NativeApply {
             value: op,
-            ty: o.value,
             decided: false,
         }
     }
@@ -7830,9 +7818,9 @@ where
 
 /// `$call(k, a)` — a **cross-kernel call** on native kernel `k`.  The lichen
 /// wrapper extracts `.native` out of the kernel struct (`call = k => a =>
-/// $call(k.native, a)`); the native op only gates the *argument* against a
-/// fresh domain cell and types the result as a fresh codomain cell (the callee
-/// signature is read at launch-time assembly).  It never re-parses the struct.
+/// $call(k.native, a)`); the native op emits the `Call` node over two raw
+/// values.  The callee signature is read at launch-time assembly; nothing about
+/// the argument or the result is stated here.
 pub struct CallOp;
 
 impl<P> NativeOp<P> for CallOp
@@ -7841,17 +7829,19 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
-    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
         let k = &args[0];
         let a = &args[1];
-        let d = ctx.fresh();
-        let c = ctx.fresh();
-        ctx.check_unify(a.ty, d, loc.clone(), DiagKind::Guard);
         let operands = ctx.array_node(&[k.value, a.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Call), Some(operands));
         NativeApply {
             value: op,
-            ty: c,
             decided: false,
         }
     }
@@ -7913,30 +7903,23 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
-    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
         let f = &args[0];
         let backend = &args[1];
-        // Function-ness gate: `f : ?cfg -> ?write` (a single-arg index function;
-        // the loop index comes from `compute.range n` inside the body, not a
-        // second function parameter).
-        let d0 = ctx.fresh();
-        let c0 = ctx.fresh();
-        let fn_ty = ctx.arrow(d0, c0);
-        ctx.check_unify(f.ty, fn_ty, loc.clone(), DiagKind::Guard);
-        // The backend is gated as a **string** here, and that is all this gate
-        // can be: the language has no enum type yet, so which strings are
-        // backends is the runtime parse's authority. Naming the shape here still
-        // moves a wrong-shaped argument from a run-time refusal to a check
-        // error, and an unknown *name* is reported by that parse, by name.
-        ctx.check_unify(backend.ty, ctx.string_type(), loc, DiagKind::Guard);
         // The bare native parallel kernel artifact — the lichen wrapper wraps
-        // this value into a `kernel` struct (`.native`).  Opaque: typed `_`.
+        // this value into a `kernel` struct (`.native`).  Opaque: the call's own
+        // fresh cell.  `f`'s function-ness and the backend's `string`-ness are
+        // stated by the wrapper's annotations, not here.
         let operands = ctx.array_node(&[f.value, backend.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Parallel), Some(operands));
-        let par_ty = ctx.fresh();
         NativeApply {
             value: op,
-            ty: par_ty,
             decided: false,
         }
     }
@@ -7948,24 +7931,18 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
-    /// `$plrun(native, sig, a)` — run parallel kernel `native` over `a` (the
-    /// `cfg`).  The lichen wrapper extracts `.native`/`.sig` out of the kernel
-    /// struct; the native op gates the signature as a single-arg function and
-    /// the `cfg` argument against its domain.
+    /// `$plrun(native, a)` — run parallel kernel `native` over `a` (the `cfg`).
+    /// The lichen wrapper extracts `.native` out of the kernel struct; this op
+    /// emits the `ParLaunch` node over the two raw values.
     ///
-    /// **The result type is a fresh cell**, and that is a deliberate limit, not
-    /// an oversight.  The signature's *arity* is what decides the result's
-    /// shape — a bare `Buffer` for a one-write index function, a tuple of
-    /// buffers for a several-write one — and the arity cannot be read here:
-    /// `build` runs once, on the frozen `plrun` template, where `.sig` is an
-    /// unbound cell that only resolves at run time.  A tuple type is a value
-    /// node with one element per position, so no check-time node can name a
-    /// tuple whose arity is not known until the run.  Naming it `[?b,
-    /// BufferKind]` instead (what the single-output form used to do) would be
-    /// check-time *decided*, and a decided non-positional type is exactly what
-    /// the checker's field-read guard refuses — a single output's `out(1)`
-    /// would not check at all, which would leave the one-output kernel unable
-    /// to be read positionally.
+    /// **The result type is the call's own fresh cell**, and that is a
+    /// deliberate limit, not an oversight.  The signature's *arity* is what
+    /// decides the result's shape — a bare `Buffer` for a one-write index
+    /// function, a tuple of buffers for a several-write one — and the arity
+    /// cannot be read here: `build` runs once, on the frozen `plrun` template,
+    /// where `.sig` is an unbound cell that only resolves at run time.  A tuple
+    /// type is a value node with one element per position, so no check-time
+    /// node can name a tuple whose arity is not known until the run.
     ///
     /// What the fresh cell costs is **static precision, not safety**: the
     /// element type is no longer named by the signature, so `read` on a `plrun`
@@ -7976,26 +7953,15 @@ where
     /// checker's evaluation pass reconciles the constant index against the tuple
     /// the launch produced and records an out-of-bounds `Index` — so the two
     /// shapes stay distinguishable exactly where it matters.
-    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
         let native = &args[0];
-        let sig = &args[1];
-        let a = &args[2];
-        // The signature is a single-arg function `?cfg -> ?codomain`, where the
-        // codomain is a `Write` or a tuple of `Write`s.  Both halves are fresh
-        // cells: the frozen `$plrun` template's generic kernel binds them when
-        // a concrete kernel struct arrives at run time, and the *shape* of the
-        // codomain is the emitter's fact to check (it is the one that can count
-        // the writes), not this gate's.
-        let d0 = ctx.fresh();
-        let c0 = ctx.fresh();
-        let sig_ty = ctx.arrow(d0, c0);
-        ctx.check_unify(sig.ty, sig_ty, loc.clone(), DiagKind::Guard);
-        // The argument is the `cfg = (n, (buffer…))`; unify it against the
-        // kernel's domain.
-        ctx.check_unify(a.ty, d0, loc.clone(), DiagKind::Guard);
-        // The result — one `Buffer` or a tuple of them — is a fresh cell; see
-        // the note above on why the arity cannot be named here.
-        let out_ty = ctx.fresh();
+        let a = &args[1];
         let operands = ctx.array_node(&[native.value, a.value]);
         let op = ctx.op_node(
             P::Operator::from(ComputeOperator::ParLaunch),
@@ -8003,7 +7969,6 @@ where
         );
         NativeApply {
             value: op,
-            ty: out_ty,
             decided: false,
         }
     }
@@ -8017,24 +7982,27 @@ where
 {
     /// `$range(n)` — the loop index of the current parallel invocation.
     ///
-    /// **The index is the class the body computes in, and so is the count it
-    /// is taken over.**  A parallel fragment's two scalar parameters are both
-    /// that class — `compile_parallel_fragment` writes its `param_shape` as
+    /// **The index's class is the class the body computes in.**  A parallel
+    /// fragment's two scalar parameters are both that class —
+    /// `compile_parallel_fragment` writes its `param_shape` as
     /// `[Scalar(class), Scalar(class)]` — the emitter pushes the index local
     /// unchanged, and the host converts both roles back to ordinals
-    /// (`const_bits(class, …)`, `run_parallel_range`).  Unifying the index with
-    /// the count states that once, where a committed `Int` would state the
-    /// opposite of what the fragment's own ABI carries
+    /// (`const_bits(class, …)`, `run_parallel_range`).  Nothing is stated here:
+    /// the call's fresh cell is resolved from the value the fragment produces,
+    /// and the fragment's own ABI is what carries the class
     /// (`docs/notes/floating-point.md` §4.2, §4.4).
-    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
         let n = &args[0];
-        let class = ctx.fresh();
-        ctx.check_unify(n.ty, class, loc.clone(), DiagKind::Guard);
         let operands = ctx.array_node(&[n.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Range), Some(operands));
         NativeApply {
             value: op,
-            ty: class,
             decided: false,
         }
     }
@@ -8046,46 +8014,41 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
-    /// `$read(buf, i)` — read one buffer element.  Buffer gate
-    /// `buf : [?b, [TypeBuffer, Type]]` (binding the element type); the result
-    /// is the element type `?b`, and **the index takes that same class**.  In
-    /// a kernel body this lowers to the host `read` import; at the VM it reads
-    /// a buffer value's element.
+    /// `$read(buf, i)` — read one buffer element.  The wrapper gates its
+    /// argument as the `Read` struct (`read = (x : Read _) => $read(x.from,
+    /// x.at)`) and leaves the result to the call's fresh cell; this op emits
+    /// the `Read` node over the two raw values.  In a kernel body it lowers to
+    /// the host `read` import; at the VM it reads a buffer value's element.
     ///
-    /// **The wrapper is not annotated, and that is what makes a `buffer<Float>`
-    /// readable.**  A buffer's element class is a fact of the *value* — the
-    /// producing fragment's declared class, or the class a backend issued a
-    /// resident buffer with — so pinning the result to `Int` here is exactly
-    /// what made a float buffer inexpressible.  The element cell is unified with
-    /// the buffer's element type and stays unbound until something decides it,
-    /// which is why a program that only forwards a buffer prints its element as
-    /// `?a` rather than as the class the value turns out to be
+    /// **The element class is a fact of the *value*, and it resolves there.**
+    /// The producing fragment's declared class, or the class a backend issued a
+    /// resident buffer with, is what the result cell turns out to be — the cell
+    /// stays open until something decides it, which is why a program that only
+    /// forwards a buffer prints its element as `?a` rather than as the class the
+    /// value turns out to be, and why a `buffer<Float>` is readable at all
     /// (`docs/notes/floating-point.md` §3.7, §4.2, §4.4).
     ///
-    /// **The index is `Int`, and that is the ABI's own statement.**  The `read`
-    /// import's signature is `(i64, i64) -> element`, with the buffer ordinal and
-    /// the index `i64` **in every class** and only the element's type following
-    /// the class (`assemble_module`; `run_parallel_range` declares the same
-    /// closures).  A position and a lane number are ordinals, not data, so the
-    /// language's `Int` is what they are — pinning them to the element's cell
-    /// instead made an index "the class the buffer is", which is exactly what a
-    /// `Float` buffer beside a decided `Int` count could not express.
-    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+    /// **The index is an ordinal in every class.**  The `read` import's
+    /// signature is `(i64, i64) -> element`, with the buffer ordinal and the
+    /// index `i64` regardless of class and only the element's type following it
+    /// (`assemble_module`; `run_parallel_range` declares the same closures).  A
+    /// position and a lane number are ordinals, not data, so pinning them to the
+    /// element's cell — which is what this used to do — made an index "the class
+    /// the buffer is", exactly what a `Float` buffer beside a decided `Int`
+    /// count could not express.
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
         let b = &args[0];
         let i = &args[1];
-        let elem = ctx.fresh();
-        let buf_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
-            ComputeValue::TypeBuffer,
-        ));
-        let buf_kind = ctx.kind_expr(buf_marker);
-        let buf_ty = ctx.array_node(&[elem, buf_kind]);
-        ctx.check_unify(b.ty, buf_ty, loc.clone(), DiagKind::Guard);
-        ctx.check_unify(i.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
         let operands = ctx.array_node(&[b.value, i.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Read), Some(operands));
         NativeApply {
             value: op,
-            ty: elem,
             decided: false,
         }
     }
@@ -8098,50 +8061,42 @@ where
     P::Operator: From<ComputeOperator>,
 {
     /// `$write(n, i, val)` — a pending parallel write into the output buffer at
-    /// index `i` (length `n`).  The length, the index and the value are **one
-    /// class**, and the result is a `Write` type `[?b, [TypeWrite, Type]]`.
-    /// Kernel-only (lowers to the host `write` import).
+    /// index `i` (length `n`).  The wrapper gates its argument as the `Write`
+    /// struct (`write = (x : Write _) => $write(x.to, x.at, x.value)`); this op
+    /// emits the `Write` node over the three raw values.  Which output buffer a
+    /// write belongs to is decided by its position in the index function's
+    /// codomain, not here.  Kernel-only (lowers to the host `write` import).
     ///
-    /// **The `Write`'s element type is the written value's own**, so a
+    /// **The written value's class is the buffer's element class**, so a
     /// `buffer<Float>` is expressible and a `buffer<Int>` is unchanged: the
-    /// written value's type is the buffer's element type, with nothing to
-    /// choose between them (`docs/notes/floating-point.md` §3.7, §4.2).
+    /// call's fresh cell resolves from the value the run produces, the same
+    /// mechanism `plrun`'s result type relies on.  An index function that only
+    /// forwards a buffer read keeps working: its element class is read off the
+    /// buffer at run time, and its emission defaults to `Int` exactly as it
+    /// always did (`docs/notes/floating-point.md` §3.7, §4.2).
     ///
-    /// It is a *fresh cell* rather than a fixed `Int` because a float write
-    /// has to be able to name its class, and the cell is what the run
-    /// resolves from the value it produces when nothing pins it — the same
-    /// mechanism `plrun`'s result type already relies on.  A `val` whose own
-    /// type is undecided leaves the cell undecided, which is why an index
-    /// function that only forwards a buffer read keeps working: its element
-    /// class is read off the buffer at run time, and its emission defaults to
-    /// `Int` exactly as it always did.
-    ///
-    /// **The length and the index are `Int`, and the ABI says so.**  The `write`
-    /// import is `(i64, i64, element)`: the count and the loop index are `i64` in
-    /// **every** class and only the written value follows the element's class
-    /// (`assemble_module`; `run_parallel_range` declares the same closures).  A
-    /// length and a lane number are ordinals rather than data, so pinning them to
-    /// the *value's* cell — which is what this used to do — made an ordinal "the
-    /// class the data is", and that is what refused a float write beside a
-    /// decided `Int` count.
-    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+    /// **The length and the index are ordinals in every class.**  The `write`
+    /// import is `(i64, i64, element)`: the count and the loop index are `i64`
+    /// regardless of class and only the written value follows the element's
+    /// class (`assemble_module`; `run_parallel_range` declares the same
+    /// closures).  A length and a lane number are ordinals rather than data, so
+    /// tying them to the *value's* cell — which is what this used to do — made an
+    /// ordinal "the class the data is", and that is what refused a float write
+    /// beside a decided `Int` count.
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
         let n = &args[0];
         let i = &args[1];
         let val = &args[2];
-        let elem = ctx.fresh();
-        ctx.check_unify(n.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
-        ctx.check_unify(i.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
-        ctx.check_unify(val.ty, elem, loc.clone(), DiagKind::Guard);
-        let write_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
-            ComputeValue::TypeWrite,
-        ));
-        let write_kind = ctx.kind_expr(write_marker);
-        let write_ty = ctx.array_node(&[elem, write_kind]);
         let operands = ctx.array_node(&[n.value, i.value, val.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Write), Some(operands));
         NativeApply {
             value: op,
-            ty: write_ty,
             decided: false,
         }
     }
@@ -8153,23 +8108,19 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
-    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
         let b = &args[0];
-        // Buffer gate: `b : [?b, [TypeBuffer, Type]]`, binding the element type.
-        let elem = ctx.fresh();
-        let buf_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
-            ComputeValue::TypeBuffer,
-        ));
-        let buf_kind = ctx.kind_expr(buf_marker);
-        let buf_ty = ctx.array_node(&[elem, buf_kind]);
-        ctx.check_unify(b.ty, buf_ty, loc.clone(), DiagKind::Guard);
-        // Array result type: `[[?b, len], [TypeArray, Type]]` with a fresh
-        // length cell (the array's length is a runtime count, so it stays a
-        // `?`-length type until observed).
-        let len = ctx.fresh();
-        let arr_shape = ctx.array_node(&[elem, len]);
-        let arr_kind = ctx.kind_expr(ctx.array_type_marker_node());
-        let arr_ty = ctx.array_node(&[arr_shape, arr_kind]);
+        // The result is an array of the buffer's element, and **the element
+        // class stays open**: it is a fact of the value the collection reads, so
+        // naming `Int` here is exactly what would make `collect` on a float
+        // buffer inexpressible.  The call's fresh cell is what the run resolves
+        // to `[[?b, len], [TypeArray, Type]]`, with the length a runtime count.
         let operands = ctx.array_node(&[b.value]);
         let op = ctx.op_node(
             P::Operator::from(ComputeOperator::BufferCollect),
@@ -8177,7 +8128,6 @@ where
         );
         NativeApply {
             value: op,
-            ty: arr_ty,
             decided: false,
         }
     }
@@ -8191,25 +8141,27 @@ where
 {
     /// `$graph(f)` — record `f`, don't run it.
     ///
-    /// The gate is only a function-ness gate. **The arity is deliberately not
-    /// checked here**: it is the length of `f`'s parameter tuple, which is a
-    /// *runtime* fact of a value the checker has not cloned yet, and a gate that
-    /// named an arity it cannot read would refuse programs the recording accepts.
-    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+    /// The wrapper's `f : _ -> _` is the function-ness gate — the same arrow the
+    /// apply will check, so a non-function is a check error rather than a refusal
+    /// at run time. **The arity is deliberately not checked**: it is the length
+    /// of `f`'s parameter tuple, which is a *runtime* fact of a value the checker
+    /// has not cloned yet, and a gate that named an arity it cannot read would
+    /// refuse programs the recording accepts.
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
         let f = &args[0];
-        let domain = ctx.fresh();
-        let codomain = ctx.fresh();
-        let fn_ty = ctx.arrow(domain, codomain);
-        ctx.check_unify(f.ty, fn_ty, loc, DiagKind::Guard);
         // The graph itself is host-owned and opaque: what a graph may be run over
         // is a question about the function it was recorded from, and that
         // function is not available to the checker — a run is what finds out.
-        let graph_ty = ctx.fresh();
         let operands = ctx.array_node(&[f.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Graph), Some(operands));
         NativeApply {
             value: op,
-            ty: graph_ty,
             decided: false,
         }
     }
@@ -8223,25 +8175,27 @@ where
 {
     /// `$graphrun(g, a)` — run a graph over the values its source function took.
     ///
-    /// **The arguments unify against a fresh cell, and that is what makes a graph
-    /// reusable across runs.** A graph's parameter tuple is a *runtime* shape —
-    /// how many arguments it takes is the length of the tuple the recording read
-    /// off a function value — so a fixed domain type would name an arity the
-    /// checker cannot know, and would refuse exactly the programs a recording
-    /// accepts. The result is a fresh cell for the same reason `plrun`'s is.
-    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+    /// **The arguments and the result are the call's own fresh cell, and that is
+    /// what makes a graph reusable across runs.** A graph's parameter tuple is a
+    /// *runtime* shape — how many arguments it takes is the length of the tuple
+    /// the recording read off a function value — so a fixed domain type would
+    /// name an arity the checker cannot know, and would refuse exactly the
+    /// programs a recording accepts. The cost is static precision, not safety: an
+    /// out-of-range ordinal on the result is still refused at check time with a
+    /// span, exactly as it is for a `plrun` result.
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
         let g = &args[0];
         let a = &args[1];
-        let graph_ty = ctx.fresh();
-        ctx.check_unify(g.ty, graph_ty, loc.clone(), DiagKind::Guard);
-        let arguments_ty = ctx.fresh();
-        ctx.check_unify(a.ty, arguments_ty, loc, DiagKind::Guard);
-        let out_ty = ctx.fresh();
         let operands = ctx.array_node(&[g.value, a.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::GraphRun), Some(operands));
         NativeApply {
             value: op,
-            ty: out_ty,
             decided: false,
         }
     }

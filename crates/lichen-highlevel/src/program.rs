@@ -180,18 +180,6 @@ pub trait Ctx<P: Program> {
     fn op_node(&mut self, op: P::Operator, operand: Option<NodeId>) -> NodeId;
     /// A `[value, type]` pair node — the encoding of an expression's term.
     fn pair(&mut self, value: NodeId, ty: NodeId) -> NodeId;
-    /// The **value** slot of a term — element
-    /// [`PAIR_VALUE_SLOT`](crate::shape::PAIR_VALUE_SLOT) of the `[value, type]`
-    /// pair, as the lazy `Index` read the checker's own `value_of` builds.
-    ///
-    /// This is the decode half of the boundary: a [`NativeArg`] hands a plugin
-    /// the argument's value and type nodes, and an expression's *term* is the
-    /// pair those slots came from — so a plugin that needs the value behind a
-    /// term asks here rather than writing the slot number itself.  The encoding
-    /// (its slot order, its pairing) therefore lives in this crate alone.
-    ///
-    /// [`NativeArg`]: crate::native::NativeArg
-    fn value_slot(&mut self, term: NodeId) -> NodeId;
     /// A kind expression `[marker, Type]`.
     fn kind_expr(&mut self, marker: NodeId) -> NodeId;
     /// A function type expression `[[domain, codomain], [FunctionType,

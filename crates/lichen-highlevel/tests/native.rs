@@ -1,13 +1,11 @@
-//! A native operator's [`NativeApply`] is validated before the checker adopts
-//! it.
+//! A native operator's [`NativeApply`] is adopted by the checker.
 //!
 //! The extension point is a public API a host composes: a plugin implements
-//! [`NativeOp::build`] and returns three raw node ids.  Every downstream read
-//! of the expression's term reads it as a `[value, type]` pair, so a builder
-//! that returns anything else would install a term the checker never checked —
-//! silently wrong, or a failure inside a later pass.  `Ctx` is the way a plugin
-//! builds the shape; this pins that a violation of that shape is a reported
-//! guard rather than an adoption.
+//! [`NativeOp::build`] and returns the value node it emitted.  The call's
+//! `[value, type]` pair is the checker's to build — a builder that assembled a
+//! term by hand would be a second source of truth for the encoding, which is
+//! exactly the mistake that once put a value in a type slot.  This pins that a
+//! builder that emits through [`Ctx`] and returns the node is adopted.
 
 use lichen_highlevel::NoAttr;
 use lichen_highlevel::attr::AttrExt;
@@ -18,27 +16,17 @@ use lichen_highlevel::program::{
     Ctx, HighProgram, HighProgramLiteral, HighProgramOperator, HighProgramValue, IntLit,
     ProgramImpl, ValueType,
 };
-use lichen_lowlevel::{LowValue, Registry};
+use lichen_lowlevel::Registry;
 use std::sync::{Arc, RwLock};
 
 /// The probe program: the built-in vocabularies and no attribute.
 type ProbeProgram = ProgramImpl<HighProgramValue, HighProgramOperator, NoAttr, HighProgramLiteral>;
 
-/// A well-formed builder: the term is the `[value, type]` pair `Ctx` built,
-/// with its value slot memoized as the returned `val`.
+/// A well-formed builder: it emits one node through `Ctx` and returns it as the
+/// call's value.  The type is the checker's.
 struct WellFormed;
 
-/// A builder that returns a bare value node as the expression's term — not a
-/// pair at all.
-struct NotAPair;
-
-/// A builder whose returned `ty` is not the pair's element 1, so the checker's
-/// two views of the expression's type disagree.
-struct TypeSlotDisagrees;
-
 static WELL_FORMED: WellFormed = WellFormed;
-static NOT_A_PAIR: NotAPair = NotAPair;
-static TYPE_SLOT_DISAGREES: TypeSlotDisagrees = TypeSlotDisagrees;
 
 impl<P: HighProgram> NativeOp<P> for WellFormed
 where
@@ -46,58 +34,13 @@ where
 {
     fn build(
         &self,
-        ctx: &mut dyn Ctx<P>,
+        _ctx: &mut dyn Ctx<P>,
         _e: ExprId,
         args: &[NativeArg],
         _loc: Loc,
     ) -> NativeApply {
-        let value = args[0].value;
-        let ty = ctx.fresh();
         NativeApply {
-            value: value,
-            ty: ty,
-            decided: true,
-        }
-    }
-}
-
-impl<P: HighProgram> NativeOp<P> for NotAPair
-where
-    P::Value: ValueType,
-{
-    fn build(
-        &self,
-        ctx: &mut dyn Ctx<P>,
-        _e: ExprId,
-        _args: &[NativeArg],
-        _loc: Loc,
-    ) -> NativeApply {
-        let node = ctx.value_node(P::Value::from(LowValue::USize(7)));
-        let ty = ctx.fresh();
-        NativeApply {
-            value: node,
-            ty: ty,
-            decided: true,
-        }
-    }
-}
-
-impl<P: HighProgram> NativeOp<P> for TypeSlotDisagrees
-where
-    P::Value: ValueType,
-{
-    fn build(
-        &self,
-        ctx: &mut dyn Ctx<P>,
-        _e: ExprId,
-        _args: &[NativeArg],
-        _loc: Loc,
-    ) -> NativeApply {
-        let value = ctx.value_node(P::Value::from(LowValue::USize(7)));
-        let ty = ctx.fresh();
-        NativeApply {
-            value: value,
-            ty: ty,
+            value: args[0].value,
             decided: true,
         }
     }
@@ -142,7 +85,7 @@ fn a_well_formed_native_operator_is_adopted() {
     let build = build(&WELL_FORMED);
     assert!(
         build.ok,
-        "a builder that returns the pair it built must be adopted, got: {:?}",
+        "a builder that emits one node through Ctx must be adopted, got: {:?}",
         build.diagnostics()
     );
 }

@@ -8,11 +8,12 @@ where
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
     /// A `$name(args…)` call: compile each argument, look `name` up in this
-    /// module's private [`NativeOps`] registry, and adopt the `[value, type]`
-    /// pair the plugin's [`NativeOp`] builder returns.  The checker has no
-    /// knowledge of what the operator does — the plugin's registration owns the
-    /// lowering and the type construction (the private contract with its own
-    /// source).  An unregistered `name` is refused with a diagnostic rather
+    /// module's private [`NativeOps`] registry, and adopt the value node the
+    /// plugin's [`NativeOp`] builder returns, typed by a fresh cell.  The
+    /// checker has no knowledge of what the operator does — the plugin's
+    /// registration owns the lowering, and the types live in the lichen
+    /// wrapper that calls `$name` (the private contract with its own source).
+    /// An unregistered `name` is refused with a diagnostic rather
     /// than a panic (the frontend compiles `$name` blind, so the checker is the
     /// first layer that can see the registry).
     pub(super) fn check_native_call(
@@ -31,7 +32,6 @@ where
             .map(|&arg| NativeArg {
                 expr: arg,
                 value: self.value_of(arg),
-                ty: self.state[arg].ty.expect("a compiled argument has a type"),
             })
             .collect();
         let loc = self.loc(e, 0);
@@ -63,14 +63,18 @@ where
                 return pair;
             }
         };
-        // The builder states the two **slots**; the checker builds the term.
-        // The `[value, type]` pair is this crate's encoding, so it is built
-        // through its one construction site ([`Checker::pair_of`]) — a plugin
-        // cannot get the shape wrong, because it never states a shape.
-        let pair = self.pair_of(built.value, built.ty);
+        // The builder states the operator's **value**; the checker states the
+        // call's **type**.  A native operator is an operator — raw operands in,
+        // one raw result node out — so the type is not the plugin's to give:
+        // the boundary mints a fresh cell for every call, unconditionally, and
+        // the `[value, type]` pair is built through its one construction site
+        // ([`Checker::pair_of`]).  Whatever the wrapper around `$name` knows
+        // about the result's type, it states as an ordinary annotation.
+        let ty = self.fresh_cell();
+        let pair = self.pair_of(built.value, ty);
         self.state[e].term = Some(pair);
         self.state[e].val = built.decided.then_some(built.value);
-        self.state[e].ty = Some(built.ty);
+        self.state[e].ty = Some(ty);
         pair
     }
 }
