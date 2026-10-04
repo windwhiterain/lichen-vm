@@ -50,7 +50,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 mod body;
 
-pub use body::{BlockId, Flow, KernelBody, Terminator};
+pub use body::{BasicBlock, Br, KernelBody, Terminator, ValueDef, ValueId};
 
 /// Which scalar class a value, a parameter leaf or a buffer element is.
 ///
@@ -562,32 +562,28 @@ pub enum KernelInstr {
     /// class it was lowered in — an `Int` local takes the value, a `Float` local
     /// takes an `f32`'s bits (`docs/notes/floating-point.md`).
     Const(ScalarClass, i64),
-    /// A binary [`KernelBin`] operator over the top two stack values, **in the
-    /// class it names**.
+    /// A binary [`KernelBin`] operator over two values, **in the class it names**.
     ///
     /// Per instruction for the same reason [`Self::Const`] is: the opcode a
     /// backend emits for `Add` is `i64.add` in one class and `f32.add` in the
     /// other, and a body that mixes the two needs both.
     Bin(ScalarClass, KernelBin),
-    /// Read a parameter leaf, by its offset in the flattened domain.
-    LocalGet(u32),
-    /// Convert the top stack value to the condition width a `select` needs.
+    /// Convert a value to the condition width a `select` needs.
     I32WrapI64,
-    /// A `if c then a else b`: the then value, the else value, the selector,
-    /// the width conversion, then this.
+    /// A `if c then a else b`, which is `Select`.
     Select,
-    /// A cross-kernel call: the top `arity` stack values are the argument, and
-    /// a backend resolves this to a call to the callee. The arity is the
-    /// callee's own domain, not known here.
+    /// A cross-kernel call: its `args` are the argument, and a backend resolves
+    /// this to a call to the callee.  The arity is the callee's own domain, not
+    /// known here.
     CallKernel(KernelId),
     /// The language's two class conversions — `int2float` and `float2int` — as
-    /// one instruction: the stack holds a `from` and this leaves behind the same
-    /// number as a `to`.
+    /// one instruction: it reads a value of one class and leaves a value of the
+    /// other.
     ///
     /// # Why the pair, when only the two crossing directions are ever written
     ///
     /// Because *which* of the two it is cannot be read off the operand: `Int →
-    /// Float` and `Float → Int` are the same shape on a stack machine, and the
+    /// Float` and `Float → Int` are the same shape to an operand, and the
     /// direction is the language's decision, not a target's.  A backend that had
     /// to re-derive it would be guessing, and the two backends could guess
     /// differently — the exact failure `docs/notes/floating-point.md` §5.1
@@ -654,6 +650,38 @@ pub enum KernelInstr {
     /// The class is the element class, as in [`Self::BufferReadCall`]; the
     /// position and the index are `Int`.
     BufferWriteCall(ScalarClass),
+}
+
+impl KernelInstr {
+    /// How many values this instruction leaves behind.
+    ///
+    /// **One for everything except a write**, which is a side effect and leaves
+    /// nothing — and that is the whole of the arity question, so
+    /// [`KernelBody::validate`](crate::KernelBody::validate) can check a
+    /// definition against its declaration without a consumer having to know.
+    pub fn produces(&self) -> usize {
+        match self {
+            KernelInstr::BufferWriteCall(_) => 0,
+            _ => 1,
+        }
+    }
+
+    /// How many values this instruction reads.
+    ///
+    /// **Stated here because it is a fact about the language's operators, not
+    /// about any target**, and a lowering should not have to re-derive it to
+    /// wire an instruction's operands. The one not fixed by the operator is
+    /// [`Self::CallKernel`], whose arity is the callee's own domain — so it reads
+    /// no argument of its own, and the caller supplies the values it passes.
+    pub fn arity(&self) -> usize {
+        match self {
+            KernelInstr::Const(..) | KernelInstr::CallKernel(_) => 0,
+            KernelInstr::Bin(_, _) | KernelInstr::BufferReadCall(_) => 2,
+            KernelInstr::I32WrapI64 | KernelInstr::Conv { .. } => 1,
+            KernelInstr::Select => 3,
+            KernelInstr::BufferWriteCall(_) => 3,
+        }
+    }
 }
 
 /// A compiled kernel-callable unit: a lowered function body plus the facts a
