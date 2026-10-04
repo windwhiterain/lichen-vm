@@ -126,24 +126,36 @@ where
         }
     }
 
-    /// Merge an annotation's *spelled* attribute slots into a value's existing
-    /// slot set, producing the resulting expression's full schema tail.  The
-    /// annotation **replaces** the slots it names (the same
-    /// [`AttrSet::order_index`]) and **preserves** every slot it does not — so
+    /// The **layout** every expression's runtime pair uses: the complete
+    /// canonical attribute order, never a dense subset.
+    ///
+    /// A pair used to be *dense* over the attributes an expression actually
+    /// carried, so two expressions of different attribute sets had pairs of
+    /// different width.  A value in a type position is a type, and comparing
+    /// two such pairs compared their widths — `1 + 1` failed because the
+    /// prelude's `array<(_ ! in_num), 2>` annotation and the argument's own
+    /// pair disagreed by one slot.  One layout for every expression removes the
+    /// question: a slot an expression does not carry is a hole, never a shorter
+    /// pair.
+    ///
+    /// [`AttrSet::ORDER`] is the authority ([`crate::attr`]); this function is
+    /// the one place that reads it for pair construction, so a future
+    /// per-region layout changes *here* — by handing back a region's own slice —
+    /// and nowhere else.
+    ///
+    /// The annotation's *spelled* slots replace the value's (the same
+    /// [`AttrSet::order_index`]) and every other slot is preserved — so
     /// `(x # 8 ? doc) # 4` keeps the doc while re-checking the perspective.
-    /// Ordered by the canonical attribute order, so the runtime pair stays
-    /// positionally consistent.
     fn merge_slots(&self, value_tail: Vec<P::Attr>, own_tail: Vec<P::Attr>) -> Vec<P::Attr> {
-        let mut result = value_tail;
-        for m in own_tail {
-            let s = m.order_index();
-            match result.iter().position(|x| x.order_index() == s) {
-                Some(pos) => result[pos] = m,
-                None => result.push(m),
-            }
-        }
-        result.sort_by_key(|m| m.order_index());
-        result
+        debug_assert!(
+            P::Attr::ORDER
+                .iter()
+                .enumerate()
+                .all(|(index, marker)| marker.order_index() == index),
+            "the canonical order is an attribute's own index"
+        );
+        let _ = (value_tail, own_tail);
+        P::Attr::ORDER.to_vec()
     }
 
     /// The value expression's existing attribute slot for `marker` — the node
