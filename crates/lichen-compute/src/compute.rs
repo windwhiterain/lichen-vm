@@ -3607,12 +3607,10 @@ where
         return Ok(None);
     };
     if let Some(roles) = &slot.roles {
-        // **A struct parameter's element 0 is a field, not the whole value.**
-        // `Index(param_pair, 0)` reads the pair's value half, which is the
-        // parameter *whole* for a positional domain and the *first field* for a
-        // struct one — and `roles` is exactly the fact that says which. So a
-        // whole-parameter path is offered as a field path first, and as the empty
-        // path only if that names nothing.
+        // **A whole-parameter path is offered as a field path first.**
+        // `Index(param_pair, 0)` reads the pair's value half, which is the parameter
+        // *whole* for a positional domain and the *first field* for a struct one —
+        // and `roles` is exactly the fact that says which.
         let path = param_path(module, slot.pair, node)?;
         if let Some(path) = path {
             let mut as_field = vec![0];
@@ -3622,6 +3620,12 @@ where
             }
             return Ok(roles.input_pos(&path));
         }
+        // **A struct field read needs a search this function cannot do.** Resolving
+        // a role path structurally takes the struct's field list
+        // (`struct_fields_of_slot`), which needs `&mut Module`; this is reached
+        // from the lowering, which holds `&Module`. The measurement saying the
+        // search is the right mechanism is in [`param_path`]'s header — what is
+        // missing there is a `&mut`, not a rule.
         return Ok(None);
     }
     let cfg_value = slot.value;
@@ -3850,6 +3854,21 @@ where
     // does not state it.
     let mut steps: Vec<IndexStep> = Vec::new();
     let mut current = node;
+    // **This walk cannot answer a struct field read, and the reason is worth
+    // stating because two rounds went the other way.** Measured on
+    // `a_struct_parameter_..._carrying_wrapper`:
+    //
+    //     chain[0] Index(921, 952)      // 952 is a *static* selector — a name
+    //     chain[1] Index(923, 926)      // 926 likewise
+    //     chain[2] 923: no operation     // the alias carries the field's class
+    //     param_pair: 22                 // never reached
+    //
+    // Walking **down** from a read finds the field it read and stops; the
+    // parameter is *above* it and the two are joined only by the equality class,
+    // which is what `alias_read` set. So the caller must search the role table's
+    // own paths for the one whose node is class-equal to the read — see
+    // `parallel_buffer_pos`.
+    //
     for _ in 0..MAX_PARAMETER_DEPTH {
         let Some(operation) = module.node_operation(current) else {
             // **A bare value cell ends the chain; it does not void it.** Two
