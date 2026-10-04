@@ -956,18 +956,16 @@ impl<P: Program> Module<P> {
     /// The join alone leaves a target whose operator has not run unanswered: the
     /// reader is now in the target's class, so the read takes the class shortcut
     /// and never re-enters the target's own evaluation, and the read would answer
-    /// with a value no operator produced.  So the target is evaluated here, under
-    /// one filter — `runned`: a target that already ran has its own answer and a
-    /// plain cell has nothing to run.
+    /// with a value no operator produced.  Evaluating the target here is what
+    /// answers it, and the filter that decides whether there is anything to run
+    /// belongs to [`Self::evaluate_node`], not to this caller.
     ///
     /// The reader keeps its operation: the operand edge must stay live for the
     /// apply's clone machinery, and for the read's own resolution path to find it.
     pub(crate) fn alias_read(&mut self, reader: NodeId, target: NodeId) {
         self.unify(reader, target);
-        if self.nodes[target].operation.is_some() && !self.nodes[target].runned {
-            let block = self.nodes[target].block;
-            self.evaluate_node(Dyn(target), Some(block));
-        }
+        let block = self.nodes[target].block;
+        self.evaluate_node(Dyn(target), Some(block));
     }
 
     /// The class's value is named by the **representative**: a class has one
@@ -996,8 +994,18 @@ impl<P: Program> Module<P> {
     /// `None` for a member whose slot is unbound **and** for the
     /// [`LowValue::Parameterized`] marker, which is the same distinction
     /// [`Self::write_node_value`] draws — a marker is not a fact to carry.
+    ///
+    /// `None` as well while the carrier is an **operation that has not run**: a
+    /// value a unification wrote there asserts what the class must eventually
+    /// hold, and until the operator produces its own answer it is not a fact to
+    /// compare against.  Reading it as the class's value is what makes a reader
+    /// treat an unverified assertion as decided; the `runned` axis is judged
+    /// here, at the one read, so no caller has to ask.
     pub(crate) fn class_committed_value(&self, rep: NodeId) -> Option<P::Value> {
         let member = self.class_committed_node(rep)?;
+        if self.nodes[member].operation.is_some() && !self.nodes[member].runned {
+            return None;
+        }
         self.nodes
             .get(member)?
             .value
