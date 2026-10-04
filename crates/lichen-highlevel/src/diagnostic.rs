@@ -552,11 +552,31 @@ where
 
     /// The structured location for a node, or `None` for a static ref (which
     /// has no importer expression).
+    ///
+    /// A runtime failure names the node it failed on, and for a failure inside
+    /// an applied function that node is a **per-apply clone** — the checker
+    /// never saw it, so the build's `node_edges` has no entry and the failure
+    /// would carry no source position.  A clone does record its template origin
+    /// ([`Module::node_origin`]), which *is* a node the checker attributed, so
+    /// the origin's edge is the fallback.  The edge for the node itself keeps
+    /// priority: a node the checker attributed directly is never re-attributed
+    /// through a clone of it.
     fn node_loc(&self, node: AnyNodeId) -> Option<Loc> {
         let AnyNodeId::Dynamic(node) = node else {
             return None;
         };
-        self.node_edges.get(&node).cloned()
+        if let Some(loc) = self.node_edges.get(&node) {
+            return Some(loc.clone());
+        }
+        // One step suffices: the origin is a template node, never a clone
+        // (see `Module::node_origin`).  The origin is not kept alive by the
+        // clone, so a released one is absent rather than a panic.
+        let origin = self.module.node_origin(node)?;
+        self.module
+            .nodes
+            .contains_key(origin)
+            .then(|| self.node_edges.get(&origin).cloned())
+            .flatten()
     }
 
     /// Whether `loc` was registered by one of the raw reads for its

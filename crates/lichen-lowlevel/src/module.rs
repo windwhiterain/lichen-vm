@@ -119,6 +119,7 @@ impl<P: Program> Module<P> {
             operation,
             low_shape: None,
             function: None,
+            origin: None,
             block,
             visiting: false,
             evaluated_deep: None,
@@ -163,6 +164,29 @@ impl<P: Program> Module<P> {
     /// Panics if `node` is not in [`Self::nodes`].
     pub fn node_function(&self, node: NodeId) -> Option<FunctionId> {
         self.nodes[node].function
+    }
+
+    /// The template node `node` was **cloned from**, or [`None`] when `node`
+    /// is not an apply clone.
+    ///
+    /// An apply instantiates a function template by cloning the members that
+    /// depend on the call's argument, and each clone records the node it was
+    /// cloned from here ([`Self::node_function`] names the *template* the clone
+    /// joined; this names the node *within* it).  A reader that holds a clone
+    /// because a runtime failure mentioned it — the per-call node a recorded
+    /// [`EvalError`](crate::EvalError) names — can therefore reach the source
+    /// node an attribution table keyed by template nodes holds.
+    ///
+    /// A reader may rely on two facts.  The origin is a node of the template,
+    /// so it is never itself a clone: one step suffices, and following it twice
+    /// adds nothing.  And it is **not a keep-alive edge**: garbage collection
+    /// moves each node with its own home block, so an origin node whose block
+    /// was released is absent from [`Self::nodes`] — use [`Self::nodes`]'
+    /// `get` before reading it rather than assuming liveness.
+    ///
+    /// Panics if `node` is not in [`Self::nodes`].
+    pub fn node_origin(&self, node: NodeId) -> Option<NodeId> {
+        self.nodes[node].origin
     }
 
     /// The operation `node` computes — its operator and single operand edge

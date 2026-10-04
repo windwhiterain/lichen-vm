@@ -1923,6 +1923,29 @@ fn a_named_instantiation_through_a_parameter_defers_its_reorder() {
     // position.
     let ids = array_ids(&b, b.state[inst].val.unwrap());
     assert_eq!(ids.len(), 2, "one instance position per named argument");
+    // Each element is `Index(call_values, TableGet(supply, key))` — the lazy
+    // gather whose key the diagnostics attribute through the template origin
+    // (the key node is cloned per apply, so its `node_edges` entry is the
+    // template's).
+    for id in ids {
+        let read = b
+            .module
+            .node_operation(id)
+            .expect("the gather element reads");
+        assert_eq!(
+            format!("{:?}", read.operator),
+            "LowOperator(Index)",
+            "an instance position is a gather read"
+        );
+        let operands = read.operand.expect("Index has operands");
+        let operands = array_ids(&b, operands);
+        let subscript = b.module.node_operation(operands[1]).expect("the subscript");
+        assert_eq!(
+            format!("{:?}", subscript.operator),
+            "LowOperator(TableGet)",
+            "the subscript is the supplying read"
+        );
+    }
 }
 
 // --- the `_` placeholder ----------------------------------------------------
