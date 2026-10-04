@@ -839,8 +839,24 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
    state, the exit taking what the header has at that point, the backedge handing
    the next iteration's state — and emit it. **This is the item the feature turns
    on**: the IR can express a loop and a backend can lower one, and nothing yet
-   connects the two. See
-   [wasm-backend-handoff](wasm-backend-handoff.md) §3.2.
+   connects the two.
+
+   **Measured on the merged tree, so the next step does not re-derive it:**
+
+   - **Nothing outside `lichen-lowlevel` reads `LoopConversion`.** Its only
+     caller today is `lichen-highlevel`'s `checker/loops.rs`, asking per component
+     entry. There is no `LoopConversion` anywhere in `lichen-compute`.
+   - **The wasm side can already lower the body this item builds.** `lower.rs`
+     creates a waffle block per kernel-IR block, binds their blockparams in order,
+     and types the non-entry ones by a fixed point over the incoming edges — which
+     is the whole of what a header's carried state needs. So item 6 is *one* new
+     walk in `lichen-compute`, not a backend change.
+   - **The SPIR-V side is the one that cannot.** `spirv.rs` still refuses a body
+     that is not straight-line (`is_straight_line`), because `OpLoopMerge` needs a
+     merge block and an unconditional branch, and the single-`OpLabel` invariant is
+     what has to be replaced — item 5 above, and it should not be started in halves.
+
+   See [wasm-backend-handoff](wasm-backend-handoff.md) §3.2.
 
 **Stage 0 — the `loop` keyword and the evaluator's choice.** The surface lands
 first, and it is the smallest thing that can be observed working: a `loop` keyword
