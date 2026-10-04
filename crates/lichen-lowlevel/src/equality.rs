@@ -594,173 +594,139 @@ impl<P: Program> Module<P> {
             self.record_error(ra, rb, steps, root);
             return false;
         }
-        let va = self.nodes[ra].value;
-        let vb = self.nodes[rb].value;
-        // **Unify does two things: it unions, and it reports a conflict.**  There
-        // is no third case to classify: an undecided side is not a reason to
-        // refuse (unify is called unconditionally), a decided side is not a
-        // reason to write into anyone, and an operation on either side is not a
-        // reason to compute first.  What a class's computation produces is
-        // reconciled when it runs; a reader that needs a value finds it through
-        // the class.
-        if is_unbound(va) || is_unbound(vb) {
-            if !self.union_with_value(ra, rb, va, vb) {
-                self.record_error(ra, rb, steps, root);
-                return false;
+        // What each class knows, asked once and of the **class** rather than of
+        // the representative's slot: a merge carries a decided value to the
+        // members it adds, so the representative may be the value-less operation
+        // node.
+        //
+        // **Unify does three things, and they are one recursion: it merges the
+        // classes, it settles the value the merged class holds, and it reports
+        // the conflict.**  There is no separate case for an undecided side —
+        // "this class knows nothing" is the `None` of the question every pair is
+        // asked, and the arm it lands in is its answer.  An undecided side is not
+        // a reason to refuse (unify is called unconditionally), a decided side is
+        // not a reason to write into anyone, and an operation on either side is
+        // not a reason to compute first: what a class's computation produces is
+        // reconciled when it runs, and a reader that needs a value finds it
+        // through the class.
+        let va = self.class_committed_value(ra);
+        let vb = self.class_committed_value(rb);
+        match (va, vb) {
+            // Nothing known on either side: the merge is the whole answer.
+            (None, None) => {
+                self.add_equality(ra, rb);
+                true
             }
-            return true;
-        }
-        let ra = disjoint::find(&mut self.nodes, ra);
-        let rb = disjoint::find(&mut self.nodes, rb);
-        // A function-type node — the self-referential `[Function(fid), ↺]`
-        // that is a function's own type (`f : f`) — on either side is handled
-        // by the program's clone-on-unify policy before the positional match.
-        // The positional match would otherwise either wrongly *merge* two
-        // self-referential function-types (binding the shared template's
-        // cells, the defect this fixes) or clash a `Function` slot 0 against
-        // an array. The policy clones the function's signature and unifies the
-        // clone, leaving the template untouched; on success the two sides are
-        // resolved *without* merging classes (the function-type stays a
-        // distinct, polymorphic class).
-        if self.is_function_type_node(ra) || self.is_function_type_node(rb) {
-            match P::unify_function_type(self, ra, rb) {
-                FunctionTypeUnify::Handled => return true,
-                FunctionTypeUnify::Conflict => {
-                    self.record_error(ra, rb, steps, root);
-                    return false;
-                }
-                // One side is a self-referential `[Function, ↺]` the program
-                // does not treat as a function-type (a build with no highlevel,
-                // which never builds one): fall through to the positional rules.
-                FunctionTypeUnify::NotFunctionType => {}
+            // One side knows a value: the merged class holds it.  There is no
+            // structure on the other side to descend into — a cell that knows
+            // nothing is an absence, not a pattern — so the write is this arm's
+            // whole effect.
+            (Some(value), None) | (None, Some(value)) => {
+                let rep = self.add_equality(ra, rb);
+                self.write_node_value(rep, Some(value));
+                true
             }
-        }
-        let va = self.nodes[ra].value;
-        let vb = self.nodes[rb].value;
-        let pair = (
-            va.as_ref().and_then(|value| value.as_enum()),
-            vb.as_ref().and_then(|value| value.as_enum()),
-        );
-        match pair {
-            (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
-                // SAFETY: `pa`/`pb` are the payloads of the reachable class
-                // representatives `ra`/`rb`, both live nodes of this module, so
-                // their home blocks stay alive across the recursion below —
-                // nothing in the descent releases a block.
-                let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
-                if left.len() != right.len() {
-                    self.record_error(ra, rb, steps, root);
-                    return false;
-                }
-                // Two self-referential universes are the same structural
-                // value even when one is materialized from a static module;
-                // unifying their cycles should be a success, not a conflict.
-                if self.is_self_referential(Dyn(ra)) && self.is_self_referential(Dyn(rb)) {
-                    self.add_equality(ra, rb);
-                    return true;
-                }
-                path.insert(ra, rb);
-                let mut ok = true;
-                for (i, (na, nb)) in left.iter().zip(right.iter()).enumerate() {
-                    // Record the descent step before recursing, so the deep
-                    // failure's trace carries the full element path.
-                    steps.push(UnifyStep {
-                        index: i,
-                        a: node_or_default(na.node),
-                        b: node_or_default(nb.node),
-                    });
-                    let child_ok =
-                        self.unify_inner(na.node, nb.node, path, materialized, steps, root);
-                    steps.pop();
-                    if !child_ok {
-                        ok = false;
-                        break;
+            // Both sides know a value: they must be the **same** value, and for
+            // an array "the same" is decided by unifying the elements — an
+            // array's elements are nodes that may still be cells, and a
+            // comparison reads a free cell as "matches anything" and drops the
+            // tie.
+            (Some(x), Some(y)) => {
+                // A function-type node — the self-referential `[Function(fid),
+                // ↺]` that is a function's own type (`f : f`) — on either side is
+                // handled by the program's clone-on-unify policy before the
+                // positional match.  The positional match would otherwise either
+                // wrongly *merge* two self-referential function-types (binding
+                // the shared template's cells, the defect this fixes) or clash a
+                // `Function` slot 0 against an array. The policy clones the
+                // function's signature and unifies the clone, leaving the
+                // template untouched; on success the two sides are resolved
+                // *without* merging classes (the function-type stays a distinct,
+                // polymorphic class).
+                if self.is_function_type_node(ra) || self.is_function_type_node(rb) {
+                    match P::unify_function_type(self, ra, rb) {
+                        FunctionTypeUnify::Handled => return true,
+                        FunctionTypeUnify::Conflict => {
+                            self.record_error(ra, rb, steps, root);
+                            return false;
+                        }
+                        // One side is a self-referential `[Function, ↺]` the
+                        // program does not treat as a function-type (a build with
+                        // no highlevel, which never builds one): fall through to
+                        // the positional rules.
+                        FunctionTypeUnify::NotFunctionType => {}
                     }
                 }
-                path.remove(ra, rb);
-                if ok {
-                    self.add_equality(ra, rb);
+                match (x.as_enum(), y.as_enum()) {
+                    (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
+                        // SAFETY: `pa`/`pb` are the payloads of the reachable
+                        // class representatives `ra`/`rb`, both live nodes of
+                        // this module, so their home blocks stay alive across the
+                        // recursion below — nothing in the descent releases a
+                        // block.
+                        let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
+                        if left.len() != right.len() {
+                            self.record_error(ra, rb, steps, root);
+                            return false;
+                        }
+                        // Two self-referential universes are the same structural
+                        // value even when one is materialized from a static
+                        // module; unifying their cycles should be a success, not
+                        // a conflict.
+                        if self.is_self_referential(Dyn(ra)) && self.is_self_referential(Dyn(rb)) {
+                            self.add_equality(ra, rb);
+                            return true;
+                        }
+                        path.insert(ra, rb);
+                        let mut ok = true;
+                        for (i, (na, nb)) in left.iter().zip(right.iter()).enumerate() {
+                            // Record the descent step before recursing, so the
+                            // deep failure's trace carries the full element path.
+                            steps.push(UnifyStep {
+                                index: i,
+                                a: node_or_default(na.node),
+                                b: node_or_default(nb.node),
+                            });
+                            let child_ok =
+                                self.unify_inner(na.node, nb.node, path, materialized, steps, root);
+                            steps.pop();
+                            if !child_ok {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        path.remove(ra, rb);
+                        if ok {
+                            self.add_equality(ra, rb);
+                        }
+                        ok
+                    }
+                    // A materialized static closure and the frozen function it
+                    // came from name **one** logical function: their `Function`
+                    // values are equal by identity even though one is dynamic and
+                    // the other static.  Checked before the generic value
+                    // comparison, which compares `AnyFunctionId` by kind and
+                    // would call them different.
+                    (Some(LowValue::Function(a)), Some(LowValue::Function(b)))
+                        if self.function_identity_equal(a, b) =>
+                    {
+                        self.add_equality(ra, rb);
+                        true
+                    }
+                    // Two concrete values merge iff they are *fully* equal
+                    // ([`ValueExt::value_eq`] — handle payloads by content, which
+                    // the cheap [`PartialEq`] deliberately does not see).
+                    _ if x.value_eq(&y) => {
+                        self.add_equality(ra, rb);
+                        true
+                    }
+                    _ => {
+                        self.record_error(ra, rb, steps, root);
+                        false
+                    }
                 }
-                ok
-            }
-            // A materialized static closure and the frozen function it came
-            // from name **one** logical function: their `Function` values are
-            // equal by identity even though one is dynamic and the other
-            // static.  Checked before the generic value comparison, which
-            // compares `AnyFunctionId` by kind and would call them different.
-            (Some(LowValue::Function(a)), Some(LowValue::Function(b)))
-                if self.function_identity_equal(a, b) =>
-            {
-                self.add_equality(ra, rb);
-                true
-            }
-            // Two concrete values merge iff they are *fully* equal
-            // ([`ValueExt::value_eq`] — handle payloads by content, which
-            // the cheap [`PartialEq`] deliberately does not see); two
-            // classes holding no value at all merge too, which nothing
-            // above could bind.
-            _ if match (&va, &vb) {
-                (Some(a), Some(b)) => a.value_eq(b),
-                (None, None) => true,
-                _ => false,
-            } =>
-            {
-                self.add_equality(ra, rb);
-                true
-            }
-            _ => {
-                self.record_error(ra, rb, steps, root);
-                false
             }
         }
-    }
-
-    /// Merge two classes and settle what the unify asserted.
-    /// **Union two classes and let the merged class hold what one of them
-    /// already knows.**  [`Self::add_equality`] is the union itself and writes
-    /// nothing; this wrapper is the unifier's one place of writing, so the
-    /// "unify merges classes" and "a class carries a value to its members"
-    /// responsibilities stay separable — the former is also used by callers
-    /// that must not write (a fresh clone's class, a pin).
-    ///
-    /// The value comes from whichever side has a decided one.  Both sides may
-    /// hold one (the caller compares values before calling this), and a decided
-    /// value always reaches every unbound pure cell of the merged class
-    /// ([`Self::write_node_value`]'s replication), which is what makes a later
-    /// member read the value its class already had.
-    ///
-    /// **A write never contradicts what the class already holds.**  When the
-    /// class carries a decided value and the merge brings a *different* decided
-    /// one, that is a conflict — reported, not overwritten.  This is the
-    /// unifier's half of "two values that must be equal are not": the
-    /// *computation*-versus-value half happens when the computation runs
-    /// ([`Self::reconcile_node_claim`]), and neither needs the computation to be
-    /// forced here.
-    fn union_with_value(
-        &mut self,
-        ra: NodeId,
-        rb: NodeId,
-        va: Option<P::Value>,
-        vb: Option<P::Value>,
-    ) -> bool {
-        let incoming = if is_unbound(va) { vb } else { va };
-        let incoming = incoming.filter(|value| !is_unbound(Some(*value)));
-        // A class that already holds a decided value and a union that brings a
-        // *different* one is a conflict, and the comparison has to be the
-        // **structural** one — `values_agree` walks the elements, where
-        // [`Self::value_eq`] would call two equal-content arrays different.
-        if incoming.is_some()
-            && (self.class_committed_value(ra).is_some()
-                || self.class_committed_value(rb).is_some())
-            && !self.values_agree(ra, rb)
-        {
-            return false;
-        }
-        let rep = self.add_equality(ra, rb);
-        if let Some(value) = incoming {
-            self.write_node_value(rep, Some(value));
-        }
-        true
     }
 
     /// Whether two decided values are the same value (the unifier's comparison,
