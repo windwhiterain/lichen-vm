@@ -450,15 +450,31 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
     answered, then ~2_000 nested applications exhausted the budget). The loop
     therefore assembles the pair from the base's value half and the return's own
     type half, which is the whole of what an apply's result is.
-  A loop is bounded by its own **work** budget ([`Module::loop_work_limit`],
-  `BudgetExhausted::LoopWork`): one unit per iteration and one per application
-  inside it. It cannot be the apply budget, and finding out why was the other
-  half of the design work: **an operation in a host program is an apply** (the
-  prelude's own function), so a loop of N iterations applies about N times, and
-  the budget that exists to make a runaway *expansion* fail fast would cap every
-  converted loop at the count the expansion can afford. The loop's own budget
-  still refuses the marked loop that never reaches its base, and an unmarked
-  recursion inside a step that does the same.
+  **The budget: an iteration is one application, and the saving is nesting.**
+  The loop charges the *real* counters — one application per iteration, exactly
+  as the unroll charges one per unwound level, plus whatever the body applies
+  through the ordinary frame — so the cumulative bound means the same thing on
+  both paths and a host that wants a large trip count raises *that* number.
+  There is no loop-specific budget, and an earlier draft's was wrong twice: it
+  was invented, and its "one unit per iteration plus one per call inside" made
+  a loop's cost unreadable against an expansion's.
+  What a loop never spends is **nesting**, and measuring where that binds was
+  the other half of the work. It is *not* the lazy host path: a tail recursion's
+  expansion keeps `apply_depth` flat (the apply returns its pair and the deep
+  pass descends into it), so under one total bound the loop and the unroll
+  afford the same count — measured, 1998 against 1999 for the reduction here.
+  Nesting binds where it is real:
+  - a **strict** recursion, where each level's result is forced (the lowlevel
+    harness's countdown: the unroll meets `ApplyDepth`, the loop answers —
+    `tests/basic/host_loop.rs`),
+  - the **emitter's** expression-nesting ceiling (§8.5 item 1c's 512), which is
+    what the kernel path pays for an expansion and a loop does not, and
+  - the kernel path's whole definition-pass cost, which a converted loop does
+    not pay at all.
+  So the honest headline is narrower than "the loop affords a trip count the
+  expansion cannot": **it affords the same work at a flat depth**, and a host
+  loop is *currently* worth what that is worth on the host path — which is
+  scope and stack, not count. The kernel side is where the count is free.
   **The cost, stated plainly**: each iteration still instantiates the body
   (~fifty nodes for the reduction here), so a host loop is linear in the trip
   count with a large constant — O(1) in *depth*, which is what removes the
@@ -467,12 +483,13 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   *one* instantiation instead of instantiating the body per iteration, which is
   also the shape the kernel reader wants.
   Evidence: `tests/basic/host_loop.rs` (the loop and the unroll agree; the loop
-  goes round exactly `count + 1` times; 5_000 iterations answer where the unroll
-  is refused at a 100-apply budget; an endless convertible loop is refused by
-  the loop's budget; a marked but unconvertible recursion still expands) and
-  `lichen-language/tests/loop_run.rs` on real programs (the acceptance case's
-  shape with a literal count, next to the same source unmarked and refused, plus
-  loop/unroll agreement at small counts).
+  spends exactly one application per iteration, pinned by the total bound; 50
+  iterations answer under a depth bound of 8 where the unroll meets the nesting
+  guard; an endless convertible loop is refused by the work budget; a marked but
+  unconvertible recursion still expands), `lichen-highlevel`'s `loop_marker.rs`
+  (a host that raises the work bound runs a 3_000-count loop) and
+  `lichen-language/tests/loop_run.rs` on real programs (loop/unroll agreement at
+  small counts, and both bounded by the same work budget at 3_000).
 - **The wasm backend** — walks the structure and emits `If` and `While`. An `if`
   frame *is* the join; a `while` is a `loop` wrapped in a `block` so its two exits
   agree; a carried value is a local, because a `br` to a loop label takes no

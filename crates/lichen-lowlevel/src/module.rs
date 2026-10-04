@@ -14,19 +14,6 @@ impl<P: Program> Module<P> {
     /// function's body (~tens of nodes), so this also bounds the module's
     /// growth — an indeterminate recursion stops before it drains memory.
     pub const MAX_APPLY_TOTAL: usize = 100_000;
-    /// The default **loop-work** budget: how much a converted `@loop`
-    /// recursion may spend before the run is refused — one unit per iteration
-    /// and one per application inside it.
-    ///
-    /// A loop is the cheap path — it does not nest, so neither the depth guard
-    /// nor the emit ceiling bounds it, and the whole point of converting a
-    /// recursion is to run a trip count the *expansion* could not afford. So it
-    /// is bounded by its own work rather than by the apply budget, and the
-    /// bound is what keeps an accidentally non-terminating marked loop (a step
-    /// that never changes the state it tests) a diagnostic rather than a hang.
-    /// Each iteration still instantiates the body, so this also bounds the
-    /// module's growth exactly as [`Self::MAX_APPLY_TOTAL`] does.
-    pub const MAX_LOOP_WORK: usize = 100_000;
     pub const MAX_DEEP_DEPTH: usize = 300_000;
 
     pub fn new() -> Self {
@@ -45,7 +32,6 @@ impl<P: Program> Module<P> {
             functions: SlotMap::with_key(),
             apply_depth_limit: Self::MAX_APPLY_DEPTH,
             apply_total_limit: Self::MAX_APPLY_TOTAL,
-            loop_work_limit: Self::MAX_LOOP_WORK,
             evaluate_depth_limit: Self::MAX_DEEP_DEPTH,
             unify_errors: Vec::new(),
             eval_errors: Vec::new(),
@@ -57,8 +43,6 @@ impl<P: Program> Module<P> {
             global_ext: P::GlobalExt::default(),
             apply_depth: 0,
             apply_total: 0,
-            loop_work: 0,
-            active_loops: 0,
             deep_depth: 0,
             budget_exhausted: None,
         }
@@ -93,7 +77,7 @@ impl<P: Program> Module<P> {
     }
 
     /// Resets the per-run evaluation budgets ([`Self::apply_depth`],
-    /// [`Self::apply_total`], [`Self::loop_work`], [`Self::deep_depth`]) so a
+    /// [`Self::apply_total`], [`Self::deep_depth`]) so a
     /// host can drive the module in a long-running loop (e.g. one kernel call
     /// per GUI frame) without the cumulative apply count exhausting
     /// [`Self::apply_total_limit`]. The budgets guard *one* run; a host that
@@ -106,7 +90,7 @@ impl<P: Program> Module<P> {
     pub fn reset_apply_budget(&mut self) {
         self.apply_depth = 0;
         self.apply_total = 0;
-        self.loop_work = 0;
+
         self.deep_depth = 0;
         self.budget_exhausted = None;
     }

@@ -1287,20 +1287,6 @@ pub enum BudgetExhausted {
     /// [`Module::apply_total_limit`] — the work bound that catches a
     /// recursion the lazy graph flattens below the nesting guard.
     ApplyTotal { limit: usize },
-    /// A converted `@loop` recursion ran out of its **loop work budget**
-    /// ([`Module::loop_work_limit`]) without reaching a base: one unit per
-    /// iteration and one per application inside it.
-    ///
-    /// Distinct from [`ApplyTotal`](Self::ApplyTotal) because the two bound
-    /// different things: that budget exists to make a runaway *expansion* fail
-    /// fast, and it is charged per nested level, while a loop is the path whose
-    /// whole point is that its trip count does not cost what an expansion
-    /// costs. Inside a running loop, work is the loop's — an operation in a
-    /// host program is itself an apply, so a loop of N iterations applies N
-    /// times, and charging the apply budget would cap every loop at the count
-    /// the expansion can afford. What this still refuses is the loop that never
-    /// reaches a base, and the recursion inside a step that does the same.
-    LoopWork { limit: usize },
     /// [`Module::evaluate_node_deep`] nested deeper than
     /// [`Module::evaluate_depth_limit`] — deep-evaluating an infinitely
     /// growing value.
@@ -1339,21 +1325,6 @@ pub struct Module<P: Program> {
     /// bounds both.  Defaults to [`Self::MAX_APPLY_TOTAL`]; tests lower it
     /// to trip fast.
     pub apply_total_limit: usize,
-    /// Loop-work guard: a run records a [`BudgetExhausted::LoopWork`] when a
-    /// converted `@loop` recursion has spent more than this while running —
-    /// one unit per iteration and one per application inside it.
-    ///
-    /// Separate from the apply budget because a loop is the *cheap* path: it
-    /// does not nest, and the whole point of converting a recursion is to run a
-    /// trip count the expansion could not afford. It cannot be the apply budget
-    /// either, for a second reason: **an operation in a host program is an
-    /// apply** (the prelude's own function), so a loop of N iterations applies
-    /// roughly N times, and the budget that makes a runaway expansion fail fast
-    /// would cap every loop at the count the expansion can afford.  What this
-    /// bound still refuses is the marked loop that never reaches its base, and
-    /// an unmarked recursion inside a step that does the same.  Defaults to
-    /// [`Self::MAX_LOOP_WORK`]; tests lower it to trip fast.
-    pub loop_work_limit: usize,
     /// Deep-evaluation guard: a run records a
     /// [`BudgetExhausted::EvaluateDepth`] when [`Self::evaluate_node_deep`]
     /// nests deeper than this (deep-evaluating an infinitely growing value,
@@ -1411,12 +1382,6 @@ pub struct Module<P: Program> {
     pub global_ext: P::GlobalExt,
     apply_depth: usize,
     apply_total: usize,
-    /// The work a converted loop has spent while running (see
-    /// [`Module::loop_work_limit`]).
-    loop_work: usize,
-    /// How many converted loops are running right now — the fact that decides
-    /// which budget an application charges (`apply.rs`).
-    active_loops: usize,
     deep_depth: usize,
 }
 
