@@ -21,7 +21,7 @@ holds the layout as named constants and typed accessors (`shape_of`, `kind_of`,
 the language composition read the layout through it. **That "one owner" claim was
 wrong about the lowlevel.** It does not hold the *constants*, but it decodes
 positions — element 0 is a value, element 1 is a type, a pair is 2- or 3-wide —
-in five sites, listed in "The lowlevel readers too" below. What Phase 2 (decision
+in six sites, listed in "The lowlevel readers too" below. What Phase 2 (decision
 D1) did remove was the lowlevel's own *type* representation: there is no
 `type_marker`, no `type_of`, no `is_type` anywhere in the crate, so a lowlevel
 reader with a type question has nothing but the pair to answer it with. That is
@@ -66,9 +66,9 @@ deferred cleaning this component up and asked for this label instead; Phase 5
 narrowed the label to the read side, and Phase 3c of the low-type design
 narrowed it again, to the body's graph walk.
 
-### The lowlevel readers too — five sites, one of them a defect
+### The lowlevel readers too — six sites, and the defect among them is closed
 
-An audit of `crates/lichen-lowlevel` for the pair convention. Five readers, and the
+An audit of `crates/lichen-lowlevel` for the pair convention. Six readers, and the
 distinction that matters is not *how much* each one knows but **whether the value
 it reads is an operand of the operation being performed**:
 
@@ -76,7 +76,8 @@ it reads is an operand of the operation being performed**:
 |---|---|---|
 | `apply.rs:105`, `apply.rs:111` | element 1 of a **parameter** node — the declared type, for the `ApplyError` attribution only | **Wiring.** The apply pass built or cloned the pair it is reading; element 1 is an operand of the check it is performing. |
 | `apply.rs:160` | element 1 of the **return pair** it just cached, to bind the checker's result cell | **Wiring.** `wire_apply_result` is constructing the result; the cell is the third operand of the apply. |
-| `control_flow.rs:488-513` (`pair_value_node`) | a **body's** parameter or return, and a 2..=3 width test, to decide which half is the value | **Type-layer leak.** The caller already resolved this value; the width test is a heuristic standing in for a fact it holds exactly. **This is the defect.** |
+| `resolve.rs` (`pair_value_half`) | a **body's** parameter or return, and a 2..=3 width test, to decide which half is the value | **Encoding reader, and now the lowlevel's own convention.** The caller-stated form (`define_in(domain, node)`) is the one to prefer *where the caller has the value*; where the analysis **starts** from `Function`'s two nodes — `parameter_leaves`, and `loop_conversion.rs`'s state and spine roots — there is no caller to state it, and `Function`'s own docs call those nodes pairs. |
+| `loop_conversion.rs` (`parameter_value_path`, `loop_conversion`) | a template's parameter, to resolve a read to the path into the parameter's value (`s(0)`), and its return, for the spine's roots | **The same standing as `parameter_leaves`.** The loop's analysis is a template-shape question — which node is a branch of the return spine — so it reads the pair the template carries; the caller states only that the function is marked. |
 | `equality.rs:479-488` (`is_static_universe_id`) | a 2-element array whose element 1 points back at the same module and index | **Mixed.** The `[Type, ↺]` universe is the canonical instance, but the predicate is stated as a *generic* graph shape and unifies any two such cycles. It decodes the positions, and reads no meaning. |
 | `evaluation.rs:554` (`table_get_operands`) | element 0 and 1 of a `TableGet`'s operand, which the arm's own check already proved is a 2-element array | **Not an encoding reader.** It is a destructure of `[table, key]`; no pair is involved. |
 
@@ -86,15 +87,19 @@ pass**, not about the crate. `apply.rs` and `control_flow.rs` are in the same cr
 and do learn it. A per-analysis boundary is the honest description; a crate-wide one
 is not.
 
-**The defect is fixed by a caller contract, not by a lowlevel change.** A function's
-`parameter` and `r#return` are `NodeId`s that hold the checker's pair; `Function`
-says nothing about their shape (`lib.rs:1083-1084`). So `Module::control_flow`
-now takes the **domain and codomain values as arguments** — the JIT's own applied
-parameter, which `ParamSlot` already resolves — and `Module::define_in` takes the
-domain value for the same reason. A caller that states the value has done the
-decoding, and the lowlevel is left with no pair to sniff. The apply sites stay: their
-pair is an operand of the operation in hand, which is the same standing
-`lichen-compute`'s `value_of_node` has.
+**The defect is fixed by a caller contract, not by a lowlevel change, and the
+rows above are what is left of it.** A function's `parameter` and `r#return` are
+`NodeId`s that hold the checker's pair; `Function` says nothing about their shape
+(`lib.rs:1083-1084`). So [`Module::define_in`] takes the **domain value as an
+argument** — the JIT's own applied parameter, which `ParamSlot` already resolves —
+and the analysis that *starts* from the pair reads it deliberately rather than
+sniffing for a width: `parameter_leaves` (a function's own leaves) and
+`loop_conversion.rs` (a template's state paths and return spine). A caller that
+states the value has done the decoding; where there is no such caller, the read is
+the lowlevel's own convention about `Function`, which is a stated fact and not a
+heuristic standing in for one. The apply sites stay: their pair is an operand of
+the operation in hand, which is the same standing `lichen-compute`'s
+`value_of_node` has.
 
 **How the sites got there: they were never introduced.** `41bfa9e` ("crates
 refactor") shows `src/lowlevel/{equality,evaluation,function}.rs` arriving as pure
@@ -143,10 +148,10 @@ type instead — which the pass now computes and stores — would remove the las
 of it. That is recorded as the open item in
 [compute-jit-low-types](compute-jit-low-types.md), not as work in flight.
 
-**One part of that residue is closed ahead of it.** Building the body's graph no
-longer needs the pair: `Module::control_flow` takes the domain and codomain values
-from its caller, so the lowlevel's *own* read of a function's `parameter` and
-`r#return` is gone, and with it `parameter_leaves`, `function_values` and the
-2..=3 width test that stood in for the value. What remains of this label is
-`lichen-compute`'s emitter walking the pair on the way *into* that graph, which is
-the item above and is deliberately not in flight.
+**One part of that residue is closed ahead of it.** Building a body's graph no
+longer needs the pair: the graph facts moved to `resolve.rs` without a
+control-flow graph, and the pair reads that remain there are the two the analysis
+*starts* from (`parameter_leaves`, `loop_conversion.rs`) rather than a value the
+caller already held. What remains of this label is `lichen-compute`'s emitter
+walking the pair on the way *into* that graph, which is the item above and is
+deliberately not in flight.

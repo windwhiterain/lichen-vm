@@ -281,6 +281,54 @@ fn host_program(trip: usize) -> String {
     )
 }
 
+/// A kernel body carrying a **marked recursion whose trip count is the
+/// kernel's own count** — a run-time value, so the definition pass cannot
+/// expand it and the checker has to say what it is instead. What comes back is
+/// the conversion's verdict: the shape rule that refused it, or the missing
+/// backend for a shape that converts.
+fn runtime_count_probe(recursion: &str, call: &str) -> String {
+    format!(
+        "--- compute = import \"compute.lichen\" ---\n\
+         p = compute.parallel (cfg => {{\n  n = cfg(0)\n  i = compute.range n\n  {recursion}\n  \
+         compute.write ((compute.Write _)(.to n, .at i, .value {call}))\n}}) \"BACKEND\"\n\
+         compute.read ((compute.Read _)(.from compute.plrun p (8,), .at 3))\n"
+    )
+}
+
+/// The marked recursions the verdict is read from, one per shape: the two
+/// convertible ones (a scalar state and a tuple state) and the three refusals
+/// (a call outside tail position, a mutual recursion, the curried combinator
+/// whose call hides in nested lambdas).
+const VERDICT_ROWS: &[(&str, &str, &str)] = &[
+    (
+        "tail recursion, scalar state",
+        "@loop count = k => if k == 0 then 0 else count (k - 1)",
+        "count i",
+    ),
+    (
+        "tail recursion, tuple state",
+        "@loop sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)",
+        "sum_to (i, 0)",
+    ),
+    (
+        "recursion outside tail position",
+        "@loop steps = k => if k == 0 then 0 else steps (k - 1) + 1",
+        "steps i",
+    ),
+    (
+        "mutual recursion",
+        "@loop even = k => if k == 0 then 1 else odd (k - 1)\n  \
+         @loop odd = k => if k == 0 then 0 else even (k - 1)",
+        "even i",
+    ),
+    (
+        "the `loop` combinator, curried",
+        "@loop loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)\n  \
+         inc = x => x + 1",
+        "loop inc i 0",
+    ),
+];
+
 /// The proposed operator **with its type written out** — the escape P1-33 names
 /// as "the whole difference" for the two-argument curried self-reference.
 const LOOP_ANNOTATED: &str = r#"
@@ -457,6 +505,13 @@ fn main() {
                     diags.join(" | ")
                 ),
             }
+        }
+        println!("  -- the conversion's verdict on a run-time count --");
+        for (name, recursion, call) in VERDICT_ROWS {
+            probe(
+                name,
+                &runtime_count_probe(recursion, call).replace("BACKEND", backend),
+            );
         }
         println!("  -- expressibility --");
         probe(

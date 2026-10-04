@@ -373,13 +373,26 @@ where
             open
         };
         for site in open {
-            self.record_guard(
-                site.node,
-                site.node,
-                site.loc,
-                DiagKind::LoopNotRecorded,
-                None,
-            );
+            // **The conversion is what decides the wording.** The refusal for
+            // an undecided entry is not one fact but two: a shape the
+            // conversion rejects (and which rule rejected it), or a shape that
+            // converts with no backend to consume it. The lowlevel answers
+            // which from the templates, and the rule rides
+            // `DiaryEntry::field` so the message names the cause.
+            let verdict = self
+                .function_of
+                .get(&site.cycle)
+                .map(|&function| self.module.loop_conversion(function));
+            let (kind, rule) = match verdict {
+                Some(Ok(_)) => (DiagKind::LoopNotEmitted, None),
+                Some(Err(refusal)) => (DiagKind::LoopNotRecorded, Some(refusal.name())),
+                // No compiled function for the component: the checker recorded
+                // an entering call but never built the binding (a callee it
+                // could not resolve to a function). Nothing converted, so the
+                // refusal stands unnamed rather than claiming a rule.
+                None => (DiagKind::LoopNotRecorded, None),
+            };
+            self.record_guard(site.node, site.node, site.loc, kind, rule);
         }
     }
 

@@ -232,16 +232,25 @@ impl<P: Program> Module<P> {
     /// What an `Index` node is: a **selection** (it computes a value) or a
     /// **view** of something else (it names one).
     ///
-    /// The views, in the order they are tried: a **`value_of` peel** —
-    /// `Index(pair, 0)` where `pair` is a `[value, type]` pair; an **element of a
-    /// materialised array**, which is the destructuring a slot read leaves behind
-    /// (`read [a, b]` becomes `x(0)`, `x(1)`); and a **parameter read at a
-    /// constant path**, which is the same peel one level down.
+    /// The container rule is the emitter's own (`emit_node`'s `value_of` arm in
+    /// `lichen-compute`), not a second reading of the encoding:
     ///
-    /// And the one that computes: **a `[then, else]` pair indexed by a value the
-    /// graph cannot decide** — the language's conditional, which `LowOperator::
-    /// Index` *is*, because a branch is an ordinary lazy index. Its arms are
-    /// separate values, so a consumer reads them by name.
+    /// - **an operator target at index 0** — `Index(e, 0)` where `e` computes —
+    ///   is a `value_of` peel: the extraction is a view of the computation's
+    ///   own result, so the view is the target itself. (A parameter read at a
+    ///   constant path is resolved *before* this rule fires, by the consumer
+    ///   that knows the parameter — `emit_node`'s parameter-read arm.)
+    /// - **a target holding an array value is the container itself** — a
+    ///   constant index selects the element (the `[value, type]` peel and a
+    ///   tuple's element 0 coincide), and an undecided index into a
+    ///   two-element array is the one `Index` that **computes**: the
+    ///   language's conditional, which `LowOperator::Index` *is*, because a
+    ///   branch is an ordinary lazy index. Its arms are separate values, so a
+    ///   consumer reads them by name.
+    ///
+    /// Anything else — a computed container, a constant index past the end —
+    /// is not a view this graph can see through, and [`None`] leaves the node
+    /// to be treated as a computation.
     ///
     /// **Nothing here decides which arm runs.** Both arms are values in the body,
     /// which is what leaves a branch available to take.
@@ -256,26 +265,15 @@ impl<P: Program> Module<P> {
         let operands = self.operand_pair(operation.operand?, "Index").ok()?;
         let (target, index) = (operands[0], operands[1]);
         let constant = self.usize_value(index);
-        let array = self.pair_value_half(target);
-        if constant == Some(0)
-            && let Some(element) = array.and_then(|array| self.item_of(array, 0))
-        {
-            return Some(Selection::Views(element));
+        if constant == Some(0) && self.node_operation(target).is_some() {
+            return Some(Selection::Views(target));
         }
-        if let (Some(k), Some(array)) = (constant, array)
-            && let Some(element) = self.item_of(array, k)
-        {
-            return Some(Selection::Views(element));
+        if let Some(k) = constant {
+            return self.item_of(target, k).map(Selection::Views);
         }
-        if constant.is_some() {
-            return None;
-        }
-        // SAFETY: every `array` here is a live node of `self`.
-        match array {
-            Some(array) => {
-                let arms = unsafe { self.array_items(array) }.map_or(0, |items| items.len());
-                (arms == 2).then_some(Selection::Computed)
-            }
+        // SAFETY: `target` is a live node of `self`.
+        match unsafe { self.array_items(target) } {
+            Some(items) => (items.len() == 2).then_some(Selection::Computed),
             None => None,
         }
     }
@@ -303,7 +301,7 @@ impl<P: Program> Module<P> {
     /// a *pair*, the apply resolves its arity, and the evaluator peels
     /// `Index(pair, 0)`. **No shape is derived here**, and the pass in
     /// [`crate::low_type`] still learns no layout.
-    fn pair_value_half(&self, node: NodeId) -> Option<NodeId> {
+    pub(crate) fn pair_value_half(&self, node: NodeId) -> Option<NodeId> {
         // SAFETY: `node` is a live node of `self`.
         let items = unsafe { self.array_items(node) }?;
         if !(2..=3).contains(&items.len()) {
@@ -347,7 +345,7 @@ impl<P: Program> Module<P> {
     }
 
     /// The `n` a node holds, when it holds a plain integer literal.
-    fn usize_value(&self, node: NodeId) -> Option<usize> {
+    pub(crate) fn usize_value(&self, node: NodeId) -> Option<usize> {
         match self.structural_value(node) {
             Some(LowValue::USize(n)) => Some(n as usize),
             _ => None,
