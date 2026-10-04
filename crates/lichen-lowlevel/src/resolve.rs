@@ -292,7 +292,20 @@ impl<P: Program> Module<P> {
         // lives here or in the module it came from, so the test reads whatever the
         // operand is rather than insisting it be this module's.
         if let Some(k) = self.usize_value(index.node) {
-            return self.item_of(target.node, k).map(Selection::Views);
+            if let Some(element) = self.item_of(target.node, k) {
+                return Some(Selection::Views(element));
+            }
+            // **A computed target at index 0 is the peel the checker makes over a
+            // call's result** — `value_of` applied to an expression that computes.
+            // The operator's result *is* the pair's value, so the peel names the
+            // operator rather than anything under it.
+            if k == 0
+                && let AnyNodeId::Dynamic(node) = target.node
+                && self.node_operation(node).is_some()
+            {
+                return Some(Selection::Views(node));
+            }
+            return None;
         }
         // SAFETY: every operand here is a live node of this module or of a frozen
         // module that outlives the reference it was read through.

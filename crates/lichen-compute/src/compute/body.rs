@@ -191,22 +191,88 @@ where
             return Err(super::kernel_body_too_deep());
         }
         self.depth += 1;
-        // **A literal is a value, and it is answered before anything else** —
-        // before the operation test and before the class walk. A node can hold a
-        // decided literal *and* have no operation and no class member that
-        // computes it, and answering it as opaque would refuse a constant the
-        // graph has already decided.
-        let value = match self.literal(node) {
-            Some(value) => value,
-            None => match self.module.define_in(self.domain, node) {
-                Define::Parameter(leaf) => self.parameter(self.slot_of(leaf)?)?,
-                Define::Computed(definition) => self.definition(definition)?,
-                Define::Opaque => self.opaque(node)?,
+        // **A read of the domain at a path, matched structurally.** `x(0)` on a
+        // tuple domain is a chain of `Index` nodes ending at the parameter, and the
+        // walk recognises it from the chain rather than from the class — which
+        // matters because the deep pass may have unified the parameter with the
+        // argument it was passed, so the node the read names is a *computation* and
+        // only the chain says where it came from.
+        let value = match self.parameter_path(node) {
+            Some(slot) => self.parameter(slot)?,
+            // **A literal is a value, answered before anything else** — before the
+            // operation test and before the class walk. A node can hold a decided
+            // literal *and* have no operation and no class member that computes it,
+            // and answering it as opaque refuses a constant the graph already
+            // decided.
+            None => match self.literal(node) {
+                Some(value) => value,
+                None => match self.module.define_in(self.domain, node) {
+                    Define::Parameter(leaf) => self.parameter(self.slot_of(leaf)?)?,
+                    Define::Computed(definition) => self.definition(definition)?,
+                    Define::Opaque => self.opaque(node)?,
+                },
             },
         };
         self.depth -= 1;
         self.values.insert(node, value);
         Ok(value)
+    }
+
+    /// The entry parameter a read of the domain at a path names, if that is what
+    /// `node` is.
+    ///
+    /// **Matched from the chain, not from the class of the base.** A parameter the
+    /// deep pass unified with an argument is *a computation* by the time codegen
+    /// sees it, and a class walk finds nothing there; the chain of `Index` nodes
+    /// is what says `x(1)` is a read of the domain rather than of anything else.
+    ///
+    /// **The base is matched against the parameter slots themselves** — each
+    /// slot's pair and its value — rather than against one domain node the caller
+    /// happened to hand over. That is the old walk's test, and it is the robust
+    /// one: a struct parameter, a tuple domain and a scalar all reach the walk
+    /// through a different node, and the slots are what all three share.
+    ///
+    /// The offsets sum because **the entry block's parameters are the domain's
+    /// leaves in flattening order**, so a path's total offset is its slot.
+    fn parameter_path(&self, node: NodeId) -> Option<usize> {
+        let mut offset = 0usize;
+        let mut cursor = node;
+        loop {
+            // **The base has no operation, and that is the end of the chain** —
+            // not a failure to answer. `?` here would return from the whole walk
+            // on the ordinary case.
+            let Some(operation) = self.module.node_operation(cursor) else {
+                break;
+            };
+            if !matches!(
+                AsEnum::<LowOperator>::as_enum(&operation.operator),
+                Some(LowOperator::Index)
+            ) {
+                break;
+            }
+            let Some(arguments) = self.arguments(cursor).ok() else {
+                return None;
+            };
+            let (Some(target), Some(index)) = (arguments.first(), arguments.get(1)) else {
+                return None;
+            };
+            let Some(step) = self.module.usize_value(*index) else {
+                return None;
+            };
+            offset += step;
+            let AnyNodeId::Dynamic(target) = target else {
+                return None;
+            };
+            cursor = *target;
+        }
+        let root = self.module.class_root(cursor);
+        self.params
+            .iter()
+            .any(|slot| {
+                root == self.module.class_root(slot.pair)
+                    || root == self.module.class_root(slot.value)
+            })
+            .then_some(offset)
     }
 
     /// The domain's leaves, flattened — the ABI's argument list.
@@ -550,10 +616,44 @@ where
             },
             None => "no index at all".to_string(),
         };
+        // **The base the chain reaches**, so a reader can see whether this is the
+        // domain, a pair, or something else entirely — which is the whole question
+        // when a read should have placed and did not.
+        let mut base = Some(node);
+        let mut walked = 0usize;
+        while let Some(cursor) = base {
+            let Some(operation) = self.module.node_operation(cursor) else {
+                break;
+            };
+            if !matches!(
+                AsEnum::<LowOperator>::as_enum(&operation.operator),
+                Some(LowOperator::Index)
+            ) {
+                break;
+            }
+            let Ok(arguments) = self.arguments(cursor) else {
+                break;
+            };
+            let (Some(target), Some(step)) = (arguments.first(), arguments.get(1)) else {
+                break;
+            };
+            walked += 1;
+            let _ = self.module.usize_value(*step);
+            let AnyNodeId::Dynamic(target) = target else {
+                break;
+            };
+            base = Some(*target);
+        }
+        let base_kind = match base {
+            Some(base) => format!("{base:?}"),
+            None => "nothing".to_string(),
+        };
         Err(format!(
             "a kernel body's index cannot be placed: its target is {target_kind} and its index is \
              {index_kind}. A view needs a constant index into an array, and a selection needs an \
-             undecided index into a two-element array; neither is what this one is"
+             undecided index into a two-element array; neither is what this one is. The chain runs \
+             {walked} step(s) and ends at {base_kind}, which is class-equal to the domain: {}",
+            self.module.class_root(base.unwrap_or(node)) == self.module.class_root(self.domain)
         ))
     }
 
