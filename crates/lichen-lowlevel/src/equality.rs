@@ -4,9 +4,8 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, FunctionIdentity,
-    FunctionTypeUnify, LowOperator, LowShape, LowValue, Module, Node, NodeId, Operation, Program,
-    StaticFunctionRef, StaticModuleCache, StaticNodeId, ValueExt as _, ancestors::AncestorPairs,
-    is_unbound,
+    FunctionTypeUnify, LowShape, LowValue, Module, Node, NodeId, Program, StaticFunctionRef,
+    StaticNodeId, ValueExt as _, ancestors::AncestorPairs, is_unbound,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -944,177 +943,6 @@ impl<P: Program> Module<P> {
         })
     }
 
-    /// Whether `rep`'s class is an all-unbound skeleton: every member is a
-    /// pure cell or an array whose elements are all skeletons — no
-    /// computation, no concrete value.  A pending computation merges onto
-    /// such a class without erasing anything; a class that holds any
-    /// concrete value or operation is not a skeleton, and binding a
-    /// computation onto it would corrupt it.
-    ///
-    /// "No concrete value" is judged on the node's **value slot**, never on
-    /// the [`LowValue`] projection: an extension atom (a value `as_enum`
-    /// cannot see) is a decided value the lowlevel cannot read, and treating
-    /// it as absent would merge a computation onto a class that holds one.
-    fn class_is_skeleton(&self, rep: NodeId) -> bool {
-        // One resolution cache for the whole class walk: an array member's
-        // static elements usually name one module.
-        let mut cache = StaticModuleCache::new();
-        let mut member = rep;
-        loop {
-            if self.nodes[member].operation.is_some() {
-                return false;
-            }
-            match self.nodes[member].value {
-                None => {}
-                Some(value) => match value.as_enum() {
-                    Some(LowValue::Parameterized) => {}
-                    Some(LowValue::Array(array)) => {
-                        // SAFETY: `array` is the payload of `member`, a live node
-                        // of this module, so its home block has not been dropped.
-                        let items = unsafe { array.items() };
-                        let mut seen = HashSet::new();
-                        if items
-                            .iter()
-                            .any(|item| !self.value_is_skeleton(&mut cache, item.node, &mut seen))
-                        {
-                            return false;
-                        }
-                    }
-                    // Any other decided value — a structural scalar or an
-                    // extension atom — is concrete content.
-                    _ => return false,
-                },
-            }
-            let Some(next) = self.nodes[member].meta().next() else {
-                return true;
-            };
-            member = next;
-        }
-    }
-
-    /// Whether the subtree of array values rooted at `node` is all
-    /// skeletons; `seen` cuts the cycle of a self-referential structure
-    /// (which is a skeleton only if its own elements are).  A static ref is
-    /// a decided leaf: its solved flag says whether it reads `Parameterized`
-    /// (a skeleton position) or concrete (not).  An extension atom — a value
-    /// the [`LowValue`] projection cannot see — is decided content, never an
-    /// empty position.  `cache` is the enclosing walk's static-module
-    /// resolution cache.
-    fn value_is_skeleton(
-        &self,
-        cache: &mut StaticModuleCache<P>,
-        node: AnyNodeId,
-        seen: &mut HashSet<AnyNodeId>,
-    ) -> bool {
-        if !seen.insert(node) {
-            return true;
-        }
-        let ok = match node {
-            AnyNodeId::Static(sref) => cache.node_parameterized(self, sref),
-            Dyn(node) => {
-                self.nodes[node].operation.is_none()
-                    && match self.nodes[node].value {
-                        None => true,
-                        Some(value) => match value.as_enum() {
-                            Some(LowValue::Parameterized) => true,
-                            // SAFETY: `array` is the payload of `node`, a live node
-                            // of this module, so its home block has not been
-                            // dropped.
-                            Some(LowValue::Array(array)) => unsafe { array.items() }
-                                .iter()
-                                .all(|item| self.value_is_skeleton(cache, item.node, seen)),
-                            // Any other decided value — a structural scalar or
-                            // an extension atom — is concrete content, not an
-                            // empty position.
-                            _ => false,
-                        },
-                    }
-            }
-        };
-        seen.remove(&node);
-        ok
-    }
-
-    /// Whether `op`'s pending `Index` reads a cell of `rep`'s own class — a
-    /// self-reference.  The read's target must be resolvable (a concrete
-    /// operand, index, and container); a read whose target is not yet known
-    /// counts as a pending computation, conservatively.
-    fn is_self_read(&self, op: NodeId, rep: NodeId) -> bool {
-        let Some(target) = self.index_target(op) else {
-            return false;
-        };
-        // A static target is not a class member — never a self-read.
-        let AnyNodeId::Dynamic(target) = target else {
-            return false;
-        };
-        let mut n = target;
-        while let Some(parent) = self.nodes[n].equality.parent() {
-            n = parent;
-        }
-        n == rep
-    }
-
-    /// The element an `Index` operation reads, when the operand array, the
-    /// index, and the container are all concrete.  The element is an
-    /// [`AnyNodeId`]: a static container yields a static element, which the
-    /// alias machinery refuses (no class behind it).
-    fn index_target(&self, op: NodeId) -> Option<AnyNodeId> {
-        let Operation { operator, operand } = self.nodes[op].operation?;
-        if !matches!(operator.as_enum(), Some(LowOperator::Index)) {
-            return None;
-        }
-        let operand = operand?;
-        let operands = self.nodes[operand].value?;
-        let Some(LowValue::Array(array)) = operands.as_enum() else {
-            return None;
-        };
-        // SAFETY: `array` is the payload of `operand`, a live node of this
-        // module, so its home block has not been dropped.
-        let operands = unsafe { array.items() };
-        if operands.len() != 2 {
-            return None;
-        }
-        let index_value = self.node_value(operands[1].node)?;
-        let Some(LowValue::USize(index)) = index_value.as_enum() else {
-            return None;
-        };
-        let container_value = self.node_value(operands[0].node)?;
-        let Some(LowValue::Array(container_ptr)) = container_value.as_enum() else {
-            return None;
-        };
-        // SAFETY: `container_ptr` is the array payload of a live node of this
-        // module (read through `Self::node_value` just above), so its home
-        // block has not been dropped.
-        unsafe { container_ptr.items() }
-            .get(index)
-            .map(|item| item.node)
-    }
-
-    /// Whether `rep`'s class holds a suspended **field/positional read**: an
-    /// `Index` operation whose operand container (or index) is not yet
-    /// concrete, so the read is a lazy reference that resolves once the
-    /// container binds.  Distinct from a resolved read and from a non-`Index`
-    /// model computation (arithmetic, a dependent-type branch).
-    fn class_has_index_read(&self, rep: NodeId) -> bool {
-        let Some(op) = self.class_first_op(rep) else {
-            return false;
-        };
-        let Some(Operation { operator, .. }) = self.nodes[op].operation else {
-            return false;
-        };
-        if !matches!(operator.as_enum(), Some(LowOperator::Index)) {
-            return false;
-        }
-        self.index_target(op).is_none()
-    }
-
-    /// The first operation-bearing member of `rep`'s class, if any — the node
-    /// whose operator the class's computation belongs to.
-    fn class_first_op(&self, rep: NodeId) -> Option<NodeId> {
-        self.class_members(rep)
-            .find(|&member| self.nodes[member].operation.is_some())
-    }
-
     /// Join `reader` into `target`'s class when the target is a pure cell —
     /// the evaluation-side counterpart of the read's own resolution.  A read of
     /// an inference variable is a reference, so the reader unifies with the
@@ -1189,19 +1017,8 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Drop `dead`'s claim on its class's carrier: the member is being released,
-    /// so the class must not name it any more.  The class's value is not lost —
-    /// every member that could take it has it — and the caller re-elects among
-    /// the survivors and re-points the carrier ([`Self::reselect_class_carrier`]).
-    pub(crate) fn forget_class_carrier(&mut self, dead: NodeId) {
-        let representative = self.class_root(dead);
-        if self.nodes[representative].class_carrier == Some(dead) {
-            self.nodes[representative].class_carrier = None;
-        }
-    }
-
-    /// Re-point a class's carrier after its member list was rebuilt — the
-    /// re-election half of [`Self::forget_class_carrier`].  It names the first
+    /// Re-point a class's carrier after its member list was rebuilt and a
+    /// representative re-elected ([`Module::flatten_class`]).  It names the first
     /// survivor that still holds a decided value, so a class whose carrier died
     /// with a dropped block keeps answering from the value the survivors carry.
     pub(crate) fn reselect_class_carrier(&mut self, members: &[NodeId]) {
@@ -1214,64 +1031,8 @@ impl<P: Program> Module<P> {
         self.nodes[representative].class_carrier = carrier;
     }
 
-    /// Whether a computed result `b` is compatible with the value `a` that a
-    /// class committed (the other side of a deferred unification).  An unbound
-    /// cell on either side is a wildcard — it binds to the other — so a free
-    /// pattern element (`?elem`) matches whatever the computation produced;
-    /// two concrete values must agree.  Arrays recurse elementwise; a cycle is
-    /// cut by the path guard (the self-referential universe).  Pure, read-only:
-    /// the counterpart of [`Self::key_eq`](crate::table::Module::key_eq), but
-    /// tolerant of the unbound cells a checked class may still hold.
-    fn reconcile_value(
-        &self,
-        a: P::Value,
-        b: P::Value,
-        path: &mut AncestorPairs<AnyNodeId>,
-    ) -> bool {
-        // A free (unbound) cell matches anything — it resolves by binding.
-        if is_unbound(Some(a)) || is_unbound(Some(b)) {
-            return true;
-        }
-        match (a.as_enum(), b.as_enum()) {
-            (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
-                // SAFETY: `pa`/`pb` are values the caller read out of live
-                // nodes of this module (`Self::node_value`), so their home
-                // blocks have not been dropped.
-                let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
-                left.len() == right.len()
-                    && left
-                        .iter()
-                        .zip(right.iter())
-                        .all(|(ia, ib)| self.reconcile_node(ia.node, ib.node, path))
-            }
-            _ => a.value_eq(&b),
-        }
-    }
-
-    /// [`Self::reconcile_value`] at the node level.
-    fn reconcile_node(
-        &self,
-        a: AnyNodeId,
-        b: AnyNodeId,
-        path: &mut AncestorPairs<AnyNodeId>,
-    ) -> bool {
-        if a == b {
-            return true;
-        }
-        if path.contains(a, b) {
-            return true;
-        }
-        path.insert(a, b);
-        let ok = match (self.node_value(a), self.node_value(b)) {
-            (Some(va), Some(vb)) => self.reconcile_value(va, vb, path),
-            // A node without a value is unknown (free or released) — a
-            // wildcard, never a conflict.
-            _ => true,
-        };
-        path.remove(a, b);
-        ok
-    }
-
+    /// Record a conflict between two **classes** — the pair a unification walked
+    /// to, with the descent that reached it.
     fn record_error(
         &mut self,
         ra: NodeId,
