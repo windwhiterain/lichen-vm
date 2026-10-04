@@ -22,7 +22,7 @@ use waffle::{
     Export, ExportKind, Func, FuncDecl, Import, ImportKind, Module, Signature, SignatureData, Type,
 };
 
-use super::lower::lower_fragment;
+use super::flow::lower_fragment;
 use super::mixed::refuse_mixed_classes;
 use crate::compute::{buffer_import_name, param_classes};
 
