@@ -1,6 +1,0 @@
----
-  order = "0"
-  output = "3: Int"
----
-add = x => y => x + y
-add 1 2
