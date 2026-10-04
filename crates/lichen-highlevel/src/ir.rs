@@ -153,6 +153,14 @@ impl ChildRange {
     pub const EMPTY: ChildRange = ChildRange { start: 0, end: 0 };
 }
 
+/// Push `id` when an `Option` operand is present — the shape every optional
+/// operand field of [`ExprKind::children`] has.
+fn push_opt(id: &Option<ExprId>, push: &mut impl FnMut(ExprId)) {
+    if let Some(id) = id {
+        push(*id);
+    }
+}
+
 /// Append `values` to an arena and return the half-open [`ChildRange`] they
 /// occupy.  Every variadic arena write goes through here, so a range and the
 /// push it describes cannot disagree.
@@ -303,6 +311,21 @@ pub enum ExprKind<L> {
         parameter_attribute: Option<ExprId>,
         r#return: ExprId,
         parent: Option<ExprId>,
+        /// The `@loop` marker, carried from the source binding onto the
+        /// `Function` node its value compiled to — a marked binding's node
+        /// **is** its value's node (the frontend transplants one into the
+        /// other), so the binding's mark and the function's are the same fact.
+        ///
+        /// The marker is **permission, not a command**: it says this
+        /// function's recursion *may* become a loop, and the default is still
+        /// the unroll whenever the trip count is decidable
+        /// (`docs/notes/loop-conversion.md` §1.1).  It is the only thing the
+        /// evaluator has to go on, so it rides here rather than being
+        /// re-derived from the source.
+        ///
+        /// `false` for every function the source did not mark, which is the
+        /// overwhelming majority and must behave exactly as it always did.
+        looping: bool,
     },
     /// `{ function, argument }`.
     Apply { function: ExprId, argument: ExprId },
@@ -523,6 +546,109 @@ pub enum ExprKind<L> {
 }
 
 impl<L> ExprKind<L> {
+    /// Every expression id this kind holds, in declaration order: the named
+    /// fields *and* the variadic kinds' arena range, resolved to ids.
+    ///
+    /// The complete child list, which is what a walk over the IR needs —
+    /// [`IR::range_children`] alone is the variadic arena only, so a descent
+    /// built on it would skip every named operand (`Apply`, `BinOp`, `Index`,
+    /// …) and miss most of the graph.  The non-variadic kinds are named rather
+    /// than caught by a wildcard, for the same reason
+    /// [`Self::repoint`] names them: a new kind that forgets to list its
+    /// children here is a walk that silently skips it.
+    ///
+    /// A [`Self::Function`]'s `parent` is **not** an operand — it names the
+    /// enclosing function's node, not an expression of this body — so it is
+    /// left out, and the list is exactly the subtree the checker compiles.
+    pub fn children(&self, ir: &IR<impl crate::attr::AttrSpec, L>) -> Vec<ExprId> {
+        let mut out = Vec::new();
+        let mut push = |id: ExprId| out.push(id);
+        match self {
+            ExprKind::Literal(_)
+            | ExprKind::Parameter
+            | ExprKind::Placeholder
+            | ExprKind::ErrorBlock
+            | ExprKind::Static { .. } => {}
+            ExprKind::Function {
+                parameter,
+                parameter_type,
+                parameter_attribute,
+                r#return,
+                ..
+            } => {
+                push(*parameter);
+                push_opt(parameter_type, &mut push);
+                push_opt(parameter_attribute, &mut push);
+                push(*r#return);
+            }
+            ExprKind::Apply { function, argument } => {
+                push(*function);
+                push(*argument);
+            }
+            ExprKind::BinOp { left, right, .. } => {
+                push(*left);
+                push(*right);
+            }
+            ExprKind::Instantiate {
+                type_expr, value, ..
+            } => {
+                push(*type_expr);
+                push(*value);
+            }
+            ExprKind::Record { value, .. } => push(*value),
+            ExprKind::Convert { value, .. } => push(*value),
+            ExprKind::Assert { condition } => push(*condition),
+            ExprKind::Index { array, index } => {
+                push(*array);
+                push(*index);
+            }
+            ExprKind::RawIndex { container, index } => {
+                push(*container);
+                push(*index);
+            }
+            ExprKind::Field { container, key } => {
+                push(*container);
+                push(*key);
+            }
+            ExprKind::NamedField { container, .. } | ExprKind::RawNamedField { container, .. } => {
+                push(*container);
+            }
+            ExprKind::Find { container, key } => {
+                push(*container);
+                push(*key);
+            }
+            ExprKind::Annotation { value, r#type, .. } => {
+                push(*value);
+                push_opt(r#type, &mut push);
+            }
+            ExprKind::TypeFunction {
+                parameter,
+                r#return,
+            } => {
+                push(*parameter);
+                push(*r#return);
+            }
+            ExprKind::TypeArray {
+                element_type,
+                length,
+            } => {
+                push(*element_type);
+                push(*length);
+            }
+            ExprKind::Tuple(range)
+            | ExprKind::TypeTuple(range)
+            | ExprKind::Array(range)
+            | ExprKind::Set(range)
+            | ExprKind::Table(range)
+            | ExprKind::ShallowArray { range, .. }
+            | ExprKind::TypeStruct { fields: range, .. }
+            | ExprKind::NativeCall { args: range, .. } => {
+                out.extend_from_slice(&ir.children[range.start as usize..range.end as usize]);
+            }
+        }
+        out
+    }
+
     /// Replace every `from` reference in the kind's own fields with `to` —
     /// one half of [`IR::repoint`].  The variadic kinds hold ranges into the
     /// children arena, not ids; the arena is [`IR::repoint`]'s other half.
@@ -790,6 +916,50 @@ impl<A: AttrSpec, L> IR<A, L> {
     ) -> ExprId {
         let range = extend_range(&mut self.children, elements.iter().copied());
         self.alloc(make(range))
+    }
+
+    /// The children of a **variadic** expression (`Tuple`, `TypeTuple`,
+    /// `Array`, `TypeStruct`, `ShallowArray`, `Table`, `NativeCall`).
+    ///
+    /// The kinds that store their children in named fields rather than an
+    /// arena range are named rather than caught by a wildcard: this is the
+    /// *open* end of the encoding — a new kind that stores its children as a
+    /// [`ChildRange`] must be added to the range arm, and a wildcard would let
+    /// it compile and then panic at run time.  One reads as no children (not
+    /// an `unreachable!`) so a caller that only ever passes a variadic kind
+    /// needs no knowledge of which kinds exist; a non-variadic kind reaching
+    /// here is a caller's mistake, and `debug_assert` says so.
+    ///
+    /// **The checker's own `range_children` is the authority, not this.** It
+    /// already spelled this list out — including `Set`, which the first draft
+    /// of this function left out, which is the drift a second list invites.
+    /// This is kept as the *closure* end: a caller's mistake reads as a
+    /// `debug_assert` naming itself rather than a wrong child list.
+    pub fn range_children(&self, e: ExprId) -> Vec<ExprId> {
+        let range = match self.expr[e.0 as usize].kind {
+            ExprKind::Tuple(range)
+            | ExprKind::TypeTuple(range)
+            | ExprKind::Array(range)
+            | ExprKind::Set(range)
+            | ExprKind::ShallowArray { range, .. }
+            | ExprKind::Table(range) => range,
+            ExprKind::TypeStruct { fields, .. } => fields,
+            ExprKind::NativeCall { args, .. } => args,
+            _ => {
+                debug_assert!(
+                    false,
+                    "range_children on a kind whose children are named fields, not an arena range"
+                );
+                return Vec::new();
+            }
+        };
+        self.children[range.start as usize..range.end as usize].to_vec()
+    }
+
+    /// The children of `e` — every kind, named fields and arena alike.  See
+    /// [`ExprKind::children`], which is the authority this defers to.
+    pub fn children(&self, e: ExprId) -> Vec<ExprId> {
+        self.expr[e.0 as usize].kind.children(self)
     }
 
     pub fn set_root(&mut self, root: ExprId) {

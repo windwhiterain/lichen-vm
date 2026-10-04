@@ -383,6 +383,16 @@ where
             ),
             None => "this binding never terminates (non-terminating recursion)".to_string(),
         },
+        DiagKind::LoopNotRecorded => {
+            // The whole point of the marker is that the program *said* this is a
+            // loop, so the wording names what it said, what could not be
+            // decided, and what is missing — the three facts a reader needs to
+            // know it is a refusal rather than a miscompile.
+            "this call is a recursion of a `@loop`-marked binding, and its trip \
+             count is not decided before the body is lowered — no loop has been \
+             recorded for it, so the call is refused rather than expanded"
+                .to_string()
+        }
     }
 }
 

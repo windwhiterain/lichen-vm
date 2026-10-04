@@ -16,6 +16,9 @@
 > [§8.4](#84-unmerged-branches-and-exactly-what-each-needs) is what the two unmerged
 > branches need, and [§8.5](#85-the-critical-path-to-the-acceptance-case) is the
 > critical path to the acceptance case.
+> [§8.6](#86-nothing-produces-a-loop) is the finding that reorders the reader's
+> expectations of step 4: **nothing in the tree produces a loop**, and the reason
+> is not in the evaluator.
 >
 > **Four decisions are closed** and are not to be re-opened without a new
 > reason: the **surface** is a `loop` keyword on the function; the **scope** is
@@ -376,8 +379,10 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
 - **The wasm backend** — walks the structure and emits `If` and `While`. An `if`
   frame *is* the join; a `while` is a `loop` wrapped in a `block` so its two exits
   agree; a carried value is a local, because a `br` to a loop label takes no
-  operands. **Straight-line fragments are byte-identical to the pre-change
-  emitter.**
+  operands. **The reader exists; nothing writes the document it reads** — see
+  [§8.6](#86-nothing-produces-a-loop). The hand-written emitter this bullet
+  describes was withdrawn and replaced by **`waffle`**; straight-line fragments
+  are not byte-identical to the pre-change emitter, which nothing asserts.
 - **The emitter depth ceiling** — `emit_node` is `#[stacksafe]` and budgeted at
   `MAX_KERNEL_BODY_DEPTH` = 512, so a body too deep to lower is refused by name
   instead of overflowing the stack.
@@ -389,12 +394,14 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
    instructions and *then* the `loop` opcode, so the condition was computed once
    before the loop and never re-tested. Reordering it was attempted, hit four
    separate defects — all of them consequences of tracking the operand stack by hand
-   — and was **withdrawn** in favour of a slot-based emitter:
-   [wasm-control-flow](wasm-control-flow.md) §2 has the four and §4 the shape to
-   build. Until that lands, the arm **refuses a loop by name** rather than
-   half-emitting one, so no body with a loop is mis-compiled. The one independent bug
-   the attempt did find — every block type being declared *after* the type section was
-   serialized — is fixed.
+   — and was **withdrawn**. What replaced it is **`waffle`**
+   ([wasm-control-flow](wasm-control-flow.md) §5), which owns the slot-first
+   pipeline; the hand-written emitter is deleted and the straight-line path lowers
+   through it ([wasm-backend-handoff](wasm-backend-handoff.md) §3.1). **The loop
+   itself is §8.5 step 2a**, and it is blocked behind §8.6 rather than behind
+   anything in this emitter. The one independent bug the withdrawn attempt found —
+   every block type being declared *after* the type section was serialized — is
+   fixed.
 2. **`passed_out` is under-specified — CLOSED.** The contract is now stated in the
    IR's own doc (`crates/lichen-kernel-ir/src/body.rs`, `Terminator::While`): the
    loop's whole state is the tuple of `carried` values the header's instructions
@@ -501,6 +508,8 @@ list now turns on:**
    piece and the one no branch has started: the recorded structure itself, the
    defunctionalisation §3 step 2, and §4's shape rules. It can be validated against
    the SPIR-V backend once step 3 lands, and against the CPU one once 2a does.
+   **Read [§8.6](#86-nothing-produces-a-loop) before sizing it** — the first
+   link of the chain is missing, and not in the evaluator.
 5. **Run the reduction on both backends**, past the 2000-apply budget and the 512
    level ceiling, at more than one length so the count is demonstrably not a
    compile-time constant.
@@ -508,6 +517,65 @@ list now turns on:**
 **Do not start 3 before 1.** Doing SPIR-V first against a contract that is already
 known to be wrong is how the `br_if` bug above came about, and it is the one
 mistake this section exists to prevent.
+
+### 8.6 Nothing produces a loop
+
+**Step 4's "the recorded structure itself" is not a piece of evaluator work, and
+§8.5 has been under-stating it.** Reading the tree rather than the plan: the chain
+this feature is a chain of — *the evaluator records a loop → the JIT reads one → a
+backend emits one* — has **no first link**, and the gap is not in
+`feature/eval-loop-recording`. Four facts, each one a read of the code rather than
+an inference:
+
+1. **Nothing in production builds a non-straight-line `KernelBody`.**
+   `KernelFragment::body` is reached through `From<Vec<KernelInstr>>`, which is
+   `KernelBody::straight_line` — a `Flow::Block` with `entry: None` and a
+   `Return`. The only `Flow::While` / `Terminator::While` constructions anywhere in
+   the tree are in `lichen-compute`'s `kernel_intern_tests`: hand-built bodies
+   that prove the IR can *express* a loop, not that anything **produces** one.
+2. **The lowlevel graph cannot express control flow at all.** `LowOperator` is
+   exactly `Index | Apply | TableGet`; a `Node`'s `operation` is **one** operator
+   and **one** operand array, defined once by `add_node` or
+   `close_operation_cycle` and never replaced. There is no branch, no label, no
+   merge, and no phi.
+3. **`Block` in lowlevel is a garbage-collection unit** — an arena, with a
+   `Bump` and a parent/child chain for collection. It is not a basic block, and
+   `TraceContext::node_block` reads as though it were. The name collision is
+   between `lichen_lowlevel::BlockId` (an arena) and `KernelBody`'s `BlockId` (a
+   control-flow label), and the two are in the same feature.
+4. `close_operation_cycle` is the nearest existing thing and it is **not** a
+   control-flow cycle: it closes a *value* cycle, where a node's operand is only
+   nameable after the node exists. It is the right shape for "the back edge" at
+   the value level and says nothing about where control goes.
+
+**So producing a `Flow::While` needs the graph to be able to say two things it
+cannot say** — "this call does not return here" and "this value crosses that
+edge" — and that is a decision about the graph, not a matter of finishing the
+evaluator's half. §8.2's "the wasm backend walks the structure and emits `If` and
+`While`" is therefore true only of the reader: **the document exists and nobody
+writes one.**
+
+#### The fork, and what each answer costs
+
+Not decided here. Three shapes, and the costs are structural reads — none of them
+measured.
+
+| | the shape | what it costs, and what it buys |
+|---|---|---|
+| **A** | a loop node **in the graph** — a new non-value node kind, with operands for header/body/exit and the carried value | **Buys** §3's "runs in evaluation" literally. **Costs** every node in `Module` is currently a value, and the contracts that assume it: the GC roots, `TraceContext`, and the deep pass's verdicts (`evaluated_deep`, `assumed_concrete`) are all about values that get computed once. A node that is *not computed* in the ordinary way is a second kind under all of them. |
+| **B** | the evaluator hands the JIT **a description of the cycle**, and the JIT's walk builds `Flow::While` from the graph it already walks | **Buys** the graph stays a value graph and `KernelBody` stays where the CFG-consuming code already is; `loops.rs` is nearly the whole of the analysis half already. **Costs** it is a **correction to §3**: "runs in evaluation, at the point where the recursion is walked" becomes "runs in the JIT's walk, from a description evaluation hands it" — which keeps §3's real argument (a cycle cannot be recognised from a stack-machine walk of a *finished* body, because that walk has already lost the caller) and loses its location. |
+| **C** | the loop is a **value** — a recursor or closure the graph already has | **Costs** it cannot work without becoming A. Every node in the graph is *evaluated*, and a node whose only exits are backedges has no value the evaluator can produce; the evaluator would have to leave it undelayed, which is the new node kind again, with a worse name. Recorded so the option is visibly closed rather than silently untried. |
+
+**B is where the reading lands**, and the reason is narrow: the argument §3 makes
+is about *what information is available where*, and B preserves it — the caller is
+still known where the decision is made, because the evaluator hands over the
+call. What B gives up is the sentence, not the fact. **A** is the honest answer if
+the graph is ever going to carry control flow for anything else, and nothing in
+this feature says it is.
+
+**Deciding this is not step 4's to decide by accident.** It changes what step 4
+*is*, and §3 is a settled decision among the four this note says are closed
+without a new reason — so it needs one stated, or B chosen with §3 amended.
 
 **Stage 0 — the `loop` keyword and the evaluator's choice.** The surface lands
 first, and it is the smallest thing that can be observed working: a `loop` keyword

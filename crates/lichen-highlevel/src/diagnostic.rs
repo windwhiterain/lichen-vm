@@ -164,6 +164,15 @@ pub enum DiagKind {
     /// statement.  The checker reports this as an error instead of panicking.
     /// `a`/`b` are unused.
     NonTerminating,
+    /// A `@loop`-marked recursion whose trip count was **not** decided before
+    /// the body is lowered, and for which no loop has been recorded — the
+    /// refusal half of Stage 0 in `docs/notes/loop-conversion.md` §8.  It
+    /// replaces an emitter-side complaint that could only name a `NodeId`:
+    /// this names the mark, the missing decision, and the missing loop.
+    ///
+    /// `a`/`b` carry the apply node the refusal is about, which is otherwise
+    /// only a node the emitter meets.
+    LoopNotRecorded,
     /// A failed build that [`Build::diagnostics`] could attribute *nothing* to:
     /// the checker recorded a failure, but every recorded failure was skipped
     /// for want of an expression to blame.  The one live producer is an assert

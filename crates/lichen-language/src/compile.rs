@@ -689,6 +689,9 @@ impl Compiler {
                         parameter_attribute,
                         r#return: body,
                         parent,
+                        // Stamped by the *binding* that owns this lambda, once
+                        // its value has compiled — see `Self::stamp_looping`.
+                        looping: false,
                     },
                 );
                 function_id
