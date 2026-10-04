@@ -479,7 +479,14 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                         _ => panic!("the reference does not mix classes in one operation"),
                     };
                 }
-                KernelInstr::I32WrapI64 => {}
+                // **A no-op on this target, but not on the value.** The narrowing emits
+                // nothing — SPIR-V's comparisons already yield a bool, and the
+                // note on `KernelInstr::I32WrapI64` says so — so the empty arm is
+                // right for the *stream* and wrong for the *walk*: leaving
+                // `produced` at its default made every narrowed condition read as
+                // `0`, and a `select` over it always took its second arm. **A no-op
+                // that is not the identity is not a no-op.**
+                KernelInstr::I32WrapI64 => produced = operand(0),
                 // The language's class conversion.  **The number, not the
                 // bits**: `int2float` is the nearest `f32` and `float2int`
                 // truncates toward zero, which is what the two real backends
