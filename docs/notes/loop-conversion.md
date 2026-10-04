@@ -448,15 +448,33 @@ A successor should treat this section as the handoff.
   loop that computes its carried value — which is *precisely* what `Seq` fixed, so
   the pass-through-block workaround it used can likely be deleted in favour of a
   straight `Seq`.
-- **`feature/eval-loop-recording`** (`a709c2d`) — the marker reaching the
-  evaluator, cycle detection, and the *entering-call* insight (the recursive
-  call's own argument is the next state, undecided for every trip count, so only
-  an entering call's argument is the count — and the curried chain has to be
-  resolved to find it). All of that is **still right and still needed**.
+- **`feature/eval-loop-recording`** (`ff0cbeb`, rebased onto `dev` and merged)
+  — the marker reaching the evaluator, cycle detection, and the *entering-call*
+  insight (the recursive call's own argument is the next state, undecided for
+  every trip count, so only an entering call's argument is the count — and the
+  curried chain has to be resolved to find it). All of that is **still right and
+  still needed**. The rebased branch now computes real **strongly connected
+  components** (§8.6's `B`, §3 step 1) rather than one cycle per marked binding.
   **What it needs**: the `value_decided` gate drives the refusal, and it must be
   **deleted and inverted** — a marked recursion becomes a loop, and the gate has
   no remaining consumer, because for the unmarked path "is it decidable" is
   already answered implicitly by whether the deep pass reduced the call.
+  **Its probe claim survives the rebase, and only after a fix that had nothing to
+  do with the marker.** Two constants were still on the pre-`dev`
+  `compute.write [n, i, v]` spelling, which the surface has since replaced with
+  the `.Write`/`.Read` struct form and which is refused as an unsupported index —
+  `RECURSIVE_LITERAL` had been updated and `RECURSIVE_LITERAL_MARKED` had not,
+  which reads exactly like the marker breaking a decided trip count. It does not:
+  with the spelling fixed, `RECURSIVE_LITERAL_MARKED` answers `4: ?a`, which is
+  what `a709c2d` said. **Stale probe programs, not a regression** — and the
+  lesson is the probe's, not the branch's: a probe is evidence only where it is
+  re-run, and two constants differing by one keyword is exactly the shape that
+  fools you.
+  `LOOP_RUNTIME_COUNT_MARKED_DECIDABLE` is still refused, by a **type** check —
+  `expected Int -> Int, found Int -> Int` — and so is its unmarked twin
+  `LOOP_IN_LICHEN`, which never had a marker. That is the curried
+  `f => n => x => …` combinator no longer type-checking, which is a program to
+  rewrite rather than a behaviour to explain.
 
 ### 8.5 The critical path to the acceptance case
 
