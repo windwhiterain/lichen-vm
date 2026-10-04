@@ -995,17 +995,12 @@ impl<P: Program> Module<P> {
     /// [`LowValue::Parameterized`] marker, which is the same distinction
     /// [`Self::write_node_value`] draws — a marker is not a fact to carry.
     ///
-    /// `None` as well while the carrier is an **operation that has not run**: a
-    /// value a unification wrote there asserts what the class must eventually
-    /// hold, and until the operator produces its own answer it is not a fact to
-    /// compare against.  Reading it as the class's value is what makes a reader
-    /// treat an unverified assertion as decided; the `runned` axis is judged
-    /// here, at the one read, so no caller has to ask.
+    /// No other condition: what the class holds is what a unification compares
+    /// against, runned or not — the comparison is unconditional, and whether
+    /// the value was produced or merely asserted is the reporting question
+    /// ([`Self::write_node_answer`]), not a reason to leave it out.
     pub(crate) fn class_committed_value(&self, rep: NodeId) -> Option<P::Value> {
         let member = self.class_committed_node(rep)?;
-        if self.nodes[member].operation.is_some() && !self.nodes[member].runned {
-            return None;
-        }
         self.nodes
             .get(member)?
             .value
