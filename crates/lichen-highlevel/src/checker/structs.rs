@@ -217,11 +217,12 @@ where
         // requirement either way (`expected TypeStruct, found …`) — the
         // struct-kind sibling of the positional read's tuple pin, and the same
         // pin [`Super::check_instantiate`] makes for an undecided callee.  The
-        // marker is the two-field identity a `struct<…>` builds; its cells stay
+        // marker is the three-field identity a `struct<…>` builds; its cells stay
         // open, so the pin states the kind, not the identity or the names.
         let id = self.fresh_cell();
         let names = self.fresh_cell();
-        let marker = self.struct_marker_node(id, names);
+        let names_in_order = self.fresh_cell();
+        let marker = self.struct_marker_node(id, names, names_in_order);
         let kind = self.kind_expr(self.current_block, marker);
         self.check_unify(container_ty, kind, self.loc(container, 1), DiagKind::Guard);
         // names — the struct marker's name table, read directly from the
@@ -281,13 +282,14 @@ where
         // the `[shape, kind]` term — stated as a unify, so the refusal names the
         // two kinds (`expected TypeStruct, found TypeArray`) instead of the
         // shared "tuple, array, or struct" wording this read does not accept
-        // (`docs/notes/eval-before-unify.md` §6.3).  The marker is the two-field
-        // identity a `struct<…>` builds; its cells stay open, so the requirement
-        // is the kind, not the identity or the names.
+        // (`docs/notes/eval-before-unify.md` §6.3).  The marker is the
+        // three-field identity a `struct<…>` builds; its cells stay open, so the
+        // requirement is the kind, not the identity or the names.
         if concrete {
             let id = self.fresh_cell();
             let names = self.fresh_cell();
-            let marker = self.struct_marker_node(id, names);
+            let names_in_order = self.fresh_cell();
+            let marker = self.struct_marker_node(id, names, names_in_order);
             let kind = self.kind_expr(self.current_block, marker);
             let container_kind = self.lazy_index_path(container_ty, &[shape::TYPE_KIND_SLOT]);
             self.check_unify(
@@ -539,17 +541,21 @@ where
         }
         if !concrete {
             // Defer the nominality check: pin the callee's type to a struct
-            // kind `[[id, names], K]` (a 2-element marker, per
+            // kind `[[id, names, names_in_order], K]` (a
+            // [`shape::STRUCT_MARKER_LEN`]-element marker, per
             // [`shape::is_struct_marker_any`]'s structural guess).  The pin
             // binds an unbound cell now and is re-checked by the apply's
             // argument unify per call, so a tuple/function/atomic actual
             // callee is rejected there.
             let id = self.fresh_cell();
             let names = self.fresh_cell();
+            // The definition-order names are what a named instantiation's
+            // deferred reorder reads; an all-positional one never does.
+            let names_in_order = self.fresh_cell();
             // Kind only, so `Self::struct_type_type` does not apply: the pin
-            // has no field-type shape to wrap, and its marker's two fields are
-            // unbound cells rather than a `Fresh` id and a name table.
-            let marker = self.struct_marker_node(id, names);
+            // has no field-type shape to wrap, and its marker's three fields are
+            // unbound cells rather than a `Fresh` id and the two name forms.
+            let marker = self.struct_marker_node(id, names, names_in_order);
             let kind = self.kind_expr(self.current_block, marker);
             self.check_unify(
                 callee_ty,
@@ -603,7 +609,7 @@ where
                 }
             };
         let (value_node, value_shape, valid) = if any_named {
-            self.named_instantiate(e, type_pair, value, arg_names, concrete)
+            self.named_instantiate(e, type_pair, callee_ty, value, arg_names, concrete)
         } else {
             // A positional instantiation keeps the value's own tuple shape.
             // The value's shape: the element-type list of a tuple type, or
@@ -659,13 +665,14 @@ where
     /// `callee_concrete` distinguishes the two ways the name table can be
     /// unavailable: a concrete but anonymous struct (a `.name` argument is a
     /// [`DiagKind::StructAnonymousField`]) and a callee whose type is not
-    /// statically known (an unbound parameter — the definition-order reorder
-    /// cannot be computed at check time, a
-    /// [`DiagKind::InstantiateNamesNotStatic`]).
+    /// statically known — the reorder is then *deferred* rather than refused,
+    /// because an unresolved struct type leaves the instantiation unresolved
+    /// too ([`Self::lazy_named_instantiate`]).
     fn named_instantiate(
         &mut self,
         e: ExprId,
         type_pair: NodeId,
+        callee_ty: NodeId,
         value: ExprId,
         arg_names: &[Option<&'static str>],
         callee_concrete: bool,
@@ -678,9 +685,12 @@ where
             .iter()
             .map(|&a| self.state[a].ty.unwrap())
             .collect();
-        // The name table is unavailable: record each `.name` argument and
-        // fall back to the call-order value (the caller skips the field-list
-        // unify).
+        // The name table is unavailable.  A *concrete* struct without one
+        // genuinely has no named fields, so each `.name` argument is recorded
+        // and the call-order value stands (the caller skips the field-list
+        // unify).  An **unresolved** callee is a different fact: the struct
+        // type is not decided yet, so the instantiation is not decided either —
+        // nothing is refused, and the reorder resolves when the type does.
         if shape::struct_names_any(
             &mut self.module,
             self.type_expr,
@@ -688,16 +698,20 @@ where
         )
         .is_none()
         {
-            let kind = if callee_concrete {
-                // A concrete struct without a name table genuinely has no
-                // named fields.
-                DiagKind::StructAnonymousField
-            } else {
-                DiagKind::InstantiateNamesNotStatic
-            };
+            if !callee_concrete {
+                return self.lazy_named_instantiate(
+                    type_pair, callee_ty, &elem_ids, arg_names, &vals, &tys,
+                );
+            }
             for (i, name) in arg_names.iter().enumerate() {
                 if name.is_some() {
-                    self.record_guard(type_pair, type_pair, self.loc(elem_ids[i], 0), kind, *name);
+                    self.record_guard(
+                        type_pair,
+                        type_pair,
+                        self.loc(elem_ids[i], 0),
+                        DiagKind::StructAnonymousField,
+                        *name,
+                    );
                 }
             }
             return (self.value_of(value), self.state[value].ty.unwrap(), false);
@@ -811,6 +825,269 @@ where
         let value_node = self.array_node(self.current_block, &order);
         let value_shape = self.array_node(self.current_block, &order_ty);
         (value_node, value_shape, true)
+    }
+
+    /// The deferred half of a named instantiation: the struct type — and so its
+    /// name table — is not resolved here, so the definition-order reorder is not
+    /// computed.  It is **built as a lazy read** instead and resolves at the
+    /// unification that binds the callee's type, which is the same principle the
+    /// positional instantiation already follows (its field-list unify wakes at
+    /// the apply): when the struct type is unresolved, the instantiation is
+    /// unresolved too.
+    ///
+    /// The instance's definition position `i` is the argument that supplies the
+    /// field whose name sits at `names_in_order[i]` — the marker's
+    /// definition-order names ([`shape::STRUCT_KIND_NAMES_ORDER_PATH`]), the
+    /// inverse of the name→index table a lazy read cannot derive:
+    ///
+    /// ```text
+    /// value[i] = Index(call_values, TableGet(supply, key(i)))
+    /// ```
+    ///
+    /// `supply` is a constant table the checker builds from the source.  An
+    /// argument's key is its **name**, or — for a positional argument — its
+    /// **rank** among the positional ones.  A definition position whose name no
+    /// argument supplies is the positional `rank`-th unclaimed position, so its
+    /// key is that rank: `rank` counts the definition positions before it whose
+    /// names are unsupplied, which the checker computes as the running sum of
+    /// the membership test `InDomain(names_in_order[i], supplied_names)`.  With
+    /// no positional argument there is no fallback to select, and the key is the
+    /// name itself.
+    ///
+    /// **The key also carries the type** whenever every argument's type is
+    /// decided (`[tag, argument type]` against `[tag, field type]`), so the
+    /// lookup's own content comparison *is* the per-field type check: a field
+    /// whose declared type no supplying argument matches is a miss.  That is the
+    /// only form the check can take here — a `unify` between the gathered type
+    /// and the field list is deferred and pinned before the marker binds (the
+    /// shape half of the callee's pair is unified before its kind half, so no
+    /// name-dependent read can resolve yet), and a pinned read is masked from
+    /// then on.  The lookup, by contrast, is *evaluated* when the instance is,
+    /// and the lowlevel's table read force-evaluates its key.
+    ///
+    /// Two facts stay check-time, because neither depends on the struct type.
+    /// A **duplicate** name is refused here — whatever the field list is, one
+    /// name supplying two positions is a structural mismatch, and a table keyed
+    /// by name would silently keep only one.  A **missing** argument is not
+    /// checked here: the returned field-type list is a probe with one cell per
+    /// argument, so the caller's field-list unify is an arity check that fires
+    /// the moment the type resolves.
+    fn lazy_named_instantiate(
+        &mut self,
+        type_pair: NodeId,
+        callee_ty: NodeId,
+        elem_ids: &[ExprId],
+        arg_names: &[Option<&'static str>],
+        vals: &[NodeId],
+        tys: &[NodeId],
+    ) -> (NodeId, NodeId, bool) {
+        let mut valid = true;
+        let mut supplied: Vec<&'static str> = Vec::new();
+        for (i, name) in arg_names.iter().enumerate() {
+            let Some(name) = *name else { continue };
+            if supplied.contains(&name) {
+                self.record_guard(
+                    type_pair,
+                    type_pair,
+                    self.loc(elem_ids[i], 0),
+                    DiagKind::StructDuplicateField,
+                    Some(name),
+                );
+                valid = false;
+            } else {
+                supplied.push(name);
+            }
+        }
+        if !valid {
+            // The mismatch is the recorded diagnostic; the call-order value
+            // stands so the descent stays total, and the caller skips the
+            // field-list unify.
+            let value_node = self.array_node(self.current_block, vals);
+            let value_shape = self.array_node(self.current_block, tys);
+            return (value_node, value_shape, false);
+        }
+        let has_positional = arg_names.iter().any(|name| name.is_none());
+        // Whether every argument's type is decided here.  When it is, the type
+        // joins the supplying key (below), which is what makes the field-type
+        // check real: the lookup compares the *field's* type against the
+        // supplying argument's by the table's own content equality, and a
+        // mismatch is a miss.  An argument whose type is still open (a `_`, a
+        // parameter-dependent value) carries no type in its key, so the lookup
+        // stays a name-only hit.
+        let typed = tys.iter().all(|&ty| self.type_is_concrete(ty));
+        // The callee's field-type list, read lazily: `[shape, kind]`'s shape.
+        // Once the callee binds, its element `i` is the definition position's
+        // own field type.
+        let shape = self.index(type_pair, self.zero());
+        // The supplying table: one entry per argument, keyed by its name — or,
+        // for a positional argument, by its rank among the positional ones —
+        // and, when every argument's type is decided, by that type too.  The
+        // value is the argument's call-order slot.
+        let mut entries = Vec::new();
+        let mut positional_rank = 0usize;
+        for (i, name) in arg_names.iter().enumerate() {
+            let tag = match name {
+                Some(name) => self.name_node(name),
+                None => {
+                    let tag = self.usize_node(positional_rank);
+                    positional_rank += 1;
+                    tag
+                }
+            };
+            let key = if typed {
+                self.array_node(self.current_block, &[tag, tys[i]])
+            } else {
+                tag
+            };
+            let value = self.usize_node(i);
+            entries.push((AnyNodeId::Dynamic(key), AnyNodeId::Dynamic(value)));
+        }
+        let handle = self.module.build_table(&entries, self.current_block);
+        let supply = self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::Table(handle))),
+        );
+        // The supplied names as a set value: the domain the membership test
+        // reads, and the only reader that distinguishes "this definition
+        // position's name is supplied by name" from "it takes the next
+        // positional argument".
+        let mut supplied_nodes = Vec::with_capacity(supplied.len());
+        for &name in &supplied {
+            let node = self.name_node(name);
+            supplied_nodes.push(node);
+        }
+        let supplied_names = self.array_node(self.current_block, &supplied_nodes);
+        // The definition-order names, read lazily through the callee's struct
+        // *kind* — `kind[0][2]`, the marker's names-in-order slot.
+        let names_in_order = self.lazy_index_path(callee_ty, &shape::STRUCT_KIND_NAMES_ORDER_PATH);
+        let call_values = self.array_node(self.current_block, vals);
+        // The instance's field-type list is a **probe**: one fresh cell per
+        // argument.  The caller unifies it with the callee's field list, so it
+        // compares the *arity* and absorbs the definition's field types — which
+        // is what a per-position read of the type resolves to, and so what the
+        // supplying lookup's key carries.  The probe holds no computation of its
+        // own, which is deliberate: a read of a real gathered type would reach
+        // back into the lookup that reads it.
+        let mut order_ty = Vec::with_capacity(tys.len());
+        for _ in 0..tys.len() {
+            order_ty.push(self.fresh_cell());
+        }
+        let mut order = Vec::with_capacity(vals.len());
+        // The running count of definition positions already claimed by a named
+        // argument — how many positions before `i` are not the positional
+        // `rank`-th unclaimed one.
+        let mut supplied_before = self.zero();
+        for i in 0..vals.len() {
+            let name_at = self.index_const(names_in_order, i);
+            // The definition position's tag, read from the table: the field's
+            // own name, or the positional rank when the position's name is one
+            // no argument carries.
+            let tag = if has_positional {
+                let is_named = self.in_domain(name_at, supplied_names);
+                let rank = if i == 0 {
+                    self.zero()
+                } else {
+                    let position = self.usize_node(i);
+                    self.sub(position, supplied_before)
+                };
+                supplied_before = self.add(supplied_before, is_named);
+                self.select(rank, name_at, is_named)
+            } else {
+                name_at
+            };
+            // The supplying argument's call slot, read from the table.  A tag
+            // no argument supplies — an unknown field, or a field type no
+            // argument's type matches — is a genuine miss, so the read is the
+            // refusal.
+            let key = if typed {
+                let field_type = self.index_const(shape, i);
+                self.array_node(self.current_block, &[tag, field_type])
+            } else {
+                tag
+            };
+            self.node_edges.insert(key, self.loc(elem_ids[i], 0));
+            let slot = self.table_get(supply, key);
+            order.push(self.index(call_values, slot));
+        }
+        (
+            self.array_node(self.current_block, &order),
+            self.array_node(self.current_block, &order_ty),
+            true,
+        )
+    }
+
+    /// The lazy structural read `Index(base, at)`.
+    fn index(&mut self, base: NodeId, at: NodeId) -> NodeId {
+        let ops = self.array_node(self.current_block, &[base, at]);
+        self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(ops),
+        )
+    }
+
+    /// [`Self::index`] with a constant subscript — the `Index(base, k)` of the
+    /// encoding's positional offsets.
+    fn index_const(&mut self, base: NodeId, k: usize) -> NodeId {
+        let at = self.usize_node(k);
+        self.index(base, at)
+    }
+
+    /// The lazy table read `TableGet(table, key)`.
+    fn table_get(&mut self, table: NodeId, key: NodeId) -> NodeId {
+        let ops = self.array_node(self.current_block, &[table, key]);
+        self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::TableGet),
+            Some(ops),
+        )
+    }
+
+    /// Whether `value` is a member of the set whose value is `members` — the
+    /// [`TypeOperator::InDomain`] membership test, used here to read "this field
+    /// name is one an argument supplied" off a set of the supplied names.
+    fn in_domain(&mut self, value: NodeId, members: NodeId) -> NodeId {
+        let ops = self.array_node(self.current_block, &[value, members]);
+        self.op_node(
+            self.current_block,
+            P::Operator::from(TypeOperator::InDomain),
+            Some(ops),
+        )
+    }
+
+    /// The two-armed lazy selection `Index([first, second], condition)` — the
+    /// encoding's conditional: `second` when the condition is `USize(1)`,
+    /// `first` when it is `0`.  Both arms are values the read picks between; the
+    /// unselected one is never evaluated.
+    fn select(&mut self, first: NodeId, second: NodeId, condition: NodeId) -> NodeId {
+        let arms = self.array_node(self.current_block, &[first, second]);
+        let ops = self.array_node(self.current_block, &[arms, condition]);
+        self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(ops),
+        )
+    }
+
+    /// The lazy `Add(left, right)` over machine scalars.
+    fn add(&mut self, left: NodeId, right: NodeId) -> NodeId {
+        let ops = self.array_node(self.current_block, &[left, right]);
+        self.op_node(
+            self.current_block,
+            P::Operator::from(TypeOperator::Add),
+            Some(ops),
+        )
+    }
+
+    /// The lazy `Sub(left, right)` over machine scalars.
+    fn sub(&mut self, left: NodeId, right: NodeId) -> NodeId {
+        let ops = self.array_node(self.current_block, &[left, right]);
+        self.op_node(
+            self.current_block,
+            P::Operator::from(TypeOperator::Sub),
+            Some(ops),
+        )
     }
 
     /// The field name at a definition position, from the struct's name table
@@ -952,5 +1229,44 @@ where
             None,
             Some(P::Value::from(LowValue::Table(handle))),
         )
+    }
+
+    /// The struct's field names **in definition order** for a field-name list:
+    /// one array element per definition position, the [`LowValue::Void`] marker
+    /// when every field is unnamed (the anonymous positional struct, mirroring
+    /// [`Self::build_struct_names`]), a [`LowValue::Void`] element for an
+    /// unnamed field otherwise.
+    ///
+    /// This is the marker's `names_in_order` slot — the *inverse* of the
+    /// name→index table, which is the one thing a lazy read of that table cannot
+    /// derive.  It exists for the named instantiation whose struct type is still
+    /// unresolved: the reorder runs when the type resolves, and at definition
+    /// position `i` it needs the field's *name* to find the argument that
+    /// supplies it ([`Self::lazy_named_instantiate`]).
+    pub(super) fn build_struct_names_in_order(&mut self, names: &[Option<&'static str>]) -> NodeId {
+        if names.iter().all(|n| n.is_none()) {
+            return self.alloc_node(
+                self.current_block,
+                None,
+                Some(P::Value::from(LowValue::Void)),
+            );
+        }
+        let mut items = Vec::with_capacity(names.len());
+        for name in names {
+            items.push(match name {
+                Some(name) => self.name_node(name),
+                // An unnamed field has no name for a position to state.  Every
+                // struct field must be named (the definition is refused
+                // otherwise), so this is a refused build's hole, not a case a
+                // read resolves through — and a `Void` element reads as the
+                // computed nothing, never as a name.
+                None => self.alloc_node(
+                    self.current_block,
+                    None,
+                    Some(P::Value::from(LowValue::Void)),
+                ),
+            });
+        }
+        self.array_node(self.current_block, &items)
     }
 }

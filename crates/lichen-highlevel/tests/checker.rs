@@ -1338,10 +1338,11 @@ fn array_index_out_of_bounds_against_a_bound_length() {
 // A struct type is the pair [[field types], [marker, Type]]: like an array
 // type (shape [element type, length]), the shape is the *positional
 // field-type list*, and the kind slot holds the fixed TypeStruct marker — a
-// two-field `[TypeId(n), names]` array carrying a *fresh nominal* id and the
-// name→index table.  Equal ids unify, different ids never do, and a struct
-// never unifies with a same-shape tuple — nominal identity.  Every field is
-// named, so a struct instance reads by name.
+// three-field `[TypeId(n), names, names_in_order]` array carrying a *fresh
+// nominal* id, the name→index table, and the same names in definition order.
+// Equal ids unify, different ids never do, and a struct never unifies with a
+// same-shape tuple — nominal identity.  Every field is named, so a struct
+// instance reads by name.
 
 #[test]
 fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
@@ -1360,14 +1361,14 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     assert_eq!(shape_ids.len(), 2);
     assert!(is_int_type(&b, shape_ids[0]));
     // the kind slot is a standard [marker, K] pair; its marker is the
-    // two-field TypeStruct value [id, names].
+    // three-field TypeStruct value [id, names, names_in_order].
     let kind = b.state[s].ty.unwrap();
     let kind_ids = array_ids(&b, kind);
     assert_eq!(kind_ids.len(), 2);
     assert_eq!(kind_ids[1], b.type_expr);
     let marker = kind_ids[0];
     let marker_ids = array_ids(&b, marker);
-    assert_eq!(marker_ids.len(), 2);
+    assert_eq!(marker_ids.len(), 3);
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(marker_ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
@@ -1388,9 +1389,9 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
 
 #[test]
 fn a_named_struct_carries_a_name_to_index_table() {
-    // struct<.a Int, .b Type> — the struct marker `[id, names]` (in the
-    // kind's marker slot) holds a table mapping each field name to its
-    // positional index.
+    // struct<.a Int, .b Type> — the struct marker `[id, names, names_in_order]`
+    // (in the kind's marker slot) holds a table mapping each field name to its
+    // positional index, and the same names again in definition order.
     let mut ir = IR::new();
     let t1 = int_t(&mut ir);
     let t2 = ty(&mut ir);
@@ -1402,7 +1403,7 @@ fn a_named_struct_carries_a_name_to_index_table() {
     assert_eq!(kind_ids.len(), 2);
     let marker = kind_ids[0];
     let marker_ids = array_ids(&b, marker);
-    assert_eq!(marker_ids.len(), 2);
+    assert_eq!(marker_ids.len(), 3);
     // the names field (marker[1]) is a constant table: "a" -> 0, "b" -> 1.
     let names_node = marker_ids[1];
     let Some(HighProgramValue::LowValue(LowValue::Table(table))) =
@@ -1430,6 +1431,20 @@ fn a_named_struct_carries_a_name_to_index_table() {
         .collect();
     found.sort_by_key(|&(_, i)| i);
     assert_eq!(found, vec![("a", 0), ("b", 1)]);
+    // the definition-order field (marker[2]) is an array of the names, one per
+    // definition position — the table's inverse, which the deferred named
+    // instantiation's reorder reads.
+    let in_order = array_ids(&b, marker_ids[2]);
+    let names: Vec<&str> = in_order
+        .iter()
+        .map(
+            |&node| match b.module.node_value(AnyNodeId::Dynamic(node)) {
+                Some(HighProgramValue::LowValue(LowValue::Str(s))) => s,
+                other => panic!("a definition-order name must be a string: {other:?}"),
+            },
+        )
+        .collect();
+    assert_eq!(names, vec!["a", "b"]);
 }
 
 #[test]
@@ -1445,7 +1460,8 @@ fn each_struct_type_occurrence_allocates_a_distinct_id() {
         AsField::<HighGlobal>::get(&b.module.global_ext).type_id_counter,
         2
     );
-    // the nominal id is the marker's slot 0: kind = [marker, K], marker = [id, names].
+    // the nominal id is the marker's slot 0: kind = [marker, K], marker =
+    // [id, names, names_in_order].
     let id1 = array_ids(&b, array_ids(&b, b.state[s1].ty.unwrap())[0])[0];
     let id2 = array_ids(&b, array_ids(&b, b.state[s2].ty.unwrap())[0])[0];
     assert!(matches!(
@@ -1496,7 +1512,8 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
     assert_eq!(module.unify_errors.len(), 1);
     // The struct and tuple shapes are both the field-type list (same arity),
     // so the nominal distinction now lives at the kind's marker: a struct
-    // marker is the 2-element `TypeStruct{id, names}` array, while a tuple
+    // marker is the 3-element `TypeStruct{id, names, names_in_order}` array,
+    // while a tuple
     // marker is the `TupleType` type constant — they clash at the marker
     // slot of the `[marker, K]` kind.
     let err = module.unify_errors[0].clone();
@@ -1882,11 +1899,12 @@ fn an_instantiation_through_a_parameter_pins_the_callee_to_a_struct_kind() {
 }
 
 #[test]
-fn a_named_instantiation_through_a_parameter_reports_the_honest_gap() {
+fn a_named_instantiation_through_a_parameter_defers_its_reorder() {
     // `f = s => s(.x 1, .y Int)` — the callee's name table is not statically
-    // known through a parameter, so the definition-order reorder cannot be
-    // computed: the honest "statically known" diagnostic per named argument,
-    // never the false "no named fields" one.
+    // known through a parameter, so the definition-order reorder is not
+    // computed here: the instantiation stays unresolved instead of being
+    // refused, and the reorder is a lazy read that resolves at the unification
+    // that binds the callee's struct type.
     let mut ir = IR::new();
     let p = param(&mut ir);
     let one = int(&mut ir, 1);
@@ -1895,15 +1913,16 @@ fn a_named_instantiation_through_a_parameter_reports_the_honest_gap() {
     let inst = ir.alloc_instantiate(p, v, &[Some("x"), Some("y")]);
     let f = lam(&mut ir, p, inst);
     let b = build(f, ir);
-    assert!(!b.ok, "named arguments need a statically known struct type");
-    let diags = b.diagnostics();
-    assert_eq!(diags.len(), 2, "one diagnostic per named argument");
     assert!(
-        diags
-            .iter()
-            .all(|d| d.kind == DiagKind::InstantiateNamesNotStatic),
-        "no false anonymous-struct claim: {diags:?}"
+        b.ok,
+        "a named instantiation through a parameter is not refused: {:?}",
+        b.diagnostics()
     );
+    // The instance's value is the deferred reorder — one element per
+    // argument, each a read of the argument supplying that definition
+    // position.
+    let ids = array_ids(&b, b.state[inst].val.unwrap());
+    assert_eq!(ids.len(), 2, "one instance position per named argument");
 }
 
 // --- the `_` placeholder ----------------------------------------------------

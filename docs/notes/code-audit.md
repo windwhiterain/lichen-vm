@@ -2380,6 +2380,26 @@ does not corrupt the second call in the shape that exercises it: the baked node'
 cached value is call-independent and nothing re-reads the parameter-dependent
 sibling. That is a pin, not a proof that no shape is harmed.
 
+**Follow-up — a verdict can outlive what it waited on** (`feature/deferred-instantiate`).
+The operand arm's exemption reads `Some(parameterized: true)` as unproven, and
+nothing cleared it when the operand chain *did* resolve: `write_node_value`
+caches a resolved value on the operation's own slot, and the forced pass skipped
+the operand walk for any node that already held a value
+(`if force_operand && self.nodes[node].value.is_none()`).  A node that was walked
+while it still waited therefore kept reading unproven forever — visible where a
+reader treats the verdict as "not decided yet": `Module::key_state` gates a
+`TableGet` on it, so a lookup keyed by a resolved read stayed lazy and the read
+it stood for never ran.  The forced pass now re-forces the operand of an
+**unproven** node as well as of an unevaluated one
+(`evaluation.rs`, next to the arm above), which recomputes the verdict bottom-up
+from the values that have since arrived.  It re-walks only nodes flagged
+unproven, so no proven node's verdict or baking changes; the lowlevel,
+`lichen-highlevel` and `lichen-language` suites and `examples` are green after
+it.  This is what the deferred named instantiation's supplying lookup needs, and
+why its per-field type check is that lookup's own key comparison rather than a
+unify (`crates/lichen-highlevel/src/checker/structs.rs`,
+`Checker::lazy_named_instantiate`).
+
 **Why this mattered beyond the contract.** `docs/notes/incremental-evaluation.md`
 needs `parameterized` to be a function of the graph rather than of where a walk
 started — a dirty-flag recomputation restarts elsewhere — and it needs the deep

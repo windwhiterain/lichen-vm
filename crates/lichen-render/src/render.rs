@@ -355,9 +355,9 @@ where
     }
 }
 
-/// Whether a value is a struct marker — the two-field `TypeStruct{id, names}`
-/// value, encoded as a 2-element array `[id, names]`.  No other kind's marker
-/// is an array, so a 2-element array marker names a struct.
+/// Whether a value is a struct marker — the three-field `TypeStruct{id, names,
+/// names_in_order}` value, encoded as a 3-element array.  No other kind's marker
+/// is an array, so such an array in a marker slot names a struct.
 fn marker_is_struct<P: HighProgram>(module: &Module<P>, marker: AnyNodeId) -> bool
 where
     P::Value: ValueType,
@@ -368,7 +368,7 @@ where
         .is_some_and(|v| match v {
             // SAFETY: `m` is the payload of the value read from the live node
             // `marker`.
-            LowValue::Array(m) => unsafe { m.items() }.len() == 2,
+            LowValue::Array(m) => unsafe { m.items() }.len() == shape::STRUCT_MARKER_LEN,
             _ => false,
         })
 }
