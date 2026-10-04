@@ -351,12 +351,10 @@ impl<P: Program> Module<P> {
     }
 
     /// The **value** half of a `[value, type]` pair node, or `None` when it is
-    /// not a pair.
+    /// not a pair. See [`Module::pair_value_half`] for the width rule, which is
+    /// `apply.rs`'s and not this file's.
     fn value_half(&self, node: NodeId) -> Option<NodeId> {
-        self.array_element(node, 1)
-            .is_ok()
-            .then(|| self.array_element(node, 0).ok())
-            .flatten()
+        self.pair_value_half(node)
     }
 
     /// The `n` a node holds, when it holds a plain integer literal.
@@ -490,24 +488,39 @@ impl<P: Program> Module<P> {
     /// unbound, so its return is the value node).
     fn function_values(&self, function: FunctionId) -> Result<Vec<NodeId>, String> {
         let r#return = self.functions[function].r#return;
-        // SAFETY: `r#return` is a live node of `self`.
-        let pair = match unsafe { self.array_items(r#return) } {
-            Some(items) if items.len() == 2 => match items[0].node {
-                AnyNodeId::Dynamic(node) => Some(node),
-                AnyNodeId::Static(_) => {
-                    return Err(
-                        "a function's return value is a static reference into a frozen module"
-                            .into(),
-                    );
-                }
-            },
-            _ => None,
-        };
-        match pair {
+        match self.pair_value_half(r#return) {
             // A scalar codomain's value half is a leaf, and an array of leaves is
             // a tuple codomain — the same one-level rule `value_leaves` states.
             Some(value) => self.value_leaves(value),
             None => Ok(vec![r#return]),
+        }
+    }
+
+    /// The **value** half of a `[value, type]` pair node, or `None` when the node
+    /// is not one.
+    ///
+    /// **The width is `apply.rs`'s, not a guess.** That module resolves the
+    /// apply's return pair with `items[1]` as the type slot and says so for "a
+    /// 2-wide pair and for a 3-wide `[value, type, perspective]` pair alike", so
+    /// a pair here is two **or three** wide and the value is element 0 in both.
+    /// Reading it as two-wide alone would drop the value half of every
+    /// perspective-bearing pair.
+    ///
+    /// This is the one place in this module that knows an encoding, and it is
+    /// here because the lowlevel already owns the convention — `Function` calls
+    /// its parameter node a *pair*, the apply resolves its arity, and the
+    /// evaluator peels `Index(pair, 0)`. It is **not** the type layer's business
+    /// to be told again: no shape is derived here, and the pass in
+    /// [`crate::low_type`] still learns no layout.
+    fn pair_value_half(&self, node: NodeId) -> Option<NodeId> {
+        // SAFETY: `node` is a live node of `self`.
+        let items = unsafe { self.array_items(node) }?;
+        if !(2..=3).contains(&items.len()) {
+            return None;
+        }
+        match items[0].node {
+            AnyNodeId::Dynamic(value) => Some(value),
+            AnyNodeId::Static(_) => None,
         }
     }
 
