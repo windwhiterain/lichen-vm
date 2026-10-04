@@ -4,9 +4,10 @@
 > `force`/`defer`/`pin` mechanisms it asks about are live on `dev` and this note
 > records what removing them would cost and which parts of the question are
 > already answered by measurement.  §2.5 is the strongest of those: the
-> "unify unconditionally, reconcile when the operator finishes" form was built,
-> and it fails on the evaluation model rather than on the unifier.  What *did*
-> land out of the same review is the run-state half — see §4.
+> "unify unconditionally, reconcile when the operator finishes" form was built
+> twice, the second time with reads that always answer and trigger the
+> computation, and it lands on the compute boundary.  What *did* land out of the
+> same review is the run-state half — see §4.
 >
 > Companions: [eval-before-unify](eval-before-unify.md) (the same unifier seen
 > from the staleness side, and where the *other* wakeup design — a class-
@@ -101,43 +102,64 @@ references; a template's parameters never bind, so its list must not fire).
 Choosing between the two is choosing between *commit early and reconcile* and
 *retry later*; the repository implements the first.
 
-### 2.5 The obvious middle — a claim, reconciled on completion — has a boundary
+### 2.5 The obvious middle — a claim, reconciled on completion — was built, and the wall moved
 
 There is a shape between the two that looks like it should work, and it was
-**built and measured**: let the unifier always settle an operation node by
-writing the other side's value as a **claim** (the value is kept for readers,
-the operation is kept so its operand edge still reaches an applied parameter),
-let the evaluator **re-run a claimed node** instead of returning its slot, and
-give the operator one reconciliation point where its outcome is checked against
-the claim.  That is the proposal's literal form — unify unconditionally,
-reconcile when the operator finishes.
+**built and measured twice**, in throwaway worktrees (both discarded).  The
+design: let the unifier always settle an operation node by writing the other
+side's value as a **claim** (the value is kept for readers, the operation is
+kept so its operand edge still reaches an applied parameter), let a read of a
+claimed node **trigger** its computation, and give the operator one
+reconciliation point where its outcome is checked against the claim.  That is
+the proposal's literal form — unify unconditionally, reconcile when the operator
+finishes.
 
-What it measured on `dev` (a throwaway worktree, since discarded):
+**Attempt 1 — re-running a claimed node mid-flight.**  The evaluator was changed
+to fall through a claimed node's cached value and re-run its operation.  A
+claimed node whose computation is already running is then re-entered from inside
+that computation, which the visit mark cannot tell from a cyclic read:
+`run examples/` dies with `unreachable!("cycle detected: node … is being
+evaluated")`.  An operation node's slot was, until then, never readable while
+its own computation ran, so nothing re-entered it.
 
-- the mechanism itself holds: 155 of 156 `lichen-lowlevel` tests pass, and the
-  one that failed was a *test of the deferral* whose conflict the claim path no
-  longer resurfaced — fixable by claiming the class's committed value at bind
-  time, which was done;
-- making the claim readable by the evaluator's normal path **re-enters a
-  computation that is already in flight**: `run examples/` then dies with
-  `unreachable!("cycle detected: node … is being evaluated")`, with the
-  deferral policy either on or off.
+**Attempt 2 — a value is always readable; the read triggers the computation.**
+The rule was made explicit: a node with a value answers with it, whether or not
+its computation is in flight, and a claimed node additionally triggers that
+computation (bounded by the visit mark, so recursion terminates).  This is a
+semantic choice, and it **fixed attempt 1's deadlock**: the mid-flight reader
+gets the claim, exactly as asked.
 
-The second bullet is the finding, and it is structural rather than a bug in the
-sketch: a claim is *readable while the computation that must settle it is
-running*, so any reader inside that computation sees the claim and — because the
-evaluator owns its cycle mark for the duration of one attempt — re-entering the
-owner is indistinguishable from a cyclic read.  The current pin does not have
-this property because it writes the value **and stops**: nothing re-runs the
-read mid-flight, and the reconciliation is deferred to whenever the computation
-happens to run next.
+It then broke exactly one thing, and it is the boundary this note predicted
+rather than a new one:
 
-So the choice is sharper than §2.4 says.  Making an operation node's slot
-readable *while it is being computed* means re-opening what one evaluation
-attempt owns — the invariant the evaluator's visit mark and the recent
-`feature/node-depth` work rest on — and that is a change to the evaluation
-model, not to the unifier.  Until that is answered, the pin's "write and stop"
-is load-bearing, and unconditional unify has no sound target to write into.
+| suite / program set | with the claim semantics |
+|---|---|
+| `lichen-lowlevel` | 155 of 156 (the one failure is a *test of the deferral* whose conflict the claim path no longer resurfaced; fixed by also claiming the class's committed value at bind time) |
+| `run examples/` | every program runs except `compute_jit.lichen` |
+| `lichen-language` — everything but compute | green |
+| `lichen-language` **`tests/compute.rs`** | **9 passed, 53 failed** |
+
+So the wall is the compute extension's template walk, as in §2.3 and as the
+parked `feature/read-kind-unify` measured for the static pin: once a claim can
+reach it, a template's parameter type reads as settled instead of deferrable, and
+the extension has nothing to force through.  Unconditional unify therefore does
+not have a sound target to write into *until the compute boundary is answered* —
+and that is a redesign of how the extension reads a template's types, not a
+change to the unifier.
+
+**What is *not* a win, and was checked rather than assumed.**  Lifting the
+"never readable mid-flight" restriction on its own (without claims) changes
+nothing: an operation node's slot is not written until its postlude caches a
+decided answer, so `is_unbound` and "has a value" already agree for it.  The
+restriction was a consequence of the value slot's discipline, never a separate
+rule — which is also why the pin can keep it.
+
+**One method note, because it cost a wrong measurement here.**  Two throwaway
+changes in the same afternoon both shared `CARGO_TARGET_DIR` with the main tree
+at different times; cargo then served the *other* tree's artifact, and a run
+that looked green was the unmodified baseline.  Isolate the target directory per
+tree, and treat a suspiciously fast `Finished` as a red flag.
+
 
 ## 3. Why the run-state half is not a substitute
 
