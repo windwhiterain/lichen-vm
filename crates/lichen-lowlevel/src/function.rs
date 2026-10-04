@@ -532,13 +532,14 @@ impl<P: Program> Module<P> {
                 // member and both entry points are cloned into the target,
                 // and the result is a fresh function homed on the target
                 // block, so it is dropped with it.
-                let (scope, r#return, parameter, return_type, asserts) = {
+                let (scope, r#return, parameter, return_type, static_origin, asserts) = {
                     let function = &self.functions[function];
                     (
                         function.nodes.clone(),
                         function.r#return,
                         function.parameter,
                         function.return_type,
+                        function.static_origin,
                         function.asserts.clone(),
                     )
                 };
@@ -554,6 +555,9 @@ impl<P: Program> Module<P> {
                     r#return,
                     parameter,
                     return_type: NodeId::default(),
+                    // A clone of a materialized static closure is still that
+                    // logical function, so the static origin travels with it.
+                    static_origin,
                     asserts: Vec::new(),
                     parent: Some(ctx.branch_top),
                     block: ctx.target,

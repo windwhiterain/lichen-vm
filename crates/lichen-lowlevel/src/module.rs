@@ -409,6 +409,7 @@ impl<P: Program> Module<P> {
             r#return: NodeId::default(),
             parameter: NodeId::default(),
             return_type: NodeId::default(),
+            static_origin: None,
             parent,
             asserts: Vec::new(),
             block,

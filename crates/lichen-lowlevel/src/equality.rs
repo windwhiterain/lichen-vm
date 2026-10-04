@@ -3,9 +3,9 @@ use std::collections::{HashMap, HashSet};
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, Deferral, FunctionTypeUnify, LowOperator,
-    LowShape, LowValue, Module, Node, NodeId, Operation, PendingSide, PendingSides, Program,
-    StaticModuleCache, StaticNodeId, ValueExt as _, ancestors::AncestorPairs, is_unbound,
+    AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, Deferral, FunctionTypeUnify,
+    LowOperator, LowShape, LowValue, Module, Node, NodeId, Operation, PendingSide, PendingSides,
+    Program, StaticModuleCache, StaticNodeId, ValueExt as _, ancestors::AncestorPairs, is_unbound,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -487,6 +487,25 @@ impl<P: Program> Module<P> {
             && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
     }
 
+    /// Whether two function values name **one logical function**.  A dynamic
+    /// closure repeatedly compared against the frozen function it was
+    /// materialized from ([`Function::static_origin`]) is equal by identity;
+    /// everything else is the ordinary `AnyFunctionId` equality.
+    ///
+    /// The lowlevel's `Function` identity is by id — a static ref and a dynamic
+    /// id are different kinds — but a materialization is the *same* function,
+    /// so unifying a value that names it through one ref against a value that
+    /// names it through the other must merge, not conflict.
+    pub fn function_identity_equal(&self, a: AnyFunctionId, b: AnyFunctionId) -> bool {
+        match (a, b) {
+            (AnyFunctionId::Dynamic(f), AnyFunctionId::Static(sref))
+            | (AnyFunctionId::Static(sref), AnyFunctionId::Dynamic(f)) => {
+                self.functions.get(f).and_then(|x| x.static_origin) == Some(sref)
+            }
+            _ => a == b,
+        }
+    }
+
     /// Whether `node`'s class holds a **function-type node**: the
     /// self-referential `[Function(fid), ↺]` that *is* a function's own type
     /// (`f : f`). Recognised by the same self-cycle the universe
@@ -725,6 +744,17 @@ impl<P: Program> Module<P> {
                     self.add_equality(ra, rb);
                 }
                 ok
+            }
+            // A materialized static closure and the frozen function it came
+            // from name **one** logical function: their `Function` values are
+            // equal by identity even though one is dynamic and the other
+            // static.  Checked before the generic value comparison, which
+            // compares `AnyFunctionId` by kind and would call them different.
+            (Some(LowValue::Function(a)), Some(LowValue::Function(b)))
+                if self.function_identity_equal(a, b) =>
+            {
+                self.add_equality(ra, rb);
+                true
             }
             // Two concrete values merge iff they are *fully* equal
             // ([`ValueExt::value_eq`] — handle payloads by content, which

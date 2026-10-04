@@ -370,6 +370,7 @@ fn gc_moves_an_assert_condition_with_its_function() {
         r#return: ret,
         parameter: param,
         return_type: NodeId::default(),
+        static_origin: None,
         asserts: vec![condition],
         parent: None,
         block: body,

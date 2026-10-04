@@ -1147,6 +1147,13 @@ pub struct Function {
     /// ([`Module::clone_signature`]) reads the signature's codomain from
     /// here, not from `r#return`'s slots.
     pub return_type: NodeId,
+    /// The static function this dynamic closure was **materialized from**, when
+    /// it is one ([`Module::static_clone_function`]); `None` for a closure the
+    /// source built.  It is the dynamic↔static half of function identity: a
+    /// materialized closure and the frozen function it came from name one
+    /// logical function, so unifying their `Function` values merges rather than
+    /// conflicts ([`Module::function_identity_equal`]).
+    pub static_origin: Option<StaticFunctionRef>,
     /// The lexical parent — the function in whose body this function is
     /// nested (or [`None`] at top level).  The chain of these links makes
     /// the template membership test: a nested closure's nodes belong to an

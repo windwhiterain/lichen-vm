@@ -271,6 +271,9 @@ impl<P: Program> Module<P> {
             r#return: NodeId::default(),
             parameter: NodeId::default(),
             return_type: NodeId::default(),
+            // The materialization's dynamic↔static identity: this closure names
+            // the frozen function it came from.
+            static_origin: Some(sref),
             asserts: Vec::new(),
             parent: ctx.branch_top,
             block: ctx.target,
