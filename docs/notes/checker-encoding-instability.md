@@ -4,7 +4,9 @@
 > *domain* read is gone: `kernel_param_shape`/`element_shape` were deleted and
 > `compile_fragment` now seeds, passes, and reads the parameter's **low type**
 > ([lowlevel-low-types](lowlevel-low-types.md)). What remains is the body's
-> graph walk, and that is what this note now describes.
+> graph walk, and that is what this note now describes. **The lowlevel's own
+> pair decoding is inventoried below and its body-graph read is closed**
+> (`control_flow` takes the domain and codomain values from its caller).
 > Points at: `crates/lichen-highlevel/src/shape.rs` (the encoding authority)
 > and `crates/lichen-compute/src/compute.rs` (the one component that still
 > reads around it).
@@ -16,10 +18,14 @@ type spine ends at the self-referential universe `K = [Type, ↺]`. **Inside the
 project that encoding has one owner** — `crates/lichen-highlevel/src/shape.rs`
 holds the layout as named constants and typed accessors (`shape_of`, `kind_of`,
 `is_function_type`, `attr_slot`), and the highlevel checker, the renderer and
-the language composition read the layout through it. The lowlevel does not hold
-it either: it became honestly untyped in Phase 2 (decision D1), keeping only
-generic graph facts such as "this class is a self-referential cycle", so there
-is no second copy anywhere to keep in step.
+the language composition read the layout through it. **That "one owner" claim was
+wrong about the lowlevel.** It does not hold the *constants*, but it decodes
+positions — element 0 is a value, element 1 is a type, a pair is 2- or 3-wide —
+in five sites, listed in "The lowlevel readers too" below. What Phase 2 (decision
+D1) did remove was the lowlevel's own *type* representation: there is no
+`type_marker`, no `type_of`, no `is_type` anywhere in the crate, so a lowlevel
+reader with a type question has nothing but the pair to answer it with. That is
+why the sites are there, and why they cannot be closed by deleting a helper.
 
 `lichen-compute`'s JIT is the one component that does not use that authority.
 It reads the same conventions out of raw nodes:
@@ -60,13 +66,55 @@ deferred cleaning this component up and asked for this label instead; Phase 5
 narrowed the label to the read side, and Phase 3c of the low-type design
 narrowed it again, to the body's graph walk.
 
+### The lowlevel readers too — five sites, one of them a defect
+
+An audit of `crates/lichen-lowlevel` for the pair convention. Five readers, and the
+distinction that matters is not *how much* each one knows but **whether the value
+it reads is an operand of the operation being performed**:
+
+| site | what it reads | verdict |
+|---|---|---|
+| `apply.rs:105`, `apply.rs:111` | element 1 of a **parameter** node — the declared type, for the `ApplyError` attribution only | **Wiring.** The apply pass built or cloned the pair it is reading; element 1 is an operand of the check it is performing. |
+| `apply.rs:160` | element 1 of the **return pair** it just cached, to bind the checker's result cell | **Wiring.** `wire_apply_result` is constructing the result; the cell is the third operand of the apply. |
+| `control_flow.rs:488-513` (`pair_value_node`) | a **body's** parameter or return, and a 2..=3 width test, to decide which half is the value | **Type-layer leak.** The caller already resolved this value; the width test is a heuristic standing in for a fact it holds exactly. **This is the defect.** |
+| `equality.rs:479-488` (`is_static_universe_id`) | a 2-element array whose element 1 points back at the same module and index | **Mixed.** The `[Type, ↺]` universe is the canonical instance, but the predicate is stated as a *generic* graph shape and unifies any two such cycles. It decodes the positions, and reads no meaning. |
+| `evaluation.rs:554` (`table_get_operands`) | element 0 and 1 of a `TableGet`'s operand, which the arm's own check already proved is a 2-element array | **Not an encoding reader.** It is a destructure of `[table, key]`; no pair is involved. |
+
+`low_type.rs:13-18` states the boundary correctly, and it is worth reading exactly:
+*"The pass never learns the `[value, type]` pair layout"* is a claim about **that
+pass**, not about the crate. `apply.rs` and `control_flow.rs` are in the same crate
+and do learn it. A per-analysis boundary is the honest description; a crate-wide one
+is not.
+
+**The defect is fixed by a caller contract, not by a lowlevel change.** A function's
+`parameter` and `r#return` are `NodeId`s that hold the checker's pair; `Function`
+says nothing about their shape (`lib.rs:1083-1084`). So `Module::control_flow`
+now takes the **domain and codomain values as arguments** — the JIT's own applied
+parameter, which `ParamSlot` already resolves — and `Module::define_in` takes the
+domain value for the same reason. A caller that states the value has done the
+decoding, and the lowlevel is left with no pair to sniff. The apply sites stay: their
+pair is an operand of the operation in hand, which is the same standing
+`lichen-compute`'s `value_of_node` has.
+
+**How the sites got there: they were never introduced.** `41bfa9e` ("crates
+refactor") shows `src/lowlevel/{equality,evaluation,function}.rs` arriving as pure
+renames, pair reading intact; `apply.rs` first appears with its type-slot doc
+comment already written (`7b65015`). `PAIR_TYPE_SLOT` was not named until
+`fc856a7` (Phase 1a) — the bare `items[1]` predates any constant by weeks. There is
+no earlier revision in which the lowlevel was free of the layout, because the
+lowlevel **is** the evaluator the checker's graph was written for: `P::Value` for
+the lichen frontend is the checker's own term, so the pair is inside the VM's value
+domain rather than a format it consumes.
+
 ## What "unstable" means here
 
 - **Inside the project** the encoding is owned, named, and still free to
   change: the cleanup's Phases 0–3 re-encoded it (the `shape` authority, the
   kind-marker registry, single-sourced codec tags and attribute slots), and
-  every internal reader followed. Nothing inside the repository reads the
-  layout except through the one module that states it.
+  every internal reader followed. One module states the layout; the sites that
+  read it without going through that module are the ones listed above, and they
+  are readable sites rather than a second statement of the encoding — no constant
+  or accessor is duplicated.
 - **Outside the project** the pair and kind layout is **not** a frozen
   contract, and this note is the statement of that. The two parts of it that
   *are* frozen are the ones an already-persisted artifact carries: the
@@ -94,3 +142,11 @@ a parameter element by its index path. A backend that read each body node's low
 type instead — which the pass now computes and stores — would remove the last
 of it. That is recorded as the open item in
 [compute-jit-low-types](compute-jit-low-types.md), not as work in flight.
+
+**One part of that residue is closed ahead of it.** Building the body's graph no
+longer needs the pair: `Module::control_flow` takes the domain and codomain values
+from its caller, so the lowlevel's *own* read of a function's `parameter` and
+`r#return` is gone, and with it `parameter_leaves`, `function_values` and the
+2..=3 width test that stood in for the value. What remains of this label is
+`lichen-compute`'s emitter walking the pair on the way *into* that graph, which is
+the item above and is deliberately not in flight.

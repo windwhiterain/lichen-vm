@@ -11,6 +11,17 @@
 //! could only disagree by being wrong in one file. The same is true of the
 //! aliasing below, which `emit_node` re-derived on every bare cell it reached.
 //!
+//! # The function's ends come from the caller
+//!
+//! A body's [domain and codomain](Module::control_flow) are **handed in as
+//! values**, not read off the function's `parameter` and `r#return` nodes. Those
+//! two nodes hold a `[value, type]` pair — that is the checker's encoding, which
+//! the apply machinery is the layer that knows (see `apply.rs`) and which
+//! [`crate::low_type`] is forbidden from learning. The caller that already holds
+//! the value node (`ParamSlot` in `lichen-compute`) states it rather than
+//! leaving this module a width test to guess with, so *this file stays a reader
+//! of values* the same way `low_type` stays a reader of classes.
+//!
 //! # The graph is not SSA over nodes, and that is the whole of this module
 //!
 //! A `NodeId` is not a value. The apply clone walk **unifies** a substituted
@@ -238,19 +249,38 @@ impl<P: Program> Module<P> {
         None
     }
 
-    /// What defines the value `node` names, read as a member of `function`'s
-    /// body.
+    /// What defines the value `node` names, as a member of a body over the
+    /// parameter value `domain`.
     ///
     /// **This is the rule that makes the graph SSA.** Three answers, in order:
     ///
     /// 1. **a parameter leaf** — `node` is in the same equality class as one of
-    ///    the function's domain leaves, so the value *is* that parameter. This is
-    ///    how a reduced same-module call's substituted parameter reads: the deep
-    ///    pass unified it with the argument.
+    ///    `domain`'s leaves, so the value *is* that parameter. This is how a
+    ///    reduced same-module call's substituted parameter reads: the deep pass
+    ///    unified it with the argument.
     /// 2. **a computation** — the node itself, or the class member that computes
     ///    it ([`Self::defining_member`]).
     /// 3. **opaque** — the value has no definition this graph can see.
-    pub fn define_in(&self, function: FunctionId, node: NodeId) -> Define {
+    ///
+    /// `domain` is a **value the caller resolved**, for the reason
+    /// [`Self::control_flow`] gives: the function's own `parameter` node is the
+    /// checker's `[value, type]` pair, and deciding what its value half is belongs
+    /// to whoever resolved it.
+    pub fn define_in(&self, domain: NodeId, node: NodeId) -> Define {
+        let leaves = self.value_leaves(domain).unwrap_or_default();
+        self.define_within(node, &leaves)
+    }
+
+    /// [`Self::define_in`]'s rule, over **already-resolved** domain leaves.
+    ///
+    /// The recursion carries the leaves because a view of a view re-enters the same
+    /// domain: resolving them per step would flatten the domain again at every
+    /// step, which is the cost that made this a second function.
+    ///
+    /// **No `FunctionId`.** The leaves are the whole of what the rule reads — its
+    /// only use for the function was to look the domain up on it, which is the
+    /// lookup [`Self::control_flow`] removed.
+    fn define_within(&self, node: NodeId, leaves: &[NodeId]) -> Define {
         // An `Index` is **usually a view of something already computed** — a
         // parameter read at a path, a `value_of` peel, an element of an array the
         // graph materialised. Only a *selection* computes anything, so resolving
@@ -258,15 +288,10 @@ impl<P: Program> Module<P> {
         if let Some(selection) = self.selection_of(node) {
             return match selection {
                 Selection::Computed => Define::Computed(node),
-                Selection::Views(view) => self.define_in(function, view),
+                Selection::Views(view) => self.define_within(view, leaves),
             };
         }
-        for (slot, leaf) in self
-            .parameter_leaves(function)
-            .unwrap_or_default()
-            .into_iter()
-            .enumerate()
-        {
+        for (slot, leaf) in leaves.iter().copied().enumerate() {
             if self.class_root(node) == self.class_root(leaf) {
                 return Define::Parameter { slot, leaf };
             }
@@ -311,7 +336,7 @@ impl<P: Program> Module<P> {
         let operands = self.operand_pair(operation.operand?, "Index").ok()?;
         let (target, index) = (operands[0], operands[1]);
         let constant = self.usize_value(index);
-        let array = self.value_half(target);
+        let array = self.pair_value_node(target);
         if let (Some(0), Some(array)) = (constant, array) {
             // SAFETY: `array` is a live node of `self`.
             if let Some(element) = unsafe { self.array_items(array) }
@@ -350,13 +375,6 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The **value** half of a `[value, type]` pair node, or `None` when it is
-    /// not a pair. See [`Module::pair_value_half`] for the width rule, which is
-    /// `apply.rs`'s and not this file's.
-    fn value_half(&self, node: NodeId) -> Option<NodeId> {
-        self.pair_value_half(node)
-    }
-
     /// The `n` a node holds, when it holds a plain integer literal.
     fn usize_value(&self, node: NodeId) -> Option<usize> {
         match self.structural_value(node) {
@@ -365,37 +383,18 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The function's parameter leaves: the **value** half of its `[value, type]`
-    /// pair, flattened. A function whose parameter node is not a pair (the
-    /// checker leaves a direct kernel-apply's codomain unbound and stores the
-    /// value node directly) is the one leaf.
-    pub fn parameter_leaves(&self, function: FunctionId) -> Result<Vec<NodeId>, String> {
-        let parameter = self.functions[function].parameter;
-        match self.array_element(parameter, 0) {
-            Ok(value) => self.value_leaves(value),
-            // Not a pair: the whole parameter node is the one leaf.
-            Err(_) => Ok(vec![parameter]),
-        }
-    }
-
-    /// Element `at` of an array node.
-    fn array_element(&self, array: NodeId, at: usize) -> Result<NodeId, String> {
-        // SAFETY: `array` is a live node of `self`.
-        let items = unsafe { self.array_items(array) }
-            .ok_or_else(|| format!("node {array:?} is not an array value"))?;
-        match items.get(at).map(|item| item.node) {
-            Some(AnyNodeId::Dynamic(node)) => Ok(node),
-            Some(AnyNodeId::Static(_)) => Err(format!(
-                "element {at} of node {array:?} is a static reference into a frozen module"
-            )),
-            None => Err(format!(
-                "node {array:?} has no element {at}: it has {} element(s)",
-                items.len()
-            )),
-        }
-    }
-
-    /// The control-flow graph of `function`.
+    /// The control-flow graph of `function`, over the **domain and codomain
+    /// values the caller hands in**.
+    ///
+    /// `domain` is the function's parameter *value* — a scalar, or a tuple whose
+    /// items are read as the parameters, one scalar leaf each. `codomain` is the
+    /// value the body returns, flattened the same way. Both are values, not the
+    /// function's entry nodes: a `[value, type]` pair is the checker's encoding,
+    /// and the layer that resolved it names the value — the JIT's own applied
+    /// parameter in `lichen-compute`, the deep pass's own result. This module
+    /// therefore never decides which pair-shaped array it is looking at, and
+    /// passing a scalar's pair node where its value belongs is not a *detectable*
+    /// mistake here; it is simply a different function.
     ///
     /// **Straight-line only.** A body with no branch is one block, and that is
     /// every body the compute surface lowers today. A `@loop`-marked function
@@ -403,7 +402,12 @@ impl<P: Program> Module<P> {
     /// templates and the nest is not built yet
     /// ([`docs/notes/loop-conversion.md`](../../docs/notes/loop-conversion.md)
     /// §8.6).
-    pub fn control_flow(&self, function: FunctionId) -> Result<Body, String> {
+    pub fn control_flow(
+        &self,
+        function: FunctionId,
+        domain: NodeId,
+        codomain: NodeId,
+    ) -> Result<Body, String> {
         if self.function_is_looping(function) {
             return Err(format!(
                 "function {function:?} is a `@loop` binding and no loop has been built for it yet: \
@@ -412,11 +416,11 @@ impl<P: Program> Module<P> {
                  (`docs/notes/loop-conversion.md` §8.6)"
             ));
         }
-        let leaves = self.parameter_leaves(function)?;
-        let values = self.function_values(function)?;
+        let leaves = self.value_leaves(domain)?;
+        let values = self.value_leaves(codomain)?;
         let params: Vec<NodeId> = leaves
             .iter()
-            .map(|leaf| self.define_in(function, *leaf))
+            .map(|leaf| self.define_in(domain, *leaf))
             .filter_map(|define| match define {
                 Define::Computed(node) => Some(node),
                 Define::Parameter { leaf, .. } => Some(leaf),
@@ -433,7 +437,7 @@ impl<P: Program> Module<P> {
         let mut on_stack: Vec<(NodeId, usize)> = values.iter().map(|&node| (node, 0)).collect();
         on_stack.reverse();
         while let Some((node, at)) = on_stack.last().copied() {
-            let Define::Computed(definition) = self.define_in(function, node) else {
+            let Define::Computed(definition) = self.define_in(domain, node) else {
                 on_stack.pop();
                 seen.insert(node);
                 continue;
@@ -460,7 +464,7 @@ impl<P: Program> Module<P> {
         let leading = values
             .iter()
             .copied()
-            .filter_map(|value| match self.define_in(function, value) {
+            .filter_map(|value| match self.define_in(domain, value) {
                 Define::Computed(node) => Some(node),
                 Define::Parameter { leaf, .. } => Some(leaf),
                 Define::Opaque => None,
@@ -481,38 +485,22 @@ impl<P: Program> Module<P> {
         })
     }
 
-    /// The values the function returns, flattened: the **value** half of its
-    /// `[value, type]` pair when that half is a pair itself (a tuple codomain),
-    /// one value when it is a scalar, and the return node itself when the
-    /// checker stored a bare value (a direct kernel-apply's codomain is left
-    /// unbound, so its return is the value node).
-    fn function_values(&self, function: FunctionId) -> Result<Vec<NodeId>, String> {
-        let r#return = self.functions[function].r#return;
-        match self.pair_value_half(r#return) {
-            // A scalar codomain's value half is a leaf, and an array of leaves is
-            // a tuple codomain — the same one-level rule `value_leaves` states.
-            Some(value) => self.value_leaves(value),
-            None => Ok(vec![r#return]),
-        }
-    }
-
     /// The **value** half of a `[value, type]` pair node, or `None` when the node
     /// is not one.
     ///
     /// **The width is `apply.rs`'s, not a guess.** That module resolves the
     /// apply's return pair with `items[1]` as the type slot and says so for "a
     /// 2-wide pair and for a 3-wide `[value, type, perspective]` pair alike", so
-    /// a pair here is two **or three** wide and the value is element 0 in both.
-    /// Reading it as two-wide alone would drop the value half of every
-    /// perspective-bearing pair.
+    /// an encoding pair here is two **or three** wide and element 0 is the value
+    /// in both; reading it as two-wide alone would drop the value half of every
+    /// perspective-bearing pair. A wider array is therefore not an encoding pair,
+    /// which is what keeps an *operand* array from being read as one.
     ///
-    /// This is the one place in this module that knows an encoding, and it is
-    /// here because the lowlevel already owns the convention — `Function` calls
-    /// its parameter node a *pair*, the apply resolves its arity, and the
-    /// evaluator peels `Index(pair, 0)`. It is **not** the type layer's business
-    /// to be told again: no shape is derived here, and the pass in
-    /// [`crate::low_type`] still learns no layout.
-    fn pair_value_half(&self, node: NodeId) -> Option<NodeId> {
+    /// **Only [`Self::selection_of`] calls this.** It needs the pair question
+    /// answered to tell an operand array from an encoding pair, and an encoding
+    /// pair is the one thing in this module that other code hands in already
+    /// resolved ([`Self::control_flow`]). A body's value is not looked for here.
+    fn pair_value_node(&self, node: NodeId) -> Option<NodeId> {
         // SAFETY: `node` is a live node of `self`.
         let items = unsafe { self.array_items(node) }?;
         if !(2..=3).contains(&items.len()) {
