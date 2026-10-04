@@ -2370,7 +2370,7 @@ where
     // node names through the lowlevel and emits a value per definition, so a
     // shared subexpression is emitted once and no consumer re-derives the
     // operand order.
-    let body = Lower::lower(module, &params, param_value, ret_value, &mut tally)?;
+    let body = Lower::lower(module, &params, param_value, fid, ret_value, &mut tally)?;
 
     Ok(KernelFragment {
         param_shape: kernel_shape(&param_shape),
@@ -2578,7 +2578,7 @@ where
     // (`docs/notes/loop-conversion.md` §6).  Answering here would replace a
     // specific cause with a generic one.
     for (position, output) in outputs.iter().enumerate() {
-        let conditional = match module.define_in(cfg_value, *output) {
+        let conditional = match module.define_in(fid, *output) {
             lichen_lowlevel::Define::Computed(definition) => matches!(
                 module.selection_of(definition),
                 Some(lichen_lowlevel::Selection::Computed)
@@ -2593,7 +2593,7 @@ where
         }
     }
     let body_instr =
-        Lower::lower_index_function(module, &params, cfg_value, &outputs, class, &mut tally)?;
+        Lower::lower_index_function(module, &params, cfg_value, fid, &outputs, class, &mut tally)?;
     if tally.writes != outputs.len() {
         return Err(format!(
             "a parallel index function emitted {} write(s) but its codomain names {} \

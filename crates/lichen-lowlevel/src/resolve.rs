@@ -224,7 +224,38 @@ impl<P: Program> Module<P> {
     /// 2. **a computation** — the node itself, or the class member that computes
     ///    it ([`Self::defining_member`]).
     /// 3. **opaque** — the value has no definition this graph can see.
-    pub fn define_in(&self, domain: NodeId, node: NodeId) -> Define {
+    /// The leaves of `function`'s **parameter domain** — the pair's value half,
+    /// flattened one level.
+    ///
+    /// **This is where a domain is derived, and deriving it in one place is what
+    /// lets every reader agree.** The value half is a decoding of the pair, and a
+    /// caller that decoded it separately could decode it differently.
+    pub fn parameter_leaves(&self, function: FunctionId) -> Result<Vec<NodeId>, String> {
+        let parameter = self.functions[function].parameter;
+        match self.pair_value_node(parameter) {
+            Some(value) => self.value_leaves(value),
+            None => Ok(vec![parameter]),
+        }
+    }
+
+    /// What defines the value `node` names, against the **function whose domain
+    /// it is read in**.
+    ///
+    /// **The domain is the function's parameter, derived here** rather than handed
+    /// in: the value half is a decoding of the pair, and every caller that decoded
+    /// it separately could decode it differently. A caller that already holds the
+    /// value half reads [`Self::value_leaves`] directly.
+    ///
+    /// **Three answers**, in order:
+    ///
+    /// 1. **a parameter leaf** — `node` is in the same equality class as one of
+    ///    the domain's leaves, so the value *is* that parameter. This is how a
+    ///    reduced same-module call's substituted parameter reads: the deep pass
+    ///    unified it with the argument.
+    /// 2. **a computation** — the node itself, or the class member that computes
+    ///    it ([`Self::defining_member`]).
+    /// 3. **opaque** — the value has no definition this graph can see.
+    pub fn define_in(&self, function: FunctionId, node: NodeId) -> Define {
         // An `Index` is **usually a view of something already computed** — a
         // `value_of` peel, an element of an array the graph materialised. Only a
         // *selection* computes anything, so resolving the views here is what
@@ -232,16 +263,10 @@ impl<P: Program> Module<P> {
         if let Some(selection) = self.selection_of(node) {
             return match selection {
                 Selection::Computed => Define::Computed(node),
-                Selection::Views(view) => self.define_in(domain, view),
+                Selection::Views(view) => self.define_in(function, view),
             };
         }
-        // **The domain's own node is a parameter too**, not only its leaves: a body may
-        // read a tuple domain whole (`k x` rather than `k (x(0), x(1))`), and that
-        // read is the parameter's own value.
-        if self.class_root(domain) == self.class_root(node) {
-            return Define::Parameter(domain);
-        }
-        for leaf in self.value_leaves(domain).unwrap_or_default() {
+        for leaf in self.parameter_leaves(function).unwrap_or_default() {
             if self.class_root(node) == self.class_root(leaf) {
                 return Define::Parameter(leaf);
             }

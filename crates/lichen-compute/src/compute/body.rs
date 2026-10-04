@@ -39,7 +39,9 @@ use std::collections::HashMap;
 use lichen_kernel_ir::{
     KernelBin, KernelBody, KernelInstr, KernelShape, ScalarClass, Terminator, ValueId,
 };
-use lichen_lowlevel::{AnyNodeId, Define, LowOperator, LowValue, Module, NodeId, Program};
+use lichen_lowlevel::{
+    AnyNodeId, Define, FunctionId, LowOperator, LowValue, Module, NodeId, Program,
+};
 use lichen_utils::extend::AsEnum;
 
 use super::{
@@ -82,6 +84,11 @@ pub struct Lower<'a, P: Program> {
     /// the caller states it rather than this file decoding a pair out of
     /// `Function::parameter`.
     domain: NodeId,
+    /// **The function the domain belongs to.** `Module::define_in` takes the
+    /// function and derives the domain itself, so that the value half is decoded
+    /// in one place rather than by every caller — the same fact, read the same
+    /// way, whichever side asks.
+    function: FunctionId,
     tally: &'a mut Positions,
     body: KernelBody,
     entry: usize,
@@ -127,6 +134,7 @@ where
         module: &'a Module<P>,
         params: &'a [ParamSlot],
         domain: NodeId,
+        function: FunctionId,
         codomain: NodeId,
         tally: &'a mut Positions,
     ) -> Result<KernelBody, String> {
@@ -144,6 +152,7 @@ where
             module,
             params,
             domain,
+            function,
             tally,
             body,
             entry,
@@ -181,6 +190,7 @@ where
         module: &'a Module<P>,
         params: &'a [ParamSlot],
         domain: NodeId,
+        function: FunctionId,
         outputs: &[NodeId],
         class: ScalarClass,
         tally: &'a mut Positions,
@@ -200,6 +210,7 @@ where
             module,
             params,
             domain,
+            function,
             tally,
             body,
             entry,
@@ -266,7 +277,7 @@ where
             // decided.
             None => match self.literal(node) {
                 Some(value) => value,
-                None => match self.module.define_in(self.domain, node) {
+                None => match self.module.define_in(self.function, node) {
                     Define::Parameter(leaf) => self.parameter(self.slot_of(leaf)?)?,
                     Define::Computed(definition) => self.definition(definition)?,
                     Define::Opaque => self.opaque(node)?,
