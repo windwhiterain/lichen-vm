@@ -67,6 +67,7 @@ Every note opens with a `> Status:` line:
 | [Raw named read `X::a`](notes/raw-field.md) | `lichen-language-lex`, `lichen-language-parser`, `lichen-language` (`compile`), `lichen-highlevel` (`ir`/`checker`) | current |
 | [Placeholder `_` anywhere](notes/placeholder-anywhere.md) | `lichen-language-lex`, `lichen-language-parser`, `lichen-language-server` (`analysis`) | current |
 | [`type_of` is a standard-library function](notes/type-of-in-std.md) | `lichen-language-lex`/`-parser`, `lichen-language` (`compile`/`resolve`), `lichen-highlevel` (`ir`/`checker`), `lichen-compute`, `lichen-std` | current |
+| [One `unify`, and the write rules are member-local](notes/unify-write-handoff.md) | `lichen-lowlevel` (`equality`), `lichen-utils` (`disjoint`) | **in progress** — `union_with_value` is gone; the write path is the open half, with the two failed attempts and their refutation recorded |
 | [No type mode](notes/no-type-mode.md) | `lichen-language-parser` | current |
 | [Record programs (modules)](notes/record-program.md) | `lichen-language-parser`, `lichen-language` (`compile`/`session`), `lichen-language-server` (`analysis`) | current |
 | [Separating lexer & parser from the language](notes/frontend-syntax-separation.md) | `lichen-language-lex`, `lichen-language-parser`, `lichen-language`, `lichen-highlevel` | current |
