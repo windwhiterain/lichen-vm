@@ -1942,8 +1942,17 @@ struct ParallelRoles {
     scalars: Vec<Vec<usize>>,
     /// Input buffer paths, in declaration order.
     inputs: Vec<Vec<usize>>,
+    /// **The field names each input path names**, parallel to `inputs`.
+    ///
+    /// Kept beside the positions because resolving a field's name needs the
+    /// struct's field list, and the only place that has `&mut Module` is the
+    /// walk that built this table. A later reader holds `&Module` and would have
+    /// to re-resolve the type to learn a name it already knew.
+    input_names: Vec<Vec<Option<&'static str>>>,
     /// Output buffer paths, in declaration order.
     outputs: Vec<Vec<usize>>,
+    /// The field names each output path names, parallel to `outputs`.
+    output_names: Vec<Vec<Option<&'static str>>>,
 }
 
 impl ParallelRoles {
@@ -2110,26 +2119,39 @@ where
     let Some(field_types) = (unsafe { array_items_any(module, shape) }) else {
         return Err(PARALLEL_PARAM_FIELDS.into());
     };
-    let count_under = |module: &mut Module<P>, at: usize| -> Option<usize> {
+    // **The names under a field are kept, not just counted.** Resolving one later
+    // needs `struct_fields_of_slot`, which takes `&mut Module` — and the place
+    // that resolves a buffer position is reached from the lowering, which holds
+    // `&Module`. Here, `&mut` is already in hand, so the names are read once and
+    // the later search needs nothing but `field_name`.
+    let fields_under = |module: &mut Module<P>, at: usize| -> Option<Vec<Option<&'static str>>> {
         let field = field_types.get(at)?.node;
-        struct_fields_of_slot(module, field).map(|(names, _)| names.len())
+        struct_fields_of_slot(module, field).map(|(names, _)| names)
     };
-    let Some(input_count) = count_under(module, inputs_at) else {
+    let Some(input_names) = fields_under(module, inputs_at) else {
         return Err(PARALLEL_PARAM_FIELDS.into());
     };
-    let Some(output_count) = count_under(module, outputs_at) else {
+    let Some(output_names) = fields_under(module, outputs_at) else {
         return Err(PARALLEL_PARAM_FIELDS.into());
     };
+    let input_count = input_names.len();
+    let output_count = output_names.len();
     let mut roles = ParallelRoles::default();
     for field in 0..names.len() {
         if field == inputs_at {
-            roles
-                .inputs
-                .extend((0..input_count).map(|j| vec![inputs_at, j]));
+            for j in 0..input_count {
+                roles.inputs.push(vec![inputs_at, j]);
+                roles
+                    .input_names
+                    .push(vec![names[inputs_at], input_names[j]]);
+            }
         } else if field == outputs_at {
-            roles
-                .outputs
-                .extend((0..output_count).map(|j| vec![outputs_at, j]));
+            for j in 0..output_count {
+                roles.outputs.push(vec![outputs_at, j]);
+                roles
+                    .output_names
+                    .push(vec![names[outputs_at], output_names[j]]);
+            }
         } else {
             roles.scalars.push(vec![field]);
         }
@@ -3607,10 +3629,30 @@ where
         return Ok(None);
     };
     if let Some(roles) = &slot.roles {
-        // **A whole-parameter path is offered as a field path first.**
-        // `Index(param_pair, 0)` reads the pair's value half, which is the parameter
-        // *whole* for a positional domain and the *first field* for a struct one —
-        // and `roles` is exactly the fact that says which.
+        // **A struct field read is found by class, with this table driving the
+        // search.** Walking *down* from the read reaches the field it read and
+        // stops — the parameter is above it, and the two are joined only by the
+        // equality class (`alias_read`). So each path in the table is resolved
+        // structurally *from the pair*, by the field **names** this table already
+        // holds, and the one class-equal to the read is the position. That is a
+        // bounded question rather than a walk hoping to land on the parameter.
+        //
+        // **`param_path` is deliberately not tried first.** It answers a struct
+        // field by pushing a `Named` step, which `resolve_steps` then looks up in
+        // the parameter type's name table — and that table is not reachable with
+        // `&Module`, so it refuses with a field name it could not place. The
+        // measurement that forced the class search is in [`param_path`]'s header.
+        let wanted = module.class_root(node);
+        for (position, names) in roles.input_names.iter().enumerate() {
+            if let Some(reached) = node_at_named_path(module, slot.pair, names)
+                && module.class_root(reached) == wanted
+            {
+                return Ok(Some(position));
+            }
+        }
+        // **The chain walk is the fallback, not the answer.** It resolves a
+        // *positional* parameter read — the `[n, (buffers…)]` shape — where the
+        // role table is empty and there is nothing to search.
         let path = param_path(module, slot.pair, node)?;
         if let Some(path) = path {
             let mut as_field = vec![0];
@@ -3620,12 +3662,6 @@ where
             }
             return Ok(roles.input_pos(&path));
         }
-        // **A struct field read needs a search this function cannot do.** Resolving
-        // a role path structurally takes the struct's field list
-        // (`struct_fields_of_slot`), which needs `&mut Module`; this is reached
-        // from the lowering, which holds `&Module`. The measurement saying the
-        // search is the right mechanism is in [`param_path`]'s header — what is
-        // missing there is a `&mut`, not a rule.
         return Ok(None);
     }
     let cfg_value = slot.value;
@@ -4284,6 +4320,49 @@ where
         .get(PAIR_TYPE_SLOT)
         .map(|item| item.node)?;
     type_term_slot(module, type_slot, TYPE_SHAPE_SLOT)
+}
+
+/// The node the parameter's value holds at a path of field **names**.
+///
+/// **This walks down the parameter, which is the opposite of [`param_path`]'s
+/// walk.** That one asks "which parameter path is this read" by climbing from the
+/// read; this one asks "what is at this path" by descending from the pair. The
+/// second is what a struct field read needs, because the evaluator aliased the
+/// read to the field and the link back to the parameter is the equality class
+/// rather than the shape — see [`parallel_buffer_pos`].
+///
+/// Each step is an `Index` whose selector is compared to the wanted field's
+/// name, so **the caller supplies the names** rather than this reading a type it
+/// has no `&mut` to resolve.
+fn node_at_named_path<P>(
+    module: &Module<P>,
+    param_pair: NodeId,
+    names: &[Option<&'static str>],
+) -> Option<NodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let mut node = pair_value_node(module, param_pair)?;
+    for wanted in names {
+        let operation = module.node_operation(node)?;
+        if !matches!(
+            AsEnum::<LowOperator>::as_enum(&operation.operator),
+            Some(LowOperator::Index)
+        ) {
+            return None;
+        }
+        let (target, selector) = operand_pair(module, operation.operand).ok()?;
+        // **A read can name its field or number it**, and a struct field read is
+        // the named form (`Index(alias, "in")`). Both are accepted, because the
+        // table speaks names and the graph may speak either.
+        if field_name(module, selector).ok()? != *wanted {
+            return None;
+        }
+        node = target.dynamic()?;
+    }
+    Some(node)
 }
 
 /// Flatten a parameter index `path` to a wasm local index, using the domain
