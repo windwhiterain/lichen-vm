@@ -73,11 +73,6 @@ pub enum DiagKind {
     /// type — structs are nominal, so only a struct type instantiates.
     /// Expected = a struct type, found = the callee's type.
     InstantiateCallee,
-    /// A `.name` argument in a struct instantiation whose callee's struct
-    /// type is not statically known (an unbound parameter, a deferred read):
-    /// the name table — and so the definition-order reorder — is unavailable
-    /// at check time.
-    InstantiateNamesNotStatic,
     /// A homogeneous literal's elements must share one type — an array's
     /// elements or a set's members.  Expected = the shared element type,
     /// found = this element's type.

@@ -686,13 +686,23 @@ maps every span back to the original file.
   an excess positional argument (`StructExcessField`), and a `.name`
   argument against a struct type with no names (`StructAnonymousField` — no
   longer reachable from source, since every definition is named, and kept for
-  hand-built IR).  The name
-  table — and so the reorder — must be statically known: through an unbound
-  callee (a parameter) a named argument is an `InstantiateNamesNotStatic`
-  diagnostic ("named arguments require a statically known struct type").
-  After
+  hand-built IR).  After
   reordering, each argument's type is checked against its field's type as
   usual.
+  When the struct type is **not statically known** — an unbound callee (a
+  parameter) or a placeholder — nothing is refused: the instantiation is
+  unresolved too, and the reorder is a **lazy read** that resolves at the
+  unification binding the callee's type.  `f = s => s(.y Int, .x 1); f (S)`
+  and `f (_(.x 1, .y 2))` reorder at the apply (with `f = x: S => x` and
+  `S = struct<.x Int, .y Int>`), the same order the positional form already
+  defers in.  The supplying argument is found by a lookup keyed by the
+  field's own name — or, for a positional argument, by its rank among the
+  positional ones — and, when every argument's type is decided, by that type
+  too, so a field whose declared type no supplying argument matches is a
+  lookup miss (`TableMiss`) at the moment the type resolves, and the arity is
+  the field-list unify's, as for a positional instantiation.  A **duplicate**
+  name is refused at check time: one name supplying two positions is a
+  structural mismatch whatever the field list is.
 - **Dependent array types (pinning).**  The length of `array<T, n>` is an arbitrary
   expression, so `array<Int, n>` where `n` is bound is a legal dependent type.  When
   an annotation compares a value against such a type, the length read — an

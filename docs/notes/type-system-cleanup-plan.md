@@ -502,22 +502,28 @@ These change or bless semantics; each needs an explicit decision (§7):
   non-struct callee is an `InstantiateCallee` diagnostic at the callee, an
   unbound callee is pinned to a struct kind (re-checked per apply), a
   call-result callee is force-evaluated at check time, and named arguments
-  through a non-statically-known callee are an honest
+  through a non-statically-known callee were an honest
   `InstantiateNamesNotStatic` diagnostic.  ~~A ≠2-field struct through a
   param-dependent call-result callee was reported to false-error at check
   time~~ — **not reproducible**: probed on the integrated tree before and
   after the D1 hook extraction, `f = g => (g (0))(1, 2, 3)` with a 3-field
   struct checks and evaluates (`(1, 2, 3): struct<Int, Int, Int>`), so the
-  positional path was never arity-limited.  The real constraint on that path
-  is the named one above, and it is a decision, not a gap: a lazy
-  definition-order reorder is inexpressible (the lazy vocabulary has no
-  scatter/gather, and name tables unify by handle, not by content).  **It
-  cannot be fixed by being smarter about static analysis**: lichen binds
-  names per apply, and whether the value arriving *is* a struct type is
-  knowable only at that apply, never at the definition — "is this callee a
-  struct" is a per-call-site fact by construction.  Any scheme that decided it
-  earlier would have to add declarative constraints the language does not
-  have.  The honest diagnostic is the end state, not a waypoint.
+  positional path was never arity-limited.  The named half of that clause is
+  **superseded** (`feature/deferred-instantiate`) and the argument below it
+  was wrong about the encoding: the reorder needs no scatter/gather — the
+  struct marker carries its field names **in definition order** beside the
+  name→index table, so a definition position's *name* is a constant subscript
+  away, and the argument supplying it is found by a lookup keyed by that name
+  (and, when the types are decided, by the field's type, which is how the
+  field-type check fires).  A named instantiation through an unresolved callee
+  now checks and reorders when the type resolves;
+  `DiagKind::InstantiateNamesNotStatic` is gone.  The decision that was taken
+  as "the honest diagnostic is the end state" is therefore reversed, and the
+  recorded reason — "a lazy definition-order reorder is inexpressible (the
+  lazy vocabulary has no scatter/gather, and name tables unify by handle, not
+  by content)" — did not hold: the reorder is positional reads into the
+  call-order array, and the type comparison is the table read's own
+  content equality, not a handle comparison.
 - **D4 — `Type : Type` wording.** Compound types are *not* typed by `Type`
   (they carry `[marker, Type]` kinds), contradicting the README/spec
   wording. Decide the honest statement and spec it.

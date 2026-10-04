@@ -167,11 +167,18 @@ except the two reds §4.4 and [class-channel](class-channel.md) §5.3 own — an
 long-standing oddity is gone with the array: the write's fields have *independent*
 type cells, so `.at Int` no longer shares a cell with `.value Float`.
 
-**The `_` spelling is refuted** (superior's suggestion, measured): writing the
-argument as `_(.from buf, .at i)` instead of `(compute.Read _)(…)` is refused with
-`named arguments require a statically known struct type` — a named-argument
-construction needs the struct's name table resolved at check time, and an
-instantiation with nothing to instantiate from has none.
+**The `_` spelling is no longer refused** (its refusal was the measurement
+this paragraph recorded): writing the argument as `_(.from buf, .at i)` used to
+be refused with `named arguments require a statically known struct type`,
+because a named-argument construction needed the struct's name table resolved at
+check time and an instantiation with nothing to instantiate from had none.  A
+named instantiation through an unresolved callee now **defers** — the reorder is
+a lazy read woken by the unification that binds the callee
+(`docs/language-spec.md` §Named instantiation arguments) — so `_(…)` checks
+instead of being refused, and whether it *resolves* depends on what binds the
+placeholder (for an argument of a plain function, its parameter's type).  The
+wrappers keep the struct spelling the rest of this section chose, for the
+reasons §4.1 gives, not because `_` is impossible.
 
 ### 4.4 What one test still loses, and why it is not the struct
 

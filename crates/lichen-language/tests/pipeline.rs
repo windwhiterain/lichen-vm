@@ -1801,22 +1801,44 @@ fn an_instantiation_of_a_non_struct_type_is_a_nominal_error() {
 }
 
 #[test]
-fn a_named_instantiation_through_a_parameter_reports_the_honest_gap() {
-    // `s(.x 1, .y Int)` through a parameter: the struct's name table is not
-    // statically known, so the definition-order reorder cannot be computed —
-    // the diagnostic says so instead of the false "no named fields" claim.
-    let d = diags("S = struct<.x Int, .y Type>\nf = s => s(.x 1, .y Int)\nf (S)");
-    assert!(
-        d.iter().all(|diag| diag
-            .check
-            .as_ref()
-            .is_some_and(|c| c.kind == DiagKind::InstantiateNamesNotStatic)),
-        "no false anonymous-struct claim: {d:?}"
+fn a_named_instantiation_through_a_parameter_reorders_when_the_type_resolves() {
+    // `S = struct<.x Int, .y Type>; f = s => s(.y Int, .x 1); f (S)` — the
+    // callee's name table is not statically known through the parameter, so
+    // the instantiation is unresolved too: the reorder is a lazy read that
+    // resolves at the apply binding `s` to `S`.
+    let (module, root) =
+        run("S = struct<.x Int, .y Type>\nf = s => s(.y Int, .x 1)\na = f (S)\n(a.x, a.y)");
+    let mut module = module;
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(ids.len(), 2);
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[0]))
+                .as_ref()
+                .unwrap()
+        ),
+        1,
+        "a.x reads the argument that named .x"
     );
-    assert!(
-        d[0].message.contains("statically known struct type"),
-        "{}",
-        d[0].message
+    assert_eq!(
+        module.node_value(AnyNodeId::Dynamic(ids[1])),
+        Some(LangValue::TypeValue(TypeValue::TypeInt)),
+        "a.y reads the argument that named .y"
+    );
+}
+
+#[test]
+fn a_named_instantiation_through_a_parameter_checks_the_field_types() {
+    // The same deferred reorder: the supplying lookup carries each argument's
+    // type beside its name, so a field whose declared type no supplying
+    // argument matches is a miss there — refused when the callee's type
+    // resolves, never a silently wrong field.
+    let d = diags("S = struct<.x Int, .y Type>\nf = s => s(.x Int, .y 1)\nf (S)");
+    assert_eq!(
+        d[0].check.as_ref().expect("a checker diagnostic").kind,
+        DiagKind::TableMiss,
+        "the supplying lookup misses on the mismatched field type: {d:?}"
     );
 }
 

@@ -116,4 +116,11 @@ pub use lichen_preprocess::{SOURCES_DIR, lichendir, sources_root};
 /// `7` added the float value to the body's value encoding (`LowValue::Float`,
 /// value tag `8`, written as its bits).  That is a change to the encoding half,
 /// so the check above retires the artifacts written before it.
-const ARTIFACT_FORMAT_VERSION: u32 = 7;
+///
+/// `8` added the struct marker's third field, the field names in definition
+/// order (`[TypeId, names, names_in_order]`).  The body's *node* encoding is
+/// unchanged — a marker is an ordinary array — but its meaning is not: a
+/// 2-field marker is no longer a struct marker, so an artifact written before
+/// this would read its struct types as unrecognised shapes rather than fail.
+/// The bump is what turns that into the recompile the check above intends.
+const ARTIFACT_FORMAT_VERSION: u32 = 8;

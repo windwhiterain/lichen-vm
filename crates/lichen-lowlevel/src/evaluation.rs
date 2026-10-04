@@ -641,8 +641,23 @@ impl<P: Program> Module<P> {
         // propagates flags through it; the forced pass runs the computation
         // behind it — shallow markers included — so a masked operand
         // resolves instead of gating the operation lazy.
+        //
+        // An **unproven** node needs that walk even when it already holds a
+        // value: its concreteness is derived partly from its operand's verdict
+        // ([`Self::value_is_parameterized`]), so an operation whose operand
+        // chain was walked while it was still waiting keeps reading as
+        // unproven after the chain resolves — while the value it computed is
+        // decided.  A reader that takes the verdict for "this is not decided
+        // yet" (`Module::key_state`, which gates a `TableGet` on it) would then
+        // never see that value.  Re-forcing the operand is what makes the
+        // verdict fresh; it is the same walk an unevaluated operation gets.
+        // Read only under `force_operand`, so the deep pass pays nothing.
+        let unproven = force_operand
+            && self.nodes[node]
+                .evaluated_deep
+                .is_some_and(|deep| deep.parameterized);
         if force_operand
-            && self.nodes[node].value.is_none()
+            && (self.nodes[node].value.is_none() || unproven)
             && let Some(operand) = self.nodes[node].operation.and_then(|op| op.operand)
         {
             let block = self.nodes[node].block;

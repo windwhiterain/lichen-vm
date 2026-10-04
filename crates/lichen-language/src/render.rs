@@ -296,9 +296,6 @@ where
             "the callee of an instantiation must be a struct type, found {}",
             printer.node(d.a)
         ),
-        DiagKind::InstantiateNamesNotStatic => {
-            "named arguments require a statically known struct type".to_string()
-        }
         // A binary operator's expected side is the class the operation
         // computes over — `Int` for the `Int`-only operators and the default
         // class, `Float` when an operand selected it — so the expected half is

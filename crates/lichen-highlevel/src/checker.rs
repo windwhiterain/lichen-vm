@@ -895,6 +895,21 @@ where
         self.one_value
     }
 
+    /// A constant `USize` node — a subscript or a table key a rule states
+    /// rather than computes.  `0` and `1` use the shared nodes ([`Self::zero`],
+    /// [`Self::one`]); anything else is allocated where it is asked for.
+    pub(super) fn usize_node(&mut self, n: usize) -> NodeId {
+        match n {
+            0 => self.zero(),
+            1 => self.one(),
+            _ => self.alloc_node(
+                self.current_block,
+                None,
+                Some(P::Value::from(LowValue::USize(n))),
+            ),
+        }
+    }
+
     /// The interned `Str(name)` key node for a field name — one node per
     /// unique name, shared across every read of it (a `TableGet(names, name)`
     /// only compares content, and the frontend already interns the string
@@ -1043,14 +1058,16 @@ where
         (shape, kind, pair)
     }
 
-    /// The struct marker node `[TypeId, names]` — the two-field kind marker
-    /// of a struct type (layout:
+    /// The struct marker node `[TypeId, names, names_in_order]` — the
+    /// three-field kind marker of a struct type (layout:
     /// [`shape::STRUCT_MARKER_ID_SLOT`](crate::shape::STRUCT_MARKER_ID_SLOT) /
-    /// [`shape::STRUCT_MARKER_NAMES_SLOT`](crate::shape::STRUCT_MARKER_NAMES_SLOT)).
+    /// [`shape::STRUCT_MARKER_NAMES_SLOT`](crate::shape::STRUCT_MARKER_NAMES_SLOT) /
+    /// [`shape::STRUCT_MARKER_NAMES_ORDER_SLOT`](crate::shape::STRUCT_MARKER_NAMES_ORDER_SLOT)).
     /// The single construction point both `struct<…>` types and
-    /// struct-returning blocks use.
-    fn struct_marker_node(&mut self, id: NodeId, names: NodeId) -> NodeId {
-        self.array_node(self.current_block, &[id, names])
+    /// struct-returning blocks use — and the deferred instantiation's pin, whose
+    /// three cells all stay open.
+    fn struct_marker_node(&mut self, id: NodeId, names: NodeId, names_in_order: NodeId) -> NodeId {
+        self.array_node(self.current_block, &[id, names, names_in_order])
     }
 
     /// A struct type's nominal id node — the [`TypeOperator::Fresh`] call one
@@ -1069,14 +1086,14 @@ where
     }
 
     /// The struct type's full encoding — the field-type `shape`, the `kind`
-    /// `[TypeStruct{id, names}, K]`, and the `[shape, kind]` wrapper pair —
-    /// built from the caller's nominal `id` node, the field types and the
-    /// field names:
+    /// `[TypeStruct{id, names, names_in_order}, K]`, and the `[shape, kind]`
+    /// wrapper pair — built from the caller's nominal `id` node, the field types
+    /// and the field names:
     ///
     /// ```text
     /// wrapper = [ shape, kind ]
     /// shape   = [ field types… ]
-    /// kind    = [ TypeStruct{id, names}, K ]
+    /// kind    = [ TypeStruct{id, names, names_in_order}, K ]
     /// ```
     ///
     /// The single construction point for the layout [`shape`](crate::shape)
@@ -1084,11 +1101,11 @@ where
     /// because which occurrence allocated it is a policy of the emitting rule,
     /// not part of the encoding.
     ///
-    /// The identity `[id, names]` is decided **here**, once per written
-    /// occurrence.  Both halves are computations the apply clone walk would
-    /// otherwise copy: the `Fresh` id would run again per application, and the
-    /// name table is an arena payload, so a copy is a *different* table that
-    /// does not unify with the original.  Either way one written struct type
+    /// The identity `[id, names, names_in_order]` is decided **here**, once per
+    /// written occurrence.  Both name halves are computations the apply clone
+    /// walk would otherwise copy: the `Fresh` id would run again per
+    /// application, and the name table is an arena payload, so a copy is a
+    /// *different* table that does not unify with the original.  Either way one written struct type
     /// applied to one argument twice yields two nominal types that do not
     /// unify — a type constructor that is not a function.  Deep-evaluating the
     /// marker is what pins them: a node the deep pass proved concrete is
@@ -1107,7 +1124,8 @@ where
     ) -> (NodeId, NodeId, NodeId) {
         let shape = self.array_node(self.current_block, field_tys);
         let names = self.build_struct_names(field_names);
-        let marker = self.struct_marker_node(id, names);
+        let names_in_order = self.build_struct_names_in_order(field_names);
+        let marker = self.struct_marker_node(id, names, names_in_order);
         self.module.evaluate_node_deep(marker, None);
         let kind = self.kind_expr(self.current_block, marker);
         let wrapper = self.array_node(self.current_block, &[shape, kind]);
@@ -1117,16 +1135,19 @@ where
     /// A lazy structural read down a constant index `path` from `base`: the
     /// nested `Index` op chain `Index(…Index(base, path[0])…, path[n])` that
     /// resolves when `base` binds — the runtime form of a constant encoding
-    /// offset, walked for both struct name-table paths
+    /// offset, walked for the struct name paths
     /// ([`shape::STRUCT_TYPE_NAMES_PATH`](crate::shape::STRUCT_TYPE_NAMES_PATH),
-    /// [`shape::STRUCT_KIND_NAMES_PATH`](crate::shape::STRUCT_KIND_NAMES_PATH)).
-    /// Each step's subscript is the shared positional constant.
+    /// [`shape::STRUCT_KIND_NAMES_PATH`](crate::shape::STRUCT_KIND_NAMES_PATH),
+    /// [`shape::STRUCT_KIND_NAMES_ORDER_PATH`](crate::shape::STRUCT_KIND_NAMES_ORDER_PATH)).
+    /// Each step's subscript is a constant node, shared for `0` and `1`.
     fn lazy_index_path(&mut self, base: NodeId, path: &[usize]) -> NodeId {
-        // Both name-table paths descend 2-element structures only.
-        debug_assert!(path.iter().all(|&slot| slot <= 1));
         let mut node = base;
         for &slot in path {
-            let index = if slot == 0 { self.zero() } else { self.one() };
+            let index = match slot {
+                0 => self.zero(),
+                1 => self.one(),
+                _ => self.usize_node(slot),
+            };
             let ops = self.array_node(self.current_block, &[node, index]);
             node = self.op_node(
                 self.current_block,
