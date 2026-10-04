@@ -412,7 +412,7 @@ commit reaching the class (§5.1) rather than by asking the question later.
 | §2.1 `20: ?a` | **landed** (§5.1): the merge carries the class's decided value to the members it adds |
 | §2.2 accept/refuse flip | **landed**: the paren read is a unify against a tuple type (§5.2), so both orders refuse |
 | §2.4 paren `x(0)` over an array | **landed**: same unify, refused at the apply |
-| §2.4 named `x.a` / `x::a` over a non-struct | **open**: the named reads' accepted set is a *shape* (any struct marker), so it cannot be pinned; §5.2's re-checkable condition is the route, and `X::a`'s panic needs its own net |
+| §2.4 named `x.a` / `x::a` over a non-struct | **open**: the named reads' accepted set is now a **tag** (`[payload, TypeStruct]`, with a per-struct payload), but the undecided tier still cannot take a term-shaped pin; §5.2's re-checkable condition is the route, and `X::a`'s panic needs its own net |
 | §2.3 | already caught; only the diagnostic quality differs by order |
 
 ## 6. Open questions
@@ -451,7 +451,7 @@ commit reaching the class (§5.1) rather than by asking the question later.
 The gap is that the paren read could not simply copy the bracket read's pin: a
 pin is a unify against **one** concrete kind, and `a(k)` accepted a
 *disjunction* — a tuple type `[shape, [TypeTuple, K]]` **or** a struct type
-`[shape, [TypeStruct{id, names}, K]]`.  An open marker cell cannot express
+`[shape, [[payload, TypeStruct], K]]`.  An open marker cell cannot express
 "tuple or struct, not array": whatever flows in binds the cell, `ArrayType`
 included — which is exactly what §2.4's accepted row was.  The options, in the
 order the analysis ranked them (the ranking is **reasoned from the encoding**,
@@ -469,9 +469,11 @@ because the pin's shape cell is what the read resolves through where the
 container's type is cyclic and never decided, a type-display change confined to
 that shape (the values still read).
 
-The named reads cannot take that route: "is a struct marker" is a **shape**
-predicate over a per-struct value (`[id, names]` — no fixed member list, and no
-single kind a pin could state), so their accepted set stays a predicate.  For
+The named reads cannot take that route in full: a struct marker is now a **tag**
+(`[payload, TypeStruct]` — the `TypeStruct` atom in the marker's *type* slot),
+so the *decided* tier does state one kind as a unify, but the per-struct payload
+leaves the *undecided* tier's accepted set a predicate, and that is the half
+still open.  For
 them the ranking below is unchanged:
 
 1. **Re-checkable assert (recommended).**  Keep skipping the static guard when

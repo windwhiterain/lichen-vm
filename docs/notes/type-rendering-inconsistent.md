@@ -42,7 +42,7 @@ vocabularies.
    [`type_constant`](../../crates/lichen-render/src/render/type_printer.rs)
    (`:179`), which spells the markers `Type`, `TypeStruct`, `TypeArray`,
    `TypeFunction`, `TypeTuple` and `TypeId(n)` (`:139`–`:166`);
-3. a full struct type `[shape, [TypeStruct{id, names}, K]]` → `struct<…>`,
+3. a full struct type `[shape, [[payload, TypeStruct], K]]` → `struct<…>`,
    optionally `#n` (`:186`);
 4. `[shape, [marker, K]]` → `in -> out` / `<T…>` / `array<T, len>` (`:205`);
 5. a checker-registered arrow shape (`:256`);

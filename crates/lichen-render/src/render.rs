@@ -277,7 +277,7 @@ fn float_literal(value: f32) -> String {
     text
 }
 
-/// Whether `node` is itself a struct kind `[id, [TypeStruct, K]]` (as opposed
+/// Whether `node` is itself a struct kind `[[payload, TypeStruct], K]` (as opposed
 /// to a struct type term `[shape, kind]`, whose kind slot is such a node).
 fn is_struct_kind<P: HighProgram>(module: &Module<P>, node: NodeId) -> bool
 where
@@ -355,27 +355,28 @@ where
     }
 }
 
-/// Whether a value is a struct marker — the three-field `TypeStruct{id, names,
-/// names_in_order}` value, encoded as a 3-element array.  No other kind's marker
-/// is an array, so such an array in a marker slot names a struct.
+/// Whether a value is a struct marker — the pair `[payload, TypeStruct]` whose
+/// payload is `[TypeId, names, names_in_order]`.  The test is the **tag**: the
+/// marker must be a two-element `[value, type]` pair whose type slot holds the
+/// `TypeStruct` atom.  A pair whose type slot is anything else is not a struct
+/// marker.
 fn marker_is_struct<P: HighProgram>(module: &Module<P>, marker: AnyNodeId) -> bool
 where
     P::Value: ValueType,
 {
-    module
-        .node_value(marker)
-        .and_then(|v| v.as_enum())
-        .is_some_and(|v| match v {
-            // SAFETY: `m` is the payload of the value read from the live node
-            // `marker`.
-            LowValue::Array(m) => unsafe { m.items() }.len() == shape::STRUCT_MARKER_LEN,
-            _ => false,
-        })
+    let Some(LowValue::Array(m)) = module.node_value(marker).and_then(|v| v.as_enum()) else {
+        return false;
+    };
+    // SAFETY: `m` is the payload of the value read from the live node `marker`.
+    let items = unsafe { m.items() };
+    items.len() == 2
+        && module.node_value(items[shape::STRUCT_MARKER_TAG_SLOT].node)
+            == Some(P::Value::type_struct_marker())
 }
 
 /// Whether `kind_items` (the element items of a kind value) describe a struct
-/// kind: `[TypeStruct{id, names}, K]`.  The kind is a standard `[marker, K]`
-/// pair whose marker is the two-field `TypeStruct` value.
+/// kind: `[[payload, TypeStruct], K]`.  The kind is a
+/// standard `[marker, K]` pair whose marker carries the `TypeStruct` tag.
 fn kind_is_struct<P: HighProgram>(module: &Module<P>, kind_items: &[ArrayItem]) -> bool
 where
     P::Value: ValueType,
@@ -385,8 +386,10 @@ where
         && marker_is_struct(module, kind_items[0].node)
 }
 
-/// The per-field names of a struct type, read from its marker `[id, names]`
-/// (the marker sits at the kind's slot 0): `None` for an unnamed (positional)
+/// The per-field names of a struct type, read from the marker pair's payload
+/// `[TypeId, names, names_in_order]` (the marker sits at the kind's
+/// slot 0, its payload at the marker's [`shape::STRUCT_MARKER_PAYLOAD_SLOT`]):
+/// `None` for an unnamed (positional)
 /// field, `Some(name)` for a `.name Ty` field.  Sized to `field_count`; a
 /// name whose index maps outside the field list is dropped (defensive).
 fn struct_field_names<P: HighProgram>(
@@ -410,7 +413,20 @@ where
     let Some(marker_items) = marker_items else {
         return out;
     };
-    let Some(names_item) = marker_items.get(1) else {
+    // The marker pair's value slot is the payload `[TypeId, names,
+    // names_in_order]`.
+    let Some(payload_item) = marker_items.get(shape::STRUCT_MARKER_PAYLOAD_SLOT) else {
+        return out;
+    };
+    let Some(LowValue::Array(payload)) = module
+        .node_value(payload_item.node)
+        .and_then(|v| v.as_enum())
+    else {
+        return out;
+    };
+    // SAFETY: `payload` is the payload of a value read from a live node of the
+    // module being rendered.
+    let Some(names_item) = unsafe { payload.items() }.get(shape::STRUCT_MARKER_NAMES_SLOT) else {
         return out;
     };
     let Some(LowValue::Table(table)) = module.node_value(names_item.node).and_then(|v| v.as_enum())
@@ -444,7 +460,8 @@ where
 }
 
 /// The named-field list of a struct **type term** (`[shape, kind]`), read from
-/// the type's kind marker `[id, names]`.  `None` when `node` is not a concrete
+/// the type's kind marker pair `[payload, TypeStruct]`.  `None`
+/// when `node` is not a concrete
 /// struct type (an unbound cell, a tuple, an array, a function).  A `None`
 /// entry is a positional (unnamed) field; a `Some(name)` entry is a
 /// `.name Ty` field.
@@ -486,8 +503,10 @@ where
     Some(struct_field_names(module, kind_items, field_count))
 }
 
-/// The nominal id of a struct type, read from its kind's marker `[id, names]`
-/// (the marker sits at the kind's slot 0, the id at the marker's slot 0).
+/// The nominal id of a struct type, read from its kind's marker payload
+/// `[TypeId, names, names_in_order]` (the marker pair sits at the kind's
+/// slot 0, its payload at [`shape::STRUCT_MARKER_PAYLOAD_SLOT`], the id at
+/// [`shape::STRUCT_MARKER_ID_SLOT`] of the payload).
 fn struct_kind_id<P: HighProgram>(module: &Module<P>, kind_items: &[ArrayItem]) -> Option<usize>
 where
     P::Value: ValueType,
@@ -501,7 +520,13 @@ where
             LowValue::Array(m) => Some(unsafe { m.items() }),
             _ => None,
         })?;
-    let id_item = marker_items.first()?;
+    let payload_item = marker_items.get(shape::STRUCT_MARKER_PAYLOAD_SLOT)?;
+    // SAFETY: `payload` is the payload of a value read from a live node of
+    // `module`.
+    let LowValue::Array(payload) = module.node_value(payload_item.node)?.as_enum()? else {
+        return None;
+    };
+    let id_item = unsafe { payload.items() }.get(shape::STRUCT_MARKER_ID_SLOT)?;
     module.node_value(id_item.node).and_then(|v| v.type_id())
 }
 
@@ -525,7 +550,7 @@ fn struct_fields_with_names(fields: &[String], names: &[Option<&'static str>]) -
 /// does not form a struct instance.
 ///
 /// `value_node` is the struct value (a field-tuple array) and `ty_node` its
-/// struct type (a `[shape, [TypeStruct{id, names}, K]]` pair).  The renderer
+/// struct type (a `[shape, [[payload, TypeStruct], K]]` pair).  The renderer
 /// walks the *type chain*, so the names come from the type, never a hardcoded
 /// shape.
 pub fn render_struct_fields_named<P: HighProgram>(

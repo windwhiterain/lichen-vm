@@ -441,8 +441,10 @@ pub enum ExprKind<L> {
     /// corresponding `names` range (into [`IR::struct_names`] holds each
     /// field's optional name.  The checker builds it as the usual
     /// `[shape, kind]` pair — shape `[T1, …, Tn]`, kind
-    /// `[TypeStruct{id, names}, K]` — so the *fresh nominal* id and the
-    /// optional name table sit in the kind, never in the shape (see the
+    /// `[[id, names, names_in_order], TypeStruct]` — so the *fresh nominal* id
+    /// and the
+    /// optional name table sit in the kind's marker payload, never in the shape
+    /// (see the
     /// checker's struct-type construction).  A struct type is reused by
     /// binding it once through a parameter.
     TypeStruct {

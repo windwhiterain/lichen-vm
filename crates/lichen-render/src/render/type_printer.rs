@@ -171,9 +171,9 @@ where
     }
 
     fn elements(&mut self, node: NodeId, elements: &[ArrayItem]) -> String {
-        // A bare struct kind `[TypeStruct{id, names}, K]` (a struct type
+        // A bare struct kind `[[payload, TypeStruct], K]` (a struct type
         // pair's type slot): render its tag `TypeStruct`.  Detected before the
-        // `[head, K]` atomic branch, since its marker is a 2-element array
+        // `[head, K]` atomic branch, since its marker is a pair
         // (not a plain type constant).
         if is_struct_kind(self.module, node) {
             return "TypeStruct".to_string();
@@ -183,9 +183,9 @@ where
         if elements.len() == 2 && self.is_universe_any(elements[1].node) {
             return self.any_node(elements[0].node);
         }
-        // A struct type: `[shape, [TypeStruct{id, names}, K]]` — the kind is a
-        // standard `[marker, K]` pair whose marker is the two-field struct
-        // value `[id, names]`.  The id renders as `#n` so two structs with the
+        // A struct type: `[shape, [[payload, TypeStruct], K]]` — the kind is a
+        // standard `[marker, K]` pair whose marker is the `[payload, TypeStruct]`
+        // pair.  The id renders as `#n` so two structs with the
         // same field shape stay distinguishable (their nominal types differ).
         if elements.len() == 2
             && let Some(kind) = self.module.node_value(elements[1].node)
@@ -385,7 +385,7 @@ where
         elements: &[ArrayItem],
         visiting: &mut HashSet<lichen_lowlevel::StaticNodeId>,
     ) -> String {
-        // A bare struct kind `[TypeStruct{id, names}, K]`: render its tag.
+        // A bare struct kind `[[payload, TypeStruct], K]`: render its tag.
         if kind_is_struct(self.module, elements) {
             return "TypeStruct".to_string();
         }
@@ -394,9 +394,9 @@ where
         if elements.len() == 2 && self.is_static_universe(elements[1].node) {
             return self.static_any(elements[0].node, visiting);
         }
-        // A struct type: `[shape, [TypeStruct{id, names}, K]]` — the kind is a
-        // standard `[marker, K]` pair whose marker is the two-field struct
-        // value `[id, names]`; a name table rides at the marker's slot 1.
+        // A struct type: `[shape, [[payload, TypeStruct], K]]` — the kind is a
+        // standard `[marker, K]` pair whose marker is the `[payload, TypeStruct]`
+        // pair; a name table rides in the payload's names slot.
         if elements.len() == 2
             && let Some(kind) = self.module.node_value(elements[1].node)
             && let Some(LowValue::Array(kind)) = kind.as_enum()

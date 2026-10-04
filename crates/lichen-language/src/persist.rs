@@ -123,4 +123,14 @@ pub use lichen_preprocess::{SOURCES_DIR, lichendir, sources_root};
 /// 2-field marker is no longer a struct marker, so an artifact written before
 /// this would read its struct types as unrecognised shapes rather than fail.
 /// The bump is what turns that into the recompile the check above intends.
-const ARTIFACT_FORMAT_VERSION: u32 = 8;
+///
+/// `9` moved the `TypeStruct` tag into the struct marker itself: the marker is
+/// now the ordinary `[payload, TypeStruct]` pair over a `[TypeId, names,
+/// names_in_order]` payload, so a struct kind's marker slot holds a pair where
+/// version `8` held the bare payload array.  Again the *node* encoding is
+/// unchanged, but an artifact of version `8` would read its struct kinds as
+/// unrecognised shapes (its marker has no `TypeStruct` tag), so its struct
+/// types and every named read over them would be silently wrong.  Version-`8`
+/// artifacts exist outside the source tree (the device cache), so the bump is
+/// warranted rather than skipped.
+const ARTIFACT_FORMAT_VERSION: u32 = 9;

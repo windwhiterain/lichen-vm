@@ -70,13 +70,13 @@ had guessed:
    class that held concrete content — with `add_equality` writing nothing, so
    the field type read as `?a` forever.
 3. **The error half was that same predicate, correct by accident.** A struct
-   type value's kind `[TypeStruct{id, names}, K]` contains a
+   type value's kind `[[payload, TypeStruct], K]` contains a
    `LowValue::Table` (the names table; `Void` when anonymous) — a genuine
    structural value, correctly judged non-skeleton. With the skeleton merge
    unavailable and the deferral guard unmatched, the unify recorded the
    spurious `expected [?a], found [TypeStruct]` error. `class_holds_type`'s
    structural guess was load-bearing only at this point, and guessed wrong at
-   descent depth (a bare struct marker `[id, names]` is not a 2-element
+   descent depth (the marker's payload is an array, not a 2-element
    `[shape, kind]`).
 
 ## 3. The fix
@@ -87,8 +87,9 @@ had guessed:
   removes the unsound silent merge everywhere, not just in this repro.
 - **`class_holds_type` is an honest tag recogniser now** (`shape.rs`): atoms
   are tested against the kind-marker registry (`ValueType::is_kind_marker`,
-  itself registry-derived) and `TypeId`, a struct marker is recognised by its
-  id-and-names shape, and the universe by its self-referential cycle — no
+  itself registry-derived) and `TypeId`, a struct marker is recognised by the
+  `TypeStruct` atom in its marker pair's *type* slot, and the universe by its
+  self-referential cycle — no
   arity guesses. The marker set is **open**: extension leaves declare their
   own type constants through `LeafKindMarkers` (compute's
   `TypeBuffer`/`TypeWrite`), and the composed vocabulary's

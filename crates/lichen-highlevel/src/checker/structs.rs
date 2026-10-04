@@ -191,12 +191,13 @@ where
     /// A **raw** named component read `X::a` (the glued `::` postfix).  It is
     /// *not* raw in the no-validation sense of [`Self::check_raw_index`]: the
     /// container's **type** must be a TypeStruct **kind**
-    /// (`[TypeStruct{id, names}, K]` — the name→index table lies directly at
-    /// `container_ty[0][1]`), a check-time requirement (a concretely non-struct
+    /// (`[[TypeId, names, names_in_order], TypeStruct]` — the name→index
+    /// table lies directly in the marker payload at
+    /// `container_ty[0][0][1]`), a check-time requirement (a concretely non-struct
     /// container is a diagnostic; an unbound one stays lazy and resolves at the
     /// apply).  This is the sibling of [`Self::check_named_field`]'s `.a`,
     /// which instead requires the container's **kind** to be TypeStruct (its
-    /// table at `container_ty[1][0][1]`).
+    /// table at `container_ty[1][0][0][1]`).
     ///
     /// The read is the element's own pair at the name table's resolved index
     /// (`TableGet(names, name)`) — its slot 0 is the value and its slot 1 the
@@ -216,17 +217,14 @@ where
         // an undecided one is pinned, and the diagnostic names the same
         // requirement either way (`expected TypeStruct, found …`) — the
         // struct-kind sibling of the positional read's tuple pin, and the same
-        // pin [`Super::check_instantiate`] makes for an undecided callee.  The
-        // marker is the three-field identity a `struct<…>` builds; its cells stay
-        // open, so the pin states the kind, not the identity or the names.
-        let id = self.fresh_cell();
-        let names = self.fresh_cell();
-        let names_in_order = self.fresh_cell();
-        let marker = self.struct_marker_node(id, names, names_in_order);
-        let kind = self.kind_expr(self.current_block, marker);
+        // statement [`Super::check_instantiate`] pins.  The marker's *type* slot
+        // is the `TypeStruct` atom, so this is a check of the tag (a
+        // `[?payload, TypeStruct]` marker pair), not of a payload shape.
+        let kind = self.struct_kind_requirement();
         self.check_unify(container_ty, kind, self.loc(container, 1), DiagKind::Guard);
         // names — the struct marker's name table, read directly from the
-        // container's *type* (a TypeStruct kind: marker at [0], names at [1]).
+        // container's *type* (a TypeStruct kind: marker at [0], its payload at
+        // [0], the names at [1] of the payload).
         let names_node = self.lazy_index_path(container_ty, &shape::STRUCT_KIND_NAMES_PATH);
         // key = TableGet(names, name) — the field's positional index.
         let name_node = self.name_node(name);
@@ -282,15 +280,11 @@ where
         // the `[shape, kind]` term — stated as a unify, so the refusal names the
         // two kinds (`expected TypeStruct, found TypeArray`) instead of the
         // shared "tuple, array, or struct" wording this read does not accept
-        // (`docs/notes/eval-before-unify.md` §6.3).  The marker is the
-        // three-field identity a `struct<…>` builds; its cells stay open, so the
-        // requirement is the kind, not the identity or the names.
+        // (`docs/notes/eval-before-unify.md` §6.3).  It is the same statement the
+        // raw named read makes: the marker is the `[?payload, TypeStruct]` pair,
+        // so the `TypeStruct` tag is what the unify checks.
         if concrete {
-            let id = self.fresh_cell();
-            let names = self.fresh_cell();
-            let names_in_order = self.fresh_cell();
-            let marker = self.struct_marker_node(id, names, names_in_order);
-            let kind = self.kind_expr(self.current_block, marker);
+            let kind = self.struct_kind_requirement();
             let container_kind = self.lazy_index_path(container_ty, &[shape::TYPE_KIND_SLOT]);
             self.check_unify(
                 container_kind,
@@ -541,9 +535,12 @@ where
         }
         if !concrete {
             // Defer the nominality check: pin the callee's type to a struct
-            // kind `[[id, names, names_in_order], K]` (a
-            // [`shape::STRUCT_MARKER_LEN`]-element marker, per
-            // [`shape::is_struct_marker_any`]'s structural guess).  The pin
+            // kind whose marker is the `[payload, TypeStruct]` pair — the
+            // payload `[?id, ?names, ?order]` left open, the `TypeStruct` tag
+            // decided ([`shape::is_struct_marker_any`]).  The payload's shape is
+            // written here (rather than left to one cell) because the deferred
+            // named reorder reads its slots lazily
+            // ([`shape::STRUCT_KIND_NAMES_ORDER_PATH`]).  The pin
             // binds an unbound cell now and is re-checked by the apply's
             // argument unify per call, so a tuple/function/atomic actual
             // callee is rejected there.
@@ -553,8 +550,8 @@ where
             // deferred reorder reads; an all-positional one never does.
             let names_in_order = self.fresh_cell();
             // Kind only, so `Self::struct_type_type` does not apply: the pin
-            // has no field-type shape to wrap, and its marker's three fields are
-            // unbound cells rather than a `Fresh` id and the two name forms.
+            // has no field-type shape to wrap, and its marker's payload fields
+            // are unbound cells rather than a `Fresh` id and the two name forms.
             let marker = self.struct_marker_node(id, names, names_in_order);
             let kind = self.kind_expr(self.current_block, marker);
             self.check_unify(
@@ -1122,12 +1119,15 @@ where
     /// just the field-type list:
     ///
     /// ```text
-    /// pair = [ shape, kind ]
-    /// shape = [ field types… ]
-    /// kind  = [ TypeStruct{id, names}, K ]
+    /// pair    = [ shape, kind ]
+    /// shape   = [ field types… ]
+    /// payload = [ id, names, names_in_order ]
+    /// marker  = [ payload, TypeStruct ]
+    /// kind    = [ marker, K ]
     /// ```
     ///
-    /// The `TypeStruct` marker is a **two-field value** `[id, names]` — the
+    /// The marker is the ordinary `[value, type]` pair `[payload, TypeStruct]` —
+    /// its *type* slot is the `TypeStruct` tag, its value a payload holding the
     /// nominal id ([`Checker::fresh_nominal_id`]: one id per written
     /// occurrence, so two occurrences keep distinct ids and an applied type
     /// lambda does not mint one per application) plus the optional name→index

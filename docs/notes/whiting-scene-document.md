@@ -166,8 +166,9 @@ obvious are called out because they are the ones that will be got wrong.
 | a type marker | `Value::Enum { tag, … }` | |
 
 **Struct field names come from the type, not the value.** A lichen struct's value
-is positional; its names live in the kind marker's slot 0, `[TypeStruct{id, names},
-K]`, where `names` is a `table` of `string → index`. `lichen-render` already reads
+is positional; its names live in the kind marker's payload — `[payload,
+TypeStruct]` under the kind's `[marker, K]` pair, with `payload = [TypeId, names,
+names_in_order]` — where `names` is a `table` of `string → index`. `lichen-render` already reads
 this — `struct_field_names` in `crates/lichen-render/src/render.rs` is the
 reference implementation, and `render_struct_fields_named` is its public face. A
 conversion that reads field names off the value produces a document no schema

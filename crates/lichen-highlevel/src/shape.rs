@@ -17,16 +17,18 @@
 //! artifact codec are all macro-derived from it, so adding or removing a
 //! marker touches that one list.
 //!
-//! Two known weaknesses are named here, not fixed (Phase 1 is a pure
-//! refactor; Phase 4 may replace them):
+//! Struct-ness is recognized by **tag**, never by silhouette: a struct marker
+//! is an ordinary `[payload, type]` pair whose [`STRUCT_MARKER_TAG_SLOT`] holds
+//! the `TypeStruct` atom ([`ValueType::type_struct_marker`]), so a pair whose
+//! type slot is not that atom is not a struct ([`is_struct_marker_any`]).
 //!
-//! - [`is_struct_marker_any`] recognizes a struct marker structurally —
-//!   "the marker is a [`STRUCT_MARKER_LEN`]-element array ⇒ struct" — because
-//!   no other kind's marker is an array.  That is a guess about an open
-//!   encoding, not a check of a `TypeStruct` tag.
+//! One known weakness is named here, not fixed (Phase 1 is a pure refactor;
+//! Phase 4 may replace it):
+//!
 //! - [`slot0_is_shape`]'s "element 0 is an array ⇒ shape" heuristic misfires
-//!   on a pair whose *value* is an array (a tuple value is an array too),
-//!   so a diagnostic path through such a pair may tag a `Value` descent as
+//!   on a pair whose *value* is an array (a tuple value is an array too, and so
+//!   is a struct marker's payload — `[payload, TypeStruct]`), so a diagnostic
+//!   path through such a pair may tag a `Value` descent as
 //!   `Shape`.  It is a diagnostic rendering hint only; the unify itself is
 //!   unaffected.
 
@@ -156,38 +158,51 @@ pub const KIND_UNIVERSE_SLOT: usize = 1;
 
 // --- struct marker layout -----------------------------------------------------
 //
-// A struct kind's marker is the three-field value `[TypeId, names,
-// names_in_order]` — the nominal id, the optional name→index table, and the
-// same names again in definition order — sitting in the kind's marker slot like
-// any other kind's marker.  The name table is reachable by two paths, depending
-// on whether the read starts from a struct *type* or a struct *kind*; both are
-// spelled once here, as the constant offset paths the checker's lazy `Index`
-// chains walk.
+// A struct kind's marker is an ordinary `[value, type]` pair whose **value** is
+// the struct's payload and whose **type** is the `TypeStruct` atom:
 //
-// The third field exists for the one reader a name→index table cannot serve: a
-// named instantiation through an **unresolved** callee reorders its arguments
-// when the struct type resolves, and that reorder needs the field's *name* at
-// each definition position ([`STRUCT_MARKER_NAMES_ORDER_SLOT`]) — the table's
-// inverse, which a lazy `Index` cannot derive.
+//     marker  = [ payload, TypeStruct ]
+//     payload = [ TypeId, names, names_in_order ]
+//
+// so a struct marker is a normal type value — the one whose type read is the
+// `TypeStruct` atom.  That tag is what makes "is this a struct marker?" a check
+// of a type constant rather than a guess about the arity of an open encoding.
+// The payload carries the nominal id, the optional name→index table, and the
+// same names again in definition order.  The name table is reachable by two
+// paths, depending on whether the read starts from a struct *type* or a struct
+// *kind*; both are spelled once here, as the constant offset paths the
+// checker's lazy `Index` chains walk.
+//
+// The last payload field exists for the one reader a name→index table cannot
+// serve: a named instantiation through an **unresolved** callee reorders its
+// arguments when the struct type resolves, and that reorder needs the field's
+// *name* at each definition position ([`STRUCT_MARKER_NAMES_ORDER_SLOT`]) — the
+// table's inverse, which a lazy `Index` cannot derive.
 
-/// Element 0 of a struct marker `[TypeId, names, names_in_order]` — the nominal
-/// type id.
+/// Element 0 of a struct marker `[payload, TypeStruct]` — the marker's *value*:
+/// the payload `[TypeId, names, names_in_order]`.  The marker is an ordinary
+/// `[value, type]` pair, so this is positionally [`PAIR_VALUE_SLOT`] with the
+/// marker's own meaning.
+pub const STRUCT_MARKER_PAYLOAD_SLOT: usize = 0;
+/// Element 1 of a struct marker `[payload, TypeStruct]` — the marker's *type*:
+/// the `TypeStruct` atom ([`ValueType::type_struct_marker`]), the honest signal
+/// that the pair is a struct marker.  An ordinary pair whose type slot is not
+/// that atom is not a struct marker.
+pub const STRUCT_MARKER_TAG_SLOT: usize = 1;
+
+/// Element 0 of a struct marker's payload `[TypeId, names, names_in_order]` —
+/// the nominal type id.
 pub const STRUCT_MARKER_ID_SLOT: usize = 0;
-/// Element 1 of a struct marker `[TypeId, names, names_in_order]` — the
-/// optional name→index table (`LowValue::Void` for an anonymous positional
-/// struct).
+/// Element 1 of a struct marker's payload — the optional name→index table
+/// (`LowValue::Void` for an anonymous positional struct).
 pub const STRUCT_MARKER_NAMES_SLOT: usize = 1;
-/// Element 2 of a struct marker `[TypeId, names, names_in_order]` — the field
-/// names in definition order, one array element per definition position (a
-/// `Str` for a named field, `Void` for a positional one; the whole field is
-/// `Void` when no field is named).  This is the inverse of the slot-1 table: a
+/// Element 2 of a struct marker's payload — the field names in definition
+/// order, one array element per definition position (a `Str` for a named field,
+/// `Void` for a positional one; the whole field is `Void` when no field is
+/// named).  This is the inverse of the [`STRUCT_MARKER_NAMES_SLOT`] table: a
 /// position's *name*, which the deferred named instantiation's reorder reads
 /// lazily (see [`STRUCT_KIND_NAMES_ORDER_PATH`]).
 pub const STRUCT_MARKER_NAMES_ORDER_SLOT: usize = 2;
-/// The struct marker's field count: exactly `[id, names, names_in_order]`.  This
-/// is also the arity [`is_struct_marker_any`] guesses on — see its documented
-/// weakness.
-pub const STRUCT_MARKER_LEN: usize = 3;
 
 // --- shape-half layout -----------------------------------------------------------
 //
@@ -212,18 +227,29 @@ pub const FUNCTION_TYPE_DOMAIN_SLOT: usize = 0;
 pub const FUNCTION_TYPE_CODOMAIN_SLOT: usize = 1;
 
 /// The lazy index path from a struct **type** `[shape, kind]` to its name
-/// table — kind at `[1]`, then the marker at `[0]`, then the names at `[1]`.
-/// The `a.x` read walks it (`container_ty[1][0][1]`).
-pub const STRUCT_TYPE_NAMES_PATH: [usize; 3] =
-    [TYPE_KIND_SLOT, KIND_MARKER_SLOT, STRUCT_MARKER_NAMES_SLOT];
+/// table — kind at `[1]`, then the marker at `[0]`, then the marker's payload
+/// at `[0]`, then the names at `[1]` of the payload.  The `a.x` read walks it
+/// (`container_ty[1][0][0][1]`).
+pub const STRUCT_TYPE_NAMES_PATH: [usize; 4] = [
+    TYPE_KIND_SLOT,
+    KIND_MARKER_SLOT,
+    STRUCT_MARKER_PAYLOAD_SLOT,
+    STRUCT_MARKER_NAMES_SLOT,
+];
 
 /// The lazy index path from a TypeStruct **kind** `[marker, K]` to its name
-/// table — the marker at `[0]`, then the names at `[1]`.  The `X::a` raw
-/// read walks it (`container_ty[0][1]`).
-pub const STRUCT_KIND_NAMES_PATH: [usize; 2] = [KIND_MARKER_SLOT, STRUCT_MARKER_NAMES_SLOT];
+/// table — the marker at `[0]`, then the marker's payload at `[0]`, then the
+/// names at `[1]` of the payload.  The `X::a` raw read walks it
+/// (`container_ty[0][0][1]`).
+pub const STRUCT_KIND_NAMES_PATH: [usize; 3] = [
+    KIND_MARKER_SLOT,
+    STRUCT_MARKER_PAYLOAD_SLOT,
+    STRUCT_MARKER_NAMES_SLOT,
+];
 
 /// The lazy index path from a TypeStruct **kind** `[marker, K]` to its
-/// definition-order names — the marker at `[0]`, then the names at `[2]`.  The
+/// definition-order names — the marker at `[0]`, then the marker's payload at
+/// `[0]`, then the names at `[2]` of the payload.  The
 /// deferred named instantiation reads through it rather than through the
 /// [`STRUCT_TYPE_NAMES_PATH`] spelling: a callee's `[shape, kind]` term is a
 /// pair, and reading *its* slot 1 would pull the shape half into the read's
@@ -231,8 +257,11 @@ pub const STRUCT_KIND_NAMES_PATH: [usize; 2] = [KIND_MARKER_SLOT, STRUCT_MARKER_
 /// operand array, not only the selected one, so the shape half (which holds the
 /// deferred reorder's own field-type probe) would be forced mid-read and the
 /// read would meet itself.  The kind node is the same node, read directly.
-pub const STRUCT_KIND_NAMES_ORDER_PATH: [usize; 2] =
-    [KIND_MARKER_SLOT, STRUCT_MARKER_NAMES_ORDER_SLOT];
+pub const STRUCT_KIND_NAMES_ORDER_PATH: [usize; 3] = [
+    KIND_MARKER_SLOT,
+    STRUCT_MARKER_PAYLOAD_SLOT,
+    STRUCT_MARKER_NAMES_ORDER_SLOT,
+];
 
 /// The array items behind either a dynamic node or a static ref — the raw
 /// read every accessor and predicate in this module is built on.  `None`
@@ -351,7 +380,8 @@ where
 
 /// Whether `node`'s class holds a **type value**: a type-level value in the
 /// pair/type encoding — the universe `K = [Type, ↺]`, an atomic type or kind
-/// `[marker, K]`, a struct marker `[TypeId, names]`, a bare kind-marker atom,
+/// `[marker, K]`, a struct marker `[payload, TypeStruct]`,
+/// a bare kind-marker atom,
 /// or a kinded type expression `[shape, [marker, K]]`.  This is the
 /// highlevel half of what the lowlevel used to know: "does this class hold a
 /// type" is meaningless without the encoding, so it lives here, in the
@@ -401,16 +431,12 @@ where
     let Some(items) = (unsafe { array_items(module, node) }) else {
         return false;
     };
-    // A struct marker `[TypeId, names, names_in_order]` — the nominal id is its
-    // tag.  The id cell may still be unbound while the marker is being built, so
-    // the honest signal is the marker's *shape*: an id slot (id or unbound) and
-    // a names slot (a name table, `Void` for an anonymous struct, or unbound).
-    if items.len() == STRUCT_MARKER_LEN {
-        let first_is_id = match module.node_value(items[STRUCT_MARKER_ID_SLOT].node) {
-            None => true,
-            Some(first_value) => first_value.type_id().is_some(),
-        };
-        return first_is_id && node_is_names_table(module, items[STRUCT_MARKER_NAMES_SLOT].node);
+    // A struct marker `[payload, TypeStruct]` — an ordinary pair whose *type*
+    // slot is the `TypeStruct` atom.  Checked before the other pair forms: it is
+    // the one pair that is a kind marker rather than a type expression, and its
+    // payload cells may still be unbound while the marker is being built.
+    if is_struct_marker_any(module, node) {
+        return true;
     }
     if items.len() != 2 {
         return false;
@@ -438,9 +464,9 @@ where
 }
 
 /// Whether `node` is a **kind marker**: a registry marker atom, a nominal
-/// `TypeId`, or a struct marker `[TypeId, names, names_in_order]` (the one
-/// marker that is an array — recognised by its id-and-names shape, closing the
-/// `is_struct_marker_any` arity guess at this site).
+/// `TypeId`, or a struct marker `[payload, TypeStruct]` (the one marker that is
+/// an array — recognised through [`is_struct_marker_any`], so this site cannot
+/// drift from the tag check).
 fn node_is_marker<P: Program>(module: &mut Module<P>, node: AnyNodeId) -> bool
 where
     P::Value: ValueType,
@@ -448,22 +474,7 @@ where
     let Some(value) = module.node_value(node) else {
         return false;
     };
-    if value.is_kind_marker() || value.type_id().is_some() {
-        return true;
-    }
-    // SAFETY: `node` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    let Some(items) = (unsafe { array_items(module, node) }) else {
-        return false;
-    };
-    if items.len() != STRUCT_MARKER_LEN {
-        return false;
-    }
-    let id_is_id = match module.node_value(items[STRUCT_MARKER_ID_SLOT].node) {
-        None => true,
-        Some(id) => id.type_id().is_some(),
-    };
-    id_is_id && node_is_names_table(module, items[STRUCT_MARKER_NAMES_SLOT].node)
+    value.is_kind_marker() || value.type_id().is_some() || is_struct_marker_any(module, node)
 }
 
 /// [`node_is_marker`], additionally accepting an unbound cell: a kind whose
@@ -473,20 +484,6 @@ where
     P::Value: ValueType,
 {
     module.node_value(node).is_none() || node_is_marker(module, node)
-}
-
-/// Whether `node` reads as a struct marker's **names slot**: a name→index
-/// table, `Void` (an anonymous positional struct), or a still-unbound cell.
-/// A `TypeId` slot alone cannot tag a struct marker honestly (it is unbound
-/// while the marker is being built), so the names slot carries the signal.
-fn node_is_names_table<P: Program>(module: &mut Module<P>, node: AnyNodeId) -> bool
-where
-    P::Value: ValueType,
-{
-    let Some(value) = module.node_value(node) else {
-        return true;
-    };
-    matches!(value.as_enum(), Some(LowValue::Table(_) | LowValue::Void))
 }
 
 /// The highlevel's [`Program::defer_pending`] policy: merge a pending
@@ -628,10 +625,12 @@ where
     function_type_parts_any(module, universe, AnyNodeId::Dynamic(ty))
 }
 
-/// Whether `ty` is a struct type: `[shape, [TypeStruct{id, names}, K]]`.
-/// The kind's marker slot holds the two-field `TypeStruct` value (the
-/// nominal id + the optional name table), so the kind is a standard
-/// `[marker, K]` pair whose marker is a 2-element array.
+/// Whether `ty` is a struct type:
+/// `[shape, [[payload, TypeStruct], K]]` with `payload = [TypeId, names,
+/// names_in_order]`.  The kind's marker slot holds the ordinary
+/// `[value, type]` marker pair whose type slot is the `TypeStruct` atom, so the
+/// kind is a standard `[marker, K]` pair whose marker is recognised by that tag
+/// ([`is_struct_marker_any`]).
 pub fn is_struct_type_any<P: Program>(
     module: &mut Module<P>,
     universe: NodeId,
@@ -658,33 +657,35 @@ where
         && is_struct_marker_any(module, kind_items[KIND_MARKER_SLOT].node)
 }
 
-/// Whether a value is a struct marker: the three-field
-/// `TypeStruct{id, names, names_in_order}` value, encoded as a
-/// [`STRUCT_MARKER_LEN`]-element array.  No other kind's marker is an array (the
-/// function/tuple/array/table markers are plain type-constant values), so such
-/// an array in a marker slot names a struct.  The names slots are **not**
-/// inspected: the marker is written in one shape, and its cells may still be
-/// unbound while it is being built.
+/// Whether a value is a struct marker: the pair `[payload, TypeStruct]` whose
+/// payload is `[TypeId, names, names_in_order]`.
 ///
-/// **Known weakness** (see the module docs): this is a structural guess
-/// about an open encoding — any [`STRUCT_MARKER_LEN`]-element array in a marker
-/// slot passes, with no `TypeStruct` tag checked.  Phase 1 names it; Phase 4
-/// may replace it with an honest tag check.
+/// The test is the **tag**: the marker must be an ordinary `[value, type]` pair
+/// (a two-element array) whose [`STRUCT_MARKER_TAG_SLOT`] holds the `TypeStruct`
+/// atom ([`ValueType::type_struct_marker`]).  A pair whose type slot is anything
+/// else — including a marker-shaped payload under another type — is not a
+/// struct marker.  The payload is not inspected: its cells may still be unbound
+/// while the marker is being built (a read's pin writes them as fresh cells).
 pub fn is_struct_marker_any<P: Program>(module: &Module<P>, marker: AnyNodeId) -> bool
 where
-    P::Value: AsEnum<LowValue>,
+    P::Value: ValueType,
 {
     // SAFETY: `marker` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
-    unsafe { array_items(module, marker) }.is_some_and(|items| items.len() == STRUCT_MARKER_LEN)
+    let Some(items) = (unsafe { array_items(module, marker) }) else {
+        return false;
+    };
+    items.len() == 2
+        && module.node_value(items[STRUCT_MARKER_TAG_SLOT].node)
+            == Some(P::Value::type_struct_marker())
 }
 
-/// Whether `ty` is a TypeStruct **kind** — `[TypeStruct{id, names,
-/// names_in_order}, K]` — the `[marker, universe]` form a raw named read `X::a`
+/// Whether `ty` is a TypeStruct **kind** — `[[payload, TypeStruct], K]` — the
+/// `[marker, universe]` form a raw named read `X::a`
 /// requires.  This is the container type's *own* shape (a struct type value's
 /// `ty`), not the `[shape, kind]` pair of a struct instance's type (which `.a`
 /// reads, [`is_struct_type_any`]): the name→index table lies directly at
-/// `ty[0][1]`, and the definition-order names at `ty[0][2]`.
+/// `ty[0][0][1]`, and the definition-order names at `ty[0][0][2]`.
 pub fn is_type_struct_kind_any<P: Program>(
     module: &mut Module<P>,
     universe: NodeId,
@@ -715,7 +716,8 @@ where
 /// so the two cannot drift.
 ///
 /// `None` when the node is not a two-slot term whose kind is a two-slot pair
-/// with a table at the marker's [`STRUCT_MARKER_NAMES_SLOT`].
+/// whose marker is a `[payload, TypeStruct]` pair carrying a table at the
+/// payload's [`STRUCT_MARKER_NAMES_SLOT`].
 fn struct_term_parts<P: Program>(
     module: &Module<P>,
     ty: AnyNodeId,
@@ -735,11 +737,17 @@ where
     if kind_items.len() != 2 {
         return None;
     }
-    // The struct marker `[id, names, names_in_order]`; its second field is the
-    // name table.
+    // The struct marker `[payload, TypeStruct]`; the tag is the honest signal.
+    if !is_struct_marker_any(module, kind_items[KIND_MARKER_SLOT].node) {
+        return None;
+    }
     // SAFETY: `kind_items[KIND_MARKER_SLOT].node` is a live node of `module`.
     let marker_items = unsafe { array_items(module, kind_items[KIND_MARKER_SLOT].node) }?;
-    let names_item = marker_items.get(STRUCT_MARKER_NAMES_SLOT)?;
+    // Its payload's name slot holds the name→index table.
+    // SAFETY: the payload item's node is a live node of `module`.
+    let payload_items =
+        unsafe { array_items(module, marker_items[STRUCT_MARKER_PAYLOAD_SLOT].node) }?;
+    let names_item = payload_items.get(STRUCT_MARKER_NAMES_SLOT)?;
     match module.node_value(names_item.node).and_then(|v| v.as_enum()) {
         Some(LowValue::Table(table)) => Some((kind_items[KIND_UNIVERSE_SLOT].node, shape, table)),
         _ => None,
@@ -749,7 +757,8 @@ where
 /// The struct's name→index table (the `struct<.a T, …>` names) from a
 /// struct type value, or `None` when it is an anonymous struct (no names)
 /// or not a struct type at all.  The table is reached through the kind:
-/// `[shape, [marker, K]]` → the marker's [`STRUCT_MARKER_NAMES_SLOT`].
+/// `[shape, [marker, K]]` → the marker's payload at
+/// [`STRUCT_MARKER_NAMES_SLOT`].
 ///
 /// **The universe is supplied by the caller.**  A checker has it; a lowering
 /// does not, and [`field_names`] is this reader for that side.
@@ -773,8 +782,8 @@ where
 /// ([`low_type_of_slot`] resolves that same indirection for a low type).
 ///
 /// **Which one it is, is stated — never guessed.**  A term and a holder are both
-/// two-slot arrays, so no structural test separates them (the module docs'
-/// structural-guess weakness), while the side that holds one always knows: the
+/// two-slot arrays, so no structural test separates them (the heuristic
+/// [`slot0_is_shape`] documents), while the side that holds one always knows: the
 /// checker walks a *type cell*, the lowering a *type term*.  A caller that
 /// genuinely does not know asks twice, once per variant, and lets the decode
 /// answer (`struct_fields_of_slot` in `lichen-compute`).
@@ -846,7 +855,8 @@ where
 
 /// The **named fields** of a struct type, in field order — `None` for a
 /// positional field.  `None` for the whole answer when the type is not a named
-/// struct: an anonymous struct (whose marker's name slot holds no table),
+/// struct: an anonymous struct (whose marker payload's name slot holds no
+/// table),
 /// another kind, or a kind that does not close on the universe.
 ///
 /// The universe is recognised by [`Module::is_self_referential`] — the
@@ -871,7 +881,7 @@ where
     let field_count = unsafe { array_items(module, shape) }?.len();
     let mut names: Vec<Option<&'static str>> = vec![None; field_count];
     // SAFETY: `table` is the payload of the value read from the live node
-    // named by the marker's name slot.
+    // named by the marker payload's name slot.
     for item in unsafe { table.items() } {
         if let Some((name, index)) = name_table_entry(module, item)
             && index < field_count

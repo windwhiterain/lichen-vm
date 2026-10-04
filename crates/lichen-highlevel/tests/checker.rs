@@ -11,7 +11,7 @@ use lichen_highlevel::program::{
     HighGlobal, HighProgramLiteral, HighProgramValue, IntLit, IntTypeLit, ProgramImpl, TypeTypeLit,
     TypeValue,
 };
-use lichen_lowlevel::{AnyFunctionId, AnyNodeId, FunctionId, LowValue, NodeId};
+use lichen_lowlevel::{AnyFunctionId, AnyNodeId, ArrayItem, FunctionId, LowValue, NodeId};
 use lichen_utils::compose::AsField;
 
 // --- hand-built IR helpers (the language frontend will produce these) -----
@@ -1337,49 +1337,111 @@ fn array_index_out_of_bounds_against_a_bound_length() {
 // --- struct types ----------------------------------------------------------
 // A struct type is the pair [[field types], [marker, Type]]: like an array
 // type (shape [element type, length]), the shape is the *positional
-// field-type list*, and the kind slot holds the fixed TypeStruct marker — a
-// three-field `[TypeId(n), names, names_in_order]` array carrying a *fresh
-// nominal* id, the name→index table, and the same names in definition order.
-// Equal ids unify, different ids never do, and a struct never unifies with a
+// field-type list*, and the kind slot holds the struct marker — the ordinary
+// `[payload, type]` pair whose payload is `[TypeId(n), names, names_in_order]`
+// (a *fresh nominal* id, the name→index table, and the same names in definition
+// order) and whose type slot is the `TypeStruct` atom.  Struct-ness is that
+// tag: a payload-shaped pair without it is not a struct.  Equal ids unify,
+// different ids never do, and a struct never unifies with a
 // same-shape tuple — nominal identity.  Every field is named, so a struct
 // instance reads by name.
 
 #[test]
 fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
-    // struct<.f Int, .t Type> — the pair [[int, Type], [TypeId(0), [TypeStruct, Type]]].
+    // struct<.f Int, .t Type> — the pair [[int, Type], [[TypeId(0), names,
+    // names_in_order], TypeStruct]].
     let mut ir = IR::new();
     let t1 = int_t(&mut ir);
     let t2 = ty(&mut ir);
     let s = named_type_struct(&mut ir, &[(t1, "f"), (t2, "t")]);
-    let b = build(s, ir);
+    let mut b = build(s, ir);
     assert!(b.ok, "struct<.f Int, .t Type> should kind");
     assert!(b.module.unify_errors.is_empty());
     // the shape is just the positional field-type list [int, Type] — the
     // nominal id does not ride in the shape
-    let shape = b.state[s].val.unwrap();
-    let shape_ids = array_ids(&b, shape);
+    let struct_shape = b.state[s].val.unwrap();
+    let shape_ids = array_ids(&b, struct_shape);
     assert_eq!(shape_ids.len(), 2);
     assert!(is_int_type(&b, shape_ids[0]));
-    // the kind slot is a standard [marker, K] pair; its marker is the
-    // three-field TypeStruct value [id, names, names_in_order].
+    // the kind slot is a standard [marker, K] pair; its marker is the ordinary
+    // [payload, type] pair: the payload [id, names, names_in_order] in the
+    // value slot, the TypeStruct atom in the type slot.
     let kind = b.state[s].ty.unwrap();
     let kind_ids = array_ids(&b, kind);
     assert_eq!(kind_ids.len(), 2);
     assert_eq!(kind_ids[1], b.type_expr);
     let marker = kind_ids[0];
     let marker_ids = array_ids(&b, marker);
-    assert_eq!(marker_ids.len(), 3);
+    assert_eq!(marker_ids.len(), 2, "the marker is a [value, type] pair");
     assert!(matches!(
-        b.module.node_value(AnyNodeId::Dynamic(marker_ids[0])),
+        b.module.node_value(AnyNodeId::Dynamic(marker_ids[1])),
+        Some(HighProgramValue::TypeValue(TypeValue::TypeStruct))
+    ));
+    let payload_ids = array_ids(&b, marker_ids[0]);
+    assert_eq!(payload_ids.len(), 3);
+    assert!(matches!(
+        b.module.node_value(AnyNodeId::Dynamic(payload_ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
     ));
-    // a named struct's marker carries a name table in its second field (the
+    // a named struct's payload carries a name table in its names slot (the
     // `Void` marker is the no-names case, reachable only from hand-built IR:
     // every source struct type now has named fields).
     assert!(matches!(
-        b.module.node_value(AnyNodeId::Dynamic(marker_ids[1])),
+        b.module.node_value(AnyNodeId::Dynamic(payload_ids[1])),
         Some(HighProgramValue::LowValue(LowValue::Table(_)))
     ));
+    // The tag is what makes it a struct marker: a pair with the same payload
+    // but the universe (not the `TypeStruct` atom) in its type slot is not one,
+    // and a type whose kind's marker is that pair is not a struct type.
+    let block = b.module.node_block(marker);
+    let tagless_items = b.module.alloc_array(
+        &[
+            ArrayItem::new(AnyNodeId::Dynamic(marker_ids[0])),
+            ArrayItem::new(AnyNodeId::Dynamic(b.type_expr)),
+        ],
+        block,
+    );
+    let tagless = b.module.add_node(
+        block,
+        None,
+        Some(HighProgramValue::from(LowValue::Array(tagless_items))),
+    );
+    assert!(
+        !lichen_highlevel::shape::is_struct_marker_any(&b.module, AnyNodeId::Dynamic(tagless)),
+        "a marker-shaped pair without the TypeStruct tag is not a struct marker"
+    );
+    let tagless_kind_items = b.module.alloc_array(
+        &[
+            ArrayItem::new(AnyNodeId::Dynamic(tagless)),
+            ArrayItem::new(AnyNodeId::Dynamic(b.type_expr)),
+        ],
+        block,
+    );
+    let tagless_kind = b.module.add_node(
+        block,
+        None,
+        Some(HighProgramValue::from(LowValue::Array(tagless_kind_items))),
+    );
+    let tagless_term_items = b.module.alloc_array(
+        &[
+            ArrayItem::new(AnyNodeId::Dynamic(struct_shape)),
+            ArrayItem::new(AnyNodeId::Dynamic(tagless_kind)),
+        ],
+        block,
+    );
+    let tagless_term = b.module.add_node(
+        block,
+        None,
+        Some(HighProgramValue::from(LowValue::Array(tagless_term_items))),
+    );
+    assert!(
+        !lichen_highlevel::shape::is_struct_type_any(
+            &mut b.module,
+            b.type_expr,
+            AnyNodeId::Dynamic(tagless_term)
+        ),
+        "a type whose kind's marker lacks the TypeStruct tag is not a struct type"
+    );
     // one source occurrence consumed exactly one fresh id
     assert_eq!(
         AsField::<HighGlobal>::get(&b.module.global_ext).type_id_counter,
@@ -1389,9 +1451,10 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
 
 #[test]
 fn a_named_struct_carries_a_name_to_index_table() {
-    // struct<.a Int, .b Type> — the struct marker `[id, names, names_in_order]`
-    // (in the kind's marker slot) holds a table mapping each field name to its
-    // positional index, and the same names again in definition order.
+    // struct<.a Int, .b Type> — the struct marker pair `[payload, TypeStruct]`
+    // (in the kind's marker slot) holds a payload `[id, names, names_in_order]`
+    // whose names slot maps each field name to its positional index, and the
+    // same names again in definition order.
     let mut ir = IR::new();
     let t1 = int_t(&mut ir);
     let t2 = ty(&mut ir);
@@ -1401,11 +1464,13 @@ fn a_named_struct_carries_a_name_to_index_table() {
     let kind = b.state[s].ty.unwrap();
     let kind_ids = array_ids(&b, kind);
     assert_eq!(kind_ids.len(), 2);
-    let marker = kind_ids[0];
-    let marker_ids = array_ids(&b, marker);
-    assert_eq!(marker_ids.len(), 3);
-    // the names field (marker[1]) is a constant table: "a" -> 0, "b" -> 1.
-    let names_node = marker_ids[1];
+    let marker_ids = array_ids(&b, kind_ids[0]);
+    assert_eq!(marker_ids.len(), 2);
+    let payload_ids = array_ids(&b, marker_ids[0]);
+    assert_eq!(payload_ids.len(), 3);
+    // the names field (the payload's slot 1) is a constant table: "a" -> 0,
+    // "b" -> 1.
+    let names_node = payload_ids[1];
     let Some(HighProgramValue::LowValue(LowValue::Table(table))) =
         b.module.node_value(AnyNodeId::Dynamic(names_node))
     else {
@@ -1431,10 +1496,10 @@ fn a_named_struct_carries_a_name_to_index_table() {
         .collect();
     found.sort_by_key(|&(_, i)| i);
     assert_eq!(found, vec![("a", 0), ("b", 1)]);
-    // the definition-order field (marker[2]) is an array of the names, one per
-    // definition position — the table's inverse, which the deferred named
-    // instantiation's reorder reads.
-    let in_order = array_ids(&b, marker_ids[2]);
+    // the definition-order field (the payload's slot 2) is an array of the
+    // names, one per definition position — the table's inverse, which the
+    // deferred named instantiation's reorder reads.
+    let in_order = array_ids(&b, payload_ids[2]);
     let names: Vec<&str> = in_order
         .iter()
         .map(
@@ -1460,10 +1525,16 @@ fn each_struct_type_occurrence_allocates_a_distinct_id() {
         AsField::<HighGlobal>::get(&b.module.global_ext).type_id_counter,
         2
     );
-    // the nominal id is the marker's slot 0: kind = [marker, K], marker =
-    // [id, names, names_in_order].
-    let id1 = array_ids(&b, array_ids(&b, b.state[s1].ty.unwrap())[0])[0];
-    let id2 = array_ids(&b, array_ids(&b, b.state[s2].ty.unwrap())[0])[0];
+    // the nominal id is the marker payload's slot 0: kind = [marker, K],
+    // marker = [payload, TypeStruct], payload = [id, names, names_in_order].
+    let id1 = array_ids(
+        &b,
+        array_ids(&b, array_ids(&b, b.state[s1].ty.unwrap())[0])[0],
+    )[0];
+    let id2 = array_ids(
+        &b,
+        array_ids(&b, array_ids(&b, b.state[s2].ty.unwrap())[0])[0],
+    )[0];
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(id1)),
         Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
@@ -1512,8 +1583,7 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
     assert_eq!(module.unify_errors.len(), 1);
     // The struct and tuple shapes are both the field-type list (same arity),
     // so the nominal distinction now lives at the kind's marker: a struct
-    // marker is the 3-element `TypeStruct{id, names, names_in_order}` array,
-    // while a tuple
+    // marker is the `[payload, TypeStruct]` pair, while a tuple
     // marker is the `TupleType` type constant — they clash at the marker
     // slot of the `[marker, K]` kind.
     let err = module.unify_errors[0].clone();

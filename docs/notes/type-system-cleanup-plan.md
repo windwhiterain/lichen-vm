@@ -66,8 +66,8 @@ inert upper chain is a necessary consequence of the uniform
 defects to fix are representational, not theoretical: (a) the inert chain
 still costs special cases in the unifier/checker (universe whitelist,
 deep-prove of the universe); (b) the kind level is repurposed as a metadata
-bus (`TypeStruct{id, names}` stores the nominal id and the field-name table
-inside the kind marker). Phase 1 should absorb (a); Phase 4 should spec
+bus (`[payload, TypeStruct]` stores the nominal id and the field-name table
+inside the kind marker's payload). Phase 1 should absorb (a); Phase 4 should spec
 `Type : Type` honestly as "the type chain closes in a cycle at `Type`".
 
 ## 1. Diagnosis: why the type system feels fragile
@@ -78,9 +78,9 @@ and **one boundary violation**:
 **Root cause — the type representation is an untyped graph with positional
 conventions.** A type is a `[shape, [marker, universe]]` node pattern; there
 is no typed view of it. Every rule re-derives meaning from raw array offsets
-(`container_ty[0][1]` vs `container_ty[1][0][1]` for the same name table,
-`checker.rs`), from structural guesses ("marker is a
-2-element array ⇒ struct", `checker.rs`), and from magic sentinels
+(`container_ty[0][0][1]` vs `container_ty[1][0][0][1]` for the same name table,
+`checker.rs`), from structural guesses (the struct marker's shape, now the
+`TypeStruct` tag, `shape.rs`), and from magic sentinels
 (`usize::MAX`, `NodeId::default()`). There is nowhere to attach an invariant,
 so each new feature (structs, named fields, raw reads, attributes, tables)
 patched the encoding, the unifier, and the checker in an ad-hoc way. The
@@ -129,7 +129,8 @@ One new module in `lichen-highlevel` (working name `shape.rs`) becomes the
 
 - Typed accessors and predicates for: pair layout `[value, type, attrs…]`,
   kind shape `[shape, [marker, universe]]`, the universe, each kind marker,
-  the struct marker `[id, names]`, both name-table paths, attribute slot
+  the struct marker `[payload, TypeStruct]` (payload `[id, names,
+  names_in_order]`), both name-table paths, attribute slot
   arithmetic (`2 + tail index`). Every `is_*_any` family, every magic offset,
   and `tag_descent`'s structural guess live in `shape.rs`.
 - The 8 kind markers are defined once (one macro or const table) and the

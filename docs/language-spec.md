@@ -317,8 +317,9 @@ delimiter is a fresh atom — an argument of an application:
     comparison takes its place.  A comparison's `<` is therefore written with a
     space before it, and `a<b>` (glued) stays the raw index.
 - `X::a` (glued `::`) is a **raw named read**: field `a` of a **TypeStruct value**,
-  whose type must itself be a TypeStruct kind (the name table lies there, at
-  `container_ty[0][1]`).  It reads the field's *type* as a value — `struct<.a
+  whose type must itself be a TypeStruct kind (the name table lies there, in the
+  marker payload at
+  `container_ty[0][0][1]`).  It reads the field's *type* as a value — `struct<.a
   Int, .b string>::a` is `Int : Type`.  The requirement is a unify for **both**
   tiers: a decided non-struct container is refused where it stands
   (`expected TypeStruct, found array<Int, 2>`), and an undecided one is pinned
@@ -614,15 +615,16 @@ maps every span back to the original file.
   `array<T, n>`.
 - **The raw named read `X::a`.**  The glued `::` postfix reads field `a` from a
   **TypeStruct value** — the container's *type* must itself be a TypeStruct
-  kind (`[TypeStruct{id, names}, K]`, the name→index table centred right there
-  at `container_ty[0][1]`) — the named sibling of the tuple-kind requirement
+  kind (`[[TypeId, names, names_in_order], TypeStruct]` under the kind's
+  `[marker, K]` pair, the name→index table centred right there
+  at `container_ty[0][0][1]`) — the named sibling of the tuple-kind requirement
   `X<e>` states, and likewise a **unify**: a decided container is refused where
   it stands, an undecided one is pinned and refused by the apply that binds it
   (this is what removed the `TableGet` panic a deferred non-struct used to hit).
   It yields the field's *type* as a value, so
   `struct<.a Int, .b string>::a` is `Int : Type`; its sibling `.a` reads a
   field *value* from a struct instance (whose *kind* must be TypeStruct, table
-  at `container_ty[1][0][1]`).  Because `::` now means this read, the table
+  at `container_ty[1][0][0][1]`).  Because `::` now means this read, the table
   literal's key/value separator is spelled `==>`.  `==` is generalized to
   compare any two same-typed values (an `Int` or a type value): `S::a == Int`
   is `1`, `S::a == string` is `0`, while a cross-type comparison is a check-time
@@ -635,11 +637,14 @@ maps every span back to the original file.
   *without* one (`struct<Int, Type>`) is a `StructFieldName` check error: a
   struct instance reads by name, so an unnamed field would have no read at all
   (the positional form `a(k)` is the *tuple* read, see *Indexing*).  The names
-  are stored on the struct type as a name→index table, in the second field of
-  the struct's **two-field marker** (`TypeStruct{id, names}`, the kind's marker
+  are stored on the struct type as a name→index table, in the names slot of the
+  struct marker's **payload** (`marker = [payload, TypeStruct]`,
+  `payload = [TypeId, names, names_in_order]`, the kind's marker
   slot), which lets a
   `a.name` read resolve a field by name.  Its kind is a standard `[marker, K]`
-  pair whose marker is that two-field value.  The kind also holds a **fresh
+  pair whose marker is that `[payload, TypeStruct]` pair — the marker's *type*
+  slot is the `TypeStruct` atom, which is what makes "is this a struct marker?"
+  a tag check rather than a shape guess.  The payload also holds a **fresh
   nominal id** — each occurrence of the syntax allocates a new id, so two
   occurrences never unify and a struct never unifies with a same-shape tuple
   type (nominal identity).  Bind one occurrence and it is reusable: the
@@ -771,9 +776,9 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `T1 -> T2` | `TypeFunction { parameter, return }` (domain, codomain) |
 | `(e1, …, en)` | `Tuple(range)` |
 | `<T1, …, Tn>` | `TypeTuple(range)` |
-| `struct<.a T1, .b T2>` | `TypeStruct { fields, names }` — nominal, fresh id per occurrence; the kind is a `[marker, K]` pair whose marker is the two-field `TypeStruct{id, names}` value.  A field without a `.name` (`struct<T1, …>`) is a `StructFieldName` check error |
+| `struct<.a T1, .b T2>` | `TypeStruct { fields, names }` — nominal, fresh id per occurrence; the kind is a `[marker, K]` pair whose marker is the ordinary `[payload, TypeStruct]` pair (`payload = [TypeId, names, names_in_order]`): the marker's type slot is the `TypeStruct` atom, the tag that makes it a struct.  A field without a `.name` (`struct<T1, …>`) is a `StructFieldName` check error |
 | `a.name` | `NamedField { container, name }` — the checker resolves `name` through the struct's name→index table to the positional index, then reads the field's type out of the field list |
-| `X::a` | `RawNamedField { container, name }` — a raw named read over a **TypeStruct value**: the container type (a TypeStruct kind) supplies the name table at `container_ty[0][1]`; yields the field's *type* as a value.  The kind is stated as a unify, so a non-struct container is refused at check time, or at the apply that binds it when the container is not decided yet |
+| `X::a` | `RawNamedField { container, name }` — a raw named read over a **TypeStruct value**: the container type (a TypeStruct kind) supplies the name table at `container_ty[0][0][1]`; yields the field's *type* as a value.  The kind is stated as a unify, so a non-struct container is refused at check time, or at the apply that binds it when the container is not decided yet |
 | `s(1, 2)` / `s(.x 1, .y 2)` (callee a struct type) | `Instantiate { type_expr, value, names }` — `names` is index-aligned with `value`'s tuple elements (a `.x 1` argument is `Some("x")`, a positional `1` is `None`); the checker reorders named arguments to the definition's positional order |
 | `[e1, …, en]` | `Array(range)` |
 | `[e1, ~e2, ~2 e3]` | `ShallowArray { range, depths }` — any `~`-marked element makes the array shallow: per-element marker depths (0 = unmarked, `usize::MAX` = the bare `~`, n = the value slot shallow at the first n levels of the element's type spine) |

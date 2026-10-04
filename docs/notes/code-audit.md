@@ -5774,7 +5774,8 @@ wrong for the renderer specifically, this is the item to reopen.
   `check_failed`'s doc) — since `P1-6` the runtime records
   `EvalError::ApplyTarget` instead; `highlevel/ir.rs`'s struct layout, which
   said the shape bundles the nominal id — the checker's `[shape, kind]` pair has
-  the field types in the shape and `[TypeStruct{id, names}, K]` in the kind, the
+  the field types in the shape and `[[id, names, names_in_order], TypeStruct]`
+  in the kind, the
   opposite of the claim; `language/src/lib.rs`'s `Report::build` doc ("`None`
   only when the resolve stage failed") — the lowering is total, so every path
   this crate produces is `Some`; `crates/lichen-tools/src/readme.rs`'s claim that

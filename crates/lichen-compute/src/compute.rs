@@ -62,8 +62,8 @@ use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram, LeafKindMarkers, TypeOperator, ValueType};
 use lichen_highlevel::shape::{
     KIND_MARKER_SLOT, PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, STRUCT_MARKER_NAMES_SLOT,
-    TYPE_KIND_SLOT, TYPE_SHAPE_SLOT, TypeRef, array_items as array_items_any, field_list,
-    field_names, field_type, low_type_of_slot,
+    STRUCT_MARKER_PAYLOAD_SLOT, TYPE_KIND_SLOT, TYPE_SHAPE_SLOT, TypeRef,
+    array_items as array_items_any, field_list, field_names, field_type, low_type_of_slot,
 };
 use lichen_kernel_ir::{
     BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
@@ -4794,6 +4794,11 @@ fn resolve_without_type(steps: &[IndexStep]) -> Result<Option<Vec<usize>>, Strin
 /// the layout.  `None` when the term is not a named struct type: a positional
 /// struct's names slot is `Void`, and a term whose chain is not yet decided is
 /// a type this resolution has nothing to read.
+///
+/// **The marker's `TypeStruct` tag is not checked here.**  This vocabulary's
+/// bound carries no [`ValueType`], so the tag atom cannot be named without
+/// rippling that bound through the lowering's callers; the names slot being a
+/// `Table` is the structural signal instead (see the closing report).
 fn struct_type_names<P>(module: &Module<P>, term: AnyNodeId) -> Option<Vec<Option<&'static str>>>
 where
     P: Program,
@@ -4803,7 +4808,10 @@ where
     let shape = type_term_slot(module, term, TYPE_SHAPE_SLOT)?;
     let kind = type_term_slot(module, term, TYPE_KIND_SLOT)?;
     let marker = type_term_slot(module, kind, KIND_MARKER_SLOT)?;
-    let names_at = type_term_slot(module, marker, STRUCT_MARKER_NAMES_SLOT)?;
+    // The marker is the `[payload, TypeStruct]` pair; the name table rides in
+    // the payload's names slot.
+    let payload = type_term_slot(module, marker, STRUCT_MARKER_PAYLOAD_SLOT)?;
+    let names_at = type_term_slot(module, payload, STRUCT_MARKER_NAMES_SLOT)?;
     let field_count = unsafe { array_items_any(module, shape) }?.len();
     let mut names: Vec<Option<&'static str>> = vec![None; field_count];
     let Some(LowValue::Table(table)) = module

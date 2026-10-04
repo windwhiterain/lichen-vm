@@ -345,9 +345,10 @@ workstream's job and unsound, because the cell is shared while the kernel is not
   (`shape::low_type_of_slot`) — never `==`.
 - **A value's encoding must not look like a type.**  The class domain used to
   need three elements for that reason (the tag is gone now, and the *set's* value
-  is an ordinary array, so nothing new can be misread); `is_struct_marker_any`
-  still accepts any two-element array, which is why a kinded type's shape is
-  wrapped in an array rather than placed bare in the shape slot.
+  is an ordinary array, so nothing new can be misread); a kinded type's shape is
+  wrapped in an array rather than placed bare in the shape slot, and the struct
+  marker is identified by the `TypeStruct` atom in its *type* slot, never by an
+  array's arity.
 - **`set` is a keyword, so it is reserved.**  A program that bound a variable
   named `set` no longer parses; that is the one breaking change the set form
   introduced (the `!` → `@assert` move was the other, earlier one).

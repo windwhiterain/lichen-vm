@@ -1058,16 +1058,43 @@ where
         (shape, kind, pair)
     }
 
-    /// The struct marker node `[TypeId, names, names_in_order]` — the
-    /// three-field kind marker of a struct type (layout:
+    /// The struct marker node `[payload, TypeStruct]` — the ordinary
+    /// `[value, type]` pair that is a struct's kind marker, whose payload is
+    /// `[TypeId, names, names_in_order]` (layout:
+    /// [`shape::STRUCT_MARKER_PAYLOAD_SLOT`](crate::shape::STRUCT_MARKER_PAYLOAD_SLOT) /
+    /// [`shape::STRUCT_MARKER_TAG_SLOT`](crate::shape::STRUCT_MARKER_TAG_SLOT),
+    /// and inside the payload
     /// [`shape::STRUCT_MARKER_ID_SLOT`](crate::shape::STRUCT_MARKER_ID_SLOT) /
     /// [`shape::STRUCT_MARKER_NAMES_SLOT`](crate::shape::STRUCT_MARKER_NAMES_SLOT) /
     /// [`shape::STRUCT_MARKER_NAMES_ORDER_SLOT`](crate::shape::STRUCT_MARKER_NAMES_ORDER_SLOT)).
-    /// The single construction point both `struct<…>` types and
-    /// struct-returning blocks use — and the deferred instantiation's pin, whose
-    /// three cells all stay open.
+    /// The pair's type slot is the installed `TypeStruct` atom
+    /// ([`Self::type_struct_marker_node`]), the same atom every other marker
+    /// node is built from — so "this is a struct marker" is a tag the graph
+    /// carries, not a shape a reader guesses.  The
+    /// single construction point both `struct<…>` types and struct-returning
+    /// blocks use — and the deferred instantiation's pin, whose payload cells
+    /// all stay open.
     fn struct_marker_node(&mut self, id: NodeId, names: NodeId, names_in_order: NodeId) -> NodeId {
-        self.array_node(self.current_block, &[id, names, names_in_order])
+        let payload = self.array_node(self.current_block, &[id, names, names_in_order]);
+        let tag = self.type_struct_marker_node();
+        self.array_node(self.current_block, &[payload, tag])
+    }
+
+    /// The **struct-kind requirement** a decided-tier read states: the struct
+    /// kind `[[payload, TypeStruct], K]` whose marker is the ordinary
+    /// `[value, type]` pair with the `TypeStruct` atom in its *type* slot and
+    /// the payload left wholly open.  This is the struct analogue of the tuple
+    /// read's `[TypeTuple, K]` unify ([`Self::check_raw_index`]): the
+    /// requirement names the tag, never the payload's shape, so it is a check
+    /// of `TypeStruct` rather than a guess that any marker-shaped array is a
+    /// struct.
+    fn struct_kind_requirement(&mut self) -> NodeId {
+        let payload = self.fresh_cell();
+        let marker = self.array_node(
+            self.current_block,
+            &[payload, self.type_struct_marker_node()],
+        );
+        self.kind_expr(self.current_block, marker)
     }
 
     /// A struct type's nominal id node — the [`TypeOperator::Fresh`] call one
@@ -1086,14 +1113,17 @@ where
     }
 
     /// The struct type's full encoding — the field-type `shape`, the `kind`
-    /// `[TypeStruct{id, names, names_in_order}, K]`, and the `[shape, kind]`
+    /// `[marker, K]` whose marker is the pair `[payload, TypeStruct]` over a
+    /// `payload = [TypeId, names, names_in_order]`, and the `[shape, kind]`
     /// wrapper pair — built from the caller's nominal `id` node, the field types
     /// and the field names:
     ///
     /// ```text
     /// wrapper = [ shape, kind ]
     /// shape   = [ field types… ]
-    /// kind    = [ TypeStruct{id, names, names_in_order}, K ]
+    /// payload = [ id, names, names_in_order ]
+    /// marker  = [ payload, TypeStruct ]
+    /// kind    = [ marker, K ]
     /// ```
     ///
     /// The single construction point for the layout [`shape`](crate::shape)
@@ -1101,10 +1131,10 @@ where
     /// because which occurrence allocated it is a policy of the emitting rule,
     /// not part of the encoding.
     ///
-    /// The identity `[id, names, names_in_order]` is decided **here**, once per
-    /// written occurrence.  Both name halves are computations the apply clone
-    /// walk would otherwise copy: the `Fresh` id would run again per
-    /// application, and the name table is an arena payload, so a copy is a
+    /// The identity `payload = [id, names, names_in_order]` is decided
+    /// **here**, once per written occurrence.  Both name halves are computations
+    /// the apply clone walk would otherwise copy: the `Fresh` id would run again
+    /// per application, and the name table is an arena payload, so a copy is a
     /// *different* table that does not unify with the original.  Either way one written struct type
     /// applied to one argument twice yields two nominal types that do not
     /// unify — a type constructor that is not a function.  Deep-evaluating the
