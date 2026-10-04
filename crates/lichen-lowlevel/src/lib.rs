@@ -14,6 +14,7 @@ pub use crate::control_flow::{BasicBlock, Body, Br, Define, Selection, Terminato
 pub use crate::equality::{UnifyError, UnifyStep};
 pub use crate::evaluation::EvalError;
 pub use crate::function::ApplyError;
+pub use crate::resolve::{Define, Selection};
 pub(crate) use crate::static_module::StaticModuleCache;
 
 pub mod ancestors;
@@ -28,6 +29,7 @@ mod gc;
 mod low_type;
 mod module;
 mod registry;
+pub mod resolve;
 mod static_module;
 mod table;
 mod utils;
