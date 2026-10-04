@@ -26,6 +26,15 @@
 //! testing it would refuse every marked recursion including the ones that
 //! expand.  An entering call's argument is the state the trip count is read
 //! from, which is a fact about the program rather than about the step.
+//!
+//! # The cycle is a component, not a function
+//!
+//! A recursion is a **group** of `@loop` bindings that reach each other, and the
+//! group is the unit everything downstream speaks in: §3 step 3's nest has one
+//! level per member, and one refusal covers the whole group. So the marked
+//! functions are keyed by the **entry of their strongly connected component**
+//! ([`component_entries`]), not by themselves — a mutual recursion is one fact,
+//! and keying by binding said it twice.
 
 use std::collections::{HashMap, HashSet};
 
@@ -41,12 +50,24 @@ use super::Checker;
 
 /// What the `@loop` markers in an IR say about its recursions.
 pub(crate) struct MarkedRecursions {
-    /// The `@loop`-marked functions that lie on a cycle, each mapped to
-    /// itself — the group a refusal is stated once for.  Stage 0 does not
-    /// compute the strongly connected components of §3, so two members of one
-    /// two-node cycle are two groups and can each be refused; that is the
-    /// analysis Stage 2 owns, and until it exists the honest key is the
-    /// binding the call names.
+    /// Each cyclic marked function, mapped to the **entry** of the strongly
+    /// connected component it belongs to — §3 step 1's components over the
+    /// marked call graph.
+    ///
+    /// **The entry, not the member.** A component is one fact about the program
+    /// — this group of `@loop` bindings reaches each other — and the entry is a
+    /// stable, unique key for it, so a refusal or a nest is stated once for the
+    /// whole group rather than once per member. Two members of one two-node cycle
+    /// share a value here; before this was a component, each was its own key and
+    /// a mutual recursion said the same thing twice.
+    ///
+    /// A marked function on no cycle is **absent**, because `@loop inc = x =>
+    /// x + 1` is an ordinary function.
+    ///
+    /// **The component's member list is not here.** It is what §3 step 2
+    /// defunctionalises — one base test, transition and environment per member —
+    /// and it belongs to the same Tarjan run rather than to a second walk over
+    /// the graph. Adding it is one more field, not another analysis.
     pub cycles: HashMap<ExprId, ExprId>,
     /// Every expression of a cyclic marked function's **own body** — the
     /// cycle calling itself.  A site outside this set enters the cycle.
@@ -96,31 +117,20 @@ pub(crate) fn marked_recursions<A: AttrSpec, L>(ir: &IR<A, L>) -> MarkedRecursio
                 .collect(),
         );
     }
-    // A function is cyclic when it reaches itself.  The least fixed point of
-    // "reachable from here" is a worklist, not a transitive closure — this
-    // graph is as large as the program's marked functions, which is small.
-    let mut cyclic: HashSet<ExprId> = HashSet::new();
-    for &start in &marked {
-        let mut seen: HashSet<ExprId> = HashSet::new();
-        let mut pending: Vec<ExprId> = edges.get(&start).cloned().unwrap_or_default();
-        while let Some(next) = pending.pop() {
-            if !seen.insert(next) {
-                continue;
-            }
-            if next == start {
-                cyclic.insert(start);
-                break;
-            }
-            pending.extend(edges.get(&next).cloned().unwrap_or_default());
-        }
+    // §3 step 1: the strongly connected components of the marked call graph.
+    //
+    // **Tarjan, not a per-function reachability search.** The previous test asked
+    // "does `f` reach itself" once per marked function, which answers *whether*
+    // and not *with whom*: two members of one two-node cycle came back as two
+    // answers, and the defunctionalisation needs one group to cut levels from.
+    // Tarjan gives the groups in one pass and, because a component pops off the
+    // stack at its root, hands each one back in **reverse topological order** —
+    // so a component's members arrive sink-first, which is the order §3 step 3
+    // needs reversed into first-entry order below.
+    let entries = component_entries(&marked, &edges);
+    for (function, entry) in entries {
+        out.cycles.insert(function, entry);
     }
-    // The cyclic set is the answer; no component key is computed here.  A
-    // refusal is therefore stated once per **marked binding entered**, which is
-    // one fact about the program and is what this stage can actually see: the
-    // strongly connected components are Stage 2's own analysis
-    // (`docs/notes/loop-conversion.md` §3), and a two-node cycle whose two
-    // entries both fail says the same thing twice.
-    out.cycles = cyclic.into_iter().map(|f| (f, f)).collect();
     // The bodies a cycle covers: a site's own recursion is inside one, and an
     // entering call is not.
     for f in out.cycles.keys().copied().collect::<Vec<_>>() {
@@ -143,6 +153,121 @@ pub(crate) fn marked_recursions<A: AttrSpec, L>(ir: &IR<A, L>) -> MarkedRecursio
         }
     }
     out
+}
+
+/// Tarjan's strongly connected components over `edges`, restricted to `nodes`.
+///
+/// Each component comes back with its members **in first-entry order** — the
+/// order of `nodes` as it was given, which is the IR's own expression order, so
+/// "first entry" is the member whose body the user wrote earliest. That is §3
+/// step 3's ordering of the nest's levels.
+///
+/// **The graph is as large as the program's marked functions**, which is small:
+/// a program without `@loop` never reaches here, and one with a handful of
+/// marked bindings is a handful of nodes. Recursion is avoided by the index
+/// stack rather than by the call depth, so a pathological `@loop` group cannot
+/// overflow while being analysed.
+/// The **entry** of each strongly connected component of the marked call graph,
+/// paired with the functions in it.
+///
+/// `nodes` order is the IR's own expression order, so "first entry" is the
+/// member whose body the user wrote first — which is how §3 step 3 orders the
+/// nest's levels.
+///
+/// **Tarjan, not a per-function reachability search.** The previous test asked
+/// "does `f` reach itself" once per marked function, which answers *whether* and
+/// not *with whom*: two members of one two-node cycle came back as two answers,
+/// and the whole point is that they are one.
+///
+/// **The graph is as large as the program's marked functions**, which is small: a
+/// program without `@loop` never reaches here, and one with a handful of marked
+/// bindings is a handful of nodes. Recursion is avoided by the index stack rather
+/// than by call depth, so a pathological `@loop` group cannot overflow while
+/// being analysed.
+fn component_entries(
+    nodes: &[ExprId],
+    edges: &HashMap<ExprId, Vec<ExprId>>,
+) -> Vec<(ExprId, ExprId)> {
+    // First-entry order, which is the IR's own expression order: "the member
+    // whose body the user wrote first".
+    let rank: HashMap<ExprId, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(position, &node)| (node, position))
+        .collect();
+    let mut index: HashMap<ExprId, usize> = HashMap::new();
+    let mut lowlink: HashMap<ExprId, usize> = HashMap::new();
+    let mut on_stack: HashSet<ExprId> = HashSet::new();
+    let mut stack: Vec<ExprId> = Vec::new();
+    // The traversal's own frames, `(node, how many successors are settled)`.
+    let mut frames: Vec<(ExprId, usize)> = Vec::new();
+    let mut found: Vec<(ExprId, ExprId)> = Vec::new();
+    let mut counter = 0usize;
+
+    for &root in nodes {
+        if index.contains_key(&root) {
+            continue;
+        }
+        frames.push((root, 0));
+        while let Some(&(node, settled)) = frames.last() {
+            // A frame is pushed only for an unvisited node, so this is its one
+            // and only entry into `index`.
+            if settled == 0 {
+                index.insert(node, counter);
+                lowlink.insert(node, counter);
+                counter += 1;
+                stack.push(node);
+                on_stack.insert(node);
+            }
+            let successors = edges.get(&node).map(Vec::as_slice).unwrap_or_default();
+            // Descend into one successor at a time. **A successor already on the
+            // stack is not descended into again**, and that is the whole of what
+            // makes a *mutual* cycle join the component instead of recursing.
+            if let Some(&successor) = successors.get(settled) {
+                frames.last_mut().expect("non-empty").1 += 1;
+                if !index.contains_key(&successor) {
+                    frames.push((successor, 0));
+                    continue;
+                }
+                if on_stack.contains(&successor) {
+                    let here = lowlink[&node].min(lowlink[&successor]);
+                    lowlink.insert(node, here);
+                }
+                continue;
+            }
+            // Every successor is settled. The node leaves its frame, its lowlink
+            // rises into its parent's, and a root of a component pops the whole
+            // component off the stack.
+            frames.pop();
+            if let Some(&(parent, _)) = frames.last() {
+                let here = lowlink[&node];
+                let above = lowlink[&parent].min(here);
+                lowlink.insert(parent, above);
+            }
+            if lowlink[&node] != index[&node] {
+                continue;
+            }
+            let mut members = Vec::new();
+            while let Some(popped) = stack.pop() {
+                on_stack.remove(&popped);
+                members.push(popped);
+                if popped == node {
+                    break;
+                }
+            }
+            // A one-member component is a recursion only when the edge is there:
+            // `@loop f = x => g x` where `g` is marked and does not reach back is
+            // two components of one, not a cycle.
+            if members.len() > 1 || successors.contains(&node) {
+                // Tarjan pops sink-first; `rank` is the IR's own order, so one
+                // sort states first entry rather than inheriting the traversal's.
+                members.sort_by_key(|member| rank[member]);
+                let entry = members[0];
+                found.extend(members.into_iter().map(|member| (member, entry)));
+            }
+        }
+    }
+    found
 }
 
 /// Every apply callee in `root`'s subtree.  The IR is a DAG, so `seen` is what
@@ -186,8 +311,12 @@ fn callee_root<A: AttrSpec, L>(ir: &IR<A, L>, mut callee: ExprId) -> Option<Expr
 /// and where the user wrote the call ([`Loc`] names the expression).
 #[derive(Clone, Debug)]
 pub(crate) struct LoopSite {
-    /// The marked binding this call enters, as [`MarkedRecursions::cycles`]
-    /// keys it.
+    /// The **entry** of the component this call enters, as
+    /// [`MarkedRecursions::cycles`] keys it.
+    ///
+    /// **The component's entry, not the binding the call names**: two members of
+    /// one cycle are one fact about the program, and a refusal is stated once
+    /// for both.
     pub cycle: ExprId,
     pub node: NodeId,
     pub argument_value: NodeId,
@@ -199,25 +328,29 @@ where
     P::Value: ValueType,
     P::Operator: From<lichen_lowlevel::LowOperator> + From<TypeOperator>,
 {
-    /// The marked cycle an apply **enters**, through a curried callee chain,
-    /// or [`None`] when it enters none.
+    /// The marked component's entry that an apply **enters**, through a curried
+    /// callee chain, or [`None`] when it enters none.
     ///
     /// A `@loop` binding is commonly curried (`loop = f => n => x => …`), and
     /// a call is a *chain* of applies rather than one — `loop inc n i` is
     /// three, and only the innermost operand is the binding.  Reading the
     /// chain is what makes the entry that actually carries the trip count the
     /// one classified, instead of the partial application before it.
+    ///
+    /// **Which member of the component the chain names does not matter** — that
+    /// is what a component is for — so this resolves the chain to the *entry*,
+    /// and every member of one component enters the same nest.
     pub(super) fn loop_cycle_entered(&self, callee: ExprId) -> Option<ExprId> {
         let binding = callee_root(&self.ir, callee)?;
         self.loop_cycles.cycles.get(&binding).copied()
     }
 
-    /// The marked cycles the build could not expand, each refused **once**, at
-    /// the first entering call whose state is undecided.
+    /// The marked components the build could not expand, each refused **once**,
+    /// at the first entering call whose state is undecided.
     ///
-    /// A marked binding with two entering calls is one fact about the program
-    /// — it did not expand — so one refusal naming the first is both enough and
-    /// less noise than a message per call site.  The sites are in source order
+    /// A component with two entering calls is one fact about the program — it
+    /// did not expand — so one refusal naming the first is both enough and less
+    /// noise than a message per call site.  The sites are in source order
     /// ([`Checker::check_app`] met them in that order), so which one is named
     /// is decided, not arbitrary.
     pub(super) fn report_open_loop_sites(&mut self) {
@@ -229,7 +362,7 @@ where
                     continue;
                 }
                 // A decided entry is not a refusal, and it does not speak for
-                // the next one: a binding may be entered once with a literal
+                // the next one: a component may be entered once with a literal
                 // and once from a run-time value, and only the second is open.
                 if self.value_decided(site.argument_value) {
                     continue;

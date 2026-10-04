@@ -192,9 +192,9 @@ inc = x => x + 1
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, loop inc 3 i]
+  compute.write ((compute.Write _)(.to n, .at i, .value loop inc 3 i))
 }) "BACKEND"
-compute.read [compute.plrun p (4,), 3]
+compute.read ((compute.Read _)(.from compute.plrun p (4,), .at 3))
 "#;
 
 /// A `@loop`-marked recursion whose trip count is **decided** and whose whole
@@ -207,9 +207,9 @@ const RECURSIVE_LITERAL_MARKED: &str = r#"
 p = compute.parallel (cfg => {
   n = cfg(0)
   i = compute.range n
-  compute.write [n, i, steps 4 + compute.range n * 0]
+  compute.write ((compute.Write _)(.to n, .at i, .value steps 4 + compute.range n * 0))
 }) "BACKEND"
-compute.read [compute.plrun p (8,), 3]
+compute.read ((compute.Read _)(.from compute.plrun p (8,), .at 3))
 "#;
 
 /// Two-stage **curried** recursion — `sum_to (n - 1) (x + 1)` is *two*
