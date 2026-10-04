@@ -17,8 +17,8 @@
 | `wasm-encoder` 0.248 bump | `feature/waffle-spike` | **verified** — and §3.1 removed its only edit to our code, so it now rides with the new lowering |
 | The waffle spike | `feature/waffle-spike` | **passes** — a loop with a carried value, lowered and run through `wasmi` |
 | §3.1 the instruction map, on `waffle::Operator`, with §3.3's assembly and §3.4's deletion | `feature/waffle-spike` | **done** — all 62 kernel-execution tests green on the new lowering |
-| §3.2 structured control flow (`If`, `Jump`, `While`) | `feature/waffle-spike` | **not started.** A body whose transfer is not a `Return` is refused by name |
-| The real lowerer, for a loop | nowhere yet | **§3.2.** Read §3 before writing it |
+| §3.2 structured control flow (`If`, `Jump`, `While`) | `feature/waffle-spike` | **done** — the three shapes lower, and the loop's own path has no test in the suite |
+| The real lowerer, for a loop | `feature/waffle-spike` | **landed in §3.2**, and verifiable only as far as the IR is: nothing in the repository builds a loop body |
 
 **§3.1, §3.3 and §3.4 were one commit, not three.** Replacing the emitter *is*
 deleting it: keeping the hand-written `Frame`/`lower_flow`/`WasmState` alive beside
@@ -123,31 +123,120 @@ rather than by what the instruction meant. It is a plain `waffle::Type` and not 
 All 62 kernel-execution tests pass with this lowering in place of the old emitter,
 and *that* was the signal to continue.
 
-### 3.2 Structured control flow — **next**
+### 3.2 Structured control flow — **done, on `feature/waffle-spike`**
 
-- **`If`** → `CondBr` to two arm blocks, both ending at a **join block whose
-  parameters are the `passes` values**. A one-armed `If` has its absent side branch
-  straight to the join with the stack as it stood — that is what makes a one-armed
-  branch expressible without inventing a value.
-- **`Jump`** → `Br` with the top `passes` values as `args`.
-- **`While`** → exactly the spike's shape: reserve the carried tuple's blockparams
-  on a header block *first*, then lower the test with those blockparams as the
-  starting stack, then `CondBr { if_true: exit-with-the-top-`passed_out`, if_false:
-  body }` where the body's last act is `Br` back to the header with the next state.
+The three transfers are `compute/wasm/flow.rs`, a file of its own: `lower.rs`
+answers *what one instruction computes*, and this answers *where the stack goes*.
+The split is the point — the two questions have different state (a stack of values
+against a table of labels and joins), and the withdrawn emitter's defects were all
+in the second. What landed is:
 
-  **The header must leave the tuple and then the condition** (the IR's own contract)
-  — that is what makes the exit's values read the right slots, and the old emitter
-  asserted it at emission. Keep asserting it.
+- **`If`** is a `CondBr` to **two arm blocks of its own**, each started on the
+  stack the branch inherited — the selector is consumed by the branch, so what an
+  arm starts from is what is below it — and both arriving at a **join block whose
+  parameters are the `passes` values**. An absent arm branches straight to the join
+  with the stack as it stood, which is what makes a one-armed branch expressible
+  without inventing a value.
+- **`Jump`** is a `Br` whose `args` are the top `passes` values.
+- **`While`** is the spike's shape exactly: the carried tuple's blockparams are
+  reserved on a header block *first*, the header's instructions run with those
+  blockparams as their starting stack, and the test is a `CondBr` whose true edge is
+  the exit — handed the top `passed_out` of the header's own values — and whose
+  false edge is the body, whose last act is a `Br` back to the header with the next
+  state.
 
-**The one shape §3.1 left open is decided, and it belongs here.** A `Flow::Block`
-whose `entry` names a label is **both** a loop header and the block holding the
-loop, and §3.1 refuses it by name rather than picking a meaning for it. **The
-meaning is the header's**: the fragment's entry block stays the preheader, and the
-labelled block becomes a block of its own holding the carried tuple as its
-blockparams — which is the same shape the spike proved and the same shape
-`FunctionBody::new` forces, since the entry block's blockparams *are* the function's
-parameters and cannot be added to. A loop whose labelled block is the fragment's
-entry has no representation, because the carried values would have nowhere to live.
+**The header's contract is asserted, and it is a height check.** The stack at the
+`CondBr` is `state(carried), condition` and nothing else, so a header that has
+consumed its own tuple, or left anything else behind, is refused by name rather
+than emitted as a branch whose exit reads the wrong slots.
+
+**The shape §3.1 left open is served as §3.1 said it would be.** A `Flow::Block`
+whose `entry` names a label **is** the loop's header: the fragment's entry block
+stays the preheader, the header is a block of the loop's own, and the carried tuple
+is its blockparams. The preheader hands the header one value per carried slot, and
+that is where the initial state comes from — which is the concrete reading of
+"a loop's state may not live in the entry block":
+`FunctionBody::new` fixes the entry block's blockparams to the function's
+parameters, so the tuple, which is a block's *parameters*, has nowhere else to be.
+
+**The join's parameters are typed by the values that arrive**, never by a count.
+`materialize_join` is the one place that creates a selection's join, and it takes
+each blockparam's type from the slot the branch is handing over; a loop's header
+and exit are the only labels whose params are made without an arriving branch, and
+both are `i64` (below).
+
+Four decisions the note did not state:
+
+1. **A carried value is typed `i64`.** The IR states a `carried` **count**, never a
+   type (`lichen_kernel_ir::body`), and a header's blockparams have to be typed
+   *when the header is created*, before any instruction has run — so the type
+   cannot be read off the stack the way every other type in this lowering is.
+   `Int` is what every scalar kernel's state is and what the acceptance case (a
+   reduction with a counter) carries; a loop that hands its exit a value that is
+   not `i64` is refused by name rather than typed wrong.
+2. **A one-armed branch passes zero values.** `passes > 0` with `on_zero == None`
+   is refused: the absent side arrives with the stack as it stood, so a join with
+   parameters would have no source on that path.
+3. **A loop with no backedge is refused.** When the body is lowered, whether it
+   arrived back at the header is carried out of the walk as a `Backedge` fact —
+   it is the one thing a stack cannot say, because the header and the exit are
+   both reachable from the body's level. A body that never arrives at its header
+   has no `Br` to emit, and this is the check the IR's own `validate` intends but
+   cannot complete (see §3.2's last paragraph).
+4. **A selection whose arms both leave the loop has no join.** This is the one IR
+   shape the lowering does not serve: `validate` lets an `If` inside a loop name
+   the header or the exit as its join, so an arm may leave and never arrive; both
+   arms doing so is refused rather than emitted against a block nothing created.
+
+**What the suite does and does not exercise.** All 62 kernel-execution tests pass.
+**No test in the repository produces a loop body**, so the loop's own path is
+verified by structure and by a probe, not by the suite: a throwaway body — deleted
+before the commit, to respect this repository's rule that agents do not add tests —
+lowered to
+
+```wat
+(func $kernel0 (param i64) (result i64)
+  (local i64 i32)
+  local.get 0
+  local.set 1
+  loop ;; label = @1
+    local.get 0
+    i64.const 0
+    i64.eq
+    i64.extend_i32_u
+    i32.wrap_i64
+    local.set 2
+    local.get 2
+    if ;; label = @2
+      local.get 1
+      local.set 1
+      local.get 1
+      return
+    else
+      local.get 1
+      local.set 1
+      br 1 (;@1;)
+    end
+  end
+  unreachable)
+```
+
+(the header's address is `local 1`, its carried blockparam, on both edges — which
+is what the header's height check pins down), which is the spike's `countdown`
+shape, and the zero-trip path ran under `wasmi` and returned the initial state.
+**The backedge is unexercised by any test.**
+
+**And the IR cannot yet build a loop that terminates.** This is the finding the
+probe produced, and it is not a backend defect: `KernelInstr::LocalGet` names a
+*parameter leaf*, and no instruction names a carried tuple element, so a body
+cannot compute a state smaller than the one the preheader supplied. Every loop a
+body can express today either runs zero trips or runs forever — the header's test
+is a function of the function's own arguments, which do not change. That is the
+shape [loop-body-expressiveness](loop-body-expressiveness.md) §2.1 describes, and
+it survives §3.2: a loop now *lowers* and is *expressible* as structure, but no
+program that reaches it can terminate. **What is still missing is an instruction
+that reads the carried tuple into the body** — the same gap that leaves the
+acceptance case ([loop-conversion](loop-conversion.md) §8.5 item 5) unrun.
 
 ### 3.3 Module assembly onto waffle's `Module` — **done, with §3.1**
 

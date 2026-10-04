@@ -12,18 +12,21 @@
 //!
 //! - `lower` — *what does this body compute*: the instruction map, one
 //!   `KernelInstr` at a time, onto `waffle`'s SSA values.
+//! - `flow` — *where does the stack go*: `If`/`Jump`/`While` onto `waffle`'s
+//!   blocks, with a loop's carried tuple as its header's blockparams.
 //! - `assemble` — *what does the module look like*: the buffer imports, one
 //!   function per fragment, and the export the host resolves `main` by.
 //! - `mixed` — *which class is each value*, checked before any of the above so
 //!   that a fragment meeting an `Int` and a `Float` in one operation costs no
 //!   emitted instruction.
 //!
-//! **What is not here yet is control flow.** `lower_fragment` lowers one block,
-//! and a body whose transfer is not a `Return` is refused by name. The loop case
-//! — and with it the `If`/`Jump` a converted loop's body needs — is the next step
-//! of the migration, in `docs/notes/wasm-backend-handoff.md` §3.2.
+//! **Structured control flow is `flow`'s**, and it is the shape
+//! `docs/notes/wasm-backend-handoff.md` §3.2 decides: a labelled block is a
+//! loop's header, the fragment's entry block stays the preheader, and an arm of a
+//! branch is a block of its own.
 
 mod assemble;
+mod flow;
 pub(crate) mod lower;
 pub(crate) mod mixed;
 
