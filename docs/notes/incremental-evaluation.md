@@ -119,8 +119,8 @@ Two facts make the in-memory scope the cheap one:
   §1.2's whole-file rows do and what this note now declines to do per
   sub-expression.
 - **The value memo is the class, not the node** (`class_value` reads through the
-  union-find representative, `equality.rs:81-87`; `write_node_value` replicates
-  to the class's unbound pure cells). A reused answer would have to carry its
+  union-find representative; `propagate_class_value` distributes a write to the
+  class's operation-free members). A reused answer would have to carry its
   class, which is exactly what an in-memory scope gets for free.
 
 And one fact is a semantic input rather than a hint: the apply clone walk decides
@@ -156,7 +156,7 @@ operand's verdict (`:766-774`).
 | 3 | `utils.rs:36-52` `alloc_array` / `alloc_table` | payload vertex + its item/entry refs, copied into the block arena | append |
 | 4 | `checker.rs:942-954` `array_node`; `function.rs:406`; `static_module/apply.rs:209`; `table.rs:186` | the callers that mint payloads (the E-item/E-entry creation sites) | append |
 | 5 | `equality.rs:60-71` `add_equality`, called at `:522,:555,:569,:599,:622,:637,:654,:909` | **class merge** — two subgraphs become one dependency set | retroactive |
-| 6 | `equality.rs:273-297` `write_node_value` | `value` write **and** replication to every unbound pure-cell class member | append + retroactive |
+| 6 | `equality.rs:310-366` `write_node_value` / `propagate_class_value` | `value` write **and** propagation to every operation-free class member that can take it — a member already holding a value is compared and left at its own when the two cannot be one (`class-channel.md` §1.1) | append + retroactive |
 | 7 | `gc.rs:154-165` `flatten_class` + `disjoint::rebuild` | class member list rebuilt, **representative re-elected** | destructive |
 | 8 | `gc.rs:177-223` `drop_block` | **vertex deletion**, class splice, assert-worklist prune | destructive |
 | 9 | `gc.rs:12-20`, `gc.rs:32-36` `garbage_collect_node` | `block` moves; payload re-alloc'd into the target arena | destructive (not a dataflow edge) |
@@ -183,10 +183,11 @@ Two answers this inventory settles:
 `is_unbound(value)` is `None` or `Parameterized` (`lib.rs:550`); everything else
 is a concrete value. Three predicates then say who can write what:
 
-- **A concrete value is not overwritten.** `bind` takes
-  `concrete = if is_unbound(va) { vb } else { va }` (`equality.rs:653`) and
-  replicates only `!is_unbound` values (`:661`); `write_node_value`'s replication
-  targets only `is_unbound(value)` members (`:289`).
+- **A concrete value is not overwritten in place of a different one.** `bind`
+  takes `concrete = if is_unbound(va) { vb } else { va }`; `write_node_value`
+  writes its own slot unconditionally and propagates to the class, where a member
+  already holding a value is asked `reconcile_held_value` and keeps its own when
+  the two cannot be one (`class-channel.md` §1.1).
 - **A node with a cached value is not pending.** `pending_op`
   (`equality.rs:853-856`) and `class_has_pending_op` (`:669-672`) select members
   with `operation.is_some() && is_unbound(value)`, which is exactly what

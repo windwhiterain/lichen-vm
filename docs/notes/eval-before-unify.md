@@ -342,22 +342,25 @@ Two halves, matching the two halves of §3.
 ### 5.1 Runtime: the class as a channel (landed) and blocked operations (sketch)
 
 **Landed.**  §3.3's chain needs only the smaller half: `add_equality` now carries
-the merged class's decided value to the unbound pure cells the merge adds to it
+the merged class's decided value to the pure cells the merge adds to it
 (`equality.rs`).  The value is read through `class_committed_value`, which scans
 the members, so it is found on whichever member carries it rather than only on
 the representative's own slot — the merge previously read just those two slots,
 which is exactly why a value committed onto an operation-bearing member was
-invisible to it.  `write_node_value`'s replication half is factored out as
-`replicate_class_value` so the write site and the merge site state the same
-invariant once.
+invisible to it.  `write_node_value`'s distribution half is factored out as
+`propagate_class_value` so the write site and the merge site state the same
+invariant once; since the member-local write rule landed it asks each member's
+own value and leaves a member that cannot take the value at its own
+([class-channel](class-channel.md) §1.1), which is the same tolerance in the
+comparison's terms.
 
-Two properties of the landed form are deliberate.  It writes the class's pure
-cells and never the representative's own slot, because an operation-bearing
-representative is a pending computation whose resolved value is the authority —
-caching the commit onto it would answer every later read with the bet instead of
-running the computation.  And it performs no low-type observation: observation
-is a class *gaining* a decided value, and this merge adds no fact to the class —
-only members.  Nothing is forced and no pending computation runs, so no program
+Two properties of the landed form are deliberate.  It never asks an
+operation-bearing member — whether that member is the representative or not —
+because such a member is a pending computation whose resolved value is the
+authority: caching the commit onto it would answer every later read with the bet
+instead of running the computation.  And the *merge* performs no low-type
+observation: observation is a class *gaining* a decided value, and this merge
+adds no fact to the class — only members.  Nothing is forced and no pending computation runs, so no program
 starts computing because something bound; what changes is that a cell added
 after the commit reads the value its class already had.
 

@@ -1,10 +1,11 @@
 # Handoff: one `unify`, and the write rules are member-local
 
-> Status: **in progress.**  The tree is green at `925bbae` (docs) on top of
-> `fd92bef` (the unified `unify_inner`).  Two attempts at the write path failed
-> and were reverted twice; the author's instruction is to **stop reverting** and
-> carry the change forward, so the next session should re-apply it — corrected —
-> rather than start from scratch.
+> Status: **landed.**  §1's "not landed" half is in: the write path is
+> member-local and unconditional.  What the four corrections cost, and the one
+> thing this does *not* settle (`unify_inner`'s `class_committed_value` scan),
+> are recorded in [class-channel](class-channel.md) §1.1 — read that for the
+> state of the design; this note keeps the task as it was handed over.
+> Corrections made against §4's sketch are marked **[corrected]** below.
 > Companions: [class-channel](class-channel.md) §1.1 (the decided rules and the
 > refutation), §2 (the measured mixture of values one class holds),
 > [eval-before-unify](eval-before-unify.md) §5.1 (`replicate_class_value`'s
@@ -17,10 +18,13 @@ One unification, no variants.  `unify` is recursive; writing a value, reporting 
 conflict and merging classes are one recursion, not a comparison path beside a
 write path.  **Landed**: `union_with_value` — the separate "unbound side" merge
 with its agree-then-copy — is deleted (`fd92bef`), and `unify_inner` answers in a
-single match over the two classes' values.  **Not landed**: the write path still
-skips a member that already holds a value (`replicate_class_value`'s `is_unbound`
-filter) and still overwrites its own target without comparing
-(`write_node_value`).
+single match over the two classes' values.  **Landed after this note**: the write
+path no longer skips a member that already holds a value
+(`replicate_class_value`'s `is_unbound` filter is gone; the walk is
+`propagate_class_value`), and `write_node_value` writes its own slot
+unconditionally.  What a disagreement means is the correction this note got
+wrong: it is the **tolerated** case, not a report (`class-channel.md` §1.1,
+correction 1–2).
 
 ## 2. The rules, as decided by the author
 
@@ -44,6 +48,7 @@ There is no separate write policy: the arms decide whether a write happens.
 | before `fd92bef` | 155 | 87 | 60/62 | 137/140 | 2.8s |
 | `fd92bef` (landed) | 155 | 87 | 60/62 | 137/140 | **5.5s** |
 | write path, class-level read (×2) | — | **34/87** | **4/61** | — | — |
+| write path, member-local (landed) | 155 | 87 | 60/62 | 137/140 | 2.8s |
 
 - The three `pipeline` failures are **not** this work: they pass on `dev`
   (`26c3cb5`) and already fail at `d5259ee`, i.e. inside this branch's earliest
@@ -62,18 +67,35 @@ There is no separate write policy: the arms decide whether a write happens.
 
 ## 4. Next step, precisely
 
+**This section is the sketch as handed over; the landing corrected four of its
+answers (marked below).**  It is kept so the next reader can see what the rules
+were expected to mean before the measurements said otherwise.
+
 Keep `fd92bef`'s unified match.  Make the write path member-local:
 
 - `write_node_value(node, value)`: write the node's own slot (its own answer);
   consult **the node's own** previous value, not the class's (rule 3) — unify and
   report on difference; then hand the value to the class for distribution.
+  **[corrected]** write the slot unconditionally and hand the value to the class:
+  the comparison is the class's per-member question, and a disagreement is not a
+  report (corrections 1–2).
 - `replicate_class_value` → a per-member loop with no `is_unbound` skip: no value
   → take it; has a value → `unify_values(member, held, value)` (rule 2); an
   operation-bearing member → `continue` (the veto).
+  **[corrected]** landed as `propagate_class_value`, and the value-to-value
+  question is `reconcile_held_value(held, incoming)` — a member that disagrees is
+  **left at its own value**, not reported.  The loop must visit the
+  representative too: the write site wrote its own node, which need not be the
+  representative (correction 4).
 - `unify_values(member, a, b) -> bool`: the one value-to-value unification.
   Arrays descend through their elements' **nodes** (normal `unify` resumes there);
   functions compare by identity; leaves agree or are reported on `member`.  A free
   cell is a wildcard.  It writes nothing, which is why it cannot cascade.
+  **[corrected]** landed as `unify_values`/`reconcile_held_value`: arrays descend
+  through element nodes but are **compared, not unified** (nothing here writes),
+  and the descent carries the element-node path plus a depth bound — a `[cell,
+  self]` term pair repeats the *same* node pair at every level, so a depth bound
+  alone reports a conflict on a value that agrees with itself (correction 3).
 - Only after that is the O(1) question well-posed.  The two candidate answers,
   neither measured: **(a)** let the representative's slot carry the class's own
   value as a maintained cache, written at the write sites, so the recursion reads
@@ -83,18 +105,27 @@ Keep `fd92bef`'s unified match.  Make the write path member-local:
   propagation; `disjoint::rebuild` (used by `Module::flatten_class`) is the
   primitive if a class must be re-rooted at a value carrier, and the class's
   `low_shape` lives on the representative, so re-rooting has to carry it.
+  **[open]** the write rule cannot reach this: the scan is `unify_inner`'s
+  (`class-channel.md` §1.1).
 
 ## 5. Pointers
 
-`crates/lichen-lowlevel/src/equality.rs` — `unify` 372, `unify_inner` 577,
-`add_equality` 80, `write_node_value` 301, `replicate_class_value` 328,
-`class_value` 107, `class_committed_value` 1170, `class_committed_node` 1161,
-`values_agree` 913, `value_matches` 852, `reconcile_node_claim` ~931,
-`UnifyError` construction for a standalone report ~931.
+`crates/lichen-lowlevel/src/equality.rs`, as landed — `add_equality` 80,
+`class_value` 107, `write_node_value` 310, `propagate_class_value` 342,
+`unify_values` 387, `reconcile_held_value` 455, `unify` 495, `unify_inner` 700,
+`value_matches` 875, `class_committed_node` 1184.  `values_agree` 936 and
+`Module::value_eq` 861 are now **dead** (the compiler reports them; nothing calls
+them since the write path stopped reading a class) — delete them with the item
+that removes the rest of the pair, rather than leaving a second path beside
+`unify_values`.
 `crates/lichen-utils/src/disjoint.rs` — `union` 143 (representative by class
 size), `rebuild` 184 (re-root at a chosen member).
-Docs to sync when the write lands: `code-audit.md` P4-2,
-`incremental-evaluation.md` row 6, `compute-kernel-struct.md` (already stale).
+Docs synced with the landing: `class-channel.md` §1.1 (the four corrections,
+which are the part to read first), `code-audit.md` P4-2,
+`incremental-evaluation.md` rows 6 and the predicate list,
+`eval-before-unify.md` §5.1 (the walk's new name and rule).
+`compute-kernel-struct.md` is still stale on its own account (`.sig`,
+`$launch(native, sig, a)`).
 
 ## 6. Discipline that cost real time here
 
@@ -108,3 +139,20 @@ Docs to sync when the write lands: `code-audit.md` P4-2,
 - **Do not revert on first failure.**  Reverting twice destroyed the same work
   twice and hid the fact that both failures had one cause; the second attempt
   should have been the correction of the first.
+- **A failing test that the checker's diagnostics own is a reporting bug, not a
+  semantic one.**  The landing's first regression was four `unify_errors` entries
+  raised *inside* a `try_unify` and therefore counted as that unify's failures —
+  `try_unify` answers with the range `before..now`, so anything that appends
+  during a unify is attributed to it.  Reading the range's consumer
+  (`checker/diagnostics.rs`) before touching the semantics is what located it.
+- **Measure the baseline with the same command before believing "pre-existing".**
+  `--test compute` is a `lichen-language` test binary (60 of 62), not
+  `cargo test -p lichen-compute` (19) — and the second regression was found only
+  by running the real binary against `aeb0c8d` and the branch side by side.  A
+  test name seen failing is not evidence that it failed before.
+- **An optimization nobody asked for is a regression you will have to bisect.**
+  The fourth correction (skipping the representative) was invented during the
+  landing; it took a compute case out and cost three bisection rounds, one of
+  which measured *stale source* because a `git checkout` had left the worktree
+  detached.  Change one thing at a time, and confirm the tree is on the branch
+  you think it is.

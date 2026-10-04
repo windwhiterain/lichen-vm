@@ -1,9 +1,10 @@
 # One channel for a class's value and its low type
 
-> Status: **§1.1 is the author's decision on the write rule** — unconditional
-> write, the operation-bearing member as the one veto, an already-valued member
-> compared by the unify recursion with a difference reported — and it records the
-> landed half: `unify_inner` is one recursion and `union_with_value` is gone.
+> Status: **§1.1 is the author's decision on the write rule, and it is landed** —
+> unconditional write, the operation-bearing member as the one veto, an
+> already-valued member compared by the unify recursion and left at its own value
+> when the two cannot be one.  It also records the half that landed before it:
+> `unify_inner` is one recursion and `union_with_value` is gone.
 > **§2 refuted by measurement**, and **§3 has no receiver on the run side**
 > (§3 below, two independent blockers).  What is left is §5, which therefore comes
 > first: it is the only place a result's type can be stated, and the two red
@@ -50,7 +51,7 @@ The lowlevel is class-routed, and says so:
 |---|---|
 | `Module::class_value` (`equality.rs:77-87`) | "the class's value, read **through its representative** — the value the unification machinery sees" |
 | `Module::class_low_type` / `low_type_of_node` (`equality.rs:89-113`) | "read through its representative … so a read **never depends on which member of the class resolved first**" |
-| `Module::write_node_value` (`equality.rs:258-297`) | "the **single choke-point** for value writes"; it replicates the value to every operation-free member and calls `observe_class_low_type` — one of the low-type layer's **two observation sites** (`Module::add_node` is the other) |
+| `Module::write_node_value` (`equality.rs:310-322`) | "the **single choke-point** for value writes"; it propagates the value over the class's operation-free members and calls `observe_class_low_type` — one of the low-type layer's **two observation sites** (`Module::add_node` is the other) |
 | `Module::seed_class_low_type` (`equality.rs:115-125`) | "a layer above the lowlevel **that has the type** calls this" — the write half of the same channel |
 
 The highlevel reads the **node's own slot** for the same questions:
@@ -109,22 +110,58 @@ equality).  `union_with_value` and its agree-then-copy are deleted, and the
 comparison it asked has no client left: the compiler reports `value_eq` unused.
 `values_agree`/`reconcile_value`/`reconcile_node` are *not* orphaned by it — they
 are still reached from the value-versus-class half (`value_matches`,
-`reconcile_node_claim`), which is the half rules two and three below turn into the
+`reconcile_computed`), which is the half rules two and three below turn into the
 same unification.
 
 **Measured when landed**: lowlevel 155, highlevel 87, `compute` 60 of 62,
 `pipeline` 137 of 140 — every number identical to before, so the merge carried no
 behaviour of its own.
 
-**Pending, and what it makes stale.**  `replicate_class_value` still filters on
-`is_unbound` (a skip in place of the comparison) and `write_node_value` still
-overwrites its target without comparing.  Both are the deviation §1.1 names.  When
-that write lands, these statements stop being true and must be updated with it:
-`code-audit.md` P4-2 ("every member that is an operation-free unbound cell"), and
-`incremental-evaluation.md`'s table row 6 ("replication to every unbound pure-cell
-class member").  The remaining O(class-size) read after that is
-`class_committed_value`'s member scan — which exists only because a class's value
-need not sit on its representative, and has no subject once the value does.
+**The write rule landed.**  Its statements in this note are now true:
+`propagate_class_value` asks every operation-free member, and `write_node_value`
+writes its node's slot unconditionally.  Read the corrections below before
+touching it — three of the four were mistakes a later session would repeat.
+`write_node_value`'s distribution half is `propagate_class_value`, and its
+comparison is the write rule's own question; the class's *value* is still read
+through the representative (`class_value`) — what is member-local is the write
+rule's test, not the read API.
+
+**Four corrections were needed, and each says something about the rules.**
+
+1. **A refusal is not a report.**  The first version refused the write when the
+   member's held value disagreed.  That is not a refusal: the write is asserted,
+   the member keeps its own value, and the mismatch is the **tolerated** case
+   §2 measured.  Refusing destroys the value the class needs.
+2. **A false report is worse than none.**  The first version also recorded every
+   propagation disagreement in `unify_errors`.  `try_unify` answers with the
+   range `before..now`, so a report raised inside a unify is *counted as that
+   unify's failure*: four tolerant member-local disagreements became four phantom
+   `Check` diagnostics on a program whose real error was one annotation failure
+   (`pipeline`, `an_applied_struct_constructor_keeps_the_occurrence_identity`:
+   1 expected → 5).  Propagation is silent; the checker's own comparison reports.
+3. **A structural comparison cannot be bounded by depth alone.**  `[cell, self]`
+   — the term pair a type is — repeats the *same node pair* at every level, so a
+   depth bound (64) reports a conflict on a value that agrees with itself.
+   `unify_values` carries the element-node path the old `reconcile_node` used,
+   with the depth bound as the static case's guard only.
+4. **The representative is not special.**  Skipping it in the walk looks like a
+   free optimization — the write site just put the value there — and it is
+   wrong: the write site wrote *its own* node, which need not be the
+   representative (a class whose representative is a value-less operation node is
+   what `add_equality` exists for), so the representative's slot is an ordinary
+   member slot and must be asked the same question.  It cost the compute suite a
+   case (`a_struct_parameter_kernel_runs_through_the_signature_carrying_wrapper`:
+   the parallel parameter ended up declaring no inputs).
+
+**Measured**: lowlevel 155, highlevel 87, `--test compute` 60 of 62 (one of the
+two reds is `jit_cross_kernel_subexpr`, parked with an `#[ignore]` and its
+reason), and `pipeline` 137 of 140 — every number identical to `dev`'s.
+
+**What this does not settle.**  The scan `fd92bef` added is in `unify_inner`,
+which reads `class_committed_value` of both sides on every pair — every array
+element included — and that is the measured 2.8s → 5.5s step.  The write path
+never reads the class, so the write rule cannot reach it: it stays
+**load-bearing** in the merge path and needs an item of its own.
 
 **Measured, and it refutes reading the rules at the class level** (two attempts,
 identical signature: `--test checker` 34 of 87, `--test compute` 4 of 61).  Rules
@@ -140,10 +177,11 @@ ordinary writes from being conflicts.
 That also settles the O(1) question's real shape: `class_committed_value`'s scan
 is **load-bearing** in the merge path — it is what stands in for the deleted
 guard's member-aware read — so the read cannot be made O(1) while a class's
-knowledge is distributed over its members.  The scan belongs to the merge and
-propagation sites, where distributing a value over a class is inherently
-O(class size); what the recursion must not do is pay it, which is what `fd92bef`
-made it do (measured: `--test compute` 2.8s → 5.5s).
+knowledge is distributed over its members.  The scan belongs to the merge site,
+where establishing what a class knows is inherently O(class size); what the
+recursion must not do is pay it, which is what `fd92bef` made it do (measured:
+`--test compute` 2.8s → 5.5s, and back to **2.4s** once the write rule landed —
+see §1.1).
 
 ## 2. Half one — refuted: a class's low type is not a second reading of a type slot
 

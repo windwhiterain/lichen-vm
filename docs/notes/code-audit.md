@@ -4959,7 +4959,8 @@ has-pending-op) collapses most of these to O(1).
 **Outcome — half held, half refuted.**
 
 *The class-size walk: held, and it is the whole of the real cost.* `write_node_value`
-(`equality.rs:94-125`) does walk the entire member list on every concrete write.
+(`equality.rs:310-366`, the walk now named `propagate_class_value`) does walk the
+entire member list on every concrete write.
 The note's extrapolation — *"classes grow with application count … quadratic in
 the common recursive case"* — is **refuted by measurement**: on a real recursive
 apply (`fib(16)` through the `lowlevel` harness: definition pass, then one call)
@@ -4970,11 +4971,13 @@ apply budget bounds how many *copies* exist, not how many members one class has.
 
 *The seven walks: held as a count, refuted as "a narrower one would do".* The
 seven are `write_node_value` plus the six predicates the note names, and each
-does walk the whole member list. Re-derived, each needs the whole list:
+does walk the whole member list (the seventh is `propagate_class_value` since the
+member-local write rule landed — `class-channel.md` §1.1). Re-derived, each needs
+the whole list:
 
 | site | what it needs |
 |---|---|
-| `write_node_value` `:94` | every member that is an operation-free unbound cell — replication is the point (`bind` reads the representative) |
+| `propagate_class_value` `:342` | every operation-free member — a member that knows nothing takes the value, one that holds a value has it compared and is left at its own when the two cannot be one (`class-channel.md` §1.1) |
 | `class_has_pending_op` `:489` | **any** member with an unbound operation |
 | `class_is_pure_cell` `:507` | **every** member is not an independent pending computation |
 | `class_is_skeleton` `:529` | **every** member is a cell or a skeleton array |
