@@ -393,23 +393,35 @@ impl<P: Program> Module<P> {
     /// and a value the unifier wrote cannot claim.
     pub(crate) fn write_node_answer(&mut self, node: NodeId, value: P::Value) {
         let mut path = AncestorPairs::new();
-
         let mut steps = Vec::new();
         // The answer against what the node's class holds, as two values: the
         // answer has no class of its own, and pulling the class's value out
         // explicitly is what makes the two comparable.
+        //
+        // Only when *this node* had not produced an answer yet: a class that
+        // came to hold a value while this operation was undecided carries a fact
+        // the operation has to meet, and meeting it is this write.  An operation
+        // re-running after it already answered is not a second assertion, and
+        // reporting there duplicates the conflict the first answer's own
+        // unification recorded.
         let held = {
             let representative = self.equality_representative(node);
             self.class_committed_value(representative)
         };
-        self.unify_inner(
-            Side::value(Some(value)),
-            Side::value(held),
-            &mut path,
-            0,
-            &mut steps,
-            (node, node),
-        );
+        let fresh_answer = !self.has_run(node);
+        if std::env::var_os("LICHEN_TRACE_VCBO").is_some() {
+            eprintln!("ANSWER node={node:?} fresh={fresh_answer}");
+        }
+        if fresh_answer {
+            self.unify_inner(
+                Side::value(Some(value)),
+                Side::value(held),
+                &mut path,
+                0,
+                &mut steps,
+                (node, node),
+            );
+        }
         self.write_node_value(node, Some(value));
         self.nodes[node].runned = true;
     }
@@ -507,6 +519,12 @@ impl<P: Program> Module<P> {
     pub fn try_unify(&mut self, a: NodeId, b: NodeId) -> (NodeId, std::ops::Range<usize>) {
         let before = self.unify_errors.len();
         let representative = self.unify(a, b);
+        if std::env::var_os("LICHEN_TRACE_VCBO").is_some() {
+            eprintln!(
+                "TRY_UNIFY {a:?} {b:?} range={before}..{}",
+                self.unify_errors.len()
+            );
+        }
         (representative, before..self.unify_errors.len())
     }
 
@@ -713,6 +731,9 @@ impl<P: Program> Module<P> {
         if depth >= MAX_VALUE_DEPTH {
             return true;
         }
+        if std::env::var_os("LICHEN_TRACE_VCBO").is_some() {
+            eprintln!("UNIFY-INNER depth={depth} a={:?} b={:?}", a.node, b.node);
+        }
         // A side with a node takes the question to its **class**; a side without
         // one is a bare value with no class to merge, so it can only be answered
         // by comparison.  Reading both before any write keeps the borrow of
@@ -908,6 +929,9 @@ impl<P: Program> Module<P> {
                 // SAFETY: `pa`/`pb` are payloads of values read out of live nodes
                 // of this module, so their home blocks have not been dropped.
                 let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
+                if std::env::var_os("LICHEN_TRACE_VCBO").is_some() && left.len() != right.len() {
+                    eprintln!("VCBO-LEN depth={depth} {} vs {}", left.len(), right.len());
+                }
                 left.len() == right.len()
                     && left.iter().zip(right.iter()).all(|(ia, ib)| {
                         match (self.node_value(ia.node), self.node_value(ib.node)) {
@@ -917,7 +941,17 @@ impl<P: Program> Module<P> {
                         }
                     })
             }
-            _ => self.value_pair_equal(a, b),
+            _ => {
+                let ok = self.value_pair_equal(a, b);
+                if !ok && std::env::var_os("LICHEN_TRACE_VCBO").is_some() {
+                    eprintln!(
+                        "VCBO-FALSE depth={depth} a={:?} b={:?}",
+                        a.as_enum(),
+                        b.as_enum()
+                    );
+                }
+                ok
+            }
         }
     }
 
