@@ -105,10 +105,12 @@ class's own members or between classes.
 class knows once, and answers in a single match (nothing known is a merge, one
 side known is a merge that carries the value, both known is a reconciliation:
 arrays by recursing their elements, functions by identity, otherwise by value
-equality).  `union_with_value` and its agree-then-copy are deleted.  Deleting it
-**orphaned the structural-comparison cluster** — `values_agree`, `reconcile_value`,
-`reconcile_node`, `value_eq` — which had exactly that one client; that cluster
-existed to serve a merge that compared instead of unifying.
+equality).  `union_with_value` and its agree-then-copy are deleted, and the
+comparison it asked has no client left: the compiler reports `value_eq` unused.
+`values_agree`/`reconcile_value`/`reconcile_node` are *not* orphaned by it — they
+are still reached from the value-versus-class half (`value_matches`,
+`reconcile_node_claim`), which is the half rules two and three below turn into the
+same unification.
 
 **Measured when landed**: lowlevel 155, highlevel 87, `compute` 60 of 62,
 `pipeline` 137 of 140 — every number identical to before, so the merge carried no
@@ -123,6 +125,25 @@ that write lands, these statements stop being true and must be updated with it:
 class member").  The remaining O(class-size) read after that is
 `class_committed_value`'s member scan — which exists only because a class's value
 need not sit on its representative, and has no subject once the value does.
+
+**Measured, and it refutes reading the rules at the class level** (two attempts,
+identical signature: `--test checker` 34 of 87, `--test compute` 4 of 61).  Rules
+two and three are **member-local**, not class-level: a member's existing value
+against the propagated value, and an operation's result against *its own* node's
+value.  Implementing them as "read the class's value and unify the incoming one
+against it" reports a conflict on every ordinary write, because a class here
+routinely holds *different* values on different members — a term pair on one, the
+resolved value on another, a type cell on a third (§2 below measured exactly that
+mixture).  The tolerated comparison this note's §2 relies on is what keeps those
+ordinary writes from being conflicts.
+
+That also settles the O(1) question's real shape: `class_committed_value`'s scan
+is **load-bearing** in the merge path — it is what stands in for the deleted
+guard's member-aware read — so the read cannot be made O(1) while a class's
+knowledge is distributed over its members.  The scan belongs to the merge and
+propagation sites, where distributing a value over a class is inherently
+O(class size); what the recursion must not do is pay it, which is what `fd92bef`
+made it do (measured: `--test compute` 2.8s → 5.5s).
 
 ## 2. Half one — refuted: a class's low type is not a second reading of a type slot
 
