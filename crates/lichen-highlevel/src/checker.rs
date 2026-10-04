@@ -1066,35 +1066,9 @@ where
         self.alloc_node(block, Some(Operation { operator, operand }), None)
     }
 
-    /// A pair node `[value, type]` built around two already-compiled nodes —
-    /// **at the one layout every expression's pair uses**.
-    ///
-    /// The pair's width is the canonical attribute order
-    /// ([`AttrSet::ORDER`](crate::attr::AttrSet::ORDER)), not two: an expression
-    /// carries no attribute here, so every attribute slot is the shared
-    /// *missing* slot for its marker.  Two expressions therefore never differ in
-    /// pair width, which is what lets one be compared with another as a type —
-    /// a literal's pair against the pair a type expression carries for it.  A
-    /// per-region layout, when it comes, changes the width here and in
-    /// [`Checker::merge_slots`], and nowhere else.
+    /// A pair node `[value, type]` built around two already-compiled nodes.
     fn pair_of(&mut self, value: NodeId, ty: NodeId) -> NodeId {
-        let mut items = Vec::with_capacity(2 + P::Attr::ORDER.len());
-        items.push(value);
-        items.push(ty);
-        let mut attr_index = 0;
-        while attr_index < P::Attr::ORDER.len() {
-            let marker = P::Attr::ORDER[attr_index];
-            let slot = self.missing_slot_of(
-                &marker,
-                Loc {
-                    expr: ExprId(0),
-                    path: Vec::new(),
-                },
-            );
-            items.push(slot);
-            attr_index += 1;
-        }
-        self.array_node(self.current_block, &items)
+        self.array_node(self.current_block, &[value, ty])
     }
 
     /// The kind expression of a compound type: `[marker, Type]`, where
