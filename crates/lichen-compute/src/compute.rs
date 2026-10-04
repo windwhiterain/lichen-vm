@@ -3607,7 +3607,22 @@ where
         return Ok(None);
     };
     if let Some(roles) = &slot.roles {
-        return Ok(param_path(module, slot.pair, node)?.and_then(|path| roles.input_pos(&path)));
+        // **A struct parameter's element 0 is a field, not the whole value.**
+        // `Index(param_pair, 0)` reads the pair's value half, which is the
+        // parameter *whole* for a positional domain and the *first field* for a
+        // struct one — and `roles` is exactly the fact that says which. So a
+        // whole-parameter path is offered as a field path first, and as the empty
+        // path only if that names nothing.
+        let path = param_path(module, slot.pair, node)?;
+        if let Some(path) = path {
+            let mut as_field = vec![0];
+            as_field.extend(path.iter().copied());
+            if let Some(position) = roles.input_pos(&as_field) {
+                return Ok(Some(position));
+            }
+            return Ok(roles.input_pos(&path));
+        }
+        return Ok(None);
     }
     let cfg_value = slot.value;
     let operation = match module.node_operation(node) {
@@ -3815,7 +3830,7 @@ enum IndexStep {
 /// out-of-domain index, a value of the body's own).  `Err` is a read that *is*
 /// one but whose index is not a compile-time constant — the undetermined type a
 /// kernel compile refuses, since it runs on a concrete instantiation.
-fn param_path<P>(
+pub(crate) fn param_path<P>(
     module: &Module<P>,
     param_pair: NodeId,
     node: NodeId,
@@ -3861,6 +3876,12 @@ where
             // `Index(param_pair, 0)` is the encoding's `[value, type]` pair read
             // — the parameter read whole, which is the empty path.  A non-zero
             // position is not a data read at all.
+            //
+            // **A struct parameter's field read is not this shape.** `cfg.I.a`
+            // reaches the emitter as a node whose chain *stops* here with an empty
+            // path, and the walk has to go on reading into the pair's value to find
+            // the field — see `a_struct_parameter_..._carrying_wrapper`, which is
+            // the one thing still red here.
             return match usize_value(module, selector) {
                 Some(0) => Ok(Some(Vec::new())),
                 _ => Ok(None),
