@@ -3852,11 +3852,19 @@ where
     let mut current = node;
     for _ in 0..MAX_PARAMETER_DEPTH {
         let Some(operation) = module.node_operation(current) else {
-            // A bare value cell is not an `Index` path: a whole-parameter read
-            // reaches the emitter through its own branch, which compares the
-            // cell's equality class against the slot's (`emit_node`), so this
-            // walk declines it rather than spelling it as an empty path.
-            return Ok(None);
+            // **A bare value cell ends the chain; it does not void it.** Two
+            // things stop here and they are different: a whole-parameter read,
+            // which `emit_node` matched by comparing the cell's class against
+            // the slot's, and a **struct field read**, whose `TableGet` the
+            // evaluator *aliased* to the field it resolved
+            // (`Module::alias_read`) — so the node is a bare cell carrying the
+            // field's class, not an operation at all.
+            //
+            // Returning `None` here threw both away and said "this is not a
+            // parameter path" for a node that plainly is one. The steps
+            // collected so far are kept; whether they name the field is the
+            // caller's question, and it has the role table to ask it with.
+            break;
         };
         if !matches!(
             AsEnum::<LowOperator>::as_enum(&operation.operator),

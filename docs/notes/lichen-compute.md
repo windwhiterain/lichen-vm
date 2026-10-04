@@ -264,18 +264,32 @@ refuses to serialize any compute operator ("a compute operation is a runtime for
 with no on-disk representation"), and a frozen module carries no kernel — so a
 change to the digest is a cold start and has no on-disk consequence.
 
-```
+```rust
+// Per-value: every instruction names its operands by `ValueId`. `LocalGet` is
+// **gone** — a value is read by naming it, not by naming a slot index.
 enum KernelInstr {
-  Const(i64),           // i64.const
-  Bin(KernelBin),       // an arithmetic/comparison/bitwise op over the top two i64
-  LocalGet(u32),        // a flattened parameter read
-  I32WrapI64,           // the `select` condition
-  Select,               // if c then a else b
-  CallKernel(KernelId), // cross-kernel call, resolved at assembly
-  BufferReadCall,       // the host `read(cfg_pos, idx)` import
-  BufferWriteCall       // the host `write(out_pos, idx, val)` import
+  Const(ScalarClass, i64),      // a literal, in the class it is declared
+  Bin(ScalarClass, KernelBin),  // an arithmetic/comparison/bitwise op over two values
+  Conv { from, to },            // `int2float` / `float2int`
+  I32WrapI64,                   // the `select` condition
+  Select,                       // if c then a else b
+  CallKernel(KernelId),         // cross-kernel call, resolved at assembly
+  BufferReadCall(ScalarClass),  // the host `read(cfg_pos, idx)` import
+  BufferWriteCall(ScalarClass)  // the host `write(out_pos, idx, val)` import
 }
+
+// And the body they live in: blocks with parameters, not a flat list.
+struct BasicBlock { params: Vec<ValueId>, instrs: Vec<KernelInstr>, terminator: Terminator }
+enum Terminator { Return { values: Vec<ValueId> }, Br(Br), CondBr { cond, if_true, if_false } }
 ```
+
+**Every instruction declares the class it produces**, and the class check
+(`compute/wasm/mixed.rs`, shared with SPIR-V) refuses a body that mixes the two in
+one operation. The class is read off the **operands**, not off the node the
+checker hung them on — a float body's index and count are `Int` positions, so an
+operator adding two floats computes in `Float` whatever its node's own class says.
+Trusting the node was a real defect: it declared `Bin(Int, Add)` over two float
+values.
 
 `emit_node` walks the simple kernel-safe subset — integer constants, every
 `KernelBin` operator (the arithmetic, comparison and bitwise sets the language
