@@ -722,9 +722,12 @@ kernel workstream's, for cost 1).
    the *registration* now says how a failure reads:
    [`AssertSpelling`](../../crates/lichen-highlevel/src/diagnostic.rs) is
    `Condition` (an explicit assert, or a generated guard) or
-   `Refinement { domain }`; it is keyed by the **template** condition, which is
-   what a per-call failure records.  `Diag` carries the domain as
-   `refinement_domain`, and
+   `Refinement { domain }` — plus `StructKind { container }` for the named
+   read's container requirement, which rides the same channel
+   (`docs/notes/eval-before-unify.md` §5.2); it is keyed by the **template**
+   condition, which is
+   what a per-call failure records.  `Diag` carries the spelling as
+   `assert_spelling`, and
    [`crates/lichen-language/src/render.rs`](../../crates/lichen-language/src/render.rs)
    spells it in place of the generic wording — the domain is a class-set value,
    so the type printer's own `{Int, Float}` arm renders it.  Measured:

@@ -324,9 +324,13 @@ delimiter is a fresh atom — an argument of an application:
   tiers: a decided non-struct container is refused where it stands
   (`expected TypeStruct, found array<Int, 2>`), and an undecided one is pinned
   and refused by the apply that binds it.  It is the
-  named sibling of `X<e>`; `.` (`.a`) is the guarded field read over a struct
-  *instance*, whose kind (not type) must be TypeStruct — the same kind unify,
-  read off the kind slot.  A spaced `::` is not a
+  named sibling of `X<e>`; `.` (`.a`) is the named field read over a struct
+  *instance*, whose kind (not type) must be TypeStruct — a unify on the kind slot
+  where the container's type is decided, and a **condition on the assert
+  channel** where it is not: an undecided container (a parameter, a call result)
+  is re-checked per application, so `f = x => x.a; f [10, 20]` is refused with
+  `expected a struct type, found array<Int, 2>` (the refused body still records
+  the runtime table read it fails).  A spaced `::` is not a
   postfix (it would be a bare infix, now ungrammatical since the table
   separator is `==>`).
 - `A(1, 2)` (glued `(`) is a struct instantiation (see §3); `f (1, 2)` (spaced

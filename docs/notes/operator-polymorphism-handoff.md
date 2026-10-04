@@ -83,7 +83,8 @@ it.
   `x => { x ! p; e }`, which is why it needs no IR field and gets per-application
   re-checking for free.
 - The assert spelling: `@assert e` (the `@` keyword sigil), freeing `!` for the
-  refinement; `AssertSpelling` + `Diag::refinement_domain` make a refinement
+  refinement; `AssertSpelling` + the diagnostic's `assert_spelling` make a
+  refinement
   failure read `does not satisfy {Int, Float}`.
 - An attribute can **name** the value it attaches to (`AttrExt::label` → the bare
   **name**; `Doc` for a string doc; `render::value_label` spells a labelled value
