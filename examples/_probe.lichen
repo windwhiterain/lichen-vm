@@ -1,0 +1,6 @@
+---
+  order = "0"
+  output = "Type: Type"
+---
+f = x => x
+f Int

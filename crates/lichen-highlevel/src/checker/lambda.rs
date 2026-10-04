@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use lichen_lowlevel::{AnyFunctionId, LowOperator, LowValue, NodeId};
+use lichen_lowlevel::{AnyFunctionId, AnyNodeId, ArrayItem, LowOperator, LowValue, NodeId};
 
 use crate::diagnostic::DiagKind;
 use crate::ir::ExprId;
@@ -199,24 +199,40 @@ where
             )))),
         );
         self.lambda_value_nodes.push(func_node);
-        // The function's own type: the arrow shape `[parameter type, return
-        // type]` kinded as a function — `[[in, out], [FunctionType, Type]]`.
-        // Built while the current function is still the shell, so these
-        // nodes join its scope like the rest of the body.
-        let (shape, _kind, arrow) =
-            self.arrow_parts(return_block, type_cell, self.state[r#return].ty.unwrap());
-        // The printer needs the arrow's *shape* — an anonymous `[dom, codom]`
-        // pair is indistinguishable from a tuple type without it, so only a
-        // registered shape renders as `dom -> codom`.
-        self.arrows.insert(shape);
-        // The self-reference's type cell now carries the arrow, so the
-        // in-body applications see the function's real type.
-        self.module.unify(ty_cell, arrow);
-        let pair = self.array_node(return_block, &[func_node, arrow]);
+        // The function's term becomes its own type (`f : f`): mutate the
+        // pre-body pair — whose type slot held the placeholder `ty_cell` so
+        // the function-ness guard skipped during checking — in place into the
+        // self-referential `[Function(fid), ↺]`, the same shape as the
+        // universe `K = [Type, ↺]`: slot 0 the function's own value node,
+        // slot 1 the pair itself, so the type chain cycles at the function
+        // (`f : f : f …`).
+        //
+        // One node, not a separate type node beside the pair: a distinct
+        // `[Function(fid), ftype]` would be value-equal to the pair
+        // `[Function(fid), ftype]` and collide with it under the apply clone's
+        // topology re-establishment. The signature (domain/codomain) lives in
+        // the function template, reached through `fid`; unifying this type
+        // clones the signature (`Program::unify_function_type`) rather than
+        // binding the template's shared cells. See
+        // `docs/notes/function-type-as-function.md`.
+        let items = [
+            ArrayItem::new(AnyNodeId::Dynamic(func_node)),
+            ArrayItem::new(AnyNodeId::Dynamic(pair)), // the self-reference
+        ];
+        self.module.write_node_value(
+            pair,
+            Some(P::Value::from(LowValue::Array(
+                self.module.alloc_array(&items, return_block),
+            ))),
+        );
+        // The placeholder type cell joins the pair's class, so any reference
+        // that resolved to `ty_cell` during the body now reads the
+        // function-type node.
+        self.module.unify(ty_cell, pair);
         self.function_stack.pop();
         self.state[e].term = Some(pair);
         self.state[e].val = Some(func_node);
-        self.state[e].ty = Some(arrow);
+        self.state[e].ty = Some(pair);
         pair
     }
 

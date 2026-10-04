@@ -820,11 +820,17 @@ fn dynamic_of(id: AnyNodeId) -> Option<NodeId> {
 ///
 /// Both sides are reduced to a `[dom, cod]` pair by [`signature_pair`]: a
 /// function-type node contributes a *cloned* signature, an arrow term
-/// contributes its shape directly, and a non-function type contributes
-/// nothing (a conflict). The two domains and the two codomains are then
-/// unified. On success the two sides are resolved **without merging classes**
-/// — the function-type node stays a distinct, polymorphic class; only the
-/// per-site clone's cells were bound.
+/// contributes its shape directly. **Only when both sides are signatures**
+/// (both a function-type node or an arrow term) does the clone-on-unify fire —
+/// unifying the two domains and codomains through fresh clone cells. When
+/// either side is *not* a signature (the function's own value-equal pair, a
+/// scalar, a tuple type), the hook defers (`NotFunctionType`) and the
+/// lowlevel's positional unify resolves it: a value-equal pair merges
+/// (the function's pair and its type node are `f : f`, one class), and a
+/// genuine mismatch (a function-type against `Int`) conflicts. On success the
+/// two sides are resolved **without merging classes** — the function-type
+/// node stays a distinct, polymorphic class; only the per-site clone's cells
+/// were bound.
 ///
 /// See [`function-type-as-function`](../notes/function-type-as-function.md).
 pub fn unify_function_type<P: Program>(
@@ -848,12 +854,49 @@ where
                 FunctionTypeUnify::Handled
             }
         }
-        // One side is a function-type (or arrow) and the other is a
-        // non-function type: a function's type does not unify with a
-        // non-function type.
-        (Some(_), None) | (None, Some(_)) => FunctionTypeUnify::Conflict,
+        // Exactly one side is a signature. The other is either the function's
+        // own value-equal pair (which the positional unify merges — `f : f`,
+        // one class), a scalar / tuple type (which it conflicts on), or a
+        // *self-referential* type — the universe `Type` or a recursive struct
+        // — which the positional unify's "two self-referential arrays merge"
+        // rule would wrongly merge with the function-type node. That rule is
+        // the one case the clone-on-unify must own: a function's type is not
+        // `Type` (nor a struct type), so it is a conflict, not a merge.
+        (Some(_), None) => {
+            if is_self_referential_type(module, b) {
+                FunctionTypeUnify::Conflict
+            } else {
+                FunctionTypeUnify::NotFunctionType
+            }
+        }
+        (None, Some(_)) => {
+            if is_self_referential_type(module, a) {
+                FunctionTypeUnify::Conflict
+            } else {
+                FunctionTypeUnify::NotFunctionType
+            }
+        }
         (None, None) => FunctionTypeUnify::NotFunctionType,
     }
+}
+
+/// Whether `node`'s class holds a **self-referential type** — a 2-element
+/// self-cycle, read through the class's committed carrier (a bare merge may
+/// leave the value on a member other than the representative). The universe
+/// `[Type, ↺]` and a recursive struct's type expression are the instances;
+/// a function-type node `[Function(fid), ↺]` is one too, but the callers of
+/// this helper have already excluded it (its signature paired). Used by
+/// [`unify_function_type`] to refuse merging a function-type node with a
+/// self-referential non-function type (`(\x. x) : Type` must fail).
+fn is_self_referential_type<P: Program>(module: &mut Module<P>, node: NodeId) -> bool
+where
+    P::Value: ValueType,
+{
+    let rep = module.equality_representative(node);
+    let Some(carrier) = module.class_committed_node(rep) else {
+        return false;
+    };
+    module.is_self_referential(AnyNodeId::Dynamic(carrier))
 }
 
 /// Whether `ty` is a struct type:
