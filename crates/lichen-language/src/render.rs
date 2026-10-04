@@ -21,7 +21,7 @@
 //! ```
 //!
 
-use lichen_highlevel::diagnostic::{Diag as CheckerDiag, DiagKind};
+use lichen_highlevel::diagnostic::{AssertSpelling, Diag as CheckerDiag, DiagKind};
 use lichen_highlevel::program::{HighProgram, ValueType};
 use lichen_lowlevel::{BudgetExhausted, LowValue, Module, NodeId};
 
@@ -348,16 +348,27 @@ where
             "this expression carries an attribute, but this build has no attribute extension to lower it"
                 .to_string()
         }
-        DiagKind::Assert => match d.refinement_domain {
+        DiagKind::Assert => match d.assert_spelling {
             // A *refinement* the contract declared: the value is outside the set
             // of classes the contract admits, and naming that set is what a
             // reader needs (`docs/notes/operator-polymorphism.md` §8.5).  The
             // domain is a set's value, so it is spelled member by member
             // (`{Int, Float}`) by [`class_domain`].
-            Some(domain) => format!("does not satisfy {}", class_domain(printer, domain)),
+            Some(AssertSpelling::Refinement { domain }) => {
+                format!("does not satisfy {}", class_domain(printer, domain))
+            }
+            // A **named read's container-kind requirement** — the deferred half
+            // of the same statement the decided container is refused with
+            // (`expected TypeStruct, found …`), named here in the read's own
+            // vocabulary.  The found side is the container's type, which a
+            // per-apply failure resolves to the argument's type.
+            Some(AssertSpelling::StructKind { container }) => format!(
+                "expected a struct type, found {}",
+                printer.node(container)
+            ),
             // An explicit `@assert e`: the condition's own failed value, rendered
             // generically through the structural `LowValue` view.
-            None => {
+            _ => {
                 let value = match d.assert_value.as_ref().and_then(|v| v.as_enum()) {
                     Some(LowValue::USize(n)) => n.to_string(),
                     Some(LowValue::None | LowValue::Void) => "none".to_string(),

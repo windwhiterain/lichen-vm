@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    BlockId, Deferral, GlobalExt, LowOperator, LowShape, LowValue, Module, ModuleKey, NodeId,
-    OperatorExt, PendingSides, Program, StaticModule, ValueExt, is_unbound,
+    AnyNodeId, BlockId, Deferral, GlobalExt, LowOperator, LowShape, LowValue, Module, ModuleKey,
+    NodeId, OperatorExt, PendingSides, Program, StaticModule, ValueExt, is_unbound,
 };
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
@@ -674,6 +674,25 @@ pub enum TypeOperator {
     /// (`Parameterized`), which is what keeps a refinement on an open parameter
     /// **pending** rather than failed until an application supplies the class.
     InDomain,
+    /// Whether a type value is a **struct type** — `[shape, [marker, K]]`
+    /// whose kind's marker is the `TypeStruct` tag (`[payload, TypeStruct]`,
+    /// [`crate::shape::is_struct_type_any`]) — answering `USize(0/1)`.
+    ///
+    /// The operand is `[type value, universe]`: the type value to judge and
+    /// the checker's canonical universe node, which the reader needs to
+    /// recognise the kind's [`KIND_UNIVERSE_SLOT`](crate::shape::KIND_UNIVERSE_SLOT).
+    /// Like [`Self::InDomain`], a still-undecided operand leaves the answer
+    /// lazy rather than `0` — a question about a type nothing has decided yet
+    /// has no answer.
+    ///
+    /// The named field read `a.name` states its container requirement with
+    /// this operator.  Its container's type is not decided at check time (a
+    /// parameter, a call result), so the read cannot be judged where it
+    /// stands; the condition is registered on the **assert channel**, which
+    /// re-checks it per apply clone exactly as [`Self::InDomain`] does
+    /// (`docs/notes/eval-before-unify.md` §6.2 option 1).  A decided
+    /// container needs none of this — the read judges it where it is.
+    IsStructType,
 }
 
 /// The category an **integer** `Div`/`Rem` by zero is recorded under.
@@ -824,6 +843,7 @@ define_type_operator_codec! {
     Int2Float = 15;
     Float2Int = 16;
     InDomain = 17;
+    IsStructType = 18;
 }
 
 // The highlevel program's operator vocabulary: a flat union of the
@@ -969,7 +989,8 @@ where
             | TypeOperator::BitAnd
             | TypeOperator::BitOr
             | TypeOperator::BitXor
-            | TypeOperator::InDomain => {
+            | TypeOperator::InDomain
+            | TypeOperator::IsStructType => {
                 // The VM already deep-evaluates the operand and gates on its
                 // parameterized subtree, so an unbound operand is the lazy
                 // marker (the definition pass flags the node).
@@ -1129,6 +1150,21 @@ where
                             crate::set::contains(module, operands[1].node, operands[0].node);
                         P::Value::from(LowValue::USize(member as usize))
                     }
+                    // `[type value, universe]` — the named read's container
+                    // requirement.  The decode is the tag-based
+                    // [`crate::shape::is_struct_type_any`], the same reader the
+                    // checker judges a decided container with, so the deferral
+                    // cannot drift from the check-time answer.  The universe is
+                    // the checker's canonical node (an operand rather than a
+                    // module fact: the lowlevel has no universe to read).
+                    TypeOperator::IsStructType => {
+                        let AnyNodeId::Dynamic(universe) = operands[1].node else {
+                            return P::Value::from(LowValue::Parameterized);
+                        };
+                        let is_struct =
+                            crate::shape::is_struct_type_any(module, universe, operands[0].node);
+                        P::Value::from(LowValue::USize(is_struct as usize))
+                    }
                 }
             }
         }
@@ -1178,6 +1214,9 @@ where
             // A membership test answers `0`/`1`, so its own class is the machine
             // scalar whatever its operands are.
             TypeOperator::InDomain => Some(LowShape::USize),
+            // The same `0`/`1`: a read's container-kind requirement is asked of
+            // type values and answered by the assert channel.
+            TypeOperator::IsStructType => Some(LowShape::USize),
             TypeOperator::Fresh => None,
         }
     }

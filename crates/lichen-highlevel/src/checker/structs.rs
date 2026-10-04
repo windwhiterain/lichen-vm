@@ -8,7 +8,7 @@ use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
 
 use lichen_utils::extend::AsEnum;
 
-use crate::diagnostic::DiagKind;
+use crate::diagnostic::{AssertSpelling, DiagKind};
 use crate::ir::{ExprId, ExprKind};
 use crate::program::{HighProgram, TypeOperator, ValueType};
 use crate::shape;
@@ -277,12 +277,13 @@ where
             .then(|| self.named_field_index_any(AnyNodeId::Dynamic(container_ty), name))
             .flatten();
         // The requirement is the container's **kind** — the corresponding slot of
-        // the `[shape, kind]` term — stated as a unify, so the refusal names the
-        // two kinds (`expected TypeStruct, found TypeArray`) instead of the
-        // shared "tuple, array, or struct" wording this read does not accept
-        // (`docs/notes/eval-before-unify.md` §6.3).  It is the same statement the
-        // raw named read makes: the marker is the `[?payload, TypeStruct]` pair,
-        // so the `TypeStruct` tag is what the unify checks.
+        // the `[shape, kind]` term — stated as a unify for a **decided**
+        // container, so the refusal names the two kinds (`expected TypeStruct,
+        // found TypeArray`) instead of the shared "tuple, array, or struct"
+        // wording this read does not accept (`docs/notes/eval-before-unify.md`
+        // §6.3).  It is the same statement the raw named read makes: the marker
+        // is the `[?payload, TypeStruct]` pair, so the `TypeStruct` tag is what
+        // the unify checks.
         if concrete {
             let kind = self.struct_kind_requirement();
             let container_kind = self.lazy_index_path(container_ty, &[shape::TYPE_KIND_SLOT]);
@@ -292,15 +293,41 @@ where
                 self.loc(container, 1),
                 DiagKind::Guard,
             );
+        } else {
+            // An **undecided** container (a parameter, a call result) cannot be
+            // judged where it stands, so the same requirement is registered as a
+            // **condition on the assert channel** — evaluated at the definition
+            // pass when it can be, and re-checked per apply clone, exactly like
+            // `TypeOperator::InDomain`
+            // (`docs/notes/eval-before-unify.md` §6.2 option 1).  A unify here
+            // would have to pin the container's own type cell to the struct
+            // pattern, and a consumer that reads a type *structurally* through
+            // the class — the compute extension forces a template's parameter
+            // type before any apply — would then read the pin's open cells
+            // instead of the deferred real type (measured: §6.2's parked
+            // `feature/read-kind-unify`).  The condition is over the container's
+            // **type**, whose kind the operator reads; the universe operand is
+            // the checker's canonical node, which the tag-based struct reader
+            // needs and the runtime has no other way to name.
+            let operands = self.array_node(self.current_block, &[container_ty, self.type_expr]);
+            let condition = self.op_node(
+                self.current_block,
+                P::Operator::from(TypeOperator::IsStructType),
+                Some(operands),
+            );
+            self.register_assert(
+                condition,
+                self.loc(container, 1),
+                true,
+                AssertSpelling::StructKind {
+                    container: container_ty,
+                },
+            );
         }
-        // An *undecided* container keeps the lazy name-table read and its
-        // requirement stays unstated until the apply decides it — the open half
-        // recorded in `docs/notes/eval-before-unify.md` §2.4/§6.2.  A term-shaped
-        // pin here would bind the container's own type cell, and a consumer that
-        // reads a type *structurally* through the class (the compute extension
-        // forces a template's parameter type before any apply) would then see the
-        // pin's open cells instead of the deferred real type: measured, the
-        // extension's suite goes from its 58/2 baseline to 8/52.
+        // The lazy name-table read below is what keeps an undecided container's
+        // named read resolvable at the apply; the requirement above no longer
+        // waits for it (the assert re-checks per clone) —
+        // `docs/notes/eval-before-unify.md` §2.4/§6.2.
         if concrete
             && shape::is_struct_type_any(
                 &mut self.module,

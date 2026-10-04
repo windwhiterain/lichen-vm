@@ -242,6 +242,19 @@ pub enum AssertSpelling {
     /// it has it; a refinement a *user* wrote names no set, and reads as the
     /// channel's generic failure.
     Refinement { domain: NodeId },
+    /// A **named read's container-kind requirement**: `a.name`'s container must
+    /// be a struct type ([`crate::program::TypeOperator::IsStructType`]).
+    ///
+    /// `container` is the condition's checked subject — the container's type —
+    /// and is the diagnostic's *found* side.  The checker registers this for an
+    /// **undecided** container only: the read cannot be judged where it stands
+    /// (a parameter's type is still a cell), so the requirement rides the assert
+    /// channel and the apply clone re-checks it per call
+    /// (`docs/notes/eval-before-unify.md` §6.2 option 1).  The field is filled
+    /// from the **failing condition**'s operand, not from the registered node:
+    /// a per-call clone's subject is the actual argument's type, while the
+    /// template's own cell is still open and would render as a bare `?a`.
+    StructKind { container: NodeId },
 }
 
 #[derive(Clone, Debug)]
@@ -264,13 +277,14 @@ pub struct Diag<P: Program> {
     /// The resolved value of a failed assert (meaningful when
     /// `kind == DiagKind::Assert`).
     pub assert_value: Option<P::Value>,
-    /// The **domain** a failed refinement admits — a class-domain value, present
-    /// only when the failure came from a refinement whose contract names one (an
-    /// operator's `{Int, Float}`, which its checker built and therefore knows).
-    /// The renderer spells it in place of the assert channel's generic wording;
-    /// `None` for every other failure, including a refinement a *user* wrote,
-    /// whose predicate consults whatever it likes and names no set.
-    pub refinement_domain: Option<NodeId>,
+    /// The **spelling** a failed assert was registered with — the extra facts
+    /// the registering site knew beyond the channel's generic "expected 1,
+    /// found …" (see [`AssertSpelling`]).  The renderer spells it; the
+    /// registration is keyed by the assert's *template*, so this survives the
+    /// per-call clone.  `None` for every other failure, and for an assert whose
+    /// spelling is the channel's own
+    /// [`Condition`](AssertSpelling::Condition).
+    pub assert_spelling: Option<AssertSpelling>,
     /// The offending index of an out-of-bounds read (meaningful when
     /// `kind == DiagKind::IndexOutOfBounds`).
     pub index: Option<usize>,
@@ -317,7 +331,7 @@ impl<P: Program> Diag<P> {
             value_a: None,
             value_b: None,
             assert_value: None,
-            refinement_domain: None,
+            assert_spelling: None,
             index: None,
             length: None,
             field: None,
@@ -432,7 +446,7 @@ where
                     value_a: Some(P::Value::from(LowValue::USize(*index_value))),
                     value_b: Some(P::Value::from(LowValue::USize(*length))),
                     assert_value: None,
-                    refinement_domain: None,
+                    assert_spelling: None,
                     index: Some(*index_value),
                     length: Some(*length),
                     field: None,
@@ -502,17 +516,25 @@ where
                 }
             };
             if self.user_asserts.contains(&template) {
-                // A refinement may name the class domain it refused; the
-                // renderer spells that in place of the channel's generic
-                // wording.  Keyed by the *template*, exactly as the registration
-                // was (a per-call failure records the template).
-                let refinement_domain = match self.assert_spellings.get(&template) {
-                    Some(AssertSpelling::Refinement { domain }) => Some(*domain),
-                    _ => None,
+                // The spelling the site registered, with a **read-kind**
+                // requirement's subject resolved against the *failing*
+                // condition: a per-call clone's subject is the argument's type,
+                // while the registered template's own cell is still open.  Keyed
+                // by the template, exactly as the registration was (a per-call
+                // failure records the template).
+                let assert_spelling = match self.assert_spellings.get(&template) {
+                    Some(AssertSpelling::StructKind { container }) => {
+                        Some(AssertSpelling::StructKind {
+                            container: self
+                                .read_assert_subject(err.condition)
+                                .unwrap_or(*container),
+                        })
+                    }
+                    spelling => spelling.copied(),
                 };
                 out.push(Diag {
                     assert_value: Some(err.value),
-                    refinement_domain,
+                    assert_spelling,
                     ..Diag::factual(DiagKind::Assert, self.node_edges.get(&template).cloned())
                 });
             }
@@ -557,6 +579,31 @@ where
             }
         }
         index
+    }
+
+    /// The **subject** a read-kind assert checked — operand 0 of the failing
+    /// condition's operand array, the container's type.
+    ///
+    /// The operand layout is
+    /// [`TypeOperator::IsStructType`](crate::program::TypeOperator::IsStructType)'s:
+    /// `[type value, universe]`.  The *failing* condition is read rather than the
+    /// registered template because a per-call clone's operand 0 is the actual
+    /// argument's type cell — the fact a reader needs — while the template's own
+    /// cell is still unbound and would render as a bare `?a`.  `None` when the
+    /// condition is not such an operation (or its operand is a static ref, which
+    /// has no importer expression to point at), in which case the registered
+    /// node answers.
+    fn read_assert_subject(&self, condition: NodeId) -> Option<NodeId> {
+        let operand = self.module.node_operation(condition)?.operand?;
+        // SAFETY: `operand` is a live node of `module` — the failing condition's
+        // own operand edge, which nothing here releases — and nothing in this
+        // crate calls `Module::drop_block`.
+        let items =
+            unsafe { crate::shape::array_items(&self.module, AnyNodeId::Dynamic(operand)) }?;
+        match items.first()?.node {
+            AnyNodeId::Dynamic(node) => Some(node),
+            AnyNodeId::Static(_) => None,
+        }
     }
 
     /// The structured location for a node, or `None` for a static ref (which
@@ -608,7 +655,7 @@ where
                 value_a: err.value_a,
                 value_b: err.value_b,
                 assert_value: None,
-                refinement_domain: None,
+                assert_spelling: None,
                 index: None,
                 length: None,
                 field: None,
@@ -639,7 +686,7 @@ where
             value_a,
             value_b,
             assert_value: None,
-            refinement_domain: None,
+            assert_spelling: None,
             index: None,
             length: None,
             field,

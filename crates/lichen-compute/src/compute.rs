@@ -3507,6 +3507,9 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
         // the body, and a kernel lowers the operand's own arithmetic.  Nothing
         // in a kernel reads a class, so it has no machine op.
         TypeOperator::InDomain => return None,
+        // The same reading of a named read's container kind: a check-time/
+        // per-apply *assert*, never a value a kernel computes.
+        TypeOperator::IsStructType => return None,
         TypeOperator::Fresh => return None,
     })
 }

@@ -1,7 +1,8 @@
 # Evaluation runs before unification, and nothing wakes what it read
 
-> Status: **§2.1 fixed, and §2.2/§2.4 closed for the paren read; the two named
-> reads open** — the order-sensitivity is **measured on `dev@5e89bb1`** (§2's
+> Status: **§2.1 fixed, and §2.2/§2.4 closed for the paren read; the named
+> read's `.a` half now states its requirement too** — the order-sensitivity is
+> **measured on `dev@5e89bb1`** (§2's
 > matrix is compiler output, reproducible from the inline programs; the rows a
 > landed fix has changed state their new output); the node-level chain behind
 > §2.1 is **traced**, not guessed (§3.3); §4 is the comparison to other
@@ -12,10 +13,15 @@
 > skip-when-undecided guard (§5.2, §6.2).  That second fix is a language
 > decision, not only a checker one: `a(k)` is the tuple read, `e[i]` the array
 > read, and **every struct field is named**, so a struct reads by name and has
-> no positional form to check.  The two **named** reads still have no enforcing
-> tier (§2.4: `x.a` over an array fails through runtime table errors, `x::a`
-> **panics**), §6.2 ranks what would close them, §6.3 records the shared
-> diagnostic's wording, and the rest of §5 stays a sketch.
+> no positional form to check.  The named read `x.a`'s **undecided** tier is
+> now a **registered condition** on the assert channel — pending at the
+> definition pass, re-checked per apply clone (§5.2, §6.2 option 1) — so `x.a`
+> over an array is refused by a check diagnostic *as well as* by the two runtime
+> table messages the refused body still records; `x::a` is enforced in both
+> tiers (its kind unify binds the container's own type cell, which the apply's
+> parameter check meets), so §2.4's `x::a` panic row is the pre-fix record.
+> §6.3 records the shared diagnostic's wording, and the rest of §5 stays a
+> sketch.
 >
 > Companions: [class-channel](class-channel.md) (the write-side half of the
 > same principle — a fact is decided once and stated on the class; this note is
@@ -172,25 +178,27 @@ struct) cannot be pinned, which is what §6.2's ranking turns on.  A tuple read
 of a tuple is unaffected (`f = x => x(0); f (10, 20)` → `10: Int`), and
 `f = x => x[0]; f (10, 20)` still refuses as before.
 
-The **named** reads are still the guard route (`check_named_field`,
-`check_raw_named_field`) — a struct type is refused by `a(k)` now, so `.name`
+The **named** reads (`check_named_field`, `check_raw_named_field`) are the guard
+route — a struct type is refused by `a(k)` now, so `.name`
 and `::a` are a struct instance's only reads — and their deferred half is
 measured the same way, again with no annotation and no statement order:
 
 | read | concrete container | deferred container (a parameter) |
 |---|---|---|
-| `l.a` on an array | `error: expected a tuple, array, or struct type, found array<Int, 2>` | two runtime diagnostics: `this value is not a container — it has no element to read`, then `table lookup missed — no entry for this key` |
-| `l::a` on an array | the same refusal | **a panic**: `internal error: entered unreachable code: TableGet target must be a table` (`evaluation.rs`) |
-| `l.a` / `l::a` on a tuple | the same refusal | — |
+| `l.a` on an array | `error: expected TypeStruct, found TypeArray` (pre-fix, the shared `expected a tuple, array, or struct type`) | pre-fix: two runtime diagnostics — `this value is not a container — it has no element to read`, then `table lookup missed — no entry for this key`; **now**: those two *plus* `error: expected a struct type, found array<Int, 2>`, the read's registered condition firing at the apply (§5.2) |
+| `l::a` on an array | `error: expected TypeStruct, found array<Int, 2>` | pre-fix: **a panic** — `internal error: entered unreachable code: TableGet target must be a table` (`evaluation.rs`); **now**: refused at the apply, `expected TypeStruct, found array<Int, 2>` (the struct-kind unify) |
+| `l.a` / `l::a` on a tuple | `expected TypeStruct, found TypeTuple` / `found <Int, Int>` | — |
 
-Neither named site asks its skipped guard again either, so the deferred name
-lookup reads a container it was never checked against.  The outcomes differ by
-read: `a.name` fails, twice, with messages about tables rather than about the
-read, while `X::a` aborts the compiler — a template-level misread reaching an
-`unreachable!` written for an invariant violation.  The paren read's hole is
-*silent* (a wrong program accepted and evaluated); the named reads' are loud and
-mislabelled, and `X::a`'s is fatal.  The panic is pre-existing (§6.3 records it
-reproduced at `dev@cce8f09`) and is not a face of the carry.
+Only `.a`'s **decided** tier is judged where it stands; its undecided tier
+registers the requirement as a condition and re-checks it per apply (§5.2),
+which is why the deferred array now carries a message about the read as well as
+the two about tables — the table messages stay, because the apply's parameter
+check still passes and the body the condition refuses still runs.  `X::a` states
+its requirement as a unify in both tiers, and its deferred half is refused by the
+apply that binds the container (that is what closed the panic).  The paren read's
+hole was *silent* (a wrong program accepted and evaluated); the named reads' were
+loud and mislabelled, and `X::a`'s was fatal.  The panic is pre-existing (§6.3
+records it reproduced at `dev@cce8f09`) and is not a face of the carry.
 
 ## 3. The mechanism, as it stands
 
@@ -379,9 +387,26 @@ the runtime net cannot help (the tuple/array confusion is invisible to
 a type-level "is this a positional type" operator beside
 [`TypeOperator::InDomain`](../crates/lichen-highlevel/src/program.rs), whose
 answer is `USize(0/1)` over a type value — plus a spelling for the diagnostic it
-records when the condition fails at the apply.  **Not landed**; §6.2 ranks this
-against the alternatives (a shape-pin, a runtime net, a settle pass) and §2.4
-measures the template-level face it must also close.
+records when the condition fails at the apply.
+
+**Landed for the named read `a.name`.**  The operator is
+`TypeOperator::IsStructType` (tag 18): operand `[container type, universe]`,
+answering `USize(0/1)` through the same tag-based reader the decided tier judges
+with ([`shape::is_struct_type_any`](../crates/lichen-highlevel/src/shape.rs)), so
+the two tiers cannot drift; the universe is an operand because the runtime has no
+canonical universe node to read.  `Checker::check_named_field` registers it, in
+the **undecided** tier only, with a new `AssertSpelling::StructKind`, which
+renders `expected a struct type, found <container type>` — the named read's own
+wording, replacing the shared "a tuple, array, or struct type" it never accepted
+(§6.3).  Measured: the condition fires for an array argument (`f = x => x.a;
+f [10, 20]` → `expected a struct type, found array<Int, 2>`, caret on the
+container) and stays silent for a struct — named or a block's record — through
+the same apply clone; the decided tier remains the kind unify it was; and the
+refusal is **added to**, not instead of, the two runtime table messages, because
+the apply never fails its parameter check and so still runs the body it refuses.
+`X::a` was already enforced in both tiers (its kind unify binds the container's
+own type cell, which the parameter check does meet), and the paren read keeps its
+unify.
 
 **The paren read did not need it** (landed): narrowing `a(k)` to tuples made its
 accepted set one kind, so its check is a plain **unify** — `check_field` pins an
@@ -389,8 +414,9 @@ undecided container to a fresh tuple type `[?shape, [TypeTuple, K]]` (the
 `check_index` mirror) and refuses a decided non-tuple outright, stating the same
 requirement (`expected <?a, …>, found …`).  The predicate pair
 `is_positional_type_any`/`is_positional_type` (`shape.rs`) was the disjunction
-and is gone with it.  That is the §6.2 option 1 machinery spent on the **named**
-reads instead, whose accepted set *cannot* be narrowed to one kind (§6.2).
+and is gone with it.  The §6.2 option 1 machinery is what the **named** read's
+undecided tier takes instead, because its accepted set *cannot* be narrowed to
+one kind (§6.2).
 
 One structural consequence, measured in `tests/graph_structure.rs`: a positional
 read of a *parameter* used to put one cell per read into the parameter's type
@@ -412,7 +438,7 @@ commit reaching the class (§5.1) rather than by asking the question later.
 | §2.1 `20: ?a` | **landed** (§5.1): the merge carries the class's decided value to the members it adds |
 | §2.2 accept/refuse flip | **landed**: the paren read is a unify against a tuple type (§5.2), so both orders refuse |
 | §2.4 paren `x(0)` over an array | **landed**: same unify, refused at the apply |
-| §2.4 named `x.a` / `x::a` over a non-struct | **open**: the named reads' accepted set is now a **tag** (`[payload, TypeStruct]`, with a per-struct payload), but the undecided tier still cannot take a term-shaped pin; §5.2's re-checkable condition is the route, and `X::a`'s panic needs its own net |
+| §2.4 named `x.a` over a non-struct | **landed**: the undecided tier registers `IsStructType` as a condition, re-checked per apply (§5.2), so the refusal is a check diagnostic (`expected a struct type, found …`) as well as the two runtime table messages; `X::a` was already refused in both tiers by its kind unify, which closed its panic |
 | §2.3 | already caught; only the diagnostic quality differs by order |
 
 ## 6. Open questions
@@ -473,10 +499,11 @@ The named reads cannot take that route in full: a struct marker is now a **tag**
 (`[payload, TypeStruct]` — the `TypeStruct` atom in the marker's *type* slot),
 so the *decided* tier does state one kind as a unify, but the per-struct payload
 leaves the *undecided* tier's accepted set a predicate, and that is the half
-still open.  For
+option 1 closes.  For
 them the ranking below is unchanged:
 
-1. **Re-checkable assert (recommended).**  Keep skipping the static guard when
+1. **Re-checkable assert (landed for `a.name`; see §5.2).**  Keep skipping the
+   static guard when
    the container is undecided, and register the condition on the assert
    worklist exactly like `InDomain` and the bounds assert: a `TypeOperator`
    over the container type answering `USize(0/1)` for "a struct type" — the
@@ -487,15 +514,21 @@ them the ranking below is unchanged:
    per apply clone.  That closes **both** faces: §2.2's same-scope flip (the
    definition pass evaluates the assert once the annotation binds) and §2.4's
    template hole (the clone's re-check meets the actual argument).  Cost: one
-   operator, one spelling, one diagnostic string — and it would let the named
-   reads refuse `x.a`/`x::a` over an array at the apply instead of through
-   runtime table errors and a **panic**.
+   operator, one spelling, one diagnostic string (tags 18 and the spelling are
+   landed).  Measured on the landed form: the named read refuses `x.a` over an
+   array with a check diagnostic at the apply, but **not** "instead of the
+   runtime table errors" — the apply's parameter check still passes, so the body
+   the condition refuses is still evaluated and records its two table messages
+   first.  Only option 2's pin refuses *before* the body, and it costs the
+   extension (§6.2's parked branch).
 2. **Shape-pin plus the same assert.**  Additionally pin the undecided
    container to the skeleton `[shape, [marker, K]]` with an open marker — the
    shape `check_index` pins, minus the kind — so `slot_read`'s lazy `Index`
    reads a decided structure and a lowering sees a field list before the kind
-   is known.  Strictly more than option 1; worth it only if a consumer needs
-   that, and none measured does.
+   is known.  Strictly more than option 1, and the only ranked route that makes
+   the apply's parameter check fail (so the refused body is never evaluated, and
+   no runtime table message is recorded); measured at `1b40ab2` to cost the
+   compute extension, which is why option 1 landed without it.
 3. **Runtime net — impossible by design.**  Evaluation cannot distinguish a
    tuple from an array (both are `LowValue::Array`) and must not: the lowlevel
    is untyped (`type-system-cleanup-plan` D1).  This is why §2.3's apply has a
@@ -538,10 +571,14 @@ prints `parameterized: ?a` and `crates/lichen-language/tests/compute.rs` goes fr
 the static pin — rather than a landing candidate.  What it needs is option 1's
 **re-checkable assert**: a predicate on the assert worklist that meets the actual
 argument per apply, instead of a concrete value written into the container's own
-type cell.  The branch is live — its three commits are on it and its worktree is
-clean as of `c776676` — so whoever writes the assert can lift its refusals, its
-diagnostic fix and its docs, and must **re-measure** `tests/compute.rs` (62/0 on
-`dev` now) rather than trusting the numbers above.
+type cell.  That assert is now **landed** (§5.2): it refuses `.a` over an array
+with a check diagnostic, and it leaves the extension at `dev`'s 62/0 — but,
+unlike the pin, it does **not** fail the apply's parameter check, so the refused
+body still runs and records its two runtime table messages.  The branch is live —
+its three commits are on it and its worktree is
+clean as of `c776676` — so whoever needs the pin's earlier refusal can lift its
+refusals, its diagnostic fix and its docs, and must **re-measure**
+`tests/compute.rs` (62/0 on `dev`) rather than trusting the numbers above.
 
 **The narrower kind-slot pin is inert — measured, not landed.**  Stating `.a`'s
 requirement for the undecided tier as a unify on the container's **kind slot**
@@ -562,9 +599,20 @@ without it the same unify is a check-time conflict (`expected TypeStruct, found
 ?a`) that refuses the struct case too.  Only the whole-term pin refuses at the
 apply, and it still costs the extension (measured at `1b40ab2`: `tests/compute.rs`
 62/0 → 9/53 — the pinned type cell is no longer the undecided `_` the extension's
-template walk defers on).  Option 1's assert remains the route.
+template walk defers on).  Option 1's assert is the route that landed for `.a`
+(§5.2); the whole-term pin stays the rejected one.
 
 ### 6.3 The message/predicate disagreement (analyzed, not landed)
+
+> **Superseded in part (measured).**  The struct marker became a **tag**
+> (`[payload, TypeStruct]`), so the three sites no longer share one wording and
+> `DiagKind::IndexTarget` has no producer left: `.a`'s decided tier refuses
+> `expected TypeStruct, found TypeArray` (or `TypeTuple`), `::a` refuses
+> `expected TypeStruct, found array<Int, 2>`, and `.a`'s undecided tier renders
+> `expected a struct type, found …` (§5.2).  The deferred named rows below are
+> likewise no longer "no net at all": `::a` is refused at the apply, and `.a`
+> carries its registered condition.  The analysis below is the record of the
+> pre-tag state; the wording it asks for is what landed.
 
 `DiagKind::IndexTarget` is shared by three guards with three different
 accepted sets, and its single message names a kind **none** of them accepts:

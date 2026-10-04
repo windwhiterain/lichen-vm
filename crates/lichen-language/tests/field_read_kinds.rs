@@ -10,6 +10,8 @@
 //! pins the same rule for the two **raw** reads, which now state their accepted
 //! container kind too: `X<e>` takes a tuple type value, `X::a` a struct type
 //! value, and `.a`/`::a` over an array are the two named sides of the refusal.
+//! The final section pins the named read's **deferred** half, whose requirement
+//! is a condition on the assert channel rather than a unify.
 
 use lichen_highlevel::diagnostic::DiagKind;
 
@@ -181,4 +183,71 @@ fn a_raw_named_read_of_a_deferred_array_is_refused_at_the_application() {
     let (message, kind) = refused("f = x => x::a\nf [10, 20]");
     assert_eq!(kind, DiagKind::Runtime);
     assert_eq!(message, "expected TypeStruct, found array<Int, 2>");
+}
+
+// --- the deferred `.a`: a registered condition, not a pin ------------------
+
+/// The **deferred** named read.  `x.a`'s container is a parameter, so its
+/// requirement cannot be judged where it stands and is registered as a
+/// **condition on the assert channel** instead of a unify: the apply clone
+/// re-checks it per call, and the array argument is refused by a check
+/// diagnostic naming the requirement
+/// (`docs/notes/eval-before-unify.md` §6.2 option 1).  The read used to fail
+/// through two runtime table messages and nothing else; those are still
+/// recorded (the refused apply still evaluates the body), so this pins the
+/// requirement's own diagnostic among them — its kind, its text, and the caret
+/// on the container.
+#[test]
+fn a_named_read_of_a_deferred_array_is_refused_by_its_condition() {
+    let report = compile("f = x => x.a\nf [10, 20]");
+    assert!(!report.ok(), "the deferred read is refused");
+    let diag = report
+        .diagnostics
+        .iter()
+        .find(|d| matches!(d.check.as_ref().map(|c| c.kind), Some(DiagKind::Assert)))
+        .expect("the requirement is a check diagnostic");
+    assert_eq!(diag.stage, Stage::Check);
+    assert_eq!(diag.message, "expected a struct type, found array<Int, 2>");
+    assert_eq!(diag.span, Some((1, 5)), "the caret is the container");
+}
+
+/// The condition admits what it must.  A **struct** reaching the parameter —
+/// a named instance or a block's record — passes the requirement, through the
+/// same apply clone the refusal above comes from, so nothing is refused that
+/// the decided tier accepts.  (A *decided* container registers no condition at
+/// all: `a_named_struct_and_a_named_block_read_by_name` and
+/// `a_named_read_of_an_array_is_refused` cover that tier.)
+#[test]
+fn a_named_read_of_a_deferred_struct_is_accepted() {
+    assert_eq!(
+        output("S = struct<.a Int, .b string>\nf = x => x.a\nf (S(.a 1, .b \"h\"))"),
+        "1: Int"
+    );
+    assert_eq!(
+        output("f = k => (k.a, k.b)\nf { a = 1; b = 2 }"),
+        "(1, 2): <Int, Int>"
+    );
+}
+
+/// The condition's other refusal shapes: a deferred tuple and a deferred
+/// atomic type are the same requirement failing, and each names the type that
+/// was found.
+#[test]
+fn a_named_read_of_a_deferred_non_struct_is_refused() {
+    for (source, found) in [
+        ("f = x => x.a\nf (1, 2)", "<Int, Int>"),
+        ("f = x => x.a\nf 5", "Int"),
+    ] {
+        let report = compile(source);
+        assert!(!report.ok(), "{source:?} is refused");
+        let diag = report
+            .diagnostics
+            .iter()
+            .find(|d| matches!(d.check.as_ref().map(|c| c.kind), Some(DiagKind::Assert)))
+            .unwrap_or_else(|| panic!("{source:?} carries the requirement's diagnostic"));
+        assert_eq!(
+            diag.message,
+            format!("expected a struct type, found {found}")
+        );
+    }
 }
