@@ -425,6 +425,54 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   every `[else, then][selector]` the checker compiles, and `operands_of`'s `Index`
   arm peeled the operand array the same way. Both are fixed; the conditional
   resolves as `Selection::Computed`, `Index(apply, 0)` as `Views(apply)`.
+- **The host loop** — `crates/lichen-lowlevel/src/loop_run.rs`: a marked,
+  convertible recursion is **run** by the evaluator instead of expanded. One
+  iteration is one `instantiate` (the same clone-and-unify the unroll uses, so
+  the per-iteration parameter check, the per-iteration asserts and the class
+  topology all come from the one implementation) plus the iteration's test
+  resolved into that instantiation.
+  Two things about the backedge and the exit were learned by running it, and
+  both are now the design:
+  - **The state crosses the backedge lazily, and the *exit* decides it.** The
+    step's next-state nodes become the next iteration's parameter values through
+    the same unify the unroll uses, so nothing is computed before the next test
+    asks for it — but the loop's *result* is forced at the moment the base is
+    chosen, **inside the loop**: a base's value is the state the loop
+    accumulated, a chain one link per iteration, and forcing it is `count`
+    applications deep. Forced outside the loop that chain is the *apply*
+    budget's business, which refused counts the loop exists to afford.
+  - **The result is built, not read off the template's return.** Evaluating the
+    return produces the same `[value, type]` pair, but it leaves the selection's
+    *untaken* step arm — an apply of the same function — in the graph, and the
+    next deep pass walks it and unrolls one level, then that level's arm, and so
+    on: the trip count the loop had just avoided paying was charged to the apply
+    budget *after* the answer was already known (measured: a 1_000-count loop
+    answered, then ~2_000 nested applications exhausted the budget). The loop
+    therefore assembles the pair from the base's value half and the return's own
+    type half, which is the whole of what an apply's result is.
+  A loop is bounded by its own **work** budget ([`Module::loop_work_limit`],
+  `BudgetExhausted::LoopWork`): one unit per iteration and one per application
+  inside it. It cannot be the apply budget, and finding out why was the other
+  half of the design work: **an operation in a host program is an apply** (the
+  prelude's own function), so a loop of N iterations applies about N times, and
+  the budget that exists to make a runaway *expansion* fail fast would cap every
+  converted loop at the count the expansion can afford. The loop's own budget
+  still refuses the marked loop that never reaches its base, and an unmarked
+  recursion inside a step that does the same.
+  **The cost, stated plainly**: each iteration still instantiates the body
+  (~fifty nodes for the reduction here), so a host loop is linear in the trip
+  count with a large constant — O(1) in *depth*, which is what removes the
+  ceiling, but not yet cheap per iteration. The obvious next step is not a
+  second design but the same one cheaper: walk the roles with a slot map over
+  *one* instantiation instead of instantiating the body per iteration, which is
+  also the shape the kernel reader wants.
+  Evidence: `tests/basic/host_loop.rs` (the loop and the unroll agree; the loop
+  goes round exactly `count + 1` times; 5_000 iterations answer where the unroll
+  is refused at a 100-apply budget; an endless convertible loop is refused by
+  the loop's budget; a marked but unconvertible recursion still expands) and
+  `lichen-language/tests/loop_run.rs` on real programs (the acceptance case's
+  shape with a literal count, next to the same source unmarked and refused, plus
+  loop/unroll agreement at small counts).
 - **The wasm backend** — walks the structure and emits `If` and `While`. An `if`
   frame *is* the join; a `while` is a `loop` wrapped in a `block` so its two exits
   agree; a carried value is a local, because a `br` to a loop label takes no
@@ -589,16 +637,18 @@ cleared the CPU side but nothing turns on it yet, because 1c is not:**
    inherits 1b: the refusal it wrote for a body that is "only a transfer" is the
    SPIR-V emitter saying there is no block for `OpLoopMerge`'s continue target, which
    `Terminator::Jump` now resolves.
-4. **Delete `value_decided` (or invert it) and make the JIT *emit* what the
-   conversion returned.** The conversion half is no longer missing — it is
-   `Module::loop_conversion` (§8.2) — so what remains is the reader: build the
-   loop's `KernelBody` (SSA, `Flow::While`, one block per arm), bind the entering
-   call's arguments to the state slots, and map each slot to a local. `value_decided`
-   is still the gate that decides *whether* the unroll handles a site, and it has
-   a consumer for as long as the unroll is the only path that produces code: a
-   decided entry is expanded, an undecided one is refused (now by name — the
-   conversion's rule, or `LoopNotEmitted`). It can only be deleted with the step
-   that makes an undecided call *run*. **Read
+4. **Make the JIT *emit* what the conversion returned.** The conversion half is
+   no longer missing — it is `Module::loop_conversion` (§8.2) — and neither is
+   its first consumer: the **host loop** (§8.2) runs a marked recursion in the
+   evaluator, which is what makes the conversion observable today. What remains
+   is the *kernel* reader: build the loop's `KernelBody` (SSA, `Flow::While`,
+   one block per arm), bind the entering call's arguments to the state slots,
+   and map each slot to a local — the same roles the host loop reads, emitted
+   instead of interpreted. `value_decided` still decides whether a marked
+   *kernel* site is refused: a host site the evaluator can run is answered, and
+   a site whose entering state is a run-time value is still refused (now by
+   name — the conversion's rule, or `LoopNotEmitted`), because no kernel loop
+   exists to run it. **Read
    [§8.6](#86-where-the-conversion-lives-lowlevel-and-the-jit-reads-it) before
    sizing this.**
 5. **Run the reduction on both backends**, past the 2000-apply budget and the 512
@@ -663,7 +713,16 @@ That gives three things, and they are the whole design:
 |---|---|---|
 | the **mark** | [`Function::looping`](../../crates/lichen-lowlevel/src/lib.rs) | rides on the template, because the templates are the only place the recursion is still a cycle — every apply clones them away |
 | the **analysis** | the strongly connected components of the marked call graph | same window, over the same templates the deep pass is about to walk |
-| the **output** | **which node plays which role** — the carried state's paths, each base test, each step's next state, each exit's values — as [`LoopConversion`](../../crates/lichen-lowlevel/src/loop_conversion.rs) | read by the JIT |
+| the **output** | **which node plays which role** — the carried state's paths, each base test, each step's next state, each exit's values — as [`LoopConversion`](../../crates/lichen-lowlevel/src/loop_conversion.rs) | read by the **host loop** (`loop_run.rs`, §8.2) and, when it lands, by the JIT |
+
+**It has one reader today, and that is what makes the contract testable.** The
+host loop walks the roles and *runs* them — one instantiation per iteration,
+the same clone-and-unify the unroll uses — so "the loop and the unroll agree" is
+a property that can be checked now, on real programs, before any backend emits a
+loop (`tests/basic/host_loop.rs`, `lichen-language/tests/loop_run.rs`). The JIT
+reader will walk the same roles and emit them; if the two disagree, the
+conversion or the reader is wrong, and the host loop is the side that is already
+running.
 
 **The output is the recursion's own facts, not a control-flow graph, and that is a
 correction this section needed.** The table used to say "a control-flow skeleton

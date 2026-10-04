@@ -24,13 +24,33 @@ impl<P: Program> Module<P> {
     /// deliberately stays inflated on that path (as it did when the guard
     /// unwound), so a caller still inside a refused apply cannot re-enter the
     /// walk.
+    ///
+    /// **Inside a converted loop, the work is the loop's.** An operation in a
+    /// host program *is* an apply (the prelude's own function), so a loop of N
+    /// iterations applies about N times; charging the apply budget would cap
+    /// every converted loop at the count the *expansion* can afford, which is
+    /// the one thing the conversion exists to lift. So while a loop is running,
+    /// an apply charges the loop's work budget
+    /// ([`Module::loop_work_limit`]) instead — which still refuses the loop
+    /// that never reaches a base, and a recursion inside a step that does the
+    /// same, because both spend that budget. Nesting is still charged to
+    /// [`Module::apply_depth_limit`] either way.
     pub(super) fn with_apply_frame(
         &mut self,
         body: impl FnOnce(&mut Self) -> P::Value,
     ) -> P::Value {
         self.apply_depth += 1;
-        self.apply_total += 1;
-        let exhausted = if self.apply_depth > self.apply_depth_limit {
+        let in_loop = self.active_loops > 0;
+        if in_loop {
+            self.loop_work += 1;
+        } else {
+            self.apply_total += 1;
+        }
+        let exhausted = if in_loop {
+            (self.loop_work > self.loop_work_limit).then_some(BudgetExhausted::LoopWork {
+                limit: self.loop_work_limit,
+            })
+        } else if self.apply_depth > self.apply_depth_limit {
             Some(BudgetExhausted::ApplyDepth {
                 limit: self.apply_depth_limit,
             })
