@@ -2543,81 +2543,6 @@ fn an_annotated_struct_parameter_function_reads_a_named_field() {
     assert!(b.ok, "f (struct<.x 1, .y 2>) must check");
 }
 
-/// Print a node's value/operation, recursing into array elements to `depth`.
-fn dump(b: &lichen_highlevel::checker::Build<ProgramImpl>, node: NodeId, depth: usize) {
-    use lichen_utils::extend::AsEnum;
-    let any = AnyNodeId::Dynamic(node);
-    let value = b.module.node_value(any);
-    let length = value
-        .as_ref()
-        .and_then(|v| AsEnum::<LowValue>::as_enum(v))
-        .and_then(|v| match v {
-            LowValue::Array(array) => {
-                // SAFETY: just read from a live node of the module.
-                Some(unsafe { array.items() }.len())
-            }
-            _ => None,
-        });
-    eprintln!(
-        "PROBE {:indent$}{node:?} op={:?} len={length:?} value={:?}",
-        "",
-        b.module
-            .node_operation(node)
-            .map(|o| format!("{:?}", o.operator)),
-        value.as_ref().and_then(|v| AsEnum::<LowValue>::as_enum(v)),
-        indent = depth * 2,
-    );
-    if depth >= 3 {
-        return;
-    }
-    if let Some(LowValue::Array(array)) = value.and_then(|v| AsEnum::<LowValue>::as_enum(&v)) {
-        // SAFETY: the payload was just read from a live node of the module.
-        let items: Vec<AnyNodeId> = unsafe { array.items() }
-            .iter()
-            .map(|item| item.node)
-            .collect();
-        for item in items {
-            match item {
-                AnyNodeId::Dynamic(child) => dump(b, child, depth + 1),
-                AnyNodeId::Static(_) => {
-                    eprintln!("PROBE {:indent$}static", "", indent = (depth + 1) * 2)
-                }
-            }
-        }
-    }
-}
-
-/// The annotation's struct type expression, built **alone** — nothing has been
-/// unified yet, so its term is the node the parameter gate compares.
-#[test]
-fn the_open_struct_type_term_before_any_unify() {
-    let mut ir = IR::new();
-    let open_i = hole(&mut ir);
-    let open_o = hole(&mut ir);
-    let open_struct = named_type_struct(&mut ir, &[(open_i, "I"), (open_o, "O")]);
-    let b = build(open_struct, ir);
-    eprintln!("PROBE === annotation term: struct<.I _, .O _> ===");
-    eprintln!("PROBE root_term:");
-    dump(&b, b.root_term, 0);
-    eprintln!("PROBE root_val:");
-    dump(&b, b.root_val, 0);
-}
-
-/// The argument's struct type expression, built **alone**.
-#[test]
-fn the_concrete_struct_type_term_before_any_unify() {
-    let mut ir = IR::new();
-    let int_i = int_t(&mut ir);
-    let int_o = int_t(&mut ir);
-    let concrete = named_type_struct(&mut ir, &[(int_i, "I"), (int_o, "O")]);
-    let b = build(concrete, ir);
-    eprintln!("PROBE === argument term: struct<.I Int, .O Int> ===");
-    eprintln!("PROBE root_term:");
-    dump(&b, b.root_term, 0);
-    eprintln!("PROBE root_val:");
-    dump(&b, b.root_val, 0);
-}
-
 /// Two **separately written** occurrences of `struct<.x Int>` are two distinct
 /// nominal types — a struct type expression mints a fresh nominal id per source
 /// occurrence (`check_type_struct`), and unification compares that id.  Sharing
@@ -2686,9 +2611,6 @@ fn an_open_struct_annotation_lets_its_field_be_read() {
     }
     for d in b.diagnostics() {
         eprintln!("PROBE open struct diag: {d:?}");
-        for node in [d.a, d.b] {
-            dump(&b, node, 0);
-        }
     }
     // What each function's parameter type slot actually holds after the build:
     // if the annotation ran before the body, this is the annotated struct type.

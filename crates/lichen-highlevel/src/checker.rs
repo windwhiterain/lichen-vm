@@ -43,7 +43,6 @@ use lichen_lowlevel::{
     AnyNodeId, ArrayItem, BlockId, BudgetExhausted, FunctionId, LowOperator, LowValue, Module,
     NodeId, Operation, Registry,
 };
-use lichen_utils::extend::AsEnum;
 use stacksafe::stacksafe;
 
 use crate::attr::{AttrExtRegistry, AttrSet};

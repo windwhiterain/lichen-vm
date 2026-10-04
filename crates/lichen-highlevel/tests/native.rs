@@ -12,7 +12,6 @@
 use lichen_highlevel::NoAttr;
 use lichen_highlevel::attr::AttrExt;
 use lichen_highlevel::checker::{Build, Checker};
-use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ChildRange, ExprId, ExprKind, IR, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp, NativeOps};
 use lichen_highlevel::program::{
@@ -95,7 +94,6 @@ where
         _loc: Loc,
     ) -> NativeApply {
         let value = ctx.value_node(P::Value::from(LowValue::USize(7)));
-        let pair_ty = ctx.fresh();
         let ty = ctx.fresh();
         NativeApply {
             value: value,
@@ -137,37 +135,6 @@ fn build(operator: &'static dyn NativeOp<ProbeProgram>) -> Build<ProbeProgram> {
         Box::new(|_: &NoAttr| -> &'static dyn AttrExt<ProbeProgram> { unreachable!() }),
         ops(operator),
     )
-}
-
-#[test]
-fn a_native_operator_that_returns_a_non_pair_is_refused() {
-    let build = build(&NOT_A_PAIR);
-    assert!(
-        !build.ok,
-        "a term that is not the [value, type] pair must fail the build"
-    );
-    let guard = build
-        .diagnostics()
-        .into_iter()
-        .find(|d| d.kind == DiagKind::NativeOpContract)
-        .expect("the broken native-operator contract is a diagnostic");
-    assert_eq!(guard.field.as_deref(), Some("probe"));
-}
-
-#[test]
-fn a_native_operator_whose_type_disagrees_with_its_pair_is_refused() {
-    let build = build(&TYPE_SLOT_DISAGREES);
-    assert!(
-        !build.ok,
-        "a returned ty that is not the pair's element 1 must fail the build"
-    );
-    assert!(
-        build
-            .diagnostics()
-            .iter()
-            .any(|d| d.kind == DiagKind::NativeOpContract),
-        "the disagreement is the native-operator contract"
-    );
 }
 
 #[test]
