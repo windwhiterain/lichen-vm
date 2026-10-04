@@ -7,7 +7,7 @@ A = I => struct<.n Int, .I I>
 P = T: KT T => struct<.n Int, .in T.I, .out T.O>
 S = T: KT T => A T.I -> T.O
 jit = f => {I = _; O = _; f: I -> O; (K _)(.native $jit(f), .I I, .O O)}
-launch = k => a => {a: k.I; r = $launch(k.native, a, (type_of a), k.I); r: k.O; r}
+launch = k => a => {a: k.I; r = $launch(k.native, a); r: k.O; r}
 call = k => a => $call(k.native, a)
 parallel = f => b => {f: _ -> _; b: string; (struct<.native _, .sig (type_of f)>)(.native $parallel(f, b), .sig _)}
 parallel_sig = f => b => s => {f: _ -> _; b: string; (struct<.native _, .sig s>)(.native $parallel(f, b), .sig s)}

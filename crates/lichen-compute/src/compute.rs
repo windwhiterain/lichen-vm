@@ -56,7 +56,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use lichen_graph_ir::Policy;
-use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram, LeafKindMarkers, TypeOperator, ValueType};
@@ -7792,27 +7791,22 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator> + From<LowOperator>,
 {
-    /// `$launch(native, a, aty, kty)` — run kernel `native` on `a`, where `aty`
-    /// is the argument's **type** and `kty` the kernel's declared domain, both
-    /// handed over as plain values by the wrapper (`(type_of a)` and `k.I`).
-    /// The op unifies the two and emits the `Launch` node over `[native, a]`;
-    /// the wrapper states the result type as `r: k.O`, so this crate states no
-    /// type at all.
-    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+    /// `$launch(native, a)` — run kernel `native` on `a`.  The wrapper states
+    /// both constraints (`a: k.I`, `r: k.O`) and hands over raw values; the op
+    /// emits the `Launch` node over `[native, a]` and states no type at all.
+    fn build(
+        &self,
+        ctx: &mut dyn Ctx<P>,
+        _e: ExprId,
+        args: &[NativeArg],
+        _loc: Loc,
+    ) -> NativeApply {
         let native = &args[0];
         let a = &args[1];
-        let aty = &args[2];
-        let kty = &args[3];
-        // Both operands are values that *are* types: the framework's read of a
-        // value at this boundary is its term's head (`value_of`), so this is the
-        // comparison the gate always made — the argument's type against the
-        // kernel's domain.
-        ctx.check_unify(aty.value, kty.value, loc, DiagKind::Guard);
-        // Emit the `Launch` operator over `[native, a]`; it reads exactly those
-        // two elements.  `kty` rides along as an inert third operand element so
-        // the kernel's declared domain stays reachable from the application's
-        // return graph and is resolved at apply time.
-        let operands = ctx.array_node(&[native.value, a.value, kty.value]);
+        // The `Launch` operator reads exactly these two elements.  The kernel's
+        // declared domain is not an operand: the wrapper's own `a: k.I` is where
+        // it is read, so it is already in the application's graph.
+        let operands = ctx.array_node(&[native.value, a.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Launch), Some(operands));
         NativeApply {
             value: op,
