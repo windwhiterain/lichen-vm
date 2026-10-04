@@ -223,6 +223,117 @@ where
         slot
     }
 
+    /// The **type value** an expression in type position denotes.
+    ///
+    /// A type expression's term *is* the type value — unless the expression
+    /// carries attributes.  A refinement written on a type (`x : (_ ! in_num)`)
+    /// makes the term the `[type, …, attribute]` pair the attribute lives in, and
+    /// the type it denotes is the **annotated value's** own term: a placeholder's
+    /// cell (what will hold the class), or a type constant's `[marker, kind]`
+    /// pair.  Taking the pair's first slot instead would answer a *shape* for a
+    /// type constant, and unifying a shape with a parameter's type slot makes
+    /// `g 7` fail against `Int` while printing `expected Int, found Int`
+    /// (measured).
+    ///
+    /// The attributes are not lost by taking the denotation: the annotation
+    /// registered its own assert where it was written, so it rides the enclosing
+    /// function and is re-checked per call
+    /// (`docs/notes/operator-polymorphism.md` §3).
+    ///
+    /// One consequence is visible in a printed signature, and it is honest
+    /// rather than a defect: an **open** class refinement's annotated type is the
+    /// placeholder's `[shape, kind]` pair of cells — the pair is what makes the
+    /// class reachable from the parameter pair, so the apply clone re-instantiates
+    /// the refinement's condition per call (taking the placeholder's *value cell*
+    /// alone loses that, measured: `f "a"` was then accepted) — and a type the
+    /// printer cannot read as a form is marked raw
+    /// ([raw-rendering-mark](raw-rendering-mark.md)).  So `x : (_ ! in_num) => e`
+    /// prints `raw[?a, ?b] -> …` where `x : (Int ! in_num) => e` prints
+    /// `Int -> …`.
+    pub(super) fn type_denotation(&mut self, type_expr: ExprId, value: Option<ExprId>) -> NodeId {
+        // The attributes the type expression carries are **not** dropped: they
+        // are unified against the annotated value's own, marker by marker, so
+        // the type the annotation names meets the value with both attribute
+        // sets reconciled.  The attribute's own check then enforces whatever the
+        // reconciliation left (see the annotation's `AttrExt::constraint`).
+        //
+        // The layouts differ (the type expression carries only what it spells,
+        // the value carries only what it spells), so the pairing is by marker,
+        // never by position.
+        if let Some(value) = value {
+            self.unify_type_attributes(type_expr, value);
+        }
+        let mut expr = type_expr;
+        while let ExprKind::Annotation { value, .. } = self.ir[expr].kind {
+            expr = value;
+        }
+        self.state[expr]
+            .term
+            .expect("a type expression is compiled before its denotation is read")
+    }
+
+    /// Unify the attribute slots `type_expr` carries against the ones on the
+    /// annotated `value`, one attribute at a time.  Only markers both sides
+    /// carry are compared: an attribute only one side spells has no counterpart
+    /// to reconcile with, and its own check is where it is enforced.
+    fn unify_type_attributes(&mut self, type_expr: ExprId, value: ExprId) {
+        let mut expr = type_expr;
+        while let ExprKind::Annotation { value: inner, .. } = self.ir[expr].kind {
+            expr = inner;
+        }
+        if self.state[expr].attr.is_none() || self.state[value].attr.is_none() {
+            return;
+        }
+        let Some(type_pair) = self.state[expr].term else {
+            return;
+        };
+        let Some(value_pair) = self.state[value].term else {
+            return;
+        };
+        // SAFETY: both are live nodes of this module; nothing here drops a
+        // block, and both item lists are read before `unify_slots` runs.
+        let (Some(type_items), Some(value_items)) = (
+            unsafe { shape::array_items(&self.module, AnyNodeId::Dynamic(type_pair)) },
+            unsafe { shape::array_items(&self.module, AnyNodeId::Dynamic(value_pair)) },
+        ) else {
+            return;
+        };
+        let type_tail = self.schema_tail(expr).to_vec();
+        let value_tail = self.schema_tail(value).to_vec();
+        let mut pairs: Vec<(P::Attr, NodeId, NodeId)> = Vec::new();
+        for (value_index, marker) in value_tail.iter().enumerate() {
+            let Some(type_index) = type_tail
+                .iter()
+                .position(|m| m.order_index() == marker.order_index())
+            else {
+                continue;
+            };
+            let slot_of = |items: &[lichen_lowlevel::ArrayItem], index: usize| {
+                items
+                    .get(shape::attr_slot(index))
+                    .map(|item| item.node)
+                    .and_then(|node| match node {
+                        AnyNodeId::Dynamic(node) => Some(node),
+                        AnyNodeId::Static(_) => None,
+                    })
+            };
+            let (Some(type_slot), Some(value_slot)) = (
+                slot_of(type_items, type_index),
+                slot_of(value_items, value_index),
+            ) else {
+                continue;
+            };
+            pairs.push((*marker, value_slot, type_slot));
+        }
+        let loc = self.loc(value, 2);
+        for (marker, value_slot, type_slot) in pairs {
+            let Some(ext) = self.attribute_extension(&marker) else {
+                continue;
+            };
+            ext.unify_slots(self, value_slot, type_slot, loc.clone());
+        }
+    }
+
     pub(super) fn check_ann(&mut self, e: ExprId, value: ExprId, r#type: Option<ExprId>) -> NodeId {
         self.check_expr(value);
         // `: T` — the value expression's type must unify with the type
@@ -244,13 +355,7 @@ where
                 // where it was written — that annotation registered its own
                 // assert on the type value — so the outer annotation needs no
                 // slot of its own.
-                // The type the annotation names is the type expression's own
-                // term: an annotation unifies the left type expression with the
-                // right expression, and both sides are the terms the checker
-                // compiled.
-                let denotation = self.state[type_expr]
-                    .term
-                    .expect("a type expression is compiled before its denotation is read");
+                let denotation = self.type_denotation(type_expr, Some(value));
                 self.check_unify(
                     self.state[value].ty.unwrap(),
                     denotation,

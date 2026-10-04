@@ -61,8 +61,6 @@ where
     /// `docs/notes/operator-polymorphism.md` §3).
     pub(super) fn check_type_element(&mut self, el: ExprId) -> NodeId {
         self.check_expr(el);
-        self.state[el]
-            .term
-            .expect("a type expression is compiled before its denotation is read")
+        self.type_denotation(el, None)
     }
 }

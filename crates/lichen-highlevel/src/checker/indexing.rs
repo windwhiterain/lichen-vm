@@ -485,9 +485,7 @@ where
         // value's term, not the `[type, …, attribute]` group whose registration
         // enforces the attribute ([`Checker::type_denotation`],
         // `docs/notes/operator-polymorphism.md` §3).
-        let element = self.state[element_type]
-            .term
-            .expect("a type expression is compiled before its denotation is read");
+        let element = self.type_denotation(element_type, None);
         let shape = self.array_node(self.current_block, &[element, length_value]);
         let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
         let pair = self.array_node(self.current_block, &[shape, kind]);

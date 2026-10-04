@@ -129,12 +129,7 @@ where
             // lives in and the parameter's slot takes the *denotation*
             // ([`Checker::type_denotation`]).  The attribute is enforced where it
             // was written (the type expression's own assert, on this function).
-            // The type the annotation names is the type expression's own term:
-            // an annotation unifies the left type expression with the right
-            // expression, and both sides are the terms the checker compiled.
-            let denotation = self.state[parameter_type]
-                .term
-                .expect("a type expression is compiled before its denotation is read");
+            let denotation = self.type_denotation(parameter_type, Some(parameter));
             self.check_unify(
                 type_cell,
                 denotation,
