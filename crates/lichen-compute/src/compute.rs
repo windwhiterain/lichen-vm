@@ -2546,11 +2546,21 @@ where
     let mut tally = Positions::default();
     // The class a buffer read is declared in; see [`Positions::element_class`].
     tally.element_class = Some(class);
-    // A position is *required* to be exactly one `compute.write`, and that is checked
-    // on the graph before anything is emitted: the per-position message names which
-    // position failed, which a total count cannot.
+    // **A conditional is left to the walk**, whether the write is the output itself
+    // or sits inside a branch. A write behind a condition is not reduced, so the
+    // refusal belongs to the walk, which knows *why* it did not reduce — and a
+    // conditional write is precisely the case where the cause matters
+    // (`docs/notes/loop-conversion.md` §6).  Answering here would replace a
+    // specific cause with a generic one.
     for (position, output) in outputs.iter().enumerate() {
-        if write_value_node(module, *output).is_none() {
+        let conditional = match module.define_in(cfg_value, *output) {
+            lichen_lowlevel::Define::Computed(definition) => matches!(
+                module.selection_of(definition),
+                Some(lichen_lowlevel::Selection::Computed)
+            ),
+            _ => false,
+        };
+        if !conditional && write_value_node(module, *output).is_none() {
             return Err(format!(
                 "output {position} of the parallel index function is not a `compute.write` \
                  (an index function must write every output it declares)"

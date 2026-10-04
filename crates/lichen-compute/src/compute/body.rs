@@ -106,7 +106,7 @@ pub struct Lower<'a, P: Program> {
 /// caller's own class: a cross-kernel call is an ordinary wasm `call`, so a float
 /// caller passing an `f32` to an integer callee — or reading an `i64` back into a
 /// float body — would be a module that does not validate.
-const CROSS_KERNEL_RESULT_ARITY: &str = "a cross-kernel call must resolve to exactly one value";
+const CROSS_KERNEL_RESULT_ARITY: &str = "a cross-kernel call to a kernel that returns more than one value is not supported: a kernel body reads a callee result as a single value, and re-materialising a tuple result needs local slots the kernel instruction set does not yet have";
 
 /// The walk''s depth ceiling. **A refusal, not a panic**: this is the condition a
 /// program can be written against, and it is what a deeply *expanded* recursion
