@@ -445,7 +445,21 @@ where
             // SAFETY: `array` is a static payload read through `sref`, whose
             // registered module pins the arena.
             Some(LowValue::Array(array)) => {
-                self.static_elements(sref, unsafe { array.items() }, visiting)
+                let items = unsafe { array.items() };
+                // A static **function-type node** `[Function(fid), ↺]`: slot 1
+                // is the node's own static self-cycle, so print the template's
+                // signature rather than the raw pair.  The dynamic case is in
+                // `elements`.
+                if items.len() == 2
+                    && items[1].node == AnyNodeId::Static(sref)
+                    && let Some(fv) = self.module.node_value(items[0].node)
+                    && let Some(LowValue::Function(fid)) = fv.as_enum()
+                    && let Some((dom, cod)) = self.function_signature(fid)
+                {
+                    format!("{dom} -> {cod}")
+                } else {
+                    self.static_elements(sref, items, visiting)
+                }
             }
             None => self
                 .type_constant(&value)
