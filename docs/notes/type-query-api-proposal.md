@@ -45,7 +45,7 @@ and drops to the encoding. Three sites do exactly that today, each walking the
 
 | Site | How it walks it |
 |---|---|
-| `shape::struct_term_parts` (`shape.rs:719`) | `array_items` at each of the three steps |
+| `shape::struct_term_parts` (`shape.rs:719`) | `array_items` at each of the steps (kind → marker → payload → names) |
 | `Checker::lazy_index_path` + `structs.rs:142`/`:218` (`STRUCT_KIND_NAMES_PATH`, `STRUCT_TYPE_NAMES_PATH`) | builds the `Index` chain |
 | `struct_type_names` (`compute.rs:5455`) | `type_term_slot` at each step — written for this branch |
 

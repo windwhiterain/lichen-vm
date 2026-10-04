@@ -1074,7 +1074,7 @@ fn a_bound_struct_type_is_reusable() {
 #[test]
 fn two_struct_type_occurrences_do_not_unify() {
     // Nominal identity is a *type*-level property now: a struct type's kind is
-    // `[TypeId(n), [TypeStruct, Type]]`, so two distinct `struct<…>`
+    // `[[TypeId(n), names, names_in_order], TypeStruct]`, so two distinct `struct<…>`
     // occurrences have different ids and therefore different *types*.  An
     // array of two distinct occurrences is heterogeneous and is rejected —
     // the nominality surfaces at the type slot, not the value slot.  (The

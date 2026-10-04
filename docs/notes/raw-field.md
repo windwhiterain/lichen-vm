@@ -10,9 +10,11 @@
 
 The glued `::` postfix reads a *named* component of a TypeStruct value with a
 check-time struct requirement: `X::a` reads field `a` from the value `X`, whose **type**
-must itself be a TypeStruct **kind** — `[TypeStruct{id, names}, K]`, the shape a
-`struct<.a T, …>` value's `ty` is (the name→index table lies directly there, at
-`container_ty[0][1]`).
+must itself be a TypeStruct **kind** — `[[TypeId, names, names_in_order],
+TypeStruct]` under the kind's `[marker, K]` pair, the shape a
+`struct<.a T, …>` value's `ty` is (the name→index table lies directly there, in
+the marker payload, at
+`container_ty[0][0][1]`).
 
 ## `:` vs `.` vs `::`
 
@@ -21,10 +23,11 @@ over a struct *instance*.  `X::a` is the **named** sibling of the raw positional
 `X<e>`:
 
 - `a.name` (`.`): requires the container's **kind** to be TypeStruct — the value's type
-  is a full struct type `[shape, kind]`, and the name table sits at `container_ty[1][0][1]`.
+  is a full struct type `[shape, kind]`, and the name table sits at
+  `container_ty[1][0][0][1]`.
   It reads the field *value*.
 - `X::a` (`::`): requires the container's **type** to be a TypeStruct kind — the value is
-  a struct *type*, and the name table sits at `container_ty[0][1]`.  It reads the field
+  a struct *type*, and the name table sits at `container_ty[0][0][1]`.  It reads the field
   *type* as a value, so `struct<.a Int, .b string>::a` is `Int : Type`.
 
 ## Check-time, not raw

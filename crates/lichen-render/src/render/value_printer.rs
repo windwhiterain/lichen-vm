@@ -49,7 +49,7 @@ where
         // node `ty`.
         let tys = unsafe { ty_array.items() };
         // A struct type itself: the value's type is the struct kind
-        // `[id, [TypeStruct, K], names]` (not a `[shape, [marker, K]]` pair),
+        // `[[payload, TypeStruct], K]` (not a `[shape, [marker, K]]` pair),
         // and the value is the field-type list — render
         // `struct<.a T1, ..., .n Tn>` (a struct field always carries a name).
         if is_struct_kind(self.module, ty)
@@ -74,9 +74,9 @@ where
             return out;
         }
         // A struct instance: the value reads against the struct's
-        // field-type list (the shape); its kind is `[TypeStruct{id, names}, K]`
-        // (a standard `[marker, K]` pair), so it is detected beside the
-        // `[marker, K]` kinds.
+        // field-type list (the shape); its kind is `[[payload, TypeStruct], K]`
+        // (a standard `[marker, K]` pair whose marker carries the tag), so it is
+        // detected beside the `[marker, K]` kinds.
         if tys.len() == 2
             && self.is_struct_kind_any(tys[1].node)
             && let Some(marker) = self.struct_marker_value(tys[1].node)
@@ -148,8 +148,8 @@ where
             return Some(format!("set<{}>", self.printer.any_node(shape[0].node)));
         }
         // A struct type never reaches `compound_type` — its kind is a standard
-        // `[marker, K]` pair whose marker is the two-field `TypeStruct`
-        // value, and the struct branch in `value` / `elements` handles it
+        // `[marker, K]` pair whose marker is the `[payload, TypeStruct]` pair,
+        // and the struct branch in `value` / `elements` handles it
         // before this falls through.
         None
     }
@@ -207,13 +207,11 @@ where
             }
             return Some(format!("set{{{}}}", out.join(", ")));
         }
-        // A struct marker is the two-field `TypeStruct{id, names}` value, a
-        // 2-element array.  No other kind's marker is an array, so an array
-        // marker names a struct.
-        if marker
-            .as_enum()
-            .is_some_and(|m| matches!(m, LowValue::Array(_)))
-        {
+        // A struct marker is the pair `[payload, TypeStruct]`, whose *type* slot
+        // holds the `TypeStruct` atom.  Checking the tag (never the array's
+        // shape) is what keeps another kind's array-like value from being read
+        // as a struct.
+        if self.marker_is_struct(marker) {
             // The shape is the positional field-type list (the nominal id
             // lives in the struct marker), so the element types are the fields.
             let fields = shape;
@@ -269,7 +267,7 @@ where
         }
     }
 
-    /// Whether an `AnyNodeId` names a struct kind `[id, [TypeStruct, K]]`.
+    /// Whether an `AnyNodeId` names a struct kind `[[payload, TypeStruct], K]`.
     fn is_struct_kind_any(&self, id: AnyNodeId) -> bool {
         self.module
             .node_value(id)
@@ -282,7 +280,23 @@ where
             })
     }
 
-    /// The struct marker value (`TypeStruct{id, names}` = `[id, names]`) from
+    /// Whether a marker *value* is a struct marker: the pair
+    /// `[payload, TypeStruct]`, whose type slot is the `TypeStruct` atom.
+    fn marker_is_struct(&self, marker: P::Value) -> bool {
+        let Some(LowValue::Array(m)) = marker.as_enum() else {
+            return false;
+        };
+        // SAFETY: `m` is the payload of a value read from the module being
+        // rendered.
+        let items = unsafe { m.items() };
+        items.len() == 2
+            && self
+                .module
+                .node_value(items[shape::STRUCT_MARKER_TAG_SLOT].node)
+                == Some(P::Value::type_struct_marker())
+    }
+
+    /// The struct marker value (`[payload, TypeStruct]`) from
     /// a struct type's kind node (`[marker, K]`), or `None` when the kind is
     /// not a struct kind.  Used to render a struct instance whose value reads
     /// against the field-type shape.
@@ -297,14 +311,7 @@ where
         let marker = self
             .module
             .node_value(unsafe { kind.items() }.first()?.node)?;
-        if marker
-            .as_enum()
-            .is_some_and(|m| matches!(m, LowValue::Array(_)))
-        {
-            Some(marker)
-        } else {
-            None
-        }
+        self.marker_is_struct(marker).then_some(marker)
     }
 
     /// The raw value layout — the fallback when the type chain cannot guide

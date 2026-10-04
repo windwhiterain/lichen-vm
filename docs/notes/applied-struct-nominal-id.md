@@ -1,7 +1,8 @@
 # An applied struct type expression is not a function
 
 > Status: **fixed** on `feature/applied-struct-nominal-id`. A struct type's
-> identity `[id, names]` is now decided when the expression is **checked**, so
+> identity payload `[id, names, names_in_order]` (the value half of the marker
+> pair `[payload, TypeStruct]`) is now decided when the expression is **checked**, so
 > one written occurrence is one nominal type however many times it is
 > evaluated; §1's repro runs, §2's controls still hold, §6 records the fix and
 > the two mechanisms instrumentation isolated.
@@ -142,12 +143,14 @@ happened once per application.
 **The id is not the whole identity.** With the id alone pinned, the repro still
 failed — this time on the *name table*. Tracing the remaining failure
 (`apply_parameter_check`'s recorded `UnifyError`) showed the conflict at step
-`[1, 1, 0, 1]` of the type expression — the kind's marker's names slot —
+`[1, 0, 0, 1]` of the type expression — the kind's marker pair, its payload's
+names slot —
 between two `LowValue::Table` payloads at different addresses. The name table is
 a value node the clone walk also copies, and a copied table is a **different**
 table (a fresh handle with the same entries) that does not unify with the
 original. The identity that must be per-occurrence is therefore the whole
-marker `[id, names]`, not the id alone. (An *anonymous* struct has
+marker payload `[id, names, names_in_order]`, not the id alone. (An *anonymous*
+struct has
 `LowValue::Void` in that slot, which copies to an equal value — which is why
 `struct<t>` in a function body appeared to work, and why the defect looked like
 it was about named fields.)
@@ -195,7 +198,7 @@ The struct type's identity is pinned at the single point that builds the
 encoding, `Checker::struct_type_type` in `crates/lichen-highlevel/src/checker.rs`:
 
 ```rust
-let marker = self.struct_marker_node(id, names);
+let marker = self.struct_marker_node(id, names, names_in_order);
 self.module.evaluate_node_deep(marker, None);
 ```
 

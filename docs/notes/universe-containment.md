@@ -78,7 +78,8 @@ kind_is_struct([shape, kind]) =
     && marker_is_struct(items[0])       static universe → misread as the universe
                                       ← the shape [Int, Int] is a 2-element
                                         array → `marker_is_struct`'s structural
-                                        guess (documented as a known weakness)
+                                        guess (since replaced by the
+                                        `TypeStruct` tag check)
                                         reads it as a struct marker
 ```
 
