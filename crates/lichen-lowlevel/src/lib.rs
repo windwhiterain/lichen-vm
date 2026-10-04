@@ -117,11 +117,7 @@ pub trait Program: Sized + Copy + Debug + PartialEq {
     /// The default refuses (`NotFunctionType`): a VM that does not know the
     /// function-as-its-own-type encoding has no function-type nodes to see, so
     /// the hook is never the right answer for it.
-    fn unify_function_type(
-        module: &mut Module<Self>,
-        a: NodeId,
-        b: NodeId,
-    ) -> FunctionTypeUnify {
+    fn unify_function_type(module: &mut Module<Self>, a: NodeId, b: NodeId) -> FunctionTypeUnify {
         let _ = (module, a, b);
         FunctionTypeUnify::NotFunctionType
     }

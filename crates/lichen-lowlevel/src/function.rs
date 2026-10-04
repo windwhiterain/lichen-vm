@@ -282,10 +282,10 @@ impl<P: Program> Module<P> {
         // internal constraints as the template. A single clone has no
         // topology.
         if ctx.remap.len() > 1 {
-            let groups = crate::apply::regroup_clones(
-                ctx.remap.iter().map(|(&t, &c)| (t, c)),
-                |t| disjoint::find(&mut self.nodes, t),
-            );
+            let groups =
+                crate::apply::regroup_clones(ctx.remap.iter().map(|(&t, &c)| (t, c)), |t| {
+                    disjoint::find(&mut self.nodes, t)
+                });
             crate::apply::unify_clone_groups(groups, |first, clone| {
                 self.unify(first, clone);
             });

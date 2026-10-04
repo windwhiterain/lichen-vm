@@ -506,8 +506,12 @@ maps every span back to the original file.
   `Type` is the type of the *atomic* type markers (`Int : Type`,
   `string : Type`, `Type : Type`) and the terminal of every chain; it is
   **not** a supertype of all types.  A compound type is typed by its kind —
-  a `[marker, Type]` pair — not by `Type` itself: an arrow's type is
-  `[[in, out], [FunctionType, Type]]`, and `array<Int, 3> : Type` *fails*
+  a `[marker, Type]` pair — not by `Type` itself: a **written** arrow `T -> U`
+  is the type term `[[in, out], [FunctionType, Type]]`, while a **function
+  value**'s type is the function itself (`f : f`, a self-referential node on the
+  universe's pattern, so its chain closes at `f` — see
+  [function-type-as-function](notes/function-type-as-function.md)), and
+  `array<Int, 3> : Type` *fails*
   (the array type's type is the kind `[ArrayType, Type]`).  There is no
   subtyping relation at all (`Int` is not `<: Type`); kinding is an ordinary
   type check, so a literal in type position is a kinding error, not a separate

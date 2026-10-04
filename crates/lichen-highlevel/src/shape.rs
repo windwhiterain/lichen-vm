@@ -33,8 +33,8 @@
 //!   unaffected.
 
 use lichen_lowlevel::{
-    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, Deferral, FunctionTypeUnify, LowShape, LowValue,
-    Module, NodeId, PendingSides, Program, StaticNodeId, TableItem, UnifyStep,
+    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, Deferral, FunctionTypeUnify, LowShape,
+    LowValue, Module, NodeId, PendingSides, Program, StaticNodeId, TableItem, UnifyStep,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -558,11 +558,7 @@ where
 /// Distinct from a function-type *node* `[Function(fid), ↺]` (a function's
 /// own type, `f : f`), which has no `[dom, cod]` shape: its signature lives
 /// in the function template. Use [`is_function_type_any`] to recognise both.
-fn is_arrow_type_any<P: Program>(
-    module: &mut Module<P>,
-    universe: NodeId,
-    ty: AnyNodeId,
-) -> bool
+fn is_arrow_type_any<P: Program>(module: &mut Module<P>, universe: NodeId, ty: AnyNodeId) -> bool
 where
     P::Value: ValueType,
 {
@@ -716,10 +712,7 @@ where
 /// ([`Module::is_self_referential`]) rather than by a caller-supplied handle,
 /// because this runs inside the lowlevel's unify policy hook, which has no
 /// checker universe to pass — the same reason [`field_names`] reads the cycle.
-fn signature_pair<P: Program>(
-    module: &mut Module<P>,
-    ty: AnyNodeId,
-) -> Option<(NodeId, NodeId)>
+fn signature_pair<P: Program>(module: &mut Module<P>, ty: AnyNodeId) -> Option<(NodeId, NodeId)>
 where
     P::Value: ValueType,
 {

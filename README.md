@@ -15,7 +15,7 @@ Build type system over untyped lowlevel from IR (intermediate representation).
 
 ### Philosophy:
 - No Curry
-- `Type : Type`: the type chain closes in a cycle at `Type` (the terminal of the chain, not a supertype) — the cycle is what admits recursive types.
+- `Type : Type`: the type chain closes in a cycle at `Type` (the terminal of the chain, not a supertype) — the cycle is what admits recursive types. A function's type is the function itself (`f : f`), so its chain closes at `f` the same way ([function-type-as-function](docs/notes/function-type-as-function.md)).
 
 ## [Lowlevel](crates/lichen-lowlevel/)
 
@@ -427,12 +427,12 @@ s = S(.a 1, .b "h")
   order = "13"
   doc = "Euclid's algorithm — the shape a real algorithm has: a recursive function
 whose base case is a comparison and whose step is a remainder.  The parameter is a
-pair, so the recursion carries both numbers, and the **annotation is what fixes
-the result's type**: under self-recursion a call's result is its own type cell, so
-without `: <Int, Int> -> Int` the program computes the right number and reports
-its type as undetermined (`6: ?a`) — the language's answer to a recursive
-definition is to write its type out, exactly as an ML-family language needs."
-  output = "6: Int"
+pair, so the recursion carries both numbers.  A function's type is the function
+itself (`f : f`), and unifying it clones the signature rather than binding the
+template — so an annotation `: <Int, Int> -> Int` *checks* the signature but does
+not fix a self-recursive result's type, which stays undetermined (`6: ?a`) until a
+separate recursive-type mechanism lands.  The value is still the right number."
+  output = "6: ?a"
 ---
 gcd = (p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : <Int, Int> -> Int
 gcd (48, 18)

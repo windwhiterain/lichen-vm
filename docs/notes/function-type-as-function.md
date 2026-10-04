@@ -1,15 +1,23 @@
 # A function's type is the function itself
 
-> Status: **planned** — design agreed with superior; Phase 1 in progress on
-> `feature/function-type-as-function`.
+> Status: **Phase 1 landed** on `feature/function-type-as-function` (merged to
+> `dev`); Phase 2 (attribute slots in the signature) is open.
 > Points at: `crates/lichen-highlevel/src/checker/lambda.rs` (`check_lam`'s
-> arrow build), `crates/lichen-highlevel/src/shape.rs` (`is_function_type` /
-> `class_holds_type`), `crates/lichen-lowlevel/src/equality.rs`
-> (`unify_inner`, the `Program::defer_pending` sibling this adds),
-> `crates/lichen-lowlevel/src/lib.rs` (`Program`), the printer, the codec,
-> `low_type_of`.
+> pair mutation), `crates/lichen-highlevel/src/shape.rs`
+> (`is_function_type` / `unify_function_type` / `signature_pair`),
+> `crates/lichen-lowlevel/src/equality.rs`
+> (`unify_inner`'s `Program::unify_function_type` hook),
+> `crates/lichen-lowlevel/src/lib.rs` (`Program`, `FunctionIdentity`),
+> `crates/lichen-lowlevel/src/function.rs` (`clone_signature`), the printer, the
+> codec, `low_type_of`.
 > Supersedes the "attribute flow is a non-goal" line in
 > [`attributes.md`](attributes.md) (Phase 2).
+>
+> **Known open, deferred to the compute session:** `compute::jit_cross_kernel_subexpr`
+> — an un-annotated kernel (`k1 = compute.jit (x => k0 (x) + 1)`) has its launch
+> gate bind a cell other than the template's parameter type cell, so the JIT's
+> parameter class stays undecided and it refuses. Disabling the clone does not
+> change it, so it is a JIT/checker interaction, not this feature's clone.
 
 ## The defect, measured
 
@@ -106,6 +114,42 @@ cell between param and return; the clone preserves that sharing, so
 The apply path is **unchanged**: it already clones the body template, and the
 type slot referencing `fid` stays put. The clone-on-unify is a *type-level*
 operation, orthogonal to the value-level apply clone.
+
+## What landed (Phase 1)
+
+- **`check_lam` mutates the pair in place.** The pre-body pair `[func_node,
+  ty_cell]` is rewritten *itself* to `[func_node, pair]` — one node, exactly the
+  universe's shape. (A separate `ftype` node was tried first and collided: the
+  function's pair and `ftype` are value-equal, so `unify_clone_groups` merged
+  them and the hook mis-fired.)
+- **The hook** is `Program::unify_function_type`, wired in `unify_inner` ahead of
+  the value comparison when either side is a function-type node. `Handled`
+  resolves **without merging** the two classes; `Conflict` records a mismatch;
+  `NotFunctionType` falls through to the positional rule (which merges a
+  function-type with its own value-equal pair, and conflicts on a scalar).
+  A function-type unified against a self-referential non-signature (the
+  universe, a recursive struct) is a `Conflict`, not a fall-through.
+- **`Module::clone_signature`** drives `node_apply` over the template's parameter
+  and return **type cells** (not the pairs) and re-establishes sharing with
+  `regroup_clones` + `unify_clone_groups`. `Function::return_type` carries the
+  return's type cell, because `r#return` may be an unevaluated op node.
+- **Static function-types** (frozen/imported modules):
+  `Module::materialize_static_signature` copies the frozen parameter/return cells
+  into fresh dynamic leaves for the unify, and
+  `Module::static_function_signature` exposes them read-only for the printer.
+- **Function identity across re-exports.** A module that re-exports an imported
+  binding materializes it, so one logical function gains a static id per
+  re-exporting module (measured: geometry's `fn[2]` carries
+  `static_origin = Some(Static(math #1/2))` — it *is* math's `add`). The identity
+  is resolved by `Module::function_identity`, following `Function::static_origin`
+  (dynamic) and `StaticFunction::origin` (static, persisted in the container) to
+  the one real function; `function_identity_equal` compares identities. Without
+  it, unifying a re-export against its original compared two `Function` values
+  and conflicted.
+- **Rendering.** A function-type prints `dom -> cod` from the template, for both
+  dynamic and static (materialized) forms; `slot1_is_self` admits the dynamic
+  class form and the static self-ref.
+- **`gcd`** reports `6: ?a` (accepted) — see *Scope*.
 
 ## Phasing
 

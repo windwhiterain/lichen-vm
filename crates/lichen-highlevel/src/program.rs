@@ -1396,11 +1396,7 @@ where
     /// cloning the function's signature, never binding the template's shared
     /// cells. "Is this a function-type node" and "where its signature lives"
     /// are facts about the encoding this crate owns.
-    fn unify_function_type(
-        module: &mut Module<Self>,
-        a: NodeId,
-        b: NodeId,
-    ) -> FunctionTypeUnify {
+    fn unify_function_type(module: &mut Module<Self>, a: NodeId, b: NodeId) -> FunctionTypeUnify {
         crate::shape::unify_function_type(module, a, b)
     }
 }

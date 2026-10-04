@@ -223,7 +223,11 @@ label's shape is hardcoded.
 ## Non-goals (currently)
 
 - The apply **checks** an attribute (equality + subtype) but does not yet *flow* it out
-  through a function (auto-derivation); the return value reads the body's slot.
+  through a function (auto-derivation); the return value reads the body's slot. This
+  non-goal is superseded by Phase 2 of
+  [a function's type is the function itself](function-type-as-function.md), which makes
+  the signature carry the parameter and return pairs so a signature can share an
+  attribute cell between them.
 - A second *constraint* attribute in the same program (only `Perspective` ships;
   `Schema::tail` is a `Vec`, so one could be added). Labels like `Doc` already share
   the tail.

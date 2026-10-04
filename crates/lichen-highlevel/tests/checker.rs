@@ -394,7 +394,10 @@ fn lambda_has_arrow_type() {
     let ftype = b.state[l].ty.unwrap();
     let ids = array_ids(&b, ftype);
     assert_eq!(ids.len(), 2, "a function-type node is a pair [func, self]");
-    assert_eq!(ids[1], ftype, "slot 1 is the node itself (self-referential)");
+    assert_eq!(
+        ids[1], ftype,
+        "slot 1 is the node itself (self-referential)"
+    );
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(ids[0])),
         Some(HighProgramValue::LowValue(LowValue::Function(_)))
@@ -540,7 +543,11 @@ fn lambda_against_an_array_type_conflicts_on_the_length() {
     let b = build(a, ir);
     assert!(!b.ok);
     let diags = b.diagnostics();
-    assert_eq!(diags.len(), 1, "one conflict: a function-type vs an array type");
+    assert_eq!(
+        diags.len(),
+        1,
+        "one conflict: a function-type vs an array type"
+    );
     assert_eq!(diags[0].kind, DiagKind::Annotation);
 }
 
@@ -2060,7 +2067,10 @@ fn an_underscore_annotation_binds_a_function_type() {
     // The template's parameter type cell stays unbound.
     let fid = function_type_id(&b, b.state[l].ty.unwrap());
     assert!(
-        lichen_lowlevel::is_unbound(b.module.node_value(AnyNodeId::Dynamic(param_type_cell(&b, fid)))),
+        lichen_lowlevel::is_unbound(
+            b.module
+                .node_value(AnyNodeId::Dynamic(param_type_cell(&b, fid)))
+        ),
         "the template's parameter type must not be guessed"
     );
 }
@@ -2078,13 +2088,16 @@ fn partial_inference_in_an_arrow_type() {
     let h = hole(&mut ir);
     let t = arrow(&mut ir, it, h);
     let a = ann(&mut ir, l, t);
-    let mut b = build(a, ir);
+    let b = build(a, ir);
     assert!(b.ok, "the identity fits Int -> _");
     // The template's parameter type cell stays unbound (the clone bound, not
     // the template).
     let fid = function_type_id(&b, b.state[l].ty.unwrap());
     assert!(
-        lichen_lowlevel::is_unbound(b.module.node_value(AnyNodeId::Dynamic(param_type_cell(&b, fid)))),
+        lichen_lowlevel::is_unbound(
+            b.module
+                .node_value(AnyNodeId::Dynamic(param_type_cell(&b, fid)))
+        ),
         "the template's parameter type must not be guessed"
     );
 }
