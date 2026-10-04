@@ -5,9 +5,11 @@ whose base case is a comparison and whose step is a remainder.  The parameter is
 pair, so the recursion carries both numbers.  A function's type is the function
 itself (`f : f`), and unifying it clones the signature rather than binding the
 template — so an annotation `: <Int, Int> -> Int` *checks* the signature but does
-not fix a self-recursive result's type, which stays undetermined (`6: ?a`) until a
-separate recursive-type mechanism lands.  The value is still the right number."
-  output = "6: ?a"
+not fix a self-recursive result's type, which stays undetermined (`raw 6: ?a`)
+until a separate recursive-type mechanism lands.  The value is still the right
+number — the `raw` mark says the printer dumped it rather than reading it
+against a type, which is exactly what an undetermined type means."
+  output = "raw 6: ?a"
 ---
 gcd = (p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : <Int, Int> -> Int
 gcd (48, 18)

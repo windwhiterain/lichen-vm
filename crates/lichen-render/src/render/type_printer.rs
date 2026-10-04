@@ -339,7 +339,7 @@ where
     /// - a **static** self-ref: a materialized static function-type copies the
     ///   frozen node's value, so its slot 1 points at the frozen node's own
     ///   cycle rather than back at the copy.
-    fn slot1_is_self(&self, slot1: AnyNodeId, node: NodeId) -> bool {
+    pub(super) fn slot1_is_self(&self, slot1: AnyNodeId, node: NodeId) -> bool {
         match slot1 {
             AnyNodeId::Dynamic(slot1) => {
                 representative(self.module, slot1) == representative(self.module, node)

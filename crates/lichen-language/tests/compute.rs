@@ -646,6 +646,10 @@ fn a_kernel_value_and_type_render_by_name() {
     // **The parameter states its class, and it has to**: a kernel is lowered for
     // one class and compiled before any apply, so an open body (`y => y + y`) is
     // refused by name rather than lowered in a class the compiler picked.
+    // Both fields are **dumps**, and say so: the struct's type names no class
+    // for either slot (`.native`'s is an unbound pair), so each renders as its
+    // own name under the mark — `raw Kernel`, `raw parameterized` — rather than
+    // spelling itself like a field the chain explained.
     let out = render(
         r#"
 --- compute = import "compute.lichen" ---
@@ -654,7 +658,7 @@ k
 "#,
     );
     assert_eq!(
-        out, "(Kernel, parameterized): struct<.native raw[?a, ?b], .sig Int -> Int>",
+        out, "(raw Kernel, raw parameterized): struct<.native raw[?a, ?b], .sig Int -> Int>",
         "kernel value/type: {out:?}"
     );
 }
@@ -796,7 +800,7 @@ k
 "#,
     );
     assert_eq!(
-        out, "(Kernel, parameterized): struct<.native raw[?a, ?b], .sig <Int, Int> -> Int>",
+        out, "(raw Kernel, raw parameterized): struct<.native raw[?a, ?b], .sig <Int, Int> -> Int>",
         "tuple-domain kernel value/type: {out:?}"
     );
 }

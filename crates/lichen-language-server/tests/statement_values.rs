@@ -102,6 +102,9 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     // `TypeKernel` means no renderer special-case: the value renders by name via
     // the compute vocabulary hook (`Kernel`) and the type renders as the struct
     // `struct<.native <_>, .sig Int -> Int>` — not the raw recursive-pair layout.
+    // The struct's type names no class for either field, so each renders under
+    // the raw mark — `raw Kernel`, `raw parameterized` — which says the printer
+    // dumped the field rather than spelling it like a form the chain explained.
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
     let doc = ShipsDoc::new_with_base(source, Some(&dir));
@@ -111,7 +114,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     for sv in vals {
         assert_eq!(
             sv.value.as_deref(),
-            Some("(Kernel, parameterized)"),
+            Some("(raw Kernel, raw parameterized)"),
             "value = {:?}",
             sv.value
         );
@@ -131,7 +134,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
         .expect("hover on k_double");
     assert_eq!(
         hover,
-        "`k_double` — `(Kernel, parameterized) : struct<.native raw[?a, ?b], .sig Int -> Int>`"
+        "`k_double` — `(raw Kernel, raw parameterized) : struct<.native raw[?a, ?b], .sig Int -> Int>`"
     );
 }
 
