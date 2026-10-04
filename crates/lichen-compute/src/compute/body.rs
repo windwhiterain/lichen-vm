@@ -278,6 +278,24 @@ where
         Ok(value)
     }
 
+    /// The parameter read `node` names, through the wrappers it may arrive wrapped in.
+    ///
+    /// **A call's argument arrives wrapped**, where a body's read does not: a bare
+    /// kernel apply carries a fresh `[value, type]` pair whose value half is the
+    /// argument, and that half is the parameter — while the pair itself is a node
+    /// this body's slots do not name. So the same path walk is tried on the node and
+    /// on what one peel takes off it, and the first that lands on a slot wins.
+    fn parameter_path_of(&self, node: NodeId) -> Option<usize> {
+        let peeled = self.module.pair_value_node(node);
+        let viewed = match self.module.selection_of(node) {
+            Some(lichen_lowlevel::Selection::Views(view)) => Some(view),
+            _ => None,
+        };
+        self.parameter_path(node)
+            .or_else(|| peeled.and_then(|peeled| self.parameter_path(peeled)))
+            .or_else(|| viewed.and_then(|viewed| self.parameter_path(viewed)))
+    }
+
     /// The entry parameter a read of the domain at a path names, if that is what
     /// `node` is.
     ///
@@ -961,15 +979,28 @@ where
     /// A call's argument as the callee domain's scalar leaves, in callee
     /// parameter order.
     ///
-    /// The argument reaches a call in one of two **encodings** and they cannot
-    /// be told apart by shape: a bare kernel apply carries the `[value, type]`
-    /// pair whose element 0 is the argument, while a `launch` argument arrives as
-    /// a bare `Parameterized` cell. So each encoding is *tried* and the first
-    /// that produces one leaf per domain element is kept — which is not a guess:
-    /// the leaves have to be emitted anyway, and a pair read as a tuple fails on
-    /// its second element, which is a type cell.
+    /// **Three shapes, tried in the order the graph can rule them out** — and this
+    /// is not the encoding-guessing loop it replaced. The order is:
+    ///
+    /// 1. **a read of the domain at a path** — `k x` and `k x(0)` are the caller's
+    ///    own parameters, contiguous in the flattened layout, so they pass through.
+    ///    Matched by [`Lower::parameter_path`], which walks the chain; the earlier
+    ///    version compared against the domain's leaves, which is the wrong shape
+    ///    for a parameter that is a struct wrapper.
+    /// 2. **the `[value, type]` pair's value** — a bare kernel apply carries the
+    ///    pair and the argument is its element 0.
+    /// 3. **a concrete tuple value**, element by element, recursing for a nested
+    ///    domain.
+    ///
+    /// The old walk tried four encodings in a loop and kept the first that worked.
+    /// That is a guess that happens to be checked; the three above are shapes, and
+    /// each is ruled out by a fact rather than by a later one failing.
     fn callee_args(&mut self, arg: NodeId, shape: &KernelShape) -> Result<Vec<ValueId>, String> {
-        if shape.flat_arity() == 1 {
+        let arity = shape.flat_arity();
+        if arity == 0 {
+            return Ok(Vec::new());
+        }
+        if arity == 1 {
             return Ok(vec![
                 self.value(self.module.pair_value_node(arg).unwrap_or(arg))?,
             ]);
@@ -977,73 +1008,35 @@ where
         let KernelShape::Tuple(items) = shape else {
             return Ok(vec![self.value(arg)?]);
         };
-        let mut cause: Option<String> = None;
-        for candidate in self.callee_arg_encodings(arg) {
-            match self.tuple_leaves(candidate, items) {
-                Ok(args) => return Ok(args),
-                Err(reason) => {
-                    if reason != CALLEE_ARGUMENT {
-                        cause = Some(reason);
-                    }
-                }
+        // (1) A read of the domain, passed through.
+        if let Some(base) = self.parameter_path_of(arg)
+            && base + arity <= self.body.parameters().len()
+        {
+            let mut args = Vec::with_capacity(arity);
+            for offset in 0..arity {
+                args.push(self.parameter(base + offset)?);
             }
+            return Ok(args);
         }
-        Err(cause.unwrap_or_else(|| CALLEE_ARGUMENT.to_string()))
+        // (2) and (3): the pair's value half, read as a concrete tuple.
+        let array = self.module.pair_value_node(arg).unwrap_or(arg);
+        self.tuple_leaves(array, items)
     }
 
-    fn callee_arg_encodings(&self, arg: NodeId) -> Vec<NodeId> {
-        [
-            self.module.pair_value_node(arg),
-            self.module
-                .selection_of(arg)
-                .and_then(|selection| match selection {
-                    lichen_lowlevel::Selection::Views(view) => Some(view),
-                    lichen_lowlevel::Selection::Computed => None,
-                }),
-            self.module.defining_member(arg),
-            Some(arg),
-        ]
-        .into_iter()
-        .flatten()
-        .collect()
-    }
-
-    /// The leaves of one argument against the domain elements `items`.
-    ///
-    /// Two shapes cover it: a **whole-parameter read** is passed through as the
-    /// parameters' own values, and a domain's leaves are contiguous in the
-    /// flattened layout; anything else must be a **concrete tuple value** of
-    /// exactly `items.len()` elements.
+    /// The leaves of one concrete tuple value against the domain elements `items`.
     fn tuple_leaves(
         &mut self,
         node: NodeId,
         items: &[KernelShape],
     ) -> Result<Vec<ValueId>, String> {
         let arity: usize = items.iter().map(KernelShape::flat_arity).sum();
-        // A whole-parameter read, passed through: its leaves are this body's own
-        // parameters, in order.
-        if let Some(base) = self
-            .domain_leaves()?
-            .iter()
-            .position(|leaf| self.module.class_root(*leaf) == self.module.class_root(node))
-        {
-            if arity == 1 || base + arity <= self.body.parameters().len() {
-                let mut args = Vec::with_capacity(arity);
-                for offset in 0..arity {
-                    args.push(self.parameter(base + offset)?);
-                }
-                return Ok(args);
-            }
-            return Err(CALLEE_ARGUMENT.into());
-        }
-        // A concrete tuple value, element by element.
         let Some(elements) = (unsafe { self.module.array_items(node) }) else {
             return Err(CALLEE_ARGUMENT.into());
         };
         if elements.len() != items.len() {
             return Err(CALLEE_ARGUMENT.into());
         }
-        let mut args = Vec::with_capacity(elements.len());
+        let mut args = Vec::with_capacity(arity);
         for (element, item) in elements.iter().zip(items) {
             let element = dynamic(element.node)?;
             match item {
