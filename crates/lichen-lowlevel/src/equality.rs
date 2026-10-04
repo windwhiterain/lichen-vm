@@ -3,9 +3,10 @@ use std::collections::{HashMap, HashSet};
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, Deferral, FunctionTypeUnify,
-    LowOperator, LowShape, LowValue, Module, Node, NodeId, Operation, PendingSide, PendingSides,
-    Program, StaticModuleCache, StaticNodeId, ValueExt as _, ancestors::AncestorPairs, is_unbound,
+    AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, Deferral, FunctionIdentity,
+    FunctionTypeUnify, LowOperator, LowShape, LowValue, Module, Node, NodeId, Operation,
+    PendingSide, PendingSides, Program, StaticFunctionRef, StaticModuleCache, StaticNodeId,
+    ValueExt as _, ancestors::AncestorPairs, is_unbound,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -487,23 +488,58 @@ impl<P: Program> Module<P> {
             && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
     }
 
-    /// Whether two function values name **one logical function**.  A dynamic
-    /// closure repeatedly compared against the frozen function it was
-    /// materialized from ([`Function::static_origin`]) is equal by identity;
-    /// everything else is the ordinary `AnyFunctionId` equality.
+    /// Whether two function values name **one logical function**, after
+    /// resolving re-export/materialization origins — see
+    /// [`Module::function_identity`].
     ///
-    /// The lowlevel's `Function` identity is by id — a static ref and a dynamic
-    /// id are different kinds — but a materialization is the *same* function,
-    /// so unifying a value that names it through one ref against a value that
-    /// names it through the other must merge, not conflict.
+    /// The lowlevel's `Function` identity is by id, and a function can be named
+    /// through several refs (a dynamic closure and the frozen function it was
+    /// materialized from, or two modules' re-exports of one imported binding),
+    /// so unifying values that name it through different refs must merge, not
+    /// conflict.
     pub fn function_identity_equal(&self, a: AnyFunctionId, b: AnyFunctionId) -> bool {
-        match (a, b) {
-            (AnyFunctionId::Dynamic(f), AnyFunctionId::Static(sref))
-            | (AnyFunctionId::Static(sref), AnyFunctionId::Dynamic(f)) => {
-                self.functions.get(f).and_then(|x| x.static_origin) == Some(sref)
+        self.function_identity(a) == self.function_identity(b)
+    }
+
+    /// The **ultimate identity** of `function`: follow its re-export /
+    /// materialization origins to the one real function it is.  A dynamic
+    /// closure points at the static function it was materialized from
+    /// ([`Function::static_origin`]); a re-exported static function points at
+    /// the module that first built it ([`StaticFunction::origin`]).  The chain
+    /// terminates at a source-built dynamic function or a module's own static
+    /// function, which is the identity.
+    ///
+    /// The bound stops a corrupt origin cycle from looping; a real chain is at
+    /// most one re-export deep per importing module.
+    pub fn function_identity(&self, function: AnyFunctionId) -> FunctionIdentity {
+        let mut current = function;
+        for _ in 0..64 {
+            match current {
+                AnyFunctionId::Dynamic(id) => {
+                    match self.functions.get(id).and_then(|f| f.static_origin) {
+                        Some(origin) => current = AnyFunctionId::Static(origin),
+                        None => return FunctionIdentity::Dynamic(id),
+                    }
+                }
+                AnyFunctionId::Static(sref) => match self.static_function_origin(sref) {
+                    Some(origin) => current = AnyFunctionId::Static(origin),
+                    None => return FunctionIdentity::Static(sref),
+                },
             }
-            _ => a == b,
         }
+        match current {
+            AnyFunctionId::Dynamic(id) => FunctionIdentity::Dynamic(id),
+            AnyFunctionId::Static(sref) => FunctionIdentity::Static(sref),
+        }
+    }
+
+    /// The real original a static function is a re-export of, or `None` when it
+    /// is a module's own function.
+    fn static_function_origin(&self, sref: StaticFunctionRef) -> Option<StaticFunctionRef> {
+        self.static_module(sref.module)
+            .functions
+            .get(sref.index.0)
+            .and_then(|function| function.origin)
     }
 
     /// Whether `node`'s class holds a **function-type node**: the

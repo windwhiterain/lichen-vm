@@ -1109,6 +1109,24 @@ pub enum AnyFunctionId {
     Static(StaticFunctionRef),
 }
 
+/// A function's **ultimate identity** — the one real function a value names,
+/// after following re-export and materialization origins
+/// ([`Module::function_identity`]).
+///
+/// A function can be named through several refs: a dynamic closure and the
+/// frozen function it was materialized from, or two modules' re-exports of one
+/// imported binding.  Those refs differ, but they name one function, so
+/// unifying values that name it through different refs must merge, not
+/// conflict.  This is the resolved form they all agree on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FunctionIdentity {
+    /// A function the source built, with no re-export/materialization origin —
+    /// its own [`FunctionId`] is its identity.
+    Dynamic(FunctionId),
+    /// A frozen function that is its own original (no further origin).
+    Static(StaticFunctionRef),
+}
+
 /// Garbage collection unit.
 /// # Contract
 /// - Only one node can be referenced from parent block
@@ -1203,6 +1221,13 @@ pub struct StaticFunction {
     /// cell, local to the static module. See that field for why the type
     /// cell is stored separately from `r#return`.
     pub return_type: LocalNodeId,
+    /// The **real original** this static function is a re-export of, when it is
+    /// one: a module that re-exports an imported binding materializes it, so
+    /// the same logical function gains a static id per re-exporting module.
+    /// This is the "original position" id that makes their identities compare
+    /// equal ([`Module::function_identity`]); `None` for a module's own
+    /// function.  The static mirror of [`Function::static_origin`].
+    pub origin: Option<StaticFunctionRef>,
     pub asserts: Vec<LocalNodeId>,
     /// The template scope — [`StaticFunction::parameter`], [`Self::r#return`],
     /// and every node owned by this function's body, as local indices.  This

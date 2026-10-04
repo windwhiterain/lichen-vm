@@ -186,6 +186,10 @@ impl<P: Program> StaticModule<P> {
                 return_type: *node_map
                     .get(&function.return_type)
                     .unwrap_or(&node_map[&function.r#return]),
+                // The original-position id travels into the artifact: a
+                // re-exported function keeps pointing at the module that first
+                // built it, so two re-exports of one function compare equal.
+                origin: function.static_origin,
                 asserts: function
                     .asserts
                     .iter()
@@ -196,8 +200,7 @@ impl<P: Program> StaticModule<P> {
         }
 
         // The ownership transfer: every frozen value is asked what it owns
-        // outside the arena, and the artifact carries the obligations until it is
-        // dropped — which is its eviction (see `ValueExt::release_obligations`).
+        // outside the arena, and the artifact carries the obligations until it is        // dropped — which is its eviction (see `ValueExt::release_obligations`).
         let mut releases: Vec<Box<dyn Release>> = Vec::new();
         for value in values.iter().flatten() {
             value.release_obligations(&mut releases);

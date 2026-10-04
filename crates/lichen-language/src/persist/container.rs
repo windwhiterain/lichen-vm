@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use lichen_lowlevel::{
-    LocalNodeId, LowShape, Program, StaticFunction, StaticModule, StaticNode, StaticOperation,
+    LocalNodeId, LowShape, Program, StaticFunction, StaticFunctionId, StaticFunctionRef,
+    StaticModule, StaticNode, StaticOperation,
 };
 
 use crate::program::{LangProgram, ProgramCodec};
@@ -100,6 +101,17 @@ where
         w.u64(function.parameter.index as u64);
         w.u64(function.r#return.index as u64);
         w.u64(function.return_type.index as u64);
+        // The re-export origin — the real original this function is a copy of,
+        // when it is one.  A raw module key + function index, absolute like the
+        // static refs the values carry.
+        match function.origin {
+            None => w.u8(0),
+            Some(origin) => {
+                w.u8(1);
+                w.u64(origin.module.as_raw());
+                w.u64(origin.index.0 as u64);
+            }
+        }
         w.u64(function.asserts.len() as u64);
         for &assert in &function.asserts {
             w.u64(assert.index as u64);
@@ -377,6 +389,14 @@ where
         let parameter = read_node_id(&mut r, node_count, "function parameter")?;
         let r#return = read_node_id(&mut r, node_count, "function return")?;
         let return_type = read_node_id(&mut r, node_count, "function return type")?;
+        let origin = match r.u8()? {
+            0 => None,
+            1 => Some(StaticFunctionRef {
+                module: ModuleKey::from_raw(r.u64()?),
+                index: StaticFunctionId(r.u64()? as usize),
+            }),
+            _ => return Err("bad function origin tag".into()),
+        };
         let assert_count = r.u64()? as usize;
         let mut asserts = reserve(&r, assert_count, "function assert entries")?;
         for _ in 0..assert_count {
@@ -395,6 +415,7 @@ where
             parameter,
             r#return,
             return_type,
+            origin,
             asserts,
             nodes: scope,
         });
