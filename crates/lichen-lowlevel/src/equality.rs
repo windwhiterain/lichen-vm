@@ -151,8 +151,10 @@ impl<P: Program> Module<P> {
 
     /// The union-find representative of `node` — the `&self`, no-compression
     /// form of [`Self::equality_representative`], so the class-routed reads
-    /// stay read-only.
-    fn class_root(&self, node: NodeId) -> NodeId {
+    /// stay read-only.  **Public** because the control-flow graph resolves a
+    /// value's definition through the class too, and two walks of one union-find
+    /// is one walk too many.
+    pub fn class_root(&self, node: NodeId) -> NodeId {
         let mut root = node;
         while let Some(parent) = self.nodes[root].equality.parent() {
             root = parent;
