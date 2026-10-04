@@ -943,25 +943,31 @@ impl<P: Program> Module<P> {
         })
     }
 
-    /// Join `reader` into `target`'s class when the target is a pure cell —
-    /// the evaluation-side counterpart of the read's own resolution.  A read of
-    /// an inference variable is a reference, so the reader unifies with the
-    /// cell through the *standard* unify: both unbound → the classes merge,
-    /// and a reader whose class already carries a value (an annotation over
-    /// the read) distributes it onto the cell — a later conflicting bind then
-    /// fails against it, exactly as if the read had been evaluated after the
-    /// bind.  The guard is the precondition for that: the target must be a
-    /// *cell* — nothing decided on its class, and no member whose own
-    /// computation has yet to produce an answer.  The reader keeps its
-    /// operation — the operand edge must stay live for the apply's clone
-    /// machinery, and for the unify pin path to find the read.
-    pub(crate) fn alias_read(&mut self, reader: NodeId, target: NodeId) -> bool {
-        let rep = disjoint::find(&mut self.nodes, target);
-        if self.class_has_pending_op(rep) || !is_unbound(self.nodes[rep].value) {
-            return false;
-        }
+    /// Join `reader` into `target`'s class — the evaluation-side half of a read's
+    /// own resolution — and then let the target's computation answer.
+    ///
+    /// A read of a cell is a reference, not a snapshot: unifying the reader with
+    /// the target lets a later bind reach it through the class, independent of
+    /// evaluation order.  The unification is **unconditional** — the target's
+    /// class may hold a decided value, and it may hold a member whose own
+    /// computation has not produced an answer yet (that member is the one the
+    /// value veto skips, so joining asserts nothing about what it will produce).
+    ///
+    /// The join alone leaves a target whose operator has not run unanswered: the
+    /// reader is now in the target's class, so the read takes the class shortcut
+    /// and never re-enters the target's own evaluation, and the read would answer
+    /// with a value no operator produced.  So the target is evaluated here, under
+    /// one filter — `runned`: a target that already ran has its own answer and a
+    /// plain cell has nothing to run.
+    ///
+    /// The reader keeps its operation: the operand edge must stay live for the
+    /// apply's clone machinery, and for the read's own resolution path to find it.
+    pub(crate) fn alias_read(&mut self, reader: NodeId, target: NodeId) {
         self.unify(reader, target);
-        true
+        if self.nodes[target].operation.is_some() && !self.nodes[target].runned {
+            let block = self.nodes[target].block;
+            self.evaluate_node(Dyn(target), Some(block));
+        }
     }
 
     /// The class's value is named by the **representative**: a class has one
