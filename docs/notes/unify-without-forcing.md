@@ -3,8 +3,10 @@
 > Status: **proposed** — the design question only.  Nothing here is built: the
 > `force`/`defer`/`pin` mechanisms it asks about are live on `dev` and this note
 > records what removing them would cost and which parts of the question are
-> already answered by measurement.  What *did* land out of the same review is
-> the run-state half — see §4.
+> already answered by measurement.  §2.5 is the strongest of those: the
+> "unify unconditionally, reconcile when the operator finishes" form was built,
+> and it fails on the evaluation model rather than on the unifier.  What *did*
+> land out of the same review is the run-state half — see §4.
 >
 > Companions: [eval-before-unify](eval-before-unify.md) (the same unifier seen
 > from the staleness side, and where the *other* wakeup design — a class-
@@ -98,6 +100,44 @@ lists (re-entrancy of a drain inside a bind; GC versus a waiter nothing else
 references; a template's parameters never bind, so its list must not fire).
 Choosing between the two is choosing between *commit early and reconcile* and
 *retry later*; the repository implements the first.
+
+### 2.5 The obvious middle — a claim, reconciled on completion — has a boundary
+
+There is a shape between the two that looks like it should work, and it was
+**built and measured**: let the unifier always settle an operation node by
+writing the other side's value as a **claim** (the value is kept for readers,
+the operation is kept so its operand edge still reaches an applied parameter),
+let the evaluator **re-run a claimed node** instead of returning its slot, and
+give the operator one reconciliation point where its outcome is checked against
+the claim.  That is the proposal's literal form — unify unconditionally,
+reconcile when the operator finishes.
+
+What it measured on `dev` (a throwaway worktree, since discarded):
+
+- the mechanism itself holds: 155 of 156 `lichen-lowlevel` tests pass, and the
+  one that failed was a *test of the deferral* whose conflict the claim path no
+  longer resurfaced — fixable by claiming the class's committed value at bind
+  time, which was done;
+- making the claim readable by the evaluator's normal path **re-enters a
+  computation that is already in flight**: `run examples/` then dies with
+  `unreachable!("cycle detected: node … is being evaluated")`, with the
+  deferral policy either on or off.
+
+The second bullet is the finding, and it is structural rather than a bug in the
+sketch: a claim is *readable while the computation that must settle it is
+running*, so any reader inside that computation sees the claim and — because the
+evaluator owns its cycle mark for the duration of one attempt — re-entering the
+owner is indistinguishable from a cyclic read.  The current pin does not have
+this property because it writes the value **and stops**: nothing re-runs the
+read mid-flight, and the reconciliation is deferred to whenever the computation
+happens to run next.
+
+So the choice is sharper than §2.4 says.  Making an operation node's slot
+readable *while it is being computed* means re-opening what one evaluation
+attempt owns — the invariant the evaluator's visit mark and the recent
+`feature/node-depth` work rest on — and that is a change to the evaluation
+model, not to the unifier.  Until that is answered, the pin's "write and stop"
+is load-bearing, and unconditional unify has no sound target to write into.
 
 ## 3. Why the run-state half is not a substitute
 
