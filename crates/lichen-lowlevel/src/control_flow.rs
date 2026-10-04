@@ -58,14 +58,20 @@ pub struct Body {
     /// The function this is the body of.
     pub function: FunctionId,
     /// The blocks, in no particular order — [`Self::entry`] is the start.
-    pub blocks: Vec<Block>,
+    pub blocks: Vec<BasicBlock>,
     /// Which block control starts in.
     pub entry: usize,
 }
 
-/// One block: the values it receives, the values it computes, and where it goes.
+/// One basic block: the values it receives, the values it computes, and where
+/// it goes.
+///
+/// **Not [`Block`](crate::Block).** That is a garbage-collection arena — a
+/// `Bump` with a parent/child chain — and the two arrived independently: this one
+/// is control flow, that one is memory. Naming them apart is not tidiness, because
+/// a caller holding both is holding two different things that once shared a word.
 #[derive(Debug, Clone)]
-pub struct Block {
+pub struct BasicBlock {
     /// The values this block **receives**.
     ///
     /// **The entry block's are the function's parameters**, flattened to their
@@ -203,19 +209,6 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The disjoint-set representative of `node`, walked without path
-    /// compression (a `&self` read).
-    ///
-    /// [`Module::equality_representative`](crate::Module::equality_representative)
-    /// is the `&mut` form; this is the read-only one a consumer walks under.
-    pub fn value_representative(&self, node: NodeId) -> NodeId {
-        let mut root = node;
-        while let Some(parent) = self.node_equality(root).parent() {
-            root = parent;
-        }
-        root
-    }
-
     /// The member of `node`'s equality class that **defines** its value: a class
     /// member carrying a computational operator, and not a `value_of` index
     /// extraction — that is a view of a `[value, type]` pair rather than the
@@ -231,7 +224,7 @@ impl<P: Program> Module<P> {
     /// being compiled, so a scan made codegen quadratic in the number of
     /// kernels.
     pub fn defining_member(&self, node: NodeId) -> Option<NodeId> {
-        let root = self.value_representative(node);
+        let root = self.class_root(node);
         for member in disjoint::members(&self.nodes, root) {
             if let Some(operation) = self.node_operation(member)
                 && !matches!(
@@ -274,7 +267,7 @@ impl<P: Program> Module<P> {
             .into_iter()
             .enumerate()
         {
-            if self.value_representative(node) == self.value_representative(leaf) {
+            if self.class_root(node) == self.class_root(leaf) {
                 return Define::Parameter { slot, leaf };
             }
         }
@@ -481,7 +474,7 @@ impl<P: Program> Module<P> {
 
         Ok(Body {
             function,
-            blocks: vec![Block {
+            blocks: vec![BasicBlock {
                 params,
                 instrs: ordered,
                 terminator: Terminator::Return { values: leading },
