@@ -1,14 +1,16 @@
 # Lowering structured control flow to WebAssembly
 
-> Status: **design, and a withdrawn attempt.** A loop emitter for the wasm backend
-> was written, found to need four more fixes before it would validate, and
-> **withdrawn** in favour of the slot-based emitter §4 describes. What is recorded
-> here is what the attempt cost and why, because every one of the four defects came
-> from the same source: **reasoning about the operand stack by hand.**
+> Status: **design, adopted.** A loop emitter for the wasm backend was written, found
+> to need four more fixes before it would validate, and **withdrawn**. What replaced
+> it is **`waffle`** (§5), which owns the whole slot-first pipeline, and a spike has
+> proved it end to end. **For anything actionable, read
+> [wasm-backend-handoff](wasm-backend-handoff.md) first**; this note is the analysis
+> behind it.
 >
-> Read this before writing a loop emitter for wasm. §1 is the ground truth about how
-> a loop is written at all, §2 is the four defects, §3 is the ordering bug that was
-> hiding under them, §4 is the shape to build instead.
+> §1 is the ground truth about how a loop is written at all, §2 the four defects of
+> the withdrawn attempt and their one cause, §3 the ordering bug that was hiding
+> under them, §4 the shape that replaced the hand-written emitter, and §5 the
+> adoption and its evidence.
 
 ## 1. How a loop is written in wasm, exactly
 
