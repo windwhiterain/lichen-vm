@@ -56,7 +56,10 @@ fn a_cross_kernel_call_is_refused_by_name() {
         ],
     );
     let refusal = spirv::compile(&fragment, ONE_IN_ONE_OUT).expect_err("refused");
-    assert_eq!(refusal, SpirvRefusal::CrossKernelCall { kernel: 7, at: 5 });
+    // **`at` is the instruction's own index**, which is what it names now that a
+    // body is SSA. The stack position it used to be has no meaning here, and a
+    // refusal pointing at one would point at something that is not in the body.
+    assert_eq!(refusal, SpirvRefusal::CrossKernelCall { kernel: 7, at: 3 });
     // The message has to name the kernel and say what is missing, or the reader
     // has nothing to act on.
     let message = refusal.to_string();
@@ -132,7 +135,12 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
     // says which space was addressed.
     let beyond = KernelFragment {
         body: KernelBody::from_flat(
-            1,
+            // **Two leaves, matching `param_shape` below**, because the body reads
+            // parameter 1. A `Read` past the domain pushes nothing, so a fragment
+            // that declared fewer parameters than it reads comes up short and the
+            // refusal names the *consumer's* arity rather than the read — which is
+            // what this test was accidentally asserting.
+            2,
             &[
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1)), // out_pos 1, but there is one output
                 FlatOp::Read(1),
@@ -150,7 +158,7 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
             position: 1,
             space: "output",
             bound: 1,
-            at: 3,
+            at: 2,
         }
     );
     assert!(refusal.to_string().contains("output"));
@@ -182,5 +190,20 @@ fn an_unbalanced_body_is_refused() {
         int_width: IntWidth::I64,
     };
     let refusal = spirv::compile(&fragment, ONE_IN_ONE_OUT).expect_err("refused");
-    assert_eq!(refusal, SpirvRefusal::UnbalancedStack { at: 0 });
+    // **There is no such thing as an unbalanced body any more.** An instruction
+    // names its operands by `ValueId`, so an operator cannot "pop from an empty
+    // stack" — the shape that made `UnbalancedStack` mean something is gone, and
+    // the variant with it. What is left is the honest refusal: the operator
+    // declares two operands and the body gives it none, and
+    // `KernelBody::validate` says so before the emitter reads anything.
+    assert!(
+        refusal
+            .to_string()
+            .contains("reads 2 value(s) but is given 0"),
+        "the refusal names the arity it could not satisfy: {refusal}"
+    );
+    assert!(
+        !matches!(refusal, SpirvRefusal::UnbalancedStack { .. }),
+        "and the stack-shaped refusal is gone with the stack"
+    );
 }

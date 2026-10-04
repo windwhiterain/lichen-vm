@@ -901,7 +901,28 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                 results: fragment.result_classes.len(),
                 left: 0,
             })?;
-            slots.get(value).copied().ok_or(SpirvRefusal::ResultArity {
+            if let Some(slot) = slots.get(value).copied() {
+                return Ok(slot);
+            }
+            // **A value that is missing because it is a *parameter* has its own
+            // refusal.** Only the index parameter is placed above, so reading
+            // another one lands here, and it is the one case the language says by
+            // name: on this target a buffer is bound as a storage buffer, so there
+            // is no value for a domain parameter to hold. Without this the reader
+            // refuses with an arity it did not mean, which is a refusal that names
+            // the wrong cause.
+            if let Some(local) = fragment
+                .body
+                .parameters()
+                .iter()
+                .position(|parameter| parameter == value)
+            {
+                return Err(SpirvRefusal::NonIndexParameter {
+                    local: local as u32,
+                    at,
+                });
+            }
+            Err(SpirvRefusal::ResultArity {
                 results: fragment.result_classes.len(),
                 left: 0,
             })
