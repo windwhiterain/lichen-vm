@@ -757,27 +757,6 @@ impl<P: Program> Module<P> {
             return false;
         }
         let rep = self.add_equality(ra, rb);
-        // PROBE: what this union writes, to which **class** (representative), and
-        // which node carries the operator.
-        if let Some(value) = incoming.as_ref() {
-            let len = value.as_enum().map(|value| match value {
-                LowValue::Array(array) => {
-                    // SAFETY: the payload is read from a value of a live node.
-                    unsafe { array.items() }.len()
-                }
-                _ => usize::MAX,
-            });
-            eprintln!(
-                "PROBE union write: rep={rep:?} ra={ra:?} rb={rb:?} len={len:?} \
-                 ra_op={:?} rb_op={:?}",
-                self.nodes[ra]
-                    .operation
-                    .map(|operation| format!("{:?}", operation.operator)),
-                self.nodes[rb]
-                    .operation
-                    .map(|operation| format!("{:?}", operation.operator)),
-            );
-        }
         if let Some(value) = incoming {
             self.write_node_value(rep, Some(value));
         }
@@ -884,31 +863,6 @@ impl<P: Program> Module<P> {
             return;
         };
         if !self.value_matches(prior, value) {
-            // PROBE: the class's members and which one holds the prior value.
-            let rep = disjoint::find(&mut self.nodes, node);
-            let members: Vec<String> = self
-                .class_members(rep)
-                .map(|member| {
-                    format!(
-                        "{member:?}(op={:?}, has_value={})",
-                        self.nodes
-                            .get(member)
-                            .and_then(|entry| entry.operation)
-                            .map(|operation| format!("{:?}", operation.operator)),
-                        self.nodes
-                            .get(member)
-                            .is_some_and(|entry| entry.value.is_some()),
-                    )
-                })
-                .collect();
-            eprintln!(
-                "PROBE reconcile reject: node={node:?} rep={rep:?} node_op={:?} members=[{}]",
-                self.nodes
-                    .get(node)
-                    .and_then(|entry| entry.operation)
-                    .map(|operation| format!("{:?}", operation.operator)),
-                members.join(", "),
-            );
             self.unify_errors.push(UnifyError {
                 root_a: node,
                 root_b: node,
