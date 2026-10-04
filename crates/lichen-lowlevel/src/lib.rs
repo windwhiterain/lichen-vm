@@ -1199,9 +1199,11 @@ pub struct Node<P: Program> {
     /// a reader that asks a run question through `is_unbound` is conflating
     /// the two.
     value: Option<P::Value>,
-    /// PROBE: whether this node's operator has **run**.  `false` with a value
-    /// present means the value slot holds a value a unification wrote and no
-    /// operator has verified yet.
+    /// Whether this node's operator has **run** — the second axis of the slot
+    /// above, and what tells a *produced* answer from an asserted one:
+    /// `false` with a value present means the slot holds a value a unification
+    /// wrote and no operator has verified yet, so the operator still owes its
+    /// own answer ([`Module::has_no_result_yet`]).
     runned: bool,
     /// The node's optional [`LowShape`] — stored *with* the value, behind the
     /// same private gate.  A layer above the lowlevel (which *has* the type)

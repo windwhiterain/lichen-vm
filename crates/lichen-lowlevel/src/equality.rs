@@ -948,13 +948,13 @@ impl<P: Program> Module<P> {
     /// an inference variable is a reference, so the reader unifies with the
     /// cell through the *standard* unify: both unbound → the classes merge,
     /// and a reader whose class already carries a value (an annotation over
-    /// the read) replicates it onto the cell — a later conflicting bind then
+    /// the read) distributes it onto the cell — a later conflicting bind then
     /// fails against it, exactly as if the read had been evaluated after the
-    /// bind.  The guard is the precondition for the unify's bind path: a
-    /// concrete or pending target would force this (mid-evaluation) reader
-    /// and re-enter it.  The reader keeps its operation — the operand edge
-    /// must stay live for the apply's clone machinery, and for the unify pin
-    /// path to find the read.
+    /// bind.  The guard is the precondition for that: the target must be a
+    /// *cell* — nothing decided on its class, and no member whose own
+    /// computation has yet to produce an answer.  The reader keeps its
+    /// operation — the operand edge must stay live for the apply's clone
+    /// machinery, and for the unify pin path to find the read.
     pub(crate) fn alias_read(&mut self, reader: NodeId, target: NodeId) -> bool {
         let rep = disjoint::find(&mut self.nodes, target);
         if self.class_has_pending_op(rep) || !is_unbound(self.nodes[rep].value) {

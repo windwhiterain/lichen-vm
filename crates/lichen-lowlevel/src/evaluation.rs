@@ -140,8 +140,10 @@ impl<P: Program> Module<P> {
             return self.evaluate_block(node);
         }
         if let Some(value) = self.nodes[node].value {
-            // PROBE: an operator that has not run must run — the value in the
-            // slot was written by a unification and is unverified.
+            // An operator that has not run must run: a value in the slot that
+            // *this node's* operator did not produce ([`Module::has_no_result_yet`])
+            // was written by a unification — an assertion, not a computation —
+            // so the operator still owes its own answer.
             if self.nodes[node].operation.is_some()
                 && !self.nodes[node].runned
                 && !self.nodes[node].visiting
