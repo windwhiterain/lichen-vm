@@ -19,6 +19,7 @@ pub mod ancestors;
 mod apply;
 mod assert;
 pub mod codec;
+pub mod control_flow;
 mod equality;
 mod evaluation;
 mod function;
