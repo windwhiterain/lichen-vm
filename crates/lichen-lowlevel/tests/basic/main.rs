@@ -20,6 +20,7 @@ mod compaction;
 mod equality;
 mod evaluation;
 mod function;
+mod loop_conversion;
 mod recursion;
 mod static_module;
 mod table;

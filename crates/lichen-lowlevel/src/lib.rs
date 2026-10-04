@@ -13,6 +13,9 @@ pub use crate::assert::{AssertError, PendingAssert};
 pub use crate::equality::{UnifyError, UnifyStep};
 pub use crate::evaluation::EvalError;
 pub use crate::function::ApplyError;
+pub use crate::loop_conversion::{
+    LoopArm, LoopConversion, LoopExit, LoopRefusal, LoopStep, LoopTest,
+};
 pub use crate::resolve::{Define, Selection};
 pub(crate) use crate::static_module::StaticModuleCache;
 
@@ -24,6 +27,7 @@ mod equality;
 mod evaluation;
 mod function;
 mod gc;
+pub mod loop_conversion;
 mod low_type;
 mod module;
 mod registry;

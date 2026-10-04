@@ -464,7 +464,20 @@ impl Compiler {
                         self.set_binder(binder, value);
                         value
                     } else {
-                        self.ir.set_kind(p, self.ir.expr[value.0 as usize].kind);
+                        let mut kind = self.ir.expr[value.0 as usize].kind;
+                        // The `@loop` mark: the binding's node **is** its
+                        // value's node (the transplant below makes one node of
+                        // both), so the mark lands on the transplanted
+                        // `Function` kind here — this is the stamp
+                        // `ExprKind::Function::looping`'s doc refers to.  A
+                        // marked binding whose value is not a lambda has no
+                        // recursion to permit, so there is nothing to stamp.
+                        if binding.looping
+                            && let ExprKind::Function { looping, .. } = &mut kind
+                        {
+                            *looping = true;
+                        }
+                        self.ir.set_kind(p, kind);
                         // The transplanted kind is identity-sensitive, unlike
                         // the depth it replaced: anything inside it naming the
                         // now-dead `value` id (a nested closure's parent link)
@@ -689,8 +702,11 @@ impl Compiler {
                         parameter_attribute,
                         r#return: body,
                         parent,
-                        // Stamped by the *binding* that owns this lambda, once
-                        // its value has compiled — see `Self::stamp_looping`.
+                        // Stamped by the *binding* that owns this lambda, at
+                        // the transplant in `compile_scope_statements` — the
+                        // lambda compiles before its binding's mark is known
+                        // here, so the kind leaves with `false` and the
+                        // binding rewrites it.
                         looping: false,
                     },
                 );

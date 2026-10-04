@@ -165,14 +165,26 @@ pub enum DiagKind {
     /// `a`/`b` are unused.
     NonTerminating,
     /// A `@loop`-marked recursion whose trip count was **not** decided before
-    /// the body is lowered, and for which no loop has been recorded — the
-    /// refusal half of Stage 0 in `docs/notes/loop-conversion.md` §8.  It
+    /// the body is lowered, and whose shape does **not** convert to a loop —
+    /// the refusal half of Stage 0 in `docs/notes/loop-conversion.md` §8.  It
     /// replaces an emitter-side complaint that could only name a `NodeId`:
     /// this names the mark, the missing decision, and the missing loop.
     ///
     /// `a`/`b` carry the apply node the refusal is about, which is otherwise
-    /// only a node the emitter meets.
+    /// only a node the emitter meets.  [`DiaryEntry::field`] carries **which
+    /// shape rule refused** ([`LoopRefusal::name`](lichen_lowlevel::LoopRefusal::name)),
+    /// so the wording and the rule cannot drift; it is `None` when no
+    /// conversion was run for the component.
     LoopNotRecorded,
+    /// A `@loop`-marked recursion whose trip count was not decided, and whose
+    /// shape **does** convert ([`Module::loop_conversion`](lichen_lowlevel::Module::loop_conversion))
+    /// — the conversion exists, no backend consumes it yet.  Distinct from
+    /// [`LoopNotRecorded`](Self::LoopNotRecorded) because the two ask the user
+    /// for different things: one says the program's shape is not a loop, the
+    /// other says the loop is ready and the backend is missing.
+    ///
+    /// `a`/`b` carry the apply node the refusal is about.
+    LoopNotEmitted,
     /// A failed build that [`Build::diagnostics`] could attribute *nothing* to:
     /// the checker recorded a failure, but every recorded failure was skipped
     /// for want of an expression to blame.  The one live producer is an assert

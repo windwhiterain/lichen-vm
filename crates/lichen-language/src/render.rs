@@ -398,10 +398,30 @@ where
             // The whole point of the marker is that the program *said* this is a
             // loop, so the wording names what it said, what could not be
             // decided, and what is missing — the three facts a reader needs to
-            // know it is a refusal rather than a miscompile.
-            "this call is a recursion of a `@loop`-marked binding, and its trip \
-             count is not decided before the body is lowered — no loop has been \
-             recorded for it, so the call is refused rather than expanded"
+            // know it is a refusal rather than a miscompile. The shape rule
+            // rides `field` (the conversion's own name for the refusal), so the
+            // reader is told *why* the shape is not a loop.
+            match &d.field {
+                Some(rule) => format!(
+                    "this call is a recursion of a `@loop`-marked binding whose trip \
+                     count is not decided before the body is lowered, and whose shape \
+                     does not convert to a loop — it is {rule} — so the call is refused \
+                     rather than expanded"
+                ),
+                None => "this call is a recursion of a `@loop`-marked binding whose trip \
+                         count is not decided before the body is lowered — no loop has \
+                         been recorded for it, so the call is refused rather than expanded"
+                    .to_string(),
+            }
+        }
+        DiagKind::LoopNotEmitted => {
+            // The other half: the shape *is* a loop and the conversion exists,
+            // so the missing piece is the backend that would consume it. Saying
+            // so is the difference between "your program is wrong" and "the
+            // compiler cannot do this yet".
+            "this call is a recursion of a `@loop`-marked binding whose trip count is \
+             not decided before the body is lowered; its shape converts to a loop, but \
+             no backend emits one yet, so the call is refused rather than expanded"
                 .to_string()
         }
     }
