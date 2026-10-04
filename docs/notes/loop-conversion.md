@@ -482,16 +482,20 @@ list now turns on:**
 2. ~~**Fix the wasm `While`** (§8.3 item 1).~~ **Attempted and withdrawn.** Four
    defects, one cause (hand-tracked operand-stack height); the module now **refuses a
    loop by name** rather than half-emitting one.
-2a. **Lower `If`/`Jump`/`While` through `waffle`.** The hand-written slot-based
-    emitter this step called for is **not being written** — `waffle` owns the
-    slot-first pipeline ([wasm-control-flow](wasm-control-flow.md) §5), so the step
-    is its control-flow mapping, not a local one. **Started and unfinished:**
-    [wasm-backend-handoff](wasm-backend-handoff.md) §3.1 has landed (every
-    non-looping body lowers through `waffle`, the hand-written emitter is deleted,
-    62 kernel-execution tests green) and §3.2 is this step — the header's carried
-    tuple as blockparams, `CondBr` at the test, `Br` at the backedge. This is still
-    the blocker for step 5 on the CPU side. The type-section ordering bug §2 found
-    is fixed.
+2a. ~~**Lower `If`/`Jump`/`While` through `waffle`.**~~ **Done — the CPU-side
+    blocker is cleared.** The hand-written slot-based emitter this step called for
+    was **not written** — `waffle` owns the slot-first pipeline
+    ([wasm-control-flow](wasm-control-flow.md) §5), so the step was its
+    control-flow mapping. All three transfers land in
+    `crates/lichen-compute/src/compute/wasm/flow.rs`: the header's carried tuple as
+    blockparams, `CondBr` at the test, `Br` at the backedge, and a selection's arms
+    as blocks of their own. 62 kernel-execution tests green on all of it; the
+    type-section ordering bug §2 found was fixed earlier. **What it does not clear
+    is the backend's own gap**: no repository test builds a loop body, so the
+    backedge is verified by structure rather than by a run, and the IR still has no
+    instruction that reads the carried tuple into a body — so a loop may be
+    *expressible* now without any loop that reaches the backend being able to
+    terminate. See [wasm-backend-handoff](wasm-backend-handoff.md) §3.2.
 3. **Rebase and extend `feature/spirv-loop-emitter`** for `Seq` — and it also
    inherits 1b: the refusal it wrote for a body that is "only a transfer" is the
    SPIR-V emitter saying there is no block for `OpLoopMerge`'s continue target, which
@@ -500,7 +504,8 @@ list now turns on:**
    evaluator *record* a loop rather than refuse. This is the biggest remaining
    piece and the one no branch has started: the recorded structure itself, the
    defunctionalisation §3 step 2, and §4's shape rules. It can be validated against
-   the SPIR-V backend once step 3 lands, and against the CPU one once 2a does.
+   the SPIR-V backend once step 3 lands, and against the CPU one, which 2a has now
+   unblocked.
 5. **Run the reduction on both backends**, past the 2000-apply budget and the 512
    level ceiling, at more than one length so the count is demonstrably not a
    compile-time constant.
