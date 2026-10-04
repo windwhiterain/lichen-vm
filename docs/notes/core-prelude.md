@@ -165,6 +165,14 @@ both are the reason the record exists:
   node, at the two clone sites (`static_module/apply.rs`, `function.rs`) — and
   resolving it through `Build::apply_edges` is what would add the "related"
   location.  (`Diag::related` is plumbed for it and nothing fills it.)
+  **Half of that mechanism has since landed for a failure's own location** (not
+  for `related`): the static materializer records the apply it materialized a
+  clone for as that clone's origin, and the diagnostics resolve it through
+  `Build::apply_edges`, so a runtime failure inside a materialized imported
+  function — a deferred instantiation's table miss — points at the argument the
+  caller passed.  The clone the *dynamic* walk makes still records only its
+  template, and neither path produces a `related` location
+  ([static modules](static-modules.md) §Reads & materialize).
 - **What "jump" and "publish" are verified against.**  `Doc`'s unit tests hold the
   in-memory case: a use of a prelude name resolves to a definition whose file
   records `core.lichen` and whose position is the binding's own line in it, and a

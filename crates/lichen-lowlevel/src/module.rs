@@ -166,23 +166,29 @@ impl<P: Program> Module<P> {
         self.nodes[node].function
     }
 
-    /// The template node `node` was **cloned from**, or [`None`] when `node`
-    /// is not an apply clone.
+    /// The node `node` is **attributed through**, or [`None`] when `node` is
+    /// not an apply clone.
     ///
     /// An apply instantiates a function template by cloning the members that
-    /// depend on the call's argument, and each clone records the node it was
-    /// cloned from here ([`Self::node_function`] names the *template* the clone
-    /// joined; this names the node *within* it).  A reader that holds a clone
-    /// because a runtime failure mentioned it — the per-call node a recorded
-    /// [`EvalError`](crate::EvalError) names — can therefore reach the source
-    /// node an attribution table keyed by template nodes holds.
+    /// depend on the call's argument, and each clone records here the node the
+    /// layer above attributes a failure in it by ([`Self::node_function`] names
+    /// the *template* the clone joined; this names the node *within* it).  A
+    /// reader that holds a clone because a runtime failure mentioned it — the
+    /// per-call node a recorded [`EvalError`](crate::EvalError) names — can
+    /// therefore reach the node an attribution table holds.
     ///
-    /// A reader may rely on two facts.  The origin is a node of the template,
-    /// so it is never itself a clone: one step suffices, and following it twice
-    /// adds nothing.  And it is **not a keep-alive edge**: garbage collection
-    /// moves each node with its own home block, so an origin node whose block
-    /// was released is absent from [`Self::nodes`] — use [`Self::nodes`]'
-    /// `get` before reading it rather than assuming liveness.
+    /// Which node that is depends on the template.  A **dynamic** clone records
+    /// the template node it instantiates, which is what per-node attribution is
+    /// keyed by.  A clone of a **frozen** template records the apply that
+    /// materialized it: the template's nodes belong to the frozen module, so no
+    /// node of this module stands for them, and the call is the only
+    /// caller-side fact the failure belongs to.  Either way following the
+    /// origin reaches a node the checker attributed, so one step suffices.
+    ///
+    /// The origin is **not a keep-alive edge**: garbage collection moves each
+    /// node with its own home block, so an origin node whose block was released
+    /// is absent from [`Self::nodes`] — use [`Self::nodes`]' `get` before
+    /// reading it rather than assuming liveness.
     ///
     /// Panics if `node` is not in [`Self::nodes`].
     pub fn node_origin(&self, node: NodeId) -> Option<NodeId> {
