@@ -1164,6 +1164,16 @@ pub struct Node<P: Program> {
     /// invariant (a concrete value replicates to the class's unbound
     /// pure-cell members).  External crates must never touch the field
     /// directly.
+    ///
+    /// **This one slot carries two axes, and readers must say which they
+    /// mean.**  The value axis is *decided or not*: a value that
+    /// [`is_unbound`] is not comparable.  The evaluation axis is *has run or
+    /// not*: an operation node whose answer is the undecided
+    /// [`LowValue::Parameterized`] marker **has** run, while one with no
+    /// cached value never ran.  [`Module::has_run`] and
+    /// [`Module::has_no_result_yet`] are the named reads of the second axis;
+    /// a reader that asks a run question through `is_unbound` is conflating
+    /// the two.
     value: Option<P::Value>,
     /// The node's optional [`LowShape`] — stored *with* the value, behind the
     /// same private gate.  A layer above the lowlevel (which *has* the type)

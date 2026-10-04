@@ -469,6 +469,13 @@ impl<P: Program> Module<P> {
         // so a later binding is observed regardless of evaluation order
         // (concrete results are memoized as usual).  Cells never reach this
         // postlude — they return their cached marker from the top.
+        //
+        // Note what is *not* claimed here: an operation node **may** compute
+        // this marker (a probe measured `Eq` over an unbound operand doing
+        // exactly that).  What is declined is caching it — so an operation
+        // node's slot holds a *decided* answer or nothing, which is what makes
+        // `Module::has_no_result_yet`'s "has an operation and no cached value"
+        // the same question as "has not produced an answer yet".
         if !matches!(value.as_enum(), Some(LowValue::Parameterized)) {
             // The single write API caches the result and, if the node is a
             // member of a unified class, replicates a concrete value to the

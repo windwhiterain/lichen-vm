@@ -33,7 +33,7 @@ use crate::{
     AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, Function,
     FunctionId, LocalNodeId, LowShape, LowValue, Module, ModuleKey, NodeId, Operation,
     PendingAssert, Program, StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle,
-    StaticModule, StaticNode, StaticNodeId, StaticOperation, TableItem, ValueExt as _,
+    StaticModule, StaticNode, StaticNodeId, StaticOperation, TableItem, ValueExt as _, is_unbound,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -145,6 +145,44 @@ impl<P: Program> Module<P> {
                 self.static_module(sref.module).nodes[sref.index.index].value
             }
         }
+    }
+
+    /// Whether `node` has **produced an answer** — its own slot carries one,
+    /// decided or undecided.
+    ///
+    /// This is the *has run* half of the value slot, and it is deliberately
+    /// not [`is_unbound`]: an operation node whose answer is the undecided
+    /// marker ([`LowValue::Parameterized`]) **has** run — the attempt
+    /// happened and could not resolve — whereas a node with no cached value
+    /// at all never ran.  A reader deciding whether to *run* the node's
+    /// operation asks [`Self::has_no_result_yet`]; a reader deciding whether
+    /// it may *compare* the node's value asks [`is_unbound`], because an
+    /// undecided answer is not comparable.  Conflating the two is what made
+    /// `is_unbound(node_value)` the effective authority for both.
+    ///
+    /// A released node (absent from [`Self::nodes`]) reads `false`: there is
+    /// nothing left to run.
+    pub fn has_run(&self, node: NodeId) -> bool {
+        !is_unbound(self.node_value(Dyn(node)))
+    }
+
+    /// Whether `node`'s operation — the computation it will produce its
+    /// answer by — **has not produced an answer yet**.
+    ///
+    /// `false` for a node with no operation (a marker, a bound constant, a
+    /// released node): there is no computation left to run.  For an operation
+    /// node this asks whether the slot holds an answer, decided **or**
+    /// undecided, disagreeing with [`is_unbound`] exactly on the undecided
+    /// marker: that marker is an answer that says "not decided", so it is
+    /// *not* pending.  The evaluator declines to cache the marker (see
+    /// [`Self::evaluate_node_operation`]'s postlude), which only matters on a
+    /// path that writes the slot directly — the apply clone walk preserves a
+    /// source's value on an operation-free node and drops an operation node's
+    /// cached value entirely ([`crate::function`]), so an operation node's
+    /// slot holds a decided answer or nothing, and a pure cell holding the
+    /// marker is correctly not "run" (nothing ran).
+    pub fn has_no_result_yet(&self, node: NodeId) -> bool {
+        self.node_operation(node).is_some() && !self.has_run(node)
     }
 
     /// The optional [`LowShape`] a layer above the lowlevel computed for

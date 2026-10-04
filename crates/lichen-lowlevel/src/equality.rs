@@ -709,20 +709,13 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Whether `rep`'s class holds an unevaluated operation: a node with an
-    /// operation whose value is still unbound.  Such nodes are pending
-    /// computations, never bindable cells.
+    /// Whether `rep`'s class holds a pending computation: a member whose
+    /// operation has not produced an answer yet
+    /// ([`Module::has_no_result_yet`]).  Such nodes are computations, never
+    /// bindable cells.
     fn class_has_pending_op(&self, rep: NodeId) -> bool {
-        let mut member = rep;
-        loop {
-            if self.nodes[member].operation.is_some() && is_unbound(self.nodes[member].value) {
-                return true;
-            }
-            let Some(next) = self.nodes[member].meta().next() else {
-                return false;
-            };
-            member = next;
-        }
+        self.class_members(rep)
+            .any(|member| self.has_no_result_yet(member))
     }
 
     /// Whether `rep`'s class is a pure cell for binding purposes: its value
@@ -731,19 +724,22 @@ impl<P: Program> Module<P> {
     /// a reference to the class, resolved by replication when the class
     /// binds, not a computation that a bind would erase.
     fn class_is_pure_cell(&self, rep: NodeId) -> bool {
-        let mut member = rep;
-        loop {
-            if self.nodes[member].operation.is_some()
-                && is_unbound(self.nodes[member].value)
-                && !self.is_self_read(member, rep)
-            {
-                return false;
-            }
-            let Some(next) = self.nodes[member].meta().next() else {
-                return true;
-            };
-            member = next;
-        }
+        !self
+            .class_members(rep)
+            .any(|member| self.has_no_result_yet(member) && !self.is_self_read(member, rep))
+    }
+
+    /// `rep`'s equality class's members, representative first — the union-find
+    /// member list's one walk.  Every reader that scans a class for a node
+    /// carrying something (a pending operation, a committed value) reads it
+    /// through here, so the walk and its bound live once.
+    fn class_members(&self, rep: NodeId) -> impl Iterator<Item = NodeId> + '_ {
+        let mut member = Some(rep);
+        std::iter::from_fn(move || {
+            let current = member?;
+            member = self.nodes[current].meta().next();
+            Some(current)
+        })
     }
 
     /// Whether `rep`'s class is an all-unbound skeleton: every member is a
@@ -928,17 +924,10 @@ impl<P: Program> Module<P> {
         let Some(value) = self.class_committed_value(rep) else {
             return;
         };
-        let mut ops = Vec::new();
-        let mut member = rep;
-        loop {
-            if self.nodes[member].operation.is_some() && is_unbound(self.nodes[member].value) {
-                ops.push(member);
-            }
-            let Some(next) = self.nodes[member].meta().next() else {
-                break;
-            };
-            member = next;
-        }
+        let ops: Vec<NodeId> = self
+            .class_members(rep)
+            .filter(|&member| self.has_no_result_yet(member))
+            .collect();
         for op in ops {
             self.write_node_value(op, Some(value));
         }
@@ -961,13 +950,8 @@ impl<P: Program> Module<P> {
 
     /// The first pending operation node in `rep`'s class, if any.
     fn pending_op(&self, rep: NodeId) -> Option<NodeId> {
-        let mut member = rep;
-        loop {
-            if self.nodes[member].operation.is_some() && is_unbound(self.nodes[member].value) {
-                return Some(member);
-            }
-            member = self.nodes[member].meta().next()?;
-        }
+        self.class_members(rep)
+            .find(|&member| self.has_no_result_yet(member))
     }
 
     /// Resolve an unforceable `Index` as a pure reference.  An `Index` over a
@@ -1051,15 +1035,7 @@ impl<P: Program> Module<P> {
     /// caller can read the encoding behind the value (an array's element
     /// nodes are reachable only from a node, not from the value alone).
     pub fn class_committed_node(&self, rep: NodeId) -> Option<NodeId> {
-        let mut member = rep;
-        loop {
-            if let Some(value) = self.nodes[member].value
-                && !is_unbound(Some(value))
-            {
-                return Some(member);
-            }
-            member = self.nodes[member].meta().next()?;
-        }
+        self.class_members(rep).find(|&member| self.has_run(member))
     }
 
     /// The concrete value `rep`'s class has already committed, if any — the
@@ -1069,15 +1045,8 @@ impl<P: Program> Module<P> {
     /// leaves the committed value where it was (the representative may be the
     /// value-less pending op node).
     pub(crate) fn class_committed_value(&self, rep: NodeId) -> Option<P::Value> {
-        let mut member = rep;
-        loop {
-            if let Some(value) = self.nodes[member].value
-                && !is_unbound(Some(value))
-            {
-                return Some(value);
-            }
-            member = self.nodes[member].meta().next()?;
-        }
+        let member = self.class_committed_node(rep)?;
+        self.nodes[member].value
     }
 
     /// Force the first unevaluated operation in `rep`'s class.  When the
@@ -1087,13 +1056,7 @@ impl<P: Program> Module<P> {
     /// the computation stays lazy, because its operands are still unbound.
     #[stacksafe]
     fn force_pending(&mut self, rep: NodeId) -> Option<P::Value> {
-        let mut member = rep;
-        loop {
-            if self.nodes[member].operation.is_some() && is_unbound(self.nodes[member].value) {
-                break;
-            }
-            member = self.nodes[member].meta().next()?;
-        }
+        let member = self.pending_op(rep)?;
         let block = self.nodes[member].block;
         // Capture the value the class already committed *before* forcing — the
         // outcome of a pending computation must reconcile with it (a pending
