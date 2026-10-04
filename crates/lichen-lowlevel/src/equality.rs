@@ -397,28 +397,18 @@ impl<P: Program> Module<P> {
         // The answer against what the node's class holds, as two values: the
         // answer has no class of its own, and pulling the class's value out
         // explicitly is what makes the two comparable.
-        //
-        // Only when *this node* had not produced an answer yet: a class that
-        // came to hold a value while this operation was undecided carries a fact
-        // the operation has to meet, and meeting it is this write.  An operation
-        // re-running after it already answered is not a second assertion, and
-        // reporting there duplicates the conflict the first answer's own
-        // unification recorded.
         let held = {
             let representative = self.equality_representative(node);
             self.class_committed_value(representative)
         };
-        let fresh_answer = !self.has_run(node);
-        if fresh_answer {
-            self.unify_inner(
-                Side::value(Some(value)),
-                Side::value(held),
-                &mut path,
-                0,
-                &mut steps,
-                (node, node),
-            );
-        }
+        self.unify_inner(
+            Side::value(Some(value)),
+            Side::value(held),
+            &mut path,
+            0,
+            &mut steps,
+            (node, node),
+        );
         self.write_node_value(node, Some(value));
         self.nodes[node].runned = true;
     }
