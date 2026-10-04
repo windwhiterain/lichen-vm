@@ -541,6 +541,27 @@ clean as of `c776676` — so whoever writes the assert can lift its refusals, it
 diagnostic fix and its docs, and must **re-measure** `tests/compute.rs` (62/0 on
 `dev` now) rather than trusting the numbers above.
 
+**The narrower kind-slot pin is inert — measured, not landed.**  Stating `.a`'s
+requirement for the undecided tier as a unify on the container's **kind slot**
+alone (`Index(container_ty, 1)` against a fresh struct kind — the decided tier's
+own statement, §2.4) refuses nothing: `f = x => x.a; f [10, 20]`, and its
+call-result form `f (id [10, 20])`, each keep the two runtime table messages.
+The unify already **merges** — `shape::defer_pending` answers `Merge` for exactly
+this pair (a pending `Index` read against a class that holds a type) and the
+lowlevel commits the kind onto the read — but the pin is invisible to the apply:
+`apply_parameter_check` unifies the parameter's `[value, type]` pair, whose type
+element is the container's own type cell, while the requirement node is a derived
+read the checker allocates outside it (`lazy_index_path` mints a fresh chain per
+call, so the name-table read is a different node).  A pinned read holds a decided
+array and is never re-evaluated, and suppressing the pin (`pin_committed_value`,
+measured) changes nothing either, because evaluation never reconciles a computed
+value with its class's committed one.  The deferral itself is not optional:
+without it the same unify is a check-time conflict (`expected TypeStruct, found
+?a`) that refuses the struct case too.  Only the whole-term pin refuses at the
+apply, and it still costs the extension (measured at `1b40ab2`: `tests/compute.rs`
+62/0 → 9/53 — the pinned type cell is no longer the undecided `_` the extension's
+template walk defers on).  Option 1's assert remains the route.
+
 ### 6.3 The message/predicate disagreement (analyzed, not landed)
 
 `DiagKind::IndexTarget` is shared by three guards with three different
