@@ -12,7 +12,7 @@ stacksafe.workspace = true
 # The wasm-tools release of `wasmi` 2.0.0's validator (`wasmparser` 0.228):
 # `wasmi::Module::new` validates every assembled module before it runs, so the
 # encoder must not be a newer generation than the parser that checks its output.
-wasm-encoder = "0.228.0"
+wasm-encoder = "0.248.0"
 lichen-kernel-ir.workspace = true
 # The recording builds real graph IR nodes, so this is the crate that owns the
 # value table, the edge rules and the named refusals — not a parallel copy of
@@ -22,3 +22,4 @@ lichen-graph-ir.workspace = true
 lichen-highlevel.workspace = true
 lichen-lowlevel.workspace = true
 lichen-utils.workspace = true
+waffle = { version = "0.3.2", default-features = false }
