@@ -1,5 +1,8 @@
 target/
 .zcode
 .soil
+# the waffle spike writes its compiled module next to the test, so that
+# `wasm-tools print` can read it; see `crates/lichen-compute/src/waffle_spike.rs`
+spike-countdown.wasm
 # per-task worktrees, created and deleted per AGENTS.md
 .worktrees/

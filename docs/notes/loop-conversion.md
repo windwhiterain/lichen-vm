@@ -7,9 +7,12 @@
 > **closed** — the `passed_out` contract, a loop body that can compute its state and
 > reach the backedge (`Terminator::Jump`, and a validator that lets a body name the
 > loop's landmarks), and the graph-dispatch item — and the wasm `While` fix is
-> **withdrawn**: serving a loop in wasm needs a slot-based emitter
-> ([wasm-control-flow](wasm-control-flow.md)), and until it lands the backend refuses
-> a loop **by name** rather than mis-compiling one.
+> **withdrawn**: serving a loop in wasm goes through **`waffle`**, which owns the
+> slot-first pipeline ([wasm-control-flow](wasm-control-flow.md) §5), and until its
+> control-flow step lands the backend refuses a loop **by name** rather than
+> mis-compiling one. `feature/waffle-spike` has lowered every non-looping kernel
+> body through `waffle` already; what is missing is `If`/`Jump`/`While`
+> ([wasm-backend-handoff](wasm-backend-handoff.md) §3.2).
 > [§8.4](#84-unmerged-branches-and-exactly-what-each-needs) is what the two unmerged
 > branches need, and [§8.5](#85-the-critical-path-to-the-acceptance-case) is the
 > critical path to the acceptance case.
@@ -479,10 +482,16 @@ list now turns on:**
 2. ~~**Fix the wasm `While`** (§8.3 item 1).~~ **Attempted and withdrawn.** Four
    defects, one cause (hand-tracked operand-stack height); the module now **refuses a
    loop by name** rather than half-emitting one.
-2a. **Write the wasm loop emitter slot-based** — every value of a structured body in a
-   local, the stack collapsed by a later pass. This is the blocker for step 5 on the
-   CPU side, and [wasm-control-flow](wasm-control-flow.md) §4 is the design and §2
-   the four defects to avoid. The type-section ordering bug it found is fixed.
+2a. **Lower `If`/`Jump`/`While` through `waffle`.** The hand-written slot-based
+    emitter this step called for is **not being written** — `waffle` owns the
+    slot-first pipeline ([wasm-control-flow](wasm-control-flow.md) §5), so the step
+    is its control-flow mapping, not a local one. **Started and unfinished:**
+    [wasm-backend-handoff](wasm-backend-handoff.md) §3.1 has landed (every
+    non-looping body lowers through `waffle`, the hand-written emitter is deleted,
+    62 kernel-execution tests green) and §3.2 is this step — the header's carried
+    tuple as blockparams, `CondBr` at the test, `Br` at the backedge. This is still
+    the blocker for step 5 on the CPU side. The type-section ordering bug §2 found
+    is fixed.
 3. **Rebase and extend `feature/spirv-loop-emitter`** for `Seq` — and it also
    inherits 1b: the refusal it wrote for a body that is "only a transfer" is the
    SPIR-V emitter saying there is no block for `OpLoopMerge`'s continue target, which

@@ -1,16 +1,18 @@
 # Lowering structured control flow to WebAssembly
 
-> Status: **design, adopted.** A loop emitter for the wasm backend was written, found
-> to need four more fixes before it would validate, and **withdrawn**. What replaced
-> it is **`waffle`** (§5), which owns the whole slot-first pipeline, and a spike has
-> proved it end to end. **For anything actionable, read
+> Status: **design, adopted, and the straight-line half of the migration has
+> landed.** A loop emitter for the wasm backend was written, found to need four more
+> fixes before it would validate, and **withdrawn**. What replaced it is
+> **`waffle`** (§5), which owns the whole slot-first pipeline; a spike proved it end
+> to end, and `feature/waffle-spike` now lowers every kernel body through it with
+> no control flow (§6). **For anything actionable, read
 > [wasm-backend-handoff](wasm-backend-handoff.md) first**; this note is the analysis
 > behind it.
 >
 > §1 is the ground truth about how a loop is written at all, §2 the four defects of
 > the withdrawn attempt and their one cause, §3 the ordering bug that was hiding
-> under them, §4 the shape that replaced the hand-written emitter, and §5 the
-> adoption and its evidence.
+> under them, §4 the shape that replaced the hand-written emitter, §5 the
+> adoption and its evidence, and §6 what the migration has landed so far.
 
 ## 1. How a loop is written in wasm, exactly
 
@@ -193,9 +195,29 @@ the hand-written emitter had to remember it.
    the two agree rather than one bending to the other.
 2. **The version gap between `waffle`'s `wasm-encoder`/`wasmparser` 0.248 and the
    `wasmparser` 0.228 that `wasmi` 2.0.0 validates with is not a problem.** The spike
-   proves it end to end: `wasmi`'s own validator accepts and runs 0.248's output. And
-   our existing emitter moves to 0.248 with **one mechanical change**
-   (`Instruction::F32Const(..)` now takes an `Ieee32`, so `..into()`), after which the
-   whole kernel-execution suite — 62 tests that assemble and run real kernels through
-   `wasmi` — passes.
+   proves it end to end: `wasmi`'s own validator accepts and runs 0.248's output, and
+   §6 runs the whole kernel-execution suite — 62 tests that assemble and run real
+   kernels through `wasmi` — through `waffle`'s output at 0.248.
+
+## 6. What the migration has landed, and what §2 still says about it
+
+**On `feature/waffle-spike`, every kernel body lowers through `waffle`**: one block
+per fragment, no control flow, a body whose transfer is not a `Return` refused by
+name. All 62 kernel-execution tests pass on it. The details are
+[wasm-backend-handoff](wasm-backend-handoff.md) §3.1; this is the one thing about it
+that belongs in the analysis note.
+
+**§2's one cause is not gone, and the landed lowering shows why.** Two of its own
+defects were the operand stack's *order* and *count* — a comparison's two operators
+leaving two slots instead of one, and `select`'s condition read as the result's
+class. Both were caught by the 62 tests in one run, which is what a machine-checked
+stack is for.
+
+**What a typed IR buys is that the mistakes stop being reachable**, not that the
+stack stops mattering. §2's defects 1 and 4 — a test computed outside the loop, a
+loop frame given the exit's type — are *shape* errors, and `waffle` makes them
+unrepresentable because every block's type is in its blockparams and every `br`
+names values that fit. That is the whole argument for the library, and it is only
+fully spent once §3.2 of the handoff lands: until a loop is lowered, nothing here has
+tested the one shape this note is about.
 
