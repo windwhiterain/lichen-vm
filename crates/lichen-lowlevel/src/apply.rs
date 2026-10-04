@@ -14,40 +14,27 @@ use crate::{
 use lichen_utils::extend::AsEnum;
 
 impl<P: Program> Module<P> {
-    /// Run `body` inside one application frame: bump the nested and total
-    /// apply counters, enforce the budgets, and pop the nested counter when
-    /// the body returns.
+    /// Run `body` inside one application frame: charge the work counter and
+    /// enforce its bound.
     ///
     /// A budget that the frame exceeds is **recorded, not unwound**: the body
     /// is refused, [`Module::budget_exhausted`] takes the budget and its
-    /// limit, and the frame returns the undecided marker.  The nested counter
-    /// deliberately stays inflated on that path (as it did when the guard
-    /// unwound), so a caller still inside a refused apply cannot re-enter the
-    /// walk.
+    /// limit, and the frame returns the undecided marker.
     ///
-    /// **A converted loop charges these counters like any other caller.** One
-    /// iteration is one application (see `loop_run.rs`), so the cumulative
-    /// counter means the same thing on both paths — what a loop *does not* do is
-    /// nest, so it never grows [`Module::apply_depth_limit`]. That is the whole
-    /// of its advantage in the budget's terms, and it is why a loop is not
-    /// bounded by the nesting it replaces.
+    /// The frame charges the **work** counter only.  The nesting guard is not
+    /// here, because nesting is not a property of the walk: it is read off the
+    /// node being applied ([`Module::node_depth`]) before the instantiation
+    /// happens, so it holds the same whether the expansion is forced as it is
+    /// built or walked later — see [`Module::function_apply`].
     pub(super) fn with_apply_frame(
         &mut self,
         body: impl FnOnce(&mut Self) -> P::Value,
     ) -> P::Value {
-        self.apply_depth += 1;
         self.apply_total += 1;
-        let exhausted = if self.apply_depth > self.apply_depth_limit {
-            Some(BudgetExhausted::ApplyDepth {
-                limit: self.apply_depth_limit,
-            })
-        } else if self.apply_total > self.apply_total_limit {
-            Some(BudgetExhausted::ApplyTotal {
+        let exhausted =
+            (self.apply_total > self.apply_total_limit).then_some(BudgetExhausted::ApplyTotal {
                 limit: self.apply_total_limit,
-            })
-        } else {
-            None
-        };
+            });
         if let Some(exhausted) = exhausted {
             if self.budget_exhausted.is_none() {
                 self.budget_exhausted = Some(exhausted);
@@ -63,9 +50,27 @@ impl<P: Program> Module<P> {
             // claim about a computation that never happened.
             return P::Value::from(LowValue::Parameterized);
         }
-        let result = body(self);
-        self.apply_depth -= 1;
-        result
+        body(self)
+    }
+
+    /// Whether applying the function at `node` would instantiate a body deeper
+    /// than [`Self::apply_depth_limit`], recording the verdict when it would.
+    ///
+    /// **The depth is the node's** ([`Self::node_depth`]), so the answer does
+    /// not depend on how the graph was built: an expansion's level `k` is
+    /// stamped `k` and a converted loop's iterations are all stamped alike,
+    /// whatever forces their values and whenever.
+    pub(super) fn depth_exhausted(&mut self, node: NodeId) -> bool {
+        let depth = self.node_depth(node) as usize + 1;
+        if depth <= self.apply_depth_limit {
+            return false;
+        }
+        if self.budget_exhausted.is_none() {
+            self.budget_exhausted = Some(BudgetExhausted::ApplyDepth {
+                limit: self.apply_depth_limit,
+            });
+        }
+        true
     }
 
     /// The post-clone parameter check shared by dynamic and static applies.

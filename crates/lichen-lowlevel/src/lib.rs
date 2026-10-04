@@ -1212,6 +1212,23 @@ pub struct Node<P: Program> {
     /// — garbage collection moves each node with its own home block, so a
     /// reader must tolerate the origin's release.
     origin: Option<NodeId>,
+    /// **How many apply levels this node was created under** — `0` for the
+    /// program's own nodes, `d + 1` for a node one instantiation created for an
+    /// apply node of depth `d`.
+    ///
+    /// It is a fact of the **graph**, not of the evaluation that built it: an
+    /// expansion's level `k` is stamped `k` whether its values are forced as the
+    /// levels are built or later by the deep pass, because the stamp comes from
+    /// the *apply node* the instantiation is for — which is also why a converted
+    /// loop's iterations are all stamped alike (they instantiate the same
+    /// entering apply node, so the trip count does not appear here at all).
+    /// Equivalently it is the length of the origin chain to a node the checker
+    /// built, memoised at construction.
+    ///
+    /// **Private**: read through [`Module::node_depth`].  A frame counter cannot
+    /// state this: it measures the *walk*, and the lazy deep pass walks an
+    /// expansion breadth-first at depth one.
+    depth: u32,
     /// Owner — the garbage-collection unit whose lifetime bounds this node.
     /// **Private**: read through [`Module::node_block`]; only
     /// [`Module::garbage_collect`] moves it.
@@ -1281,11 +1298,16 @@ pub struct StaticNode<P: Program> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BudgetExhausted {
     /// Nested applications ran deeper than [`Module::apply_depth_limit`] — a
-    /// function applying itself directly, with no base case.
+    /// function applying itself, or a chain of functions applying each other,
+    /// deeper than the bound.  **Measured on the node being applied**
+    /// ([`Module::node_depth`]), so the verdict is the same whether the
+    /// expansion was forced as it was built or walked later.
     ApplyDepth { limit: usize },
     /// The cumulative application count passed
-    /// [`Module::apply_total_limit`] — the work bound that catches a
-    /// recursion the lazy graph flattens below the nesting guard.
+    /// [`Module::apply_total_limit`] — the work bound.  Between them, this and
+    /// [`ApplyDepth`](Self::ApplyDepth) are why a converted loop is bounded by
+    /// work alone: an iteration is one application of the *same* apply node, so
+    /// it spends this and never that.
     ApplyTotal { limit: usize },
     /// [`Module::evaluate_node_deep`] nested deeper than
     /// [`Module::evaluate_depth_limit`] — deep-evaluating an infinitely
@@ -1310,20 +1332,21 @@ pub struct Module<P: Program> {
     pub blocks: SlotMap<BlockId, Block>,
     pub functions: SlotMap<FunctionId, Function>,
     /// Nested-application guard: a run records a
-    /// [`BudgetExhausted::ApplyDepth`] when function applications nest
-    /// deeper than this (a non-terminating function applying itself
-    /// directly, e.g. `f(x) = f(x)`) and stops evaluating.  Defaults to
-    /// [`Self::MAX_APPLY_DEPTH`]; tests lower it to trip fast.
+    /// [`BudgetExhausted::ApplyDepth`] when an application's node sits deeper
+    /// than this — the depth being [`Self::node_depth`], so "deeper" means
+    /// *more apply levels in the graph*, not more frames on the walk.  An
+    /// expansion reaches this bound at its trip count; a converted loop's
+    /// iterations are all at the entering apply node's depth and never do.
+    /// Defaults to [`Self::MAX_APPLY_DEPTH`]; tests lower it to trip fast.
     pub apply_depth_limit: usize,
     /// Total-application guard: a run records a
     /// [`BudgetExhausted::ApplyTotal`] when the *cumulative* number of
-    /// function applications exceeds this — the lazy graph flattens most
-    /// recursion (an apply returns its result pair and the outer deep pass
-    /// descends into it, so nested depth stays 1 even for an infinite loop
-    /// behind a lazy branch, and a wide recursion like fib is never deep at
-    /// all), so nested depth alone cannot bound the work.  The total count
-    /// bounds both.  Defaults to [`Self::MAX_APPLY_TOTAL`]; tests lower it
-    /// to trip fast.
+    /// function applications exceeds this.  The nesting guard alone cannot
+    /// bound a run — a wide recursion like fib is never deep, and an infinite
+    /// recursion behind a lazy branch is walked breadth-first at depth one —
+    /// so the work is bounded by its own counter, which a converted loop
+    /// spends one unit of per iteration.  Defaults to
+    /// [`Self::MAX_APPLY_TOTAL`]; tests lower it to trip fast.
     pub apply_total_limit: usize,
     /// Deep-evaluation guard: a run records a
     /// [`BudgetExhausted::EvaluateDepth`] when [`Self::evaluate_node_deep`]
@@ -1380,8 +1403,12 @@ pub struct Module<P: Program> {
     pub extension_diagnostics: Vec<ExtensionDiagnostic>,
     /// Program-global extension state — see [`Program::GlobalExt`].
     pub global_ext: P::GlobalExt,
-    apply_depth: usize,
     apply_total: usize,
+    /// The depth [`Module::add_node`] stamps on the nodes it creates — set
+    /// around an instantiation to the apply node's own depth plus one (see
+    /// [`Module::instantiate`]), and zero everywhere else, so a node created
+    /// outside an apply belongs to the program's own graph.
+    stamp_depth: u32,
     deep_depth: usize,
 }
 

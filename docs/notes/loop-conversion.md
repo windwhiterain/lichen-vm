@@ -458,23 +458,31 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   There is no loop-specific budget, and an earlier draft's was wrong twice: it
   was invented, and its "one unit per iteration plus one per call inside" made
   a loop's cost unreadable against an expansion's.
-  What a loop never spends is **nesting**, and measuring where that binds was
-  the other half of the work. It is *not* the lazy host path: a tail recursion's
-  expansion keeps `apply_depth` flat (the apply returns its pair and the deep
-  pass descends into it), so under one total bound the loop and the unroll
-  afford the same count — measured, 1998 against 1999 for the reduction here.
-  Nesting binds where it is real:
-  - a **strict** recursion, where each level's result is forced (the lowlevel
-    harness's countdown: the unroll meets `ApplyDepth`, the loop answers —
-    `tests/basic/host_loop.rs`),
-  - the **emitter's** expression-nesting ceiling (§8.5 item 1c's 512), which is
-    what the kernel path pays for an expansion and a loop does not, and
-  - the kernel path's whole definition-pass cost, which a converted loop does
-    not pay at all.
-  So the honest headline is narrower than "the loop affords a trip count the
-  expansion cannot": **it affords the same work at a flat depth**, and a host
-  loop is *currently* worth what that is worth on the host path — which is
-  scope and stack, not count. The kernel side is where the count is free.
+  What a loop never spends is **nesting** — and making that measurable was the
+  other half of the work, because a *frame counter cannot state it*. A counter
+  measures the walk, and the lazy deep pass walks an expansion **breadth-first
+  at depth one**: before this, 200 expanded levels under a depth bound of 20 was
+  not refused, and the loop and the unroll answered the same counts (measured,
+  1998 against 1999). The fix is one field: **a node records the number of apply
+  levels it was created under** (`Module::node_depth`, stamped by
+  `add_node` from the apply node the instantiation is for). It is a fact of the
+  *graph*, so it holds whatever builds or forces the values:
+  - an **expansion** stamps level `k` with `k` (level `k`'s clone of the step
+    apply node is stamped `k`, and level `k+1` instantiates *that* node), so it
+    meets the nesting bound at its trip count — measured now: the reduction's
+    expansion answers counts up to **499** under the checker's default 500,
+  - a **loop** stamps every iteration from the *same* entering apply node, so
+    every iteration's nodes sit at one depth however long it runs — measured:
+    **1_998**, the work bound, and flat across counts.
+  The nesting guard therefore moved out of the frame and in front of the
+  instantiation (`Module::depth_exhausted`), the transient `apply_depth` counter
+  is gone, and the two bounds now mean two different things a host states
+  separately: **nesting** (the graph's, read off the node) and **work** (an
+  iteration is one application). A large trip count needs the work bound raised;
+  an expansion needs the nesting bound raised as well, which is the choice the
+  conversion exists to remove. The emitter's expression-nesting ceiling and the
+  kernel path's definition-pass cost are the same saving seen from the other
+  side.
   **The cost, stated plainly**: each iteration still instantiates the body
   (~fifty nodes for the reduction here), so a host loop is linear in the trip
   count with a large constant — O(1) in *depth*, which is what removes the
@@ -483,13 +491,17 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   *one* instantiation instead of instantiating the body per iteration, which is
   also the shape the kernel reader wants.
   Evidence: `tests/basic/host_loop.rs` (the loop and the unroll agree; the loop
-  spends exactly one application per iteration, pinned by the total bound; 50
-  iterations answer under a depth bound of 8 where the unroll meets the nesting
-  guard; an endless convertible loop is refused by the work budget; a marked but
-  unconvertible recursion still expands), `lichen-highlevel`'s `loop_marker.rs`
-  (a host that raises the work bound runs a 3_000-count loop) and
-  `lichen-language/tests/loop_run.rs` on real programs (loop/unroll agreement at
-  small counts, and both bounded by the same work budget at 3_000).
+  spends exactly one application per iteration, pinned by the total bound; an
+  expansion's nodes deepen once per level and a loop's do not — the mechanism,
+  asserted per node; 50 iterations answer under a depth bound of 8 where the
+  unroll meets the nesting guard; an endless convertible loop is refused by the
+  work budget; a marked but unconvertible recursion still expands),
+  `lichen-highlevel`'s `loop_marker.rs` and `checker.rs` (a raised work bound
+  runs a 3_000-count loop; a raised *pair* of bounds is what a long terminating
+  recursion asks for, and each bound refuses the shape it is for) and
+  `lichen-language/tests/loop_run.rs` on real programs (600 answers as a loop
+  where the same source unmarked is refused by the *nesting* guard, 3_000 is
+  refused as a loop by the *work* bound, and loop and unroll agree below both).
 - **The wasm backend** — walks the structure and emits `If` and `While`. An `if`
   frame *is* the join; a `while` is a `loop` wrapped in a `block` so its two exits
   agree; a carried value is a local, because a `br` to a loop label takes no

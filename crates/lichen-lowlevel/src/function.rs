@@ -124,6 +124,16 @@ impl<P: Program> Module<P> {
         node: NodeId,
         cell: Option<NodeId>,
     ) -> P::Value {
+        // **The nesting guard, before any work.** `node` is the apply node this
+        // instantiation is for, and the node's own depth is how many apply
+        // levels it already sits under — a fact of the graph, so an expansion
+        // meets this bound at its trip count whether it is forced as it is built
+        // or walked later by the deep pass. A converted loop instantiates the
+        // same entering apply node every iteration, so it stays at that node's
+        // depth however long it runs: it spends work, never nesting.
+        if self.depth_exhausted(node) {
+            return P::Value::from(LowValue::Parameterized);
+        }
         // **A marked recursion runs as a loop.** `@loop` is permission to
         // convert, and a shape that converts ([`Module::loop_conversion`]) is
         // driven by [`Module::apply_loop`] instead of expanded level by level:
@@ -156,8 +166,30 @@ impl<P: Program> Module<P> {
     /// instantiates **once per iteration** and reads its condition, its next
     /// state and its exit out of the same map, so the loop's iterations are
     /// ordinary applies with the nesting removed.
+    ///
+    /// **Every node it creates is stamped with the instantiation's depth** —
+    /// the apply node's own depth plus one ([`Module::stamp_depth`]) — which is
+    /// what makes a node's [`depth`](Module::node_depth) a fact about the graph
+    /// rather than about the walk that happened to build it. Nested
+    /// instantiation (an argument whose evaluation applies something) restores
+    /// the previous stamp on the way out.
     #[stacksafe]
     pub(super) fn instantiate(
+        &mut self,
+        function: FunctionId,
+        argument: NodeId,
+        block: BlockId,
+        node: NodeId,
+    ) -> Option<Instantiation> {
+        let stamp = self.stamp_depth;
+        self.stamp_depth = self.node_depth(node) + 1;
+        let instantiation = self.instantiate_stamped(function, argument, block, node);
+        self.stamp_depth = stamp;
+        instantiation
+    }
+
+    #[stacksafe]
+    fn instantiate_stamped(
         &mut self,
         function: FunctionId,
         argument: NodeId,

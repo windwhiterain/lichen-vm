@@ -32,6 +32,46 @@ fn run(
 }
 
 #[test]
+fn the_depth_a_node_carries_is_the_levels_it_was_created_under() {
+    // **The mechanism, not just the outcome.** A node records how many apply
+    // levels it was created under, and that comes from the *apply node* the
+    // instantiation is for — so an expansion's clones deepen once per level,
+    // while a converted loop's iterations all instantiate the same entering
+    // apply node and stay at one depth however many iterations they run. This
+    // is what makes the difference the same whether the evaluation is lazy or
+    // forced.
+    let deepest = |marked: bool, count: u128| {
+        let mut m = Module::new();
+        let (function, id, _, _, _) = countdown(&mut m, marked);
+        m.evaluate_node_deep(function, None);
+        m.evaluate_node_deep(m.functions[id].r#return, None);
+        let root = m.add_block(None);
+        let argument = u128_node(&mut m, root, count);
+        let call = call_node(&mut m, root, function, argument);
+        m.evaluate_node_deep(call, None);
+        m.nodes
+            .keys()
+            .map(|node| m.node_depth(node))
+            .max()
+            .expect("a module has nodes")
+    };
+
+    assert!(
+        deepest(false, 20) >= 19,
+        "the expansion must deepen once per level, got {}",
+        deepest(false, 20)
+    );
+    assert!(
+        deepest(true, 20) <= 2,
+        "the loop must stay at the entering apply node's depth, got {}",
+        deepest(true, 20)
+    );
+    // And the loop's depth does not grow with the count, which is the claim
+    // that matters: it is flat, not merely small.
+    assert_eq!(deepest(true, 20), deepest(true, 400));
+}
+
+#[test]
 fn a_marked_loop_answers_what_the_unroll_answers() {
     // The same program, marked and unmarked: the marked one takes the loop and
     // the unmarked one the unroll, and the two must not disagree — on the value
