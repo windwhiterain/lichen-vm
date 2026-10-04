@@ -48,6 +48,21 @@ use super::{
     node_class_in, parallel_buffer_pos, param_classes, peeled_argument, scalar_literal,
 };
 
+/// How many parameter leaves the body's entry block receives — **the declared
+/// shape's arity**, which is the ABI's count and not the domain node's.
+///
+/// A kernel's parameter is a struct carrying a native wrapper and a signature, so
+/// the node a caller hands over is the wrapper's cell rather than the tuple the
+/// domain declares. Reading the count off the node gave one leaf for a two-leaf
+/// domain, and every tuple read then failed to place.
+fn domain_arity(params: &[ParamSlot]) -> usize {
+    params
+        .iter()
+        .map(|slot| super::flat_arity(&slot.shape))
+        .sum()
+}
+
+/// One function's lowering: the body being built, and everything the walk needs
 /// One function's lowering: the body being built, and everything the walk needs
 /// to place a value in it.
 pub struct Lower<'a, P: Program> {
@@ -99,7 +114,12 @@ where
     ) -> Result<KernelBody, String> {
         let mut body = KernelBody::new();
         let entry = body.add_block();
-        for _ in module.value_leaves(domain)? {
+        // **The parameter count is the shape's, not the domain node's.** A kernel's
+        // parameter is a struct carrying a native wrapper and a signature, so the
+        // node the caller hands over is the wrapper's cell rather than the tuple the
+        // domain declares — reading the count off the node gave one leaf for a
+        // two-leaf domain, and every tuple read then failed to place.
+        for _ in 0..domain_arity(params) {
             body.add_param(entry);
         }
         let mut lower = Lower {
@@ -146,14 +166,14 @@ where
     ) -> Result<KernelBody, String> {
         let mut body = KernelBody::new();
         let entry = body.add_block();
-        for _ in module.value_leaves(domain)? {
+        for _ in 0..domain_arity(params) {
             body.add_param(entry);
         }
         // **A parallel fragment's domain is its config's leaves *plus* the
         // invocation index**, which is the one value `compute.range` reads. The
-        // index is not part of the config parameter's own leaves — it is this
+        // index is not part of the config parameter's own shape — it is this
         // target's way of naming "which lane am I" — so it is added here rather
-        // than read out of a domain that does not contain it.
+        // than counted from a shape that does not contain it.
         body.add_param(entry);
         let mut lower = Lower {
             module,
@@ -266,13 +286,23 @@ where
             cursor = *target;
         }
         let root = self.module.class_root(cursor);
-        self.params
-            .iter()
-            .any(|slot| {
-                root == self.module.class_root(slot.pair)
-                    || root == self.module.class_root(slot.value)
+        let on_a_slot = self.params.iter().any(|slot| {
+            root == self.module.class_root(slot.pair) || root == self.module.class_root(slot.value)
+        });
+        // **Or one of the domain's leaves.** A kernel's parameter is a struct
+        // carrying a native wrapper and a signature, and a read of `p` reaches the
+        // wrapper's field first — so the chain ends at a *leaf* of the domain
+        // rather than at the domain, which is why matching the slots alone placed
+        // six tuple-domain reads nowhere.
+        let on_a_leaf = self
+            .domain_leaves()
+            .map(|leaves| {
+                leaves
+                    .iter()
+                    .any(|leaf| self.module.class_root(*leaf) == root)
             })
-            .then_some(offset)
+            .unwrap_or(false);
+        (on_a_slot || on_a_leaf).then_some(offset)
     }
 
     /// The domain's leaves, flattened — the ABI's argument list.
@@ -582,6 +612,14 @@ where
         if let Some(lichen_lowlevel::Selection::Computed) = self.module.selection_of(node) {
             return self.conditional(node);
         }
+        // **A read of the domain at a path is a parameter read**, even where
+        // `define_in` answered `Computed` for it: the node the read names may be a
+        // computation — the parameter unified with its argument — and only the
+        // chain says where it came from. Checked here as well as in `value`,
+        // because a definition is reached from whatever used it, not from itself.
+        if let Some(slot) = self.parameter_path(node) {
+            return self.parameter(slot);
+        }
         // Anything else that is a view has already been resolved by
         // `define_in`, so reaching it here means the index named nothing this
         // body can place.
@@ -645,15 +683,42 @@ where
             base = Some(*target);
         }
         let base_kind = match base {
-            Some(base) => format!("{base:?}"),
+            Some(base) => format!(
+                "{base:?} (class {:?}, holds {:?})",
+                self.module.class_root(base),
+                self.module
+                    .structural_value(base)
+                    .map(|value| format!("{value:?}"))
+            ),
             None => "nothing".to_string(),
         };
+        let slots: Vec<String> = self
+            .params
+            .iter()
+            .map(|slot| {
+                format!(
+                    "pair {:?}/class {:?}, value {:?}/class {:?}",
+                    slot.pair,
+                    self.module.class_root(slot.pair),
+                    slot.value,
+                    self.module.class_root(slot.value)
+                )
+            })
+            .collect();
+        let leaves: Vec<String> = self
+            .domain_leaves()
+            .unwrap_or_default()
+            .iter()
+            .map(|leaf| format!("{leaf:?}/class {:?}", self.module.class_root(*leaf)))
+            .collect();
         Err(format!(
             "a kernel body's index cannot be placed: its target is {target_kind} and its index is \
-             {index_kind}. A view needs a constant index into an array, and a selection needs an \
-             undecided index into a two-element array; neither is what this one is. The chain runs \
-             {walked} step(s) and ends at {base_kind}, which is class-equal to the domain: {}",
-            self.module.class_root(base.unwrap_or(node)) == self.module.class_root(self.domain)
+             {index_kind}. The chain runs {walked} step(s) and ends at {base_kind}. The slots are \
+             [{}] and the domain is {:?} (class {:?}) with leaves [{}]",
+            slots.join("; "),
+            self.domain,
+            self.module.class_root(self.domain),
+            leaves.join("; ")
         ))
     }
 
