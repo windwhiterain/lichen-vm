@@ -1843,6 +1843,110 @@ fn a_named_instantiation_through_a_parameter_checks_the_field_types() {
 }
 
 #[test]
+fn a_deferred_instantiation_refusal_points_at_the_offending_argument() {
+    // The refusal is recorded on a **per-apply clone** of the supplying key —
+    // the checker never saw that node — so the caret comes from the clone's
+    // template origin (`Module::node_origin`), which is the argument node the
+    // checker did attribute.  Both the unknown-field and the mismatched-type
+    // refusal point at the argument the user wrote, inside the lambda body.
+    let d = diags("S = struct<.y Int>\nf = s => s(.x 1)\nf (S)");
+    assert_eq!(
+        d[0].check.as_ref().expect("a checker diagnostic").kind,
+        DiagKind::TableMiss,
+        "{d:?}"
+    );
+    assert_eq!(
+        d[0].span,
+        Some((2, 15)),
+        "the caret is on the instantiation's offending argument: {d:?}"
+    );
+    // `f = s => s(.x 1)` — column 15 is the `.x 1` argument in the lambda
+    // body, not the `f (S)` call site on the next line.
+    let d = diags("S = struct<.x Int, .y Type>\nf = s => s(.x string, .y 1)\nf (S)");
+    let spans: Vec<_> = d.iter().map(|diag| diag.span).collect();
+    assert_eq!(
+        spans,
+        vec![Some((2, 15)), Some((2, 26))],
+        "one caret per mismatched argument, both in the lambda body: {d:?}"
+    );
+}
+
+#[test]
+fn an_undecided_sibling_type_narrows_the_deferred_type_check() {
+    // Known limit, pinned deliberately.  The supplying key carries a type only
+    // when every argument's type is decided, so one undecided argument (here
+    // `.y _`) drops the type from **every** key and `.x`'s `string`-against-
+    // `Int` mismatch is not checked: the program is accepted.  A per-argument
+    // key form would check `.x` and refuse this; the mechanism for that is not
+    // in place, so this records the behaviour rather than asserting the
+    // intended one.
+    let report = compile("S = struct<.x Int, .y Type>\nf = s => s(.x string, .y _)\nf (S)");
+    assert!(
+        report.ok(),
+        "the undecided sibling suppresses the whole type check: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn a_deferred_instantiation_of_a_concrete_argument_type_is_accepted() {
+    // A parameter annotated with the struct type resolves the callee at the
+    // call, so the named instantiation checks against the real fields.
+    let (module, root) = run("A = struct<.x Int, .y Int>\nf = x: A => x\nf (_(.x 1, .y 2))");
+    let mut module = module;
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(ids.len(), 2);
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[0]))
+                .as_ref()
+                .unwrap()
+        ),
+        1
+    );
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[1]))
+                .as_ref()
+                .unwrap()
+        ),
+        2
+    );
+}
+
+#[test]
+fn a_mixed_positional_and_named_instantiation_reorders() {
+    // A positional argument fills the lowest-numbered unclaimed definition
+    // position, so `.y 2, 1` gives `(.x = 1, .y = 2)`.
+    let (module, root) = run("A = struct<.x Int, .y Int>\nf = s => s(.y 2, 1)\nf (A)");
+    let mut module = module;
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(ids.len(), 2);
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[0]))
+                .as_ref()
+                .unwrap()
+        ),
+        1,
+        ".x takes the positional argument"
+    );
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[1]))
+                .as_ref()
+                .unwrap()
+        ),
+        2,
+        ".y takes the named argument"
+    );
+}
+
+#[test]
 fn an_instantiation_through_a_parameter_at_a_non_struct_fails_at_the_call() {
     // `f = s => s(1,2); f (Int)` — the body's callee is pinned to a struct
     // kind, so the non-struct argument fails the apply's parameter check:

@@ -339,6 +339,10 @@ impl<P: Program> Module<P> {
         // Reserve the clone id before recursing so diamonds resolve to one
         // clone and value cycles to the clone's own (still evaluating) id.
         let clone = self.add_node(ctx.target, None, None);
+        // The clone's template origin: the node it instantiates, so a reader
+        // that holds a *clone* — a runtime failure's own operand — can reach the
+        // source node the layer above attributes by ([`Module::node_origin`]).
+        self.nodes[clone].origin = Some(node);
         // The owner tag: a node of the closure's own scope joins the fresh
         // id (its template reads as members of that id, re-instantiated per
         // call), while a capture — a member of the *enclosing* template
