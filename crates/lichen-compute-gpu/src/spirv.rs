@@ -906,9 +906,7 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                 left: 0,
             })
         };
-        let args = args.clone();
         let instruction = op;
-        let _ = instruction;
         match instruction {
             KernelInstr::Const(class, value) => {
                 // A constant is emitted once per (class, value) no matter how
@@ -1527,11 +1525,6 @@ fn assemble(ids: &Ids, binding: Binding, literals: &[Inst], code: &[Inst], bound
         ],
     );
     out
-}
-
-/// Pop one operand, or refuse.
-fn pop(stack: &mut Vec<Slot>, at: usize) -> Result<Slot, SpirvRefusal> {
-    stack.pop().ok_or(SpirvRefusal::UnbalancedStack { at })
 }
 
 /// The class a binary operator runs over, from its two operands.

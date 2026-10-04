@@ -235,7 +235,7 @@ impl<P: Program> Module<P> {
                 Selection::Views(view) => self.define_in(domain, view),
             };
         }
-        /// The domain's own node is a parameter too**, not only its leaves: a body may
+        // **The domain's own node is a parameter too**, not only its leaves: a body may
         // read a tuple domain whole (`k x` rather than `k (x(0), x(1))`), and that
         // read is the parameter's own value.
         if self.class_root(domain) == self.class_root(node) {

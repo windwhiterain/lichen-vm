@@ -66,8 +66,8 @@ use lichen_highlevel::shape::{
     array_items as array_items_any, field_list, field_names, field_type, low_type_of_slot,
 };
 use lichen_kernel_ir::{
-    BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelShape,
-    ResidentId, ScalarClass, ScalarData, fragment_digest,
+    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
+    ScalarClass, ScalarData, fragment_digest,
 };
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
@@ -75,7 +75,6 @@ use lichen_lowlevel::{
     LowValue, Module, ModuleKey, NodeId, Operation, OperatorExt, Program, Release, StaticModule,
     ValueExt,
 };
-use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
 
 mod body;
@@ -3039,47 +3038,6 @@ where
     root
 }
 
-/// The member of `node`'s equality class that *defines* its value — a class
-/// member carrying a computational operator (anything but a `value_of` index
-/// extraction, which is a view of a `[value, type]` pair rather than the
-/// computation itself).  The deep pass collapses some values to a bare
-/// `Parameterized` cell and unifies that cell with the defining computation
-/// (a kernel call's result, a `launch` argument); the emitter reaches the
-/// computation through the class.  Returns `None` when the class has no such
-/// member — the value is genuinely opaque (an uncomputable leaf).
-///
-/// The walk is the class's own member list, not a scan of the module's whole
-/// node table.  The table holds every kernel's nodes while the emitter is
-/// compiling one kernel, and this call is made per kernel that reaches a bare
-/// cell, so scanning it made codegen quadratic in the number of kernels.
-fn class_computation_node<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    let root = equality_rep(module, node);
-    for member in disjoint::members(&module.nodes, root) {
-        if let Some(op) = module.node_operation(member).as_ref()
-            && !matches!(
-                AsEnum::<LowOperator>::as_enum(&op.operator),
-                Some(LowOperator::Index)
-            )
-        {
-            return Some(member);
-        }
-    }
-    None
-}
-
-/// A `compute.write` reached inside a conditional.  A write is a side effect
-/// with no value, so it cannot sit in a `select` branch (which must leave a
-/// value on the stack) — and it would be written on only one of the two paths,
-/// which is exactly what the every-ordinal-written invariant forbids.  The one
-/// construct that could skip a write is named here rather than emitted.
-const CONDITIONAL_WRITE: &str = "a `compute.write` inside a conditional is not supported: that \
-     output ordinal would not be written on every index";
-
 /// How many levels deep [`emit_node`]'s walk may go before it refuses.
 ///
 /// **The budget is on the walk, and the walk's depth is the trip count.** An
@@ -4421,21 +4379,6 @@ fn flatten_offset(domain: &LowShape, path: &[usize]) -> Result<usize, String> {
     Ok(offset)
 }
 
-/// The domain shape a parameter index `path` reads — the mirror of
-/// [`flatten_offset`], which answers the same path with a local offset instead
-/// of a shape.  A path into a scalar is `None`: a scalar domain is only ever
-/// read whole, as the empty path.
-fn sub_shape<'a>(domain: &'a LowShape, path: &[usize]) -> Option<&'a LowShape> {
-    let mut shape = domain;
-    for &i in path {
-        let LowShape::Tuple(items) = shape else {
-            return None;
-        };
-        shape = items.get(i)?;
-    }
-    Some(shape)
-}
-
 /// One scalar crossing a kernel's ABI — a launch/call argument, or a value a run
 /// handed back: the class it is and the bits that class's wasm value takes.
 ///
@@ -4787,26 +4730,6 @@ where
 {
     // SAFETY: `node` is a live node of `module`.
     unsafe { module.array_items(node) }.ok_or_else(|| "operand is not an array value".into())
-}
-
-/// The `[function, argument]` of an `Apply` operand array.  The checker's
-/// apply operands are `[function, argument, result_cell]` (the result cell is
-/// a checker-wired value that does not participate in codegen), so unlike
-/// [`operand_pair`] this tolerates extra elements and takes the first two.
-fn apply_pair<P>(module: &Module<P>, operand: Option<NodeId>) -> Result<(NodeId, NodeId), String>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    let Some(operand) = operand else {
-        return Err("Apply operand is missing".into());
-    };
-    let items = operand_items(module, operand)?;
-    if items.len() < 2 {
-        return Err("Apply operand array must have at least two elements".into());
-    }
-    Ok((dyn_node(items[0].node)?, dyn_node(items[1].node)?))
 }
 
 /// Record one dispatch into the graph being built, in place of running it.
@@ -5432,41 +5355,6 @@ where
             .and_then(|value| AsEnum::<LowValue>::as_enum(&value)),
         Some(LowValue::Function(AnyFunctionId::Static(_)))
     )
-}
-
-/// Emit a **frozen** module's node as the constant it holds — the value half of
-/// [`emit_operand`].
-fn emit_static_operand<P>(
-    module: &Module<P>,
-    item: AnyNodeId,
-    body: &mut Vec<KernelInstr>,
-) -> Result<(), String>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    let held = module
-        .node_value(item)
-        .and_then(|held| AsEnum::<LowValue>::as_enum(&held));
-    match held {
-        Some(LowValue::USize(value)) => {
-            body.push(KernelInstr::Const(
-                ScalarClass::Int,
-                const_bits(ScalarClass::Int, value as i64),
-            ));
-            Ok(())
-        }
-        Some(LowValue::Float(value)) => {
-            body.push(KernelInstr::Const(ScalarClass::Float, float_bits(value)));
-            Ok(())
-        }
-        other => Err(format!(
-            "a kernel body reached a frozen module's node holding {other:?} where it needs a \
-             value: a static module is the callee of an apply, and the only part of it a kernel \
-             can carry across is a scalar constant"
-        )),
-    }
 }
 
 /// The compiled **module cache** — the launch paths' derived-data cache: an
@@ -6514,7 +6402,11 @@ fn word_value(class: ScalarClass, word: i64) -> wasmi::Val {
 #[cfg(test)]
 mod parallel_launch_tests {
     use super::*;
-    use lichen_kernel_ir::ResidentId;
+    // **`KernelBody` and `FlatOp` reach a hand-written body, and nothing else in
+    // this file does.** `from_flat` is the one construction a test — or a
+    // fixture — has, since it has no graph to lower; keeping them out of the
+    // crate's imports is what says the SSA walk does not build bodies this way.
+    use lichen_kernel_ir::{FlatOp, KernelBody, ResidentId};
 
     /// A two-output parallel fragment over `(n, i)`: `out0[i] = i + 1` and
     /// `out1[i] = i + i`, with each `BufferWriteCall` fed the

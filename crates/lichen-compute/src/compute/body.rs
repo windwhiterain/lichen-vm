@@ -1066,6 +1066,20 @@ where
         }
         // (2) and (3): the pair's value half, read as a concrete tuple.
         let array = self.module.pair_value_node(arg).unwrap_or(arg);
+        // **A wrapper's `launch` argument is a bare `Parameterized` cell** —
+        // concrete only at run time — so the tuple it stands for is not an array
+        // value here and never will be, and that is why the third shape misses.
+        //
+        // Measured on `jit_cross_kernel_tuple_argument_through_the_wrapper`, which
+        // is the test this shape is for: `array` (the pair's value half) is its own
+        // singleton class and holds no array, while **`class_root(arg)` does hold
+        // one**. So the link exists and is the argument's class, not the peel's.
+        //
+        // **That is not wired in.** Following it needs the argument's own class to
+        // be walked for its elements, and the element that fails is the parameter
+        // the tuple carries — so the next question is what *that* resolves to, not
+        // how to find the tuple. Recorded here because the measurement is the
+        // answer to "where is the tuple", and finding it is the easy half.
         self.tuple_leaves(array, items)
     }
 
@@ -1086,7 +1100,10 @@ where
         for (element, item) in elements.iter().zip(items) {
             let element = dynamic(element.node)?;
             match item {
-                KernelShape::Scalar(_) => args.push(self.value(element)?),
+                KernelShape::Scalar(_) => {
+                    let value = self.value(element)?;
+                    args.push(value)
+                }
                 KernelShape::Tuple(nested) => args.extend(self.tuple_leaves(element, nested)?),
             }
         }
@@ -1164,16 +1181,6 @@ where
 /// argument does not own.
 pub(super) const CALLEE_ARGUMENT: &str = "a cross-kernel call's argument must be a concrete tuple value or a whole parameter read; \
      build the argument from its elements (or pass the parameter through)";
-
-/// The node an array element names, or the reason there is none.
-fn target_item(node: lichen_lowlevel::AnyNodeId) -> NodeId {
-    match node {
-        lichen_lowlevel::AnyNodeId::Dynamic(node) => node,
-        // A frozen arm is a constant the clone carried across, and `array_items_of`
-        // answers `None` for it below — so this arm is never reached with one.
-        lichen_lowlevel::AnyNodeId::Static(_) => NodeId::default(),
-    }
-}
 
 fn dynamic(node: lichen_lowlevel::AnyNodeId) -> Result<NodeId, String> {
     match node {

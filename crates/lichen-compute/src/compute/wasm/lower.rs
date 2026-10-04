@@ -269,7 +269,7 @@ fn type_parameters(walk: &mut Walk<'_, '_>) -> Result<(), String> {
 /// Lower one instruction. **No stack**: its operands are named by its definition,
 /// and its result is a value this walk records.
 fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
-    let Some(ValueDef::Instr { op, args, classes }) = walk.body.values.get(instr.0 as usize) else {
+    let Some(ValueDef::Instr { op, args, .. }) = walk.body.values.get(instr.0 as usize) else {
         return Err(format!(
             "compute.wasm: {instr:?} is a block parameter, not an instruction"
         ));
