@@ -49,6 +49,7 @@ There is no separate write policy: the arms decide whether a write happens.
 | `fd92bef` (landed) | 155 | 87 | 60/62 | 137/140 | **5.5s** |
 | write path, class-level read (×2) | — | **34/87** | **4/61** | — | — |
 | write path, member-local (landed) | 155 | 87 | 60/62 | 137/140 | 2.8s |
+| class value carrier, O(1) read (landed) | 155 | 87 | 60/62 | 137/140 | 2.7s |
 
 - The three `pipeline` failures are **not** this work: they pass on `dev`
   (`26c3cb5`) and already fail at `d5259ee`, i.e. inside this branch's earliest
@@ -61,9 +62,15 @@ There is no separate write policy: the arms decide whether a write happens.
   mixture), so a class-level read turns every ordinary write into a conflict.
 - `fd92bef`'s cost is the read it introduced: `class_committed_value` **scans the
   class's members** on every `unify_inner` call, including every array element.
-  That scan is *load-bearing* in the merge path — it stands in for the deleted
+  That scan was *load-bearing* in the merge path — it stands in for the deleted
   guard's member-aware read — so it cannot simply be swapped back for the O(1)
   representative read without losing the conflict check for member-held values.
+  **[landed, O(1)]** It is now a carrier on the representative: the class records
+  *which* member holds its value, so the read is one `find` plus one field read.
+  The value is not moved onto the representative because a representative bearing
+  an operation is never written (the veto), so it often could not land there; see
+  `class-channel.md` §1.1.  What remains open is the **write walk**, which is
+  O(members) per write by nature.
 
 ## 4. Next step, precisely
 

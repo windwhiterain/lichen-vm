@@ -181,6 +181,10 @@ impl<P: Program> Module<P> {
             survivors.push(member);
         }
         disjoint::rebuild(&mut self.nodes, &survivors);
+        // `rebuild` re-elected a representative among the survivors, so the
+        // class's value carrier has to be re-pointed at one of them: the member
+        // it named may be the one being dropped.
+        self.reselect_class_carrier(&survivors);
     }
 
     /// Drops `block` and everything homed in it (children, functions,

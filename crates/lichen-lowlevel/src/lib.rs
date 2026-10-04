@@ -1213,6 +1213,18 @@ pub struct Node<P: Program> {
     /// absent for any node the backend will not trace (type-check-only
     /// scaffolding, or a node materialized before the backend runs).
     low_shape: Option<LowShape>,
+    /// The member of this node's equality class that carries the class's
+    /// committed value — **valid only on the class's representative**, exactly
+    /// as `low_shape` is, and for the same reason: a class has one value and it
+    /// may sit on any member (an operation-bearing member keeps its own
+    /// computation, so it is never written), which is why a reader needs to be
+    /// told which member to read rather than scanning for it.  `None` is a class
+    /// that has committed nothing.
+    ///
+    /// Private behind the same gate as `value`: written only through
+    /// [`Module::commit_class_value`], which is the value-write path, so a
+    /// carrier cannot outlive the value it names.
+    class_carrier: Option<NodeId>,
     /// The node's computation — the operator and its single operand edge, or
     /// `None` for a node that carries a value instead.  **Private**: read
     /// through [`Module::node_operation`], and defined once, either by

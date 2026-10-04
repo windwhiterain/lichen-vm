@@ -490,17 +490,14 @@ impl<P: Program> Module<P> {
             self.nodes[node].runned = true;
             return value;
         }
-        // The computation produced an answer: it must agree with what its class
-        // already holds.  A class may hold a value a unification put there while
-        // this node was undecided (the unifier writes, it does not compute), and
-        // a disagreement is exactly the conflict the unify deferred to here.
-        let prior = self.nodes[node].value.or_else(|| {
-            let rep = self.equality_representative(node);
-            self.class_committed_value(rep)
-        });
-        self.reconcile_computed(node, prior, value);
-        self.nodes[node].runned = true;
-        self.nodes[node].value = Some(value);
+        // The computation produced an answer: it is committed through the one
+        // value-write path, so the class's value reaches the representative
+        // rather than sitting on this member beside it, and it is reconciled
+        // with what the class already held — a class may hold a value a
+        // unification put there while this node was undecided (the unifier
+        // writes, it does not compute), and a disagreement is exactly the
+        // conflict the unify deferred to here.
+        self.write_node_answer(node, value);
         value
     }
 

@@ -157,11 +157,21 @@ rule's test, not the read API.
 two reds is `jit_cross_kernel_subexpr`, parked with an `#[ignore]` and its
 reason), and `pipeline` 137 of 140 — every number identical to `dev`'s.
 
-**What this does not settle.**  The scan `fd92bef` added is in `unify_inner`,
-which reads `class_committed_value` of both sides on every pair — every array
-element included — and that is the measured 2.8s → 5.5s step.  The write path
-never reads the class, so the write rule cannot reach it: it stays
-**load-bearing** in the merge path and needs an item of its own.
+**What this does not settle.**  The write walk (`propagate_class_value`) is
+O(members) per write — no index makes writing to *m* members O(1) — and it is the
+remaining item.  The read is done: `class_committed_value` scanned the member
+list (twice per `unify_inner` pair, every array element included), which is the
+measured 2.8s → 5.5s step `fd92bef` introduced; the class's representative now
+carries the member that holds the class's value, so the read is one `find` plus
+one field read.
+
+**Why the representative's own slot is not the carrier.**  The obvious shape —
+"the class value *is* the representative's value" — cannot work: a
+representative that bears an operation is never written (the veto), so the value
+frequently has nowhere to land.  A debug assertion written during this work
+named the case directly (`members [6, 7]`, representative `6` an operation
+node), which is why the carrier is a *pointer* to the member that holds the
+value rather than the value itself.
 
 **Measured, and it refutes reading the rules at the class level** (two attempts,
 identical signature: `--test checker` 34 of 87, `--test compute` 4 of 61).  Rules
@@ -175,13 +185,12 @@ mixture).  The tolerated comparison this note's §2 relies on is what keeps thos
 ordinary writes from being conflicts.
 
 That also settles the O(1) question's real shape: `class_committed_value`'s scan
-is **load-bearing** in the merge path — it is what stands in for the deleted
-guard's member-aware read — so the read cannot be made O(1) while a class's
-knowledge is distributed over its members.  The scan belongs to the merge site,
-where establishing what a class knows is inherently O(class size); what the
-recursion must not do is pay it, which is what `fd92bef` made it do (measured:
-`--test compute` 2.8s → 5.5s, and back to **2.4s** once the write rule landed —
-see §1.1).
+was **load-bearing** in the merge path — it stood in for the deleted guard's
+member-aware read — and it cannot be made O(1) by *moving* the value: a class's
+value may sit on a member no write may touch (an operation-bearing
+representative), so the class's representative records **which** member carries
+it and the scan became one field read (§1.1).  The write walk stays O(class size)
+per write, which is inherent to distributing a value over members.
 
 ## 2. Half one — refuted: a class's low type is not a second reading of a type slot
 
