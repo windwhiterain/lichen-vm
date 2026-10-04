@@ -396,6 +396,35 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   entry of the block holding it, which is what makes a zero-trip loop correct.
 - **The `@loop` keyword** — through lexer, parser, AST and frontend, with `@`
   reserved as the sigil. It reaches `ExprKind::Function::looping`.
+- **The conversion itself** — `crates/lichen-lowlevel/src/loop_conversion.rs`:
+  `Module::loop_conversion(function)` answers §4's shape rules over the marked
+  template and, for a convertible recursion, returns **what it converts to** —
+  the carried state (one path per slot), each base test with its two arms, each
+  step's next-state computations, and each exit's result values, all as
+  `NodeId`s. It is **not** a control-flow graph; see §8.6 for the line, and
+  `resolve.rs` for why the graph cannot hold one.
+  `Module::parameter_value_path` is its read-resolution query, and the refusals
+  are `LoopRefusal::{NotRecursive, MutualComponent, NonTailCall, NoBaseCase,
+  StateShape}`, each with the name a diagnostic carries. Verified against the
+  checker's real templates by `loop_marker.rs` (a scalar state and a two-element
+  tuple state both convert; a non-tail call and a mutual pair name their rules)
+  and by hand-built shapes in `tests/basic/loop_conversion.rs`. The probe
+  `examples/recursion.rs` prints one verdict per shape.
+- **The marker reaches the graph through real source** — `compile.rs`'s
+  block-wide binding arm re-stamps `ExprKind::Function::looping` when the
+  binding is `@loop`. Without it the mark was dropped at the transplant, and the
+  probe read "no looping function found" for a source that had written `@loop`
+  (`@loop sum_to = …` is a binding whose value is the function, so the two nodes
+  are one). **Found by the dump probe, not by a test.**
+- **`resolve.rs`'s `selection_of` views the conditional correctly** — the
+  container rule is now the emitter's own (`emit_node`'s `value_of` arm): an
+  operator target at constant 0 is a `value_of` peel, and only a target that
+  *holds an array value* is a container. The previous rule peeled the target with
+  `pair_value_half` first, which misreads the conditional's **bare two-element
+  arms array** as a `[value, type]` pair — so `selection_of` answered `None` for
+  every `[else, then][selector]` the checker compiles, and `operands_of`'s `Index`
+  arm peeled the operand array the same way. Both are fixed; the conditional
+  resolves as `Selection::Computed`, `Index(apply, 0)` as `Views(apply)`.
 - **The wasm backend** — walks the structure and emits `If` and `While`. An `if`
   frame *is* the join; a `while` is a `loop` wrapped in a `block` so its two exits
   agree; a carried value is a local, because a `br` to a loop label takes no
@@ -418,8 +447,10 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
    ([wasm-control-flow](wasm-control-flow.md) §5), which owns the slot-first
    pipeline; the hand-written emitter is deleted and the straight-line path lowers
    through it ([wasm-backend-handoff](wasm-backend-handoff.md) §3.1). **The loop
-   itself is §8.5 step 2a**, and it is blocked behind §8.6 rather than behind
-   anything in this emitter. The one independent bug the withdrawn attempt found —
+   itself is §8.5 step 2a**, and what it still waits on is the JIT reader §8.6
+   names — the conversion that answers "what is the loop" landed (§8.2), and
+   nothing consumes it. The blocker is not anything in this emitter. The one
+   independent bug the withdrawn attempt found —
    every block type being declared *after* the type section was serialized — is
    fixed.
 2. **`passed_out` is under-specified — CLOSED.** The contract is now stated in the
@@ -558,13 +589,16 @@ cleared the CPU side but nothing turns on it yet, because 1c is not:**
    inherits 1b: the refusal it wrote for a body that is "only a transfer" is the
    SPIR-V emitter saying there is no block for `OpLoopMerge`'s continue target, which
    `Terminator::Jump` now resolves.
-4. **Delete `value_decided`** in `feature/eval-loop-recording` and make the
-   evaluator *record* a loop rather than refuse. This is the biggest remaining
-   piece and the one no branch has started: the recorded structure itself, the
-   defunctionalisation §3 step 2, and §4's shape rules. It can be validated against
-   the SPIR-V backend once step 3 lands. **The CPU side is no longer the
-   blocker** — 2a has landed — but it is not the next thing either: the first
-   link of the chain is still missing, and not in the evaluator. **Read
+4. **Delete `value_decided` (or invert it) and make the JIT *emit* what the
+   conversion returned.** The conversion half is no longer missing — it is
+   `Module::loop_conversion` (§8.2) — so what remains is the reader: build the
+   loop's `KernelBody` (SSA, `Flow::While`, one block per arm), bind the entering
+   call's arguments to the state slots, and map each slot to a local. `value_decided`
+   is still the gate that decides *whether* the unroll handles a site, and it has
+   a consumer for as long as the unroll is the only path that produces code: a
+   decided entry is expanded, an undecided one is refused (now by name — the
+   conversion's rule, or `LoopNotEmitted`). It can only be deleted with the step
+   that makes an undecided call *run*. **Read
    [§8.6](#86-where-the-conversion-lives-lowlevel-and-the-jit-reads-it) before
    sizing this.**
 5. **Run the reduction on both backends**, past the 2000-apply budget and the 512
@@ -629,7 +663,20 @@ That gives three things, and they are the whole design:
 |---|---|---|
 | the **mark** | [`Function::looping`](../../crates/lichen-lowlevel/src/lib.rs) | rides on the template, because the templates are the only place the recursion is still a cycle — every apply clones them away |
 | the **analysis** | the strongly connected components of the marked call graph | same window, over the same templates the deep pass is about to walk |
-| the **output** | a **control-flow skeleton** over `NodeId`s — blocks, terminators, and which nodes each block evaluates | read by the JIT |
+| the **output** | **which node plays which role** — the carried state's paths, each base test, each step's next state, each exit's values — as [`LoopConversion`](../../crates/lichen-lowlevel/src/loop_conversion.rs) | read by the JIT |
+
+**The output is the recursion's own facts, not a control-flow graph, and that is a
+correction this section needed.** The table used to say "a control-flow skeleton
+over `NodeId`s — blocks, terminators, and which nodes each block evaluates", and
+`resolve.rs` states why that cannot live in lowlevel: this graph is a **DAG of
+values** — every node is computed once and `evaluate_node_deep` answers a value
+for every node it reaches — while a CFG says *some of this is not computed once*
+(a header is entered many times and its blockparams differ each time). That is a
+**program** fact, and the program is `lichen-kernel-ir`'s `KernelBody`, which is
+becoming SSA for exactly this reason. So the conversion names roles over the
+value graph and the body is built where bodies live. What the earlier draft got
+right is what survives: the conversion runs on the templates, before the deep
+pass expands them, and a consumer reads its answer.
 
 **The skeleton says *what runs when*; the JIT keeps saying *how to emit it*.** That
 split is what makes this cheap: class tracking, `Positions`, the depth budget and
@@ -652,10 +699,20 @@ Each step is landable and each is *used* by the one before it lands:
    function's shell exists. **Done.**
 2. **The analysis moves down** with it: the components over `Module`'s function
    graph, in the window between the statement pass and the deep pass. The checker
-   keeps only stamping and recording sites.
-3. **The skeleton**, straight-line first, and the JIT reads it for ordering. A body
-   with no marked cycle is one block, which is exactly what the JIT emits today, so
-   nothing else has to move.
+   keeps only stamping and recording sites. **Done, in `loop_conversion.rs`** —
+   `loop_component` walks the marked call graph over the templates (nested
+   closures included) and the checker only *asks*, per component entry, what the
+   conversion says. The checker's own IR-level Tarjan run stays for what it alone
+   can answer: which **call sites** enter a component and whether their argument
+   is decided.
+3. **The conversion facts**, and the JIT reads them for ordering and for the
+   nest's shape. A body with no marked cycle is one block, which is exactly what
+   the JIT emits today, so nothing else has to move. **Landed as
+   `Module::loop_conversion`** (§8.2): a shape that converts, or a
+   `LoopRefusal` naming the rule that refused it. **What remains is the reader** —
+   no backend consumes `LoopConversion` yet, so a converted-and-undecided marked
+   call still fails the build, now as `DiagKind::LoopNotEmitted` rather than as
+   the generic refusal.
 4. **The deep pass stops expanding a marked cycle** it cannot decide. Until this
    lands there is no graph with a live cycle in it for step 5 to read — and this is
    the step most likely to be underestimated: `function_apply` clones per
