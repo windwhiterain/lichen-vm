@@ -768,10 +768,11 @@ where
     Some((dom, cod))
 }
 
-/// [`Module::clone_signature`] over an [`AnyFunctionId`], dynamic only: a
-/// static function-type (a frozen module's) is a Phase 1 gap — its clone needs
-/// the static materialise path, not yet wired — so it answers `None` and the
-/// caller treats the unify as unhandled.
+/// [`Module::clone_signature`] over an [`AnyFunctionId`].  A **dynamic**
+/// function-type clones the template's signature (so the template's shared
+/// cells stay unbound); a **static** one (a frozen module's) has an immutable
+/// signature, so its parameter and return type cells are materialized as fresh
+/// dynamic leaves and reconciled as a check.
 fn clone_signature_dynamic<P: Program>(
     module: &mut Module<P>,
     fid: AnyFunctionId,
@@ -781,7 +782,7 @@ where
 {
     match fid {
         AnyFunctionId::Dynamic(function) => module.clone_signature(function),
-        AnyFunctionId::Static(_) => None,
+        AnyFunctionId::Static(sref) => module.materialize_static_signature(sref),
     }
 }
 
