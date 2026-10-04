@@ -175,11 +175,22 @@ which is what makes a barrier inside a data-dependent loop a separate question.
 
 **It runs in lichen evaluation, at the point where the recursion is walked** — the
 same decision the unmarked case makes when it expands (§1.1) — and what it
-produces is a **loop already recorded in the graph**, which the JIT reads and
-emits. It is not a pass over an emitter's body and not an emitter-side inline: a
-cycle cannot be recognised from a stack-machine walk of a finished body, because
-that walk sees one call at a time and has already lost the caller. The evaluator
-is what *is* the recursion.
+produces is a **description of the loop**, which the JIT's walk turns into a
+loop and emits. It is not a pass over an emitter's body and not an emitter-side
+inline: a cycle cannot be recognised from a stack-machine walk of a finished
+body, because that walk sees one call at a time and has already lost the caller.
+The evaluator is what *is* the recursion.
+
+> **Corrected: the description, not the loop, is what evaluation produces.** This
+> section originally said the evaluator produces "a loop already recorded in the
+> graph". It cannot — the graph has no control-flow representation to record one
+> in ([§8.6](#86-nothing-produces-a-loop)) — and the decision recorded there moves
+> the construction to the JIT's walk. **The argument above is unchanged and still
+> carries**, because it is about *what information is available where* and the
+> caller is still known where the decision is made: evaluation is what hands the
+> description over. What is given up is the location, not the fact. Evaluation
+> decides *which* cycle converts and *from which call*; the JIT's walk turns that
+> description into `Flow::While`.
 
 Three steps, and the first two are the evaluator's:
 
@@ -557,8 +568,8 @@ writes one.**
 
 #### The fork, and what each answer costs
 
-Not decided here. Three shapes, and the costs are structural reads — none of them
-measured.
+Not decided here → **decided, B.** Three shapes were read, and the costs below are
+structural reads — none of them measured.
 
 | | the shape | what it costs, and what it buys |
 |---|---|---|
@@ -566,16 +577,13 @@ measured.
 | **B** | the evaluator hands the JIT **a description of the cycle**, and the JIT's walk builds `Flow::While` from the graph it already walks | **Buys** the graph stays a value graph and `KernelBody` stays where the CFG-consuming code already is; `loops.rs` is nearly the whole of the analysis half already. **Costs** it is a **correction to §3**: "runs in evaluation, at the point where the recursion is walked" becomes "runs in the JIT's walk, from a description evaluation hands it" — which keeps §3's real argument (a cycle cannot be recognised from a stack-machine walk of a *finished* body, because that walk has already lost the caller) and loses its location. |
 | **C** | the loop is a **value** — a recursor or closure the graph already has | **Costs** it cannot work without becoming A. Every node in the graph is *evaluated*, and a node whose only exits are backedges has no value the evaluator can produce; the evaluator would have to leave it undelayed, which is the new node kind again, with a worse name. Recorded so the option is visibly closed rather than silently untried. |
 
-**B is where the reading lands**, and the reason is narrow: the argument §3 makes
-is about *what information is available where*, and B preserves it — the caller is
-still known where the decision is made, because the evaluator hands over the
-call. What B gives up is the sentence, not the fact. **A** is the honest answer if
-the graph is ever going to carry control flow for anything else, and nothing in
-this feature says it is.
-
-**Deciding this is not step 4's to decide by accident.** It changes what step 4
-*is*, and §3 is a settled decision among the four this note says are closed
-without a new reason — so it needs one stated, or B chosen with §3 amended.
+**Decided: B — the JIT's walk builds the CFG.** Evaluation hands it a description
+of the cycle; the construction into `Flow::While` happens where `KernelBody`
+already lives. §3 is amended above, which is the cost and it is paid honestly.
+**A** is the answer if the graph is ever going to carry control flow for anything
+else, and nothing in this feature says it is. **C** is closed: every node is
+evaluated, and a node whose only exits are backedges has no value the evaluator
+can produce.
 
 **Stage 0 — the `loop` keyword and the evaluator's choice.** The surface lands
 first, and it is the smallest thing that can be observed working: a `loop` keyword
