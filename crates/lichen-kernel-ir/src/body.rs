@@ -211,7 +211,10 @@ pub fn from_flat(domain: usize, ops: &[FlatOp]) -> KernelBody {
         body.add_param(entry);
     }
     let parameters = body.blocks[entry].params.clone();
-    let mut values: Vec<ValueId> = parameters.clone();
+    // **The stack starts empty.** A parameter is reached by `Read(k)`, which is a
+    // step of *writing* a body — seeding the stack with them would leave every
+    // parameter on it, and the return below would hand them back as results.
+    let mut values: Vec<ValueId> = Vec::new();
     for op in ops {
         match *op {
             FlatOp::Read(index) => {
@@ -236,12 +239,18 @@ pub fn from_flat(domain: usize, ops: &[FlatOp]) -> KernelBody {
             }
         }
     }
-    // **The return hands out what is left**, most recent first, which is what a
-    // hand-written body's final steps produced.
+    // **The return hands out the top of the stack and nothing else.** A body that
+    // computes several values in sequence returns the last one, which is what the
+    // stack's own convention was; handing back every intermediate would make the
+    // arity depend on how the body was written.
+    //
+    // **A body that produces nothing returns nothing** — a write-only fragment's
+    // results are its output buffers, not its wasm results, and `compile_parallel_fragment`
+    // appends the constant that gives it one.
     body.set_terminator(
         entry,
         Terminator::Return {
-            values: values.into_iter().rev().collect(),
+            values: values.last().copied().into_iter().collect(),
         },
     );
     body
