@@ -513,20 +513,32 @@ not ship one.
 p = compute.parallel (cfg => { ... sum_to (cfg(0), 0) ... }) "BACKEND"
 ```
 
-In order, and the order is forced. **Items 1, 1b and 2 are done; item 2a is what the
-list now turns on:**
+In order, and the order is forced. **Item 1 is done; 1b is half; 2a has
+cleared the CPU side but nothing turns on it yet, because 1c is not:**
 
 1. ~~**Settle `passed_out`** (§8.3 item 2) in the IR's doc and, if it needs more than a
    count, in the type.~~ **Done** — the exit reads the header's own top `passed_out`
    values, it is stated in `body.rs`'s `Terminator::While`, and `validate()` refuses
    `passed_out > carried` by name.
-1b. ~~**Make a loop body expressible** (§8.3 item 4).~~ **Done** —
-   `Terminator::Jump` exists and `validate_flow` lets a body name the loop's header
-   or its exit, so a reduction has a representation
-   ([loop-body-expressiveness](loop-body-expressiveness.md) §4).
-2. ~~**Fix the wasm `While`** (§8.3 item 1).~~ **Attempted and withdrawn.** Four
-   defects, one cause (hand-tracked operand-stack height); the module now **refuses a
-   loop by name** rather than half-emitting one.
+1b. **Make a loop body expressible** (§8.3 item 4) — **half done**. The
+   *transfer* is: `Terminator::Jump` exists and `validate_flow` lets a body name the
+   loop's header or its exit. The *carried read* is not, and §2.1 of
+   [loop-body-expressiveness](loop-body-expressiveness.md) is still true for that
+   reason: a body can arrive at the header but cannot carry anything new.
+1c. **Give the IR an instruction that reads the carried tuple.** `LocalGet` names a
+   **parameter leaf**, and nothing names element `k` of the loop's current state —
+   so a body can only forward the header's own values, and every loop the IR can
+   build runs zero trips or forever. **This is what a lowering discovers on its way
+   past**: `Flow::While` lowers through `waffle` and the thing it lowers cannot run,
+   and `compute.rs`'s two loop fixtures are the forwarding shape, which is why they
+   validate and cannot execute. The shape has one real question — a new
+   `KernelInstr` beside `LocalGet`, or a second domain for `LocalGet` — and it
+   belongs here, ahead of every remaining item, because nothing downstream can be
+   demonstrated until a loop terminates.
+2. ~~**Fix the wasm `While`** (§8.3 item 1).~~ **Done, by way of `waffle`.** Four
+   defects, one cause (hand-tracked operand-stack height) took the hand-written
+   reorder out of the picture; the backend lowers the whole body through `waffle`
+   ([wasm-control-flow](wasm-control-flow.md) §5).
 2a. ~~**Lower `If`/`Jump`/`While` through `waffle`.**~~ **Done — the CPU-side
     blocker is cleared.** The hand-written slot-based emitter this step called for
     was **not written** — `waffle` owns the slot-first pipeline
@@ -540,7 +552,8 @@ list now turns on:**
     backedge is verified by structure rather than by a run, and the IR still has no
     instruction that reads the carried tuple into a body — so a loop may be
     *expressible* now without any loop that reaches the backend being able to
-    terminate. See [wasm-backend-handoff](wasm-backend-handoff.md) §3.2.
+    terminate. That instruction is **item 1c**, and it is what this list turns on.
+    See [wasm-backend-handoff](wasm-backend-handoff.md) §3.2.
 3. **Rebase and extend `feature/spirv-loop-emitter`** for `Seq` — and it also
    inherits 1b: the refusal it wrote for a body that is "only a transfer" is the
    SPIR-V emitter saying there is no block for `OpLoopMerge`'s continue target, which
