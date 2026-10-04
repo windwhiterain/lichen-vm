@@ -843,14 +843,24 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
 
    **Measured on the merged tree, so the next step does not re-derive it:**
 
+   - **There is no kernel-level `@loop` program anywhere.** Every marked recursion
+     in the tree runs through the **host** loop — `lichen-language`'s
+     `loop_run.rs` says so in its first line, and no `compute.jit` /
+     `compute.parallel` program in any test is marked. The conversion is covered
+     where it lives (`lichen-lowlevel`'s `loop_conversion` tests answer "does it
+     convert"), and the host loop covers "does a marked recursion run as one" —
+     **nothing covers "does a kernel body become a nest", because no such program
+     exists yet.** So item 6 is the walk *and* its acceptance case, and the
+     acceptance case is a program to write, not a test to point at.
    - **Nothing outside `lichen-lowlevel` reads `LoopConversion`.** Its only
      caller today is `lichen-highlevel`'s `checker/loops.rs`, asking per component
      entry. There is no `LoopConversion` anywhere in `lichen-compute`.
    - **The wasm side can already lower the body this item builds.** `lower.rs`
      creates a waffle block per kernel-IR block, binds their blockparams in order,
      and types the non-entry ones by a fixed point over the incoming edges — which
-     is the whole of what a header's carried state needs. So item 6 is *one* new
-     walk in `lichen-compute`, not a backend change.
+     is the whole of what a header's carried state needs. So the walk itself is
+     **one new pass in `lichen-compute`, not a backend change**, which is not
+     obvious from reading either side alone.
    - **The SPIR-V side is the one that cannot.** `spirv.rs` still refuses a body
      that is not straight-line (`is_straight_line`), because `OpLoopMerge` needs a
      merge block and an unconditional branch, and the single-`OpLabel` invariant is
