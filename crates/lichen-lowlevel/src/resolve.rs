@@ -53,6 +53,7 @@
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
 
+use crate::ArrayItem;
 use crate::{AnyNodeId, FunctionId, LowOperator, LowValue, Module, NodeId, Program};
 
 /// What an `Index` node turned out to be. See [`Module::selection_of`].
@@ -114,8 +115,20 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// An operand array's elements, in order.
+    ///
+    /// **The whole array, not the first two** — [`Self::operand_pair`] is the
+    /// two-element reading, and a three-element `[function, argument,
+    /// result_cell]` has to be readable whole for a caller that wants its third.
+    /// A lowering that needs an operand's shape asks for the shape it needs; the
+    /// two readings cannot disagree about what the array holds.
+    pub fn operand_items(&self, operand: NodeId) -> Result<&'static [ArrayItem], String> {
+        // SAFETY: `operand` is a live node of `self`; nothing here releases it.
+        unsafe { self.array_items(operand) }.ok_or_else(|| "operand is not an array value".into())
+    }
+
     /// The `[left, right]` of a two-element operand array, all of this module's.
-    fn operand_pair(&self, operand: NodeId, what: &str) -> Result<Vec<NodeId>, String> {
+    pub fn operand_pair(&self, operand: NodeId, what: &str) -> Result<Vec<NodeId>, String> {
         // SAFETY: `operand` is a live node of `self`; nothing here releases it.
         let items = unsafe { self.array_items(operand) }
             .ok_or_else(|| format!("{what} operand is not an array value"))?;
@@ -191,16 +204,54 @@ impl<P: Program> Module<P> {
         None
     }
 
-    /// What defines the value `node` names, read as a member of `function`'s
-    /// body.
+    /// What defines the value `node` names, against the **domain the caller
+    /// states**.
     ///
-    /// **This is the rule that makes the graph readable as SSA.** Three answers,
-    /// in order:
+    /// `domain` is the function's domain *value* node — not the function, and not
+    /// its `[value, type]` parameter pair. The lowlevel has **no type
+    /// representation of its own**, so a pair is the only thing a type question can
+    /// be answered with, and the cost of decoding one is that the width becomes a
+    /// second answer. The caller that already resolved the pair passes what it
+    /// knows; see `docs/notes/checker-encoding-instability.md` for the five readers
+    /// and the one defect they share.
+    ///
+    /// **Three answers**, in order:
     ///
     /// 1. **a parameter leaf** — `node` is in the same equality class as one of
-    ///    the function's parameter leaves, so the value *is* that parameter. This
-    ///    is how a reduced same-module call's substituted parameter reads: the
-    ///    deep pass unified it with the argument.
+    ///    the domain's leaves, so the value *is* that parameter. This is how a
+    ///    reduced same-module call's substituted parameter reads: the deep pass
+    ///    unified it with the argument.
+    /// 2. **a computation** — the node itself, or the class member that computes
+    ///    it ([`Self::defining_member`]).
+    /// 3. **opaque** — the value has no definition this graph can see.
+    /// The leaves of `function`'s **parameter domain** — the pair's value half,
+    /// flattened one level.
+    ///
+    /// **This is where a domain is derived, and deriving it in one place is what
+    /// lets every reader agree.** The value half is a decoding of the pair, and a
+    /// caller that decoded it separately could decode it differently.
+    pub fn parameter_leaves(&self, function: FunctionId) -> Result<Vec<NodeId>, String> {
+        let parameter = self.functions[function].parameter;
+        match self.pair_value_half(parameter) {
+            Some(value) => self.value_leaves(value),
+            None => Ok(vec![parameter]),
+        }
+    }
+
+    /// What defines the value `node` names, against the **function whose domain
+    /// it is read in**.
+    ///
+    /// **The domain is the function's parameter, derived here** rather than handed
+    /// in: the value half is a decoding of the pair, and every caller that decoded
+    /// it separately could decode it differently. A caller that already holds the
+    /// value half reads [`Self::value_leaves`] directly.
+    ///
+    /// **Three answers**, in order:
+    ///
+    /// 1. **a parameter leaf** — `node` is in the same equality class as one of
+    ///    the domain's leaves, so the value *is* that parameter. This is how a
+    ///    reduced same-module call's substituted parameter reads: the deep pass
+    ///    unified it with the argument.
     /// 2. **a computation** — the node itself, or the class member that computes
     ///    it ([`Self::defining_member`]).
     /// 3. **opaque** — the value has no definition this graph can see.
@@ -232,8 +283,14 @@ impl<P: Program> Module<P> {
     /// What an `Index` node is: a **selection** (it computes a value) or a
     /// **view** of something else (it names one).
     ///
-    /// The container rule is the emitter's own (`emit_node`'s `value_of` arm in
-    /// `lichen-compute`), not a second reading of the encoding:
+    /// **One rule for every view, and no guess about encodings.** A *constant*
+    /// index names an element: `Index(x, k)` is `x`'s element `k`, whether `x` is a
+    /// `[value, type]` pair (a `value_of` peel, `x` a typed slot), a tuple
+    /// domain's leaves (`x(1)` on `<Int, Int, Int>`), or an array the graph
+    /// materialised (the destructuring a slot read leaves behind). An earlier
+    /// draft asked first whether `x` was a pair and inferred that from its
+    /// **width** — which a two-leaf domain also has, so it could name the wrong
+    /// array. Width is not the question; a constant index is the answer.
     ///
     /// - **an operator target at index 0** — `Index(e, 0)` where `e` computes —
     ///   is a `value_of` peel: the extraction is a view of the computation's
@@ -262,26 +319,61 @@ impl<P: Program> Module<P> {
         ) {
             return None;
         }
-        let operands = self.operand_pair(operation.operand?, "Index").ok()?;
-        let (target, index) = (operands[0], operands[1]);
-        let constant = self.usize_value(index);
-        if constant == Some(0) && self.node_operation(target).is_some() {
-            return Some(Selection::Views(target));
+        let operands = self.operand_items(operation.operand?).ok()?;
+        let (Some(target), Some(index)) = (operands.first(), operands.get(1)) else {
+            return None;
+        };
+        // **An operand may be frozen.** The apply clone copies a callee's unchanged
+        // subterms by reference, so an index inside a routed body can name a node
+        // of the frozen module — and a view is a view whether the node it reads
+        // lives here or in the module it came from, so the test reads whatever the
+        // operand is rather than insisting it be this module's.
+        if let Some(k) = self.usize_value(index.node) {
+            if let Some(element) = self.item_of(target.node, k) {
+                return Some(Selection::Views(element));
+            }
+            // **A computed target at index 0 is the peel the checker makes over a
+            // call's result** — `value_of` applied to an expression that computes.
+            // The operator's result *is* the pair's value, so the peel names the
+            // operator rather than anything under it.
+            if k == 0
+                && let AnyNodeId::Dynamic(node) = target.node
+                && self.node_operation(node).is_some()
+            {
+                return Some(Selection::Views(node));
+            }
+            return None;
         }
-        if let Some(k) = constant {
-            return self.item_of(target, k).map(Selection::Views);
+        // SAFETY: every operand here is a live node of this module or of a frozen
+        // module that outlives the reference it was read through.
+        match unsafe { self.array_items_of(target.node) } {
+            Some(items) if items.len() == 2 => Some(Selection::Computed),
+            _ => None,
         }
-        // SAFETY: `target` is a live node of `self`.
-        match unsafe { self.array_items(target) } {
-            Some(items) => (items.len() == 2).then_some(Selection::Computed),
-            None => None,
+    }
+
+    /// An operand array's items, whether the array belongs to this module or to a
+    /// frozen one the caller holds.
+    ///
+    /// **A frozen node's payload belongs to its own module**, so only this
+    /// module's arrays are read here; a frozen *array* has no node in this graph
+    /// and is answered `None` rather than by reaching across the boundary.
+    ///
+    /// # Safety
+    ///
+    /// The node must be live — this module's, or one of a frozen module that
+    /// outlives the reference it was reached through, which is the same obligation
+    /// every read of an `AnyNodeId` carries.
+    pub unsafe fn array_items_of(&self, node: AnyNodeId) -> Option<&'static [ArrayItem]> {
+        match node {
+            AnyNodeId::Dynamic(node) => unsafe { self.array_items(node) },
+            AnyNodeId::Static(_) => None,
         }
     }
 
     /// Element `k` of an array node, dynamic entries only.
-    fn item_of(&self, array: NodeId, k: usize) -> Option<NodeId> {
-        // SAFETY: `array` is a live node of `self`.
-        let items = unsafe { self.array_items(array) }?;
+    fn item_of(&self, array: AnyNodeId, k: usize) -> Option<NodeId> {
+        let items = unsafe { self.array_items_of(array) }?;
         match items.get(k)?.node {
             AnyNodeId::Dynamic(node) => Some(node),
             AnyNodeId::Static(_) => None,
@@ -301,7 +393,7 @@ impl<P: Program> Module<P> {
     /// a *pair*, the apply resolves its arity, and the evaluator peels
     /// `Index(pair, 0)`. **No shape is derived here**, and the pass in
     /// [`crate::low_type`] still learns no layout.
-    pub(crate) fn pair_value_half(&self, node: NodeId) -> Option<NodeId> {
+    pub fn pair_value_half(&self, node: NodeId) -> Option<NodeId> {
         // SAFETY: `node` is a live node of `self`.
         let items = unsafe { self.array_items(node) }?;
         if !(2..=3).contains(&items.len()) {
@@ -310,37 +402,6 @@ impl<P: Program> Module<P> {
         match items[0].node {
             AnyNodeId::Dynamic(value) => Some(value),
             AnyNodeId::Static(_) => None,
-        }
-    }
-
-    /// The **type** half of a `[value, type]` pair node, or `None` when it is
-    /// not a pair — the sibling of [`Self::pair_value_half`], reading element 1
-    /// by the same rule (a 2-wide pair and a 3-wide `[value, type, perspective]`
-    /// pair agree there).
-    ///
-    /// The loop driver is its caller: an internal iteration states the same
-    /// argument type the entering call did, so the per-iteration parameter check
-    /// still means what it means for the entry.
-    pub(crate) fn pair_type_half(&self, node: NodeId) -> Option<NodeId> {
-        // SAFETY: `node` is a live node of `self`.
-        let items = unsafe { self.array_items(node) }?;
-        if !(2..=3).contains(&items.len()) {
-            return None;
-        }
-        match items[1].node {
-            AnyNodeId::Dynamic(r#type) => Some(r#type),
-            AnyNodeId::Static(_) => None,
-        }
-    }
-
-    /// The function's parameter leaves: the **value** half of its `[value, type]`
-    /// pair, flattened. A function whose parameter node is not a pair is the one
-    /// leaf itself.
-    pub fn parameter_leaves(&self, function: FunctionId) -> Result<Vec<NodeId>, String> {
-        let parameter = self.functions[function].parameter;
-        match self.pair_value_half(parameter) {
-            Some(value) => self.value_leaves(value),
-            None => Ok(vec![parameter]),
         }
     }
 
@@ -357,6 +418,27 @@ impl<P: Program> Module<P> {
         Ok(false)
     }
 
+    /// The **type** half of a `[value, type]` pair node, or `None` when it is
+    /// not a pair — the sibling of [`Self::pair_value_half`], reading element 1 by
+    /// the same rule (a 2-wide pair and a 3-wide `[value, type, perspective]` pair
+    /// agree there).
+    ///
+    /// **Public for the same reason** as its sibling: the loop reader names a
+    /// pair's type when it checks an entering call's argument type, and
+    /// duplicating that decoding is what
+    /// `docs/notes/checker-encoding-instability.md` is about.
+    pub fn pair_type_half(&self, node: NodeId) -> Option<NodeId> {
+        // SAFETY: `node` is a live node of `self`.
+        let items = unsafe { self.array_items(node) }?;
+        if !(2..=3).contains(&items.len()) {
+            return None;
+        }
+        match items[1].node {
+            AnyNodeId::Dynamic(r#type) => Some(r#type),
+            AnyNodeId::Static(_) => None,
+        }
+    }
+
     /// The structural value `node` holds, when it holds one — what a consumer
     /// reads for a literal rather than an operator.
     pub fn structural_value(&self, node: NodeId) -> Option<LowValue> {
@@ -364,9 +446,11 @@ impl<P: Program> Module<P> {
         AsEnum::<LowValue>::as_enum(&value)
     }
 
-    /// The `n` a node holds, when it holds a plain integer literal.
-    pub(crate) fn usize_value(&self, node: NodeId) -> Option<usize> {
-        match self.structural_value(node) {
+    /// The `n` a node holds, when it holds a plain integer literal — **frozen or
+    /// not**, because a literal an apply clone copied across is still a literal.
+    pub fn usize_value(&self, node: impl Into<AnyNodeId>) -> Option<usize> {
+        let value = self.node_value(node.into())?;
+        match AsEnum::<LowValue>::as_enum(&value) {
             Some(LowValue::USize(n)) => Some(n as usize),
             _ => None,
         }

@@ -6,17 +6,48 @@
 //! surface only.
 
 use lichen_kernel_ir::{
-    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ScalarClass,
+    IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelShape, ScalarClass,
 };
+
+/// A one-parameter body: `p0 + first`, in SSA.
+///
+/// **Built the way a lowering builds one** — `add_param` for the domain leaf,
+/// `add_op` in dependency order, `set_terminator` last — because the digest's
+/// invariant is over the shape a consumer actually reads, and a fixture assembled
+/// some other way would not exercise it.
+fn body(first: i64, combine: bool) -> KernelBody {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let parameter = body.add_param(entry);
+    let literal = body.add_op(
+        entry,
+        KernelInstr::Const(ScalarClass::Int, first),
+        Vec::new(),
+        vec![ScalarClass::Int],
+    );
+    let result = if combine {
+        body.add_op(
+            entry,
+            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+            vec![literal, parameter],
+            vec![ScalarClass::Int],
+        )
+    } else {
+        literal
+    };
+    body.set_terminator(
+        entry,
+        lichen_kernel_ir::Terminator::Return {
+            values: vec![result],
+        },
+    );
+    body
+}
 
 fn fragment() -> KernelFragment {
     KernelFragment {
         param_shape: KernelShape::Scalar(ScalarClass::Int),
-        body: vec![
-            KernelInstr::Const(ScalarClass::Int, 1),
-            KernelInstr::LocalGet(0),
-        ]
-        .into(),
+        body: body(1, true),
         inputs: 0,
         outputs: 0,
         input_classes: Vec::new(),
@@ -56,11 +87,7 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
         (
             "body",
             KernelFragment {
-                body: vec![
-                    KernelInstr::Const(ScalarClass::Int, 2),
-                    KernelInstr::LocalGet(0),
-                ]
-                .into(),
+                body: body(2, true),
                 ..base.clone()
             },
         ),
@@ -103,11 +130,7 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
     variants.push((
         "body instruction kind",
         KernelFragment {
-            body: vec![
-                KernelInstr::Const(ScalarClass::Int, 1),
-                KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
-            ]
-            .into(),
+            body: body(1, false),
             ..base.clone()
         },
     ));

@@ -19,10 +19,11 @@ use std::collections::HashMap;
 
 use lichen_kernel_ir::{KernelFragment, KernelId, ScalarClass};
 use waffle::{
-    Export, ExportKind, Func, FuncDecl, Import, ImportKind, Module, Signature, SignatureData, Type,
+    Export, ExportKind, Func, FuncDecl, FunctionBody, Import, ImportKind, Module, Signature,
+    SignatureData, Type, Value,
 };
 
-use super::flow::lower_fragment;
+use super::lower::{ModuleCtx, lower_body};
 use super::mixed::refuse_mixed_classes;
 use crate::compute::{buffer_import_name, param_classes};
 
@@ -84,7 +85,7 @@ pub(crate) fn assemble_module(
                 .map(value_type)
                 .collect(),
         });
-        let body = lower_fragment(fragment, ordered, index, &module, signature, &imports)?;
+        let body = lower_into(fragment, ordered, index, &module, signature, &imports)?;
         // **The function index is the push order**, so a fragment is pushed in
         // `ordered`'s order and a cross-kernel call resolves through `base` plus
         // the callee's position — the same two numbers the linker sees.
@@ -102,6 +103,38 @@ pub(crate) fn assemble_module(
     module
         .to_wasm_bytes()
         .map_err(|failure| format!("compute.wasm: waffle could not compile the module: {failure}"))
+}
+
+/// Build one fragment's waffle body, with the launch set as its context.
+///
+/// **The signature builds the entry block's blockparams** (`FunctionBody::new`
+/// does it from the signature, and nothing may add to them), so the body's own
+/// parameter values *are* those blockparams — which is what makes a function's
+/// argument and a loop's carried value one read rather than two.
+fn lower_into<'a>(
+    fragment: &'a KernelFragment,
+    ordered: &'a [KernelFragment],
+    index: &HashMap<KernelId, u32>,
+    module: &Module,
+    signature: waffle::Signature,
+    imports: &BufferImports,
+) -> Result<FunctionBody, String> {
+    let leaves = param_classes(fragment);
+    let mut builder = FunctionBody::new(module, signature);
+    // **The entry block's parameters are its blockparams**, built from the
+    // signature by `FunctionBody::new`, and nothing may add to them
+    // (`docs/notes/wasm-backend-handoff.md` §3.2).  They are the first
+    // `n_params` values.
+    let params: Vec<Value> = (0..builder.n_params as u32).map(Value::from).collect();
+    let context = ModuleCtx {
+        callees: ordered,
+        index,
+        imports,
+        leaves: &leaves,
+        params: &params,
+    };
+    lower_body(&fragment.body, &mut builder, &context)?;
+    Ok(builder)
 }
 
 /// Declare one `read`/`write` import pair per class, the reads first.

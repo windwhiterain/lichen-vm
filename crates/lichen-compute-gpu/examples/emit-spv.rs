@@ -13,7 +13,7 @@
 //! ```
 
 use lichen_kernel_ir::{
-    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ScalarClass,
+    FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelShape, ScalarClass,
 };
 
 fn main() {
@@ -27,15 +27,15 @@ fn main() {
     // and computed `1 + i` instead of `in[i] + 1` — a wrong answer with nothing
     // refused anywhere.
     let count_prologue = vec![
-        KernelInstr::Const(ScalarClass::Int, 0), // buffer position, in the *output* space
-        KernelInstr::LocalGet(1),                // the index
-        KernelInstr::Const(ScalarClass::Int, 0), // cfg_pos, in the *input* space
-        KernelInstr::LocalGet(1),                // the index
-        KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
-        KernelInstr::Const(ScalarClass::Int, 1),
-        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add), // in[i] + 1
-        KernelInstr::BufferWriteCall(ScalarClass::Int),
-        KernelInstr::Const(ScalarClass::Int, 0),
+        FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // buffer position, in the *output* space
+        FlatOp::Read(1),                                        // the index
+        FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos, in the *input* space
+        FlatOp::Read(1),                                        // the index
+        FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)), // in[i]
+        FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1)),
+        FlatOp::Instr(KernelInstr::Bin(ScalarClass::Int, KernelBin::Add)), // in[i] + 1
+        FlatOp::Instr(KernelInstr::BufferWriteCall(ScalarClass::Int)),
+        FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
     ];
 
     let fragment = KernelFragment {
@@ -43,7 +43,7 @@ fn main() {
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
         ]),
-        body: count_prologue.into(),
+        body: KernelBody::from_flat(2, &count_prologue),
         inputs: 1,
         outputs: 1,
         input_classes: vec![ScalarClass::Int],

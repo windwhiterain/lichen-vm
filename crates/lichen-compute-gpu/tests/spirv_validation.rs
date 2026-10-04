@@ -18,7 +18,7 @@ use std::process::{Command, Stdio};
 
 use lichen_compute_gpu::spirv::{self, Binding};
 use lichen_kernel_ir::{
-    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ScalarClass,
+    FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelShape, ScalarClass,
 };
 
 /// The validator, spelled the way it is installed on `PATH`.
@@ -44,18 +44,20 @@ fn adds_one() -> KernelFragment {
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
         ]),
-        body: vec![
-            KernelInstr::Const(ScalarClass::Int, 0), // out_pos, in the *output* space
-            KernelInstr::LocalGet(1),                // the index
-            KernelInstr::Const(ScalarClass::Int, 0), // cfg_pos, in the *input* space
-            KernelInstr::LocalGet(1),                // the index
-            KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
-            KernelInstr::Const(ScalarClass::Int, 1),
-            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add), // in[i] + 1
-            KernelInstr::BufferWriteCall(ScalarClass::Int),
-            KernelInstr::Const(ScalarClass::Int, 0),
-        ]
-        .into(),
+        body: KernelBody::from_flat(
+            2,
+            &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos, in the *output* space
+                FlatOp::Read(1),                                        // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos, in the *input* space
+                FlatOp::Read(1),                                        // the index
+                FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)), // in[i]
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1)),
+                FlatOp::Instr(KernelInstr::Bin(ScalarClass::Int, KernelBin::Add)), // in[i] + 1
+                FlatOp::Instr(KernelInstr::BufferWriteCall(ScalarClass::Int)),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            ],
+        ),
         inputs: 1,
         outputs: 1,
         input_classes: vec![ScalarClass::Int],
@@ -83,40 +85,67 @@ fn adds_one() -> KernelFragment {
 /// literal has to be read as an integer in a module whose values are floats — and
 /// a 32-bit one, since a float module's integers are indices.
 fn scales_a_float() -> KernelFragment {
-    let read = |body: &mut Vec<KernelInstr>| {
-        body.push(KernelInstr::Const(ScalarClass::Int, 0));
-        body.push(KernelInstr::LocalGet(1));
-        body.push(KernelInstr::BufferReadCall(ScalarClass::Float));
+    let read = |body: &mut Vec<FlatOp>| {
+        body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)));
+        body.push(FlatOp::Read(1));
+        body.push(FlatOp::Instr(KernelInstr::BufferReadCall(
+            ScalarClass::Float,
+        )));
     };
     // out_pos, then the index: the [position, index] a write takes.
     let mut body = vec![
-        KernelInstr::Const(ScalarClass::Int, 0),
-        KernelInstr::LocalGet(1),
+        FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+        FlatOp::Read(1),
     ];
     // then: in[i] * 2.5
     read(&mut body);
-    body.push(KernelInstr::Const(ScalarClass::Float, TWO_POINT_FIVE));
-    body.push(KernelInstr::Bin(ScalarClass::Float, KernelBin::Mul));
+    body.push(FlatOp::Instr(KernelInstr::Const(
+        ScalarClass::Float,
+        TWO_POINT_FIVE,
+    )));
+    body.push(FlatOp::Instr(KernelInstr::Bin(
+        ScalarClass::Float,
+        KernelBin::Mul,
+    )));
     // … + (in[i] == 0.0), a comparison materialised into the float `1.0`/`0.0`
     read(&mut body);
-    body.push(KernelInstr::Const(ScalarClass::Float, 0)); // `0.0f32` is the bit pattern zero
-    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Eq));
-    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Add));
+    body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Float, 0))); // `0.0f32` is the bit pattern zero
+    body.push(FlatOp::Instr(KernelInstr::Bin(
+        ScalarClass::Int,
+        KernelBin::Eq,
+    )));
+    body.push(FlatOp::Instr(KernelInstr::Bin(
+        ScalarClass::Int,
+        KernelBin::Add,
+    )));
     // … + in[i] / 2.5
     read(&mut body);
-    body.push(KernelInstr::Const(ScalarClass::Float, TWO_POINT_FIVE));
-    body.push(KernelInstr::Bin(ScalarClass::Float, KernelBin::Div));
-    body.push(KernelInstr::Bin(ScalarClass::Int, KernelBin::Add));
+    body.push(FlatOp::Instr(KernelInstr::Const(
+        ScalarClass::Float,
+        TWO_POINT_FIVE,
+    )));
+    body.push(FlatOp::Instr(KernelInstr::Bin(
+        ScalarClass::Float,
+        KernelBin::Div,
+    )));
+    body.push(FlatOp::Instr(KernelInstr::Bin(
+        ScalarClass::Int,
+        KernelBin::Add,
+    )));
     // else: 0.0
-    body.push(KernelInstr::Const(ScalarClass::Int, 0));
+    body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)));
     // the selector: in[0], a float value rather than a comparison's bool, read at
     // a constant index
-    body.push(KernelInstr::Const(ScalarClass::Int, 0));
-    body.push(KernelInstr::Const(ScalarClass::Int, 0));
-    body.push(KernelInstr::BufferReadCall(ScalarClass::Float));
-    body.push(KernelInstr::Select);
-    body.push(KernelInstr::BufferWriteCall(ScalarClass::Float));
-    body.push(KernelInstr::Const(ScalarClass::Int, 0));
+    body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)));
+    body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)));
+    body.push(FlatOp::Instr(KernelInstr::BufferReadCall(
+        ScalarClass::Float,
+    )));
+    body.push(FlatOp::Instr(KernelInstr::Select));
+    body.push(FlatOp::Instr(KernelInstr::BufferWriteCall(
+        ScalarClass::Float,
+    )));
+    body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)));
     KernelFragment {
         // `(config, index)`, integers, however the buffers are classed: this
         // target's index is the invocation id, not a value of that domain.
@@ -124,7 +153,7 @@ fn scales_a_float() -> KernelFragment {
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
         ]),
-        body: body.into(),
+        body: KernelBody::from_flat(2, &body),
         inputs: 1,
         outputs: 1,
         input_classes: vec![ScalarClass::Float],
@@ -245,22 +274,24 @@ fn index_to_float() -> KernelFragment {
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
         ]),
-        body: vec![
-            KernelInstr::Const(ScalarClass::Int, 0), // out_pos
-            KernelInstr::LocalGet(1),                // the index
-            KernelInstr::LocalGet(1),                // the same index, what `int2float` reads
-            KernelInstr::Conv {
-                from: ScalarClass::Int,
-                to: ScalarClass::Float,
-            },
-            KernelInstr::Const(ScalarClass::Int, 0), // cfg_pos
-            KernelInstr::LocalGet(1),                // the index
-            KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
-            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
-            KernelInstr::BufferWriteCall(ScalarClass::Int),
-            KernelInstr::Const(ScalarClass::Int, 0),
-        ]
-        .into(),
+        body: KernelBody::from_flat(
+            2,
+            &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
+                FlatOp::Read(1),                                        // the index
+                FlatOp::Read(1), // the same index, what `int2float` reads
+                FlatOp::Instr(KernelInstr::Conv {
+                    from: ScalarClass::Int,
+                    to: ScalarClass::Float,
+                }),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos
+                FlatOp::Read(1),                                        // the index
+                FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)), // in[i]
+                FlatOp::Instr(KernelInstr::Bin(ScalarClass::Int, KernelBin::Add)),
+                FlatOp::Instr(KernelInstr::BufferWriteCall(ScalarClass::Int)),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            ],
+        ),
         inputs: 1,
         outputs: 1,
         input_classes: vec![ScalarClass::Float],
@@ -284,24 +315,26 @@ fn crosses_both_ways() -> KernelFragment {
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
         ]),
-        body: vec![
-            KernelInstr::Const(ScalarClass::Int, 0),       // out_pos
-            KernelInstr::LocalGet(1),                      // the index
-            KernelInstr::Const(ScalarClass::Int, 0),       // cfg_pos
-            KernelInstr::LocalGet(1),                      // the index
-            KernelInstr::BufferReadCall(ScalarClass::Int), // in[i]
-            KernelInstr::Conv {
-                from: ScalarClass::Float,
-                to: ScalarClass::Int,
-            },
-            KernelInstr::Conv {
-                from: ScalarClass::Int,
-                to: ScalarClass::Float,
-            },
-            KernelInstr::BufferWriteCall(ScalarClass::Int),
-            KernelInstr::Const(ScalarClass::Int, 0),
-        ]
-        .into(),
+        body: KernelBody::from_flat(
+            2,
+            &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
+                FlatOp::Read(1),                                        // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos
+                FlatOp::Read(1),                                        // the index
+                FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)), // in[i]
+                FlatOp::Instr(KernelInstr::Conv {
+                    from: ScalarClass::Float,
+                    to: ScalarClass::Int,
+                }),
+                FlatOp::Instr(KernelInstr::Conv {
+                    from: ScalarClass::Int,
+                    to: ScalarClass::Float,
+                }),
+                FlatOp::Instr(KernelInstr::BufferWriteCall(ScalarClass::Int)),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            ],
+        ),
         inputs: 1,
         outputs: 1,
         input_classes: vec![ScalarClass::Float],
