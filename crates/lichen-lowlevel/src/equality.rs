@@ -61,6 +61,12 @@ struct Side<P: Program> {
     value: Option<P::Value>,
 }
 
+/// The depth bound for a comparison reached without classes: such a pair cannot
+/// name itself, so its descent is bounded instead of cycle-guarded.  Past the
+/// bound a pair is given the benefit of the doubt, as the unifier's cycle guard
+/// does.
+const MAX_VALUE_DEPTH: usize = 64;
+
 impl<P: Program> Side<P> {
     /// A side that is a node (its class answers for it).
     fn node(node: NodeId) -> Self {
@@ -387,7 +393,7 @@ impl<P: Program> Module<P> {
     /// and a value the unifier wrote cannot claim.
     pub(crate) fn write_node_answer(&mut self, node: NodeId, value: P::Value) {
         let mut path = AncestorPairs::new();
-        let mut materialized = HashMap::new();
+
         let mut steps = Vec::new();
         // The answer against what the node's class holds, as two values: the
         // answer has no class of its own, and pulling the class's value out
@@ -400,7 +406,7 @@ impl<P: Program> Module<P> {
             Side::value(Some(value)),
             Side::value(held),
             &mut path,
-            &mut materialized,
+            0,
             &mut steps,
             (node, node),
         );
@@ -413,30 +419,25 @@ impl<P: Program> Module<P> {
     /// where a merge carries the class's decided value to the members it adds
     /// exactly as a write carries it to the members it finds.
     ///
-    /// The walk is **member-local** ([`docs/notes/class-channel.md`] §1.1): a
-    /// member that knows nothing takes the value; a member that already holds
-    /// one has `existing ⊔ propagated`, the value-to-value unification
-    /// ([`Self::reconcile_held_value`]) that has no class to write into and so
-    /// cannot cascade — which is what makes this walk one pass over the class.
-    /// A member whose value cannot be the propagated one is **left as it is**:
-    /// the write itself is not gated on the slot being unbound (the rule's
-    /// "a unification must write"), but a class here routinely holds
-    /// *different* values on different members, so a disagreement is the
-    /// tolerated case rather than a failure to record.  The arithmetic is not
-    /// lost: the member keeps the value it had, and the incoming value is
-    /// distributed to the members that can take it.
+    /// The walk is **unconditional**: a class has one value, the first member to
+    /// have one propagates it to every member that can take it, and no later
+    /// pass can meet a member that already holds a *different* one.  There is
+    /// therefore no comparison here and nothing to tolerate — a member either
+    /// has the class's value already (the write is idempotent) or does not and
+    /// takes it.  The condition that used to guard this ("a member that already
+    /// knows something is compared") described a state the invariant no longer
+    /// admits.
     ///
     /// An **operation-bearing** member is the one veto: its own computation is
     /// what settles it, and a value arriving from elsewhere is not a proof of
-    /// what that computation will produce.
+    /// what that computation will produce.  That is why the class's value can be
+    /// reachable only through the class carrier
+    /// ([`Self::class_committed_node`]) rather than from every member's slot.
     ///
-    /// The walk visits the representative too, and deliberately: the write site
-    /// wrote *its own* node, which need not be the representative — a class
-    /// whose representative is a value-less operation node is exactly the case
-    /// [`Self::add_equality`] exists for — so the representative's slot is an
-    /// ordinary member slot here and is asked the same question.  That is also
-    /// what puts the class's value *on* the representative, which is the
-    /// invariant [`Self::class_committed_node`] reads.
+    /// The walk visits the representative too: the write site wrote *its own*
+    /// node, which need not be the representative — a class whose representative
+    /// is a value-less operation node is exactly the case
+    /// [`Self::add_equality`] exists for.
     fn propagate_class_value(&mut self, representative: NodeId, value: P::Value) {
         // A class whose sole member is the representative — `parent` and `next`
         // both `None`, `disjoint::Meta`'s contract for a representative with no
@@ -453,20 +454,7 @@ impl<P: Program> Module<P> {
             if self.nodes[member].operation.is_some() {
                 continue;
             }
-            // A member that already holds a value takes the propagated one only
-            // when the two can be one value; a member that disagrees keeps its
-            // own, which is the tolerated case the write rule names.  The
-            // disagreement is **not** reported here: a propagation is one
-            // write's distribution to a class, and whether the write itself
-            // conflicted is the unification's answer, already recorded by the
-            // caller that asked for the write ([`Self::write_node_answer`] for
-            // an operation's answer, the merge arms for a unification).  A
-            // second report here would double-count one fact.
-            if !self.has_run(member)
-                || self.reconcile_held_value(self.nodes[member].value, Some(value))
-            {
-                self.nodes[member].value = Some(value);
-            }
+            self.nodes[member].value = Some(value);
         }
     }
 
@@ -494,60 +482,16 @@ impl<P: Program> Module<P> {
         });
     }
 
-    /// A member's already-held `held` against the `incoming` value a
-    /// unification carries — the member-local half of [`Self::write_node_value`]
-    /// and its only reader.  Both sides are **values**: the held one comes from
-    /// the member's slot, the incoming one a write is distributing, and neither
-    /// is a class to merge, so the question goes to [`Self::unify_inner`] with
-    /// both sides node-less ([`Side::value`]).  Pure here: it answers, and the
-    /// caller decides what that means for the member's slot.
-    fn reconcile_held_value(&mut self, held: Option<P::Value>, incoming: Option<P::Value>) -> bool {
-        let mut path = AncestorPairs::new();
-        let mut materialized = HashMap::new();
-        let mut steps = Vec::new();
-        self.unify_inner(
-            Side::value(held),
-            Side::value(incoming),
-            &mut path,
-            &mut materialized,
-            &mut steps,
-            (NodeId::default(), NodeId::default()),
-        )
-    }
-
     /// Resolve a side that names a node down to **what its class knows** — the
     /// ordinary reading, because a side that names a node stands for that node's
-    /// whole class.  A node-less side already carries its own answer.  A static
-    /// ref is materialized into a leaf (homed in the other side's block), which
-    /// is how a static value enters the class machinery.
-    fn answer_class_side(
-        &mut self,
-        side: Side<P>,
-        other: Side<P>,
-        materialized: &mut HashMap<StaticNodeId, NodeId>,
-    ) -> Side<P> {
+    /// whole class.  A node-less side already carries its own answer.
+    fn answer_class_side(&mut self, side: Side<P>) -> Side<P> {
         let Some(node) = side.node else {
             return side;
         };
-        let _ = other;
         Side {
             node: Some(node),
             value: self.class_committed_value(node),
-        }
-    }
-
-    /// Resolve a node-bearing side down to **the node's own value**, for the one
-    /// question that is about a node's own slot rather than its class: an
-    /// operation's answer meeting the value its class already holds
-    /// ([`Self::write_node_answer`]).  Asking the class there would compare the
-    /// class's value with itself and see no conflict at all.
-    fn answer_own_side(&mut self, side: Side<P>) -> Side<P> {
-        let Some(node) = side.node else {
-            return side;
-        };
-        Side {
-            node: Some(node),
-            value: self.nodes[node].value,
         }
     }
 
@@ -588,7 +532,7 @@ impl<P: Program> Module<P> {
     /// `a`'s class when unification fails.
     pub fn unify(&mut self, a: NodeId, b: NodeId) -> NodeId {
         let mut path = AncestorPairs::new();
-        let mut materialized = HashMap::new();
+
         // The descent path, seeded empty; the root operands are carried
         // separately and recorded in each `UnifyError`'s `root_a`/`root_b`.
         let mut steps = Vec::new();
@@ -596,51 +540,11 @@ impl<P: Program> Module<P> {
             Side::node(a),
             Side::node(b),
             &mut path,
-            &mut materialized,
+            0,
             &mut steps,
             (a, b),
         );
         disjoint::find(&mut self.nodes, a)
-    }
-
-    /// A static side of a unification has no class to join: materialize it
-    /// into a fresh leaf node holding its value (homed in the other
-    /// side's block — or the module's first block when both sides are static,
-    /// which the apply path cannot produce), then unify that.  This is the
-    /// only place a static value enters the class machinery; refs are
-    /// absolute, so the value needs no conversion to be storable there.
-    ///
-    /// A static ref is materialized at most once per [`Self::unify`]
-    /// traversal (the cache is threaded through [`Self::unify_inner`]).  This
-    /// matters for static self-referential structures: without the cache,
-    /// each recursive encounter of a static universe ref would mint a fresh
-    /// leaf and the path guard could never see a repeated class pair.
-    fn unify_side(
-        &mut self,
-        id: AnyNodeId,
-        other: AnyNodeId,
-        materialized: &mut HashMap<StaticNodeId, NodeId>,
-    ) -> NodeId {
-        match id {
-            Dyn(node) => node,
-            AnyNodeId::Static(sref) => {
-                if let Some(&node) = materialized.get(&sref) {
-                    return node;
-                }
-                let block = match other {
-                    Dyn(node) => self.nodes[node].block,
-                    AnyNodeId::Static(_) => self
-                        .blocks
-                        .iter()
-                        .next()
-                        .map(|(block, _)| block)
-                        .expect("module has at least one block"),
-                };
-                let node = self.materialize_leaf(sref, block);
-                materialized.insert(sref, node);
-                node
-            }
-        }
     }
 
     /// Whether `id` names a **self-referential two-element array** — a
@@ -790,66 +694,50 @@ impl<P: Program> Module<P> {
     /// Recursive core of [`Self::unify`]; `path` holds the class pairs on
     /// the current recursion, so a mutually recursive structure (an array
     /// unified with itself) records an error instead of looping.
+    ///
+    /// `path` guards only pairs that have **nodes**.  A pair of bare values has
+    /// no class to name it — a self-referential structure reached through the
+    /// node-less arms (`[cell, self]`, the term pair a type is) would repeat
+    /// forever — so `depth` bounds that descent, and a pair past the bound is
+    /// given the benefit of the doubt exactly as the unifier's cycle guard does.
     #[stacksafe]
     fn unify_inner(
         &mut self,
         a: Side<P>,
         b: Side<P>,
         path: &mut AncestorPairs<NodeId>,
-        materialized: &mut HashMap<StaticNodeId, NodeId>,
+        depth: usize,
         steps: &mut Vec<UnifyStep>,
         root: (NodeId, NodeId),
     ) -> bool {
+        if depth >= MAX_VALUE_DEPTH {
+            return true;
+        }
         // A side with a node takes the question to its **class**; a side without
         // one is a bare value with no class to merge, so it can only be answered
         // by comparison.  Reading both before any write keeps the borrow of
         // `nodes` short and the values stable across the merge below.
-        let a = self.answer_class_side(a, b, materialized);
-        let b = self.answer_class_side(b, a, materialized);
+        let a = self.answer_class_side(a);
+        let b = self.answer_class_side(b);
         let va = a.value;
         let vb = b.value;
         let (Some(ra), Some(rb)) = (a.node, b.node) else {
-            // One side has no class: nothing to merge, and the whole question is
-            // whether the two values can be one value.  The failure is still the
-            // unification's (`record_error` at the roots), so a caller that
-            // watches `unify_errors` sees it exactly as it does any other.
+            // One side has no class: there is nothing to merge, and the whole
+            // question is whether the two values can be one value.  The descent
+            // therefore **writes nothing** — it cannot, there is no second root
+            // to merge and no element position to bind through — and the
+            // disagreement is recorded once, at the roots the caller passed.
             let va = va.filter(|value| !is_unbound(Some(*value)));
             let vb = vb.filter(|value| !is_unbound(Some(*value)));
             return match (va, vb) {
-                (Some(x), Some(y)) => match (x.as_enum(), y.as_enum()) {
-                    (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
-                        // SAFETY: `pa`/`pb` are payloads of values read out of
-                        // live nodes of this module, so their home blocks have
-                        // not been dropped.
-                        let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
-                        // A bare-value array descends through its **element
-                        // nodes**, where a free cell still resolves by binding;
-                        // the nodes are what carry the positions.
-                        left.len() == right.len()
-                            && left.iter().zip(right.iter()).all(|(ia, ib)| {
-                                self.unify_inner(
-                                    Side::of(ia.node, self.node_value(ia.node)),
-                                    Side::of(ib.node, self.node_value(ib.node)),
-                                    path,
-                                    materialized,
-                                    steps,
-                                    root,
-                                )
-                            })
-                    }
-                    // Two function values name one logical function when they are
-                    // one function — the frozen/static pair included.
-                    (Some(LowValue::Function(x)), Some(LowValue::Function(y)))
-                        if self.function_identity_equal(x, y) =>
-                    {
+                (Some(x), Some(y)) => {
+                    if self.values_can_be_one(x, y, depth) {
                         true
-                    }
-                    _ if x.value_eq(&y) => true,
-                    _ => {
+                    } else {
                         self.record_value_error(root, va, vb);
                         false
                     }
-                },
+                }
                 // A free cell is a wildcard, and a side with no value at all is
                 // an absence rather than a pattern.
                 _ => true,
@@ -957,7 +845,7 @@ impl<P: Program> Module<P> {
                                 Side::of(na.node, self.node_value(na.node)),
                                 Side::of(nb.node, self.node_value(nb.node)),
                                 path,
-                                materialized,
+                                depth + 1,
                                 steps,
                                 root,
                             );
@@ -1001,121 +889,58 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Whether two decided values are the same value (the unifier's comparison,
-    /// arrays elementwise).
-    fn value_eq(&self, a: P::Value, b: P::Value) -> bool {
-        let mut path = AncestorPairs::new();
-        self.reconcile_value(a, b, &mut path)
-    }
-
-    /// **Structural** agreement between two decided values — the comparison a
-    /// reconciliation needs, and deliberately not [`Self::value_eq`].
+    /// Whether two decided values can be one value — the **node-less** half of
+    /// the unification, and the only part of it that must not write: neither side
+    /// has a class to merge, so the whole effect of a disagreement is the caller's
+    /// report, and nothing here may reach [`Self::add_equality`].
     ///
-    /// `value_eq` is shallow by contract: an array is one allocation, so two
-    /// arrays compare equal only when they share it, and it is unification's own
-    /// elementwise recursion that answers the structural question
-    /// (`ValueExt::value_eq`).  A type is routinely two arrays with equal
-    /// contents and distinct allocations — `Int` twice, say — so the shallow
-    /// comparison calls them different and the reconciliation refuses a
-    /// *matching* value.  This walks the elements instead: a free cell matches
-    /// anything, two arrays recurse positionally (each element through its own
-    /// node, so an element that is itself a type is compared structurally too),
-    /// and anything else falls back to the value comparison.
-    fn value_matches(&self, a: P::Value, b: P::Value) -> bool {
-        self.value_matches_inner(a, b, 0)
-    }
-
-    /// [`Self::value_matches`] with a depth bound, so a self-referential type
-    /// (the universe) cannot recurse forever.  A value's tree is as deep as the
-    /// program's own nesting; past the bound the comparison gives the benefit of
-    /// the doubt, which is what the unifier's cycle guard does too.
-    fn value_matches_inner(&self, a: P::Value, b: P::Value, depth: usize) -> bool {
-        const MAX_VALUE_DEPTH: usize = 64;
-        if depth >= MAX_VALUE_DEPTH {
-            return true;
-        }
-        if is_unbound(Some(a)) || is_unbound(Some(b)) {
+    /// A structure descends positionally through its elements' **values** (not
+    /// their classes — these are bare values), a free cell matches anything
+    /// because it resolves by binding, and two functions are one when their
+    /// identities resolve to one logical function.  `depth` is the cycle guard:
+    /// a self-referential structure reached without nodes has no pair to name.
+    fn values_can_be_one(&self, a: P::Value, b: P::Value, depth: usize) -> bool {
+        if depth >= MAX_VALUE_DEPTH || is_unbound(Some(a)) || is_unbound(Some(b)) {
             return true;
         }
         match (a.as_enum(), b.as_enum()) {
             (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
-                // SAFETY: `pa`/`pb` are values of live nodes of this module, so
-                // their home blocks have not been dropped.
+                // SAFETY: `pa`/`pb` are payloads of values read out of live nodes
+                // of this module, so their home blocks have not been dropped.
                 let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
                 left.len() == right.len()
                     && left.iter().zip(right.iter()).all(|(ia, ib)| {
-                        let (va, vb) = (self.node_value(ia.node), self.node_value(ib.node));
-                        match (va, vb) {
-                            (Some(va), Some(vb)) => self.value_matches_inner(va, vb, depth + 1),
-                            // An element without a value is unknown — a
-                            // wildcard, never a conflict.
+                        match (self.node_value(ia.node), self.node_value(ib.node)) {
+                            (Some(va), Some(vb)) => self.values_can_be_one(va, vb, depth + 1),
+                            // An element without a value is unknown — a wildcard.
                             _ => true,
                         }
                     })
             }
-            _ => {
-                // An element the value slot does not hold — `None` or the lazy
-                // marker — is unknown, exactly as it is at the top of this
-                // function: a wildcard, never a conflict.
-                let (ea, eb) = (a.as_enum(), b.as_enum());
-                if ea.is_none() || eb.is_none() {
-                    return true;
-                }
-                if ea == Some(LowValue::Parameterized) || eb == Some(LowValue::Parameterized) {
-                    return true;
-                }
-                let same = a.value_eq(&b);
-                same
-            }
+            _ => self.value_pair_equal(a, b),
         }
     }
 
-    /// Whether the two classes' decided values **agree structurally** — the
-    /// comparison a union uses to decide that the value it carries is the value
-    /// the class already holds.
-    ///
-    /// It has to be the *structural* one, never [`Self::value_eq`]: the two
-    /// sides of a type are routinely two arrays with equal contents but distinct
-    /// allocations, and `value_eq` documents that two arrays compare equal only
-    /// when they share their allocation (`ValueExt::value_eq`) — its own
-    /// elementwise recursion is unification's, not its.  So this walks the
-    /// elements exactly as the unifier does (`reconcile_node`): a free cell
-    /// matches anything, two arrays recurse positionally, and a cycle is cut by
-    /// the path guard.
-    fn values_agree(&self, a: NodeId, b: NodeId) -> bool {
-        let mut path = AncestorPairs::new();
-        self.reconcile_node(Dyn(a), Dyn(b), &mut path)
-    }
-
-    /// Reconcile a computation's freshly produced `value` against the `prior`
-    /// value its class held — the deferred half of a unification that wrote a
-    /// value while the computation could not run.  A free cell in `prior` is a
-    /// wildcard; two concrete values that disagree are recorded as a conflict.
-    pub(crate) fn reconcile_computed(
-        &mut self,
-        node: NodeId,
-        prior: Option<P::Value>,
-        value: P::Value,
-    ) {
-        let Some(prior) = prior.filter(|prior| !is_unbound(Some(*prior))) else {
-            return;
-        };
-        if !self.value_matches(prior, value) {
-            if std::env::var_os("LICHEN_TRACE_RECORD").is_some() {
-                eprintln!("RECOMPUTED node={node:?}");
+    /// Whether two decided **leaf** values are one value: two functions by
+    /// resolved identity, everything else by full value equality
+    /// ([`ValueExt::value_eq`]).
+    fn value_pair_equal(&self, a: P::Value, b: P::Value) -> bool {
+        match (a.as_enum(), b.as_enum()) {
+            // A materialized static closure and the frozen function it came from
+            // name one logical function even though one is dynamic and the other
+            // static — checked before the generic comparison, which reads
+            // `AnyFunctionId` by kind and would call them different.
+            (Some(LowValue::Function(x)), Some(LowValue::Function(y))) => {
+                self.function_identity_equal(x, y)
             }
-            self.unify_errors.push(UnifyError {
-                root_a: node,
-                root_b: node,
-                steps: Vec::new(),
-                a: node,
-                b: node,
-                value_a: Some(prior),
-                value_b: Some(value),
-            });
+            _ => a.value_eq(&b),
         }
     }
 
+    /// The depth bound shared by the node-less comparisons: a structure reached
+    /// without classes cannot name a repeated pair, so its descent is bounded and
+    /// a pair past the bound is given the benefit of the doubt, exactly as the
+    /// unifier's cycle guard does.
     /// Whether `rep`'s class holds a computation that has not produced an
     /// answer yet ([`Module::has_no_result_yet`]) — a node whose operator still
     /// owes a result.
