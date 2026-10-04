@@ -180,6 +180,131 @@ fn an_imported_deferred_instantiation_points_at_the_argument_the_caller_passed()
 }
 
 #[test]
+fn an_imported_placeholder_instantiation_resolves_at_the_apply() {
+    // `_(.x 1, .y 2)` is an instantiation whose callee is the placeholder, so
+    // the struct type is unknown where it stands: later unification with the
+    // imported parameter's annotation decides it.  The callee is a static
+    // (imported) function, so the deferred instantiation crosses a materialize
+    // walk of the frozen body and must still wake when the apply binds the
+    // parameter's type cell (`docs/language-spec.md` §3, the deferred
+    // instantiation).  Asserted structurally: the instance's own field values
+    // in definition order, and the resolved type's fields read back through
+    // `type_of` — a struct type's field list and names.  The nominal id is per
+    // occurrence, so the importer cannot name it.
+    let dir = temp_dir("imported-placeholder");
+    write(&dir, "f.lichen", "f = x: struct<.x Int, .y Int> => x\n");
+    let main = "---f = import \"f.lichen\"---\ntype_of = x => {t = _; x: t; t}\nv = f.f (_(.x 1, .y 2))\nT = type_of v\n(v, T::x == Int, T::y == Int)\n";
+    let mut store = PackageStore::<LangProgram>::new();
+    let (module, value, _) = common::run_at(main, Some(&dir), &mut store);
+    let parts = common::array_values(&module, &value);
+    let fields = common::array_values(&module, &parts[0]);
+    assert_eq!(common::usize_of(&fields[0]), 1, "the `.x` argument");
+    assert_eq!(common::usize_of(&fields[1]), 2, "the `.y` argument");
+    assert_eq!(
+        common::usize_of(&parts[1]),
+        1,
+        "the instance's type has field `.x`, typed Int"
+    );
+    assert_eq!(
+        common::usize_of(&parts[2]),
+        1,
+        "the instance's type has field `.y`, typed Int"
+    );
+}
+
+#[test]
+fn two_applies_of_one_imported_placeholder_instantiation_stay_distinct() {
+    // One static function applied twice, each call with its own argument
+    // values: the two materialized clones must resolve their placeholder
+    // instantiations independently — the first call's binding must not stand
+    // in for the second's.
+    let dir = temp_dir("imported-placeholder-twice");
+    write(&dir, "f.lichen", "f = x: struct<.x Int, .y Int> => x\n");
+    let main = "---f = import \"f.lichen\"---(f.f (_(.x 1, .y 2)), f.f (_(.x 3, .y 4)))\n";
+    let mut store = PackageStore::<LangProgram>::new();
+    let (module, value, _) = common::run_at(main, Some(&dir), &mut store);
+    let calls = common::array_values(&module, &value);
+    let first = common::array_values(&module, &calls[0]);
+    let second = common::array_values(&module, &calls[1]);
+    assert_eq!(common::usize_of(&first[0]), 1);
+    assert_eq!(common::usize_of(&first[1]), 2);
+    assert_eq!(common::usize_of(&second[0]), 3);
+    assert_eq!(common::usize_of(&second[1]), 4);
+}
+
+#[test]
+fn a_placeholder_instantiation_deferred_inside_an_imported_body_resolves_at_the_apply() {
+    // Here the instantiation stands *in* the imported body, and the annotation
+    // that decides its type comes after the read that uses it, so the package
+    // freezes a genuinely unresolved instantiation that the apply's
+    // materialized clone must resolve.  The instance is a **static** ref into
+    // the frozen module — the body's array is proven concrete and referenced
+    // in place — so the fields are read *in the program* and the resulting
+    // dynamic tuple carries the values: `common::array_values` refuses a
+    // static-backed array by design ("language arrays are dynamic").
+    let dir = temp_dir("imported-body-deferred");
+    write(
+        &dir,
+        "g.lichen",
+        "g = s => { a = _(.x 1, .y 2)\n  p = a : struct<.x Int, .y Int>\n  a }\n",
+    );
+    let main = "---g = import \"g.lichen\"---\ntype_of = x => {t = _; x: t; t}\nv = g.g 0\nT = type_of v\n(v.x, v.y, T::x == Int, T::y == Int)\n";
+    let mut store = PackageStore::<LangProgram>::new();
+    let (module, value, _) = common::run_at(main, Some(&dir), &mut store);
+    let parts = common::array_values(&module, &value);
+    assert_eq!(common::usize_of(&parts[0]), 1, "the `.x` argument");
+    assert_eq!(common::usize_of(&parts[1]), 2, "the `.y` argument");
+    assert_eq!(
+        common::usize_of(&parts[2]),
+        1,
+        "the instance's type has field `.x`, typed Int"
+    );
+    assert_eq!(
+        common::usize_of(&parts[3]),
+        1,
+        "the instance's type has field `.y`, typed Int"
+    );
+}
+
+#[test]
+fn two_applies_of_one_imported_function_resolve_their_own_struct_type() {
+    // The shared-clone hazard: the deferred instantiation's cells live in the
+    // *frozen* body, so if a per-apply clone reused the first call's bound
+    // cells, two calls resolving **different** struct types through one
+    // imported function would contaminate each other.  The imported body's
+    // parameter is left open and the caller supplies the type, so each call
+    // decides the instantiation for itself.  `struct<.x Int, .y Int>` reads
+    // the arguments in `.x, .y` order while `struct<.y Int, .x Int>` reverses
+    // them, so the instances' own definition-order values are `(1, 2)` and
+    // `(2, 1)`: the per-call type is visible in the value, and a leaked clone
+    // would give `(1, 2)` twice, or refuse the second call.
+    let dir = temp_dir("static-clone-hazard");
+    write(
+        &dir,
+        "f.lichen",
+        "f = x => { a = _(.x 1, .y 2)\n  p = a : x\n  a }\n",
+    );
+    let main = "---f = import \"f.lichen\"---\nS = struct<.x Int, .y Int>\nT = struct<.y Int, .x Int>\n(f.f (S), f.f (T))\n";
+    let mut store = PackageStore::<LangProgram>::new();
+    let (module, value, _) = common::run_at(main, Some(&dir), &mut store);
+    let calls = common::array_values(&module, &value);
+    let first = common::array_values(&module, &calls[0]);
+    let second = common::array_values(&module, &calls[1]);
+    assert_eq!(common::usize_of(&first[0]), 1, "the first call's `.x`");
+    assert_eq!(common::usize_of(&first[1]), 2, "the first call's `.y`");
+    assert_eq!(
+        common::usize_of(&second[0]),
+        2,
+        "the second call's `.y` leads its definition order"
+    );
+    assert_eq!(
+        common::usize_of(&second[1]),
+        1,
+        "the second call's `.x` follows it"
+    );
+}
+
+#[test]
 fn a_failing_dependency_is_reported_at_the_import_directive() {
     // inner fails to resolve `y` at its own line 2; the main file's
     // diagnostic points at its own @import line (not inner's coordinates)
