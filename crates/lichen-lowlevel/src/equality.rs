@@ -743,25 +743,43 @@ impl<P: Program> Module<P> {
         let va = a.value;
         let vb = b.value;
         let (Some(ra), Some(rb)) = (a.node, b.node) else {
-            // One side has no class: there is nothing to merge, and the whole
-            // question is whether the two values can be one value.  The descent
-            // therefore **writes nothing** — it cannot, there is no second root
-            // to merge and no element position to bind through — and the
-            // disagreement is recorded once, at the roots the caller passed.
+            // Neither side has a class to merge: the question is whether the two
+            // values can be one value, and the descent goes on through the same
+            // arms as any other pair.  Where the descent bottoms out on nodes,
+            // those nodes' classes are merged — which is what "can these be one
+            // value" means for the cells inside a structure.
             let va = va.filter(|value| !is_unbound(Some(*value)));
             let vb = vb.filter(|value| !is_unbound(Some(*value)));
-            return match (va, vb) {
-                (Some(x), Some(y)) => {
-                    if self.values_can_be_one(x, y, depth) {
-                        true
-                    } else {
-                        self.record_value_error(root, va, vb);
-                        false
-                    }
-                }
+            let (Some(x), Some(y)) = (va, vb) else {
                 // A free cell is a wildcard, and a side with no value at all is
                 // an absence rather than a pattern.
-                _ => true,
+                return true;
+            };
+            return match (x.as_enum(), y.as_enum()) {
+                (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
+                    // SAFETY: `pa`/`pb` are payloads of values read out of live
+                    // nodes of this module, so their home blocks have not been
+                    // dropped.
+                    let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
+                    left.len() == right.len()
+                        && left.iter().zip(right.iter()).all(|(ia, ib)| {
+                            self.unify_inner(
+                                Side::of(ia.node, self.node_value(ia.node)),
+                                Side::of(ib.node, self.node_value(ib.node)),
+                                path,
+                                depth + 1,
+                                steps,
+                                root,
+                            )
+                        })
+                }
+                // Two functions are one when their identities resolve to one
+                // logical function — the frozen/static pair included.
+                _ if self.value_pair_equal(x, y) => true,
+                _ => {
+                    self.record_value_error(root, Some(x), Some(y));
+                    false
+                }
             };
         };
         if ra == rb {
@@ -906,51 +924,6 @@ impl<P: Program> Module<P> {
                         false
                     }
                 }
-            }
-        }
-    }
-
-    /// Whether two decided values can be one value — the **node-less** half of
-    /// the unification, and the only part of it that must not write: neither side
-    /// has a class to merge, so the whole effect of a disagreement is the caller's
-    /// report, and nothing here may reach [`Self::add_equality`].
-    ///
-    /// A structure descends positionally through its elements' **values** (not
-    /// their classes — these are bare values), a free cell matches anything
-    /// because it resolves by binding, and two functions are one when their
-    /// identities resolve to one logical function.  `depth` is the cycle guard:
-    /// a self-referential structure reached without nodes has no pair to name.
-    fn values_can_be_one(&self, a: P::Value, b: P::Value, depth: usize) -> bool {
-        if depth >= MAX_VALUE_DEPTH || is_unbound(Some(a)) || is_unbound(Some(b)) {
-            return true;
-        }
-        match (a.as_enum(), b.as_enum()) {
-            (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
-                // SAFETY: `pa`/`pb` are payloads of values read out of live nodes
-                // of this module, so their home blocks have not been dropped.
-                let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
-                if std::env::var_os("LICHEN_TRACE_VCBO").is_some() && left.len() != right.len() {
-                    eprintln!("VCBO-LEN depth={depth} {} vs {}", left.len(), right.len());
-                }
-                left.len() == right.len()
-                    && left.iter().zip(right.iter()).all(|(ia, ib)| {
-                        match (self.node_value(ia.node), self.node_value(ib.node)) {
-                            (Some(va), Some(vb)) => self.values_can_be_one(va, vb, depth + 1),
-                            // An element without a value is unknown — a wildcard.
-                            _ => true,
-                        }
-                    })
-            }
-            _ => {
-                let ok = self.value_pair_equal(a, b);
-                if !ok && std::env::var_os("LICHEN_TRACE_VCBO").is_some() {
-                    eprintln!(
-                        "VCBO-FALSE depth={depth} a={:?} b={:?}",
-                        a.as_enum(),
-                        b.as_enum()
-                    );
-                }
-                ok
             }
         }
     }
