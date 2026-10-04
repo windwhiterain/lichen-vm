@@ -132,12 +132,17 @@ pub(super) fn lower_body(
         current: 0,
     };
 
-    // Pass 1: create the blocks, and bind the entry block's blockparams to the
-    // kernel-IR parameter values that name them.
-    for _ in &body.blocks {
+    // Pass 1: bind the blocks. **waffle's entry block already exists** — it is the
+    // one the signature built its blockparams on — so it is *used* rather than
+    // added again; every other block is new. Leaving that entry block
+    // unterminated is what puts an `unreachable` at the top of the function.
+    let entry = walk.builder.entry;
+    let mut bound = vec![(entry, Vec::new())];
+    for _ in 1..body.blocks.len() {
         let block = walk.builder.add_block();
-        walk.blocks.push((block, Vec::new()));
+        bound.push((block, Vec::new()));
     }
+    walk.blocks = bound;
     let entry_params: Vec<Value> = context.params.to_vec();
     for (offset, &value) in body.blocks[body.entry].params.iter().enumerate() {
         let slot = *entry_params.get(offset).ok_or_else(|| {

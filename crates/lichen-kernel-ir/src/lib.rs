@@ -666,21 +666,26 @@ impl KernelInstr {
         }
     }
 
-    /// How many values this instruction reads.
+    /// How many values this instruction reads, when the instruction fixes it.
     ///
     /// **Stated here because it is a fact about the language's operators, not
     /// about any target**, and a lowering should not have to re-derive it to
-    /// wire an instruction's operands. The one not fixed by the operator is
-    /// [`Self::CallKernel`], whose arity is the callee's own domain — so it reads
-    /// no argument of its own, and the caller supplies the values it passes.
-    pub fn arity(&self) -> usize {
-        match self {
-            KernelInstr::Const(..) | KernelInstr::CallKernel(_) => 0,
+    /// wire an instruction's operands.
+    ///
+    /// [`Self::None`] — spelled `None`, meaning *not fixed by the instruction* — is
+    /// [`Self::CallKernel`], whose arity is the **callee's own domain**. This
+    /// crate does not know that arity, and neither does anything that would want to
+    /// check it, so a body that calls another kernel states its arguments and the
+    /// check that could contradict it belongs to whoever holds the callee.
+    pub fn arity(&self) -> Option<usize> {
+        Some(match self {
+            KernelInstr::Const(..) => 0,
             KernelInstr::Bin(_, _) | KernelInstr::BufferReadCall(_) => 2,
             KernelInstr::I32WrapI64 | KernelInstr::Conv { .. } => 1,
             KernelInstr::Select => 3,
             KernelInstr::BufferWriteCall(_) => 3,
-        }
+            KernelInstr::CallKernel(_) => return None,
+        })
     }
 
     /// The class this instruction states in its own form, if it states one.

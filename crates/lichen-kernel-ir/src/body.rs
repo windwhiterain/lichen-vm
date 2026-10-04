@@ -221,7 +221,7 @@ pub fn from_flat(domain: usize, ops: &[FlatOp]) -> KernelBody {
                 values.push(value);
             }
             FlatOp::Instr(instr) => {
-                let take = instr.arity().min(values.len());
+                let take = instr.arity().unwrap_or(0).min(values.len());
                 let args = values[values.len() - take..].to_vec();
                 values.truncate(values.len() - take);
                 let classes = if instr.produces() == 0 {
@@ -349,10 +349,12 @@ impl KernelBody {
                         classes.len()
                     ));
                 }
-                if args.len() != op.arity() {
+                // **A call's arity is the callee's**, which this crate does not know, so the
+                // check is the one instruction's exemption from the rule.
+                if op.arity().is_some_and(|arity| args.len() != arity) {
                     return Err(format!(
                         "{op:?} reads {} value(s) but is given {}",
-                        op.arity(),
+                        op.arity().unwrap_or_default(),
                         args.len()
                     ));
                 }

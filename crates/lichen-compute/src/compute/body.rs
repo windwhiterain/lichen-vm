@@ -191,10 +191,18 @@ where
             return Err(super::kernel_body_too_deep());
         }
         self.depth += 1;
-        let value = match self.module.define_in(self.domain, node) {
-            Define::Parameter(leaf) => self.parameter(self.slot_of(leaf)?)?,
-            Define::Computed(definition) => self.definition(definition)?,
-            Define::Opaque => self.opaque(node)?,
+        // **A literal is a value, and it is answered before anything else** —
+        // before the operation test and before the class walk. A node can hold a
+        // decided literal *and* have no operation and no class member that
+        // computes it, and answering it as opaque would refuse a constant the
+        // graph has already decided.
+        let value = match self.literal(node) {
+            Some(value) => value,
+            None => match self.module.define_in(self.domain, node) {
+                Define::Parameter(leaf) => self.parameter(self.slot_of(leaf)?)?,
+                Define::Computed(definition) => self.definition(definition)?,
+                Define::Opaque => self.opaque(node)?,
+            },
         };
         self.depth -= 1;
         self.values.insert(node, value);
@@ -213,9 +221,19 @@ where
     }
 
     /// The ABI slot the domain's `leaf`-th leaf takes.
+    ///
+    /// **A struct domain's whole value is a parameter too**, and its fields are
+    /// the ones that take slots — so a body reading the parameter itself and a
+    /// body reading one of its fields are both parameter reads, and only the
+    /// field names an index.
     fn slot_of(&self, leaf: NodeId) -> Result<usize, String> {
         let root = self.module.class_root(leaf);
-        self.domain_leaves()?
+        let domain = self.domain;
+        let leaves = self.domain_leaves()?;
+        if self.module.class_root(domain) == root {
+            return Ok(0);
+        }
+        leaves
             .iter()
             .position(|candidate| self.module.class_root(*candidate) == root)
             .ok_or_else(|| {
@@ -296,7 +314,7 @@ where
         // The structural core, dispatched through the lowlevel.
         if let Some(low) = AsEnum::<LowOperator>::as_enum(op) {
             return match low {
-                LowOperator::Index => self.index(node, operand),
+                LowOperator::Index => self.index(node),
                 LowOperator::Apply => self.apply(node, operand),
                 LowOperator::TableGet => Err(
                     "unsupported tableget operator in kernel body (kernel-safe subset is scalar \
@@ -492,23 +510,50 @@ where
     }
 
     /// An `Index`: a view, a parameter read, or the language's conditional.
-    fn index(&mut self, node: NodeId, operand: NodeId) -> Result<ValueId, String> {
+    fn index(&mut self, node: NodeId) -> Result<ValueId, String> {
         // **The conditional first**, because a view never computes and the two
         // can only be told apart by the index.
         if let Some(lichen_lowlevel::Selection::Computed) = self.module.selection_of(node) {
-            return self.conditional(node, operand);
+            return self.conditional(node);
         }
         // Anything else that is a view has already been resolved by
         // `define_in`, so reaching it here means the index named nothing this
         // body can place.
         let arguments = self.arguments(node)?;
-        let Some(index) = arguments.get(1) else {
-            return Err("an index read is missing its index".into());
+        let Some(target) = arguments.first() else {
+            return Err("an index read is missing its target".into());
+        };
+        let index = arguments.get(1);
+        // **What it saw, in the terms the graph has.** A refusal that says only
+        // "cannot place" leaves the reader guessing between a target that is not an
+        // array, an index that is not a constant, and an arm count that is not two
+        // — and those are three different defects.
+        let target_kind = match target {
+            AnyNodeId::Dynamic(node) => {
+                let items = unsafe { self.module.array_items_of(AnyNodeId::Dynamic(*node)) };
+                if self.module.node_operation(*node).is_some() {
+                    "a computation".to_string()
+                } else if let Some(items) = items {
+                    format!("an array of {} element(s)", items.len())
+                } else if self.module.structural_value(*node).is_some() {
+                    "a literal".to_string()
+                } else {
+                    "a bare cell".to_string()
+                }
+            }
+            AnyNodeId::Static(_) => "a frozen node".to_string(),
+        };
+        let index_kind = match index {
+            Some(index) => match self.module.usize_value(*index) {
+                Some(k) => format!("the constant {k}"),
+                None => "a value the graph cannot decide".to_string(),
+            },
+            None => "no index at all".to_string(),
         };
         Err(format!(
-            "a kernel body's index `{index:?}` names a value this walk cannot place: a constant \
-             index into something that is not an array, or an index that is neither a constant nor \
-             a two-armed branch"
+            "a kernel body's index cannot be placed: its target is {target_kind} and its index is \
+             {index_kind}. A view needs a constant index into an array, and a selection needs an \
+             undecided index into a two-element array; neither is what this one is"
         ))
     }
 
@@ -517,22 +562,29 @@ where
     /// **Both arms are emitted before the select**, and they are separate values:
     /// the walk emits the arms because the graph holds them, not because a target
     /// needs two arms. That is what leaves a real branch available to build.
-    fn conditional(&mut self, node: NodeId, operand: NodeId) -> Result<ValueId, String> {
-        let Some(items) = (unsafe { self.module.array_items(operand) }) else {
-            return Err("a conditional's operand is not an array value".into());
+    ///
+    /// The language's conditional is `[else, then][condition]` — an ordinary lazy
+    /// index — so the arms come off **the target array**, not off the index's own
+    /// operand array, and they are in that order.
+    fn conditional(&mut self, node: NodeId) -> Result<ValueId, String> {
+        let arguments = self.arguments(node)?;
+        let Some((target, selector)) = arguments.first().zip(arguments.get(1)) else {
+            return Err("a conditional is missing its arms or its selector".into());
         };
-        if items.len() != 2 {
+        let Some(arms) = (unsafe { self.module.array_items_of(*target) }) else {
+            return Err("a conditional's arms are not an array value".into());
+        };
+        if arms.len() != 2 {
             return Err(format!(
                 "a conditional's arms are a two-element array, and this one has {}",
-                items.len()
+                arms.len()
             ));
         }
-        let arguments = self.arguments(node)?;
-        let Some((otherwise, selector)) = arguments.first().zip(arguments.get(1)) else {
-            return Err("a conditional is missing an arm or its selector".into());
-        };
-        let otherwise = self.value_item(*otherwise)?;
-        let then = self.value_item(items[1].node)?;
+        // **`[else, then]`**, so element 0 is the arm that runs when the condition
+        // is false.
+        let (otherwise, then) = (arms[0].node, arms[1].node);
+        let otherwise = self.value_item(otherwise)?;
+        let then = self.value_item(then)?;
         let selector = self.value_item(*selector)?;
         // The selector is the language's `0`/`1` scalar; a consumer whose own
         // condition is narrower narrows it here. **`I32WrapI64` is that
@@ -816,6 +868,15 @@ pub(super) const CALLEE_ARGUMENT: &str = "a cross-kernel call's argument must be
      build the argument from its elements (or pass the parameter through)";
 
 /// The node an array element names, or the reason there is none.
+fn target_item(node: lichen_lowlevel::AnyNodeId) -> NodeId {
+    match node {
+        lichen_lowlevel::AnyNodeId::Dynamic(node) => node,
+        // A frozen arm is a constant the clone carried across, and `array_items_of`
+        // answers `None` for it below — so this arm is never reached with one.
+        lichen_lowlevel::AnyNodeId::Static(_) => NodeId::default(),
+    }
+}
+
 fn dynamic(node: lichen_lowlevel::AnyNodeId) -> Result<NodeId, String> {
     match node {
         lichen_lowlevel::AnyNodeId::Dynamic(node) => Ok(node),

@@ -235,6 +235,12 @@ impl<P: Program> Module<P> {
                 Selection::Views(view) => self.define_in(domain, view),
             };
         }
+        /// The domain's own node is a parameter too**, not only its leaves: a body may
+        // read a tuple domain whole (`k x` rather than `k (x(0), x(1))`), and that
+        // read is the parameter's own value.
+        if self.class_root(domain) == self.class_root(node) {
+            return Define::Parameter(domain);
+        }
         for leaf in self.value_leaves(domain).unwrap_or_default() {
             if self.class_root(node) == self.class_root(leaf) {
                 return Define::Parameter(leaf);
@@ -308,7 +314,7 @@ impl<P: Program> Module<P> {
     /// The node must be live — this module's, or one of a frozen module that
     /// outlives the reference it was reached through, which is the same obligation
     /// every read of an `AnyNodeId` carries.
-    unsafe fn array_items_of(&self, node: AnyNodeId) -> Option<&'static [ArrayItem]> {
+    pub unsafe fn array_items_of(&self, node: AnyNodeId) -> Option<&'static [ArrayItem]> {
         match node {
             AnyNodeId::Dynamic(node) => unsafe { self.array_items(node) },
             AnyNodeId::Static(_) => None,
