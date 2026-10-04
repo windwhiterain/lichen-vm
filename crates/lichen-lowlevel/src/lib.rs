@@ -10,17 +10,16 @@ use lichen_utils::disjoint::{self};
 use lichen_utils::extend::AsEnum;
 
 pub use crate::assert::{AssertError, PendingAssert};
-pub use crate::control_flow::{BasicBlock, Body, Br, Define, Selection, Terminator};
 pub use crate::equality::{UnifyError, UnifyStep};
 pub use crate::evaluation::EvalError;
 pub use crate::function::ApplyError;
+pub use crate::resolve::{Define, Selection};
 pub(crate) use crate::static_module::StaticModuleCache;
 
 pub mod ancestors;
 mod apply;
 mod assert;
 pub mod codec;
-pub mod control_flow;
 mod equality;
 mod evaluation;
 mod function;
@@ -28,6 +27,7 @@ mod gc;
 mod low_type;
 mod module;
 mod registry;
+pub mod resolve;
 mod static_module;
 mod table;
 mod utils;
