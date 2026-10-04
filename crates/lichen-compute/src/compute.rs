@@ -430,6 +430,26 @@ mod kernel_intern_tests {
     }
 }
 
+/// The scalar classes a parameter slot's shape flattens to, in order.
+pub(crate) fn scalar_classes_of(shape: &LowShape) -> Vec<ScalarClass> {
+    let mut classes = Vec::new();
+    flatten_classes_into(shape, &mut classes);
+    classes
+}
+
+/// Append one shape's leaves' classes, recursing for a tuple.
+fn flatten_classes_into(shape: &LowShape, classes: &mut Vec<ScalarClass>) {
+    match shape {
+        LowShape::Float => classes.push(ScalarClass::Float),
+        LowShape::Tuple(items) => {
+            for item in items {
+                flatten_classes_into(item, classes);
+            }
+        }
+        _ => classes.push(ScalarClass::Int),
+    }
+}
+
 /// The element results of a buffer payload — a borrowed view into the block
 /// arena the value lives in.
 ///

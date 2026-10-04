@@ -48,6 +48,15 @@ use super::{
     node_class_in, parallel_buffer_pos, param_classes, peeled_argument, scalar_literal,
 };
 
+/// The parameter slots' classes in flattening order — **the ABI's own list**,
+/// since a leaf's class is the parameter's and not the body's.
+fn param_classes_of(params: &[ParamSlot]) -> Vec<ScalarClass> {
+    params
+        .iter()
+        .flat_map(|slot| super::scalar_classes_of(&slot.shape))
+        .collect()
+}
+
 /// How many parameter leaves the body's entry block receives — **the declared
 /// shape's arity**, which is the ABI's count and not the domain node's.
 ///
@@ -82,6 +91,15 @@ pub struct Lower<'a, P: Program> {
     /// How many definitions deep the walk is — the guard that replaced a
     /// hand-rolled operand stack's failure mode.
     depth: usize,
+    /// The class each emitted value was declared in, keyed by the node it came
+    /// from — what an operator consults to learn what class its operands are.
+    classes: HashMap<NodeId, ScalarClass>,
+    /// The entry block's parameters' classes, in flattening order — **the ABI's
+    /// own list**, since a leaf's class is the parameter's and not the body's.
+    leaf_classes: Vec<ScalarClass>,
+    /// The node whose definition is being emitted, so [`Lower::emit`] can record
+    /// the class it declared against it.
+    defining: NodeId,
 }
 
 /// A cross-kernel callee must return exactly one value, and it must be the
@@ -131,6 +149,9 @@ where
             entry,
             values: HashMap::new(),
             depth: 0,
+            classes: HashMap::new(),
+            leaf_classes: param_classes_of(params),
+            defining: NodeId::default(),
         };
         let mut values = Vec::new();
         for node in lower.leaves_of(codomain)? {
@@ -184,6 +205,9 @@ where
             entry,
             values: HashMap::new(),
             depth: 0,
+            classes: HashMap::new(),
+            leaf_classes: param_classes_of(params),
+            defining: NodeId::default(),
         };
         for output in outputs {
             // The value a write leaves is discarded on purpose: see the doc.
@@ -211,6 +235,12 @@ where
             return Err(super::kernel_body_too_deep());
         }
         self.depth += 1;
+        // **Every emission for this node records its class against this node.**
+        // A literal is emitted straight from here rather than from `definition`, so
+        // setting it once here covers both — and recording it against the wrong
+        // node is how a float constant ended up unrecorded and its operator fell
+        // back to the node's own class.
+        self.defining = node;
         // **A read of the domain at a path, matched structurally.** `x(0)` on a
         // tuple domain is a chain of `Index` nodes ending at the parameter, and the
         // walk recognises it from the chain rather than from the class — which
@@ -218,7 +248,17 @@ where
         // argument it was passed, so the node the read names is a *computation* and
         // only the chain says where it came from.
         let value = match self.parameter_path(node) {
-            Some(slot) => self.parameter(slot)?,
+            Some(slot) => {
+                // **A parameter's class is the ABI's**, recorded here so an operator
+                // that reads one learns what class it is without the fragment.
+                let class = self
+                    .leaf_classes
+                    .get(slot)
+                    .copied()
+                    .unwrap_or(ScalarClass::Int);
+                self.classes.insert(node, class);
+                self.parameter(slot)?
+            }
             // **A literal is a value, answered before anything else** — before the
             // operation test and before the class walk. A node can hold a decided
             // literal *and* have no operation and no class member that computes it,
@@ -352,12 +392,18 @@ where
 
     /// Emit `instr` over `args` in the entry block, declaring what it leaves.
     fn emit(&mut self, instr: KernelInstr, args: Vec<ValueId>, class: ScalarClass) -> ValueId {
-        let classes = if instr.produces() == 0 {
+        let declared = if instr.produces() == 0 {
             Vec::new()
         } else {
             vec![class]
         };
-        self.body.add_op(self.entry, instr, args, classes)
+        let value = self.body.add_op(self.entry, instr, args, declared);
+        if instr.produces() > 0 {
+            // **Recorded against the node being defined**, which is what an
+            // operator consults to learn what class its operands are.
+            self.classes.insert(self.defining, class);
+        }
+        value
     }
 
     fn emit_const(&mut self, class: ScalarClass, bits: i64) -> ValueId {
@@ -438,6 +484,23 @@ where
             let Some(lhs) = arguments.first() else {
                 return Err(format!("{ty_op:?} is missing an operand"));
             };
+            // **The operator's class is its operands' class**, read off them and
+            // falling back to the node's. The node's own class is a hint, not the
+            // answer: a float body's index and count are `Int` positions, so an
+            // operator that adds two floats computes in `Float` whatever the node
+            // the checker hung them on says. Trusting the node here made a float
+            // kernel declare `Bin(Int, Add)` over two float values, and the class
+            // check refused it — correctly, and for the wrong reason.
+            // **The operands first**: the class below is read off what they
+            // emitted, and asking before they exist reads nothing and falls back
+            // to the node's own.
+            let left = self.value_item(*lhs)?;
+            let right = self.value_item(*rhs)?;
+            let operand_class = self
+                .emitted_class(*lhs)
+                .or_else(|| self.emitted_class(*rhs))
+                .unwrap_or(class);
+            let class = operand_class;
             // **A float has no `%` or bitwise form**, and the refusal is here at
             // the operand because the class is still visible.
             if class == ScalarClass::Float
@@ -451,8 +514,6 @@ where
                      the four order comparisons, not `%` or the bitwise operators"
                 ));
             }
-            let left = self.value_item(*lhs)?;
-            let right = self.value_item(*rhs)?;
             return Ok(self.emit(KernelInstr::Bin(class, bin), vec![left, right], class));
         }
 
@@ -460,12 +521,24 @@ where
         if let Some(compute_op) = AsEnum::<ComputeOperator>::as_enum(op) {
             return match compute_op {
                 ComputeOperator::Launch | ComputeOperator::Call => {
-                    let operands = self.module.operands_of(node)?;
+                    // **A program's own operator reads its operand array's
+                    // elements**, not the array: `operands_of` answers "which
+                    // nodes does this definition depend on", and for a program
+                    // operator that is the array itself — one node, built before
+                    // the operator that indexes it.
+                    let operands = self.arguments(node)?;
                     let Some(kernel) = operands.first() else {
-                        return Err("cross-kernel call is missing its callee".into());
+                        return Err(format!(
+                            "cross-kernel call's operand array is empty, and a call reads [callee, \
+                             argument]"
+                        ));
                     };
                     let Some(arg) = operands.get(1) else {
-                        return Err("cross-kernel call is missing its argument".into());
+                        return Err(format!(
+                            "cross-kernel call's operand array holds {} element(s), and a call \
+                             reads [callee, argument]",
+                            operands.len()
+                        ));
                     };
                     self.cross_kernel_call(*kernel, *arg)
                 }
@@ -532,13 +605,15 @@ where
         }
         // A cross-kernel call.
         if kernel_id_of(self.module, callee).is_some() {
-            let arg = dynamic(
-                operands
-                    .get(1)
-                    .map(|item| item.node)
-                    .unwrap_or(operands[0].node),
-            )?;
-            return self.cross_kernel_call(callee, arg);
+            let arg = operands.get(1).map(|item| item.node);
+            let Some(arg) = arg else {
+                return Err(format!(
+                    "an Apply's operand array holds {} element(s), and a cross-kernel call reads \
+                     [callee, argument]",
+                    operands.len()
+                ));
+            };
+            return self.cross_kernel_call(AnyNodeId::Dynamic(callee), arg);
         }
         // Style 1: an ordinary lichen-function call. **This is where a marked
         // recursion reaches the emitter today** — refused by name rather than
@@ -549,6 +624,23 @@ where
              inline lichen-function calls are not yet supported"
                 .into(),
         )
+    }
+
+    /// The class a value this walk has already emitted was declared in.
+    ///
+    /// **Read from what was emitted, not from the node.** An operator's operands
+    /// are emitted before the operator, so by the time the operator asks what
+    /// class its operands are, this walk knows — and that is the *whole* reason
+    /// the class belongs here: a float body's index and count are `Int` positions,
+    /// so an operator adding two floats computes in `Float` whatever the node the
+    /// checker hung them on says. Trusting the node made a float kernel declare
+    /// `Bin(Int, Add)` over two float values, and the class check refused it —
+    /// correctly, and for the wrong reason.
+    fn emitted_class(&self, value: AnyNodeId) -> Option<ScalarClass> {
+        let AnyNodeId::Dynamic(value) = value else {
+            return None;
+        };
+        self.classes.get(&value).copied()
     }
 
     /// The values a **program's own** operator reads — its operand array's elements.
@@ -823,7 +915,9 @@ where
     }
 
     /// A cross-kernel call: `compute.launch k x` / `compute.call k x`.
-    fn cross_kernel_call(&mut self, kernel: NodeId, arg: NodeId) -> Result<ValueId, String> {
+    fn cross_kernel_call(&mut self, kernel: AnyNodeId, arg: AnyNodeId) -> Result<ValueId, String> {
+        let kernel = dynamic(kernel)?;
+        let arg = dynamic(arg)?;
         let kid = kernel_id_of(self.module, kernel)
             .ok_or_else(|| "cross-kernel call target is not a kernel value".to_string())?;
         // The callee's domain, its result arity **and its class** are facts of
