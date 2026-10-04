@@ -2631,39 +2631,61 @@ fn the_default_entry_point_still_uses_the_tuned_budget() {
 
 #[test]
 fn a_raised_budget_lets_a_terminating_program_check() {
-    // The same program as above, under a total the caller raised: `count
-    // 2500` terminates after 2_501 applications and now checks.  This is the
-    // capability the tuned-only budget denied — before it, the build above is
-    // the only available answer for a terminating program.
+    // The same program as above, under bounds the caller raised.  **Both** have
+    // to move, and that is the point of the pair: a trip count costs one
+    // application *and* one apply level (the expansion deepens once per count —
+    // the level is read off the node being applied, so it does not depend on
+    // which pass forces the values), and the two bounds measure those two
+    // things. `count 2500` terminates after 2_501 applications at 2_500 levels,
+    // so a raised total alone would still meet the nesting guard.
     let (root, mut ir) = countdown(2_500);
     ir.set_root(root);
     let b = Checker::<ProgramImpl>::build_with_budget(
         ir,
         lichen_highlevel::checker::WorkBudget {
+            apply_depth_limit: 5_000,
             apply_total_limit: 10_000,
-            ..Default::default()
         },
     );
     assert!(
         b.ok,
-        "a terminating recursion below the raised total must check"
+        "a terminating recursion below both raised bounds must check"
     );
     assert!(b.module.budget_exhausted.is_none());
 }
 
 #[test]
-fn the_tuned_total_still_bounds_a_long_but_terminating_recursion() {
-    // The default numbers are unchanged: a terminating recursion past the
-    // tuned total (2_000 applications) is still refused and reported, which
-    // is exactly why the limit has to be the caller's to raise.
+fn the_tuned_bounds_still_refuse_a_long_but_terminating_recursion() {
+    // The default numbers are unchanged, and which of them refuses says what
+    // each one is for: a *deep* expansion meets the nesting guard at its trip
+    // count (`count 2_500` under a bound of 500), and the work bound is there
+    // for the recursion this one cannot catch — a wide one, or an infinite one
+    // behind a lazy branch, where nesting stays low and only the count grows.
+    // Both are the caller's to raise, which is why a large trip count is a
+    // decision the host states rather than something the evaluator guesses.
     let (root, ir) = countdown(2_500);
     let b = build(root, ir);
-    assert!(!b.ok, "the tuned total must still refuse this walk");
+    assert!(!b.ok, "the tuned bounds must still refuse this walk");
     assert_eq!(
         b.module.budget_exhausted,
-        Some(lichen_lowlevel::BudgetExhausted::ApplyTotal { limit: 2_000 })
+        Some(lichen_lowlevel::BudgetExhausted::ApplyDepth { limit: 500 })
     );
     assert_eq!(b.nonterminating.len(), 1);
+    // A count inside the nesting bound still shows the work bound at work: the
+    // same program under a caller's total of 100 refuses that way instead.
+    let (root, mut ir) = countdown(400);
+    ir.set_root(root);
+    let b = Checker::<ProgramImpl>::build_with_budget(
+        ir,
+        lichen_highlevel::checker::WorkBudget {
+            apply_total_limit: 100,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        b.module.budget_exhausted,
+        Some(lichen_lowlevel::BudgetExhausted::ApplyTotal { limit: 100 })
+    );
 }
 
 // --- the checker's own recursion -----------------------------------------

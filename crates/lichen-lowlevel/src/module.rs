@@ -41,8 +41,8 @@ impl<P: Program> Module<P> {
             apply_error_nodes: HashSet::new(),
             extension_diagnostics: Vec::new(),
             global_ext: P::GlobalExt::default(),
-            apply_depth: 0,
             apply_total: 0,
+            stamp_depth: 0,
             deep_depth: 0,
             budget_exhausted: None,
         }
@@ -76,21 +76,22 @@ impl<P: Program> Module<P> {
             .freeze_mapped(source, key, hash)
     }
 
-    /// Resets the per-run evaluation budgets ([`Self::apply_depth`],
-    /// [`Self::apply_total`], [`Self::deep_depth`]) so a
-    /// host can drive the module in a long-running loop (e.g. one kernel call
-    /// per GUI frame) without the cumulative apply count exhausting
-    /// [`Self::apply_total_limit`]. The budgets guard *one* run; a host that
-    /// resets them per run keeps the guard while shedding lifetime
-    /// accumulation. The limits themselves are unchanged.
+    /// Resets the per-run evaluation budgets ([`Self::apply_total`],
+    /// [`Self::deep_depth`]) so a host can drive the module in a long-running
+    /// loop (e.g. one kernel call per GUI frame) without the cumulative apply
+    /// count exhausting [`Self::apply_total_limit`]. The budgets guard *one*
+    /// run; a host that resets them per run keeps the guard while shedding
+    /// lifetime accumulation. The limits themselves are unchanged.
+    ///
+    /// The nesting guard needs no reset: it reads a node's
+    /// [`depth`](Module::node_depth), a fact of the graph rather than a counter
+    /// a run accumulates.
     ///
     /// [`Self::budget_exhausted`] resets with them: it is a per-run verdict,
     /// so a host starting a new run must not read the previous run's
     /// refusal.
     pub fn reset_apply_budget(&mut self) {
-        self.apply_depth = 0;
         self.apply_total = 0;
-
         self.deep_depth = 0;
         self.budget_exhausted = None;
     }
@@ -121,6 +122,7 @@ impl<P: Program> Module<P> {
             low_shape: None,
             function: None,
             origin: None,
+            depth: self.stamp_depth,
             block,
             visiting: false,
             evaluated_deep: None,
@@ -137,6 +139,14 @@ impl<P: Program> Module<P> {
             self.observe_class_low_type(node, value);
         }
         node
+    }
+
+    /// How many apply levels `node` was created under: `0` for a node the
+    /// checker built, `d + 1` for a node one instantiation created for an apply
+    /// node of depth `d`.  See [`Node`]'s `depth` field for why it is a fact of
+    /// the graph rather than of the evaluation that built it.
+    pub fn node_depth(&self, node: NodeId) -> u32 {
+        self.nodes[node].depth
     }
 
     /// The block `node` is homed in — the garbage-collection unit
