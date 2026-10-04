@@ -20,138 +20,108 @@
 //! typed by the callee's own `result_classes`, which are exactly the types its
 //! wasm signature declares. That is the `Option` disappearing into a fact rather
 //! than into a guess.
+//!
+//! **What a body *transfers* is not here.** Which block a stack ends in, and how a
+//! carried value survives a backedge, is [`flow`](super::flow)'s question; this
+//! file answers only what one instruction computes.
 
 use std::collections::HashMap;
 
-use lichen_kernel_ir::{Flow, KernelBin, KernelFragment, KernelId, KernelInstr, ScalarClass};
-use waffle::{
-    Block, Func, FunctionBody, Module, Operator, Signature, Terminator as WasmTerminator, Type,
-    Value,
-};
+use lichen_kernel_ir::{KernelBin, KernelFragment, KernelId, KernelInstr, ScalarClass};
+use waffle::{Block, Func, FunctionBody, Operator, Type, Value};
 
 use super::assemble::BufferImports;
-use crate::compute::param_classes;
+use super::flow::Slot;
 
-/// One value the body has left on the operand stack: the `waffle` value, and the
-/// wasm type it holds.
+/// What one fragment's lowering needs from the rest of the assembly, and nothing
+/// about the fragment it is lowering.
 ///
-/// **The type is what makes a crossing decidable**, and it is not the same
-/// question as the class: a comparison yields the language's `0`/`1` scalar,
-/// which is an `i64` in either class, and a narrowing turns a `0`/`1` scalar
-/// into an `i32`. Both are facts about the value in hand, and both are what the
-/// next instruction has to be told.
-struct Slot {
-    value: Value,
-    ty: Type,
-}
-
-/// What one fragment's lowering needs from the rest of the assembly.
-struct Lowering<'a> {
+/// **Read-only, and shared with the flow walk**, because these are facts of the
+/// launch set rather than of one body: a cross-kernel call is typed by its
+/// callee's own `result_classes`, and a parameter leaf's class by the ABI's
+/// flattened `param_shape`.
+pub(super) struct ModuleCtx<'a> {
     /// The launch set, so a cross-kernel call can be typed by its callee's own
     /// result list rather than left unnamed.
-    callees: &'a [KernelFragment],
+    pub(super) callees: &'a [KernelFragment],
     /// Each callee [`KernelId`]'s position in `callees`.
-    index: &'a HashMap<KernelId, u32>,
-    imports: &'a BufferImports,
+    pub(super) index: &'a HashMap<KernelId, u32>,
+    pub(super) imports: &'a BufferImports,
     /// The parameter leaves' classes, in flattening order — the ABI types each
     /// [`KernelInstr::LocalGet`] reads back.
     ///
     /// **A leaf's class is its own, not the fragment's**: a float fragment's
     /// count and index are `f32` parameters whatever the body computes.
-    leaves: &'a [ScalarClass],
+    pub(super) leaves: &'a [ScalarClass],
     /// The entry block's blockparams, which **are** the function's parameters, in
     /// the ABI's flattened leaf order. A [`KernelInstr::LocalGet`] reads one of
     /// these directly rather than emitting a `local.get` against an index.
-    params: &'a [Value],
+    ///
+    /// **A blockparam and not a local**, because the entry block has no
+    /// predecessors to hand a local to: `FunctionBody::new` builds these from the
+    /// signature, and nothing may add to them
+    /// (`docs/notes/wasm-backend-handoff.md` §3.2).
+    pub(super) params: &'a [Value],
 }
 
-/// Lower one fragment's body into a `waffle` [`FunctionBody`].
+/// One instruction's worth of emission state: where its operators go and what
+/// they leave on the stack.
 ///
-/// **One block, no control flow.** The entry block's blockparams *are* the
-/// function's parameters (`FunctionBody::new` builds them), so the ABI's
-/// flattened leaves are already named and a [`KernelInstr::LocalGet`] reads one
-/// of them directly rather than a `local.get`.
-///
-/// A body's transfer other than [`lichen_kernel_ir::Terminator::Return`] is
-/// refused by name — including the entry block naming a label, which is how a
-/// `While` marks its own header. Serving those is `docs/notes/wasm-backend-handoff.md`
-/// §3.2.
-pub(super) fn lower_fragment(
-    fragment: &KernelFragment,
-    callees: &[KernelFragment],
-    index: &HashMap<KernelId, u32>,
-    module: &Module,
-    signature: Signature,
-    imports: &BufferImports,
-) -> Result<FunctionBody, String> {
-    fragment
-        .body
-        .validate()
-        .map_err(|broken| format!("compute.wasm: the kernel body is malformed: {broken}"))?;
-    let Flow::Block { entry, instrs, .. } = &fragment.body.entry else {
-        return Err(
-            "compute.wasm: a kernel body must begin with a block, and a `Seq` is a loop's own body \
-             rather than a fragment's"
-                .to_string(),
-        );
-    };
-    if let Some(label) = entry {
-        return Err(format!(
-            "compute.wasm: the fragment's own block is labelled {} and so is a loop's header — a loop \
-             needs a block of its own for the carried tuple, which this one-block lowering does not \
-             yet give it",
-            label.0
-        ));
-    }
-
-    let mut body = FunctionBody::new(module, signature);
-    let block = body.entry;
-    let params: Vec<Value> = body.blocks[block]
-        .params
-        .iter()
-        .map(|(_, value)| *value)
-        .collect();
-    let lowering = Lowering {
-        callees,
-        index,
-        imports,
-        leaves: &param_classes(fragment),
-        params: &params,
-    };
-
-    let mut stack: Vec<Slot> = Vec::new();
-    for instruction in instrs {
-        lower_instr(*instruction, &mut body, block, &mut stack, &lowering)?;
-    }
-
-    let values = return_values(&mut stack, fragment.result_classes.len())?;
-    body.set_terminator(
-        block,
-        WasmTerminator::Return {
-            values: values.iter().map(|slot| slot.value).collect(),
-        },
-    );
-    Ok(body)
+/// **The stack is a real operand stack**, in the sense that the next instruction
+/// reads the top of it — what makes it a fact rather than a guess is that every
+/// slot carries its type, so a crossing is decided by what the value holds
+/// (`docs/notes/wasm-backend-handoff.md` §3.1).
+pub(super) struct Lower<'a, 'b> {
+    pub(super) builder: &'a mut FunctionBody,
+    pub(super) context: &'a ModuleCtx<'b>,
+    pub(super) block: Block,
+    pub(super) stack: &'a mut Vec<Slot>,
 }
 
-/// The top `results` slots, in order, and the stack without them.
-fn return_values(stack: &mut Vec<Slot>, results: usize) -> Result<Vec<Slot>, String> {
-    if stack.len() < results {
-        return Err(format!(
-            "compute.wasm: the body returns {results} value(s) but leaves only {} on the stack",
-            stack.len()
-        ));
+impl Lower<'_, '_> {
+    /// Add one operator to the current block and leave its result on the stack.
+    pub(super) fn emit(&mut self, operator: Operator, args: &[Value], results: &[Type]) -> Value {
+        let value = self.builder.add_op(self.block, operator, args, results);
+        // A one-result operator is the only shape that leaves a value behind: a
+        // `BufferWriteCall` returns nothing, and the arms that call this push the
+        // slot themselves when there is one.
+        if let [ty] = results {
+            self.stack.push(Slot { value, ty: *ty });
+        }
+        value
     }
-    Ok(stack.split_off(stack.len() - results))
+
+    /// Pop the top slot, or refuse: an underflow is a malformed body, and this
+    /// lowering says so rather than emitting an operator with a missing operand.
+    pub(super) fn pop(&mut self) -> Result<Slot, String> {
+        self.stack.pop().ok_or_else(|| {
+            "compute.wasm: an instruction reads below the bottom of the stack — the body's operands \
+             are not the ones the instruction consumes"
+                .to_string()
+        })
+    }
+
+    /// Pop `count` slots, deepest first.
+    pub(super) fn pop_many(&mut self, count: usize) -> Result<Vec<Value>, String> {
+        if self.stack.len() < count {
+            return Err(format!(
+                "compute.wasm: a call consumes {count} value(s) but only {} are on the stack",
+                self.stack.len()
+            ));
+        }
+        Ok(self
+            .stack
+            .split_off(self.stack.len() - count)
+            .into_iter()
+            .map(|slot| slot.value)
+            .collect())
+    }
 }
 
-/// Lower one instruction onto `block`, consuming and producing slots.
-fn lower_instr(
+/// Lower one instruction, consuming and producing slots.
+pub(super) fn lower_instr(
+    mut lower: Lower<'_, '_>,
     instruction: KernelInstr,
-    body: &mut FunctionBody,
-    block: Block,
-    stack: &mut Vec<Slot>,
-    lowering: &Lowering<'_>,
 ) -> Result<(), String> {
     // `KernelInstr` is `Copy`, so this matches it **by value**: an instruction's
     // class is a value, not a borrow, and every arm below reads it directly.
@@ -161,22 +131,15 @@ fn lower_instr(
                 ScalarClass::Int => (Operator::I64Const { value: bits as u64 }, Type::I64),
                 ScalarClass::Float => (Operator::F32Const { value: bits as u32 }, Type::F32),
             };
-            emit(body, block, operator, &[], &[ty], stack);
+            lower.emit(operator, &[], &[ty]);
         }
         KernelInstr::Bin(class, operator) => {
-            let rhs = pop(stack)?;
-            let lhs = pop(stack)?;
+            let rhs = lower.pop()?;
+            let lhs = lower.pop()?;
             let native = binary_operator(class, operator)?;
             if !is_comparison(operator) {
                 let result = super::assemble::value_type(class);
-                emit(
-                    body,
-                    block,
-                    native,
-                    &[lhs.value, rhs.value],
-                    &[result],
-                    stack,
-                );
+                lower.emit(native, &[lhs.value, rhs.value], &[result]);
                 return Ok(());
             }
             // **A comparison is two operators, and this is the fact the withdrawn
@@ -189,19 +152,16 @@ fn lower_instr(
             // **The narrowing leaves no slot of its own**: two operators make one
             // value, and a stack slot per operator would put the `i32` underneath
             // the `i64` and make the next instruction read the wrong one.
-            let narrow = body.add_op(block, native, &[lhs.value, rhs.value], &[Type::I32]);
-            emit(
-                body,
-                block,
-                Operator::I64ExtendI32U,
-                &[narrow],
-                &[Type::I64],
-                stack,
-            );
+            let narrow =
+                lower
+                    .builder
+                    .add_op(lower.block, native, &[lhs.value, rhs.value], &[Type::I32]);
+            lower.emit(Operator::I64ExtendI32U, &[narrow], &[Type::I64]);
         }
         KernelInstr::LocalGet(offset) => {
             let leaf = usize::try_from(offset).unwrap_or(usize::MAX);
-            let ty = lowering
+            let ty = lower
+                .context
                 .leaves
                 .get(leaf)
                 .copied()
@@ -210,30 +170,23 @@ fn lower_instr(
                     format!(
                         "compute.wasm: a body reads parameter leaf {leaf}, which a domain of {} \
                          leaf/leaves does not have",
-                        lowering.leaves.len()
+                        lower.context.leaves.len()
                     )
                 })?;
-            let value = *lowering.params.get(leaf).ok_or_else(|| {
+            let value = *lower.context.params.get(leaf).ok_or_else(|| {
                 format!(
                     "compute.wasm: a body reads parameter leaf {leaf}, which the function's \
-                         signature does not have"
+                     signature does not have"
                 )
             })?;
-            stack.push(Slot { value, ty });
+            lower.stack.push(Slot { value, ty });
         }
         // The narrowing a `0`/`1` scalar takes to become a `select` condition or a
         // branch's `CondBr`. **The slot's type is the `i32` it now is**, which is
         // the only thing either consumer can use it for.
         KernelInstr::I32WrapI64 => {
-            let top = pop(stack)?;
-            emit(
-                body,
-                block,
-                Operator::I32WrapI64,
-                &[top.value],
-                &[Type::I32],
-                stack,
-            );
+            let top = lower.pop()?;
+            lower.emit(Operator::I32WrapI64, &[top.value], &[Type::I32]);
         }
         KernelInstr::Select => {
             // **The condition is on top**, so the three pops read it first, then
@@ -243,19 +196,16 @@ fn lower_instr(
             // here, which is the condition rather than either arm; nothing caught
             // it because a body that selects is returning the value immediately,
             // and the type it tracked was never read again.
-            let selector = pop(stack)?;
-            let otherwise = pop(stack)?;
-            let then = pop(stack)?;
+            let selector = lower.pop()?;
+            let otherwise = lower.pop()?;
+            let then = lower.pop()?;
             // The arms are the value, so either one's type is the result's: they
             // are one class by construction (`refuse_mixed_classes` refuses
             // otherwise).
-            emit(
-                body,
-                block,
+            lower.emit(
                 Operator::Select,
                 &[then.value, otherwise.value, selector.value],
                 &[otherwise.ty],
-                stack,
             );
         }
         // The crossing. `from` and `to` are what the **language** asked for; what
@@ -267,33 +217,21 @@ fn lower_instr(
         // float fragment's index and count are `f32` parameters already, while the
         // number the language means is an `Int`.
         KernelInstr::Conv { from, to } => {
-            let operand = pop(stack)?;
+            let operand = lower.pop()?;
             match (operand.ty, to) {
                 // Already the target's representation: the conversion is a
                 // reclassification and wasm is told nothing.
-                (seen, to) if seen == super::assemble::value_type(to) => stack.push(Slot {
-                    value: operand.value,
-                    ty: seen,
-                }),
+                (seen, to) if seen == super::assemble::value_type(to) => {
+                    lower.stack.push(Slot {
+                        value: operand.value,
+                        ty: seen,
+                    });
+                }
                 (Type::I64, ScalarClass::Float) => {
-                    emit(
-                        body,
-                        block,
-                        Operator::F32ConvertI64U,
-                        &[operand.value],
-                        &[Type::F32],
-                        stack,
-                    );
+                    lower.emit(Operator::F32ConvertI64U, &[operand.value], &[Type::F32]);
                 }
                 (Type::F32, ScalarClass::Int) => {
-                    emit(
-                        body,
-                        block,
-                        Operator::I64TruncF32U,
-                        &[operand.value],
-                        &[Type::I64],
-                        stack,
-                    );
+                    lower.emit(Operator::I64TruncF32U, &[operand.value], &[Type::I64]);
                 }
                 // The instruction names a crossing this value is not on either
                 // side of: it was never a representation the two classes could
@@ -308,13 +246,13 @@ fn lower_instr(
             }
         }
         KernelInstr::CallKernel(callee) => {
-            let at = *lowering.index.get(&callee).ok_or_else(|| {
+            let at = *lower.context.index.get(&callee).ok_or_else(|| {
                 format!("cross-kernel call to kernel {callee} is not in the assembled set")
             })?;
-            let target = lowering.callees.get(at as usize).ok_or_else(|| {
+            let target = lower.context.callees.get(at as usize).ok_or_else(|| {
                 format!(
                     "cross-kernel call to kernel {callee} names position {at}, which the launch \
-                         set does not hold"
+                     set does not hold"
                 )
             })?;
             let results: Vec<Type> = target
@@ -342,48 +280,45 @@ fn lower_instr(
                     results.len()
                 ));
             }
-            let arity = callee_arity(lowering, callee)?;
-            let args = pop_many(stack, arity)?;
-            let call = body.add_op(
-                block,
+            let arity = callee_arity(lower.context, callee)?;
+            let args = lower.pop_many(arity)?;
+            let call = lower.builder.add_op(
+                lower.block,
                 Operator::Call {
-                    function_index: Func::from(lowering.imports.base + at),
+                    function_index: Func::from(lower.context.imports.base + at),
                 },
                 &args,
                 &results,
             );
-            stack.push(Slot {
+            lower.stack.push(Slot {
                 value: call,
                 ty: result,
             });
         }
         // The `read` import for this element's class, over `[position, index]`.
         KernelInstr::BufferReadCall(class) => {
-            let index = pop(stack)?;
-            let position = pop(stack)?;
-            let function_index = *lowering.imports.read.get(&class).ok_or_else(|| {
+            let index = lower.pop()?;
+            let position = lower.pop()?;
+            let function_index = *lower.context.imports.read.get(&class).ok_or_else(|| {
                 format!("compute.wasm: no `read` import was declared for {class:?} elements")
             })?;
-            emit(
-                body,
-                block,
+            lower.emit(
                 Operator::Call { function_index },
                 &[position.value, index.value],
                 &[super::assemble::value_type(class)],
-                stack,
             );
         }
         // The `write` import for this element's class, over
         // `[position, index, value]`, and nothing left behind.
         KernelInstr::BufferWriteCall(class) => {
-            let value = pop(stack)?;
-            let index = pop(stack)?;
-            let position = pop(stack)?;
-            let function_index = *lowering.imports.write.get(&class).ok_or_else(|| {
+            let value = lower.pop()?;
+            let index = lower.pop()?;
+            let position = lower.pop()?;
+            let function_index = *lower.context.imports.write.get(&class).ok_or_else(|| {
                 format!("compute.wasm: no `write` import was declared for {class:?} elements")
             })?;
-            body.add_op(
-                block,
+            lower.builder.add_op(
+                lower.block,
                 Operator::Call { function_index },
                 &[position.value, index.value, value.value],
                 &[],
@@ -393,59 +328,15 @@ fn lower_instr(
     Ok(())
 }
 
-/// Add one operator to `block` and leave its result on the stack.
-fn emit(
-    body: &mut FunctionBody,
-    block: Block,
-    operator: Operator,
-    args: &[Value],
-    results: &[Type],
-    stack: &mut Vec<Slot>,
-) -> Value {
-    let value = body.add_op(block, operator, args, results);
-    // A one-result operator is the only shape that leaves a value behind: a
-    // `BufferWriteCall` returns nothing, and `add_op`'s caller pushes the slot
-    // itself when there is one.
-    if let [ty] = results {
-        stack.push(Slot { value, ty: *ty });
-    }
-    value
-}
-
-/// Pop the top slot, or refuse: an underflow is a malformed body, and this
-/// lowering says so rather than emitting an operator with a missing operand.
-fn pop(stack: &mut Vec<Slot>) -> Result<Slot, String> {
-    stack.pop().ok_or_else(|| {
-        "compute.wasm: an instruction reads below the bottom of the stack — the body's operands \
-         are not the ones the instruction consumes"
-            .to_string()
-    })
-}
-
-/// Pop `count` slots, deepest first.
-fn pop_many(stack: &mut Vec<Slot>, count: usize) -> Result<Vec<Value>, String> {
-    if stack.len() < count {
-        return Err(format!(
-            "compute.wasm: a call consumes {count} value(s) but only {} are on the stack",
-            stack.len()
-        ));
-    }
-    Ok(stack
-        .split_off(stack.len() - count)
-        .into_iter()
-        .map(|slot| slot.value)
-        .collect())
-}
-
 /// How many values a cross-kernel call consumes — the callee's own domain.
-fn callee_arity(lowering: &Lowering<'_>, callee: KernelId) -> Result<usize, String> {
-    let at = *lowering.index.get(&callee).ok_or_else(|| {
+pub(super) fn callee_arity(context: &ModuleCtx<'_>, callee: KernelId) -> Result<usize, String> {
+    let at = *context.index.get(&callee).ok_or_else(|| {
         format!("cross-kernel call to kernel {callee} is not in the assembled set")
     })?;
-    let target = lowering.callees.get(at as usize).ok_or_else(|| {
+    let target = context.callees.get(at as usize).ok_or_else(|| {
         format!(
             "cross-kernel call to kernel {callee} names position {at}, which the launch set does \
-                 not hold"
+             not hold"
         )
     })?;
     Ok(target.param_shape.flat_arity())
