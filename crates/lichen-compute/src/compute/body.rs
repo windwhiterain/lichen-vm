@@ -310,10 +310,8 @@ where
     /// one: a struct parameter, a tuple domain and a scalar all reach the walk
     /// through a different node, and the slots are what all three share.
     ///
-    /// The offsets sum because **the entry block's parameters are the domain's
-    /// leaves in flattening order**, so a path's total offset is its slot.
     fn parameter_path(&self, node: NodeId) -> Option<usize> {
-        let mut offset = 0usize;
+        let mut positions: Vec<usize> = Vec::new();
         let mut cursor = node;
         loop {
             // **The base has no operation, and that is the end of the chain** —
@@ -337,10 +335,27 @@ where
             let Some(step) = self.module.usize_value(*index) else {
                 return None;
             };
-            offset += step;
             let AnyNodeId::Dynamic(target) = target else {
                 return None;
             };
+            // **`Index(param_pair, k)` is the pair's value half, not a step of the
+            // domain's path.** It is how a read reaches the parameter at all, and
+            // counting it would descend the parameter's *wrapper* struct as though
+            // it were the domain's shape.
+            //
+            // **The cursor still moves onto the pair** before the walk stops: the
+            // pair is where the read ended up, and it is the base the check below
+            // has to see. Stopping one node short of it left the base unmatched and
+            // the whole-parameter read unplaced.
+            if self
+                .params
+                .iter()
+                .any(|slot| self.module.class_root(slot.pair) == self.module.class_root(*target))
+            {
+                cursor = *target;
+                break;
+            }
+            positions.push(step);
             cursor = *target;
         }
         let root = self.module.class_root(cursor);
@@ -360,7 +375,38 @@ where
                     .any(|leaf| self.module.class_root(*leaf) == root)
             })
             .unwrap_or(false);
-        (on_a_slot || on_a_leaf).then_some(offset)
+        if !(on_a_slot || on_a_leaf) {
+            return None;
+        }
+        // **The slot is the path *flattened*, and the difference matters at one
+        // level of nesting.** A flat tuple's positions sum, because every element
+        // before the one named holds exactly one leaf. A nested tuple's do not: in
+        // `<<Int, Int>, Int>`, `p(1)` names the outer element at position 1, which
+        // starts after the inner tuple's **two** leaves — offset **2**, not 1.
+        // Summing read the wrong parameter and the fragment answered `2 + 3 + 3`.
+        //
+        // **The steps come out innermost-first** — the walk descends from the read
+        // — so they are reversed before flattening, or the descent enters the
+        // inner tuple at the outer position.
+        positions.reverse();
+        let mut offset = 0usize;
+        let mut shape = match self.params.first() {
+            Some(slot) => slot.shape.clone(),
+            None => return None,
+        };
+        for position in &positions {
+            let lichen_lowlevel::LowShape::Tuple(items) = &shape else {
+                return None;
+            };
+            let Some(element) = items.get(*position) else {
+                return None;
+            };
+            for skipped in &items[..*position] {
+                offset += super::flat_arity(skipped);
+            }
+            shape = element.clone();
+        }
+        Some(offset)
     }
 
     /// The domain's leaves, flattened — the ABI's argument list.
