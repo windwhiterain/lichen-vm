@@ -1162,16 +1162,26 @@ pub struct Node<P: Program> {
     /// [`Module::register_in_function`], and the clone walks re-stamp the tag
     /// on the nodes they instantiate.
     function: Option<FunctionId>,
-    /// The **template node this one was cloned from**, for a node an apply
-    /// instantiated ([`None`] for every other node).  The apply clone walk
-    /// records it on each clone it creates, so a reader that holds a per-call
-    /// clone — a runtime failure's own operand, say — can reach the template
-    /// node the source declares (the highlevel's per-node source
-    /// attribution is keyed by the template, never by a clone).  **Private**:
-    /// read through [`Module::node_origin`].  The origin is a node of the
-    /// *template*: it is referenced, never cloned by the walk, and it is not
-    /// a keep-alive edge — garbage collection moves each node with its own
-    /// home block, so a reader must tolerate the origin's release.
+    /// The node this one is **attributed through** by the layer above, for a
+    /// node an apply instantiated ([`None`] for every other node).  A clone is
+    /// a per-call node the checker never saw, so a reader that holds one — a
+    /// runtime failure's own operand, say — needs a node the source
+    /// attribution is keyed by, and the clone walk records it here.
+    ///
+    /// Which node that is depends on what the applied template was.  A
+    /// **dynamic** clone (the walk in `function.rs`) records the template node
+    /// it instantiates: the highlevel's per-node attribution is keyed by the
+    /// template, never by a clone.  A clone the **static** materializer
+    /// creates ([`Module::static_node_apply`], called by
+    /// [`Module::static_function_apply`]) has no template in *this* module —
+    /// its template is a node of the frozen module, whose indices are that
+    /// module's — so it records the apply operation node that materialized
+    /// it: the caller-side node the highlevel's apply table is keyed by, the
+    /// one that names the call's argument.  **Private**: read through
+    /// [`Module::node_origin`].  Following the origin reaches a node the
+    /// checker attributed, so one step suffices; it is not a keep-alive edge
+    /// — garbage collection moves each node with its own home block, so a
+    /// reader must tolerate the origin's release.
     origin: Option<NodeId>,
     /// Owner — the garbage-collection unit whose lifetime bounds this node.
     /// **Private**: read through [`Module::node_block`]; only

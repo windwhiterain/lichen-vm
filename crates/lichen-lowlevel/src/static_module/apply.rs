@@ -30,6 +30,12 @@ impl<P: Program> Module<P> {
                 parameter,
                 branch_top: None,
                 tag: module.nodes[node].function,
+                // The caller-side node every clone this pass creates is
+                // attributed through ([`Node::origin`]): the apply itself, or
+                // — when the apply is a per-call clone too — the template it
+                // was cloned from, which is the node the checker built and the
+                // only one this module's tables can hold.
+                origin: module.nodes[node].origin.unwrap_or(node),
             };
             let applied = module.static_node_apply(r#return, &mut ctx);
             // The parameter is an entry point of the walk, not just a node the
@@ -100,6 +106,12 @@ impl<P: Program> Module<P> {
         // Reserve the clone id before recursing so diamonds resolve to one
         // clone and value cycles to the clone's own (still evaluating) id.
         let clone = self.add_node(ctx.target, None, None);
+        // The clone's origin: the caller-side apply this materialization
+        // answers to, so a runtime failure that names the clone is attributed
+        // to the argument of the call that made it ([`Module::node_origin`]).
+        // A frozen template's own nodes are not this module's, so the static
+        // template cannot be the origin; see [`Node::origin`].
+        self.nodes[clone].origin = Some(ctx.origin);
         ctx.remap.insert(local, clone);
         if parameterized {
             // The residual clone joins the template of the code that performed
@@ -430,4 +442,12 @@ struct StaticApplyCtx<P: Program> {
     /// `ApplyCtx::tag`.  [`None`] for an apply at the top level.  A baked clone
     /// is not tagged: it is final per call and is referenced in place.
     tag: Option<FunctionId>,
+    /// The caller-side node the clones this pass creates record as their
+    /// origin ([`Node::origin`]): the apply operation node that performed the
+    /// materialization, or the template it was itself cloned from when the
+    /// apply site is inside a per-call clone.  The static mirror of the
+    /// dynamic path's template origin, whose subject here is the *call* — a
+    /// frozen template's nodes are not nodes of this module, so the layer
+    /// above can only reach the call's own argument edge.
+    origin: NodeId,
 }

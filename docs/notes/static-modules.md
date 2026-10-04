@@ -77,6 +77,19 @@ takes `AnyNodeId` with a static early-return arm; the deep pass treats static re
 decided leaves. Applying a static function re-opens a materialize walk with a per-call
 remap (see `static_function_apply`).
 
+The materialize walk creates **fresh dynamic clones** in the caller's module, and each
+clone records the *origin* the layer above attributes a failure in it by (`Node::origin`,
+`Module::node_origin`). A clone of a frozen template has no template node of *this*
+module to name — the frozen module's indices are that module's — so the static
+materializer records the **apply operation node** that materialized it. That is the node
+the importer's checker recorded an argument edge for (`Build::apply_edges`), so a runtime
+failure naming a clone (a deferred named instantiation's table miss, say) carries a caret
+on the argument the caller passed. The imported file's own position stays out of reach:
+an ordinary imported package keeps no source record (`HighPackageMeta::source` is a
+built-in's, and giving ordinary packages one would attribute their per-call assert
+failures, which `registry.rs` pins as unattributed). The dynamic walk records the
+*template* node instead — the node its per-node attribution table is keyed by.
+
 ## GC & asserts
 
 GC keeps static handles verbatim: the static arena has no block to vacate, its item refs

@@ -149,6 +149,37 @@ fn circular_imports_are_diagnosed() {
 }
 
 #[test]
+fn an_imported_deferred_instantiation_points_at_the_argument_the_caller_passed() {
+    // `f`'s body defers the named instantiation `s(.x 1)` — the callee is the
+    // lambda's parameter, so it resolves only when a concrete argument arrives
+    // — and the miss is recorded on a per-apply clone the importer's checker
+    // never saw.  A frozen template's nodes are not this module's, so the clone
+    // cannot name its template; its origin is the apply that materialized it,
+    // and `Build::apply_edges` turns that into the argument expression the
+    // caller passed.  The argument is the bare name `S`, whose use *is* the
+    // binder's own expression (`compile.rs`), so the caret sits on `S`'s
+    // binding — exactly where a runtime parameter-check failure of a name
+    // argument points today.  The imported file's own `.x 1` is not reachable:
+    // an ordinary package keeps no source record.
+    let dir = temp_dir("imported-deferred");
+    write(&dir, "f.lichen", "s => s(.x 1)\n");
+    let main = "---f = import \"f.lichen\"---\nS = struct<.y Int>\nf (S)\n";
+    let mut store = PackageStore::<LangProgram>::new();
+    let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
+    let diag = err.first().expect("a refusal");
+    assert_eq!(
+        diag.check.as_ref().expect("a checker diagnostic").kind,
+        DiagKind::TableMiss,
+        "{err:?}"
+    );
+    assert_eq!(
+        diag.span,
+        Some((2, 5)),
+        "the caret is on the argument the caller passed: {err:?}"
+    );
+}
+
+#[test]
 fn a_failing_dependency_is_reported_at_the_import_directive() {
     // inner fails to resolve `y` at its own line 2; the main file's
     // diagnostic points at its own @import line (not inner's coordinates)

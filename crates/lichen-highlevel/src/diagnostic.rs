@@ -565,11 +565,16 @@ where
     /// A runtime failure names the node it failed on, and for a failure inside
     /// an applied function that node is a **per-apply clone** — the checker
     /// never saw it, so the build's `node_edges` has no entry and the failure
-    /// would carry no source position.  A clone does record its template origin
-    /// ([`Module::node_origin`]), which *is* a node the checker attributed, so
-    /// the origin's edge is the fallback.  The edge for the node itself keeps
-    /// priority: a node the checker attributed directly is never re-attributed
-    /// through a clone of it.
+    /// would carry no source position.  A clone does record the node it is
+    /// attributed through ([`Module::node_origin`]): for a clone of a dynamic
+    /// template that is a node the checker attributed directly, so its edge is
+    /// the fallback; for a clone of a **frozen** template (an imported
+    /// function) no node of this module stands for the template, and the
+    /// recorded node is the apply that materialized it — which
+    /// [`Build::apply_edges`], keyed by the apply, attributes to the argument
+    /// the caller passed there.  The edge for the node itself keeps priority:
+    /// a node the checker attributed directly is never re-attributed through a
+    /// clone of it.
     fn node_loc(&self, node: AnyNodeId) -> Option<Loc> {
         let AnyNodeId::Dynamic(node) = node else {
             return None;
@@ -577,15 +582,25 @@ where
         if let Some(loc) = self.node_edges.get(&node) {
             return Some(loc.clone());
         }
-        // One step suffices: the origin is a template node, never a clone
-        // (see `Module::node_origin`).  The origin is not kept alive by the
-        // clone, so a released one is absent rather than a panic.
+        // One step suffices: the origin reaches a node the checker attributed
+        // (see `Module::node_origin`).  It is not kept alive by the clone, so
+        // a released one is absent rather than a panic.
         let origin = self.module.node_origin(node)?;
-        self.module
-            .nodes
-            .contains_key(origin)
-            .then(|| self.node_edges.get(&origin).cloned())
-            .flatten()
+        if !self.module.nodes.contains_key(origin) {
+            return None;
+        }
+        if let Some(loc) = self.node_edges.get(&origin) {
+            return Some(loc.clone());
+        }
+        // The origin is the apply that materialized a clone of a frozen
+        // template: the failure belongs to that call, and the caller's
+        // argument is the location the checker recorded on the apply's edge.
+        // A pathless `Loc` is the argument expression itself — the caret
+        // target the edge was recorded for.
+        self.apply_edges.get(&origin).map(|edge| Loc {
+            expr: edge.argument_expr,
+            path: Vec::new(),
+        })
     }
 
     /// Whether `loc` was registered by one of the raw reads for its
