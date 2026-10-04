@@ -1,6 +1,10 @@
 # One channel for a class's value and its low type
 
-> Status: **§2 refuted by measurement**, and **§3 has no receiver on the run side**
+> Status: **§1.1 is the author's decision on the write rule** — unconditional
+> write, the operation-bearing member as the one veto, an already-valued member
+> compared by the unify recursion with a difference reported — and it records the
+> landed half: `unify_inner` is one recursion and `union_with_value` is gone.
+> **§2 refuted by measurement**, and **§3 has no receiver on the run side**
 > (§3 below, two independent blockers).  What is left is §5, which therefore comes
 > first: it is the only place a result's type can be stated, and the two red
 > targets the operator-polymorphism branch recorded
@@ -78,6 +82,47 @@ The point of the plan: a fact is decided once, the class is where it lives, and
 every reader asks the class.  §2 is where that second clause is measured and
 narrowed: a fact *about a value's class* does live on the class, and a fact about
 a *type* does not.
+
+## 1.1 The write rule — decided
+
+The write side is **one rule**, and the replication below is a deviation from it
+rather than a second case:
+
+- **A unification is unconditional: it must write.**  A write is not gated on the
+  slot being unbound — "this member already knows something" is not a reason to
+  skip it.
+- **The one veto is an operation-bearing member.**  Its own computation is what
+  settles it, and a value arriving from elsewhere is not a proof of what that
+  computation will produce.  This is a decision, not a gap.
+- **A member that already holds a value is compared**, and the comparison is the
+  unify recursion — a structure's elements are nodes, so comparing binds the
+  cells inside it.  Two values that cannot be one value are **reported**.
+
+So "unify, report, merge" are one recursion and there is no variant of it, on the
+class's own members or between classes.
+
+**Landed** (`fd92bef`): `unify_inner` is that one recursion — it reads what each
+class knows once, and answers in a single match (nothing known is a merge, one
+side known is a merge that carries the value, both known is a reconciliation:
+arrays by recursing their elements, functions by identity, otherwise by value
+equality).  `union_with_value` and its agree-then-copy are deleted.  Deleting it
+**orphaned the structural-comparison cluster** — `values_agree`, `reconcile_value`,
+`reconcile_node`, `value_eq` — which had exactly that one client; that cluster
+existed to serve a merge that compared instead of unifying.
+
+**Measured when landed**: lowlevel 155, highlevel 87, `compute` 60 of 62,
+`pipeline` 137 of 140 — every number identical to before, so the merge carried no
+behaviour of its own.
+
+**Pending, and what it makes stale.**  `replicate_class_value` still filters on
+`is_unbound` (a skip in place of the comparison) and `write_node_value` still
+overwrites its target without comparing.  Both are the deviation §1.1 names.  When
+that write lands, these statements stop being true and must be updated with it:
+`code-audit.md` P4-2 ("every member that is an operation-free unbound cell"), and
+`incremental-evaluation.md`'s table row 6 ("replication to every unbound pure-cell
+class member").  The remaining O(class-size) read after that is
+`class_committed_value`'s member scan — which exists only because a class's value
+need not sit on its representative, and has no subject once the value does.
 
 ## 2. Half one — refuted: a class's low type is not a second reading of a type slot
 
