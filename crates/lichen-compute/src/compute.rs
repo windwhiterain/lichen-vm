@@ -3572,6 +3572,7 @@ fn parallel_buffer_pos<P>(
     module: &Module<P>,
     params: &[ParamSlot],
     node: impl Into<AnyNodeId>,
+    unpeeled: AnyNodeId,
 ) -> Result<Option<usize>, String>
 where
     P: Program,
@@ -3587,30 +3588,39 @@ where
         return Ok(None);
     };
     if let Some(roles) = &slot.roles {
-        // **A struct field read is found by class, with this table driving the
-        // search.** Walking *down* from the read reaches the field it read and
-        // stops — the parameter is above it, and the two are joined only by the
-        // equality class (`alias_read`). So each path in the table is resolved
-        // structurally *from the pair*, by the field **names** this table already
-        // holds, and the one class-equal to the read is the position. That is a
-        // bounded question rather than a walk hoping to land on the parameter.
+        // **A struct field read is read by the path on its own chain.**
         //
-        // **`param_path` is deliberately not tried first.** It answers a struct
-        // field by pushing a `Named` step, which `resolve_steps` then looks up in
-        // the parameter type's name table — and that table is not reachable with
-        // `&Module`, so it refuses with a field name it could not place. The
-        // measurement that forced the class search is in [`param_path`]'s header.
-        let wanted = module.class_root(node);
-        for (position, names) in roles.input_names.iter().enumerate() {
-            if let Some(reached) = node_at_named_path(module, slot.pair, names)
-                && module.class_root(reached) == wanted
-            {
+        // Walking from the *parameter* cannot answer this: the parameter's value
+        // half is an alias with no operation, and the link between it and a read is
+        // the equality class rather than the shape. Walking from the read can,
+        // because the chain *is* the read — and `TableGet(names, "in")` arrives
+        // already specialised to `Index`, so the selectors are **positions**.
+        //
+        // **Measured, and the two disagree by one at the head**:
+        //
+        //     positions on the read's chain = [0, 0]
+        //     roles.inputs                   = [[1, 0]]
+        //
+        // `.in` is field **1** of the parameter struct and the chain says 0, so
+        // either the chain indexes the value's own fields rather than the
+        // struct's, or the role table counts the struct's. **Which of the two is
+        // right is the next thing to read**, and it is a fact about the checker's
+        // parameter layout, not a rule this function can decide.
+        //
+        // **`positions` is read from the *unpeeled* operand.** The peel resolves
+        // the wrapper's slot-read destructuring and takes one `Index` off the
+        // front, so a path read after it is missing its head.
+        let positions = unpeeled
+            .dynamic()
+            .and_then(|unpeeled| named_path(module, unpeeled));
+        for (position, candidate) in roles.inputs.iter().enumerate() {
+            if positions.as_deref() == Some(candidate.as_slice()) {
                 return Ok(Some(position));
             }
         }
         // **The chain walk is the fallback, not the answer.** It resolves a
         // *positional* parameter read — the `[n, (buffers…)]` shape — where the
-        // role table is empty and there is nothing to search.
+        // role table is empty and there is nothing to compare against.
         let path = param_path(module, slot.pair, node)?;
         if let Some(path) = path {
             let mut as_field = vec![0];
@@ -4290,44 +4300,31 @@ where
     type_term_slot(module, type_slot, TYPE_SHAPE_SLOT)
 }
 
-/// The node the parameter's value holds at a path of field **names**.
+/// The field positions a read's own chain names, walking **down from the read**.
 ///
-/// **This walks down the parameter, which is the opposite of [`param_path`]'s
-/// walk.** That one asks "which parameter path is this read" by climbing from the
-/// read; this one asks "what is at this path" by descending from the pair. The
-/// second is what a struct field read needs, because the evaluator aliased the
-/// read to the field and the link back to the parameter is the equality class
-/// rather than the shape — see [`parallel_buffer_pos`].
+/// **A named read reaches a lowering already resolved.** `TableGet(names, "in")`
+/// is specialised into `Index(field, 0)`, so the chain a body actually holds
+/// carries **positions**, not names — which is why matching against the name table
+/// found nothing. The positions are the role table's own, so the comparison is
+/// exact.
 ///
-/// Each step is an `Index` whose selector is compared to the wanted field's
-/// name, so **the caller supplies the names** rather than this reading a type it
-/// has no `&mut` to resolve.
-fn node_at_named_path<P>(
-    module: &Module<P>,
-    param_pair: NodeId,
-    names: &[Option<&'static str>],
-) -> Option<NodeId>
+/// Walking from the *parameter* cannot answer this: the parameter's value half is
+/// an alias with no operation, and the link between it and a read is the equality
+/// class rather than the shape. Walking from the read can, because the chain is
+/// the read.
+fn named_path<P>(module: &Module<P>, node: NodeId) -> Option<Vec<usize>>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let mut node = pair_value_node(module, param_pair)?;
-    for wanted in names {
-        let Some(operation) = module.node_operation(node) else {
-            // **Measured on `a_struct_parameter_..._carrying_wrapper`: this is where
-            // a *descent* stops, and it is the same place a *climb* stops.** The
-            // parameter's value half is node 428 and it has no operation — a bare
-            // cell carrying the parameter's class. The read's base was node 923,
-            // also bare. Both are aliases (`alias_read`), so the class is the only
-            // link between the read and the parameter, and **neither direction of a
-            // structural walk can use a class**: climbing never arrives at the
-            // pair, and descending never arrives at the fields.
-            //
-            // So the position has to be asked of whoever owns the encoding —
-            // `roles` knows the paths, but nothing says which one a read named
-            // without walking, and the walk is exactly what the aliases broke.
-            return None;
+    let mut positions = Vec::new();
+    let mut cursor = node;
+    for _ in 0..MAX_PARAMETER_DEPTH {
+        let Some(operation) = module.node_operation(cursor) else {
+            // The chain ends here. **An empty chain names nothing**, which is the
+            // whole-parameter read and not a field.
+            return (!positions.is_empty()).then_some(positions);
         };
         if !matches!(
             AsEnum::<LowOperator>::as_enum(&operation.operator),
@@ -4336,18 +4333,13 @@ where
             return None;
         }
         let (target, selector) = operand_pair(module, operation.operand).ok()?;
-        // **A read can name its field or number it**, and a struct field read is
-        // the named form (`Index(alias, "in")`). Both are accepted, because the
-        // table speaks names and the graph may speak either.
-        let Some(name) = field_name(module, selector).ok() else {
+        positions.push(usize_value(module, selector)?);
+        let Some(target) = target.dynamic() else {
             return None;
         };
-        if name != *wanted {
-            return None;
-        }
-        node = target.dynamic()?;
+        cursor = target;
     }
-    Some(node)
+    None
 }
 
 /// Flatten a parameter index `path` to a wasm local index, using the domain

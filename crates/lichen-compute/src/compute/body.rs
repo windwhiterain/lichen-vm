@@ -1068,19 +1068,19 @@ where
         let array = self.module.pair_value_node(arg).unwrap_or(arg);
         // **A wrapper's `launch` argument is a bare `Parameterized` cell** —
         // concrete only at run time — so the tuple it stands for is not an array
-        // value here and never will be, and that is why the third shape misses.
-        //
-        // Measured on `jit_cross_kernel_tuple_argument_through_the_wrapper`, which
-        // is the test this shape is for: `array` (the pair's value half) is its own
-        // singleton class and holds no array, while **`class_root(arg)` does hold
-        // one**. So the link exists and is the argument's class, not the peel's.
-        //
-        // **That is not wired in.** Following it needs the argument's own class to
-        // be walked for its elements, and the element that fails is the parameter
-        // the tuple carries — so the next question is what *that* resolves to, not
-        // how to find the tuple. Recorded here because the measurement is the
-        // answer to "where is the tuple", and finding it is the easy half.
-        self.tuple_leaves(array, items)
+        // value here and never will be. **The argument's class is where it is**:
+        // measured on `jit_cross_kernel_tuple_argument_through_the_wrapper`,
+        // `array` (the pair's value half) is its own singleton class and holds no
+        // array, while `class_root(arg)` holds one. The peel loses the link, not
+        // the cell.
+        if let Ok(args) = self.tuple_leaves(array, items) {
+            return Ok(args);
+        }
+        let by_class = self.module.class_root(arg);
+        if by_class != array {
+            return self.tuple_leaves(by_class, items);
+        }
+        Err(CALLEE_ARGUMENT.into())
     }
 
     /// The leaves of one concrete tuple value against the domain elements `items`.
@@ -1118,8 +1118,10 @@ where
         };
         // The buffer operand comes through the wrapper's slot-read
         // destructuring, so resolve it to the actual buffer node.
-        let buffer = peeled_argument(self.module, *buffer)?;
-        let pos = parallel_buffer_pos(self.module, self.params, buffer)?.ok_or_else(|| {
+        let unpeeled = AnyNodeId::Dynamic(*buffer);
+        let buffer = peeled_argument(self.module, unpeeled)?;
+        let pos = parallel_buffer_pos(self.module, self.params, buffer, unpeeled)?
+            .ok_or_else(|| {
             let seen = match self.params.first().and_then(|slot| slot.roles.as_ref()) {
                 Some(roles) => format!("the parameter's inputs are {:?}", roles.inputs),
                 None => "the parameter declares no inputs".to_string(),
