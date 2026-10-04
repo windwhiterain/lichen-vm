@@ -3834,13 +3834,20 @@ where
     let Some(selector) = selector.dynamic() else {
         return Ok(None);
     };
-    let Some(operation) = module.node_operation(selector) else {
-        return Ok(None);
-    };
-    let (_, key) = match AsEnum::<LowOperator>::as_enum(&operation.operator) {
-        Some(LowOperator::TableGet) => operand_pair(module, operation.operand)?,
-        // A computed index is a conditional's selector, not a field read.
-        _ => return Ok(None),
+    // **A named read reaches a lowering in one of two shapes, and this function
+    // must answer both.** Unspecialised it is `TableGet(name-table, "name")`, and
+    // the name is the second operand. Specialised — which is what the evaluator
+    // hands the emitter — it is `Index(target, "name")`, where the selector *is*
+    // the string and carries no operation at all. Reading only the first shape is
+    // why every struct field read came back nameless.
+    let key = match module.node_operation(selector) {
+        Some(operation) => match AsEnum::<LowOperator>::as_enum(&operation.operator) {
+            Some(LowOperator::TableGet) => operand_pair(module, operation.operand)?.1,
+            // A computed index is a conditional's selector, not a field read.
+            _ => return Ok(None),
+        },
+        // **No operation: the selector is the name itself.**
+        None => AnyNodeId::Dynamic(selector),
     };
     Ok(module
         .node_value(key)
@@ -3941,8 +3948,11 @@ where
             // `roles` holds is made of field positions with no step for the peel
             // itself — so `cfg.I.a` is two steps in, not a whole-parameter read.
             //
-            // The step is the selector as written, name or position, because that
-            // is what the field list resolves against.
+            // **This is known not to reach the answer** — see the measured note in
+            // `node_at_named_path`: the value half is an alias with no operation,
+            // so the descent it drives stops immediately. What is kept is the step
+            // record, because `resolve_steps` is right about what a *positional*
+            // path means and wrong only about where a named one can be resolved.
             match field_name(module, selector)? {
                 Some(name) => steps.push(IndexStep::Named(name)),
                 None => match usize_value(module, selector) {
@@ -4346,7 +4356,21 @@ where
 {
     let mut node = pair_value_node(module, param_pair)?;
     for wanted in names {
-        let operation = module.node_operation(node)?;
+        let Some(operation) = module.node_operation(node) else {
+            // **Measured on `a_struct_parameter_..._carrying_wrapper`: this is where
+            // a *descent* stops, and it is the same place a *climb* stops.** The
+            // parameter's value half is node 428 and it has no operation — a bare
+            // cell carrying the parameter's class. The read's base was node 923,
+            // also bare. Both are aliases (`alias_read`), so the class is the only
+            // link between the read and the parameter, and **neither direction of a
+            // structural walk can use a class**: climbing never arrives at the
+            // pair, and descending never arrives at the fields.
+            //
+            // So the position has to be asked of whoever owns the encoding —
+            // `roles` knows the paths, but nothing says which one a read named
+            // without walking, and the walk is exactly what the aliases broke.
+            return None;
+        };
         if !matches!(
             AsEnum::<LowOperator>::as_enum(&operation.operator),
             Some(LowOperator::Index)
@@ -4357,7 +4381,10 @@ where
         // **A read can name its field or number it**, and a struct field read is
         // the named form (`Index(alias, "in")`). Both are accepted, because the
         // table speaks names and the graph may speak either.
-        if field_name(module, selector).ok()? != *wanted {
+        let Some(name) = field_name(module, selector).ok() else {
+            return None;
+        };
+        if name != *wanted {
             return None;
         }
         node = target.dynamic()?;
