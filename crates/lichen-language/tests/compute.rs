@@ -819,9 +819,14 @@ compute.jit
         "Function: raw[?a, raw[?b, ?c]] -> raw[?d, raw[?e, ?f]] -> struct<.native raw[?g, ?h], .I raw[?b, ?c], .O raw[?e, ?f]>",
         "jit wrapper value/type"
     );
-    // `launch` reads the kernel's `.sig` lazily and returns its codomain, so it
-    // stays a generic `? -> ? -> ?` (the codomain is an unbound cell at the
-    // module level) — the concrete codomain only resolves when applied.
+    // `launch`'s result is the kernel's `.O` field, and at module level that
+    // field's pair is not explained by any form the printer can read, so it is
+    // marked `raw[…]` rather than claimed as one
+    // (raw-rendering-mark.md §2: an unbound pair still marks).  A resolved pair
+    // reads as its head — `[Int, Type]` prints `Int` — which is why the same
+    // wrapper's *applied* results print as plain `Int`.  The argument cell is
+    // unconstrained in the wrapper (the gate is the native op's, against the
+    // argument's type), so it stays a plain cell.
     assert_eq!(
         render(
             r#"
@@ -829,7 +834,7 @@ compute.jit
 compute.launch
 "#
         ),
-        "Function: ?a -> ?b -> ?c",
+        "Function: ?a -> ?b -> raw[?c, ?d]",
         "launch wrapper value/type"
     );
 }
