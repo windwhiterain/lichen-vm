@@ -375,6 +375,11 @@ else references is what "undecided forever" currently *means*, so draining must
 not resurrect semantics by keeping dead nodes live); and the template/clone split
 (a template's parameters never bind — its blocked list must not fire).
 
+This sketch is also one horn of a wider question — whether the pending/force/
+commit machinery can be replaced by "unify regardless of whether a node carries
+an operation" — which is analysed, with the measurements that bound it, in
+[unify-without-forcing](unify-without-forcing.md).
+
 ### 5.2 Checker: guards as re-checkable registrations
 
 The assert channel already is the model: a condition registered once,

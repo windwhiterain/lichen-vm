@@ -10,7 +10,7 @@
 //! the refusal names its cause, that a convertible shape yields the conversion
 //! the JIT will read, and that the unmarked program is untouched.
 
-use lichen_highlevel::checker::{Build, Checker};
+use lichen_highlevel::checker::{Build, Checker, WorkBudget};
 use lichen_highlevel::diagnostic::{Diag, DiagKind};
 use lichen_highlevel::ir::{BinOp, ExprId, ExprKind, IR};
 use lichen_highlevel::program::{HighProgramLiteral, IntLit, ProgramImpl};
@@ -255,7 +255,7 @@ fn a_marked_scalar_recursion_converts_to_one_carried_slot() {
     assert_eq!(conversion.steps.len(), 1);
     assert_eq!(conversion.exits.len(), 1);
     assert_eq!(conversion.steps[0].next.len(), 1);
-    assert_eq!(conversion.exits[0].values.len(), 1);
+    assert_eq!(conversion.exits.len(), 1);
 }
 
 #[test]
@@ -275,7 +275,7 @@ fn a_marked_tuple_state_converts_to_one_slot_per_element() {
         "both slots are handed to the recursive call"
     );
     assert_eq!(conversion.exits.len(), 1);
-    assert_eq!(conversion.exits[0].values.len(), 1);
+    assert_eq!(conversion.exits.len(), 1);
 }
 
 #[test]
@@ -313,5 +313,43 @@ fn the_refusal_makes_the_build_not_ok() {
     assert!(
         !build.ok,
         "a refused `@loop` recursion must reject the build"
+    );
+}
+
+/// **The loop's whole advantage, in the budget's terms, is nesting.** A host
+/// that wants a large trip count states a large work total — the bound both
+/// paths spend one application per count against — and then what a converted
+/// loop never touches is the *nesting* guard. This pins the work side of that
+/// statement: with the total raised, the loop answers a count the default total
+/// refuses, and it does so without the markers of a run that nested.
+#[test]
+fn a_host_that_wants_a_large_trip_count_raises_the_work_bound() {
+    // Under the default budget, the count is bounded by the *work* it costs —
+    // one application per count — for the loop exactly as for the unroll.
+    let default: Build<ProgramImpl> = build(countdown(true, Some(3_000)));
+    assert!(
+        !default.ok,
+        "3_000 applications must exceed the checker's default work bound"
+    );
+
+    // Raised, the loop runs it. (The unroll answers it too, and that is the
+    // honest half of the statement: in this lazy graph the expansion's applies
+    // stay shallow, so it is not the *host* where nesting binds — it is a strict
+    // recursion's depth guard (`tests/basic/host_loop.rs`), the emitter's
+    // expression-nesting ceiling, and the kernel path.)
+    let budget = WorkBudget {
+        apply_depth_limit: 500,
+        apply_total_limit: 100_000,
+    };
+    let (_root, ir) = countdown(true, Some(3_000));
+    let looped: Build<ProgramImpl> = Checker::build_with_budget(ir, budget);
+    assert!(
+        looped.ok,
+        "the raised work bound must let the loop run: {:?}",
+        looped.diagnostics()
+    );
+    assert_eq!(
+        looped.module.budget_exhausted, None,
+        "and nothing refused along the way"
     );
 }

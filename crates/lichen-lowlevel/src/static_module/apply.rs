@@ -16,7 +16,14 @@ impl<P: Program> Module<P> {
         node: NodeId,
         cell: Option<NodeId>,
     ) -> P::Value {
-        self.with_apply_frame(|module| {
+        // The nesting guard, on the same fact as the dynamic path: the apply
+        // node's own depth, which a materialization would deepen by one.
+        if self.depth_exhausted(node) {
+            return P::Value::from(LowValue::Parameterized);
+        }
+        let stamp = self.stamp_depth;
+        self.stamp_depth = self.node_depth(node) + 1;
+        let result = self.with_apply_frame(|module| {
             let static_module = module.static_module(function.module);
             let (r#return, parameter, assert_count) = {
                 let f = &static_module.functions[function.index.0];
@@ -90,7 +97,9 @@ impl<P: Program> Module<P> {
             }
             let result = module.evaluate_node(Dyn(applied), Some(block));
             module.wire_apply_result(node, cell, result, applied, block)
-        })
+        });
+        self.stamp_depth = stamp;
+        result
     }
 
     /// Clone one static node into the dynamic world (see the module docs).

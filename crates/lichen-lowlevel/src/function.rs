@@ -82,6 +82,34 @@ struct ApplyCtx<'a> {
     remap: &'a mut HashMap<NodeId, NodeId>,
 }
 
+/// One **instantiation** of a function's template for one argument: the clone
+/// of its return pair, and the map from each template node to the node of this
+/// instantiation that stands for it.
+///
+/// This is the half of an apply that its two consumers share.  The unroll
+/// evaluates the instantiated return and unwinds; a converted loop instantiates
+/// **once per iteration** and reads its test, its next state and its exit out of
+/// the same map, so a loop's iterations are ordinary applies with the nesting
+/// removed (see `loop_run.rs`).
+pub(super) struct Instantiation {
+    /// The clone of the function's return pair — what an apply evaluates.
+    pub applied: NodeId,
+    /// Template node → the node of this instantiation standing for it.
+    ///
+    /// A template node the walk referenced in place — a concrete or per-call
+    /// invariant value — is absent, and *is* its own clone; read through
+    /// [`Instantiation::node_of`] rather than indexing the map.
+    remap: HashMap<NodeId, NodeId>,
+}
+
+impl Instantiation {
+    /// The node of this instantiation standing for the template node
+    /// `template`.
+    pub fn node_of(&self, template: NodeId) -> NodeId {
+        self.remap.get(&template).copied().unwrap_or(template)
+    }
+}
+
 impl<P: Program> Module<P> {
     /// `#[stacksafe]`: application recursion runs through here (and
     /// [`Module::evaluate_node`]) at one frame per level, so the depth guard
@@ -96,110 +124,36 @@ impl<P: Program> Module<P> {
         node: NodeId,
         cell: Option<NodeId>,
     ) -> P::Value {
+        // **The nesting guard, before any work.** `node` is the apply node this
+        // instantiation is for, and the node's own depth is how many apply
+        // levels it already sits under — a fact of the graph, so an expansion
+        // meets this bound at its trip count whether it is forced as it is built
+        // or walked later by the deep pass. A converted loop instantiates the
+        // same entering apply node every iteration, so it stays at that node's
+        // depth however long it runs: it spends work, never nesting.
+        if self.depth_exhausted(node) {
+            return P::Value::from(LowValue::Parameterized);
+        }
+        // **A marked recursion runs as a loop.** `@loop` is permission to
+        // convert, and a shape that converts ([`Module::loop_conversion`]) is
+        // driven by [`Module::apply_loop`] instead of expanded level by level:
+        // same values, one instantiation per iteration rather than one per
+        // nested level, so the trip count stops costing nesting.  A marked
+        // function whose shape does *not* convert, and every unmarked one, is
+        // untouched and takes the unroll below.
+        if self.function_is_looping(function)
+            && let Ok(conversion) = self.loop_conversion(function)
+        {
+            return self.apply_loop(&conversion, function, argument, block, node, cell);
+        }
         self.with_apply_frame(|module| {
-            let (r#return, parameter, assert_count) = {
-                let function = &module.functions[function];
-                (
-                    function.r#return,
-                    function.parameter,
-                    function.asserts.len(),
-                )
-            };
-            debug_assert!(
-                module.functions[function].nodes.contains(&r#return),
-                "function {function:?} (block {:?}, parent {:?}) return {return:?} not in scope {:?}",
-                module.functions[function].block,
-                module.functions[function].parent,
-                module.functions[function].nodes
-            );
-            debug_assert!(module.functions[function].nodes.contains(&parameter));
-            let mut remap = HashMap::new();
-            let mut ctx = ApplyCtx {
-                target: block,
-                // Membership is the chain test, not a scope snapshot: the clones
-                // this pass creates are stamped with the apply node's owner, so
-                // the enclosing template re-instantiates them per call.
-                anchor: function,
-                branch_top: function,
-                closure_scope: None,
-                applied: function,
-                parameter,
-                tag: module.nodes[node].function,
-                remap: &mut remap,
-            };
-            let applied = module.node_apply(r#return, &mut ctx);
-            // The parameter is an entry point of the clone walk, not just a node
-            // the return subtree happens to reach: the argument must satisfy the
-            // parameter's type even when the body never references the parameter
-            // (an ignored parameter), and a parameter read whose value a type
-            // annotation pinned is referenced in place and so is invisible from
-            // the return.  Walking it regardless guarantees the parameter unify
-            // below fires.  Idempotent: if the return clone already remapped it,
-            // this returns the same clone.
-            module.node_apply(parameter, &mut ctx);
-            // The body's asserts are the function's own registry entries (see
-            // `Function::asserts`): the return clone cannot reach a condition
-            // that no value references, so each one is instantiated through the
-            // shared remap — a condition the deep pass proved concrete is
-            // per-call invariant and is referenced in place (decided at
-            // normalize), while an unbound one rewrites to this call's clones,
-            // so the body's assert re-checks against the argument.  Only actual
-            // clones register: a fresh entry is a constraint on this call.  The
-            // entry keeps the body condition as its template, which is all the
-            // host needs to attribute a per-call failure (a user-facing flag, a
-            // source position) through its own table.
-            // Walked by index rather than over a clone of the list: the loop
-            // body needs `&mut module` to instantiate each condition, and the
-            // registry lives on `module` itself, so no borrow of it can be
-            // held across the call.  The list is only read here — the entries
-            // this loop adds go to `module.asserts`, the per-call registry,
-            // not to the function's own.
-            for index in 0..assert_count {
-                let condition = module.functions[function].asserts[index];
-                let instantiated = module.node_apply(condition, &mut ctx);
-                if instantiated != condition {
-                    module.asserts.push(PendingAssert {
-                        condition: instantiated,
-                        template: Dyn(condition),
-                    });
-                }
-            }
-            // The parameter is cloned like any parameterized node, and the clone
-            // is unified with the argument instead of being replaced by it: the
-            // class binding propagates the argument's value to every reference
-            // to the parameter in the body.
-            if let Some(&cloned_param) = ctx.remap.get(&parameter) {
-                // The clones are fresh singleton classes; re-establish the
-                // template's internal class topology among them, so template
-                // nodes unified at definition time (e.g. the elements of a
-                // homogeneous array pattern) stay unified after cloning — the
-                // elementwise unify below then forces the argument to satisfy
-                // the pattern's internal constraints.  A single clone (just the
-                // parameter) has no topology to re-establish.
-                if ctx.remap.len() > 1 {
-                    let groups = crate::apply::regroup_clones(
-                        ctx.remap.iter().map(|(&template, &clone)| (template, clone)),
-                        |template| disjoint::find(&mut module.nodes, template),
-                    );
-                    crate::apply::unify_clone_groups(groups, |first, clone| {
-                        module.unify(first, clone);
-                    });
-                }
+            let Some(instantiation) = module.instantiate(function, argument, block, node) else {
                 // A failed parameter check leaves the apply's result unknown:
                 // the body must not run under a mismatched argument.
-                if module.apply_parameter_check(
-                    cloned_param,
-                    argument,
-                    block,
-                    node,
-                    AnyFunctionId::Dynamic(function),
-                    parameter,
-                ) {
-                    return P::Value::from(LowValue::Parameterized);
-                }
-            }
-            let result = module.evaluate_node(Dyn(applied), Some(block));
-            module.wire_apply_result(node, cell, result, applied, block)
+                return P::Value::from(LowValue::Parameterized);
+            };
+            let result = module.evaluate_node(Dyn(instantiation.applied), Some(block));
+            module.wire_apply_result(node, cell, result, instantiation.applied, block)
         })
     }
 
@@ -291,6 +245,149 @@ impl<P: Program> Module<P> {
             });
         }
         Some((dom, cod))
+    }
+
+    /// One **instantiation** of `function`'s template for `argument`: the clone
+    /// of its return pair, the template→clone map, and the parameter check that
+    /// makes the argument satisfy the declared parameter type.
+    ///
+    /// This is the half of an apply that its two consumers share.  The unroll
+    /// evaluates the instantiated return and unwinds; a converted loop
+    /// instantiates **once per iteration** and reads its condition, its next
+    /// state and its exit out of the same map, so the loop's iterations are
+    /// ordinary applies with the nesting removed.
+    ///
+    /// **Every node it creates is stamped with the instantiation's depth** —
+    /// the apply node's own depth plus one ([`Module::stamp_depth`]) — which is
+    /// what makes a node's [`depth`](Module::node_depth) a fact about the graph
+    /// rather than about the walk that happened to build it. Nested
+    /// instantiation (an argument whose evaluation applies something) restores
+    /// the previous stamp on the way out.
+    #[stacksafe]
+    pub(super) fn instantiate(
+        &mut self,
+        function: FunctionId,
+        argument: NodeId,
+        block: BlockId,
+        node: NodeId,
+    ) -> Option<Instantiation> {
+        let stamp = self.stamp_depth;
+        self.stamp_depth = self.node_depth(node) + 1;
+        let instantiation = self.instantiate_stamped(function, argument, block, node);
+        self.stamp_depth = stamp;
+        instantiation
+    }
+
+    #[stacksafe]
+    fn instantiate_stamped(
+        &mut self,
+        function: FunctionId,
+        argument: NodeId,
+        block: BlockId,
+        node: NodeId,
+    ) -> Option<Instantiation> {
+        let (r#return, parameter, assert_count) = {
+            let function = &self.functions[function];
+            (
+                function.r#return,
+                function.parameter,
+                function.asserts.len(),
+            )
+        };
+        debug_assert!(
+            self.functions[function].nodes.contains(&r#return),
+            "function {function:?} (block {:?}, parent {:?}) return {return:?} not in scope {:?}",
+            self.functions[function].block,
+            self.functions[function].parent,
+            self.functions[function].nodes
+        );
+        debug_assert!(self.functions[function].nodes.contains(&parameter));
+        let mut remap = HashMap::new();
+        let mut ctx = ApplyCtx {
+            target: block,
+            // Membership is the chain test, not a scope snapshot: the clones
+            // this pass creates are stamped with the apply node's owner, so
+            // the enclosing template re-instantiates them per call.
+            anchor: function,
+            branch_top: function,
+            closure_scope: None,
+            applied: function,
+            parameter,
+            tag: self.nodes[node].function,
+            remap: &mut remap,
+        };
+        let applied = self.node_apply(r#return, &mut ctx);
+        // The parameter is an entry point of the clone walk, not just a node
+        // the return subtree happens to reach: the argument must satisfy the
+        // parameter's type even when the body never references the parameter
+        // (an ignored parameter), and a parameter read whose value a type
+        // annotation pinned is referenced in place and so is invisible from
+        // the return.  Walking it regardless guarantees the parameter unify
+        // below fires.  Idempotent: if the return clone already remapped it,
+        // this returns the same clone.
+        self.node_apply(parameter, &mut ctx);
+        // The body's asserts are the function's own registry entries (see
+        // `Function::asserts`): the return clone cannot reach a condition
+        // that no value references, so each one is instantiated through the
+        // shared remap — a condition the deep pass proved concrete is
+        // per-call invariant and is referenced in place (decided at
+        // normalize), while an unbound one rewrites to this call's clones,
+        // so the body's assert re-checks against the argument.  Only actual
+        // clones register: a fresh entry is a constraint on this call.  The
+        // entry keeps the body condition as its template, which is all the
+        // host needs to attribute a per-call failure (a user-facing flag, a
+        // source position) through its own table.
+        // Walked by index rather than over a clone of the list: the loop
+        // body needs `&mut self` to instantiate each condition, and the
+        // registry lives on `self` itself, so no borrow of it can be
+        // held across the call.  The list is only read here — the entries
+        // this loop adds go to `self.asserts`, the per-call registry,
+        // not to the function's own.
+        for index in 0..assert_count {
+            let condition = self.functions[function].asserts[index];
+            let instantiated = self.node_apply(condition, &mut ctx);
+            if instantiated != condition {
+                self.asserts.push(PendingAssert {
+                    condition: instantiated,
+                    template: Dyn(condition),
+                });
+            }
+        }
+        // The parameter is cloned like any parameterized node, and the clone
+        // is unified with the argument instead of being replaced by it: the
+        // class binding propagates the argument's value to every reference
+        // to the parameter in the body.
+        if let Some(&cloned_param) = ctx.remap.get(&parameter) {
+            // The clones are fresh singleton classes; re-establish the
+            // template's internal class topology among them, so template
+            // nodes unified at definition time (e.g. the elements of a
+            // homogeneous array pattern) stay unified after cloning — the
+            // elementwise unify below then forces the argument to satisfy
+            // the pattern's internal constraints.  A single clone (just the
+            // parameter) has no topology to re-establish.
+            if ctx.remap.len() > 1 {
+                let groups = crate::apply::regroup_clones(
+                    ctx.remap
+                        .iter()
+                        .map(|(&template, &clone)| (template, clone)),
+                    |template| disjoint::find(&mut self.nodes, template),
+                );
+                crate::apply::unify_clone_groups(groups, |first, clone| {
+                    self.unify(first, clone);
+                });
+            }
+            if self.apply_parameter_check(
+                cloned_param,
+                argument,
+                block,
+                node,
+                AnyFunctionId::Dynamic(function),
+                parameter,
+            ) {
+                return None;
+            }
+        }
+        Some(Instantiation { applied, remap })
     }
 
     /// Evaluate `argument` to the structural depth `pattern` (the cloned

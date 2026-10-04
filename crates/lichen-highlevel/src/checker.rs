@@ -502,6 +502,13 @@ pub struct WorkBudget {
     pub apply_depth_limit: usize,
     /// Cumulative applications permitted before the guard refuses — the
     /// lowlevel's [`Module::apply_total_limit`].
+    ///
+    /// **A converted `@loop` iteration is one application**, so this bound
+    /// covers loops and expansions alike and means the same thing for both.
+    /// What a loop does not spend is the nesting bound below — which is the
+    /// whole of what the conversion buys in the budget's terms, and why a host
+    /// that needs a large trip count raises *this* number (it is the work
+    /// bound) rather than expecting loops to be exempt from it.
     pub apply_total_limit: usize,
 }
 
@@ -519,6 +526,14 @@ impl Default for WorkBudget {
     /// recursion level's parameter unifies into one shared class), so a tight
     /// budget stops a runaway recursion in seconds, while legitimate programs
     /// (the examples, fib up to ~15, countdown) apply far fewer times.
+    ///
+    /// **The two numbers are matched to one another** (~four applications per
+    /// unwound level: the level's own apply plus the operations in its body), so
+    /// an unmarked recursion normally reaches the *total* bound around the same
+    /// count it would have reached the nesting one. A converted loop pays the
+    /// same per iteration minus nothing and plus nothing — but it never nests,
+    /// so raising [`Self::apply_total_limit`] is what a large trip count asks
+    /// for, and it is a bound the loop can actually use.
     fn default() -> Self {
         WorkBudget {
             apply_depth_limit: 500,
@@ -621,6 +636,7 @@ where
         // on [`WorkBudget::default`].
         module.apply_depth_limit = work_budget.apply_depth_limit;
         module.apply_total_limit = work_budget.apply_total_limit;
+
         let root_block = module.add_block(None);
         let n = ir.expr.len();
         let mut checker = Checker {

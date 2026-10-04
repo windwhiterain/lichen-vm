@@ -20,6 +20,7 @@ mod compaction;
 mod equality;
 mod evaluation;
 mod function;
+mod host_loop;
 mod loop_conversion;
 mod recursion;
 mod static_module;
@@ -726,5 +727,86 @@ fn unconditional_self_apply(m: &mut Module<TestProgram>) -> (NodeId, FunctionId)
         Some(operands),
     );
     let function = finish_function(m, body, ret, param, func_node);
+    (func_node, function)
+}
+
+/// Build `count n = if n < 1 then n else count (n - 1)`, with the `@loop` mark
+/// set when `marked`: the convertible shape — one tail self-application, one
+/// base, a scalar state.  Returns the value node, the id, and the nodes the
+/// conversion names (the test's condition, the step's next state, the
+/// parameter).
+fn countdown(
+    m: &mut Module<TestProgram>,
+    marked: bool,
+) -> (NodeId, FunctionId, NodeId, NodeId, NodeId) {
+    let body = m.add_block(None);
+    let param = m.add_node(
+        body,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
+    let func_node = m.add_node(body, None, None);
+    let one = u128_node(m, body, 1);
+    let decrement_ops = array_node(m, body, &[param, one], None);
+    let decrement = op_node(m, body, TestOperator::Sub, Some(decrement_ops));
+    let call_ops = array_node(m, body, &[func_node, decrement], None);
+    let call = op_node(
+        m,
+        body,
+        TestOperator::LowOperator(LowOperator::Apply),
+        Some(call_ops),
+    );
+    let condition_ops = array_node(m, body, &[param, one], None);
+    let condition = op_node(m, body, TestOperator::Lt, Some(condition_ops));
+    // `[count (n - 1), n][n < 1]` — element 1 answers `1`, which is the base.
+    let branches = array_node(m, body, &[call, param], None);
+    let index_ops = array_node(m, body, &[branches, condition], None);
+    let ret = op_node(
+        m,
+        body,
+        TestOperator::LowOperator(LowOperator::Index),
+        Some(index_ops),
+    );
+    let function = finish_function(m, body, ret, param, func_node);
+    if marked {
+        m.mark_looping(function);
+    }
+    (func_node, function, condition, decrement, param)
+}
+
+/// Build `stuck n = if n < 1 then n else stuck n` — a **convertible** recursion
+/// whose step never changes the state it tests, so it never reaches its base.
+/// The shape is what makes it a loop; an argument that fails the test is what
+/// makes that loop endless.
+fn stuck_loop(m: &mut Module<TestProgram>, marked: bool) -> (NodeId, FunctionId) {
+    let body = m.add_block(None);
+    let param = m.add_node(
+        body,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
+    let func_node = m.add_node(body, None, None);
+    let one = u128_node(m, body, 1);
+    let call_ops = array_node(m, body, &[func_node, param], None);
+    let call = op_node(
+        m,
+        body,
+        TestOperator::LowOperator(LowOperator::Apply),
+        Some(call_ops),
+    );
+    let condition_ops = array_node(m, body, &[param, one], None);
+    let condition = op_node(m, body, TestOperator::Lt, Some(condition_ops));
+    let branches = array_node(m, body, &[call, param], None);
+    let index_ops = array_node(m, body, &[branches, condition], None);
+    let ret = op_node(
+        m,
+        body,
+        TestOperator::LowOperator(LowOperator::Index),
+        Some(index_ops),
+    );
+    let function = finish_function(m, body, ret, param, func_node);
+    if marked {
+        m.mark_looping(function);
+    }
     (func_node, function)
 }

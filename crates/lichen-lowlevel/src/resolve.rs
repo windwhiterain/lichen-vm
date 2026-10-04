@@ -313,6 +313,26 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// The **type** half of a `[value, type]` pair node, or `None` when it is
+    /// not a pair — the sibling of [`Self::pair_value_half`], reading element 1
+    /// by the same rule (a 2-wide pair and a 3-wide `[value, type, perspective]`
+    /// pair agree there).
+    ///
+    /// The loop driver is its caller: an internal iteration states the same
+    /// argument type the entering call did, so the per-iteration parameter check
+    /// still means what it means for the entry.
+    pub(crate) fn pair_type_half(&self, node: NodeId) -> Option<NodeId> {
+        // SAFETY: `node` is a live node of `self`.
+        let items = unsafe { self.array_items(node) }?;
+        if !(2..=3).contains(&items.len()) {
+            return None;
+        }
+        match items[1].node {
+            AnyNodeId::Dynamic(r#type) => Some(r#type),
+            AnyNodeId::Static(_) => None,
+        }
+    }
+
     /// The function's parameter leaves: the **value** half of its `[value, type]`
     /// pair, flattened. A function whose parameter node is not a pair is the one
     /// leaf itself.
