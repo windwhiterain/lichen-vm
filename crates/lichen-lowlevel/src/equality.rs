@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use stacksafe::stacksafe;
 
@@ -409,9 +409,6 @@ impl<P: Program> Module<P> {
             self.class_committed_value(representative)
         };
         let fresh_answer = !self.has_run(node);
-        if std::env::var_os("LICHEN_TRACE_VCBO").is_some() {
-            eprintln!("ANSWER node={node:?} fresh={fresh_answer}");
-        }
         if fresh_answer {
             self.unify_inner(
                 Side::value(Some(value)),
@@ -480,9 +477,6 @@ impl<P: Program> Module<P> {
         a: Option<P::Value>,
         b: Option<P::Value>,
     ) {
-        if std::env::var_os("LICHEN_TRACE_DOUBLE").is_some() {
-            eprintln!("VALUE-ERROR root={root:?} a={:?} b={:?}", a.as_ref().map(|v| v.as_enum()), b.as_ref().map(|v| v.as_enum()));
-        }
         self.unify_errors.push(UnifyError {
             root_a: root.0,
             root_b: root.1,
@@ -519,12 +513,6 @@ impl<P: Program> Module<P> {
     pub fn try_unify(&mut self, a: NodeId, b: NodeId) -> (NodeId, std::ops::Range<usize>) {
         let before = self.unify_errors.len();
         let representative = self.unify(a, b);
-        if std::env::var_os("LICHEN_TRACE_VCBO").is_some() {
-            eprintln!(
-                "TRY_UNIFY {a:?} {b:?} range={before}..{}",
-                self.unify_errors.len()
-            );
-        }
         (representative, before..self.unify_errors.len())
     }
 
@@ -730,9 +718,6 @@ impl<P: Program> Module<P> {
     ) -> bool {
         if depth >= MAX_VALUE_DEPTH {
             return true;
-        }
-        if std::env::var_os("LICHEN_TRACE_VCBO").is_some() {
-            eprintln!("UNIFY-INNER depth={depth} a={:?} b={:?}", a.node, b.node);
         }
         // A side with a node takes the question to its **class**; a side without
         // one is a bare value with no class to merge, so it can only be answered
@@ -1304,15 +1289,6 @@ impl<P: Program> Module<P> {
         steps: &[UnifyStep],
         root: (NodeId, NodeId),
     ) {
-        if std::env::var_os("LICHEN_TRACE_RECORD").is_some()
-            || std::env::var_os("LICHEN_TRACE_DOUBLE").is_some()
-        {
-            eprintln!(
-                "RECORD ra={ra:?} rb={rb:?} root={root:?} va={:?} vb={:?}",
-                self.nodes[ra].value.as_ref().map(|value| value.as_enum()),
-                self.nodes[rb].value.as_ref().map(|value| value.as_enum()),
-            );
-        }
         self.unify_errors.push(UnifyError {
             root_a: root.0,
             root_b: root.1,
