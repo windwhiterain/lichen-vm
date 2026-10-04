@@ -255,6 +255,9 @@ impl<P: Program> Module<P> {
             asserts: Vec::new(),
             parent: ctx.branch_top,
             block: ctx.target,
+            // An instance, not a template — see the dynamic clone path's
+            // `looping: false` for why the `@loop` mark does not travel here.
+            looping: false,
         });
         // Nested re-homes inside this closure's walk hang under it.
         let outer_top = std::mem::replace(&mut ctx.branch_top, Some(fresh));

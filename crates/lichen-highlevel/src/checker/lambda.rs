@@ -27,6 +27,7 @@ where
         parameter_attribute: Option<ExprId>,
         parameter: ExprId,
         r#return: ExprId,
+        looping: bool,
     ) -> NodeId {
         let return_block = self.module.add_block(None);
         let saved = self.current_block;
@@ -48,6 +49,15 @@ where
         let function = self.module.begin_function(return_block, parent);
         self.function_of.insert(e, function);
         self.function_stack.push((function, Some(e)));
+        // **The `@loop` mark crosses into the graph here**, where the shell
+        // exists and the body has not been compiled yet. It rides on
+        // [`Function::looping`] rather than staying in the IR because the cycle
+        // it marks is a fact about *this* graph — the templates are the only
+        // place the recursion is still a cycle, since every apply clones them
+        // away (`docs/notes/loop-conversion.md` §8.6).
+        if looping {
+            self.module.mark_looping(function);
+        }
         let value_cell = self.fresh_cell();
         let type_cell = self.fresh_cell();
         // The parameter *is* the pair `[value, type]`; the cells live in the

@@ -295,6 +295,7 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
         asserts: Vec::new(),
         parent: None,
         block: body,
+        looping: false,
     });
     tag_scope(
         &mut m,
@@ -340,6 +341,7 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
         asserts: Vec::new(),
         parent: None,
         block: body,
+        looping: false,
     });
     tag_scope(
         &mut m,

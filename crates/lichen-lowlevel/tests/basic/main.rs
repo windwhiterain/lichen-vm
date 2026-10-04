@@ -515,6 +515,7 @@ fn finish_function(
         asserts: Vec::new(),
         parent: None,
         block,
+        looping: false,
     });
     tag_scope(m, function, nodes);
     m.blocks[block].functions.push(function);
@@ -557,6 +558,7 @@ fn recursive_function(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
         asserts: Vec::new(),
         parent: None,
         block: body,
+        looping: false,
     });
     tag_scope(m, function, vec![param, func_node, operands, apply, ret]);
     m.blocks[body].functions.push(function);
@@ -613,6 +615,7 @@ fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId)
         asserts: Vec::new(),
         parent: None,
         block: body,
+        looping: false,
     });
     tag_scope(m, f, vec![f_param, f_func, f_ops, f_apply, f_ret]);
     let g = m.functions.insert(Function {
@@ -622,6 +625,7 @@ fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId)
         asserts: Vec::new(),
         parent: None,
         block: body,
+        looping: false,
     });
     tag_scope(m, g, vec![g_param, g_func, g_ops, g_apply, g_ret]);
     m.blocks[body].functions.extend([f, g]);

@@ -405,9 +405,30 @@ impl<P: Program> Module<P> {
             parent,
             asserts: Vec::new(),
             block,
+            looping: false,
         });
         self.blocks[block].functions.push(function);
         function
+    }
+
+    /// Stamp `function` as a `@loop` binding — its recursion may become a loop.
+    ///
+    /// **Called once, while the body is being compiled**, by the layer that
+    /// knows the source said `@loop`. Not later: the body is the only place the
+    /// mark has to survive, because an apply clones templates away and the
+    /// analysis that reads the mark runs on templates before any of that.
+    ///
+    /// Stamping twice is idempotent — it is a flag, and a second stamp would say
+    /// nothing new — so this needs no "already stamped" bookkeeping and a
+    /// caller cannot get it wrong by stamping twice.
+    pub fn mark_looping(&mut self, function: FunctionId) {
+        self.functions[function].looping = true;
+    }
+
+    /// Whether `function` is a `@loop` binding. See [`Function::looping`] for
+    /// what the mark does and does not mean.
+    pub fn function_is_looping(&self, function: FunctionId) -> bool {
+        self.functions[function].looping
     }
 
     /// Complete the shell begun by [`Self::begin_function`], naming the

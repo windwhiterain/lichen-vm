@@ -1098,6 +1098,28 @@ pub struct Function {
     pub asserts: Vec<NodeId>,
     /// Owner.
     pub block: BlockId,
+    /// This function's recursion **may become a loop** — the `@loop` mark,
+    /// stamped by the layer above once it has compiled the body
+    /// ([`Module::mark_looping`]).
+    ///
+    /// **It is permission, not a command**, and nothing here acts on it by
+    /// itself: a marked function whose recursion the deep pass *can* decide is
+    /// still expanded, exactly as an unmarked one is. What the mark changes is
+    /// the other half — a recursion it **cannot** decide stops being an
+    /// expansion, because an expansion of it is what runs out of budget. The
+    /// conversion that replaces the expansion is built from this graph
+    /// ([`docs/notes/loop-conversion.md`](../../docs/notes/loop-conversion.md)
+    /// §8.6).
+    ///
+    /// **It rides here rather than in the frontend's IR** because the cycle this
+    /// marks is a fact about *this* graph: the templates are the only place the
+    /// recursion is still a cycle, since every apply clones them away. A marker
+    /// held one layer up would be a fact about syntax, and the analysis that
+    /// needs it runs after the bodies are compiled.
+    ///
+    /// `false` for every function that was not marked, which is the
+    /// overwhelming majority and must behave exactly as it always did.
+    pub looping: bool,
 }
 
 pub struct StaticFunction {

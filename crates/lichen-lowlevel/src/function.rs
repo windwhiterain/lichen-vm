@@ -465,6 +465,16 @@ impl<P: Program> Module<P> {
                     asserts: Vec::new(),
                     parent: Some(ctx.branch_top),
                     block: ctx.target,
+                    // **A clone does not carry its template's `@loop` mark**, and
+                    // this is the mark's "permission, not a command" half rather
+                    // than an oversight: an instance is what an apply *made*, so
+                    // it is expanded like any other call, and a marked recursion
+                    // whose state the deep pass can decide is expanded exactly as
+                    // an unmarked one is. The mark lives on the template, which
+                    // is the only place the recursion is still a cycle — every
+                    // apply clones templates away, so the analysis that reads the
+                    // mark runs before any of this.
+                    looping: false,
                 });
                 // The nested function's own scope joins the clone's
                 // template: its body may capture the applied function's
