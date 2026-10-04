@@ -191,20 +191,27 @@ impl<P: Program> Module<P> {
         None
     }
 
-    /// What defines the value `node` names, read as a member of `function`'s
-    /// body.
+    /// What defines the value `node` names, against the **domain the caller
+    /// states**.
     ///
-    /// **This is the rule that makes the graph readable as SSA.** Three answers,
-    /// in order:
+    /// `domain` is the function's domain *value* node — not the function, and not
+    /// its `[value, type]` parameter pair. The lowlevel has **no type
+    /// representation of its own**, so a pair is the only thing a type question can
+    /// be answered with, and the cost of decoding one is that the width becomes a
+    /// second answer. The caller that already resolved the pair passes what it
+    /// knows; see `docs/notes/checker-encoding-instability.md` for the five readers
+    /// and the one defect they share.
+    ///
+    /// **Three answers**, in order:
     ///
     /// 1. **a parameter leaf** — `node` is in the same equality class as one of
-    ///    the function's parameter leaves, so the value *is* that parameter. This
-    ///    is how a reduced same-module call's substituted parameter reads: the
-    ///    deep pass unified it with the argument.
+    ///    the domain's leaves, so the value *is* that parameter. This is how a
+    ///    reduced same-module call's substituted parameter reads: the deep pass
+    ///    unified it with the argument.
     /// 2. **a computation** — the node itself, or the class member that computes
     ///    it ([`Self::defining_member`]).
     /// 3. **opaque** — the value has no definition this graph can see.
-    pub fn define_in(&self, function: FunctionId, node: NodeId) -> Define {
+    pub fn define_in(&self, domain: NodeId, node: NodeId) -> Define {
         // An `Index` is **usually a view of something already computed** — a
         // `value_of` peel, an element of an array the graph materialised. Only a
         // *selection* computes anything, so resolving the views here is what
@@ -212,10 +219,10 @@ impl<P: Program> Module<P> {
         if let Some(selection) = self.selection_of(node) {
             return match selection {
                 Selection::Computed => Define::Computed(node),
-                Selection::Views(view) => self.define_in(function, view),
+                Selection::Views(view) => self.define_in(domain, view),
             };
         }
-        for leaf in self.parameter_leaves(function).unwrap_or_default() {
+        for leaf in self.value_leaves(domain).unwrap_or_default() {
             if self.class_root(node) == self.class_root(leaf) {
                 return Define::Parameter(leaf);
             }
@@ -256,7 +263,7 @@ impl<P: Program> Module<P> {
         let operands = self.operand_pair(operation.operand?, "Index").ok()?;
         let (target, index) = (operands[0], operands[1]);
         let constant = self.usize_value(index);
-        let array = self.pair_value_half(target);
+        let array = self.pair_value_node(target);
         if constant == Some(0)
             && let Some(element) = array.and_then(|array| self.item_of(array, 0))
         {
@@ -303,7 +310,7 @@ impl<P: Program> Module<P> {
     /// a *pair*, the apply resolves its arity, and the evaluator peels
     /// `Index(pair, 0)`. **No shape is derived here**, and the pass in
     /// [`crate::low_type`] still learns no layout.
-    fn pair_value_half(&self, node: NodeId) -> Option<NodeId> {
+    fn pair_value_node(&self, node: NodeId) -> Option<NodeId> {
         // SAFETY: `node` is a live node of `self`.
         let items = unsafe { self.array_items(node) }?;
         if !(2..=3).contains(&items.len()) {
@@ -312,17 +319,6 @@ impl<P: Program> Module<P> {
         match items[0].node {
             AnyNodeId::Dynamic(value) => Some(value),
             AnyNodeId::Static(_) => None,
-        }
-    }
-
-    /// The function's parameter leaves: the **value** half of its `[value, type]`
-    /// pair, flattened. A function whose parameter node is not a pair is the one
-    /// leaf itself.
-    pub fn parameter_leaves(&self, function: FunctionId) -> Result<Vec<NodeId>, String> {
-        let parameter = self.functions[function].parameter;
-        match self.pair_value_half(parameter) {
-            Some(value) => self.value_leaves(value),
-            None => Ok(vec![parameter]),
         }
     }
 
