@@ -255,7 +255,7 @@ fn a_marked_scalar_recursion_converts_to_one_carried_slot() {
     assert_eq!(conversion.steps.len(), 1);
     assert_eq!(conversion.exits.len(), 1);
     assert_eq!(conversion.steps[0].next.len(), 1);
-    assert_eq!(conversion.exits[0].values.len(), 1);
+    assert_eq!(conversion.exits.len(), 1);
 }
 
 #[test]
@@ -275,7 +275,7 @@ fn a_marked_tuple_state_converts_to_one_slot_per_element() {
         "both slots are handed to the recursive call"
     );
     assert_eq!(conversion.exits.len(), 1);
-    assert_eq!(conversion.exits[0].values.len(), 1);
+    assert_eq!(conversion.exits.len(), 1);
 }
 
 #[test]

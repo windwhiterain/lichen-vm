@@ -145,8 +145,14 @@ pub struct LoopStep {
 /// One base case.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoopExit {
-    /// The result values — the codomain's leaves on this branch.
-    pub values: Vec<NodeId>,
+    /// The base's **value half** — the branch's result as a value: a scalar
+    /// cell, or the array a tuple-valued codomain flattens to.
+    ///
+    /// **The value half, not the branch's leaves**: a consumer builds the
+    /// apply's result pair `[value, type]` from it instead of evaluating the
+    /// function's return, whose *untaken* step arm would otherwise stay in the
+    /// graph for the next deep pass to walk (and unroll — see `loop_run.rs`).
+    pub value: NodeId,
 }
 
 impl<P: Program> Module<P> {
@@ -478,14 +484,10 @@ impl<P: Program> Spine<'_, P> {
         Ok(index)
     }
 
-    /// A base case: the branch's result values, one per codomain leaf.
+    /// A base case: the branch's value half.
     fn record_exit(&mut self, arm: NodeId) -> Result<usize, LoopRefusal> {
-        let values = self
-            .module
-            .value_leaves(arm)
-            .map_err(|_| LoopRefusal::StateShape)?;
         let index = self.exits.len();
-        self.exits.push(LoopExit { values });
+        self.exits.push(LoopExit { value: arm });
         Ok(index)
     }
 
@@ -506,11 +508,7 @@ impl<P: Program> Spine<'_, P> {
             .iter()
             .map(|test| test.condition)
             .chain(self.steps.iter().flat_map(|step| step.next.iter().copied()))
-            .chain(
-                self.exits
-                    .iter()
-                    .flat_map(|exit| exit.values.iter().copied()),
-            );
+            .chain(self.exits.iter().map(|exit| exit.value));
         for root in roots {
             self.module
                 .check_reads(self.function, root, arity, &mut tuple)?;

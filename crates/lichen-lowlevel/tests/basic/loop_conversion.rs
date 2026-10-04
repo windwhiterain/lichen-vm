@@ -6,47 +6,10 @@
 use super::*;
 use lichen_lowlevel::{LoopArm, LoopRefusal};
 
-/// `count n = if n < 1 then n else count (n - 1)`, marked `@loop`: the
-/// convertible shape — one tail self-application, one base, a scalar state.
-/// Returns the value node, the id, and the nodes the conversion must name.
-fn marked_countdown(m: &mut Module<TestProgram>) -> (NodeId, FunctionId, NodeId, NodeId, NodeId) {
-    let body = m.add_block(None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
-    let func_node = m.add_node(body, None, None);
-    let one = u128_node(m, body, 1);
-    let decrement_ops = array_node(m, body, &[param, one], None);
-    let decrement = op_node(m, body, TestOperator::Sub, Some(decrement_ops));
-    let call_ops = array_node(m, body, &[func_node, decrement], None);
-    let call = op_node(
-        m,
-        body,
-        TestOperator::LowOperator(LowOperator::Apply),
-        Some(call_ops),
-    );
-    let condition_ops = array_node(m, body, &[param, one], None);
-    let condition = op_node(m, body, TestOperator::Lt, Some(condition_ops));
-    // `[count (n - 1), n][n < 1]` — element 1 answers `1`, which is the base.
-    let branches = array_node(m, body, &[call, param], None);
-    let index_ops = array_node(m, body, &[branches, condition], None);
-    let ret = op_node(
-        m,
-        body,
-        TestOperator::LowOperator(LowOperator::Index),
-        Some(index_ops),
-    );
-    let function = finish_function(m, body, ret, param, func_node);
-    m.mark_looping(function);
-    (func_node, function, condition, decrement, param)
-}
-
 #[test]
 fn a_marked_tail_recursion_converts() {
     let mut m = Module::new();
-    let (_func_node, function, condition, decrement, param) = marked_countdown(&mut m);
+    let (_func_node, function, condition, decrement, param) = countdown(&mut m, true);
     let conversion = m
         .loop_conversion(function)
         .expect("a tail self-application with a base converts");
@@ -60,7 +23,7 @@ fn a_marked_tail_recursion_converts() {
     assert_eq!(conversion.steps.len(), 1);
     assert_eq!(conversion.steps[0].next, vec![decrement]);
     assert_eq!(conversion.exits.len(), 1);
-    assert_eq!(conversion.exits[0].values, vec![param]);
+    assert_eq!(conversion.exits[0].value, param);
 }
 
 #[test]
@@ -139,7 +102,7 @@ fn a_non_recursive_function_refuses() {
 #[test]
 fn a_parameter_read_resolves_to_its_path() {
     let mut m = Module::new();
-    let (_func_node, function, condition, decrement, param) = marked_countdown(&mut m);
+    let (_func_node, function, condition, decrement, param) = countdown(&mut m, true);
     // The bare parameter is the whole value; a computation over it is not a
     // read at all.
     assert_eq!(m.parameter_value_path(function, param), Some(Vec::new()));

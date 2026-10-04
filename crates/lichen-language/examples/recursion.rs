@@ -329,6 +329,18 @@ const VERDICT_ROWS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// The acceptance case's shape in a **host** program: a marked reduction over a
+/// tuple state whose count is a literal, so the evaluator can decide the whole
+/// state — and the only thing between it and a value is *how the recursion is
+/// run*. `marked` is the whole difference between the two rows the probe prints.
+fn host_reduction(marked: bool, count: usize) -> String {
+    let marker = if marked { "@loop " } else { "" };
+    format!(
+        "{marker}sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)\n\
+         sum_to ({count}, 0)\n"
+    )
+}
+
 /// The proposed operator **with its type written out** — the escape P1-33 names
 /// as "the whole difference" for the two-argument curried self-reference.
 const LOOP_ANNOTATED: &str = r#"
@@ -512,6 +524,27 @@ fn main() {
                 name,
                 &runtime_count_probe(recursion, call).replace("BACKEND", backend),
             );
+        }
+        println!("  -- the host loop: a literal count, run rather than expanded --");
+        // Host rows are backend-independent, so the counts stay small: the
+        // point is where the two shapes part company, and each loop iteration
+        // instantiates the body (the cost M3 exists to remove).
+        for count in [400usize, 1_000] {
+            for marked in [true, false] {
+                let shape = if marked { "loop  " } else { "unroll" };
+                let start = Instant::now();
+                match run(&host_reduction(marked, count)) {
+                    Ok(out) => println!(
+                        "  {shape}  {count:>6}  {:>9.1} ms  {out}",
+                        start.elapsed().as_secs_f64() * 1000.0
+                    ),
+                    Err(diags) => println!(
+                        "  {shape}  {count:>6}  {:>9.1} ms  refused: {}",
+                        start.elapsed().as_secs_f64() * 1000.0,
+                        diags.join(" | ")
+                    ),
+                }
+            }
         }
         println!("  -- expressibility --");
         probe(
