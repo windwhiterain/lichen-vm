@@ -257,11 +257,14 @@ mod kernel_intern_tests {
         let mut body = KernelBody::new();
         let entry = body.add_block();
         let one = body.add_const(entry, ScalarClass::Int, 1);
+        // **A branch hands the target its parameters, so entering the header hands
+        // it the state it starts from.** An empty handover is a malformed branch,
+        // not an entry that happens to carry nothing.
         body.set_terminator(
             entry,
             Terminator::Br(Br {
                 target: 1,
-                args: Vec::new(),
+                args: vec![one],
             }),
         );
 
@@ -386,6 +389,7 @@ mod kernel_intern_tests {
         let mut body = KernelBody::new();
         let entry = body.add_block();
         let one = body.add_const(entry, ScalarClass::Int, 1);
+        let two = body.add_const(entry, ScalarClass::Int, 2);
         body.set_terminator(
             entry,
             Terminator::Br(Br {
@@ -405,7 +409,7 @@ mod kernel_intern_tests {
             entry,
             Terminator::Br(Br {
                 target: 1,
-                args: vec![one],
+                args: vec![one, two],
             }),
         );
         body.validate()
@@ -416,7 +420,7 @@ mod kernel_intern_tests {
             entry,
             Terminator::Br(Br {
                 target: 1,
-                args: vec![one, one],
+                args: vec![one, two, one],
             }),
         );
         let refusal = body
@@ -3613,9 +3617,30 @@ where
         let positions = unpeeled
             .dynamic()
             .and_then(|unpeeled| named_path(module, unpeeled));
-        for (position, candidate) in roles.inputs.iter().enumerate() {
-            if positions.as_deref() == Some(candidate.as_slice()) {
-                return Ok(Some(position));
+        if let Some(positions) = positions.as_deref() {
+            for (position, candidate) in roles.inputs.iter().enumerate() {
+                // **The chain is the role path's tail, below the wrapper's slot-read
+                // and below whatever the alias folded away.** Measured:
+                //
+                //     1103: Index(0) -> 1105: Index(0) -> 1107: bare cell
+                //     roles.inputs[0] = [1, 0]
+                //
+                // Two levels of the chain are not levels of the path. The first is
+                // the wrapper's slot-read destructuring — the step `peeled_argument`
+                // resolves, which is why the path is read from the *unpeeled*
+                // operand. The second is `.in`, **which the alias consumed**: 1107
+                // is the aliased `.in` cell, so no `Index` states it. What remains
+                // is `[0]`, and `[1, 0]` ends with `[0]`.
+                //
+                // So the relation is a suffix, and the chain's own head is dropped
+                // first: comparing `[0, 0]` against `[1, 0]` matches nothing, and
+                // comparing `[0]` matches exactly one input.
+                let Some(tail) = positions.get(1..).filter(|tail| !tail.is_empty()) else {
+                    continue;
+                };
+                if candidate.ends_with(tail) {
+                    return Ok(Some(position));
+                }
             }
         }
         // **The chain walk is the fallback, not the answer.** It resolves a
@@ -4333,7 +4358,8 @@ where
             return None;
         }
         let (target, selector) = operand_pair(module, operation.operand).ok()?;
-        positions.push(usize_value(module, selector)?);
+        let step = usize_value(module, selector);
+        positions.push(step?);
         let Some(target) = target.dynamic() else {
             return None;
         };
