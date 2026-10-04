@@ -3873,19 +3873,29 @@ where
             return Ok(None);
         };
         if target == AnyNodeId::Dynamic(param_pair) {
-            // `Index(param_pair, 0)` is the encoding's `[value, type]` pair read
-            // — the parameter read whole, which is the empty path.  A non-zero
-            // position is not a data read at all.
+            // **Step into the pair's value and keep walking.** A struct
+            // parameter's fields live *inside* the value half, and the path
+            // `roles` holds is made of field positions with no step for the peel
+            // itself — so `cfg.I.a` is two steps in, not a whole-parameter read.
             //
-            // **A struct parameter's field read is not this shape.** `cfg.I.a`
-            // reaches the emitter as a node whose chain *stops* here with an empty
-            // path, and the walk has to go on reading into the pair's value to find
-            // the field — see `a_struct_parameter_..._carrying_wrapper`, which is
-            // the one thing still red here.
-            return match usize_value(module, selector) {
-                Some(0) => Ok(Some(Vec::new())),
-                _ => Ok(None),
-            };
+            // The step is the selector as written, name or position, because that
+            // is what the field list resolves against.
+            match field_name(module, selector)? {
+                Some(name) => steps.push(IndexStep::Named(name)),
+                None => match usize_value(module, selector) {
+                    Some(position) => steps.push(IndexStep::Position(position)),
+                    None => return Ok(None),
+                },
+            }
+            match pair_value_node(module, param_pair) {
+                Some(value) => {
+                    current = value;
+                    continue;
+                }
+                // A pair with no value half has nothing inside to walk, and the
+                // path so far is what the caller's read reached.
+                None => break,
+            }
         }
         // The selector is a *name* when the read was written `a.name`, and a
         // *position* when it was written `a(0)`.
