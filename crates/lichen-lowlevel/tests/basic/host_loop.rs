@@ -61,22 +61,27 @@ fn a_marked_loop_answers_what_the_unroll_answers() {
 }
 
 #[test]
-fn the_loop_iterates_once_per_count() {
+fn the_loop_spends_one_application_per_iteration() {
     // The count *is* the iteration count: `count 17` tests 17 states that fail
-    // the base test and one that passes it. A limit one below that is refused
-    // and a limit that fits answers, which is what says the loop really went
-    // round rather than reaching the base some other way.
+    // the base test and one that passes it, and each iteration is one
+    // application — the same unit the unwound level would have cost. One
+    // application less than that is refused and exactly enough answers, which is
+    // what says the loop really went round rather than reaching the base some
+    // other way. (The entering call is the one other application.)
     let short = run(
-        |m| m.loop_work_limit = 17,
+        |m| m.apply_total_limit = 18,
         |m| {
             let (function, id, _, _, _) = countdown(m, true);
             (function, id)
         },
         17,
     );
-    assert_eq!(short, (None, Some(BudgetExhausted::LoopWork { limit: 17 })));
+    assert_eq!(
+        short,
+        (None, Some(BudgetExhausted::ApplyTotal { limit: 18 }))
+    );
     let exact = run(
-        |m| m.loop_work_limit = 18,
+        |m| m.apply_total_limit = 19,
         |m| {
             let (function, id, _, _, _) = countdown(m, true);
             (function, id)
@@ -88,12 +93,13 @@ fn the_loop_iterates_once_per_count() {
 
 #[test]
 fn a_marked_loop_runs_a_count_the_unroll_cannot_afford() {
-    // The expansion pays one application per level, so a count above the apply
-    // budget is refused as non-terminating; the loop pays one instantiation per
-    // iteration and no nesting, which is the whole point of the conversion.
-    let count = 5_000u128;
+    // **The difference is depth, not work.** Both paths apply the function once
+    // per count, so the same total budget affords both — but the expansion pays
+    // one *level of nesting* per count and the loop pays none, which is the
+    // whole of what the conversion buys in the budget's terms.
+    let count = 50u128;
     let unrolled = run(
-        |m| m.apply_total_limit = 100,
+        |m| m.apply_depth_limit = 8,
         |m| {
             let (function, id, _, _, _) = countdown(m, false);
             (function, id)
@@ -102,11 +108,11 @@ fn a_marked_loop_runs_a_count_the_unroll_cannot_afford() {
     );
     assert_eq!(
         unrolled,
-        (None, Some(BudgetExhausted::ApplyTotal { limit: 100 })),
-        "the expansion must be refused by the apply budget"
+        (None, Some(BudgetExhausted::ApplyDepth { limit: 8 })),
+        "the expansion must be refused by the nesting guard"
     );
     let looped = run(
-        |m| m.apply_total_limit = 100,
+        |m| m.apply_depth_limit = 8,
         |m| {
             let (function, id, _, _, _) = countdown(m, true);
             (function, id)
@@ -116,19 +122,21 @@ fn a_marked_loop_runs_a_count_the_unroll_cannot_afford() {
     assert_eq!(
         looped,
         (Some(0), None),
-        "the loop must answer without spending the apply budget"
+        "the loop must run at one level however many iterations it takes"
     );
 }
 
 #[test]
-fn a_marked_loop_that_never_reaches_its_base_is_refused_by_the_loop_budget() {
+fn a_marked_loop_that_never_reaches_its_base_is_refused_by_the_work_budget() {
     // `stuck 5` tests `5 < 1`, fails, and recurses with the same state forever:
-    // a *convertible* shape, so the loop runs it — and the loop's own budget is
-    // what turns that into a diagnostic instead of a hang.
-    let refused = run(|m| m.loop_work_limit = 5, |m| stuck_loop(m, true), 5);
+    // a *convertible* shape, so the loop runs it — and the work budget, which
+    // each iteration spends one application of, is what turns that into a
+    // diagnostic instead of a hang. The expansion's nesting guard never fires
+    // here, which is exactly why the total bound has to.
+    let refused = run(|m| m.apply_total_limit = 5, |m| stuck_loop(m, true), 5);
     assert_eq!(
         refused,
-        (None, Some(BudgetExhausted::LoopWork { limit: 5 }))
+        (None, Some(BudgetExhausted::ApplyTotal { limit: 5 }))
     );
 }
 

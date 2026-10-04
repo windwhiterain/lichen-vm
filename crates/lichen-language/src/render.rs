@@ -389,15 +389,6 @@ where
             Some(BudgetExhausted::ApplyTotal { limit }) => format!(
                 "this binding never terminates — it applied a function more than {limit} times (non-terminating recursion)"
             ),
-            // A converted loop spends its own budget, so the message names the
-            // loop's work rather than applications: `@loop` applied the function
-            // once and went round many times, and the shape that does that
-            // forever is a step which never changes the state its test reads.
-            Some(BudgetExhausted::LoopWork { limit }) => format!(
-                "this binding never terminates — its `@loop` recursion spent more than {limit} \
-                 units of loop work (one per iteration, one per call inside one) without \
-                 reaching a base, which is what a step that never changes the state it tests does"
-            ),
             Some(BudgetExhausted::EvaluateDepth { limit }) => format!(
                 "this binding never terminates — its value grows deeper than {limit} levels (non-terminating evaluation)"
             ),

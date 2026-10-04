@@ -98,10 +98,7 @@ impl<P: Program> Module<P> {
         // it goes on to run; only what the loop does *inside* is the loop's own
         // work, which is what the flag brackets (see `apply.rs`).
         self.with_apply_frame(|module| {
-            module.active_loops += 1;
-            let result = module.loop_body(conversion, function, argument, block, node, cell);
-            module.active_loops -= 1;
-            result
+            module.loop_body(conversion, function, argument, block, node, cell)
         })
     }
 
@@ -117,11 +114,16 @@ impl<P: Program> Module<P> {
     ) -> P::Value {
         let mut argument = argument;
         loop {
-            self.loop_work += 1;
-            if self.loop_work > self.loop_work_limit {
+            // **An iteration is an application.** The unwound level it replaces
+            // is one application too, so the cumulative counter means the same
+            // thing on both paths and the limit the host states bounds both;
+            // what the loop does not spend is *depth*. Anything the iteration
+            // applies in turn charges the counters through the ordinary frame.
+            self.apply_total += 1;
+            if self.apply_total > self.apply_total_limit {
                 if self.budget_exhausted.is_none() {
-                    self.budget_exhausted = Some(BudgetExhausted::LoopWork {
-                        limit: self.loop_work_limit,
+                    self.budget_exhausted = Some(BudgetExhausted::ApplyTotal {
+                        limit: self.apply_total_limit,
                     });
                 }
                 return P::Value::from(LowValue::Parameterized);
