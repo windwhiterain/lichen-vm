@@ -618,11 +618,10 @@ where
                     }
                 }
                 // Lazy shape read: `Index(type_pair, 0)`.  The deferred unify
-                // below resolves through the lowlevel's pending-`Index`
-                // deferral: a pending read against a class that holds a type
-                // value merges and commits the type value
-                // ([`shape::defer_pending`]), so a param-dependent call-result
-                // callee checks against the real fields at the apply.
+                // below does not force the read: it merges the classes so the
+                // type value the other side holds reaches this class's
+                // carrier, and the call-result callee then checks against the
+                // real fields once the read resolves at the apply.
                 _ => {
                     let ops = self.array_node(self.current_block, &[type_pair, self.zero()]);
                     self.op_node(

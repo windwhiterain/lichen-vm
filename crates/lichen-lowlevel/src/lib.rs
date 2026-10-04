@@ -774,8 +774,7 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
     /// This is the sole place an operator vocabulary *outside* the lowlevel's
     /// own [`LowOperator`] set states what its computation produces.  It
     /// lives on the operator rather than in the pass because the meaning of an
-    /// operator belongs to whoever defined it — the same split that put the
-    /// unification policy on [`Program::defer_pending`].
+    /// operator belongs to whoever defined it.
     fn low_type(&self, arguments: &[Option<LowShape>]) -> Option<LowShape> {
         let _ = arguments;
         None
