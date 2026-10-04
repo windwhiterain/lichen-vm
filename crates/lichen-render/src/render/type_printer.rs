@@ -192,11 +192,7 @@ where
         // (a frozen module's) is left to the raw fallback — its signature
         // reads through the static module, not yet wired here.
         if elements.len() == 2
-            && let AnyNodeId::Dynamic(slot1) = elements[1].node
-            // Self-referential by **class**, not node identity: a cell bound
-            // to the function-type carries the same value but is a class
-            // member, not the self-ref node itself.
-            && representative(self.module, slot1) == representative(self.module, node)
+            && self.slot1_is_self(elements[1].node, node)
             && let Some(fv) = self.module.node_value(elements[0].node)
             && let Some(LowValue::Function(fid)) = fv.as_enum()
             && let Some((dom, cod)) = self.function_signature(fid)
@@ -333,6 +329,30 @@ where
         })
     }
 
+    /// Whether an element-1 node **is** the node's own self-cycle — the mark of
+    /// a function-type `[Function(fid), ↺]`, as against a plain `[value, type]`
+    /// pair.  Two forms count:
+    ///
+    /// - a **dynamic** self-cycle, compared by class so a cell bound to the
+    ///   function-type also counts (it carries the same value but is a class
+    ///   member, not the self-ref node itself);
+    /// - a **static** self-ref: a materialized static function-type copies the
+    ///   frozen node's value, so its slot 1 points at the frozen node's own
+    ///   cycle rather than back at the copy.
+    fn slot1_is_self(&self, slot1: AnyNodeId, node: NodeId) -> bool {
+        match slot1 {
+            AnyNodeId::Dynamic(slot1) => {
+                representative(self.module, slot1) == representative(self.module, node)
+            }
+            AnyNodeId::Static(sref) => matches!(
+                self.module.static_read(sref).as_enum(),
+                Some(LowValue::Array(array))
+                    if unsafe { array.items() }.get(1)
+                        .is_some_and(|item| item.node == AnyNodeId::Static(sref))
+            ),
+        }
+    }
+
     /// The `domain -> codomain` spelling of a function-type node's signature,
     /// read from the function template's parameter and return *type* cells
     /// (`Function::parameter` and `Function::r#return` are the `[value, type]`
@@ -342,13 +362,18 @@ where
     /// for a static function-type (its template lives in a static module, not
     /// wired here yet) or a function whose entry points are not pairs.
     fn function_signature(&mut self, fid: AnyFunctionId) -> Option<(String, String)> {
-        let AnyFunctionId::Dynamic(function) = fid else {
-            return None;
-        };
-        let function = &self.module.functions[function];
-        let param_ty = self.pair_type_slot(function.parameter)?;
-        let return_ty = self.pair_type_slot(function.r#return)?;
-        Some((self.node(param_ty), self.node(return_ty)))
+        match fid {
+            AnyFunctionId::Dynamic(function) => {
+                let function = &self.module.functions[function];
+                let param_ty = self.pair_type_slot(function.parameter)?;
+                let return_ty = self.pair_type_slot(function.r#return)?;
+                Some((self.node(param_ty), self.node(return_ty)))
+            }
+            AnyFunctionId::Static(sref) => {
+                let (param_ty, return_ty) = self.module.static_function_signature(sref)?;
+                Some((self.any_node(param_ty), self.any_node(return_ty)))
+            }
+        }
     }
 
     /// Element 1 (the type slot) of a `[value, type, attrs…]` pair, as a

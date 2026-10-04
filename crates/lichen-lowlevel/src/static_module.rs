@@ -184,6 +184,40 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// The static function's **signature cells** — its parameter type and its
+    /// return type — as refs a renderer can read without materializing.
+    /// `None` when `sref` is not a static function of a registered module, or
+    /// its parameter is not a pair.
+    pub fn static_function_signature(
+        &self,
+        sref: StaticFunctionRef,
+    ) -> Option<(AnyNodeId, AnyNodeId)> {
+        let (param_pair, return_type) = {
+            let module = self.static_module(sref.module);
+            let function = module.functions.get(sref.index.0)?;
+            (function.parameter, function.return_type)
+        };
+        // The parameter pair's slot 1 is the parameter type cell.
+        let param_pair_ref = StaticNodeId {
+            module: sref.module,
+            index: param_pair,
+        };
+        let param_type = match self.static_read(param_pair_ref).as_enum() {
+            // SAFETY: `array` is a static payload read through `param_pair_ref`,
+            // whose home module is registered — the registration pins its
+            // arena.
+            Some(LowValue::Array(array)) => unsafe { array.items() }.get(1)?.node,
+            _ => return None,
+        };
+        Some((
+            param_type,
+            AnyNodeId::Static(StaticNodeId {
+                module: sref.module,
+                index: return_type,
+            }),
+        ))
+    }
+
     /// The materialized `[domain, codomain]` of a **static** function-type: the
     /// frozen template's parameter and return *type* cells, copied into fresh
     /// dynamic leaves so the clone-on-unify policy can reconcile them against
