@@ -267,7 +267,7 @@ annotated = compute.jit ((y : Int) => y + y)
 annotated
 ```
 
-prints `(Kernel, parameterized): struct<.native raw[?a, ?b], .sig Int -> Int>` —
+prints `(raw Kernel, raw parameterized): struct<.native raw[?a, ?b], .sig Int -> Int>` —
 the target string, already, on today's tree.  The red target is the *unannotated*
 body, where `+`'s class is open and the recorded choice is the class domain's
 `default`.  So the slice is: **choose the class where the domain says to choose
@@ -284,8 +284,8 @@ before any apply, so the parameter's type is where the language says which class
 this artifact is for, and a body that left its class open is refused by name
 ([`UNDECIDED_DOMAIN`]: "the kernel parameter's class is not decided when the
 kernel is compiled … annotate the parameter").  Measured: `compute.jit (y => y +
-y)` is refused, `compute.jit (y : Int => y + y)` is `(Kernel, parameterized):
-struct<.native raw[?a, ?b], .sig Int -> Int>` and launches `3 + 3 = 6`, and the
+y)` is refused, `compute.jit (y : Int => y + y)` is `(raw Kernel, raw
+parameterized): struct<.native raw[?a, ?b], .sig Int -> Int>` and launches `3 + 3 = 6`, and the
 function itself stays polymorphic for its other uses (`f = y => y + y; k =
 compute.jit f; f 1.5` is `3.0: Float` — the refusal does not touch the class).
 `open_class_of` and `compile_fragment`'s `open_class` parameter are **deleted**;
