@@ -389,14 +389,22 @@ impl<P: Program> Module<P> {
         let mut path = AncestorPairs::new();
         let mut materialized = HashMap::new();
         let mut steps = Vec::new();
+        // The answer against what the node's class holds, as two values: the
+        // answer has no class of its own, and pulling the class's value out
+        // explicitly is what makes the two comparable.
+        let held = {
+            let representative = self.equality_representative(node);
+            self.class_committed_value(representative)
+        };
         self.unify_inner(
-            Side::node(node),
             Side::value(Some(value)),
+            Side::value(held),
             &mut path,
             &mut materialized,
             &mut steps,
             (node, node),
         );
+        self.write_node_value(node, Some(value));
         self.nodes[node].runned = true;
     }
 
@@ -447,9 +455,13 @@ impl<P: Program> Module<P> {
             }
             // A member that already holds a value takes the propagated one only
             // when the two can be one value; a member that disagrees keeps its
-            // own, which is the tolerated case the write rule names.  The class
-            // carrier still records *a* decided value (the caller commits it),
-            // so the read stays O(1) whichever member it lands on.
+            // own, which is the tolerated case the write rule names.  The
+            // disagreement is **not** reported here: a propagation is one
+            // write's distribution to a class, and whether the write itself
+            // conflicted is the unification's answer, already recorded by the
+            // caller that asked for the write ([`Self::write_node_answer`] for
+            // an operation's answer, the merge arms for a unification).  A
+            // second report here would double-count one fact.
             if !self.has_run(member)
                 || self.reconcile_held_value(self.nodes[member].value, Some(value))
             {
@@ -462,7 +474,15 @@ impl<P: Program> Module<P> {
     /// side is a class, so there is no pair of roots to name, and the failure is
     /// attributed to the enclosing unification's roots with the two values that
     /// could not be one.
-    fn record_value_error(&mut self, root: (NodeId, NodeId), a: Option<P::Value>, b: Option<P::Value>) {
+    fn record_value_error(
+        &mut self,
+        root: (NodeId, NodeId),
+        a: Option<P::Value>,
+        b: Option<P::Value>,
+    ) {
+        if std::env::var_os("LICHEN_TRACE_DOUBLE").is_some() {
+            eprintln!("VALUE-ERROR root={root:?} a={:?} b={:?}", a.as_ref().map(|v| v.as_enum()), b.as_ref().map(|v| v.as_enum()));
+        }
         self.unify_errors.push(UnifyError {
             root_a: root.0,
             root_b: root.1,
@@ -495,15 +515,12 @@ impl<P: Program> Module<P> {
         )
     }
 
-    /// A side of a unification: a node's class, a bare value, or both.
-    ///
-    /// A side **without** a node is a value that has no class to merge — the
-    /// result an operation just produced, or a value a write is distributing.
-    /// Asking `unify` of such a side is asking whether the two can be one value,
-    /// which is the same question the arms below answer for two classes; the
-    /// absence of a class is not a variant of the recursion, it is a side with
-    /// nothing to merge.
-    fn answer_side(
+    /// Resolve a side that names a node down to **what its class knows** — the
+    /// ordinary reading, because a side that names a node stands for that node's
+    /// whole class.  A node-less side already carries its own answer.  A static
+    /// ref is materialized into a leaf (homed in the other side's block), which
+    /// is how a static value enters the class machinery.
+    fn answer_class_side(
         &mut self,
         side: Side<P>,
         other: Side<P>,
@@ -515,7 +532,22 @@ impl<P: Program> Module<P> {
         let _ = other;
         Side {
             node: Some(node),
-            value: self.class_committed_value(node).or(side.value),
+            value: self.class_committed_value(node),
+        }
+    }
+
+    /// Resolve a node-bearing side down to **the node's own value**, for the one
+    /// question that is about a node's own slot rather than its class: an
+    /// operation's answer meeting the value its class already holds
+    /// ([`Self::write_node_answer`]).  Asking the class there would compare the
+    /// class's value with itself and see no conflict at all.
+    fn answer_own_side(&mut self, side: Side<P>) -> Side<P> {
+        let Some(node) = side.node else {
+            return side;
+        };
+        Side {
+            node: Some(node),
+            value: self.nodes[node].value,
         }
     }
 
@@ -772,8 +804,8 @@ impl<P: Program> Module<P> {
         // one is a bare value with no class to merge, so it can only be answered
         // by comparison.  Reading both before any write keeps the borrow of
         // `nodes` short and the values stable across the merge below.
-        let a = self.answer_side(a, b, materialized);
-        let b = self.answer_side(b, a, materialized);
+        let a = self.answer_class_side(a, b, materialized);
+        let b = self.answer_class_side(b, a, materialized);
         let va = a.value;
         let vb = b.value;
         let (Some(ra), Some(rb)) = (a.node, b.node) else {
@@ -1440,7 +1472,9 @@ impl<P: Program> Module<P> {
         steps: &[UnifyStep],
         root: (NodeId, NodeId),
     ) {
-        if std::env::var_os("LICHEN_TRACE_RECORD").is_some() {
+        if std::env::var_os("LICHEN_TRACE_RECORD").is_some()
+            || std::env::var_os("LICHEN_TRACE_DOUBLE").is_some()
+        {
             eprintln!(
                 "RECORD ra={ra:?} rb={rb:?} root={root:?} va={:?} vb={:?}",
                 self.nodes[ra].value.as_ref().map(|value| value.as_enum()),
