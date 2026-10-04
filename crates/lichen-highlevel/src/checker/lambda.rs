@@ -184,6 +184,11 @@ where
         // fills in now with the function id.
         self.module.functions[function].r#return = ret;
         self.module.functions[function].parameter = param;
+        // The return's type cell, stored on the function so the type-level
+        // clone-on-unify can read the signature's codomain without forcing
+        // `r#return` (which may be an unevaluated operation node — a
+        // native-call return — whose own slots do not name the type).
+        self.module.functions[function].return_type = self.state[r#return].ty.unwrap();
         // The return may live in another function's scope — a body ending
         // in a variable reference to a nested closure's pair (owned by that
         // closure, its chain reaching here through the parent link).  The

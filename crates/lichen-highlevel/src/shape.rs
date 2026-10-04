@@ -700,22 +700,6 @@ where
         })
 }
 
-/// The type slot (element [`PAIR_TYPE_SLOT`]) of a dynamic `pair`, as a
-/// dynamic node — the `[value, type, attrs…]` layout's type cell. `None` when
-/// `pair` is not a 2+-element array or its type slot is a static ref (a
-/// function-type's cloned signature is fully dynamic).
-fn pair_type_slot<P: Program>(module: &Module<P>, pair: NodeId) -> Option<NodeId>
-where
-    P::Value: AsEnum<LowValue>,
-{
-    // SAFETY: `pair` is a live node of `module`; nothing here drops a block.
-    let items = unsafe { array_items(module, AnyNodeId::Dynamic(pair)) }?;
-    match items.get(PAIR_TYPE_SLOT)?.node {
-        AnyNodeId::Dynamic(n) => Some(n),
-        AnyNodeId::Static(_) => None,
-    }
-}
-
 /// The `[domain, codomain]` pair a type carries for the clone-on-unify, as
 /// two dynamic nodes — the signature the function-type is unified against.
 ///
@@ -739,15 +723,13 @@ fn signature_pair<P: Program>(
 where
     P::Value: ValueType,
 {
-    // A function-type node: clone its signature, read the clone's type slots.
+    // A function-type node: clone its signature — the clone returns the
+    // parameter and return *type cells* directly as (domain, codomain).
     if let AnyNodeId::Dynamic(node) = ty
         && module.is_function_type_node(node)
     {
         let fid = function_type_function(module, ty)?;
-        let (param_clone, return_clone) = clone_signature_dynamic(module, fid)?;
-        let dom = pair_type_slot(module, param_clone)?;
-        let cod = pair_type_slot(module, return_clone)?;
-        return Some((dom, cod));
+        return clone_signature_dynamic(module, fid);
     }
     // An arrow term `[[dom, cod], [FunctionType, K]]` recognised without a
     // universe handle (K by its self-cycle): read its shape's two halves.

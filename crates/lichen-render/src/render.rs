@@ -17,7 +17,7 @@ use lichen_highlevel::attr::AttrExt;
 use lichen_highlevel::program::{HighProgram, ValueType};
 use lichen_highlevel::shape;
 use lichen_lowlevel::ancestors::AncestorNodes;
-use lichen_lowlevel::{AnyNodeId, ArrayItem, LowValue, Module, NodeId};
+use lichen_lowlevel::{AnyFunctionId, AnyNodeId, ArrayItem, LowValue, Module, NodeId};
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
 

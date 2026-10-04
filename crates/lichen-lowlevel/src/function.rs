@@ -204,7 +204,7 @@ impl<P: Program> Module<P> {
     }
 
     /// Clone a function template's **signature** — its parameter and return
-    /// pairs — into the template's own block, preserving the template's
+    /// *type cells* — into the template's own block, preserving the template's
     /// internal class topology among the fresh clones, *without* evaluating
     /// the body or re-registering asserts.
     ///
@@ -217,45 +217,65 @@ impl<P: Program> Module<P> {
     /// reuses the apply clone walk ([`Self::function_apply`]'s `node_apply`
     /// setup) verbatim — the same `Function` re-homing and the same
     /// `unify_clone_groups` topology re-establishment — scoped to the two
-    /// signature entry points and shedding the apply-specific frame (no
-    /// argument, no body evaluation, no assert re-registration).
+    /// type cells and shedding the apply-specific frame (no argument, no body
+    /// evaluation, no assert re-registration).
     ///
-    /// Returns the cloned parameter and return pairs (the signature), or
-    /// `None` when `function` is not a dynamic function of this module.
+    /// The type cells are cloned, not the `parameter`/`r#return` pairs:
+    /// `r#return` may be an unevaluated operation node (a native-call return)
+    /// whose own slots do not name the type, so the return's type is read from
+    /// [`Function::return_type`]. The parameter's type is the parameter pair's
+    /// slot 1 (always a `[value, type, attrs…]` pair).
+    ///
+    /// Returns the cloned parameter and return *type* cells (domain, codomain),
+    /// or `None` when `function` is not a dynamic function of this module.
     pub fn clone_signature(&mut self, function: FunctionId) -> Option<(NodeId, NodeId)> {
-        let (block, r#return, parameter) = {
+        let (block, parameter, return_type) = {
             let function = &self.functions[function];
-            (function.block, function.r#return, function.parameter)
+            (function.block, function.parameter, function.return_type)
+        };
+        // The parameter's type cell = the parameter pair's slot 1
+        // (`[value, type, attrs…]`). The parameter is always a pair.
+        // SAFETY: `parameter` is a live node of this module; nothing here
+        // drops a block.
+        let param_type = match unsafe { self.array_items(parameter) }
+            .and_then(|items| items.get(1))
+            .map(|item| item.node)
+        {
+            Some(Dyn(n)) => n,
+            _ => return None,
         };
         let mut remap = HashMap::new();
         let mut ctx = ApplyCtx {
             target: block,
             // The signature's own template is the membership anchor: its
-            // parameter/return pairs and the cells they reference are members,
-            // cloned fresh; captured cells (from an enclosing scope) are
-            // outside the chain and referenced as-is, exactly as an apply
-            // treats a capture.
+            // type cells and the nodes they reference are members, cloned
+            // fresh; captured cells (from an enclosing scope) are outside the
+            // chain and referenced as-is, exactly as an apply treats a
+            // capture.
             anchor: function,
             branch_top: function,
             closure_scope: None,
-            // `applied` is the function being cloned, so its own self-reference
-            // (a recursive type) is referenced in place rather than re-homed
-            // into a fresh closure — the same rule an apply applies.
+            // `applied` is the function being cloned, so its own
+            // self-reference (a recursive type) is referenced in place rather
+            // than re-homed into a fresh closure — the same rule an apply
+            // applies.
             applied: function,
             parameter,
-            // The signature clones carry no template role: a later apply of the
-            // enclosing scope reaches them (if at all) through a unified class,
-            // not through `Function::nodes`, so no owner tag is stamped.
+            // The signature clones carry no template role: a later apply of
+            // the enclosing scope reaches them (if at all) through a unified
+            // class, not through `Function::nodes`, so no owner tag is
+            // stamped.
             tag: None,
             remap: &mut remap,
         };
-        let return_clone = self.node_apply(r#return, &mut ctx);
-        let param_clone = self.node_apply(parameter, &mut ctx);
+        let dom = self.node_apply(param_type, &mut ctx);
+        let cod = self.node_apply(return_type, &mut ctx);
         // Re-establish the template's internal class topology among the fresh
-        // clones, so a signature whose template unified two cells at definition
-        // time (e.g. identity's shared param/return type cell) keeps them
-        // unified after cloning — the clone carries the same internal
-        // constraints as the template. A single clone has no topology.
+        // clones, so a signature whose template unified two cells at
+        // definition time (e.g. identity's shared param/return type cell)
+        // keeps them unified after cloning — the clone carries the same
+        // internal constraints as the template. A single clone has no
+        // topology.
         if ctx.remap.len() > 1 {
             let groups = crate::apply::regroup_clones(
                 ctx.remap.iter().map(|(&t, &c)| (t, c)),
@@ -265,7 +285,7 @@ impl<P: Program> Module<P> {
                 self.unify(first, clone);
             });
         }
-        Some((param_clone, return_clone))
+        Some((dom, cod))
     }
 
     /// Evaluate `argument` to the structural depth `pattern` (the cloned
@@ -507,12 +527,13 @@ impl<P: Program> Module<P> {
                 // member and both entry points are cloned into the target,
                 // and the result is a fresh function homed on the target
                 // block, so it is dropped with it.
-                let (scope, r#return, parameter, asserts) = {
+                let (scope, r#return, parameter, return_type, asserts) = {
                     let function = &self.functions[function];
                     (
                         function.nodes.clone(),
                         function.r#return,
                         function.parameter,
+                        function.return_type,
                         function.asserts.clone(),
                     )
                 };
@@ -527,6 +548,7 @@ impl<P: Program> Module<P> {
                     nodes: Vec::new(),
                     r#return,
                     parameter,
+                    return_type: NodeId::default(),
                     asserts: Vec::new(),
                     parent: Some(ctx.branch_top),
                     block: ctx.target,
@@ -566,6 +588,7 @@ impl<P: Program> Module<P> {
                     .collect();
                 let r#return = self.node_apply(r#return, &mut inner);
                 let parameter = self.node_apply(parameter, &mut inner);
+                let return_type = self.node_apply(return_type, &mut inner);
                 // The fresh closure's asserts instantiate with its scope: a
                 // condition reading the closure's captures rewrites to this
                 // call's clones and re-registers, while one proven concrete
@@ -607,6 +630,7 @@ impl<P: Program> Module<P> {
                 fresh_function.nodes = nodes;
                 fresh_function.r#return = r#return;
                 fresh_function.parameter = parameter;
+                fresh_function.return_type = return_type;
                 fresh_function.asserts = fresh_asserts;
                 self.blocks[target].functions.push(fresh);
                 P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(fresh)))

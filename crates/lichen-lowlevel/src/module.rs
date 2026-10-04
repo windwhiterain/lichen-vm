@@ -408,6 +408,7 @@ impl<P: Program> Module<P> {
             nodes: Vec::new(),
             r#return: NodeId::default(),
             parameter: NodeId::default(),
+            return_type: NodeId::default(),
             parent,
             asserts: Vec::new(),
             block,

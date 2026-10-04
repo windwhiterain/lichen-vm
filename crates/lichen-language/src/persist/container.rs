@@ -99,6 +99,7 @@ where
     for function in &module.functions {
         w.u64(function.parameter.index as u64);
         w.u64(function.r#return.index as u64);
+        w.u64(function.return_type.index as u64);
         w.u64(function.asserts.len() as u64);
         for &assert in &function.asserts {
             w.u64(assert.index as u64);
@@ -375,6 +376,7 @@ where
     for _ in 0..function_count {
         let parameter = read_node_id(&mut r, node_count, "function parameter")?;
         let r#return = read_node_id(&mut r, node_count, "function return")?;
+        let return_type = read_node_id(&mut r, node_count, "function return type")?;
         let assert_count = r.u64()? as usize;
         let mut asserts = reserve(&r, assert_count, "function assert entries")?;
         for _ in 0..assert_count {
@@ -392,6 +394,7 @@ where
         functions.push(StaticFunction {
             parameter,
             r#return,
+            return_type,
             asserts,
             nodes: scope,
         });

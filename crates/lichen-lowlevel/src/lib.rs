@@ -1140,6 +1140,13 @@ pub struct Function {
     pub nodes: Vec<NodeId>,
     pub r#return: NodeId,
     pub parameter: NodeId,
+    /// The return expression's **type cell** — `state[r#return].ty` in the
+    /// checker, stored here because `r#return` itself may be an unevaluated
+    /// operation node (a native-call return) whose own slots do not name the
+    /// type. The function-type clone-on-unify
+    /// ([`Module::clone_signature`]) reads the signature's codomain from
+    /// here, not from `r#return`'s slots.
+    pub return_type: NodeId,
     /// The lexical parent — the function in whose body this function is
     /// nested (or [`None`] at top level).  The chain of these links makes
     /// the template membership test: a nested closure's nodes belong to an
@@ -1185,6 +1192,10 @@ pub struct Function {
 pub struct StaticFunction {
     pub parameter: LocalNodeId,
     pub r#return: LocalNodeId,
+    /// The static mirror of [`Function::return_type`] — the return's type
+    /// cell, local to the static module. See that field for why the type
+    /// cell is stored separately from `r#return`.
+    pub return_type: LocalNodeId,
     pub asserts: Vec<LocalNodeId>,
     /// The template scope — [`StaticFunction::parameter`], [`Self::r#return`],
     /// and every node owned by this function's body, as local indices.  This

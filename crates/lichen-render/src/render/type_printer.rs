@@ -183,6 +183,22 @@ where
         if elements.len() == 2 && self.is_universe_any(elements[1].node) {
             return self.any_node(elements[0].node);
         }
+        // A function-type node `[Function(fid), ↺]` — a function's own type
+        // (`f : f`): slot 0 holds a `Function` value and slot 1 is the node
+        // itself (the self-cycle, like the universe `[Type, ↺]`). Its
+        // signature lives in the function template (`parameter` / `r#return`),
+        // not in a `[dom, cod]` shape, so render `domain -> codomain` from the
+        // template's parameter and return type cells. A static function-type
+        // (a frozen module's) is left to the raw fallback — its signature
+        // reads through the static module, not yet wired here.
+        if elements.len() == 2
+            && elements[1].node == AnyNodeId::Dynamic(node)
+            && let Some(fv) = self.module.node_value(elements[0].node)
+            && let Some(LowValue::Function(fid)) = fv.as_enum()
+            && let Some((dom, cod)) = self.function_signature(fid)
+        {
+            return format!("{dom} -> {cod}");
+        }
         // A struct type: `[shape, [[payload, TypeStruct], K]]` — the kind is a
         // standard `[marker, K]` pair whose marker is the `[payload, TypeStruct]`
         // pair.  The id renders as `#n` so two structs with the
@@ -311,6 +327,37 @@ where
         self.arrows.is_some_and(|arrows| {
             disjoint::members(&self.module.nodes, rep).any(|m| arrows.contains(&m))
         })
+    }
+
+    /// The `domain -> codomain` spelling of a function-type node's signature,
+    /// read from the function template's parameter and return *type* cells
+    /// (`Function::parameter` and `Function::r#return` are the `[value, type]`
+    /// pairs; slot 1 is the type). The template's cells are read directly —
+    /// they are unbound for a polymorphic function (so `?a -> ?a`) and bound
+    /// for a monomorphic one, which is exactly the signature to print. `None`
+    /// for a static function-type (its template lives in a static module, not
+    /// wired here yet) or a function whose entry points are not pairs.
+    fn function_signature(&mut self, fid: AnyFunctionId) -> Option<(String, String)> {
+        let AnyFunctionId::Dynamic(function) = fid else {
+            return None;
+        };
+        let function = &self.module.functions[function];
+        let param_ty = self.pair_type_slot(function.parameter)?;
+        let return_ty = self.pair_type_slot(function.r#return)?;
+        Some((self.node(param_ty), self.node(return_ty)))
+    }
+
+    /// Element 1 (the type slot) of a `[value, type, attrs…]` pair, as a
+    /// dynamic node. `None` when `pair` is not a 2+-element array or its type
+    /// slot is a static ref.
+    fn pair_type_slot(&self, pair: NodeId) -> Option<NodeId> {
+        // SAFETY: `pair` is a live node of the module being rendered; this
+        // printer releases no block.
+        let items = unsafe { self.module.array_items(pair) }?;
+        match items.get(1)?.node {
+            AnyNodeId::Dynamic(n) => Some(n),
+            AnyNodeId::Static(_) => None,
+        }
     }
 
     /// Read-only variant of [`Self::fields`] for a static or dynamic shape.

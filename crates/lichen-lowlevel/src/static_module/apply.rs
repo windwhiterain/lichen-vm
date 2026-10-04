@@ -247,9 +247,15 @@ impl<P: Program> Module<P> {
         sref: StaticFunctionRef,
         ctx: &mut StaticApplyCtx<P>,
     ) -> P::Value {
-        let (r#return, parameter, asserts, scope) = {
+        let (r#return, parameter, return_type, asserts, scope) = {
             let f = &ctx.module.functions[sref.index.0];
-            (f.r#return, f.parameter, f.asserts.clone(), f.nodes.clone())
+            (
+                f.r#return,
+                f.parameter,
+                f.return_type,
+                f.asserts.clone(),
+                f.nodes.clone(),
+            )
         };
         // Fresh closure homed on the target block.  Its `parent` is the
         // enclosing fresh dynamic closure when re-homes nest (a wrapper
@@ -264,6 +270,7 @@ impl<P: Program> Module<P> {
             nodes: Vec::new(),
             r#return: NodeId::default(),
             parameter: NodeId::default(),
+            return_type: NodeId::default(),
             asserts: Vec::new(),
             parent: ctx.branch_top,
             block: ctx.target,
@@ -275,6 +282,7 @@ impl<P: Program> Module<P> {
         let outer_top = std::mem::replace(&mut ctx.branch_top, Some(fresh));
         let ret_clone = self.static_node_apply(r#return, ctx);
         let param_clone = self.static_node_apply(parameter, ctx);
+        let return_type_clone = self.static_node_apply(return_type, ctx);
         let mut assert_clones = Vec::with_capacity(asserts.len());
         for &condition in &asserts {
             let baked = !ctx.module.nodes[condition.index].parameterized;
@@ -301,6 +309,7 @@ impl<P: Program> Module<P> {
         fresh_function.nodes = own;
         fresh_function.r#return = ret_clone;
         fresh_function.parameter = param_clone;
+        fresh_function.return_type = return_type_clone;
         fresh_function.asserts = assert_clones;
         self.blocks[ctx.target].functions.push(fresh);
         P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(fresh)))

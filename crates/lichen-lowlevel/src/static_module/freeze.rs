@@ -180,6 +180,7 @@ impl<P: Program> StaticModule<P> {
             functions.push(StaticFunction {
                 parameter: node_map[&function.parameter],
                 r#return: node_map[&function.r#return],
+                return_type: node_map[&function.return_type],
                 asserts: function
                     .asserts
                     .iter()

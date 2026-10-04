@@ -282,6 +282,20 @@ macro_rules! lang_compose_vocabulary {
             ) -> Option<::lichen_lowlevel::Deferral> {
                 ::lichen_highlevel::shape::defer_pending(module, sides)
             }
+
+            // The highlevel's function-type unify policy: a function-type
+            // node `[Function(fid), ↺]` (a function's own type, `f : f`) is
+            // unified by cloning the function's signature, never binding the
+            // template's shared cells. Like `defer_pending`, wiring it here
+            // makes every composed program — plugin-built ones included —
+            // inherit it. See `lichen_highlevel::shape::unify_function_type`.
+            fn unify_function_type(
+                module: &mut ::lichen_lowlevel::Module<Self>,
+                a: ::lichen_lowlevel::NodeId,
+                b: ::lichen_lowlevel::NodeId,
+            ) -> ::lichen_lowlevel::FunctionTypeUnify {
+                ::lichen_highlevel::shape::unify_function_type(module, a, b)
+            }
         }
 
         impl ::lichen_highlevel::program::HighProgram for LangProgram {
