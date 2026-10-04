@@ -466,13 +466,6 @@ impl<P: Program> Module<P> {
         a: Option<P::Value>,
         b: Option<P::Value>,
     ) {
-        if std::env::var_os("LICHEN_TRACE_ALIAS").is_some() {
-            eprintln!(
-                "VALUE-ERROR root={root:?} a={:?} b={:?}",
-                a.as_ref().map(|v| v.as_enum()),
-                b.as_ref().map(|v| v.as_enum())
-            );
-        }
         self.unify_errors.push(UnifyError {
             root_a: root.0,
             root_b: root.1,
@@ -950,43 +943,25 @@ impl<P: Program> Module<P> {
         })
     }
 
-    /// Join `reader` into `target`'s class — the evaluation-side half of a read's
-    /// own resolution — and then **run the target's computation**, so the
-    /// reference the join created is answered rather than left waiting.
-    ///
-    /// A read of a cell is a reference, not a snapshot: unifying the reader with
-    /// the target lets a later bind reach it through the class, independent of
-    /// evaluation order.  The unification is **unconditional** — the target's
-    /// class may hold a decided value, and it may hold a member whose own
-    /// computation has not produced an answer yet (that member is the one the
-    /// value veto skips, so joining asserts nothing about what it will produce).
-    ///
-    /// Running the target afterwards is what makes the unconditional join safe: a
-    /// reader that takes the class shortcut in [`Self::evaluate_node`] never
-    /// re-enters the target's own evaluation, so a target whose computation is
-    /// still outstanding would stay undecided forever and the read would answer
-    /// with the marker.  This settles the target and distributes what it produced
-    /// onto the class the reader just joined.
-    ///
-    /// The reader keeps its operation: the operand edge must stay live for the
-    /// apply's clone machinery, and for the read's own resolution path to find it.
-    pub(crate) fn alias_read(&mut self, reader: NodeId, target: NodeId) {
-        self.unify(reader, target);
-        // Run the target only when its slot holds a value **no operator has
-        // produced** (`has_run && !runned`): that is a value a unification
-        // asserted while the read was pending, and the operator still owes its
-        // own answer — this is the only path that would otherwise never run it,
-        // because the reader is now in the target's class and takes the class
-        // shortcut.  A target with no value either has nothing to run or is
-        // reached by the caller's own evaluation, and running it here as well is
-        // what reported one conflict twice.
-        if self.has_run(target)
-            && !self.nodes[target].runned
-            && self.nodes[target].operation.is_some()
-        {
-            let block = self.nodes[target].block;
-            self.evaluate_node(Dyn(target), Some(block));
+    /// Join `reader` into `target`'s class when the target is a pure cell —
+    /// the evaluation-side counterpart of the read's own resolution.  A read of
+    /// an inference variable is a reference, so the reader unifies with the
+    /// cell through the *standard* unify: both unbound → the classes merge,
+    /// and a reader whose class already carries a value (an annotation over
+    /// the read) distributes it onto the cell — a later conflicting bind then
+    /// fails against it, exactly as if the read had been evaluated after the
+    /// bind.  The guard is the precondition for that: the target must be a
+    /// *cell* — nothing decided on its class, and no member whose own
+    /// computation has yet to produce an answer.  The reader keeps its
+    /// operation — the operand edge must stay live for the apply's clone
+    /// machinery, and for the unify pin path to find the read.
+    pub(crate) fn alias_read(&mut self, reader: NodeId, target: NodeId) -> bool {
+        let rep = disjoint::find(&mut self.nodes, target);
+        if self.class_has_pending_op(rep) || !is_unbound(self.nodes[rep].value) {
+            return false;
         }
+        self.unify(reader, target);
+        true
     }
 
     /// The class's value is named by the **representative**: a class has one
