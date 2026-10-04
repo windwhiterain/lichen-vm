@@ -42,6 +42,16 @@ use lichen_utils::extend::AsEnum;
 
 use crate::{AnyNodeId, FunctionId, LowOperator, LowValue, Module, NodeId, Program};
 
+/// What an `Index` node turned out to be. See [`Module::selection_of`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Selection {
+    /// A `[then, else]` pair indexed by an undecided value: the language's
+    /// conditional, and the one `Index` that computes.
+    Computed,
+    /// A view: the value the index actually names.
+    Views(NodeId),
+}
+
 /// A function's control-flow graph: **SSA over the values this module defines**.
 #[derive(Debug, Clone)]
 pub struct Body {
@@ -248,6 +258,16 @@ impl<P: Program> Module<P> {
     ///    it ([`Self::defining_member`]).
     /// 3. **opaque** — the value has no definition this graph can see.
     pub fn define_in(&self, function: FunctionId, node: NodeId) -> Define {
+        // An `Index` is **usually a view of something already computed** — a
+        // parameter read at a path, a `value_of` peel, an element of an array the
+        // graph materialised. Only a *selection* computes anything, so resolving
+        // the views here is what keeps them out of a block's `instrs`.
+        if let Some(selection) = self.selection_of(node) {
+            return match selection {
+                Selection::Computed => Define::Computed(node),
+                Selection::Views(view) => self.define_in(function, view),
+            };
+        }
         for (slot, leaf) in self
             .parameter_leaves(function)
             .unwrap_or_default()
@@ -264,6 +284,93 @@ impl<P: Program> Module<P> {
         match self.defining_member(node) {
             Some(computation) => Define::Computed(computation),
             None => Define::Opaque,
+        }
+    }
+
+    /// What an `Index` node is: a **selection** (it computes a value) or a
+    /// **view** of something else (it names one).
+    ///
+    /// Three views, in the order they are tried, and one selection:
+    ///
+    /// - **a `value_of` peel** — `Index(pair, 0)` where `pair` is a
+    ///   `[value, type]` pair. The extraction is a view of the pair's *value*.
+    /// - **an element of a materialised array** — the destructuring a slot read
+    ///   leaves behind (`read [a, b]` becomes `x(0)`, `x(1)`).
+    /// - **a parameter read at a constant path** — `x(0)` on a tuple domain,
+    ///   which resolves through the same peel.
+    ///
+    /// And the one that computes: **a `[then, else]` pair indexed by a value the
+    /// graph cannot decide** — the language's conditional, which `LowOperator::
+    /// Index` is because a branch is an ordinary lazy index. Its arms are separate
+    /// values, so a consumer reads them by name and emits one select.
+    ///
+    /// **Nothing here decides which arm runs.** Both arms are values in the body,
+    /// which is what lets a backend build a real branch rather than a select, and
+    /// what the loop conversion finally takes.
+    pub fn selection_of(&self, node: NodeId) -> Option<Selection> {
+        let operation = self.node_operation(node)?;
+        if !matches!(
+            AsEnum::<LowOperator>::as_enum(&operation.operator),
+            Some(LowOperator::Index)
+        ) {
+            return None;
+        }
+        let operands = self.operand_pair(operation.operand?, "Index").ok()?;
+        let (target, index) = (operands[0], operands[1]);
+        let constant = self.usize_value(index);
+        let array = self.value_half(target);
+        if let (Some(0), Some(array)) = (constant, array) {
+            // SAFETY: `array` is a live node of `self`.
+            if let Some(element) = unsafe { self.array_items(array) }
+                .and_then(|items| items.first())
+                .and_then(|item| match item.node {
+                    AnyNodeId::Dynamic(node) => Some(node),
+                    AnyNodeId::Static(_) => None,
+                })
+            {
+                return Some(Selection::Views(element));
+            }
+        }
+        if let (Some(k), Some(array)) = (constant, array) {
+            // SAFETY: `array` is a live node of `self`.
+            if let Some(element) = unsafe { self.array_items(array) }
+                .and_then(|items| items.get(k))
+                .and_then(|item| match item.node {
+                    AnyNodeId::Dynamic(node) => Some(node),
+                    AnyNodeId::Static(_) => None,
+                })
+            {
+                return Some(Selection::Views(element));
+            }
+        }
+        if constant.is_some() {
+            return None;
+        }
+        // SAFETY: `array` is a live node of `self`.
+        match array {
+            Some(array) => {
+                // SAFETY: `array` is a live node of `self`.
+                let arms = unsafe { self.array_items(array) }.map_or(0, |items| items.len());
+                (arms == 2).then_some(Selection::Computed)
+            }
+            None => None,
+        }
+    }
+
+    /// The **value** half of a `[value, type]` pair node, or `None` when it is
+    /// not a pair.
+    fn value_half(&self, node: NodeId) -> Option<NodeId> {
+        self.array_element(node, 1)
+            .is_ok()
+            .then(|| self.array_element(node, 0).ok())
+            .flatten()
+    }
+
+    /// The `n` a node holds, when it holds a plain integer literal.
+    fn usize_value(&self, node: NodeId) -> Option<usize> {
+        match self.structural_value(node) {
+            Some(LowValue::USize(n)) => Some(n as usize),
+            _ => None,
         }
     }
 
