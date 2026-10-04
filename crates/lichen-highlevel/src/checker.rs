@@ -1399,7 +1399,7 @@ where
                 parameter_attribute,
                 r#return,
                 parent,
-                ..
+                looping,
             } => self.check_lam(
                 e,
                 parent,
@@ -1407,6 +1407,7 @@ where
                 parameter_attribute,
                 parameter,
                 r#return,
+                looping,
             ),
             ExprKind::Apply { function, argument } => self.check_app(e, function, argument),
             ExprKind::BinOp {

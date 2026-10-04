@@ -181,18 +181,27 @@ inline: a cycle cannot be recognised from a stack-machine walk of a finished
 body, because that walk sees one call at a time and has already lost the caller.
 The evaluator is what *is* the recursion.
 
-> **Corrected: the description, not the loop, is what evaluation produces.** This
-> section originally said the evaluator produces "a loop already recorded in the
-> graph". It cannot — the graph has no control-flow representation to record one
-> in ([§8.6](#86-nothing-produces-a-loop)) — and the decision recorded there moves
-> the construction to the JIT's walk. **The argument above is unchanged and still
-> carries**, because it is about *what information is available where* and the
-> caller is still known where the decision is made: evaluation is what hands the
-> description over. What is given up is the location, not the fact. Evaluation
-> decides *which* cycle converts and *from which call*; the JIT's walk turns that
-> description into `Flow::While`.
+> **Corrected: the conversion is lowlevel's, not evaluation's.** This section
+> originally said the conversion runs in lichen evaluation and produces "a loop
+> already recorded in the graph". **Both halves are wrong**, and the reason is one
+> sentence of its own argument read properly: the conversion cannot happen in a walk
+> of a finished body because *the deep pass has already expanded it* — by then the
+> graph holds N copies, not a cycle. So it runs where the cycle still exists, which
+> is `lichen_lowlevel`'s own graph, in the window between the bodies being compiled
+> and the deep pass expanding them, and it produces a **control-flow skeleton** that
+> the JIT walks ([§8.6](#86-where-the-conversion-lives-lowlevel-and-the-jit-reads-it)).
+>
+> **The argument above still carries, and it is worth being exact about why**: it is
+> about *what information is available where*, not about which crate. The caller is
+> preserved — lowlevel holds the same templates the caller is an apply node in. What
+> is given up is the location.
+>
+> **The first two steps below are therefore lowlevel's**, not the evaluator's —
+> "find the cycle" and "defunctionalise" are both over `Module`'s functions and
+> `NodeId`s. `evaluation.rs` may still decide *whether* a mark becomes a loop, but
+> it does not build one.
 
-Three steps, and the first two are the evaluator's:
+Three steps, and the first two are **lowlevel's**:
 
 1. **Find the cycle.** Over the functions a `loop`-marked binding can reach, build
    the call graph and take its strongly connected components. Only a component of
@@ -547,14 +556,14 @@ list now turns on:**
 known to be wrong is how the `br_if` bug above came about, and it is the one
 mistake this section exists to prevent.
 
-### 8.6 Nothing produces a loop
+### 8.6 Where the conversion lives: lowlevel, and the JIT reads it
 
 **Step 4's "the recorded structure itself" is not a piece of evaluator work, and
 §8.5 has been under-stating it.** Reading the tree rather than the plan: the chain
-this feature is a chain of — *the evaluator records a loop → the JIT reads one → a
-backend emits one* — has **no first link**, and the gap is not in
-`feature/eval-loop-recording`. Four facts, each one a read of the code rather than
-an inference:
+this feature is a chain of — *something turns a marked recursion into a control-flow
+graph → the JIT reads it → a backend emits it* — has **no first link**, and the gap
+is not in `feature/eval-loop-recording`. Four facts, each one a read of the code
+rather than an inference:
 
 1. **Nothing in production builds a non-straight-line `KernelBody`.**
    `KernelFragment::body` is reached through `From<Vec<KernelInstr>>`, which is
@@ -562,46 +571,78 @@ an inference:
    `Return`. The only `Flow::While` / `Terminator::While` constructions anywhere in
    the tree are in `lichen-compute`'s `kernel_intern_tests`: hand-built bodies
    that prove the IR can *express* a loop, not that anything **produces** one.
-2. **The lowlevel graph cannot express control flow at all.** `LowOperator` is
-   exactly `Index | Apply | TableGet`; a `Node`'s `operation` is **one** operator
-   and **one** operand array, defined once by `add_node` or
-   `close_operation_cycle` and never replaced. There is no branch, no label, no
-   merge, and no phi.
-3. **`Block` in lowlevel is a garbage-collection unit** — an arena, with a
-   `Bump` and a parent/child chain for collection. It is not a basic block, and
+   `emit_node` refuses the recursion before it gets that far: its `Apply` arm's
+   "Style 1 — a full lichen-function call (inline its body)" is *deferred*.
+2. **The graph cannot express control flow.** `LowOperator` is exactly
+   `Index | Apply | TableGet`; a `Node`'s `operation` is **one** operator and **one**
+   operand array, defined once by `add_node` or `close_operation_cycle` and never
+   replaced. There is no branch, no label, no merge, and no phi.
+3. **`Block` in lowlevel is a garbage-collection unit** — an arena, with a `Bump`
+   and a parent/child chain for collection. It is not a basic block, and
    `TraceContext::node_block` reads as though it were. The name collision is
    between `lichen_lowlevel::BlockId` (an arena) and `KernelBody`'s `BlockId` (a
    control-flow label), and the two are in the same feature.
 4. `close_operation_cycle` is the nearest existing thing and it is **not** a
    control-flow cycle: it closes a *value* cycle, where a node's operand is only
-   nameable after the node exists. It is the right shape for "the back edge" at
-   the value level and says nothing about where control goes.
+   nameable after the node exists.
 
-**So producing a `Flow::While` needs the graph to be able to say two things it
-cannot say** — "this call does not return here" and "this value crosses that
-edge" — and that is a decision about the graph, not a matter of finishing the
-evaluator's half. §8.2's "the wasm backend walks the structure and emits `If` and
-`While`" is therefore true only of the reader: **the document exists and nobody
-writes one.**
+§8.2's "the wasm backend walks the structure and emits `If` and `While`" is
+therefore true only of the reader: **the document exists and nobody writes one.**
 
-#### The fork, and what each answer costs
+#### Decided: the conversion is `lichen-lowlevel`'s, and the JIT reads it
 
-Not decided here → **decided, B.** Three shapes were read, and the costs below are
-structural reads — none of them measured.
+**Lowlevel turns the marked recursion into a control-flow graph; `lichen-compute`
+walks that graph instead of the nodes.** §3 is corrected above and stays corrected:
+the conversion does **not** run in evaluation.
 
-| | the shape | what it costs, and what it buys |
+The argument that decides it is the one §3 already makes, read for what it is
+rather than where it lives. *"A cycle cannot be recognised from a stack-machine
+walk of a finished body, because that walk sees one call at a time and has already
+lost the caller."* The load-bearing half is **the deep pass has already expanded
+it**: by the time any consumer walks, the graph holds N copies, not a cycle. So the
+conversion has to run where the cycle still exists — which is **lowlevel's own
+graph, between the bodies being compiled and the deep pass expanding them** — and
+its output has to be something a consumer can walk.
+
+That gives three things, and they are the whole design:
+
+| | what | where |
 |---|---|---|
-| **A** | a loop node **in the graph** — a new non-value node kind, with operands for header/body/exit and the carried value | **Buys** §3's "runs in evaluation" literally. **Costs** every node in `Module` is currently a value, and the contracts that assume it: the GC roots, `TraceContext`, and the deep pass's verdicts (`evaluated_deep`, `assumed_concrete`) are all about values that get computed once. A node that is *not computed* in the ordinary way is a second kind under all of them. |
-| **B** | the evaluator hands the JIT **a description of the cycle**, and the JIT's walk builds `Flow::While` from the graph it already walks | **Buys** the graph stays a value graph and `KernelBody` stays where the CFG-consuming code already is; `loops.rs` is nearly the whole of the analysis half already. **Costs** it is a **correction to §3**: "runs in evaluation, at the point where the recursion is walked" becomes "runs in the JIT's walk, from a description evaluation hands it" — which keeps §3's real argument (a cycle cannot be recognised from a stack-machine walk of a *finished* body, because that walk has already lost the caller) and loses its location. |
-| **C** | the loop is a **value** — a recursor or closure the graph already has | **Costs** it cannot work without becoming A. Every node in the graph is *evaluated*, and a node whose only exits are backedges has no value the evaluator can produce; the evaluator would have to leave it undelayed, which is the new node kind again, with a worse name. Recorded so the option is visibly closed rather than silently untried. |
+| the **mark** | [`Function::looping`](../../crates/lichen-lowlevel/src/lib.rs) | rides on the template, because the templates are the only place the recursion is still a cycle — every apply clones them away |
+| the **analysis** | the strongly connected components of the marked call graph | same window, over the same templates the deep pass is about to walk |
+| the **output** | a **control-flow skeleton** over `NodeId`s — blocks, terminators, and which nodes each block evaluates | read by the JIT |
 
-**Decided: B — the JIT's walk builds the CFG.** Evaluation hands it a description
-of the cycle; the construction into `Flow::While` happens where `KernelBody`
-already lives. §3 is amended above, which is the cost and it is paid honestly.
-**A** is the answer if the graph is ever going to carry control flow for anything
-else, and nothing in this feature says it is. **C** is closed: every node is
-evaluated, and a node whose only exits are backedges has no value the evaluator
-can produce.
+**The skeleton says *what runs when*; the JIT keeps saying *how to emit it*.** That
+split is what makes this cheap: class tracking, `Positions`, the depth budget and
+every refusal the emitter has stay in `lichen-compute`, and lowlevel grows no
+knowledge of kernels.
+
+**And it costs nothing I was wrong about in the A/B fork this section used to
+carry.** A loop never has to be a *node*. Nodes stay values — so the GC roots,
+`TraceContext`, and the deep pass's verdicts (`evaluated_deep`, `assumed_concrete`)
+are untouched, which was the whole of the objection to a loop node — and the graph
+gains one flag plus one derived structure. The fork I wrote framed the choice as
+"the graph carries control flow" against "control flow is nowhere"; there was a
+third answer and it is the right one.
+
+#### The order the work goes in
+
+Each step is landable and each is *used* by the one before it lands:
+
+1. **The mark moves down.** `Function::looping`, stamped by the checker where the
+   function's shell exists. **Done.**
+2. **The analysis moves down** with it: the components over `Module`'s function
+   graph, in the window between the statement pass and the deep pass. The checker
+   keeps only stamping and recording sites.
+3. **The skeleton**, straight-line first, and the JIT reads it for ordering. A body
+   with no marked cycle is one block, which is exactly what the JIT emits today, so
+   nothing else has to move.
+4. **The deep pass stops expanding a marked cycle** it cannot decide. Until this
+   lands there is no graph with a live cycle in it for step 5 to read — and this is
+   the step most likely to be underestimated: `function_apply` clones per
+   application, and the budget refusal is the symptom.
+5. **The nest**: defunctionalise, build the loops, and teach the JIT to emit
+   `Flow::While` from them.
 
 **Stage 0 — the `loop` keyword and the evaluator's choice.** The surface lands
 first, and it is the smallest thing that can be observed working: a `loop` keyword
