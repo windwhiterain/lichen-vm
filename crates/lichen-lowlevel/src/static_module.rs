@@ -182,7 +182,25 @@ impl<P: Program> Module<P> {
     /// slot holds a decided answer or nothing, and a pure cell holding the
     /// marker is correctly not "run" (nothing ran).
     pub fn has_no_result_yet(&self, node: NodeId) -> bool {
-        self.node_operation(node).is_some() && !self.has_run(node)
+        // PROBE: a value the unifier wrote on an operator that has not run is
+        // not a result yet.
+        self.nodes[node].operation.is_some() && (!self.has_run(node) || !self.nodes[node].runned)
+    }
+
+    /// PROBE: whether the node's operator has run.
+    pub fn node_runned(&self, node: NodeId) -> bool {
+        self.nodes[node].runned
+    }
+
+    /// PROBE: write a value a unification asserted, which the operator must
+    /// still verify — the value readers see, with the operator kept so it runs.
+    pub fn write_node_claim(&mut self, node: NodeId, value: P::Value) {
+        debug_assert!(
+            self.nodes[node].operation.is_some(),
+            "a claim needs an operation to settle it: {node:?}"
+        );
+        self.nodes[node].value = Some(value);
+        self.nodes[node].runned = false;
     }
 
     /// The optional [`LowShape`] a layer above the lowlevel computed for

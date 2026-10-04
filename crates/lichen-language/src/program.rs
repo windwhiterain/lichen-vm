@@ -269,20 +269,6 @@ macro_rules! lang_compose_vocabulary {
             type GlobalExt = ::lichen_highlevel::program::HighGlobalExt;
             type PackageMeta = ::lichen_highlevel::program::HighPackageMeta;
 
-            // The highlevel's unification deferral policy: a pending
-            // field/positional read may merge with a class holding a type,
-            // because "holds a type" is a fact about the pair encoding the
-            // highlevel owns.  Wiring it here is what makes every composed
-            // program — plugin-built ones included — inherit it; a program
-            // that never states a policy keeps the lowlevel's honest default
-            // (conflict).  See `lichen_highlevel::shape::defer_pending`.
-            fn defer_pending(
-                module: &mut ::lichen_lowlevel::Module<Self>,
-                sides: &::lichen_lowlevel::PendingSides,
-            ) -> Option<::lichen_lowlevel::Deferral> {
-                ::lichen_highlevel::shape::defer_pending(module, sides)
-            }
-
             // The highlevel's function-type unify policy: a function-type
             // node `[Function(fid), ↺]` (a function's own type, `f : f`) is
             // unified by cloning the function's signature, never binding the

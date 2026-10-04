@@ -654,7 +654,7 @@ k
 "#,
     );
     assert_eq!(
-        out, "(Kernel, parameterized): struct<.native raw[?a, ?b], .sig Int -> Int>",
+        out, "(Kernel, Int, Int): struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>",
         "kernel value/type: {out:?}"
     );
 }
@@ -796,7 +796,8 @@ k
 "#,
     );
     assert_eq!(
-        out, "(Kernel, parameterized): struct<.native raw[?a, ?b], .sig <Int, Int> -> Int>",
+        out,
+        "(Kernel, raw[Int, Int], Int): struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>",
         "tuple-domain kernel value/type: {out:?}"
     );
 }
@@ -815,7 +816,7 @@ fn wrapper_functions_render_with_named_type_variables() {
 compute.jit
 "#
         ),
-        "Function: ?a -> ?b -> struct<.native raw[?c, ?d], .sig ?a -> ?b>",
+        "Function: raw[?a, raw[?b, ?c]] -> raw[?d, raw[?e, ?f]] -> struct<.native raw[?g, ?h], .I raw[?b, ?c], .O raw[?e, ?f]>",
         "jit wrapper value/type"
     );
     // `launch` reads the kernel's `.sig` lazily and returns its codomain, so it

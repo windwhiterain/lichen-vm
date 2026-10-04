@@ -54,11 +54,10 @@ where
     ) -> NativeApply {
         let value = args[0].value;
         let ty = ctx.fresh();
-        let pair = ctx.pair(value, ty);
         NativeApply {
-            node: pair,
-            val: Some(value),
-            ty,
+            value: value,
+            ty: ty,
+            decided: true,
         }
     }
 }
@@ -77,9 +76,9 @@ where
         let node = ctx.value_node(P::Value::from(LowValue::USize(7)));
         let ty = ctx.fresh();
         NativeApply {
-            node,
-            val: Some(node),
-            ty,
+            value: node,
+            ty: ty,
+            decided: true,
         }
     }
 }
@@ -97,12 +96,11 @@ where
     ) -> NativeApply {
         let value = ctx.value_node(P::Value::from(LowValue::USize(7)));
         let pair_ty = ctx.fresh();
-        let pair = ctx.pair(value, pair_ty);
         let ty = ctx.fresh();
         NativeApply {
-            node: pair,
-            val: Some(value),
-            ty,
+            value: value,
+            ty: ty,
+            decided: true,
         }
     }
 }

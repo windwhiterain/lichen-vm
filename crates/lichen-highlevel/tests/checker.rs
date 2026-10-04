@@ -111,6 +111,10 @@ fn field(ir: &mut IR, c: ExprId, k: ExprId) -> ExprId {
         key: k,
     })
 }
+/// A **named** field read `c.name` — the form that accepts a struct container.
+fn named_field(ir: &mut IR, c: ExprId, name: &'static str) -> ExprId {
+    ir.alloc(ExprKind::NamedField { container: c, name })
+}
 fn ann(ir: &mut IR, e: ExprId, t: ExprId) -> ExprId {
     ir.alloc(ExprKind::Annotation {
         value: e,
@@ -785,6 +789,21 @@ fn inline_lambda_applies() {
     let five = int(&mut ir, 5);
     let call = app(&mut ir, l, five);
     let b = build(call, ir);
+    // PROBE: what the build reports when the unify no longer forces.
+    if !b.ok && std::env::var_os("LICHEN_BUILD_TRACE").is_some() {
+        for d in b.diagnostics() {
+            eprintln!(
+                "PROBE diag: kind={:?} a={:?} b={:?} loc={:?} va={:?} vb={:?}",
+                d.kind, d.a, d.b, d.loc, d.value_a, d.value_b
+            );
+        }
+        for e in &b.module.unify_errors {
+            eprintln!(
+                "PROBE unify_error: a={:?} b={:?} va={:?} vb={:?} steps={:?}",
+                e.a, e.b, e.value_a, e.value_b, e.steps
+            );
+        }
+    }
     assert!(b.ok);
     let mut module = b.module;
     let value = module.evaluate_node_deep(b.root_val, None);
@@ -2498,223 +2517,272 @@ fn a_body_index_fails_at_the_violating_argument() {
     );
 }
 
-// --- annotated parameters are checked in body scope -------------------------
+// --- a struct-domain function that reads a field ----------------------------
+//
+// The named field read (`a.name`) accepts a struct container and registers the
+// kind requirement as a re-checkable assert when the container is undecided
+// (`docs/notes/eval-before-unify.md` §5.2/§6.2), so a function whose parameter
+// is annotated with a struct type and whose body reads a named field checks:
 
 #[test]
-fn an_annotated_array_parameter_bounds_are_checked_in_body() {
-    // f = xs : array<Int, 3> => xs[5] — the annotation is compiled in body scope,
-    // so the generated `5 < 3` constraint is decided at normalize: the
-    // never-applied function already fails, with no unification involved.
+fn an_annotated_struct_parameter_function_reads_a_named_field() {
+    // `f = (p : struct<.x Int, .y Int> => p.x)`; `f (struct<.x 1, .y 2>)`.
     let mut ir = IR::new();
-    let xs = param(&mut ir);
-    let elem_t = int_t(&mut ir);
-    let length = int(&mut ir, 3);
-    let arr_ty = type_array(&mut ir, elem_t, length);
-    let five = int(&mut ir, 5);
-    let body = index(&mut ir, xs, five);
-    let f = lam_at_typed(&mut ir, xs, Some(arr_ty), body, None);
-    let b = build(f, ir);
-    assert!(!b.ok, "xs[5] against array<Int, 3> must fail");
-    assert!(b.module.unify_errors.is_empty(), "no unification failed");
-    assert_eq!(b.module.assert_errors.len(), 1);
-    assert_eq!(
-        b.module.assert_errors[0].value,
-        HighProgramValue::LowValue(LowValue::USize(0))
-    );
-    assert!(
-        b.module.asserts.is_empty(),
-        "a decided constraint leaves the worklist"
-    );
-}
-
-#[test]
-fn an_annotated_array_parameter_in_bounds_body_index_checks_and_drains() {
-    // f = xs : array<Int, 3> => xs[1]; f [7, 8, 9] — with a literal index the
-    // body's `1 < 3` is fully concrete, so the template's own constraint is
-    // decided at normalize and consumed along with the apply's clone.
-    let mut ir = IR::new();
-    let xs = param(&mut ir);
-    let elem_t = int_t(&mut ir);
-    let length = int(&mut ir, 3);
-    let arr_ty = type_array(&mut ir, elem_t, length);
+    let p = param(&mut ir);
+    let int_x = int_t(&mut ir);
+    let int_y = int_t(&mut ir);
+    let struct_ty = named_type_struct(&mut ir, &[(int_x, "x"), (int_y, "y")]);
+    let read = named_field(&mut ir, p, "x");
+    let f = lam_at_typed(&mut ir, p, Some(struct_ty), read, None);
     let one = int(&mut ir, 1);
-    let body = index(&mut ir, xs, one);
-    let f = lam_at_typed(&mut ir, xs, Some(arr_ty), body, None);
-    let a = int(&mut ir, 7);
-    let b2 = int(&mut ir, 8);
-    let c = int(&mut ir, 9);
-    let arg = array(&mut ir, &[a, b2, c]);
+    let two = int(&mut ir, 2);
+    let fields = tuple(&mut ir, &[one, two]);
+    let arg = instantiate(&mut ir, struct_ty, fields);
     let call = app(&mut ir, f, arg);
     let b = build(call, ir);
-    assert!(b.ok, "f [7, 8, 9] should check");
-    assert!(b.module.assert_errors.is_empty());
-    assert!(
-        b.module.asserts.is_empty(),
-        "the all-concrete constraint was decided and consumed"
-    );
+    assert!(b.ok, "f (struct<.x 1, .y 2>) must check");
 }
 
-// --- the compile work budget ---------------------------------------------
-
-/// `count n = [count (n - 1), 0][n == 0]` — the lazy-branch spelling of
-/// `if n == 0 then 0 else count (n - 1)`: a recursion that terminates after
-/// `argument + 1` applications, so how much work it asks of the definition
-/// pass is known exactly.
-fn countdown(argument: u64) -> (ExprId, IR) {
-    let mut ir = IR::new();
-    // A block-wide binding reserves its own id before its value compiles, so
-    // the recursive call in the body resolves to it (the frontend's
-    // block-root discipline).
-    let count = ir.alloc(ExprKind::Placeholder);
-    ir.block_roots.insert(count);
-    let n = param(&mut ir);
-    let zero = int(&mut ir, 0);
-    let condition = eq_binop(&mut ir, n, zero);
-    let one = int(&mut ir, 1);
-    let decrement = ir.alloc(ExprKind::BinOp {
-        operator: lichen_highlevel::ir::BinOp::Sub,
-        left: n,
-        right: one,
-    });
-    let recursive = app(&mut ir, count, decrement);
-    let base = int(&mut ir, 0);
-    let branches = tuple(&mut ir, &[recursive, base]);
-    let body = field(&mut ir, branches, condition);
-    ir.set_kind(
-        count,
-        ExprKind::Function {
-            parameter: n,
-            parameter_type: None,
-            parameter_attribute: None,
-            r#return: body,
-            parent: None,
-            looping: false,
-        },
+/// Print a node's value/operation, recursing into array elements to `depth`.
+fn dump(b: &lichen_highlevel::checker::Build<ProgramImpl>, node: NodeId, depth: usize) {
+    use lichen_utils::extend::AsEnum;
+    let any = AnyNodeId::Dynamic(node);
+    let value = b.module.node_value(any);
+    let length = value
+        .as_ref()
+        .and_then(|v| AsEnum::<LowValue>::as_enum(v))
+        .and_then(|v| match v {
+            LowValue::Array(array) => {
+                // SAFETY: just read from a live node of the module.
+                Some(unsafe { array.items() }.len())
+            }
+            _ => None,
+        });
+    eprintln!(
+        "PROBE {:indent$}{node:?} op={:?} len={length:?} value={:?}",
+        "",
+        b.module
+            .node_operation(node)
+            .map(|o| format!("{:?}", o.operator)),
+        value.as_ref().and_then(|v| AsEnum::<LowValue>::as_enum(v)),
+        indent = depth * 2,
     );
-    let argument = int(&mut ir, argument);
-    let root = app(&mut ir, count, argument);
-    (root, ir)
-}
-
-#[test]
-fn a_caller_supplied_budget_bounds_the_definition_pass() {
-    // `count 3` applies four times.  A caller-supplied total of two refuses
-    // the definition pass, and the refusal is reported as the same
-    // non-termination diagnostic an unbounded recursion gets — so the limit
-    // in force is the caller's, not the tuned default.
-    let (root, mut ir) = countdown(3);
-    ir.set_root(root);
-    let b = Checker::<ProgramImpl>::build_with_budget(
-        ir,
-        lichen_highlevel::checker::WorkBudget {
-            apply_total_limit: 2,
-            ..Default::default()
-        },
-    );
-    assert!(!b.ok, "the caller's budget must refuse the walk");
-    assert_eq!(
-        b.module.budget_exhausted,
-        Some(lichen_lowlevel::BudgetExhausted::ApplyTotal { limit: 2 }),
-        "the caller's limit is the one the guard refused on"
-    );
-    assert_eq!(b.nonterminating.len(), 1, "the refusal is a diagnostic");
-    assert!(
-        b.diagnostics()
+    if depth >= 3 {
+        return;
+    }
+    if let Some(LowValue::Array(array)) = value.and_then(|v| AsEnum::<LowValue>::as_enum(&v)) {
+        // SAFETY: the payload was just read from a live node of the module.
+        let items: Vec<AnyNodeId> = unsafe { array.items() }
             .iter()
-            .any(|d| d.kind == DiagKind::NonTerminating)
+            .map(|item| item.node)
+            .collect();
+        for item in items {
+            match item {
+                AnyNodeId::Dynamic(child) => dump(b, child, depth + 1),
+                AnyNodeId::Static(_) => {
+                    eprintln!("PROBE {:indent$}static", "", indent = (depth + 1) * 2)
+                }
+            }
+        }
+    }
+}
+
+/// The annotation's struct type expression, built **alone** — nothing has been
+/// unified yet, so its term is the node the parameter gate compares.
+#[test]
+fn the_open_struct_type_term_before_any_unify() {
+    let mut ir = IR::new();
+    let open_i = hole(&mut ir);
+    let open_o = hole(&mut ir);
+    let open_struct = named_type_struct(&mut ir, &[(open_i, "I"), (open_o, "O")]);
+    let b = build(open_struct, ir);
+    eprintln!("PROBE === annotation term: struct<.I _, .O _> ===");
+    eprintln!("PROBE root_term:");
+    dump(&b, b.root_term, 0);
+    eprintln!("PROBE root_val:");
+    dump(&b, b.root_val, 0);
+}
+
+/// The argument's struct type expression, built **alone**.
+#[test]
+fn the_concrete_struct_type_term_before_any_unify() {
+    let mut ir = IR::new();
+    let int_i = int_t(&mut ir);
+    let int_o = int_t(&mut ir);
+    let concrete = named_type_struct(&mut ir, &[(int_i, "I"), (int_o, "O")]);
+    let b = build(concrete, ir);
+    eprintln!("PROBE === argument term: struct<.I Int, .O Int> ===");
+    eprintln!("PROBE root_term:");
+    dump(&b, b.root_term, 0);
+    eprintln!("PROBE root_val:");
+    dump(&b, b.root_val, 0);
+}
+
+/// Two **separately written** occurrences of `struct<.x Int>` are two distinct
+/// nominal types — a struct type expression mints a fresh nominal id per source
+/// occurrence (`check_type_struct`), and unification compares that id.  Sharing
+/// one *named* type expression is what makes an annotation and an instance
+/// agree; writing the type twice does not.
+#[test]
+fn two_written_struct_types_are_distinct_nominal_types() {
+    let mut ir = IR::new();
+    let p = param(&mut ir);
+    let int_a = int_t(&mut ir);
+    let written_in_annotation = named_type_struct(&mut ir, &[(int_a, "x")]);
+    let read = named_field(&mut ir, p, "x");
+    let f = lam_at_typed(&mut ir, p, Some(written_in_annotation), read, None);
+    let int_b = int_t(&mut ir);
+    let written_in_argument = named_type_struct(&mut ir, &[(int_b, "x")]);
+    let one = int(&mut ir, 1);
+    let fields = tuple(&mut ir, &[one]);
+    let arg = instantiate(&mut ir, written_in_argument, fields);
+    let call = app(&mut ir, f, arg);
+    let b = build(call, ir);
+    for d in b.diagnostics() {
+        eprintln!("PROBE two occurrences diag: {d:?}");
+    }
+    assert!(
+        !b.ok,
+        "two written occurrences of the same struct text are distinct nominal types"
     );
 }
 
 #[test]
-fn the_default_entry_point_still_uses_the_tuned_budget() {
-    // The same program through the default entry point: `count 3` applies
-    // four times, far below the tuned total, so it checks and runs.
-    let (root, ir) = countdown(3);
-    let b = build(root, ir);
-    assert!(b.ok, "count 3 must check under the default budget");
-    assert!(b.module.budget_exhausted.is_none());
-}
-
-#[test]
-fn a_raised_budget_lets_a_terminating_program_check() {
-    // The same program as above, under bounds the caller raised.  **Both** have
-    // to move, and that is the point of the pair: a trip count costs one
-    // application *and* one apply level (the expansion deepens once per count —
-    // the level is read off the node being applied, so it does not depend on
-    // which pass forces the values), and the two bounds measure those two
-    // things. `count 2500` terminates after 2_501 applications at 2_500 levels,
-    // so a raised total alone would still meet the nesting guard.
-    let (root, mut ir) = countdown(2_500);
-    ir.set_root(root);
-    let b = Checker::<ProgramImpl>::build_with_budget(
-        ir,
-        lichen_highlevel::checker::WorkBudget {
-            apply_depth_limit: 5_000,
-            apply_total_limit: 10_000,
-        },
-    );
+fn an_open_struct_annotation_lets_its_field_be_read() {
+    // `F = T: KT T => T.I` with `KT = _x => struct<.I _, .O _>` — the
+    // annotation names the two fields but leaves their *types* open.
+    //
+    // The contract (`checker/lambda.rs`) is that the annotated parameter's type
+    // is compiled and unified into the parameter's type slot **before** the
+    // body compiles, so the body's reader sees the annotated kind statically.
+    // The body's `T.I` is therefore reading a field of a struct the annotation
+    // already named, and applying `F` to a concrete struct type closes that
+    // field — the read must resolve.
+    let mut ir = IR::new();
+    let t = param(&mut ir);
+    let open_i = hole(&mut ir);
+    let open_o = hole(&mut ir);
+    // **One** named struct type, reused for the annotation and for the argument's
+    // instantiation: two written `struct<…>` are distinct nominal types.
+    let open_struct = named_type_struct(&mut ir, &[(open_i, "I"), (open_o, "O")]);
+    let read = named_field(&mut ir, t, "I");
+    let f = lam_at_typed(&mut ir, t, Some(open_struct), read, None);
+    // The argument is an **instance** of that struct whose field values are the
+    // *types* `Int` — the struct contains a type.
+    let int_i = int_t(&mut ir);
+    let int_o = int_t(&mut ir);
+    let fields = tuple(&mut ir, &[int_i, int_o]);
+    let arg = instantiate(&mut ir, open_struct, fields);
+    let call = app(&mut ir, f, arg);
+    let b = build(call, ir);
+    // The checker's own per-expression view — set while checking, not mutated
+    // by the unify, so this is the pre-unify encoding of each expression.
+    for (at, st) in b.state.iter().enumerate() {
+        let e = ExprId(at as u32);
+        eprintln!(
+            "PROBE expr[{at}] kind={:?}\n    term={:?}\n    val ={:?}\n    ty  ={:?}",
+            b.ir[e].kind, st.term, st.val, st.ty,
+        );
+    }
+    for d in b.diagnostics() {
+        eprintln!("PROBE open struct diag: {d:?}");
+        for node in [d.a, d.b] {
+            dump(&b, node, 0);
+        }
+    }
+    // What each function's parameter type slot actually holds after the build:
+    // if the annotation ran before the body, this is the annotated struct type.
+    for (fid, function) in b.module.functions.iter() {
+        let cell = array_ids(&b, function.parameter)[1];
+        eprintln!(
+            "PROBE function {fid:?} param_type_cell={cell:?} value={:?} low={:?}",
+            b.module.node_value(AnyNodeId::Dynamic(cell)),
+            b.module.low_type_of_node(cell),
+        );
+    }
     assert!(
         b.ok,
-        "a terminating recursion below both raised bounds must check"
-    );
-    assert!(b.module.budget_exhausted.is_none());
-}
-
-#[test]
-fn the_tuned_bounds_still_refuse_a_long_but_terminating_recursion() {
-    // The default numbers are unchanged, and which of them refuses says what
-    // each one is for: a *deep* expansion meets the nesting guard at its trip
-    // count (`count 2_500` under a bound of 500), and the work bound is there
-    // for the recursion this one cannot catch — a wide one, or an infinite one
-    // behind a lazy branch, where nesting stays low and only the count grows.
-    // Both are the caller's to raise, which is why a large trip count is a
-    // decision the host states rather than something the evaluator guesses.
-    let (root, ir) = countdown(2_500);
-    let b = build(root, ir);
-    assert!(!b.ok, "the tuned bounds must still refuse this walk");
-    assert_eq!(
-        b.module.budget_exhausted,
-        Some(lichen_lowlevel::BudgetExhausted::ApplyDepth { limit: 500 })
-    );
-    assert_eq!(b.nonterminating.len(), 1);
-    // A count inside the nesting bound still shows the work bound at work: the
-    // same program under a caller's total of 100 refuses that way instead.
-    let (root, mut ir) = countdown(400);
-    ir.set_root(root);
-    let b = Checker::<ProgramImpl>::build_with_budget(
-        ir,
-        lichen_highlevel::checker::WorkBudget {
-            apply_total_limit: 100,
-            ..Default::default()
-        },
-    );
-    assert_eq!(
-        b.module.budget_exhausted,
-        Some(lichen_lowlevel::BudgetExhausted::ApplyTotal { limit: 100 })
+        "an open struct annotation must still let the body read its field"
     );
 }
 
-// --- the checker's own recursion -----------------------------------------
-
-/// Nesting levels of [`a_deeply_nested_program_is_checked_without_an_overflow`],
-/// chosen past what the test thread's native stack holds: the checker's
-/// `check_term` recurses about twice per level (through `check_expr` and the
-/// `check_ann` rule), so this is millions of frames.
-const DEEP_NESTING: usize = 200_000;
+// --- a tuple-domain function that reads an element --------------------------
 
 #[test]
-fn a_deeply_nested_program_is_checked_without_an_overflow() {
-    // A generated program may nest far deeper than the native stack: the
-    // checker's `check_term` recurses once per nesting level, so without a
-    // stack guard this build overflows and aborts the process instead of
-    // reporting anything.  The deep pass that follows is already
-    // `#[stacksafe]`; this pins the same property for the checker.
+fn an_annotated_tuple_parameter_function_reads_an_element() {
+    // The three-line regression, measured through the compiler:
+    //   `f = p : <Int, Int> => p(0)`; `f (1, 2)`
+    // resolves on the baseline and fails here with
+    //   `expected raw[?a, Int], found raw[?a, Int]`.
     let mut ir = IR::new();
-    let int_ty = int_t(&mut ir);
-    let mut nested = int(&mut ir, 5);
-    for _ in 0..DEEP_NESTING {
-        nested = ann(&mut ir, nested, int_ty);
+    let p = param(&mut ir);
+    let int1 = int_t(&mut ir);
+    let int2 = int_t(&mut ir);
+    let tuple_ty = type_tuple(&mut ir, &[int1, int2]);
+    let zero = int(&mut ir, 0);
+    let read = field(&mut ir, p, zero);
+    let f = lam_at_typed(&mut ir, p, Some(tuple_ty), read, None);
+    let one = int(&mut ir, 1);
+    let two = int(&mut ir, 2);
+    let fields = tuple(&mut ir, &[one, two]);
+    let call = app(&mut ir, f, fields);
+    let b = build(call, ir);
+    for d in b.diagnostics() {
+        eprintln!(
+            "PROBE tuple read diag: kind={:?} loc={:?} a={:?} b={:?}",
+            d.kind, d.loc, d.a, d.b
+        );
     }
-    let b = build(nested, ir);
-    assert!(b.ok, "the nested annotations must check");
+    assert!(b.ok, "f (1, 2) against the tuple domain must check");
+    // And actually evaluate it: the apply's parameter check runs there.
+    let mut module = b.module;
+    let value = module.evaluate_node_deep(b.root_val, None);
+    for e in &module.unify_errors {
+        eprintln!(
+            "PROBE tuple read eval error: a={:?} b={:?} va={:?} vb={:?} steps={:?}",
+            e.a, e.b, e.value_a, e.value_b, e.steps
+        );
+    }
+    assert_eq!(common_value(&value), 1, "f (1, 2) yields 1");
+}
+
+/// The integer a value carries, for the assertions above.
+fn common_value(value: &HighProgramValue) -> u64 {
+    match value {
+        HighProgramValue::LowValue(LowValue::USize(n)) => *n as u64,
+        other => panic!("expected a usize value, got {other:?}"),
+    }
+}
+
+// --- a wrapper's parameter type comes from the body call --------------------
+//
+// The regression target: `f`'s parameter type states the argument's type, so a
+// wrapper `g = (a => f a)` must have its parameter type cell filled by
+// normalizing `g` — no apply, no inference at run time.  This is the
+// language-level shape of the compute wrapper (`k1 = jit (x => launch k0 (x,1))`
+// fails with "the kernel parameter's class is not decided": the same cell).
+
+#[test]
+fn a_wrappers_parameter_type_is_inferred_from_a_body_call() {
+    // `f = (p : struct<.x Int, .y Int> => p)`; `g = (a => f a)`.
+    let mut ir = IR::new();
+    let p = param(&mut ir);
+    let int_x = int_t(&mut ir);
+    let int_y = int_t(&mut ir);
+    let struct_ty = named_type_struct(&mut ir, &[(int_x, "x"), (int_y, "y")]);
+    let f = lam_at_typed(&mut ir, p, Some(struct_ty), p, None);
+
+    let a = param(&mut ir);
+    let call = app(&mut ir, f, a);
+    let g = lam(&mut ir, a, call);
+
+    let b = build(g, ir);
+    assert!(b.ok, "the wrapper must check");
+    let gtype = b.state[g].ty.expect("a lambda has a type");
+    let gid = function_type_id(&b, gtype);
+    let cell = param_type_cell(&b, gid);
+    assert!(
+        !lichen_lowlevel::is_unbound(b.module.node_value(AnyNodeId::Dynamic(cell))),
+        "the wrapper's parameter type must be inferred from the body call"
+    );
 }

@@ -140,6 +140,16 @@ impl<P: Program> Module<P> {
             return self.evaluate_block(node);
         }
         if let Some(value) = self.nodes[node].value {
+            // PROBE: an operator that has not run must run — the value in the
+            // slot was written by a unification and is unverified.
+            if self.nodes[node].operation.is_some()
+                && !self.nodes[node].runned
+                && !self.nodes[node].visiting
+            {
+                let guard = self.retain_node(node);
+                guard.run(|module, node| module.evaluate_node_operation(node));
+                return self.nodes[node].value.unwrap_or(value);
+            }
             return value;
         }
         // A node flagged visiting with no cached value is being computed by an
@@ -476,16 +486,21 @@ impl<P: Program> Module<P> {
         // node's slot holds a *decided* answer or nothing, which is what makes
         // `Module::has_no_result_yet`'s "has an operation and no cached value"
         // the same question as "has not produced an answer yet".
-        if !matches!(value.as_enum(), Some(LowValue::Parameterized)) {
-            // The single write API caches the result and, if the node is a
-            // member of a unified class, replicates a concrete value to the
-            // class's unbound pure-cell members — so a late-arriving value
-            // (e.g. a lazy host-operator result) reaches the cells and the
-            // representative bound before it was concrete.  Without this,
-            // `bind` (which reads only the representative's value) could not
-            // see the member's concrete value when the class later merges.
-            self.write_node_value(node, Some(value));
+        if matches!(value.as_enum(), Some(LowValue::Parameterized)) {
+            self.nodes[node].runned = true;
+            return value;
         }
+        // The computation produced an answer: it must agree with what its class
+        // already holds.  A class may hold a value a unification put there while
+        // this node was undecided (the unifier writes, it does not compute), and
+        // a disagreement is exactly the conflict the unify deferred to here.
+        let prior = self.nodes[node].value.or_else(|| {
+            let rep = self.equality_representative(node);
+            self.class_committed_value(rep)
+        });
+        self.reconcile_computed(node, prior, value);
+        self.nodes[node].runned = true;
+        self.nodes[node].value = Some(value);
         value
     }
 

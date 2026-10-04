@@ -142,11 +142,10 @@ where
         // The bare sort operator over the array value; its result is the
         // constrained array type.
         let op = ctx.op_node(P::Operator::from(SortOp::Sort), Some(a.value));
-        let pair = ctx.array_node(&[op, array_ty]);
         NativeApply {
-            node: pair,
-            val: Some(op),
+            value: op,
             ty: array_ty,
+            decided: true,
         }
     }
 }

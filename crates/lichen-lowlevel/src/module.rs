@@ -118,6 +118,7 @@ impl<P: Program> Module<P> {
     ) -> NodeId {
         let node = self.nodes.insert(Node {
             value,
+            runned: false,
             operation,
             low_shape: None,
             function: None,

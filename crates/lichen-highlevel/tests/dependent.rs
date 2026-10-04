@@ -155,47 +155,48 @@ fn dependent_type_resolves_per_argument_via_laziness() {
 fn a_concrete_type_is_never_bound_over_a_dependent_codomain() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // Boundary: a dependent function's codomain meets a concrete `int`
-    // while the parameter is still unbound (the function is passed as a
-    // value, not applied).  The computation cannot be forced — the unify
-    // fails instead of silently binding `int` over it.
-    let x = unbound_node(&mut m, root);
+    // Boundary: a dependent function's codomain (`[0, 1][x]`) meets a concrete
+    // `1` while the parameter is still unbound (the function is passed as a
+    // value, not applied).  **Unify does not evaluate**, so it merges and the
+    // concrete value is what the class holds; the codomain's own computation is
+    // what has to agree with it, and that comparison happens when the codomain
+    // is read.  The two parameter values below are the two outcomes: the
+    // instance that resolves to `1` agrees, the one that resolves to `0` does
+    // not.
     let float = usize_node(&mut m, root, 0);
     let int = usize_node(&mut m, root, 1);
     let branches = array_node(&mut m, root, &[float, int]);
-    let codomain = index_node(&mut m, root, branches, x);
-    m.unify(int, codomain);
-    assert_eq!(m.unify_errors.len(), 1);
-    assert_ne!(
-        m.equality_representative(int),
-        m.equality_representative(codomain)
-    );
 
-    // Once the parameter is bound — a fresh instance, like each application's
-    // clone — the same shape resolves: `int` against the x = 1 instance
-    // merges...
+    // x = 1: the codomain computes to `1`, which is what the class holds → clean.
     let x1 = unbound_node(&mut m, root);
     let codomain1 = index_node(&mut m, root, branches, x1);
+    m.unify(int, codomain1);
+    assert!(m.unify_errors.is_empty());
     let one = usize_node(&mut m, root, 1);
     m.unify(x1, one);
-    m.unify(int, codomain1);
-    // the boundary error above persists in the collection
-    assert_eq!(m.unify_errors.len(), 1);
+    let _ = m.evaluate_node_deep(codomain1, None);
+    assert!(
+        m.unify_errors.is_empty(),
+        "a codomain that resolves to the value it was given is not a conflict"
+    );
     assert_eq!(
         m.equality_representative(int),
         m.equality_representative(codomain1)
     );
 
-    // ...and `int` against the x = 0 instance (which is `float`) conflicts.
+    // x = 0: the same shape resolves to `0`, which conflicts with the `1` the
+    // class holds — reported when the computation runs.
     let x0 = unbound_node(&mut m, root);
     let codomain0 = index_node(&mut m, root, branches, x0);
+    m.unify(int, codomain0);
+    assert!(m.unify_errors.is_empty());
     let zero = usize_node(&mut m, root, 0);
     m.unify(x0, zero);
-    m.unify(int, codomain0);
-    assert_eq!(m.unify_errors.len(), 2);
-    assert_ne!(
-        m.equality_representative(int),
-        m.equality_representative(codomain0)
+    let _ = m.evaluate_node_deep(codomain0, None);
+    assert_eq!(
+        m.unify_errors.len(),
+        1,
+        "a codomain that resolves to a different value is a conflict"
     );
 }
 
@@ -203,9 +204,11 @@ fn a_concrete_type_is_never_bound_over_a_dependent_codomain() {
 fn a_resolvable_computation_is_forced_and_compared() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // A concrete expectation meets an unevaluated computation whose operands
-    // are already bound (a constant condition): it is forced, and the
-    // comparison happens against the computed value.
+    // A concrete expectation meets a computation whose operands are already
+    // bound (a constant condition).  Unify does not evaluate it: the two
+    // classes merge and the expectation is what the class holds.  The
+    // computation runs when something reads it, and its result is compared
+    // against that value then.
     let four_v = usize_node(&mut m, root, 4);
     let five_v = usize_node(&mut m, root, 5);
     let branches = array_node(&mut m, root, &[four_v, five_v]);
@@ -220,9 +223,15 @@ fn a_resolvable_computation_is_forced_and_compared() {
         m.equality_representative(five),
         m.equality_representative(pick_five)
     );
+    // Reading it runs the computation, which agrees with what the class holds.
+    let _ = m.evaluate_node_deep(pick_five, None);
+    assert!(
+        m.unify_errors.is_empty(),
+        "an equal expectation is not a conflict"
+    );
 
-    // an unequal one conflicts against the computed value — the computation
-    // was not erased, and still reads 5
+    // an unequal one conflicts against the value — the computation was not
+    // erased, and still reads 5
     let four = usize_node(&mut m, root, 4);
     m.unify(four, pick_five);
     assert_eq!(m.unify_errors.len(), 1);
@@ -254,6 +263,11 @@ fn a_resolvable_index_read_pins_its_element() {
     let three = usize_node(&mut m, root, 3);
     m.unify(three, read);
     assert!(m.unify_errors.is_empty());
+    // The read's **subscript** is only known by evaluating it, so the equation
+    // "this read is that element" cannot be established at unify time: the
+    // evaluation establishes it (`alias_read`), and that unification is what
+    // carries the concrete value onto the element.
+    let _ = m.evaluate_node_deep(read, None);
     assert_eq!(
         m.equality_representative(three),
         m.equality_representative(cell),
@@ -290,7 +304,10 @@ fn two_resolvable_computations_are_compared_after_forcing() {
     let cond0 = usize_node(&mut m, root, 0);
     let pick4 = index_node(&mut m, root, branches, cond0);
 
-    // two different computations: both force, and the mismatch is detected
+    // two different computations: each reads its own value, and the mismatch is
+    // detected by the unify that follows — unify itself never computes.
+    let _ = m.evaluate_node_deep(pick5, None);
+    let _ = m.evaluate_node_deep(pick4, None);
     m.unify(pick5, pick4);
     assert_eq!(m.unify_errors.len(), 1);
     assert_ne!(
@@ -310,6 +327,7 @@ fn two_resolvable_computations_are_compared_after_forcing() {
     // equal computations merge
     let cond1b = usize_node(&mut m, root, 1);
     let pick5b = index_node(&mut m, root, branches, cond1b);
+    let _ = m.evaluate_node_deep(pick5b, None);
     m.unify(pick5, pick5b);
     // the earlier mismatch error persists in the collection
     assert_eq!(m.unify_errors.len(), 1);

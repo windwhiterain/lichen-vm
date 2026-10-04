@@ -33,8 +33,8 @@
 //!   unaffected.
 
 use lichen_lowlevel::{
-    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, Deferral, FunctionTypeUnify, LowShape,
-    LowValue, Module, NodeId, PendingSides, Program, StaticNodeId, TableItem, UnifyStep,
+    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, FunctionTypeUnify, LowShape, LowValue, Module,
+    NodeId, Program, StaticNodeId, TableItem, UnifyStep,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -484,34 +484,6 @@ where
     P::Value: ValueType,
 {
     module.node_value(node).is_none() || node_is_marker(module, node)
-}
-
-/// The highlevel's [`Program::defer_pending`] policy: merge a pending
-/// **type-level computation** — a field/positional **read** or a lazy
-/// **call** (a type function applied to an undecided argument) — with a
-/// class that **holds a type**, and nothing else.
-///
-/// The merge is sound because neither side can be compared yet: the
-/// computation resolves to its actual type once what it depends on binds,
-/// and a genuine mismatch then surfaces against the resolved value (the
-/// lowlevel commits the type value onto the class — `Module::unify`'s pin —
-/// and reconciles it with the computation's outcome when that runs).  The
-/// deferral stays deliberately narrow — only an unresolvable `Index` or a
-/// lazy `Apply` qualifies, never a resolved read nor arithmetic nor a
-/// dependent-type branch — so an unresolvable real computation still records
-/// an error.  Every other case returns `None` and falls through to the
-/// lowlevel's generic rules.
-pub fn defer_pending<P: Program>(module: &mut Module<P>, sides: &PendingSides) -> Option<Deferral>
-where
-    P::Value: ValueType,
-{
-    let read_against_type = (sides.a.pending
-        && (sides.a.pending_index_read || sides.a.pending_apply)
-        && class_holds_type(module, sides.b.representative))
-        || (sides.b.pending
-            && (sides.b.pending_index_read || sides.b.pending_apply)
-            && class_holds_type(module, sides.a.representative));
-    read_against_type.then_some(Deferral::Merge)
 }
 
 // --- shape predicates ---------------------------------------------------------

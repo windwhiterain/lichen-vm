@@ -7804,11 +7804,10 @@ where
         let kernel_ty = ctx.fresh();
         // The expression's `term` must evaluate to a `[value, type]` pair, so
         // `value_of` can `Index` it; the op's own result is the bare `Kernel`.
-        let pair = ctx.array_node(&[op, kernel_ty]);
         NativeApply {
-            node: pair,
-            val: None,
+            value: op,
             ty: kernel_ty,
+            decided: false,
         }
     }
 }
@@ -7836,9 +7835,9 @@ where
         // which the wrapper hands to `$jit` so the lowering can state the class
         // it chose on it.
         NativeApply {
-            node: fn_ty,
-            val: Some(shape),
+            value: shape,
             ty: kind,
+            decided: true,
         }
     }
 }
@@ -7886,11 +7885,10 @@ where
         // elements 0 and 1.
         let operands = ctx.array_node(&[native.value, a.value, d]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Launch), Some(operands));
-        let pair = ctx.array_node(&[op, c]);
         NativeApply {
-            node: pair,
-            val: None,
+            value: op,
             ty: c,
+            decided: false,
         }
     }
 }
@@ -7916,11 +7914,10 @@ where
         ctx.check_unify(a.ty, d, loc.clone(), DiagKind::Guard);
         let operands = ctx.array_node(&[k.value, a.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Call), Some(operands));
-        let pair = ctx.array_node(&[op, c]);
         NativeApply {
-            node: pair,
-            val: None,
+            value: op,
             ty: c,
+            decided: false,
         }
     }
 }
@@ -8002,11 +7999,10 @@ where
         let operands = ctx.array_node(&[f.value, backend.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Parallel), Some(operands));
         let par_ty = ctx.fresh();
-        let pair = ctx.array_node(&[op, par_ty]);
         NativeApply {
-            node: pair,
-            val: None,
+            value: op,
             ty: par_ty,
+            decided: false,
         }
     }
 }
@@ -8070,11 +8066,10 @@ where
             P::Operator::from(ComputeOperator::ParLaunch),
             Some(operands),
         );
-        let pair = ctx.array_node(&[op, out_ty]);
         NativeApply {
-            node: pair,
-            val: None,
+            value: op,
             ty: out_ty,
+            decided: false,
         }
     }
 }
@@ -8102,11 +8097,10 @@ where
         ctx.check_unify(n.ty, class, loc.clone(), DiagKind::Guard);
         let operands = ctx.array_node(&[n.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Range), Some(operands));
-        let pair = ctx.array_node(&[op, class]);
         NativeApply {
-            node: pair,
-            val: None,
+            value: op,
             ty: class,
+            decided: false,
         }
     }
 }
@@ -8154,11 +8148,10 @@ where
         ctx.check_unify(i.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
         let operands = ctx.array_node(&[b.value, i.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Read), Some(operands));
-        let pair = ctx.array_node(&[op, elem]);
         NativeApply {
-            node: pair,
-            val: None,
+            value: op,
             ty: elem,
+            decided: false,
         }
     }
 }
@@ -8211,11 +8204,10 @@ where
         let write_ty = ctx.array_node(&[elem, write_kind]);
         let operands = ctx.array_node(&[n.value, i.value, val.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Write), Some(operands));
-        let pair = ctx.array_node(&[op, write_ty]);
         NativeApply {
-            node: pair,
-            val: None,
+            value: op,
             ty: write_ty,
+            decided: false,
         }
     }
 }
@@ -8248,11 +8240,10 @@ where
             P::Operator::from(ComputeOperator::BufferCollect),
             Some(operands),
         );
-        let pair = ctx.array_node(&[op, arr_ty]);
         NativeApply {
-            node: pair,
-            val: None,
+            value: op,
             ty: arr_ty,
+            decided: false,
         }
     }
 }
@@ -8281,11 +8272,10 @@ where
         let graph_ty = ctx.fresh();
         let operands = ctx.array_node(&[f.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Graph), Some(operands));
-        let pair = ctx.array_node(&[op, graph_ty]);
         NativeApply {
-            node: pair,
-            val: None,
+            value: op,
             ty: graph_ty,
+            decided: false,
         }
     }
 }
@@ -8314,11 +8304,10 @@ where
         let out_ty = ctx.fresh();
         let operands = ctx.array_node(&[g.value, a.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::GraphRun), Some(operands));
-        let pair = ctx.array_node(&[op, out_ty]);
         NativeApply {
-            node: pair,
-            val: None,
+            value: op,
             ty: out_ty,
+            decided: false,
         }
     }
 }

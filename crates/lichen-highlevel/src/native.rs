@@ -22,15 +22,26 @@ use lichen_lowlevel::NodeId;
 use crate::ir::{ExprId, Loc};
 use crate::program::{Ctx, HighProgram, ValueType};
 
-/// The result of a native operator's [`NativeOp::build`]: the compiled pair
-/// node, the value node (or `None` when only known at runtime, like a call
-/// result), and the type node — the same three records the ordinary apply
-/// wiring sets on an expression.
+/// The result of a native operator's [`NativeOp::build`]: the expression's
+/// **value** node and **type** node, plus whether the value is already decided.
+///
+/// A builder states the two slots of the expression's term, never the term
+/// itself: the `[value, type]` pair is this crate's encoding, so the checker
+/// builds it (through the same site every other expression goes through).  A
+/// builder that assembled the pair by hand would be a second source of truth
+/// for the encoding — which the boundary used to require, and which is exactly
+/// the mistake that put a value in a type slot.
 #[derive(Debug, Clone, Copy)]
 pub struct NativeApply {
-    pub node: NodeId,
-    pub val: Option<NodeId>,
+    /// The term pair's **value** slot (element 0) — the expression's value node.
+    pub value: NodeId,
+    /// The term pair's **type** slot (element 1) — the expression's type node.
     pub ty: NodeId,
+    /// Whether `value` is a decided value the checker may cache in
+    /// [`ExprState::val`](crate::checker::ExprState), or a computation whose
+    /// value the runtime reads — the latter being what the old `val: None`
+    /// meant, where `value_of` builds the lazy `Index(pair, 0)` instead.
+    pub decided: bool,
 }
 
 /// A native operator's compiled argument: the expression id plus its value and

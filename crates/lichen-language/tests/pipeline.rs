@@ -83,6 +83,23 @@ fn applying_a_lambda_checks_and_evaluates() {
 }
 
 #[test]
+fn a_tuple_domain_parameter_read_checks_and_evaluates() {
+    // The three-line regression of the unify/evaluate rework:
+    // `f = p : <Int, Int> => p(0)`; `f (1, 2)` — resolves on the baseline,
+    // fails here with `expected raw[?a, Int], found raw[?a, Int]`.
+    assert_eq!(
+        usize_of(&evaluate("(p : <Int, Int> => p(0)) (1, 2) : Int")),
+        1
+    );
+    // The same program written as a top-level binding + a final line — the form
+    // that failed through the compiler.
+    assert_eq!(
+        usize_of(&evaluate("f = p : <Int, Int> => p(0)\nf (1, 2)")),
+        1
+    );
+}
+
+#[test]
 fn a_binder_used_once_checks() {
     // The root apply's result cell is lazy, so the whole program is annotated
     // to anchor its type.

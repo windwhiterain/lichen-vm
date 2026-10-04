@@ -66,30 +66,6 @@ pub trait Program: Sized + Copy + Debug + PartialEq {
     /// putting that concept into the lowlevel.
     type PackageMeta: Default;
 
-    /// The unification policy hook: what to do when a unification stalls
-    /// because one or both classes hold a **pending computation** — a class
-    /// with no decided value that carries an unevaluated operation, so
-    /// neither side can be compared yet.
-    ///
-    /// The lowlevel itself stays untyped, so it only merges what is a
-    /// *generic graph fact*: a pending computation against an all-unbound
-    /// skeleton (it holds nothing to erase), and two pending `Index` reads
-    /// (neither has a value to compare).  Every other deferral depends on
-    /// what the values **mean** — a read whose type is being unified against
-    /// a type value, for instance — and that is the program's decision, made
-    /// here.  The default refuses, which is the honest answer for a VM that
-    /// does not know what its values stand for.
-    ///
-    /// The policy is given the module to read (that is how it recognises its
-    /// own encodings) and must not retain the borrow, merge classes, or
-    /// write values.  `None` defers to the lowlevel's generic rules; the
-    /// verdict is only consulted where those rules would otherwise record a
-    /// conflict.
-    fn defer_pending(module: &mut Module<Self>, sides: &PendingSides) -> Option<Deferral> {
-        let _ = (module, sides);
-        None
-    }
-
     /// The function-type unification policy: what to do when a unification
     /// reaches a **function-type node** — a self-referential
     /// `[Function(fid), ↺]` that *is* a function's own type (`f : f`, the
@@ -139,50 +115,6 @@ pub enum FunctionTypeUnify {
     /// Neither side is a function-type node; the lowlevel's generic positional
     /// rules apply.
     NotFunctionType,
-}
-
-/// What a [`Program::defer_pending`] policy decided about a stalled
-/// unification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Deferral {
-    /// Merge the classes after all: the pending computation resolves later
-    /// and the merge erases nothing.  The lowlevel commits the other side's
-    /// decided value onto the merged class (its pending operations keep
-    /// their operand edge, so the apply's clone machinery still recomputes
-    /// against the real argument — the deferred check surfacing there).
-    Merge,
-    /// Record the conflict now.
-    Conflict,
-}
-
-/// One side of a stalled unification, as the lowlevel sees it: the class
-/// identity plus the graph facts that need no knowledge of the program's
-/// values.  A policy reads the module for anything beyond these.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PendingSide {
-    /// The class's equality-class representative.
-    pub representative: NodeId,
-    /// The class holds an unevaluated operation — a pending computation.
-    pub pending: bool,
-    /// That operation is an `Index` that cannot be resolved yet (its target
-    /// is not a concrete array).
-    pub pending_index_read: bool,
-    /// That operation is an `Apply` — a call that stays lazy because its
-    /// argument is not decided yet (a type-level computation spelled as a
-    /// type-function call rather than a read).
-    pub pending_apply: bool,
-    /// The class is an all-unbound structure: no value, no operation.
-    pub skeleton: bool,
-    /// The class is a single unbound cell.
-    pub pure_cell: bool,
-}
-
-/// Both sides of a stalled unification — the whole view a policy gets
-/// besides the module.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PendingSides {
-    pub a: PendingSide,
-    pub b: PendingSide,
 }
 
 /// Program-global extension state — the marker trait that stances the
@@ -1268,6 +1200,10 @@ pub struct Node<P: Program> {
     /// a reader that asks a run question through `is_unbound` is conflating
     /// the two.
     value: Option<P::Value>,
+    /// PROBE: whether this node's operator has **run**.  `false` with a value
+    /// present means the value slot holds a value a unification wrote and no
+    /// operator has verified yet.
+    runned: bool,
     /// The node's optional [`LowShape`] — stored *with* the value, behind the
     /// same private gate.  A layer above the lowlevel (which *has* the type)
     /// sets it via [`Module::set_node_shape`], and a backend reads it via

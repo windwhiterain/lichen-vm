@@ -17,9 +17,8 @@ use std::sync::Arc;
 
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    AnyNodeId, BlockId, Deferral, FunctionTypeUnify, GlobalExt, LowOperator, LowShape, LowValue,
-    Module, ModuleKey, NodeId, OperatorExt, PendingSides, Program, StaticModule, ValueExt,
-    is_unbound,
+    AnyNodeId, BlockId, FunctionTypeUnify, GlobalExt, LowOperator, LowShape, LowValue, Module,
+    ModuleKey, NodeId, OperatorExt, Program, StaticModule, ValueExt, is_unbound,
 };
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
@@ -181,6 +180,18 @@ pub trait Ctx<P: Program> {
     fn op_node(&mut self, op: P::Operator, operand: Option<NodeId>) -> NodeId;
     /// A `[value, type]` pair node — the encoding of an expression's term.
     fn pair(&mut self, value: NodeId, ty: NodeId) -> NodeId;
+    /// The **value** slot of a term — element
+    /// [`PAIR_VALUE_SLOT`](crate::shape::PAIR_VALUE_SLOT) of the `[value, type]`
+    /// pair, as the lazy `Index` read the checker's own `value_of` builds.
+    ///
+    /// This is the decode half of the boundary: a [`NativeArg`] hands a plugin
+    /// the argument's value and type nodes, and an expression's *term* is the
+    /// pair those slots came from — so a plugin that needs the value behind a
+    /// term asks here rather than writing the slot number itself.  The encoding
+    /// (its slot order, its pairing) therefore lives in this crate alone.
+    ///
+    /// [`NativeArg`]: crate::native::NativeArg
+    fn value_slot(&mut self, term: NodeId) -> NodeId;
     /// A kind expression `[marker, Type]`.
     fn kind_expr(&mut self, marker: NodeId) -> NodeId;
     /// A function type expression `[[domain, codomain], [FunctionType,
@@ -1380,15 +1391,6 @@ where
     type Operator = O;
     type GlobalExt = G;
     type PackageMeta = HighPackageMeta;
-
-    /// The highlevel's unification deferral policy — see
-    /// [`crate::shape::defer_pending`]: a pending field/positional read may
-    /// merge with a class that holds a type, because "holds a type" is a fact
-    /// about the pair encoding this crate owns.  Everything else falls
-    /// through to the lowlevel's generic (untyped) rules.
-    fn defer_pending(module: &mut Module<Self>, sides: &PendingSides) -> Option<Deferral> {
-        crate::shape::defer_pending(module, sides)
-    }
 
     /// The highlevel's function-type unify policy — see
     /// [`crate::shape::unify_function_type`]: a function-type node
