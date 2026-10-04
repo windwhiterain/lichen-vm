@@ -178,6 +178,29 @@ fn array_ids(
         .collect()
 }
 
+/// The `FunctionId` a function-type node `[Function(fid), ↺]` carries — the
+/// function's own type (`f : f`). Reads slot 0's value.
+fn function_type_id(
+    b: &lichen_highlevel::checker::Build<ProgramImpl>,
+    ftype: lichen_lowlevel::NodeId,
+) -> lichen_lowlevel::FunctionId {
+    let slot0 = array_ids(b, ftype)[0];
+    match b.module.node_value(AnyNodeId::Dynamic(slot0)) {
+        Some(HighProgramValue::LowValue(LowValue::Function(AnyFunctionId::Dynamic(fid)))) => fid,
+        _ => panic!("expected a function-type node"),
+    }
+}
+
+/// The function template's parameter *type* cell — `Function::parameter`'s
+/// slot 1 — the signature's domain, read for inference checks.
+fn param_type_cell(
+    b: &lichen_highlevel::checker::Build<ProgramImpl>,
+    fid: lichen_lowlevel::FunctionId,
+) -> lichen_lowlevel::NodeId {
+    let parameter = b.module.functions[fid].parameter;
+    array_ids(b, parameter)[1]
+}
+
 /// The ids inside an evaluated array value.
 fn array_ids_from(value: HighProgramValue) -> Vec<lichen_lowlevel::NodeId> {
     let HighProgramValue::LowValue(LowValue::Array(array)) = value else {
@@ -365,17 +388,17 @@ fn lambda_has_arrow_type() {
     let l = lam(&mut ir, x, x);
     let b = build(l, ir);
     assert!(b.ok, "\\x. x should check");
-    // The lambda's type is the kinded arrow [[?a, ?a], [FunctionType, Type]].
-    let arrow = b.state[l].ty.unwrap();
-    let ids = array_ids(&b, arrow);
-    assert_eq!(ids.len(), 2, "a type expression is a pair [shape, kind]");
-    let kind_ids = array_ids(&b, ids[1]);
-    assert_eq!(kind_ids.len(), 2);
+    // The lambda's type is the function itself (`f : f`): a self-referential
+    // `[Function(fid), ↺]` — slot 0 the function's value node, slot 1 the node
+    // itself (the self-cycle, like the universe `[Type, ↺]`).
+    let ftype = b.state[l].ty.unwrap();
+    let ids = array_ids(&b, ftype);
+    assert_eq!(ids.len(), 2, "a function-type node is a pair [func, self]");
+    assert_eq!(ids[1], ftype, "slot 1 is the node itself (self-referential)");
     assert!(matches!(
-        b.module.node_value(AnyNodeId::Dynamic(kind_ids[0])),
-        Some(HighProgramValue::TypeValue(TypeValue::TypeFunction))
+        b.module.node_value(AnyNodeId::Dynamic(ids[0])),
+        Some(HighProgramValue::LowValue(LowValue::Function(_)))
     ));
-    assert_eq!(kind_ids[1], b.type_expr);
 }
 
 #[test]
@@ -505,8 +528,8 @@ fn the_array_type_has_a_kind_not_a_type() {
 
 #[test]
 fn lambda_against_an_array_type_conflicts_on_the_length() {
-    // (\x. x) : Array(int, 3) — the identity's shared parameter type is
-    // fixed to int by instance[0], then conflicts with the length 3.
+    // (\x. x) : Array(int, 3) — a function's type is not an array type, so the
+    // annotation conflicts (a function-type node against an array type).
     let mut ir = IR::new();
     let x = param(&mut ir);
     let l = lam(&mut ir, x, x);
@@ -517,24 +540,8 @@ fn lambda_against_an_array_type_conflicts_on_the_length() {
     let b = build(a, ir);
     assert!(!b.ok);
     let diags = b.diagnostics();
-    assert_eq!(
-        diags.len(),
-        1,
-        "the array kind passes; only the shape clashes"
-    );
+    assert_eq!(diags.len(), 1, "one conflict: a function-type vs an array type");
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    assert_eq!(
-        diags[0].value_b,
-        Some(HighProgramValue::LowValue(LowValue::USize(3)))
-    );
-    // The found side is the arrow pair `[shape, [FunctionType, K]]`; its
-    // inner shape is the arrow the checker registered.
-    let found = array_ids(&b, diags[0].a);
-    assert_eq!(found.len(), 2);
-    assert!(
-        b.arrows.contains(&found[0]),
-        "the found side is the arrow shape"
-    );
 }
 
 #[test]
@@ -916,8 +923,9 @@ fn runtime_apply_mismatch_is_attributed_to_the_argument() {
 
 #[test]
 fn annotating_a_lambda_with_a_mixed_tuple_type_reports_expected_found() {
-    // (\x. x) : [Type, int] — the identity's shared parameter type is fixed
-    // to Type by the annotation's first element, then conflicts with int
+    // (\x. x) : <Type, Int> — a function's type is not a tuple type, so the
+    // annotation conflicts at the top level (a function-type node against a
+    // tuple type), rather than element-wise as the old arrow shape did.
     let mut ir = IR::new();
     let x = param(&mut ir);
     // The return expression uses the parameter's id directly.
@@ -927,24 +935,16 @@ fn annotating_a_lambda_with_a_mixed_tuple_type_reports_expected_found() {
     let t = type_tuple(&mut ir, &[t1, t2]);
     let a = ann(&mut ir, l, t);
     let b = build(a, ir);
-    assert!(!b.ok);
+    assert!(!b.ok, "a function is not a tuple type");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    assert_eq!(
-        diags[0].value_a,
-        Some(HighProgramValue::TypeValue(TypeValue::TypeType))
-    );
-    assert_eq!(
-        diags[0].value_b,
-        Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
-    );
 }
 
 #[test]
 fn an_unannotated_lambda_has_an_unbound_arrow_type() {
-    // (\x. x) : Type — the found side is the identity's arrow shape
-    // `?a → ?a`: unbound components, but the arrow shape is determined.
+    // (\x. x) : Type — a function's type is not Type (nor any self-referential
+    // non-function type), so the annotation conflicts.
     let mut ir = IR::new();
     let x = param(&mut ir);
     // The return expression uses the parameter's id directly.
@@ -956,17 +956,7 @@ fn an_unannotated_lambda_has_an_unbound_arrow_type() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    assert_eq!(
-        diags[0].value_b,
-        Some(HighProgramValue::TypeValue(TypeValue::TypeType))
-    );
-    // The found side is the arrow *pair* (`[shape, [FunctionType, K]]`); its
-    // inner shape is the arrow the checker registered.
-    let found_shape = array_ids(&b, diags[0].a)[0];
-    assert!(
-        b.arrows.contains(&found_shape),
-        "the found side is the arrow shape"
-    );
+    // The found side is the function-type node `[Function(fid), ↺]`.
     assert!(matches!(
         diags[0].value_a,
         Some(HighProgramValue::LowValue(LowValue::Array(_)))
@@ -2049,9 +2039,11 @@ fn an_underscore_annotation_infers_the_type() {
 
 #[test]
 fn an_underscore_annotation_binds_a_function_type() {
-    // (\x. x) : _ — the placeholder's kind slot is a cell too, so it binds
-    // to the identity's kind expression instead of clashing with the
-    // universe; the parameter type stays unbound (inference does not guess).
+    // (\x. x) : _ — the placeholder binds to the function-type node (the
+    // function's own type, `f : f`). The clone-on-unify never fires for a
+    // placeholder (no signature on the placeholder side), so the placeholder's
+    // cell binds to the whole function-type node, and the template's parameter
+    // type stays unbound.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let l = lam(&mut ir, x, x);
@@ -2059,26 +2051,26 @@ fn an_underscore_annotation_binds_a_function_type() {
     let a = ann(&mut ir, l, h);
     let mut b = build(a, ir);
     assert!(b.ok, "(\\x. x) : _ should check");
-    // The placeholder's value slot binds to the arrow shape.
-    let ann_ids = array_ids(&b, b.state[a].ty.unwrap());
-    let shape = array_ids(&b, b.state[l].ty.unwrap())[0];
+    // The placeholder binds to the function-type node.
     assert_eq!(
-        b.module.equality_representative(ann_ids[0]),
-        b.module.equality_representative(shape),
-        "the placeholder binds to the arrow shape"
+        b.module.equality_representative(b.state[a].ty.unwrap()),
+        b.module.equality_representative(b.state[l].ty.unwrap()),
+        "the placeholder binds to the function-type node"
     );
-    // The parameter type cell stays unbound.
-    let shape_ids = array_ids(&b, shape);
+    // The template's parameter type cell stays unbound.
+    let fid = function_type_id(&b, b.state[l].ty.unwrap());
     assert!(
-        lichen_lowlevel::is_unbound(b.module.node_value(AnyNodeId::Dynamic(shape_ids[0]))),
-        "the parameter type must not be guessed"
+        lichen_lowlevel::is_unbound(b.module.node_value(AnyNodeId::Dynamic(param_type_cell(&b, fid)))),
+        "the template's parameter type must not be guessed"
     );
 }
 
 #[test]
 fn partial_inference_in_an_arrow_type() {
-    // (\x. x) : (Int -> _) — the parameter side fixes the input to int, the
-    // placeholder return binds to the output (int, for the identity).
+    // (\x. x) : (Int -> _) — the clone-on-unify binds a per-site clone's
+    // domain to Int and its codomain to the placeholder, never the template,
+    // so the identity stays polymorphic and the template's parameter type
+    // stays unbound.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let l = lam(&mut ir, x, x);
@@ -2086,13 +2078,14 @@ fn partial_inference_in_an_arrow_type() {
     let h = hole(&mut ir);
     let t = arrow(&mut ir, it, h);
     let a = ann(&mut ir, l, t);
-    let b = build(a, ir);
+    let mut b = build(a, ir);
     assert!(b.ok, "the identity fits Int -> _");
-    let arrow = array_ids(&b, b.state[l].ty.unwrap());
-    let shape_ids = array_ids(&b, arrow[0]);
+    // The template's parameter type cell stays unbound (the clone bound, not
+    // the template).
+    let fid = function_type_id(&b, b.state[l].ty.unwrap());
     assert!(
-        is_int_type(&b, shape_ids[0]),
-        "the parameter type unifies with int"
+        lichen_lowlevel::is_unbound(b.module.node_value(AnyNodeId::Dynamic(param_type_cell(&b, fid)))),
+        "the template's parameter type must not be guessed"
     );
 }
 

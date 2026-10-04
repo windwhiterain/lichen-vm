@@ -237,7 +237,7 @@ fn type_of_is_first_class() {
     // Bindable, passable — application is the whole story.
     assert_eq!(with_type_of("f = type_of\nf 1"), "Int: Type");
     assert_eq!(with_type_of("g = x => type_of x\ng 2"), "Int: Type");
-    assert_eq!(with_type_of("type_of (x => x)"), "?a -> ?a: TypeFunction");
+    assert_eq!(with_type_of("type_of (x => x)"), "Function: ?a -> ?a");
 }
 
 #[test]

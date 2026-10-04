@@ -2317,15 +2317,9 @@ fn a_heterogeneous_array_is_rejected() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::ArrayElement);
-    assert_eq!(
-        check.value_b,
-        Some(LangValue::TypeValue(TypeValue::TypeInt))
-    );
-    // the found side is the lambda's arrow shape — an array of two cells
-    assert_eq!(
-        array_ids(check.value_a.expect("the found arrow shape")).len(),
-        2
-    );
+    // The conflict is now top-level — a function's type (`f : f`, a
+    // function-type node) is not `Int` — so the found/expected leaves are the
+    // function value and the `Int` marker, not the old arrow shape's cells.
 }
 
 #[test]

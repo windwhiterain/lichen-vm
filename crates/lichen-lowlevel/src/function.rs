@@ -233,6 +233,11 @@ impl<P: Program> Module<P> {
             let function = &self.functions[function];
             (function.block, function.parameter, function.return_type)
         };
+        // A hand-built function (a lowlevel test) may leave `return_type`
+        // unset: its signature is not readable, so decline to clone.
+        if !self.nodes.contains_key(return_type) {
+            return None;
+        }
         // The parameter's type cell = the parameter pair's slot 1
         // (`[value, type, attrs…]`). The parameter is always a pair.
         // SAFETY: `parameter` is a live node of this module; nothing here
@@ -588,7 +593,13 @@ impl<P: Program> Module<P> {
                     .collect();
                 let r#return = self.node_apply(r#return, &mut inner);
                 let parameter = self.node_apply(parameter, &mut inner);
-                let return_type = self.node_apply(return_type, &mut inner);
+                // A hand-built function (a lowlevel test) may leave
+                // `return_type` unset — clone it only when it names a node.
+                let return_type = if self.nodes.contains_key(return_type) {
+                    self.node_apply(return_type, &mut inner)
+                } else {
+                    return_type
+                };
                 // The fresh closure's asserts instantiate with its scope: a
                 // condition reading the closure's captures rewrites to this
                 // call's clones and re-registers, while one proven concrete

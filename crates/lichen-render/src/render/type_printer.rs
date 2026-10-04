@@ -192,7 +192,11 @@ where
         // (a frozen module's) is left to the raw fallback — its signature
         // reads through the static module, not yet wired here.
         if elements.len() == 2
-            && elements[1].node == AnyNodeId::Dynamic(node)
+            && let AnyNodeId::Dynamic(slot1) = elements[1].node
+            // Self-referential by **class**, not node identity: a cell bound
+            // to the function-type carries the same value but is a class
+            // member, not the self-ref node itself.
+            && representative(self.module, slot1) == representative(self.module, node)
             && let Some(fv) = self.module.node_value(elements[0].node)
             && let Some(LowValue::Function(fid)) = fv.as_enum()
             && let Some((dom, cod)) = self.function_signature(fid)

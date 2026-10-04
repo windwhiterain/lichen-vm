@@ -180,7 +180,12 @@ impl<P: Program> StaticModule<P> {
             functions.push(StaticFunction {
                 parameter: node_map[&function.parameter],
                 r#return: node_map[&function.r#return],
-                return_type: node_map[&function.return_type],
+                // A hand-built function (a lowlevel test) may leave
+                // `return_type` unset: fall back to the return node, which is
+                // always mapped — its signature is unused.
+                return_type: *node_map
+                    .get(&function.return_type)
+                    .unwrap_or(&node_map[&function.r#return]),
                 asserts: function
                     .asserts
                     .iter()

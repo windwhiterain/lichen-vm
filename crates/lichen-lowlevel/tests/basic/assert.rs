@@ -369,6 +369,7 @@ fn gc_moves_an_assert_condition_with_its_function() {
         nodes: Vec::new(),
         r#return: ret,
         parameter: param,
+        return_type: NodeId::default(),
         asserts: vec![condition],
         parent: None,
         block: body,
