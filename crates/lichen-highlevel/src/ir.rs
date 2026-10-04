@@ -596,8 +596,8 @@ impl<L> ExprKind<L> {
                 push(*value);
             }
             ExprKind::Record { value, .. } => push(*value),
+            ExprKind::Convert { value, .. } => push(*value),
             ExprKind::Assert { condition } => push(*condition),
-            ExprKind::TypeOf { value } => push(*value),
             ExprKind::Index { array, index } => {
                 push(*array);
                 push(*index);
@@ -638,6 +638,7 @@ impl<L> ExprKind<L> {
             ExprKind::Tuple(range)
             | ExprKind::TypeTuple(range)
             | ExprKind::Array(range)
+            | ExprKind::Set(range)
             | ExprKind::Table(range)
             | ExprKind::ShallowArray { range, .. }
             | ExprKind::TypeStruct { fields: range, .. }
@@ -928,21 +929,31 @@ impl<A: AttrSpec, L> IR<A, L> {
     /// an `unreachable!`) so a caller that only ever passes a variadic kind
     /// needs no knowledge of which kinds exist; a non-variadic kind reaching
     /// here is a caller's mistake, and `debug_assert` says so.
+    ///
+    /// **The checker's own `range_children` is the authority, not this.** It
+    /// already spelled this list out — including `Set`, which the first draft
+    /// of this function left out, which is the drift a second list invites.
+    /// This is kept as the *closure* end: a caller's mistake reads as a
+    /// `debug_assert` naming itself rather than a wrong child list.
     pub fn range_children(&self, e: ExprId) -> Vec<ExprId> {
-        debug_assert!(
-            matches!(
-                self.expr[e.0 as usize].kind,
-                ExprKind::Tuple(_)
-                    | ExprKind::TypeTuple(_)
-                    | ExprKind::Array(_)
-                    | ExprKind::ShallowArray { .. }
-                    | ExprKind::Table(_)
-                    | ExprKind::TypeStruct { .. }
-                    | ExprKind::NativeCall { .. }
-            ),
-            "range_children on a kind whose children are named fields, not an arena range"
-        );
-        self.children(e)
+        let range = match self.expr[e.0 as usize].kind {
+            ExprKind::Tuple(range)
+            | ExprKind::TypeTuple(range)
+            | ExprKind::Array(range)
+            | ExprKind::Set(range)
+            | ExprKind::ShallowArray { range, .. }
+            | ExprKind::Table(range) => range,
+            ExprKind::TypeStruct { fields, .. } => fields,
+            ExprKind::NativeCall { args, .. } => args,
+            _ => {
+                debug_assert!(
+                    false,
+                    "range_children on a kind whose children are named fields, not an arena range"
+                );
+                return Vec::new();
+            }
+        };
+        self.children[range.start as usize..range.end as usize].to_vec()
     }
 
     /// The children of `e` — every kind, named fields and arena alike.  See
