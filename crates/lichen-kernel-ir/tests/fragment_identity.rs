@@ -35,7 +35,12 @@ fn body(first: i64, combine: bool) -> KernelBody {
     } else {
         literal
     };
-    body.set_terminator(entry, lichen_kernel_ir::Terminator::Return { values: vec![result] });
+    body.set_terminator(
+        entry,
+        lichen_kernel_ir::Terminator::Return {
+            values: vec![result],
+        },
+    );
     body
 }
 

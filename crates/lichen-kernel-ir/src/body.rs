@@ -155,17 +155,103 @@ impl KernelBody {
         classes: Vec<ScalarClass>,
     ) -> ValueId {
         let value = ValueId(self.values.len() as u32);
-        self.values.push(ValueDef::Instr {
-            op,
-            args,
-            classes,
-        });
+        self.values.push(ValueDef::Instr { op, args, classes });
         self.blocks[block].instrs.push(value);
         value
     }
 
+    /// Define a constant in `block`, of the class the opcode reads its bits in.
+    pub fn add_const(&mut self, block: usize, class: ScalarClass, bits: i64) -> ValueId {
+        self.add_op(
+            block,
+            KernelInstr::Const(class, bits),
+            Vec::new(),
+            vec![class],
+        )
+    }
+
     pub fn set_terminator(&mut self, block: usize, terminator: Terminator) {
         self.blocks[block].terminator = terminator;
+    }
+}
+
+/// One step of a **hand-written** body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlatOp {
+    /// An operation, reading the values above it — as many as its own
+    /// [`KernelInstr::arity`] says, most recent first.
+    Instr(KernelInstr),
+    /// Read the entry block's `index`-th parameter, and push it.
+    ///
+    /// **This is what `KernelInstr::LocalGet(k)` was** — a way to name a parameter
+    /// — and it is a step of *writing* a body rather than an instruction *in* one.
+    /// A body whose operands are named does not need an instruction to fetch one;
+    /// it needs the name, and here the name is the step.
+    Read(usize),
+}
+
+/// A one-block body written by hand, from a list of steps.
+///
+/// **The steps consume and produce a running list of values, which is a stack
+/// discipline, and that is deliberate and local.** This is a way of *writing* a
+/// body for something with no graph to walk — a fixture, an example, a probe.
+/// A lowering does not use it and cannot: it walks the graph, resolves what each
+/// node names through `lichen_lowlevel::resolve`, and names every operand, which
+/// is what makes a shared subexpression emit once instead of once per use.
+///
+/// `domain` is the number of parameter leaves the entry block receives. An
+/// operation's declared class comes from the instruction itself where it states one
+/// ([`KernelInstr::own_class`]) and is the ABI's integer default otherwise,
+/// because a hand-written body is saying what it computes rather than deriving it
+/// from a node.
+pub fn from_flat(domain: usize, ops: &[FlatOp]) -> KernelBody {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    for _ in 0..domain {
+        body.add_param(entry);
+    }
+    let parameters = body.blocks[entry].params.clone();
+    let mut values: Vec<ValueId> = parameters.clone();
+    for op in ops {
+        match *op {
+            FlatOp::Read(index) => {
+                let Some(value) = parameters.get(index).copied() else {
+                    continue;
+                };
+                values.push(value);
+            }
+            FlatOp::Instr(instr) => {
+                let take = instr.arity().min(values.len());
+                let args = values[values.len() - take..].to_vec();
+                values.truncate(values.len() - take);
+                let classes = if instr.produces() == 0 {
+                    Vec::new()
+                } else {
+                    vec![instr.own_class().unwrap_or(ScalarClass::Int)]
+                };
+                let value = body.add_op(entry, instr, args, classes);
+                if instr.produces() > 0 {
+                    values.push(value);
+                }
+            }
+        }
+    }
+    // **The return hands out what is left**, most recent first, which is what a
+    // hand-written body's final steps produced.
+    body.set_terminator(
+        entry,
+        Terminator::Return {
+            values: values.into_iter().rev().collect(),
+        },
+    );
+    body
+}
+
+impl KernelBody {
+    /// A one-block body written by hand — see [`from_flat`], which this only
+    /// forwards to.
+    pub fn from_flat(domain: usize, ops: &[FlatOp]) -> KernelBody {
+        from_flat(domain, ops)
     }
 
     /// Whether this body is one block that returns — the fast path a consumer
@@ -182,13 +268,17 @@ impl KernelBody {
         &self.blocks[self.entry].params
     }
 
-    /// Every value this body defines, in walk order.
-    pub fn instrs(&self) -> Vec<KernelInstr> {
+    /// Every instruction this body defines, in walk order.
+    ///
+    /// **A block parameter is not an instruction**, so a consumer that needs the
+    /// body's inputs reads [`Self::parameters`] — that is the whole difference between
+    /// a named value and a fetched one.
+    pub fn instrs(&self) -> Vec<&KernelInstr> {
         self.blocks
             .iter()
             .flat_map(|block| block.instrs.iter())
             .filter_map(|&value| match &self.values[value.0 as usize] {
-                ValueDef::Instr { op, .. } => Some(*op),
+                ValueDef::Instr { op, .. } => Some(op),
                 ValueDef::BlockParam { .. } => None,
             })
             .collect()
@@ -242,7 +332,9 @@ impl KernelBody {
                 }
                 for arg in &br.args {
                     if self.values.get(arg.0 as usize).is_none() {
-                        return Err(format!("block {index} hands over a value it does not define"));
+                        return Err(format!(
+                            "block {index} hands over a value it does not define"
+                        ));
                     }
                 }
             }
@@ -278,7 +370,9 @@ impl KernelBody {
             };
             for value in values {
                 if self.values.get(value.0 as usize).is_none() {
-                    return Err(format!("block {index} returns a value this body does not define"));
+                    return Err(format!(
+                        "block {index} returns a value this body does not define"
+                    ));
                 }
             }
         }

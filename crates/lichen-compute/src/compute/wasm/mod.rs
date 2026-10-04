@@ -26,7 +26,6 @@
 //! branch is a block of its own.
 
 mod assemble;
-mod flow;
 pub(crate) mod lower;
 pub(crate) mod mixed;
 

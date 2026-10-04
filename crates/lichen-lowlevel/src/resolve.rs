@@ -53,6 +53,7 @@
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
 
+use crate::ArrayItem;
 use crate::{AnyNodeId, FunctionId, LowOperator, LowValue, Module, NodeId, Program};
 
 /// What an `Index` node turned out to be. See [`Module::selection_of`].
@@ -114,8 +115,20 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// An operand array's elements, in order.
+    ///
+    /// **The whole array, not the first two** — [`Self::operand_pair`] is the
+    /// two-element reading, and a three-element `[function, argument,
+    /// result_cell]` has to be readable whole for a caller that wants its third.
+    /// A lowering that needs an operand's shape asks for the shape it needs; the
+    /// two readings cannot disagree about what the array holds.
+    pub fn operand_items(&self, operand: NodeId) -> Result<&'static [ArrayItem], String> {
+        // SAFETY: `operand` is a live node of `self`; nothing here releases it.
+        unsafe { self.array_items(operand) }.ok_or_else(|| "operand is not an array value".into())
+    }
+
     /// The `[left, right]` of a two-element operand array, all of this module's.
-    fn operand_pair(&self, operand: NodeId, what: &str) -> Result<Vec<NodeId>, String> {
+    pub fn operand_pair(&self, operand: NodeId, what: &str) -> Result<Vec<NodeId>, String> {
         // SAFETY: `operand` is a live node of `self`; nothing here releases it.
         let items = unsafe { self.array_items(operand) }
             .ok_or_else(|| format!("{what} operand is not an array value"))?;
@@ -239,11 +252,14 @@ impl<P: Program> Module<P> {
     /// What an `Index` node is: a **selection** (it computes a value) or a
     /// **view** of something else (it names one).
     ///
-    /// The views, in the order they are tried: a **`value_of` peel** —
-    /// `Index(pair, 0)` where `pair` is a `[value, type]` pair; an **element of a
-    /// materialised array**, which is the destructuring a slot read leaves behind
-    /// (`read [a, b]` becomes `x(0)`, `x(1)`); and a **parameter read at a
-    /// constant path**, which is the same peel one level down.
+    /// **One rule for every view, and no guess about encodings.** A *constant*
+    /// index names an element: `Index(x, k)` is `x`'s element `k`, whether `x` is a
+    /// `[value, type]` pair (a `value_of` peel, `x` a typed slot), a tuple
+    /// domain's leaves (`x(1)` on `<Int, Int, Int>`), or an array the graph
+    /// materialised (the destructuring a slot read leaves behind). An earlier
+    /// draft asked first whether `x` was a pair and inferred that from its
+    /// **width** — which a two-leaf domain also has, so it could name the wrong
+    /// array. Width is not the question; a constant index is the answer.
     ///
     /// And the one that computes: **a `[then, else]` pair indexed by a value the
     /// graph cannot decide** — the language's conditional, which `LowOperator::
@@ -260,37 +276,48 @@ impl<P: Program> Module<P> {
         ) {
             return None;
         }
-        let operands = self.operand_pair(operation.operand?, "Index").ok()?;
-        let (target, index) = (operands[0], operands[1]);
-        let constant = self.usize_value(index);
-        let array = self.pair_value_node(target);
-        if constant == Some(0)
-            && let Some(element) = array.and_then(|array| self.item_of(array, 0))
-        {
-            return Some(Selection::Views(element));
-        }
-        if let (Some(k), Some(array)) = (constant, array)
-            && let Some(element) = self.item_of(array, k)
-        {
-            return Some(Selection::Views(element));
-        }
-        if constant.is_some() {
+        let operands = self.operand_items(operation.operand?).ok()?;
+        let (Some(target), Some(index)) = (operands.first(), operands.get(1)) else {
             return None;
+        };
+        // **An operand may be frozen.** The apply clone copies a callee's unchanged
+        // subterms by reference, so an index inside a routed body can name a node
+        // of the frozen module — and a view is a view whether the node it reads
+        // lives here or in the module it came from, so the test reads whatever the
+        // operand is rather than insisting it be this module's.
+        if let Some(k) = self.usize_value(index.node) {
+            return self.item_of(target.node, k).map(Selection::Views);
         }
-        // SAFETY: every `array` here is a live node of `self`.
-        match array {
-            Some(array) => {
-                let arms = unsafe { self.array_items(array) }.map_or(0, |items| items.len());
-                (arms == 2).then_some(Selection::Computed)
-            }
-            None => None,
+        // SAFETY: every operand here is a live node of this module or of a frozen
+        // module that outlives the reference it was read through.
+        match unsafe { self.array_items_of(target.node) } {
+            Some(items) if items.len() == 2 => Some(Selection::Computed),
+            _ => None,
+        }
+    }
+
+    /// An operand array's items, whether the array belongs to this module or to a
+    /// frozen one the caller holds.
+    ///
+    /// **A frozen node's payload belongs to its own module**, so only this
+    /// module's arrays are read here; a frozen *array* has no node in this graph
+    /// and is answered `None` rather than by reaching across the boundary.
+    ///
+    /// # Safety
+    ///
+    /// The node must be live — this module's, or one of a frozen module that
+    /// outlives the reference it was reached through, which is the same obligation
+    /// every read of an `AnyNodeId` carries.
+    unsafe fn array_items_of(&self, node: AnyNodeId) -> Option<&'static [ArrayItem]> {
+        match node {
+            AnyNodeId::Dynamic(node) => unsafe { self.array_items(node) },
+            AnyNodeId::Static(_) => None,
         }
     }
 
     /// Element `k` of an array node, dynamic entries only.
-    fn item_of(&self, array: NodeId, k: usize) -> Option<NodeId> {
-        // SAFETY: `array` is a live node of `self`.
-        let items = unsafe { self.array_items(array) }?;
+    fn item_of(&self, array: AnyNodeId, k: usize) -> Option<NodeId> {
+        let items = unsafe { self.array_items_of(array) }?;
         match items.get(k)?.node {
             AnyNodeId::Dynamic(node) => Some(node),
             AnyNodeId::Static(_) => None,
@@ -310,7 +337,7 @@ impl<P: Program> Module<P> {
     /// a *pair*, the apply resolves its arity, and the evaluator peels
     /// `Index(pair, 0)`. **No shape is derived here**, and the pass in
     /// [`crate::low_type`] still learns no layout.
-    fn pair_value_node(&self, node: NodeId) -> Option<NodeId> {
+    pub fn pair_value_node(&self, node: NodeId) -> Option<NodeId> {
         // SAFETY: `node` is a live node of `self`.
         let items = unsafe { self.array_items(node) }?;
         if !(2..=3).contains(&items.len()) {
@@ -342,9 +369,11 @@ impl<P: Program> Module<P> {
         AsEnum::<LowValue>::as_enum(&value)
     }
 
-    /// The `n` a node holds, when it holds a plain integer literal.
-    fn usize_value(&self, node: NodeId) -> Option<usize> {
-        match self.structural_value(node) {
+    /// The `n` a node holds, when it holds a plain integer literal — **frozen or
+    /// not**, because a literal an apply clone copied across is still a literal.
+    pub fn usize_value(&self, node: AnyNodeId) -> Option<usize> {
+        let value = self.node_value(node)?;
+        match AsEnum::<LowValue>::as_enum(&value) {
             Some(LowValue::USize(n)) => Some(n as usize),
             _ => None,
         }

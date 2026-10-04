@@ -95,7 +95,9 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use lichen_kernel_ir::{KernelBin, KernelFragment, KernelInstr, KernelShape, ScalarClass};
+use lichen_kernel_ir::{
+    KernelBin, KernelFragment, KernelInstr, KernelShape, ScalarClass, Terminator, ValueDef, ValueId,
+};
 
 /// SPIR-V opcodes.  Not from memory: these are the `SpvOp*` values in the
 /// Khronos `spirv.h` shipped with the Vulkan SDK.
@@ -764,17 +766,16 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
         return Err(SpirvRefusal::ControlFlow { detail: broken });
     }
     // Until this emitter learns `OpLoopMerge` / `OpBranch` / `OpPhi`, a body with
-    // a transfer is refused rather than emitted straight-line.  See
+    // more than one block is refused rather than emitted straight-line.  See
     // `SpirvRefusal::ControlFlow` for why that is the only safe answer.
-    let instrs = fragment
-        .body
-        .straight_line_instrs()
-        .ok_or_else(|| SpirvRefusal::ControlFlow {
+    if !fragment.body.is_straight_line() {
+        return Err(SpirvRefusal::ControlFlow {
             detail: format!(
-                "the body allocates {} label(s) and has a transfer",
-                fragment.body.labels
+                "this body has {} block(s) and a transfer",
+                fragment.body.blocks.len()
             ),
-        })?;
+        });
+    }
     if fragment.int_width.bits() != 64 {
         return Err(SpirvRefusal::UnsupportedIntWidth {
             bits: fragment.int_width.bits(),
@@ -838,7 +839,10 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
     // collected here and emitted with the types rather than inside the function.
     let mut literals = Literals::default();
     let mut code: Vec<Inst> = Vec::new();
-    let mut stack: Vec<Slot> = Vec::new();
+    // **The map that replaces the operand stack.** Every value the body defines is
+    // here once it has been emitted, so an operand is a lookup rather than a pop —
+    // and a shared subexpression is emitted once rather than once per use.
+    let mut slots: HashMap<ValueId, Slot> = HashMap::new();
 
     // The index value: the invocation id's x component. It is an **integer**
     // whatever the fragment's parameter leaves say, because this target's index
@@ -874,7 +878,37 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
         ScalarClass::Float => component,
     };
 
-    for (at, instruction) in instrs.iter().enumerate() {
+    // The index parameter is the one entry-block parameter this target can place:
+    // it is the invocation id, not a value of the fragment's domain. **A parameter
+    // is named by which value it is**, so this is a binding rather than an
+    // instruction to interpret, and any other parameter is refused where it is
+    // read rather than silently given some id.
+    if let Some(index_parameter) = fragment.body.parameters().get(index as usize).copied() {
+        slots.insert(index_parameter, scalar(index_value, ScalarClass::Int));
+    }
+
+    let entry = &fragment.body.blocks[fragment.body.entry];
+    for (at, &definition) in entry.instrs.iter().enumerate() {
+        let Some(ValueDef::Instr { op, args, .. }) =
+            fragment.body.values.get(definition.0 as usize)
+        else {
+            continue;
+        };
+        let op = *op;
+        // **Every operand is named by the definition that produced it.**
+        let operand = |at: usize| -> Result<Slot, SpirvRefusal> {
+            let value = args.get(at).ok_or(SpirvRefusal::ResultArity {
+                results: fragment.result_classes.len(),
+                left: 0,
+            })?;
+            slots.get(value).copied().ok_or(SpirvRefusal::ResultArity {
+                results: fragment.result_classes.len(),
+                left: 0,
+            })
+        };
+        let args = args.clone();
+        let instruction = op;
+        let _ = instruction;
         match instruction {
             KernelInstr::Const(class, value) => {
                 // A constant is emitted once per (class, value) no matter how
@@ -883,13 +917,13 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                 // *instruction* names, which is the reading a value position
                 // wants; a position that wants an integer asks the pool for that
                 // reading instead.
-                let id = literals.get(*class, *value, &ids, &mut next);
-                stack.push(literal(id, *value));
+                let id = literals.get(class, value, &ids, &mut next);
+                slots.insert(definition, literal(id, value));
             }
             KernelInstr::Bin(class, operator) => {
-                let rhs = pop(&mut stack, at)?;
-                let lhs = pop(&mut stack, at)?;
-                let operand_class = bin_class(lhs.kind, rhs.kind, *class);
+                let rhs = operand(1)?;
+                let lhs = operand(0)?;
+                let operand_class = bin_class(lhs.kind, rhs.kind, class);
                 // A comparison is the one operator whose operands may not be
                 // scalars — `(a < b) == c` compares the *scalar* a comparison
                 // means — and the one whose result is not one. Every other
@@ -1057,16 +1091,13 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                 } else {
                     code.push(Inst::new(opcode, vec![result_type, result, lhs.id, rhs.id]));
                 }
-                stack.push(Slot {
-                    id: result,
-                    kind: result_kind,
-                });
-            }
-            KernelInstr::LocalGet(local) => {
-                if *local != index {
-                    return Err(SpirvRefusal::NonIndexParameter { local: *local, at });
-                }
-                stack.push(scalar(index_value, ScalarClass::Int));
+                slots.insert(
+                    definition,
+                    Slot {
+                        id: result,
+                        kind: result_kind,
+                    },
+                );
             }
             // The condition a `select` needs.  **Not a no-op here**: wasm's
             // `i32.wrap_i64` narrows an `i64` condition to the `i32` its
@@ -1076,19 +1107,16 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
             // emitter in `lichen-compute` produces for an `if` — it is a no-op,
             // and that is the case the module docs describe.
             KernelInstr::I32WrapI64 => {
-                let popped = pop(&mut stack, at)?;
-                stack.push(as_condition(
-                    popped,
-                    &ids,
-                    &mut literals,
-                    &mut code,
-                    &mut next,
-                ));
+                let popped = operand(0)?;
+                slots.insert(
+                    definition,
+                    as_condition(popped, &ids, &mut literals, &mut code, &mut next),
+                );
             }
             KernelInstr::Select => {
-                let selector = pop(&mut stack, at)?;
-                let otherwise = pop(&mut stack, at)?;
-                let then = pop(&mut stack, at)?;
+                let selector = operand(2)?;
+                let otherwise = operand(1)?;
+                let then = operand(0)?;
                 // The arms are the language's scalars (a `select`'s result type
                 // is its arms' type, and a scalar is what a lichen value is),
                 // and the selector is the bool `select` takes.
@@ -1117,7 +1145,7 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                     op::SELECT,
                     vec![ids.scalar(), result, selector.id, then.id, otherwise.id],
                 ));
-                stack.push(scalar(result, ids.class));
+                slots.insert(definition, scalar(result, ids.class));
             }
             // The language's two class crossings.  **The direction is the
             // instruction's**, and that is the whole reason the IR carries the
@@ -1129,13 +1157,13 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
             // a comparison's `0`/`1` is materialised into it here — the same two
             // positions the rest of this emitter decides a class at.
             KernelInstr::Conv { from, to } => {
-                let (from, to) = (*from, *to);
-                let seen = pop(&mut stack, at)?;
+                let (from, to) = (from, to);
+                let seen = operand(0)?;
                 let seen = as_class(seen, from, &ids, &mut literals, &mut code, &mut next, at)?;
                 // A crossing between one class and itself is a reclassification:
                 // the value already holds the answer, and nothing is emitted.
                 if from == to {
-                    stack.push(seen);
+                    slots.insert(definition, seen);
                     continue;
                 }
                 // **Every crossing the language has is representable here, in
@@ -1157,11 +1185,11 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                     _ => unreachable!("a same-class crossing returned above"),
                 };
                 code.push(Inst::new(opcode, vec![ids.type_of(to), result, seen.id]));
-                stack.push(scalar(result, to));
+                slots.insert(definition, scalar(result, to));
             }
             KernelInstr::BufferReadCall(_) => {
-                let element = pop(&mut stack, at)?;
-                let position = pop(&mut stack, at)?;
+                let element = operand(1)?;
+                let position = operand(0)?;
                 // An access chain's index is an **integer**, so a float in this
                 // position is a fragment asking for a conversion the language
                 // does not have, and `as_class` refuses it by name.
@@ -1193,12 +1221,12 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                     ],
                 ));
                 code.push(Inst::new(op::LOAD, vec![ids.scalar(), loaded, pointer]));
-                stack.push(scalar(loaded, ids.class));
+                slots.insert(definition, scalar(loaded, ids.class));
             }
             KernelInstr::BufferWriteCall(_) => {
-                let value = pop(&mut stack, at)?;
-                let element = pop(&mut stack, at)?;
-                let position = pop(&mut stack, at)?;
+                let value = operand(2)?;
+                let element = operand(1)?;
+                let position = operand(0)?;
                 // A buffer element is the module's scalar whatever the body
                 // computed the value as, so a comparison stored into one is
                 // materialised here — and a value of the *other* class is refused
@@ -1238,18 +1266,37 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                 code.push(Inst::new(op::STORE, vec![pointer, value.id]));
             }
             KernelInstr::CallKernel(kernel) => {
-                return Err(SpirvRefusal::CrossKernelCall {
-                    kernel: *kernel,
-                    at,
-                });
+                return Err(SpirvRefusal::CrossKernelCall { kernel, at });
             }
         }
     }
 
-    if stack.len() != 1 {
+    // **The returned values are the terminator's list**, so a body's result arity is
+    // a fact of the body rather than of whatever happened to be left over.
+    let returned = match &entry.terminator {
+        Terminator::Return { values } => values.clone(),
+        _ => {
+            return Err(SpirvRefusal::ControlFlow {
+                detail: "a straight-line body ends in a return, and this one does not".to_string(),
+            });
+        }
+    };
+    if returned.len() != 1 {
         return Err(SpirvRefusal::ResultArity {
             results: fragment.result_classes.len(),
-            left: stack.len(),
+            left: returned.len(),
+        });
+    }
+    // And the id that result names must have been emitted, which is the same
+    // check the stack's length was: a body whose return is not one of its own
+    // values has produced nothing to hand back.
+    if returned
+        .first()
+        .is_none_or(|value| !slots.contains_key(value))
+    {
+        return Err(SpirvRefusal::ResultArity {
+            results: fragment.result_classes.len(),
+            left: 0,
         });
     }
 

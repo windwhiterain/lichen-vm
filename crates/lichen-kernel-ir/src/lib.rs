@@ -50,7 +50,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 mod body;
 
-pub use body::{BasicBlock, Br, KernelBody, Terminator, ValueDef, ValueId};
+pub use body::{BasicBlock, Br, FlatOp, KernelBody, Terminator, ValueDef, ValueId, from_flat};
 
 /// Which scalar class a value, a parameter leaf or a buffer element is.
 ///
@@ -680,6 +680,24 @@ impl KernelInstr {
             KernelInstr::I32WrapI64 | KernelInstr::Conv { .. } => 1,
             KernelInstr::Select => 3,
             KernelInstr::BufferWriteCall(_) => 3,
+        }
+    }
+
+    /// The class this instruction states in its own form, if it states one.
+    ///
+    /// **Stated, not derived**: a constant's bits and an arithmetic operator's
+    /// operands are only readable against the class they were lowered in, so an
+    /// instruction that names its class names it because the fact cannot be
+    /// recovered from the value later.
+    pub fn own_class(&self) -> Option<ScalarClass> {
+        match self {
+            KernelInstr::Const(class, _) => Some(*class),
+            KernelInstr::Bin(class, _) => Some(*class),
+            KernelInstr::Conv { to, .. } => Some(*to),
+            KernelInstr::BufferReadCall(class) | KernelInstr::BufferWriteCall(class) => {
+                Some(*class)
+            }
+            KernelInstr::I32WrapI64 | KernelInstr::Select | KernelInstr::CallKernel(_) => None,
         }
     }
 }
