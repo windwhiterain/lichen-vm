@@ -1,7 +1,8 @@
 # A block and an applied lambda disagree on a struct field's inferred type
 
-> Status: **root cause found** (§9); **direction (a) chosen by the author,
-> implementation handed off** (§12).  The
+> Status: **root cause found** (§9); **a workaround now fixes the reported
+> programs** (§13) while direction (a) — the principled fix — is still owed and
+> still handed off (§12).  The
 > measurements in §1–§7 stand as the investigation that narrowed the question;
 > §9–§11 are the answer, found by tracing every root `unify`/`MERGE`/value
 > write during the build of both §1 programs and by three confirming
@@ -537,5 +538,55 @@ compute 59 of 62 — unchanged except where the fix deliberately adds
 coverage.  A regression test belongs with the render tests
 (`crates/lichen-language/src/tests/render_tests.rs`'s `output()` helper);
 per team rule, add tests only with the author's say-so.
+
+## 13. The workaround that landed meanwhile (author's call)
+
+§9's mechanism is the apply clone walk's **operand-rewrite rule**: an
+operation whose operand this call maps to different nodes had its answer
+dropped, so an embedded callee apply re-ran per call and minted a second
+generation of field cells (§3.4).  The author's rule replaces that rule in
+`node_apply`:
+
+> **Whether an operator runs is `runned`, and nothing else.**  A clone
+> carries the template's answer, mapped recursively so every node the answer
+> names is this call's node, and the operator does not run again.
+
+Three qualifications, each measured rather than chosen:
+
+1. **The answer has to be a template fact.**  Two node axes decide, and they
+   are not to be conflated: `runned` says the source's *own* operator produced
+   the value (`false` with a value present means a unification wrote it), and
+   `evaluated_deep` says the **deep pass** evaluated the node, which is what
+   makes its answer a fact about the template rather than about whichever call
+   ran last.  Both must hold.  A clone that fails either carries **no value at
+   all** — a slot holding a value is a slot a static reader (a backend
+   compiling from the graph) reads as decided, and this was measured: with the
+   value written anyway, `graph_jit` lost 8 of 9 and `graph_structure` 1 of 5.
+2. **A function id is never carried.**  It is a per-call allocation, not a
+   value the operator computed from its operand, and mapping it mints a second
+   per-call closure beside the one the element walk already cloned — measured
+   as `expected Function, found Function` on every block-with-capture closure.
+3. **One closure per call.**  The walk reaches a template closure from several
+   nodes (its value node, and any carried answer that names it — a recursive
+   call's result pair), and each reach mints a fresh closure under the old
+   code.  Two closures where the body means one meet in a unification as two
+   different functions; measured as 5 functions where `recursion` expects 3.
+   `ApplyCtx` now carries the walk's `minted` table (source `FunctionId` →
+   fresh `FunctionId`), the closure-level counterpart of the node-level
+   `remap`.
+
+**What it fixes:** the second generation is never minted, so the field check's
+class binding lands on the batch the instance actually reads, and §1's lambda
+program prints `struct<.x Type>` — the note's whole §12.7 table passes.
+
+**What it does not fix:** the root cause.  A callee that *is* re-run per call
+(a program that binds its argument before the instantiate, say) still mints a
+fresh generation, and the field constraint still does not follow it; §12 is
+still owed.  This workaround only removes the generation in the case where the
+template's own answer is the one that was being recomputed.
+
+Suites after the change, against the same baseline: lowlevel 155, checker 87,
+language 70, pipeline 137 of 140, compute 59, graph_jit 9, graph_structure 5 —
+**identical to the numbers before it**, plus the reported program fixed.
 
 

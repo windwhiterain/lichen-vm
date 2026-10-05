@@ -80,6 +80,20 @@ struct ApplyCtx<'a> {
     /// template role carry [`None`].
     tag: Option<FunctionId>,
     remap: &'a mut HashMap<NodeId, NodeId>,
+    /// The fresh closure this walk has already minted for a template closure:
+    /// a source [`FunctionId`] → the fresh [`FunctionId`] minted for it.  The
+    /// `Function(fresh)` value is rebuilt on read, so this table needs no value
+    /// type of its own.
+    ///
+    /// A per-call closure is minted **once**.  The walk reaches a template
+    /// closure from more than one node (its own value node, and any answer
+    /// value that names it — a recursive call's result pair, a captured
+    /// binding), and each of those is a per-call fact about the *same*
+    /// closure.  Minting per reach would give this call two closures where its
+    /// body means one, and the two meet in a unification as two different
+    /// functions.  The node-level [`ApplyCtx::remap`] dedups *nodes*; this
+    /// dedups the closure those nodes carry.
+    minted: &'a mut HashMap<FunctionId, FunctionId>,
 }
 
 /// One **instantiation** of a function's template for one argument: the clone
@@ -204,6 +218,7 @@ impl<P: Program> Module<P> {
             _ => return None,
         };
         let mut remap = HashMap::new();
+        let mut minted = HashMap::new();
         let mut ctx = ApplyCtx {
             target: block,
             // The signature's own template is the membership anchor: its
@@ -226,6 +241,7 @@ impl<P: Program> Module<P> {
             // stamped.
             tag: None,
             remap: &mut remap,
+            minted: &mut minted,
         };
         let dom = self.node_apply(param_type, &mut ctx);
         let cod = self.node_apply(return_type, &mut ctx);
@@ -303,6 +319,7 @@ impl<P: Program> Module<P> {
         );
         debug_assert!(self.functions[function].nodes.contains(&parameter));
         let mut remap = HashMap::new();
+        let mut minted = HashMap::new();
         let mut ctx = ApplyCtx {
             target: block,
             // Membership is the chain test, not a scope snapshot: the clones
@@ -315,6 +332,7 @@ impl<P: Program> Module<P> {
             parameter,
             tag: self.nodes[node].function,
             remap: &mut remap,
+            minted: &mut minted,
         };
         let applied = self.node_apply(r#return, &mut ctx);
         // The parameter is an entry point of the clone walk, not just a node
@@ -546,38 +564,63 @@ impl<P: Program> Module<P> {
             self.nodes[node].function
         };
         ctx.remap.insert(node, clone);
-        // A cached value on an operation node was computed against the
-        // body's parameter and is stale once the argument is mapped in, so
-        // such clones are left unevaluated — the kept operand chain
-        // recomputes against the argument.  Constant nodes (no operation)
-        // carry their remapped value.
-        // **The staleness is the operand's rewrite.**  An operation whose operand
-        // this call maps to different nodes computes over this call's nodes, so
-        // the clone must run: its answer is not the template's.  One whose
-        // operand maps to itself is the same computation over the same nodes —
-        // its cached answer is this call's answer, and the clone carries both
-        // the answer and `runned`, so the operator does not run again (whether
-        // an operator runs is `runned`, not whether a value sits in the slot).
-        let source_operand = operation.and_then(|operation| operation.operand);
+        // **Whether the operator runs is `runned`, and nothing else** — the
+        // operand's rewrite does not decide it.  The clone carries the
+        // template's answer, mapped recursively so every node the answer names
+        // is this call's node, and it carries the answer's `runned` with it:
+        // an answer the template's own operator produced is this call's answer
+        // (the mapping has already substituted this call's nodes), so the
+        // operator owes nothing more.  A value whose cells are still unbound is
+        // exactly that case — the remap substituted the cells, and whatever
+        // binds them (the parameter unify, a field check) binds *these* cells.
+        // A struct type expression's answer is one such answer, and carrying it
+        // is what stops a re-run from minting a second generation of holes that
+        // the call-time constraints never reach.
+        //
+        // Which axis answers "the operator owes an answer still", and which
+        // answers "is the value a *template* fact":
+        //
+        // * `runned` — the source's **own** operator produced the value
+        //   (`false` with a value present means a unification wrote it, an
+        //   assertion, not a computation).  A clone that would owe an answer
+        //   carries **no value at all**, because a slot holding a value is a
+        //   slot a static reader (a backend compiling from this graph) reads
+        //   as decided — the two axes are not to be conflated here.
+        // * `evaluated_deep` — the **deep pass** evaluated this node, so its
+        //   answer is a fact about the *template* and every call shares it.
+        //   Without it the slot holds whatever the last runtime application
+        //   produced, which is this call's business, not the template's.
+        //
+        // A **function id** is never carried either: it is a per-call
+        // allocation, not a value the operator computed from its operand, and
+        // mapping it mints a *second* per-call closure beside the one the
+        // element walk already cloned, for the two to meet in a unification.
+        // A *constant* node (no operation) always carries its mapped value:
+        // there is no operator to owe an answer.
         let operation = operation.map(|operation| Operation {
             operand: operation
                 .operand
                 .map(|operand| self.node_apply(operand, ctx)),
             ..operation
         });
-        let operand_rewritten = match (source_operand, operation.and_then(|o| o.operand)) {
-            (Some(before), Some(after)) => before != after,
-            _ => false,
+        let template_answer = self.nodes[node].runned && self.nodes[node].evaluated_deep.is_some();
+        let carried = match &operation {
+            None => true,
+            Some(_) => {
+                template_answer
+                    && !value
+                        .is_some_and(|value| matches!(value.as_enum(), Some(LowValue::Function(_))))
+            }
         };
-        let value = if operation.is_some() && operand_rewritten {
-            None
-        } else {
+        // The mapping runs only for a value that is kept: an answer that is
+        // about to be dropped must not clone a closure into the target block.
+        let mapped = if carried {
             value.map(|value| self.value_apply(value, ctx))
+        } else {
+            None
         };
-        self.write_node_value(clone, value);
-        if !operand_rewritten {
-            self.nodes[clone].runned = true;
-        }
+        self.write_node_value(clone, mapped);
+        self.nodes[clone].runned = carried;
         self.nodes[clone].operation = operation;
         // The clone is still a singleton class here, so the slot write *is* the
         // class write; a later unify joins the two through `add_equality`.
@@ -640,6 +683,15 @@ impl<P: Program> Module<P> {
             // in place (its apply materializes per call).
             Some(LowValue::Function(AnyFunctionId::Static(_))) => value,
             Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => {
+                // **One closure per call.**  The walk reaches a template closure
+                // from several nodes, and each reach is a fact about the same
+                // closure; minting per reach would give this call two closures
+                // where its body means one, and the two would meet in a
+                // unification as two different functions.  So the first reach
+                // mints and the rest read that one back.
+                if let Some(minted) = ctx.minted.get(&function).copied() {
+                    return P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(minted)));
+                }
                 // A cloned function's scope is mapped like an array: every
                 // member and both entry points are cloned into the target,
                 // and the result is a fresh function homed on the target
@@ -693,6 +745,7 @@ impl<P: Program> Module<P> {
                 // `applied` switches to the function being instantiated, so
                 // its own self-reference (if recursive) stays in place.
                 let target = ctx.target;
+                let minted = &mut *ctx.minted;
                 let mut inner = ApplyCtx {
                     target,
                     anchor: ctx.anchor,
@@ -702,6 +755,7 @@ impl<P: Program> Module<P> {
                     parameter,
                     tag: Some(fresh),
                     remap: ctx.remap,
+                    minted,
                 };
                 let nodes: Vec<NodeId> = scope
                     .iter()
@@ -760,6 +814,7 @@ impl<P: Program> Module<P> {
                 fresh_function.return_type = return_type;
                 fresh_function.asserts = fresh_asserts;
                 self.blocks[target].functions.push(fresh);
+                ctx.minted.insert(function, fresh);
                 P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(fresh)))
             }
             // A program-specific value may carry a handle into an arena —
