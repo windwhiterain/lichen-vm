@@ -1008,21 +1008,11 @@ where
     /// A fresh, unbound type cell (a parameterized node — evaluating it
     /// yields the lazy marker, never a panic).
     pub fn fresh_cell(&mut self) -> NodeId {
-        // An inference cell **is a type value**: the pair `[cell, Type]`, the
-        // same shape every other type position uses.  A bare cell could only
-        // ever be filled on the value channel, so an apply whose argument type
-        // reached a parameter through a bare cell could not fill that
-        // parameter's kind half — which is what let a block and the equivalent
-        // lambda application disagree (`struct<.x Type>` against
-        // `struct<.x raw[?a, ?b]>`).  Apply is macro expansion, so nothing here
-        // may be a shape the macro path does not see.
-        let value = self.alloc_node(
+        self.alloc_node(
             self.current_block,
             None,
             Some(P::Value::from(LowValue::Parameterized)),
-        );
-        let universe = self.type_expr;
-        self.array_node(self.current_block, &[value, universe])
+        )
     }
 
     /// A plain value node in the current block — the way a native operator
