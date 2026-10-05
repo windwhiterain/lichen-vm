@@ -548,20 +548,28 @@ impl<P: Program> Module<P> {
         // that holds a *clone* — a runtime failure's own operand — can reach the
         // source node the layer above attributes by ([`Module::node_origin`]).
         self.nodes[clone].origin = Some(node);
-        // The owner tag: a node of the closure's own scope joins the fresh
-        // id (its template reads as members of that id, re-instantiated per
-        // call), while a capture — a member of the *enclosing* template
-        // cloned through the closure's edges — keeps the source's own
-        // owner.  It is then a member of the enclosing template (the
-        // instance this closure references in place), not of the fresh
-        // closure: re-cloning it under the fresh id would re-instantiate
-        // the captured value on every nested apply, tearing it out of the
+        // The owner tag.  A plain apply's clones are stamped with the **apply
+        // node's owner** ([`ApplyCtx::tag`]) — the template the call sits in —
+        // so that template re-instantiates them per call; inheriting the
+        // applied function's own id instead would leave them looking like
+        // another function's instance, and the enclosing template would
+        // reference them in place for every call (measured: `id = x => x`,
+        // `f = x => id x`, `f 1` read the first call's parameter cells).  The
+        // static path stamps the same way ([`Module::static_node_apply`]).
+        //
+        // A closure walk is the exception: a node of the closure's own scope
+        // joins the fresh id (its template reads as members of that id,
+        // re-instantiated per call), while a capture — a member of the
+        // *enclosing* template cloned through the closure's edges — keeps the
+        // source's own owner.  It is then a member of the enclosing template
+        // (the instance this closure references in place), not of the fresh
+        // closure: re-cloning it under the fresh id would re-instantiate the
+        // captured value on every nested apply, tearing it out of the
         // enclosing instance the walk already built.
-        self.nodes[clone].function = if ctx.closure_scope.is_some_and(|scope| scope.contains(&node))
-        {
-            ctx.tag
-        } else {
-            self.nodes[node].function
+        self.nodes[clone].function = match ctx.closure_scope {
+            Some(scope) if scope.contains(&node) => ctx.tag,
+            Some(_) => self.nodes[node].function,
+            None => ctx.tag,
         };
         ctx.remap.insert(node, clone);
         // **Whether the operator runs is `runned`, and nothing else** — the
