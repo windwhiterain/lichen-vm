@@ -18,6 +18,7 @@ members = [
     "crates/lichen-perspective",
     "crates/lichen-language",
     "crates/lichen-tools",
+    "crates/lichen-analyze",
     "crates/lichen-compiler",
     "crates/lichen-language-server",
     "lichen-language-zed",
@@ -65,6 +66,7 @@ lichen-doc = { path = "crates/lichen-doc" }
 lichen-perspective = { path = "crates/lichen-perspective" }
 lichen-language = { path = "crates/lichen-language" }
 lichen-tools = { path = "crates/lichen-tools" }
+lichen-analyze = { path = "crates/lichen-analyze" }
 lichen-package = { path = "crates/lichen-package" }
 lichen-std-native = { path = "lichen-std-native" }
 

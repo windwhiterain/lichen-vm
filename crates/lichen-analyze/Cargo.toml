@@ -1,0 +1,10 @@
+[package]
+name = "lichen-analyze"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lichen-highlevel.workspace = true
+lichen-language.workspace = true
+lichen-lowlevel.workspace = true
+lichen-utils.workspace = true
