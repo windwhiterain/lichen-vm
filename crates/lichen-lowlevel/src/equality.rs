@@ -717,16 +717,47 @@ impl<P: Program> Module<P> {
         let va = a.value;
         let vb = b.value;
         let (Some(ra), Some(rb)) = (a.node, b.node) else {
-            // Neither side has a class to merge: the question is whether the two
-            // values can be one value, and the descent goes on through the same
-            // arms as any other pair.  Where the descent bottoms out on nodes,
-            // those nodes' classes are merged — which is what "can these be one
-            // value" means for the cells inside a structure.
+            // **At least one side has no class to merge** — a bare value (an
+            // operation's answer, a write being distributed) or a static ref,
+            // which is absolute and has no local cell to merge into.  What the
+            // other side carries still decides the question, and a **value
+            // against a valueless class is a write**: the class learns the
+            // value.  It used to pass here, which silently dropped every
+            // fact a static ref brought into a unification — an imported
+            // `struct<.x Int, .y Int>`'s field types reached the importer's
+            // cells as `Int` and were discarded, so a placeholder
+            // instantiation across the boundary never learned its field types
+            // (`crates/lichen-language/tests/registry.rs`).
             let va = va.filter(|value| !is_unbound(Some(*value)));
             let vb = vb.filter(|value| !is_unbound(Some(*value)));
+            match (a.node, b.node) {
+                // A class against a bare value (a static ref's, or an answer a
+                // write is distributing).  The **value is the fact the class is
+                // missing**, so the class learns it — but only when the class
+                // holds nothing.  A class that already holds a value is not a
+                // hole, and writing over it would mask the conflict the
+                // comparison below exists to find.
+                (Some(node), None) => {
+                    if va.is_none()
+                        && let Some(value) = vb
+                    {
+                        self.write_node_value(node, Some(value));
+                        return true;
+                    }
+                }
+                (None, Some(node)) => {
+                    if vb.is_none()
+                        && let Some(value) = va
+                    {
+                        self.write_node_value(node, Some(value));
+                        return true;
+                    }
+                }
+                _ => {}
+            }
             let (Some(x), Some(y)) = (va, vb) else {
-                // A free cell is a wildcard, and a side with no value at all is
-                // an absence rather than a pattern.
+                // Two absences: a free cell is a wildcard, and a side with no
+                // value at all is an absence rather than a pattern.
                 return true;
             };
             return match (x.as_enum(), y.as_enum()) {
