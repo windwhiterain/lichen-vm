@@ -271,29 +271,25 @@ fn evaluated_deep_marks_subtrees_with_parameters() {
     assert_eq!(
         m.node_evaluated_deep(p),
         Some(EvaluatedDeep {
-            parameterized: true,
-            functions: FunctionValues::None
+            parameterized: true
         })
     );
     assert_eq!(
         m.node_evaluated_deep(arr),
         Some(EvaluatedDeep {
-            parameterized: true,
-            functions: FunctionValues::None
+            parameterized: true
         })
     );
     assert_eq!(
         m.node_evaluated_deep(id_arr),
         Some(EvaluatedDeep {
-            parameterized: true,
-            functions: FunctionValues::None
+            parameterized: true
         })
     );
     assert_eq!(
         m.node_evaluated_deep(x),
         Some(EvaluatedDeep {
-            parameterized: false,
-            functions: FunctionValues::None
+            parameterized: false
         })
     );
     assert_eq!(m.node_evaluated_deep(id_p), None); // not yet evaluated
@@ -302,8 +298,7 @@ fn evaluated_deep_marks_subtrees_with_parameters() {
     assert_eq!(
         m.node_evaluated_deep(id_p),
         Some(EvaluatedDeep {
-            parameterized: true,
-            functions: FunctionValues::None
+            parameterized: true
         })
     );
 }
@@ -332,15 +327,13 @@ fn deep_eval_skips_shallow_positions_until_an_index_read() {
     assert_eq!(
         m.node_evaluated_deep(three),
         Some(EvaluatedDeep {
-            parameterized: false,
-            functions: FunctionValues::None
+            parameterized: false
         })
     );
     assert_eq!(
         m.node_evaluated_deep(arr),
         Some(EvaluatedDeep {
-            parameterized: true,
-            functions: FunctionValues::None
+            parameterized: true
         }),
         "a shallow-marked array is never proven concrete"
     );

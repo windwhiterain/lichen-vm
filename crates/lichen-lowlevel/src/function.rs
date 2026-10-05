@@ -4,8 +4,7 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, Function, FunctionId,
-    FunctionValues, LowValue, Module, NodeId, Operation, PendingAssert, Program, TableItem,
-    is_unbound,
+    LowValue, Module, NodeId, Operation, PendingAssert, Program, TableItem, is_unbound,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -527,21 +526,14 @@ impl<P: Program> Module<P> {
         };
         // A node the deep pass proved concrete can be baked (referenced in
         // place); one it never ran on (`None`) or flagged parameterized is
-        // cloned.  The deep pass's closure tally ([`EvaluatedDeep::functions`])
-        // is the same fact a value walk would produce, already computed: a
-        // *concreteness proof* cannot see through a function's body, so an
-        // answer that holds one is not a template fact even when its cells are
-        // decided.  `Only(applied)` is the recursion self-reference — the
-        // applied function naming itself — and is this call's own, not a
-        // foreign closure.
+        // cloned, and so is one whose value holds a foreign closure — the
+        // concreteness proof cannot see through a function's body, so that
+        // attribution is made here, where the scope being instantiated is known
+        // ([`Self::value_holds_foreign_function`]).
         let proven_concrete = evaluated_deep.is_some_and(|e| !e.parameterized);
-        let holds_foreign_function = evaluated_deep.is_some_and(|deep| match deep.functions {
-            FunctionValues::None => false,
-            FunctionValues::Only(function) => function != ctx.applied,
-            FunctionValues::Multiple => true,
-        });
-        let depends_on_parameter =
-            node == ctx.parameter || !proven_concrete || holds_foreign_function;
+        let depends_on_parameter = node == ctx.parameter
+            || !proven_concrete
+            || self.value_holds_foreign_function(value, ctx.applied);
         if !depends_on_parameter {
             return node;
         }
@@ -615,20 +607,20 @@ impl<P: Program> Module<P> {
                 .map(|operand| self.node_apply(operand, ctx)),
             ..operation
         });
-        let template_answer = self.nodes[node].runned && evaluated_deep.is_some();
+        let template_answer = self.nodes[node].runned && self.nodes[node].evaluated_deep.is_some();
         let carried = match &operation {
             None => true,
             Some(_) => {
-                // A structure *containing* a foreign closure is no more
-                // carriable than a bare one: the id names a closure minted by
-                // one symbolic application of this template (the checker's own,
-                // with marker captures), and the deep-pass proof cannot see
-                // through its body — the same reason the bake guard above
-                // refuses to reference it in place.  The clone must carry
-                // nothing and re-run, so the call mints its own closure with
-                // this call's captures.  An answer whose cells are open is the
-                // opposite case: it still carries, with `runned` false below.
-                template_answer && !holds_foreign_function
+                // An answer that *holds* a foreign closure at one of its own
+                // positions is no more carriable than a bare one: the id names
+                // a closure minted by an earlier application of this template
+                // (the checker's own, with marker captures), and mapping cannot
+                // reach inside a function value, so carrying the answer would
+                // share one closure across every call.  One level is enough: a
+                // closure held any deeper sits inside a position the scope-local
+                // rule already made unproven, so the walk clones that position
+                // and re-maps its interior.
+                template_answer && !self.value_holds_foreign_function(value, ctx.applied)
             }
         };
         // The mapping runs only for a value that is kept: an answer that is
@@ -765,6 +757,14 @@ impl<P: Program> Module<P> {
                     // mark runs before any of this.
                     looping: false,
                 });
+                // The fresh id is recorded **before** its scope is walked.  A
+                // closure's scope can name it again — directly, or through a
+                // sibling that names it back — and the walk below re-enters
+                // here for each such reach; recording the entry afterwards
+                // would mint a fresh function per level, without bound.  Only
+                // the identity is needed to stop that, so the entry is written
+                // now and the rest of the record is filled in below.
+                ctx.minted.insert(function, fresh);
                 // The nested function's own scope joins the clone's
                 // template: its body may capture the applied function's
                 // members (an outer parameter), and those references must
@@ -843,7 +843,6 @@ impl<P: Program> Module<P> {
                 fresh_function.return_type = return_type;
                 fresh_function.asserts = fresh_asserts;
                 self.blocks[target].functions.push(fresh);
-                ctx.minted.insert(function, fresh);
                 P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(fresh)))
             }
             // A program-specific value may carry a handle into an arena —
@@ -860,7 +859,11 @@ impl<P: Program> Module<P> {
     /// was already instantiated by the enclosing apply) does not.  Walks
     /// with [`SlotMap::get`] so a dangling parent — a function dropped with
     /// its home block — reads as non-membership instead of panicking.
-    fn function_descends_from(&self, function: Option<FunctionId>, anchor: FunctionId) -> bool {
+    pub(crate) fn function_descends_from(
+        &self,
+        function: Option<FunctionId>,
+        anchor: FunctionId,
+    ) -> bool {
         let mut current = function;
         while let Some(f) = current {
             if f == anchor {
@@ -889,5 +892,76 @@ impl<P: Program> Module<P> {
             AnyNodeId::Dynamic(node) => is_unbound(self.node_value(Dyn(node))),
             AnyNodeId::Static(sref) => is_unbound(Some(self.static_read(sref))),
         })
+    }
+
+    /// Whether `value`'s tree holds a **foreign** closure: a dynamic function
+    /// that is neither the applied function itself nor an enclosing one.  The
+    /// walk follows value edges only — array items and table entries — because
+    /// those are the positions a carried answer names.
+    ///
+    /// The attribution belongs here, where the scope being instantiated is
+    /// known, and not on a node's `parameterized` verdict: whether a function
+    /// counts as "inside the scope" depends on which scope the apply is
+    /// cloning, and the verdict is computed without a caller.  The applied
+    /// function's own self-reference is the recursion point and an enclosing
+    /// function is shared by every call, so both stay in place; a closure the
+    /// body builds, and one an earlier application of this same template left
+    /// behind, are per-call allocations — the proof cannot see through their
+    /// bodies, and mapping stops at the id, so a carried answer would share one
+    /// closure across calls whose arguments differ.
+    ///
+    /// A *static* function value is frozen, with no dynamic captures, and is
+    /// never foreign.
+    fn value_holds_foreign_function(&self, value: Option<P::Value>, applied: FunctionId) -> bool {
+        let foreign = |function: FunctionId| {
+            function != applied && !self.function_descends_from(Some(applied), function)
+        };
+        let held = |node: AnyNodeId| match node {
+            AnyNodeId::Static(_) => None,
+            Dyn(node) => self.nodes[node].value.and_then(|value| value.as_enum()),
+        };
+        let mut stack: Vec<AnyNodeId> = match value.and_then(|value| value.as_enum()) {
+            Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => {
+                return foreign(function);
+            }
+            // SAFETY: `array`/`table` are payloads of `value`, which the caller
+            // holds reachable; this method only reads, so neither home block is
+            // released.  The note covers both arms.
+            Some(LowValue::Array(array)) => unsafe { array.items() }
+                .iter()
+                .map(|item| item.node)
+                .collect(),
+            Some(LowValue::Table(table)) => unsafe { table.items() }
+                .iter()
+                .flat_map(|item| [item.key, item.value])
+                .collect(),
+            _ => return false,
+        };
+        let mut seen = HashSet::new();
+        while let Some(node) = stack.pop() {
+            if !seen.insert(node) {
+                continue;
+            }
+            match held(node) {
+                Some(LowValue::Function(AnyFunctionId::Dynamic(function))) if foreign(function) => {
+                    return true;
+                }
+                Some(LowValue::Array(array)) => {
+                    // SAFETY: `array` is the payload of `node`, a live node of
+                    // this module; this method only reads.
+                    stack.extend(unsafe { array.items() }.iter().map(|item| item.node))
+                }
+                Some(LowValue::Table(table)) => {
+                    // SAFETY: `table` is the payload of `node`, a live node of
+                    // this module; this method only reads.
+                    for item in unsafe { table.items() } {
+                        stack.push(item.key);
+                        stack.push(item.value);
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
     }
 }

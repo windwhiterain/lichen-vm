@@ -29,8 +29,8 @@ mod verdict;
 
 use lichen_lowlevel::{
     AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, BudgetExhausted, EvalError,
-    EvaluatedDeep, Function, FunctionId, FunctionValues, GlobalExt, Handle, LowOperator, LowValue,
-    Module, NodeId, Operation, OperatorExt, Program, StaticHandle, TraceContext, ValueExt,
+    EvaluatedDeep, Function, FunctionId, GlobalExt, Handle, LowOperator, LowValue, Module, NodeId,
+    Operation, OperatorExt, Program, StaticHandle, TraceContext, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 use std::collections::HashSet;

@@ -10,14 +10,12 @@ fn recursive_function_applies_itself_lazily() {
     let (f_node, f_id) = recursive_function(&mut m);
     // The function's own value node is concrete (it never depends on the
     // parameter), so the clone keeps the self-reference in place instead of
-    // copying the function per level — the verdict names the one function it
-    // holds, and it is this one, so it is not foreign to an apply of it.
+    // copying the function per level.
     m.evaluate_node_deep(f_node, None);
     assert_eq!(
         m.node_evaluated_deep(f_node),
         Some(EvaluatedDeep {
-            parameterized: false,
-            functions: FunctionValues::Only(f_id)
+            parameterized: false
         })
     );
 
@@ -163,8 +161,7 @@ fn fibonacci_recurses_through_index_branches() {
     assert_eq!(
         m.node_evaluated_deep(fib_node),
         Some(EvaluatedDeep {
-            parameterized: false,
-            functions: FunctionValues::Only(fib_id)
+            parameterized: false
         })
     );
 
@@ -175,8 +172,7 @@ fn fibonacci_recurses_through_index_branches() {
     assert_eq!(
         m.node_evaluated_deep(m.functions[fib_id].r#return),
         Some(EvaluatedDeep {
-            parameterized: true,
-            functions: FunctionValues::None
+            parameterized: true
         })
     );
 
@@ -238,8 +234,7 @@ fn countdown_definition_pass_terminates() {
     assert_eq!(
         m.node_evaluated_deep(ret),
         Some(EvaluatedDeep {
-            parameterized: true,
-            functions: FunctionValues::None
+            parameterized: true
         })
     );
 
@@ -390,15 +385,13 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
     assert_eq!(
         m.node_evaluated_deep(e_ret),
         Some(EvaluatedDeep {
-            parameterized: true,
-            functions: FunctionValues::None
+            parameterized: true
         })
     );
     assert_eq!(
         m.node_evaluated_deep(o_ret),
         Some(EvaluatedDeep {
-            parameterized: true,
-            functions: FunctionValues::None
+            parameterized: true
         })
     );
 

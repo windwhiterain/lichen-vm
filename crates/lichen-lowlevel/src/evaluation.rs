@@ -2,7 +2,7 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, BudgetExhausted, EvaluatedDeep,
-    FunctionValues, LowOperator, LowValue, Module, NodeId, OperatorExt, Program, StaticModuleCache,
+    LowOperator, LowValue, Module, NodeId, OperatorExt, Program, StaticModuleCache,
     ancestors::AncestorPairs, table::KeyState,
 };
 use lichen_utils::extend::AsEnum;
@@ -748,11 +748,8 @@ impl<P: Program> Module<P> {
         // marker, or any position at all sits behind a shallow mark.  A
         // static position's concreteness is the module's solved flag — it
         // was already decided by the deep pass that solved the module.
-        let (parameterized, functions) = self.value_deep_facts(cache, value, node);
-        self.nodes[node].evaluated_deep = Some(EvaluatedDeep {
-            parameterized,
-            functions,
-        });
+        let parameterized = self.value_is_parameterized(cache, value, node);
+        self.nodes[node].evaluated_deep = Some(EvaluatedDeep { parameterized });
         // The real verdict supersedes any cycle-cut assumption: the node is no
         // longer in progress, so the mark must not outlive the frame.
         self.nodes[node].assumed_concrete = false;
@@ -793,125 +790,84 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The two facts the deep pass records about one value: whether the
-    /// subtree is unproven (the lazy marker itself, an array or table with a
-    /// shallow position or a parameterized element, or an operation whose
-    /// operand is parameterized), and which dynamic closures its value tree
-    /// holds ([`FunctionValues`]).
+    /// Whether `value` — the value this module just evaluated for `node` — is
+    /// unproven: the lazy marker itself, an array or table with a shallow
+    /// position or a parameterized element, or an operation whose operand is
+    /// parameterized.  `cache` is the walk's static-module resolution cache,
+    /// so a static element's solved flag costs one lookup per module for the
+    /// whole walk rather than one per element.
     ///
-    /// Both are read off one position walk, and every position's own verdict
-    /// is read through [`Self::ref_is_parameterized`] /
-    /// [`Self::ref_function_values`], so an **in-progress** position is
+    /// Every position's own verdict is read through
+    /// [`Self::ref_is_parameterized`], so an **in-progress** position is
     /// assumed concrete (the coinductive step) while one the pass never ran on
-    /// is not.  `cache` is the walk's static-module resolution cache, so a
-    /// static element's solved flag costs one lookup per module for the whole
-    /// walk rather than one per element.
-    fn value_deep_facts(
+    /// is not.
+    fn value_is_parameterized(
         &self,
         cache: &mut StaticModuleCache<P>,
         value: P::Value,
         node: NodeId,
-    ) -> (bool, FunctionValues) {
+    ) -> bool {
         // The value's extension view is taken once: every arm below tests the
         // same value, and taking the view clones the extension leaf out of the
         // composed union, so re-taking it per arm is work already done.
         let view = value.as_enum();
-        let mut parameterized = matches!(view, Some(LowValue::Parameterized));
-        let mut functions = match view {
-            Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => {
-                FunctionValues::Only(function)
-            }
-            _ => FunctionValues::None,
-        };
-        match view {
-            // An array holding a shallow position can never be proven
-            // concrete — its marked subtree was deliberately not evaluated, and
-            // even an assert's forced pass that cached values in it leaves it
-            // unproven by this flag, so it is never referenced in place across
-            // applies.
-            //
-            // SAFETY: `array` is the payload of `value`, the value this module
-            // just evaluated for `node`, so its home block is alive; the note
-            // covers the `items()` call in this arm.
-            Some(LowValue::Array(array)) => {
-                for item in unsafe { array.items() } {
-                    parameterized |= item.shallow || self.ref_is_parameterized(cache, item.node);
-                    functions = functions.merge(self.ref_function_values(item.node));
-                }
-            }
-            // SAFETY: `table` is the payload of `value`, the value this module
-            // just evaluated for `node`, so its home block is alive; the note
-            // covers the `items()` call in this arm.
-            Some(LowValue::Table(table)) => {
-                for item in unsafe { table.items() } {
-                    for position in [item.key, item.value] {
-                        parameterized |= self.ref_is_parameterized(cache, position);
-                        functions = functions.merge(self.ref_function_values(position));
-                    }
-                }
-            }
-            _ => {}
-        }
-        if self.nodes[node].operation.is_some_and(|op| {
-            op.operand.is_some_and(|operand| {
-                // Deliberately **not** read through `ref_is_parameterized`.
-                // A core operator's operand is the argument array a layer
-                // above synthesized for it, and the deep pass descends
-                // value-reachable edges only, so "this operand was never
-                // walked" is the normal case rather than an anomaly —
-                // reading it as unproven would flip every pair read
-                // (`Index(pair, 0)`) in a template and clone it per apply.
-                // The operand's effect on the node's *value* is already
-                // decided where the value is: the value arms above for a
-                // structural operator (a read of an unbound element yields
-                // the marker), and the `Parameterized` gate the operation
-                // postlude applies to an extension operator's operand
-                // (`Self::evaluate_node_operation`'s `None` arm) for the
-                // rest.  Operands are static graph edges, not
-                // value-reachable, so a nested block release may have
-                // dropped the node by now.
-                self.nodes
-                    .get(operand)
-                    .is_some_and(|node| node.evaluated_deep.is_some_and(|e| e.parameterized))
+        matches!(view, Some(LowValue::Parameterized))
+            || matches!(
+                view,
+                Some(LowValue::Array(array))
+                    // An array holding a shallow position can never be
+                    // proven concrete — its marked subtree was deliberately
+                    // not evaluated, and even an assert's forced pass that
+                    // cached values in it leaves it unproven by this flag,
+                    // so it is never referenced in place across applies.
+                    // SAFETY: `array` is the payload of `value`, the value this
+                    // module just evaluated for `node`, so its home block is
+                    // alive.  The note covers the two `items()` calls in this
+                    // arm.
+                    if unsafe { array.items() }.iter().any(|item| item.shallow)
+                        || unsafe { array.items() }
+                            .iter()
+                            .any(|item| self.ref_is_parameterized(cache, item.node))
+            )
+            || matches!(
+                view,
+                Some(LowValue::Table(table))
+                    // SAFETY: `table` is the payload of `value`, the value this
+                    // module just evaluated for `node`, so its home block is
+                    // alive.  The note covers the two `items()` calls in this
+                    // arm.
+                    if unsafe { table.items() }
+                        .iter()
+                        .any(|item| self.ref_is_parameterized(cache, item.key))
+                        || unsafe { table.items() }
+                            .iter()
+                            .any(|item| self.ref_is_parameterized(cache, item.value))
+            )
+            || self.nodes[node].operation.is_some_and(|op| {
+                op.operand.is_some_and(|operand| {
+                    // Deliberately **not** read through `ref_is_parameterized`.
+                    // A core operator's operand is the argument array a layer
+                    // above synthesized for it, and the deep pass descends
+                    // value-reachable edges only, so "this operand was never
+                    // walked" is the normal case rather than an anomaly —
+                    // reading it as unproven would flip every pair read
+                    // (`Index(pair, 0)`) in a template and clone it per apply.
+                    // The operand's effect on the node's *value* is already
+                    // decided where the value is: the value arm above for a
+                    // structural operator (a read of an unbound element yields
+                    // the marker), and the `Parameterized` gate the operation
+                    // postlude applies to an extension operator's operand
+                    // (`Self::evaluate_node_operation`'s `None` arm) for the
+                    // rest.  Operands are static graph edges, not
+                    // value-reachable, so a nested block release may have
+                    // dropped the node by now.
+                    self.nodes
+                        .get(operand)
+                        .is_some_and(|node| node.evaluated_deep.is_some_and(|e| e.parameterized))
+                })
             })
-        }) {
-            parameterized = true;
-        }
-        (parameterized, functions)
     }
 
-    /// The closure tally of one **ref** inside the verdict computation.
-    ///
-    /// A dynamic node the pass finished answers from its own verdict — the
-    /// same fact, already computed, in O(1).  A node standing for its own
-    /// answer — in progress, or a cycle cut that marked it
-    /// [`assumed_concrete`](Node::assumed_concrete) — contributes nothing
-    /// here either, the coinductive step the concreteness flag already takes;
-    /// otherwise every cyclic value would read as holding closures.  One the
-    /// pass never ran on (a shallow position, a refused subtree) has no
-    /// verdict either, and is answered from its own slot: a structure under it
-    /// is unknown, so it reads as [`FunctionValues::Multiple`] — the
-    /// conservative answer, which keeps a closure out of a carried answer.  A
-    /// static ref is a decided leaf of another module, holding no closure of
-    /// this one.
-    fn ref_function_values(&self, id: AnyNodeId) -> FunctionValues {
-        match id {
-            Dyn(node) => match self.nodes[node].evaluated_deep {
-                Some(deep) => deep.functions,
-                None if self.nodes[node].visiting || self.nodes[node].assumed_concrete => {
-                    FunctionValues::None
-                }
-                None => match self.nodes[node].value.and_then(|value| value.as_enum()) {
-                    Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => {
-                        FunctionValues::Only(function)
-                    }
-                    Some(LowValue::Array(_)) | Some(LowValue::Table(_)) => FunctionValues::Multiple,
-                    _ => FunctionValues::None,
-                },
-            },
-            AnyNodeId::Static(_) => FunctionValues::None,
-        }
-    }
     fn evaluate_block(&mut self, root: NodeId) -> P::Value {
         let value = self.evaluate_node_deep(root, None);
         // The deep pass answers without caching the root in two legitimate
