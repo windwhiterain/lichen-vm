@@ -287,6 +287,19 @@ where
         if concrete {
             let kind = self.struct_kind_requirement();
             let container_kind = self.lazy_index_path(container_ty, &[shape::TYPE_KIND_SLOT]);
+            // **The kind read has to run before the unify states the
+            // requirement.**  `container_kind` is an `Index` operation, and an
+            // operation that has not run holds no value: unifying it against the
+            // requirement then takes the "one side knows a value" arm, which
+            // writes the requirement into the read's class and asks nothing —
+            // the guard passes over an array or a tuple instead of refusing it
+            // (measured: `l.a` on `[10, 20]` reported the generic "not a
+            // container" plus a name-table miss, where the raw sibling `l::a` on
+            // the same container states `expected TypeStruct, found
+            // array<Int, 2>`).  A **decided** container's kind is settled, so
+            // reading it here is a fact, not a forcing of a lazy value.
+            self.module
+                .evaluate_node(AnyNodeId::Dynamic(container_kind), None);
             self.check_unify(
                 container_kind,
                 kind,
