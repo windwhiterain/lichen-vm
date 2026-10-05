@@ -251,15 +251,12 @@ where
     /// prints `raw[?a, ?b] -> …` where `x : (Int ! in_num) => e` prints
     /// `Int -> …`.
     pub(super) fn type_denotation(&mut self, type_expr: ExprId, value: Option<ExprId>) -> NodeId {
-        // The attributes the type expression carries are **not** dropped: they
-        // are unified against the annotated value's own, marker by marker, so
-        // the type the annotation names meets the value with both attribute
-        // sets reconciled.  The attribute's own check then enforces whatever the
-        // reconciliation left (see the annotation's `AttrExt::constraint`).
-        //
-        // The layouts differ (the type expression carries only what it spells,
-        // the value carries only what it spells), so the pairing is by marker,
-        // never by position.
+        // Every attribute in play is reconciled here — the ones the type
+        // expression carries and the ones the annotated value carries, with the
+        // *missing* slot standing in wherever a side does not carry it.  The
+        // type the annotation names therefore meets the value with both
+        // attribute sets decided; the attribute's own check enforces whatever
+        // the reconciliation left (see the annotation's `AttrExt::constraint`).
         if let Some(value) = value {
             self.unify_type_attributes(type_expr, value);
         }
@@ -272,60 +269,34 @@ where
             .expect("a type expression is compiled before its denotation is read")
     }
 
-    /// Unify the attribute slots `type_expr` carries against the ones on the
-    /// annotated `value`, one attribute at a time.  Only markers both sides
-    /// carry are compared: an attribute only one side spells has no counterpart
-    /// to reconcile with, and its own check is where it is enforced.
+    /// Unify the attributes of the type expression with those of the annotated
+    /// `value`, one marker at a time.  A side that does not carry the marker
+    /// contributes the attribute's **missing** slot, so an attribute a single
+    /// side spells is still reconciled against the other side's absence rather
+    /// than skipped.
+    ///
+    /// The two sides' schemas are dense over the attributes each actually
+    /// carries, so the pairing is by marker, never by position.
     fn unify_type_attributes(&mut self, type_expr: ExprId, value: ExprId) {
-        let mut expr = type_expr;
-        while let ExprKind::Annotation { value: inner, .. } = self.ir[expr].kind {
-            expr = inner;
-        }
-        if self.state[expr].attr.is_none() || self.state[value].attr.is_none() {
-            return;
-        }
-        let Some(type_pair) = self.state[expr].term else {
-            return;
-        };
-        let Some(value_pair) = self.state[value].term else {
-            return;
-        };
-        // SAFETY: both are live nodes of this module; nothing here drops a
-        // block, and both item lists are read before `unify_slots` runs.
-        let (Some(type_items), Some(value_items)) = (
-            unsafe { shape::array_items(&self.module, AnyNodeId::Dynamic(type_pair)) },
-            unsafe { shape::array_items(&self.module, AnyNodeId::Dynamic(value_pair)) },
-        ) else {
-            return;
-        };
-        let type_tail = self.schema_tail(expr).to_vec();
+        let type_tail = self.schema_tail(type_expr).to_vec();
         let value_tail = self.schema_tail(value).to_vec();
-        let mut pairs: Vec<(P::Attr, NodeId, NodeId)> = Vec::new();
-        for (value_index, marker) in value_tail.iter().enumerate() {
-            let Some(type_index) = type_tail
+        let mut markers: Vec<P::Attr> = Vec::new();
+        for marker in type_tail.iter().chain(value_tail.iter()) {
+            if markers
                 .iter()
-                .position(|m| m.order_index() == marker.order_index())
-            else {
+                .any(|seen| seen.order_index() == marker.order_index())
+            {
                 continue;
-            };
-            let slot_of = |items: &[lichen_lowlevel::ArrayItem], index: usize| {
-                items
-                    .get(shape::attr_slot(index))
-                    .map(|item| item.node)
-                    .and_then(|node| match node {
-                        AnyNodeId::Dynamic(node) => Some(node),
-                        AnyNodeId::Static(_) => None,
-                    })
-            };
-            let (Some(type_slot), Some(value_slot)) = (
-                slot_of(type_items, type_index),
-                slot_of(value_items, value_index),
-            ) else {
-                continue;
-            };
-            pairs.push((*marker, value_slot, type_slot));
+            }
+            markers.push(*marker);
         }
         let loc = self.loc(value, 2);
+        let mut pairs: Vec<(P::Attr, NodeId, NodeId)> = Vec::new();
+        for marker in markers {
+            let type_slot = self.attr_or_missing(type_expr, &marker);
+            let value_slot = self.attr_or_missing(value, &marker);
+            pairs.push((marker, value_slot, type_slot));
+        }
         for (marker, value_slot, type_slot) in pairs {
             let Some(ext) = self.attribute_extension(&marker) else {
                 continue;
