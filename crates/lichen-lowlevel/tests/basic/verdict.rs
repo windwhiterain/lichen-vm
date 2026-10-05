@@ -57,6 +57,7 @@ fn a_cyclic_value_is_proven_concrete() {
 
     let concrete = Some(EvaluatedDeep {
         parameterized: false,
+        functions: FunctionValues::None,
     });
     assert_eq!(
         m.node_evaluated_deep(self_ref),
@@ -96,8 +97,13 @@ fn a_refused_subtree_leaves_its_parent_unproven() {
     );
     assert_eq!(
         m.node_evaluated_deep(parent),
+        // The refused position has no verdict and is a structure, so the
+        // closure tally reads it conservatively: unknown interiors count as
+        // possibly holding a closure, which is what keeps one out of a carried
+        // answer.
         Some(EvaluatedDeep {
-            parameterized: true
+            parameterized: true,
+            functions: FunctionValues::Multiple
         }),
         "a refused subtree is unproven, so its parent cannot be certified concrete"
     );
@@ -145,7 +151,8 @@ fn an_operand_the_pass_never_walked_certifies_the_node() {
     assert_eq!(
         m.node_evaluated_deep(ret),
         Some(EvaluatedDeep {
-            parameterized: false
+            parameterized: false,
+            functions: FunctionValues::None
         }),
         "the indexed read is certified concrete although its operand was never walked"
     );

@@ -1173,16 +1173,53 @@ pub struct StaticFunction {
     pub open_captures: bool,
 }
 
+/// The dynamic function values one answer's value tree holds: none, exactly
+/// one, or more than one.  A *dynamic* function value is a per-call
+/// allocation — a minted closure — so an answer holding one is not a template
+/// fact: each call needs its own, and the one already sitting in the template
+/// belongs to whichever application (the checker's, a solve) minted it.  A
+/// *static* function value is a frozen template with no dynamic captures and
+/// never counts.
+///
+/// The identity is kept, not just a flag, so a reader excludes the applied
+/// function's own recursion self-reference with one integer comparison instead
+/// of re-walking the answer.  Merging is O(1): two `Only` ids that differ
+/// collapse to `Multiple`, which answers "foreign" for any caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FunctionValues {
+    None,
+    Only(FunctionId),
+    Multiple,
+}
+
+impl FunctionValues {
+    /// The tally of two subtrees' contents.
+    pub fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::None, other) | (other, Self::None) => other,
+            (Self::Only(first), Self::Only(second)) if first == second => Self::Only(first),
+            _ => Self::Multiple,
+        }
+    }
+}
+
 /// The outcome of the deep pass ([`Module::evaluate_node_deep`],
 /// [`Module::evaluate_node_forced`]) on one node.  The deep pass records,
 /// per node, whether it ran at all and, when it ran, whether the subtree it
-/// covers is parameterized.
+/// covers is parameterized and which closures it holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EvaluatedDeep {
     /// `true` when any node in self's reachable subtree has a
     /// [`LowValue::Parameterized`] — i.e. the deep pass could not prove the
     /// subtree concrete.
     pub parameterized: bool,
+    /// The subtree's [`FunctionValues`].  A separate fact from
+    /// `parameterized`, not a refinement of it: a call's answer pair is
+    /// parameterized for the two opposite reasons the two consumers must tell
+    /// apart — open cells, which the call's own checks bind (so the answer may
+    /// be carried), and a minted closure, which no later bind can reach into
+    /// (so it may not).
+    pub functions: FunctionValues,
 }
 
 #[derive(Debug)]

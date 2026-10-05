@@ -4,7 +4,8 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, Function, FunctionId,
-    LowValue, Module, NodeId, Operation, PendingAssert, Program, TableItem, is_unbound,
+    FunctionValues, LowValue, Module, NodeId, Operation, PendingAssert, Program, TableItem,
+    is_unbound,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -526,18 +527,21 @@ impl<P: Program> Module<P> {
         };
         // A node the deep pass proved concrete can be baked (referenced in
         // place); one it never ran on (`None`) or flagged parameterized is
-        // cloned.
+        // cloned.  The deep pass's closure tally ([`EvaluatedDeep::functions`])
+        // is the same fact a value walk would produce, already computed: a
+        // *concreteness proof* cannot see through a function's body, so an
+        // answer that holds one is not a template fact even when its cells are
+        // decided.  `Only(applied)` is the recursion self-reference — the
+        // applied function naming itself — and is this call's own, not a
+        // foreign closure.
         let proven_concrete = evaluated_deep.is_some_and(|e| !e.parameterized);
-        let depends_on_parameter = node == ctx.parameter
-            || !proven_concrete
-            || value.is_some_and(|value| {
-                matches!(
-                    value.as_enum(),
-                    Some(LowValue::Function(AnyFunctionId::Dynamic(function)))
-                        if function != ctx.applied
-                )
-            })
-            || (proven_concrete && self.value_contains_foreign_function(value, ctx.applied));
+        let holds_foreign_function = evaluated_deep.is_some_and(|deep| match deep.functions {
+            FunctionValues::None => false,
+            FunctionValues::Only(function) => function != ctx.applied,
+            FunctionValues::Multiple => true,
+        });
+        let depends_on_parameter =
+            node == ctx.parameter || !proven_concrete || holds_foreign_function;
         if !depends_on_parameter {
             return node;
         }
@@ -611,22 +615,20 @@ impl<P: Program> Module<P> {
                 .map(|operand| self.node_apply(operand, ctx)),
             ..operation
         });
-        let template_answer = self.nodes[node].runned && self.nodes[node].evaluated_deep.is_some();
+        let template_answer = self.nodes[node].runned && evaluated_deep.is_some();
         let carried = match &operation {
             None => true,
             Some(_) => {
-                template_answer
-                    && !value
-                        .is_some_and(|value| matches!(value.as_enum(), Some(LowValue::Function(_))))
-                    // A structure *containing* a foreign function id is no more
-                    // carriable than a bare one: the id names a closure minted
-                    // by one symbolic application of this template (the
-                    // checker's own, with marker captures), and the deep-pass
-                    // proof cannot see through its body — the same reason the
-                    // bake guard above refuses to reference it in place.  The
-                    // clone must carry nothing and re-run, so the call mints
-                    // its own closure with this call's captures.
-                    && !self.value_contains_foreign_function(value, ctx.applied)
+                // A structure *containing* a foreign closure is no more
+                // carriable than a bare one: the id names a closure minted by
+                // one symbolic application of this template (the checker's own,
+                // with marker captures), and the deep-pass proof cannot see
+                // through its body — the same reason the bake guard above
+                // refuses to reference it in place.  The clone must carry
+                // nothing and re-run, so the call mints its own closure with
+                // this call's captures.  An answer whose cells are open is the
+                // opposite case: it still carries, with `runned` false below.
+                template_answer && !holds_foreign_function
             }
         };
         // The mapping runs only for a value that is kept: an answer that is
@@ -887,66 +889,5 @@ impl<P: Program> Module<P> {
             AnyNodeId::Dynamic(node) => is_unbound(self.node_value(Dyn(node))),
             AnyNodeId::Static(sref) => is_unbound(Some(self.static_read(sref))),
         })
-    }
-
-    /// Whether `value`'s array tree contains a function value other than
-    /// `applied` — a nested closure whose captures must rebind to this
-    /// call.  A concreteness proof ([`Node::evaluated_deep`]) cannot see
-    /// a function's body, so a proven-concrete structure that contains one
-    /// must still be cloned, never referenced in place.  A *static* function
-    /// value is frozen — no dynamic captures — and is never foreign.
-    fn value_contains_foreign_function(
-        &self,
-        value: Option<P::Value>,
-        applied: FunctionId,
-    ) -> bool {
-        let Some(value) = value else {
-            return false;
-        };
-        let mut stack: Vec<AnyNodeId> = match value.as_enum() {
-            // SAFETY: `array`/`table` are payloads of `value`, which the
-            // caller holds reachable; this method only reads, so neither home
-            // block is released.  The note covers both arms.
-            Some(LowValue::Array(array)) => unsafe { array.items() }
-                .iter()
-                .map(|item| item.node)
-                .collect(),
-            Some(LowValue::Table(table)) => unsafe { table.items() }
-                .iter()
-                .flat_map(|item| [item.key, item.value])
-                .collect(),
-            _ => return false,
-        };
-        let mut seen = HashSet::new();
-        while let Some(node) = stack.pop() {
-            if !seen.insert(node) {
-                continue;
-            }
-            match node {
-                AnyNodeId::Static(_) => {}
-                Dyn(node) => match self.nodes[node].value.and_then(|value| value.as_enum()) {
-                    Some(LowValue::Function(AnyFunctionId::Dynamic(function)))
-                        if function != applied =>
-                    {
-                        return true;
-                    }
-                    Some(LowValue::Array(array)) => {
-                        // SAFETY: `array` is the payload of `node`, a live node
-                        // of this module; this method only reads.
-                        stack.extend(unsafe { array.items() }.iter().map(|item| item.node))
-                    }
-                    Some(LowValue::Table(table)) => {
-                        // SAFETY: `table` is the payload of `node`, a live node
-                        // of this module; this method only reads.
-                        for item in unsafe { table.items() } {
-                            stack.push(item.key);
-                            stack.push(item.value);
-                        }
-                    }
-                    _ => {}
-                },
-            }
-        }
-        false
     }
 }

@@ -76,7 +76,8 @@ fn function_call_operator_clones_array_body() {
     assert_eq!(
         m.node_evaluated_deep(ret),
         Some(EvaluatedDeep {
-            parameterized: true
+            parameterized: true,
+            functions: FunctionValues::None
         })
     );
 
@@ -140,7 +141,8 @@ fn function_call_operator_preserves_parameterized_operand_chain() {
     assert_eq!(
         m.node_evaluated_deep(call),
         Some(EvaluatedDeep {
-            parameterized: true
+            parameterized: true,
+            functions: FunctionValues::None
         })
     );
 
@@ -187,7 +189,8 @@ fn function_call_operator_recomputes_stale_definition_markers() {
     assert_eq!(
         m.node_evaluated_deep(ret),
         Some(EvaluatedDeep {
-            parameterized: true
+            parameterized: true,
+            functions: FunctionValues::None
         })
     );
 
@@ -222,7 +225,8 @@ fn function_call_operator_references_concrete_body_nodes_in_place() {
     assert_eq!(
         m.node_evaluated_deep(ret),
         Some(EvaluatedDeep {
-            parameterized: false
+            parameterized: false,
+            functions: FunctionValues::None
         })
     );
 
@@ -569,7 +573,8 @@ fn function_can_index_into_parameterized_array() {
     assert_eq!(
         m.node_evaluated_deep(ret),
         Some(EvaluatedDeep {
-            parameterized: true
+            parameterized: true,
+            functions: FunctionValues::None
         })
     );
 
@@ -618,13 +623,15 @@ fn manually_partially_evaluated_function_applies_correctly() {
     assert_eq!(
         m.node_evaluated_deep(one),
         Some(EvaluatedDeep {
-            parameterized: false
+            parameterized: false,
+            functions: FunctionValues::None
         })
     );
     assert_eq!(
         m.node_evaluated_deep(two),
         Some(EvaluatedDeep {
-            parameterized: false
+            parameterized: false,
+            functions: FunctionValues::None
         })
     );
     assert_eq!(m.node_evaluated_deep(ret), None);
@@ -764,7 +771,8 @@ fn call_return_is_shallow_for_container_bodies() {
     assert_eq!(
         m.node_evaluated_deep(ret),
         Some(EvaluatedDeep {
-            parameterized: true
+            parameterized: true,
+            functions: FunctionValues::None
         })
     );
 
@@ -847,7 +855,8 @@ fn apply_clone_preserves_the_shallow_mask() {
     assert_eq!(
         m.node_evaluated_deep(ret),
         Some(EvaluatedDeep {
-            parameterized: true
+            parameterized: true,
+            functions: FunctionValues::None
         })
     );
 
