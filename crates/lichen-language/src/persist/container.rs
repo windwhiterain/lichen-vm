@@ -418,21 +418,27 @@ where
             origin,
             asserts,
             nodes: scope,
+            // Filled below, from the loaded tables: the open-capture verdict is
+            // not serialized — it is a function of the graph, recomputed from
+            // the same walk the freeze runs, so an artifact cannot carry a
+            // verdict that disagrees with the graph it ships.
+            open_captures: false,
         });
     }
     if !r.done() {
         return Err("trailing bytes after the artifact".into());
     }
-    Ok((
-        StaticModule {
-            key,
-            nodes,
-            functions,
-            arena,
-            // A loaded artifact owns no out-of-arena resource: a resource handle
-            // is process-local and cannot be in the bytes.
-            releases: Vec::new(),
-        },
-        export,
-    ))
+    let mut module = StaticModule {
+        key,
+        nodes,
+        functions,
+        arena,
+        // A loaded artifact owns no out-of-arena resource: a resource handle
+        // is process-local and cannot be in the bytes.
+        releases: Vec::new(),
+    };
+    // The open-capture verdict, recomputed from the loaded tables — the
+    // freeze's walk over the same two tables (see `StaticFunction::open_captures`).
+    module.fill_open_captures();
+    Ok((module, export))
 }

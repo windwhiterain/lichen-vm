@@ -1165,6 +1165,12 @@ pub struct StaticFunction {
     /// with the fresh owner) from its captures (kept in the enclosing
     /// template).
     pub nodes: Vec<LocalNodeId>,
+    /// Whether the body graph reaches a `parameterized` node outside this
+    /// function's own template scope — an open capture.  Computed once when the
+    /// artifact is built (freeze or load), so the materialize pass's re-home
+    /// test is a field read instead of a body walk per function-valued
+    /// position.  See `static_closure_has_open_captures`.
+    pub open_captures: bool,
 }
 
 /// The outcome of the deep pass ([`Module::evaluate_node_deep`],

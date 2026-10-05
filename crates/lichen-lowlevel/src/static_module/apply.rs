@@ -190,7 +190,7 @@ impl<P: Program> Module<P> {
         if let Some(LowValue::Function(AnyFunctionId::Static(sref))) = value.as_enum() {
             if sref.module == ctx.module.key
                 && sref.index != ctx.applied
-                && static_closure_has_open_captures(&ctx.module, sref.index)
+                && ctx.module.functions[sref.index.0].open_captures
             {
                 return self.static_clone_function(sref, ctx);
             }
@@ -332,96 +332,10 @@ fn static_node_holds_open_closure<P: Program>(module: &StaticModule<P>, node: Lo
     };
     match value.as_enum() {
         Some(LowValue::Function(AnyFunctionId::Static(sref))) => {
-            sref.module == module.key && static_closure_has_open_captures(module, sref.index)
+            sref.module == module.key && module.functions[sref.index.0].open_captures
         }
         _ => false,
     }
-}
-
-/// Whether static function `index` has **open captures**: its body graph
-/// reaches a `parameterized` node outside its own template scope
-/// ([`StaticFunction::nodes`], which covers the parameter, the return, and
-/// every body-owned node).  A scope's own open cells re-open per call through
-/// the residual clone rule, but a capture sits outside the scope: its binding
-/// was made by whichever application minted this closure — the solve-time
-/// one, with marker cells, for a closure frozen into an artifact — and only
-/// re-homing the closure through the apply's shared remap clones the capture
-/// alongside the applied parameter, so the regroup re-joins their frozen
-/// class and the parameter unify binds this call's values.
-///
-/// Nested same-module closures are entered through their entry points and
-/// their scopes join the allowed set: a capture one closure layer down is
-/// still a capture of this one.  The walk answers through the nested
-/// function's entry points rather than descending into a function *value*
-/// node, which is a leaf of the graph it rides in.
-fn static_closure_has_open_captures<P: Program>(
-    module: &StaticModule<P>,
-    index: StaticFunctionId,
-) -> bool {
-    fn enter<P: Program>(
-        module: &StaticModule<P>,
-        index: StaticFunctionId,
-        scope: &mut HashSet<LocalNodeId>,
-        stack: &mut Vec<LocalNodeId>,
-    ) {
-        let f = &module.functions[index.0];
-        scope.extend(f.nodes.iter().copied());
-        stack.push(f.r#return);
-        stack.extend(f.asserts.iter().copied());
-    }
-    let mut scope = HashSet::new();
-    let mut visited = HashSet::new();
-    let mut stack = Vec::new();
-    enter(module, index, &mut scope, &mut stack);
-    while let Some(node) = stack.pop() {
-        if !visited.insert(node) {
-            continue;
-        }
-        let sn = &module.nodes[node.index];
-        if sn.parameterized && !scope.contains(&node) {
-            return true;
-        }
-        if let Some(operation) = sn.operation
-            && let Some(operand) = operation.operand
-        {
-            stack.push(operand);
-        }
-        if let Some(value) = sn.value {
-            match value.as_enum() {
-                Some(LowValue::Array(array)) => {
-                    // SAFETY: `array` is a payload in `module`'s arena, and the
-                    // caller holds the registered static module alive for this
-                    // walk.
-                    for item in unsafe { array.items() } {
-                        if let AnyNodeId::Static(sref) = item.node
-                            && sref.module == module.key
-                        {
-                            stack.push(sref.index);
-                        }
-                    }
-                }
-                Some(LowValue::Table(table)) => {
-                    // SAFETY: as in the array arm above.
-                    for item in unsafe { table.items() } {
-                        for node in [item.key, item.value] {
-                            if let AnyNodeId::Static(sref) = node
-                                && sref.module == module.key
-                            {
-                                stack.push(sref.index);
-                            }
-                        }
-                    }
-                }
-                Some(LowValue::Function(AnyFunctionId::Static(sref)))
-                    if sref.module == module.key =>
-                {
-                    enter(module, sref.index, &mut scope, &mut stack);
-                }
-                _ => {}
-            }
-        }
-    }
-    false
 }
 
 /// The fixed context of one static materialize pass: where the clones land,

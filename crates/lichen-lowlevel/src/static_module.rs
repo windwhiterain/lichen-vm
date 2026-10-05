@@ -430,7 +430,120 @@ fn collect_referenced_keys<P: Program>(value: P::Value, keys: &mut HashSet<Modul
     }
 }
 
+/// Whether static function `index` has **open captures**: its body graph
+/// reaches a `parameterized` node outside its own template scope
+/// ([`StaticFunction::nodes`], which covers the parameter, the return, and
+/// every body-owned node).  A scope's own open cells re-open per call through
+/// the residual clone rule, but a capture sits outside the scope: its binding
+/// was made by whichever application minted this closure — the solve-time
+/// one, with marker cells, for a closure frozen into an artifact — and only
+/// re-homing the closure through the apply's shared remap clones the capture
+/// alongside the applied parameter, so the regroup re-joins their frozen
+/// class and the parameter unify binds this call's values.
+///
+/// Nested same-module closures are entered through their entry points and
+/// their scopes join the allowed set: a capture one closure layer down is
+/// still a capture of this one.  The walk answers through the nested
+/// function's entry points rather than descending into a function *value*
+/// node, which is a leaf of the graph it rides in.
+///
+/// The answer is the artifact's [`StaticFunction::open_captures`], filled
+/// once when the artifact is built — this takes the node and function tables
+/// directly so both the freeze and the loader can fill it before the
+/// [`StaticModule`] is assembled.
+fn static_closure_has_open_captures<P: Program>(
+    key: ModuleKey,
+    nodes: &[StaticNode<P>],
+    functions: &[StaticFunction],
+    index: StaticFunctionId,
+) -> bool {
+    fn enter(
+        functions: &[StaticFunction],
+        index: StaticFunctionId,
+        scope: &mut HashSet<LocalNodeId>,
+        stack: &mut Vec<LocalNodeId>,
+    ) {
+        let f = &functions[index.0];
+        scope.extend(f.nodes.iter().copied());
+        stack.push(f.r#return);
+        stack.extend(f.asserts.iter().copied());
+    }
+    let mut scope = HashSet::new();
+    let mut visited = HashSet::new();
+    let mut stack = Vec::new();
+    enter(functions, index, &mut scope, &mut stack);
+    while let Some(node) = stack.pop() {
+        if !visited.insert(node) {
+            continue;
+        }
+        let sn = &nodes[node.index];
+        if sn.parameterized && !scope.contains(&node) {
+            return true;
+        }
+        if let Some(operation) = sn.operation
+            && let Some(operand) = operation.operand
+        {
+            stack.push(operand);
+        }
+        if let Some(value) = sn.value {
+            match value.as_enum() {
+                Some(LowValue::Array(array)) => {
+                    // SAFETY: `array` is a payload in the artifact's arena (the
+                    // module being built, or a dependency the registry pins),
+                    // and the caller holds every module alive for this walk.
+                    for item in unsafe { array.items() } {
+                        if let AnyNodeId::Static(sref) = item.node
+                            && sref.module == key
+                        {
+                            stack.push(sref.index);
+                        }
+                    }
+                }
+                Some(LowValue::Table(table)) => {
+                    // SAFETY: as in the array arm above.
+                    for item in unsafe { table.items() } {
+                        for node in [item.key, item.value] {
+                            if let AnyNodeId::Static(sref) = node
+                                && sref.module == key
+                            {
+                                stack.push(sref.index);
+                            }
+                        }
+                    }
+                }
+                Some(LowValue::Function(AnyFunctionId::Static(sref))) if sref.module == key => {
+                    enter(functions, sref.index, &mut scope, &mut stack);
+                }
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
 impl<P: Program> StaticModule<P> {
+    /// Fill every function's [`StaticFunction::open_captures`] from this
+    /// artifact's own tables — once, at build time, so the materialize pass
+    /// reads a field instead of walking a body per function-valued position.
+    /// A host that assembles a [`StaticModule`] by hand (a decoder reading
+    /// serialized bytes) calls it after assembly; the graph is the only
+    /// source, so a stored verdict that disagreed with the graph cannot arise.
+    pub fn fill_open_captures(&mut self) {
+        let key = self.key;
+        let computed: Vec<bool> = (0..self.functions.len())
+            .map(|index| {
+                static_closure_has_open_captures(
+                    key,
+                    &self.nodes,
+                    &self.functions,
+                    StaticFunctionId(index),
+                )
+            })
+            .collect();
+        for (function, open) in self.functions.iter_mut().zip(computed) {
+            function.open_captures = open;
+        }
+    }
     /// Every module key a static ref in the artifact's values names — its frozen
     /// dependencies, in the form an artifact that is *already* static can answer.
     /// The mirror of `referenced_keys(module)` above, and what a registry needs to

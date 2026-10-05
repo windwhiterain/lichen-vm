@@ -196,6 +196,9 @@ impl<P: Program> StaticModule<P> {
                     .map(|&condition| node_map[&condition])
                     .collect(),
                 nodes: function.nodes.iter().map(|&node| node_map[&node]).collect(),
+                // Filled below, once every value is in static form: the
+                // open-capture walk reads the value edges phase 3 rewrites.
+                open_captures: false,
             });
         }
 
@@ -290,16 +293,18 @@ impl<P: Program> StaticModule<P> {
             ));
         }
 
-        (
-            StaticModule {
-                key,
-                nodes,
-                functions,
-                arena,
-                releases,
-            },
-            node_map,
-        )
+        // The open-capture verdict, one walk per function, after phase 3: the
+        // walk follows the value edges the rewrite produced (before it, every
+        // node's value is still `None` and the walk would see operands only).
+        let mut artifact = StaticModule {
+            key,
+            nodes,
+            functions,
+            arena,
+            releases,
+        };
+        artifact.fill_open_captures();
+        (artifact, node_map)
     }
 }
 
