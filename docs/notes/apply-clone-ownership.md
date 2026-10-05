@@ -219,6 +219,31 @@ no deep information: re-run is decided by the answer's own slots being unbound
 id — a minted closure's mere presence in an answer marks it per-call, whatever
 its captures hold.
 
+**Where the predicate lives is part of the rule.**  Storing it on the node — a
+deep-pass tally of the closures an answer holds — cannot work, and the two
+attempts to do so are what pinned that down.  Whether a function counts as
+inside "the scope" depends on *which apply is cloning*, and a verdict is
+computed without a caller.  Reading the node's own owner as the scope is a
+different fact, not that one: the check-time closure's owner is the closure
+itself, so `half`'s answer read as concrete again.  Counting *every* dynamic
+function as unproven instead makes the recursion self-reference unproven, so
+the recursion point and the body are cloned once per level — and the walk that
+descends into a function value reaches the closure mint below, which did not
+terminate even for `fib 3`.
+
+The attribution therefore happens at the clone decision, where `ctx.applied` is
+in hand (`2786ad9`): `value_holds_foreign_function` walks the answer's value
+edges and counts a dynamic function only when it is neither the applied
+function — the recursion point, which must stay in place or a clone would mint
+a second function where the body means one — nor an enclosing function, which
+every call shares.
+
+The closure mint records its fresh id **before** walking the closure's scope
+(same commit).  A scope can name its own closure back through a sibling, and
+the walk re-enters the mint for each such reach; recording the entry afterwards
+minted a fresh function per level, without bound.  The hazard was latent for as
+long as no rule let the walk descend into function values.
+
 ## 9. The static mirror: the capture test asked about a target, not openness
 
 `examples/import`'s `(42, none, 7)` is the same shape across a frozen module:
@@ -273,5 +298,8 @@ two missing `dev` commits explain.
 
 Commits: `3f57cef` (the clone's owner), `dffdb74` (the carried answer's
 claim), `5019fbb` (a carried answer holds no foreign closure), `7ceee3e` (the
-static capture test asks about openness), on top of `827ee5d` and `f2c80db`
-(the value-against-valueless-class write, and the named read's kind guard).
+static capture test asks about openness), `2786ad9` (scope attribution at the
+clone decision, and the mint's entry recorded before its scope walk), on top of
+`827ee5d` and `f2c80db` (the value-against-valueless-class write, and the named
+read's kind guard).  `a1b81c1` (the deep-pass closure tally) was reverted by
+`2786ad9` for the reason §8 records.
