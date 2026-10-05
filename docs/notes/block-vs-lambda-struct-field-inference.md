@@ -285,6 +285,18 @@ compute 59 of 62 — the same numbers as before this work.
 
 ## 9. The root cause
 
+> **Superseded, partly.**  The clone-walk rules this section's argument leans on
+> ("the apply clone can never carry the cached value") were themselves the
+> defect: a clone was stamped with the *callee's* owner instead of the enclosing
+> template's, and a carried answer claimed its operator's run even with open
+> slots.  Both are fixed, and a one-line reproduction of the same family
+> (`id = x => x`, `f = x => id x`, `f 1`) now reads `1: Int`; the commit that
+> broke it (`30f1308`, a flat answer write) was found by bisect.  See
+> [`apply-clone-ownership.md`](apply-clone-ownership.md) for the measurements.
+> The field-list analysis below still describes how the *check* relates to the
+> *expansion*, which is why the companion note's direction (a) is still the plan
+> for the field-list form of the divergence.
+
 **The field-list check runs once, at check time, against the callee's
 check-time evaluation batch — and its effect lives only in template-level
 class topology.  A callee that is an apply node embedded in a function
