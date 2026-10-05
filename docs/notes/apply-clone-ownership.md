@@ -1,8 +1,8 @@
 # A call's clones belong to the enclosing template
 
 A value that travels through a wrapper function disappears.  This note records
-what the disappearance actually is, the commit that introduced it, the two
-rules the clone walk was missing, and the one break that is still open.  It
+what the disappearance actually is, the commit that introduced it, and the
+rules the clone walk was missing on both the dynamic and the static side.  It
 supersedes §9 of
 [`block-vs-lambda-struct-field-inference.md`](block-vs-lambda-struct-field-inference.md),
 which looked for the cause in the checker's field-list check.
@@ -190,31 +190,70 @@ tested against the reproduction above.
 | the per-call clone reads the *template* parameter instead of this call's | the clone reads the right node: `143 = Index(145, 0)`, and `145`'s first slot holds `USize(5)` |
 | `propagate_class_value` is what corrupts the argument pair *by itself* | it is the flat write (§4) that makes it observable: the same propagation at the singleton write does nothing |
 
-## 8. What is still open
+## 8. The carried answer must not contain a foreign closure
 
-`half = x => add x; half 5 5` still ends in a marker.  The chain, measured:
+With §5 and §6 fixed, `half = x => add x; half 5 5` still ended in a marker.
+The earlier reading of that chain ("the argument's value read runs before the
+parameter it reads is bound and is never forced again") recorded the symptom;
+the cause is upstream, at clone time.
 
-```
-143 = Index(145, 0)  value=NO-VALUE      ← the argument's value read
-145 elements=[146 = USize(5), …]         ← the value is in the slot it reads
-EVAL-NODE 143 (twice) … PATTERN pattern=145 argument=67 … (nothing evaluates 143 again)
-```
+Checking `half`'s body *applies* `add` to the checker's marker, and that
+symbolic application mints a real closure whose captures bind the markers.
+The deep pass then proves the body apply's answer — `[closure, type]` —
+**concrete**: the answer's only open cells live behind the closure's body,
+which the concreteness scan deliberately treats as opaque, and the type is
+decided.  The clone walk's bake guard already knew such an answer must not be
+referenced in place (`value_contains_foreign_function`: a proof cannot see
+through a function's body), but the *carry* rule rejected only a top-level
+function value — a pair *containing* one carried whole, `runned` included.
+The enclosing template's membership test then references the check-time
+closure in place (its owner chain descends from `add`, not from `half`), so
+every call of `half` applies the closure whose captures are the checker's
+markers, and the runtime argument never reaches the body.
 
-The argument's value read runs **before** the parameter it reads is bound, gets
-the marker (which the evaluator declines to cache), and is never read again
-afterwards.  `apply_parameter_check`'s `evaluate_pattern_argument` runs after
-the check by design ("so the unify sees the argument's element values instead of
-unbound slots") and descends into that position, but nothing forces the read
-again.  The next step is there: either the descent must force an argument
-position whose pattern slot is a bare cell, or the parameter check must re-force
-the argument positions the unify left open.
+Fixed in `5019fbb`: the carry side consumes the same recursive predicate as
+the bake side.  An answer holding a foreign closure carries nothing; the clone
+re-runs the operator and mints this call's closure.  Re-run versus carry needs
+no deep information: re-run is decided by the answer's own slots being unbound
+(§6), and carry is suppressed by a value-recursive scan for a foreign function
+id — a minted closure's mere presence in an answer marks it per-call, whatever
+its captures hold.
 
-`examples/import`'s `(42, none, 7)` is the same shape across a frozen module and
-should be re-measured once this is fixed.
+## 9. The static mirror: the capture test asked about a target, not openness
 
-## 9. Status
+`examples/import`'s `(42, none, 7)` is the same shape across a frozen module:
+`double = x => math.add x x` lives in geometry's frozen artifact, where
+solving `math.add x` minted a closure over marker cells and freezing kept it
+as a module-local static function.  The minimal matrix isolates it: the shape
+breaks only when the wrapper lives in an intermediate module.
 
-| suite | before this work | after `3f57cef` and `dffdb74` |
+Measured at run time, the machinery almost works: the inner apply is a
+residual and re-runs, the fresh closure is minted (`REHOME`) with its capture
+bound to `5` — and the outer apply *still* applies the frozen solve-time
+closure.  The frozen closure's value node is op-less and `parameterized`, so
+materialization keeps its value; whether to re-home it was decided by
+`static_function_captures`, which walked the closure's body for a value edge
+to **the applied function's parameter node**.  A frozen closure's captured
+cells are the solve-time application's parameter clone — linked to the
+parameter only through an equality class, never by a value edge — so the test
+answered "non-capturing" and the frozen closure rode in verbatim.  It unified
+silently with the fresh closure (`function_identity` resolves both to one
+origin, capture-blind by design for re-exports), and a read of the stale slot
+handed the outer apply the closure whose captures are dead markers.
+
+Fixed in `7ceee3e`: the test asks what the machinery needs — whether the
+closure's body reaches any `parameterized` node **outside its own template
+scope** (`StaticFunction::nodes`).  An own-scope open cell re-opens per call
+through the residual clone rule, so it is not a capture; a captured open cell
+is outside the scope by definition.  No equality-class walk is needed: the
+body reaches the captured cell through operation operands and array items
+already.  Once the closure re-homes through the shared remap, the existing
+machinery does the rest — the capture clone re-joins the parameter's frozen
+class in the regroup, and the parameter unify binds it.
+
+## 10. Status
+
+| suite | before this work | after `5019fbb` and `7ceee3e` |
 | --- | --- | --- |
 | lowlevel | 155 | 155 |
 | checker | 87 | 87 |
@@ -222,14 +261,17 @@ should be re-measured once this is fixed.
 | field_read_kinds | 15 | 15 |
 | pipeline | 138 / 140 | 138 / 140 |
 | compute | 59 / 62 | 59 / 62 |
-| examples | 0 / 1 (drift unchanged) | 0 / 1 (drift unchanged) |
+| examples | 0 / 1 (import drift) | import fixed; `compute_jit` drift remains |
+| perspective | 17 / 20 | 17 / 20 |
 
 The red tests that remain are the ones this note does not touch: the mirrored
 double diagnostic (`pipeline`), the refinement and perspective suites whose
 expectations predate the `f : f` encoding
-(`docs/notes/function-type-as-function.md`), the parked compute case, and the
-`dependent` checker case.
+(`docs/notes/function-type-as-function.md`), the parked compute case, the
+`dependent` checker case, and `compute_jit`'s `raw[...]` rendering, which the
+two missing `dev` commits explain.
 
-Commits: `3f57cef` (the clone's owner), `dffdb74` (the carried answer's claim),
-on top of `827ee5d` and `f2c80db` (the value-against-valueless-class write, and
-the named read's kind guard).
+Commits: `3f57cef` (the clone's owner), `dffdb74` (the carried answer's
+claim), `5019fbb` (a carried answer holds no foreign closure), `7ceee3e` (the
+static capture test asks about openness), on top of `827ee5d` and `f2c80db`
+(the value-against-valueless-class write, and the named read's kind guard).
