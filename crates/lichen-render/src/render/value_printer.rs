@@ -21,6 +21,7 @@ where
             printer: TypePrinter::new_with_ext(module, render_ext),
             path: AncestorNodes::new(),
             tpath: AncestorNodes::new(),
+            raw_path: AncestorNodes::new(),
         }
     }
 
@@ -31,7 +32,7 @@ where
 
     /// Render a value against its type: the type chain decides how the value
     /// reads.  When the type chain is opaque, fall back to the raw layout,
-    /// which marks a list of cells `raw[…]`.
+    /// which marks every reading it dumps (`raw[…]`, `raw Int`).
     fn value(&mut self, value: P::Value, ty: NodeId) -> String {
         // The universe as the type: the value is an atomic type constant —
         // `Int`, `Type`, or an extension's own type constant.
@@ -97,17 +98,57 @@ where
         {
             return out;
         }
+        // A type that names a **leaf class**: `[class, K]` whose kind slot is
+        // the self-looping universe, or a function-type node
+        // `[Function(fid), ↺]` whose kind slot is the node's own self-cycle.
+        // The value such a type holds is a scalar or a function, and reads by
+        // its own spelling (`1`, `"s"`, `Function`) — a standard format, so
+        // it is **not** what the tail of this cascade dumps.  A value the
+        // class does not hold (a list, say) is a mismatch and falls through.
+        if let Some(spelling) = self.leaf_class(value, ty, tys) {
+            return spelling;
+        }
         self.raw(value)
     }
 
-    /// An atomic type constant: the value of a type expression whose type is
-    /// the universe.  A structural value typed by the universe (the universe
-    /// node itself) falls back to the raw layout.
-    fn atomic(&mut self, value: P::Value) -> String {
-        if let Some(spelling) = self.printer.type_constant(&value) {
-            spelling
+    /// [`Self::spelling`] when the type `ty` — read as the cells `tys` —
+    /// names a leaf class, `None` for any other type and for a value the
+    /// class does not hold.  A leaf class is a two-cell type node whose
+    /// **class slot** names what it holds: a function type is named by a
+    /// `Function` value and closes on itself (`[Function(fid), ↺]`), every
+    /// other class by a type constant whose kind slot is the self-looping
+    /// universe (`[Int, ↺]`, `[string, ↺]`, …).
+    fn leaf_class(&self, value: P::Value, ty: NodeId, tys: &[ArrayItem]) -> Option<String> {
+        if tys.len() != 2 {
+            return None;
+        }
+        let class = self.module.node_value(tys[0].node)?;
+        // The **class slot** says which kind of leaf this is: a function type
+        // is named by a `Function` value and its kind slot is the node's own
+        // self-cycle; every other class is a type constant whose kind slot is
+        // the universe — read through the ref, so a class frozen in another
+        // module counts too.
+        let leaf = if matches!(class.as_enum(), Some(LowValue::Function(_))) {
+            self.printer.slot1_is_self(tys[1].node, ty)
         } else {
-            self.raw(value)
+            self.printer.is_universe_any(tys[1].node)
+        };
+        if !leaf {
+            return None;
+        }
+        self.spelling(value)
+    }
+
+    /// An atomic type constant: the value of a type expression whose type is
+    /// the universe.  A value this vocabulary has no name for is `?`: the
+    /// chain *did* read it as a type constant, so the mark would claim the
+    /// opposite.  A structural value typed by the universe (the universe node
+    /// itself) is no type constant at all, and falls back to the raw layout.
+    fn atomic(&mut self, value: P::Value) -> String {
+        match self.printer.type_constant(&value) {
+            Some(spelling) => spelling,
+            None if value.as_enum().is_some() => self.raw(value),
+            None => "?".to_string(),
         }
     }
 
@@ -314,56 +355,76 @@ where
         self.marker_is_struct(marker).then_some(marker)
     }
 
-    /// The raw value layout — the fallback when the type chain cannot guide
-    /// the reading: a type pair `[head, [Type, ↺]]` renders as its head
-    /// (`[TypeInt, K]` → `Int`), a list of cells as `raw[…]` (the mark that
-    /// says the type chain did not read it), functions `Function`, and the
-    /// type constants by their spellings `Int` / `Type`.
+    /// The raw value layout — the fallback for a value the type chain named
+    /// no class for.  **Every reading here is marked `raw`**: a list of cells
+    /// as `raw[…]` (the mark fuses with the list's own brackets), an atomic
+    /// as `raw x` — `raw 6`, `raw Int`.  The mark is unconditional because no
+    /// reading here is a form the chain explained, and a dump spelled exactly
+    /// like a read one (`6`, `Int`) would be indistinguishable from that read
+    /// though the two sit behind entirely different structures — see
+    /// [raw-rendering-mark](../docs/notes/raw-rendering-mark.md).
     fn raw(&mut self, value: P::Value) -> String {
         self.raw_any(value)
     }
 
     /// [`Self::raw`] for a value whose array items may be static refs.
     fn raw_any(&mut self, value: P::Value) -> String {
-        if let Some(structural) = value.as_enum() {
-            return match structural {
-                LowValue::USize(n) => n.to_string(),
-                LowValue::Float(value) => float_literal(value),
-                LowValue::Str(s) => format!("\"{s}\""),
-                LowValue::Function(_) => "Function".to_string(),
-                LowValue::Table(_) => "Table".to_string(),
-                LowValue::None => "none".to_string(),
-                LowValue::Void => "none".to_string(),
-                LowValue::Parameterized => "parameterized".to_string(),
-                LowValue::Array(array) => {
-                    // SAFETY: `array` is the payload of `value`, a value of the
-                    // module being rendered.
-                    let elements = unsafe { array.items() };
-                    // A type pair `[head, K]`: the kind slot is the
-                    // self-looping universe, so render just the head (and cut
-                    // the cycle).
-                    if elements.len() == 2 && self.printer.is_universe_any(elements[1].node) {
-                        let head = self
-                            .module
-                            .node_value(elements[0].node)
-                            .unwrap_or_else(|| P::Value::from(LowValue::None));
-                        return self.raw_any(head);
-                    }
-                    let mut out = Vec::new();
-                    for item in elements {
-                        let value = self
-                            .module
-                            .node_value(item.node)
-                            .unwrap_or_else(|| P::Value::from(LowValue::None));
-                        let text = self.raw_any(value);
-                        out.push(text);
-                    }
-                    format!("raw[{}]", out.join(", "))
-                }
-            };
+        if let Some(LowValue::Array(array)) = value.as_enum() {
+            // SAFETY: `array` is the payload of `value`, a value of the module
+            // being rendered.
+            return self.raw_cells(unsafe { array.items() });
         }
-        self.printer
-            .type_constant(&value)
-            .unwrap_or_else(|| "?".to_string())
+        // An atomic reads by its own spelling; the array is the one value
+        // [`Self::spelling`] has no answer for, and it is handled above, so
+        // `?` here is the printer's own "this vocabulary cannot name it".
+        let atomic = self.spelling(value).unwrap_or_else(|| "?".to_string());
+        format!("raw {atomic}")
+    }
+
+    /// The raw reading of a list's cells: `raw[…]`, each cell dumped through
+    /// [`Self::raw_any`] in its turn.
+    fn raw_cells(&mut self, elements: &[ArrayItem]) -> String {
+        let mut out = Vec::with_capacity(elements.len());
+        for item in elements {
+            // A cell this dump has already entered is a cycle, and reads as
+            // `…` — the type printer's own spelling.  It is what keeps a
+            // self-referential kind (`[Type, ↺]`) from unrolling forever.
+            if self.raw_path.contains(item.node) {
+                out.push("…".to_string());
+                continue;
+            }
+            let child = self
+                .module
+                .node_value(item.node)
+                .unwrap_or_else(|| P::Value::from(LowValue::None));
+            self.raw_path.insert(item.node);
+            out.push(self.raw_any(child));
+            self.raw_path.remove(item.node);
+        }
+        format!("raw[{}]", out.join(", "))
+    }
+
+    /// The value's own spelling: a scalar's digits, a string's quotes, a
+    /// function's or a table's name, a type constant's spelling.  This is the
+    /// **standard** reading wherever the type chain named a class for the
+    /// value ([`Self::leaf_class`]), and the content of a dump — marked — where
+    /// it did not.  `None` for an array, the one value with no single-token
+    /// spelling: its cells are the reading instead.
+    fn spelling(&self, value: P::Value) -> Option<String> {
+        match value.as_enum() {
+            Some(LowValue::USize(n)) => Some(n.to_string()),
+            Some(LowValue::Float(value)) => Some(float_literal(value)),
+            Some(LowValue::Str(s)) => Some(format!("\"{s}\"")),
+            Some(LowValue::Function(_)) => Some("Function".to_string()),
+            Some(LowValue::Table(_)) => Some("Table".to_string()),
+            Some(LowValue::None) | Some(LowValue::Void) => Some("none".to_string()),
+            Some(LowValue::Parameterized) => Some("parameterized".to_string()),
+            Some(LowValue::Array(_)) => None,
+            None => Some(
+                self.printer
+                    .type_constant(&value)
+                    .unwrap_or_else(|| "?".to_string()),
+            ),
+        }
     }
 }

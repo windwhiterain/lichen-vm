@@ -141,5 +141,5 @@ reassembled in index order.  The results are stored under a fresh `BufferId` and
 
 `tests/compute.rs` covers the scalar config (`plrun`/`pget`), `pcollect` to an
 array, a **tuple config** (`<Int, Int> -> Int` domain), and the `ParKernel`
-value/type render (`(ParKernel, parameterized): struct<.native raw[?a, ?b], .sig Int -> Int -> Int>`).
+value/type render (`(raw ParKernel, raw parameterized): struct<.native raw[?a, ?b], .sig Int -> Int -> Int>`).
 The full file (25 tests) passes alongside the original `jit`/`launch` suite.

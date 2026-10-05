@@ -37,9 +37,10 @@ type RenderExt<'a, V> = &'a dyn Fn(&V) -> Option<String>;
 /// `<Int, Type>`, `array<Int, 3>`), a value whose type is a tuple type reads as a
 /// tuple `(1, Int)`, an array type as an array `[1, 2, 3]`, and a struct
 /// type as its field tuple.  When the type chain is opaque (an unbound cell,
-/// an extension type), the value falls back to its raw layout — the old
-/// `[head, K]` reading of a recursive pair, with a list of cells spelled
-/// `raw[…]` so a raw reading never reads as a form the chain explained.
+/// an extension type), the value falls back to its raw layout, and **every**
+/// reading of that layout is marked: a list of cells `raw[…]`, an atomic
+/// `raw 6` / `raw Int`.  A dump never spells itself like a form the chain
+/// explained — the two sit behind different structures.
 pub fn print_value<P: HighProgram>(module: &Module<P>, value: P::Value, ty: NodeId) -> String
 where
     P::Value: ValueType,
@@ -206,6 +207,11 @@ where
     path: AncestorNodes<NodeId>,
     /// Type nodes on the current recursion; a cycle renders as `…`.
     tpath: AncestorNodes<NodeId>,
+    /// Cells the current **raw dump** has entered; one met again renders as
+    /// `…`, which is what stops a self-referential kind (`[Type, ↺]`) from
+    /// unrolling forever.  Static refs count as well as dynamic ones: a kind
+    /// read out of a frozen module carries its own self-loop.
+    raw_path: AncestorNodes<AnyNodeId>,
 }
 
 /// The class representative of `node`, via a read-only `parent` walk (the

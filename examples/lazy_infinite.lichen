@@ -1,6 +1,6 @@
 ---
   order = "2"
-  output = "(1, 2, 3): <?a, ?b, ?c>"
+  output = "(raw 1, raw 2, raw 3): <?a, ?b, ?c>"
 ---
 f = x => [x, ~ f (x + 1)]
 inf = f 0
