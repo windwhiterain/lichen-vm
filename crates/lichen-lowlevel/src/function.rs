@@ -512,6 +512,7 @@ impl<P: Program> Module<P> {
         let proven_concrete = evaluated_deep.is_some_and(|e| !e.parameterized);
         let depends_on_parameter = node == ctx.parameter
             || !proven_concrete
+            || self.value_contains_unbound(value, ctx.applied)
             || value.is_some_and(|value| {
                 matches!(
                     value.as_enum(),
@@ -828,6 +829,72 @@ impl<P: Program> Module<P> {
                     }
                     _ => {}
                 },
+            }
+        }
+        false
+    }
+
+    /// Whether `value`'s array tree still holds an **unbound cell**, directly
+    /// or through the nodes it names.
+    ///
+    /// A node with a value is normally finished — a value write goes to the
+    /// class that holds none — but a value whose parts are cells can still
+    /// change: a unification that reaches one of those cells fills it, and the
+    /// change belongs to *this* call.  Such a node must be cloned like a
+    /// valueless one, or the write either lands in the caller's template or
+    /// never reaches the clone that stands for it in this call.
+    fn value_contains_unbound(&self, value: Option<P::Value>, applied: FunctionId) -> bool {
+        let Some(value) = value else {
+            return false;
+        };
+        let mut stack: Vec<AnyNodeId> = match value.as_enum() {
+            // SAFETY: `array`/`table` are payloads of `value`, which the caller
+            // holds reachable; this method only reads, so neither home block is
+            // released.  The note covers both arms.
+            Some(LowValue::Array(array)) => unsafe { array.items() }
+                .iter()
+                .map(|item| item.node)
+                .collect(),
+            Some(LowValue::Table(table)) => unsafe { table.items() }
+                .iter()
+                .flat_map(|item| [item.key, item.value])
+                .collect(),
+            _ => return false,
+        };
+        let mut seen = HashSet::new();
+        while let Some(node) = stack.pop() {
+            if !seen.insert(node) {
+                continue;
+            }
+            match node {
+                AnyNodeId::Static(_) => {}
+                Dyn(node) => {
+                    let value = self.nodes[node].value;
+                    if crate::is_unbound(value) {
+                        return true;
+                    }
+                    match value.and_then(|value| value.as_enum()) {
+                        // A function's body is not this call's business here:
+                        // `value_contains_foreign_function` owns that case.
+                        Some(LowValue::Function(AnyFunctionId::Dynamic(function)))
+                            if function == applied => {}
+                        Some(LowValue::Function(_)) => {}
+                        Some(LowValue::Array(array)) => {
+                            // SAFETY: `array` is the payload of `node`, a live
+                            // node of this module; this method only reads.
+                            stack.extend(unsafe { array.items() }.iter().map(|item| item.node))
+                        }
+                        Some(LowValue::Table(table)) => {
+                            // SAFETY: `table` is the payload of `node`, a live
+                            // node of this module; this method only reads.
+                            for item in unsafe { table.items() } {
+                                stack.push(item.key);
+                                stack.push(item.value);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
         false
