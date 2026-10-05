@@ -551,18 +551,33 @@ impl<P: Program> Module<P> {
         // such clones are left unevaluated — the kept operand chain
         // recomputes against the argument.  Constant nodes (no operation)
         // carry their remapped value.
-        let value = if operation.is_some() {
-            None
-        } else {
-            value.map(|value| self.value_apply(value, ctx))
-        };
+        // **The staleness is the operand's rewrite.**  An operation whose operand
+        // this call maps to different nodes computes over this call's nodes, so
+        // the clone must run: its answer is not the template's.  One whose
+        // operand maps to itself is the same computation over the same nodes —
+        // its cached answer is this call's answer, and the clone carries both
+        // the answer and `runned`, so the operator does not run again (whether
+        // an operator runs is `runned`, not whether a value sits in the slot).
+        let source_operand = operation.and_then(|operation| operation.operand);
         let operation = operation.map(|operation| Operation {
             operand: operation
                 .operand
                 .map(|operand| self.node_apply(operand, ctx)),
             ..operation
         });
+        let operand_rewritten = match (source_operand, operation.and_then(|o| o.operand)) {
+            (Some(before), Some(after)) => before != after,
+            _ => false,
+        };
+        let value = if operation.is_some() && operand_rewritten {
+            None
+        } else {
+            value.map(|value| self.value_apply(value, ctx))
+        };
         self.write_node_value(clone, value);
+        if !operand_rewritten {
+            self.nodes[clone].runned = true;
+        }
         self.nodes[clone].operation = operation;
         // The clone is still a singleton class here, so the slot write *is* the
         // class write; a later unify joins the two through `add_equality`.
