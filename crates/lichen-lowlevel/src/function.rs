@@ -4,7 +4,7 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, Function, FunctionId,
-    LowValue, Module, NodeId, Operation, PendingAssert, Program, TableItem,
+    LowValue, Module, NodeId, Operation, PendingAssert, Program, TableItem, is_unbound,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -628,7 +628,17 @@ impl<P: Program> Module<P> {
             None
         };
         self.write_node_value(clone, mapped);
-        self.nodes[clone].runned = carried;
+        // An answer whose **own slots are still open** is the operator's result
+        // structure — the pair a call answers with — and only that operator's
+        // re-run and wiring settle it (the parameter unify, `wire_apply_result`
+        // binding the call's cell and its type).  The value still carries (its
+        // structure is the template's fact, and mapping it is what puts this
+        // call's cells in it), but the clone does not claim the operator's
+        // answer: `runned` stays false, so a read runs it and the computed
+        // answer is reconciled with the carried one instead of the open slots
+        // being read as final.
+        let owes_answer = mapped.is_some_and(|value| self.answer_elements_are_unbound(value));
+        self.nodes[clone].runned = carried && !owes_answer;
         self.nodes[clone].operation = operation;
         // The clone is still a singleton class here, so the slot write *is* the
         // class write; a later unify joins the two through `add_equality`.
@@ -848,6 +858,26 @@ impl<P: Program> Module<P> {
             current = self.functions.get(f).and_then(|f| f.parent);
         }
         false
+    }
+
+    /// Whether an answer's **own** slots are still unbound — an array whose
+    /// elements are cells no operator has filled.  Such an answer is the
+    /// operator's own result structure (the pair a call answers with), and the
+    /// only thing that settles it is that operator's own re-run and wiring, so
+    /// a clone that claimed the operator's answer would read open slots as
+    /// final.  One level deep by design: a structure whose *elements* are
+    /// decided is a fact a clone may answer with, however open its interior is
+    /// (a struct type's field cells are bound by the enclosing call's checks).
+    fn answer_elements_are_unbound(&self, value: P::Value) -> bool {
+        let Some(LowValue::Array(array)) = value.as_enum() else {
+            return false;
+        };
+        // SAFETY: `array` is the payload of `value`, a value the caller holds
+        // reachable; this method only reads, so its home block is not released.
+        unsafe { array.items() }.iter().any(|item| match item.node {
+            AnyNodeId::Dynamic(node) => is_unbound(self.node_value(Dyn(node))),
+            AnyNodeId::Static(sref) => is_unbound(Some(self.static_read(sref))),
+        })
     }
 
     /// Whether `value`'s array tree contains a function value other than
