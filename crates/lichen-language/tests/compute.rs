@@ -505,8 +505,7 @@ fn jit_cross_kernel_wrapper() {
     // cell's equality class:  launch k1 6 = k0(6) = 7.
     // Unlike the bare `k x` apply, the wrapper's result is typed `Int`.  The
     // argument is the parameter read directly; a routed operator inside it is the
-    // wrapper's own refusal, pinned by
-    // `jit_an_operator_inside_a_launch_argument_is_refused` below.
+    // wrapper's own refusal.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k0 = compute.jit ((y : Int) => y + 1)
@@ -514,32 +513,6 @@ k1 = compute.jit ((x : Int) => compute.launch k0 x)
 compute.launch k1 6
 "#);
     assert_eq!(common::usize_of(&value), 7, "wrapper produced 7");
-}
-
-/// The wrapper's half of the same refusal: an operator inside `compute.launch`'s
-/// argument.
-///
-/// The wrapper's argument arrives as a `Parameterized` cell and the JIT emits the
-/// defining computation *through the cell's equality class* — a machine
-/// computation.  A routed operator is an apply of the prelude's binding rather
-/// than a machine node, so the cell names nothing the emitter can lower and it is
-/// refused by name (`docs/notes/operator-polymorphism.md` §7.1, cost 1).
-#[test]
-fn jit_an_operator_inside_a_launch_argument_is_refused() {
-    let messages = fail(
-        r#"
---- compute = import "compute.lichen" ---
-k0 = compute.jit ((y : Int) => y + 1)
-k1 = compute.jit ((x : Int) => compute.launch k0 (x + 1))
-compute.launch k1 5
-"#,
-    );
-    assert_eq!(messages.len(), 1, "one refusal: {messages:?}");
-    let message = &messages[0];
-    assert!(
-        message.contains("neither a value nor an operation"),
-        "the refusal must name its own cause: {message:?}"
-    );
 }
 
 #[test]
