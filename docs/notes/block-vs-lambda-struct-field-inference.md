@@ -1,6 +1,7 @@
 # A block and an applied lambda disagree on a struct field's inferred type
 
-> Status: **root cause found** (§9); fix direction not yet chosen (§11).  The
+> Status: **root cause found** (§9); **direction (a) chosen by the author,
+> implementation handed off** (§12).  The
 > measurements in §1–§7 stand as the investigation that narrowed the question;
 > §9–§11 are the answer, found by tracing every root `unify`/`MERGE`/value
 > write during the build of both §1 programs and by three confirming
@@ -393,4 +394,148 @@ Directions, not a decision:**
 Any of them must keep the two accidentally-working paths working: the block
 (single batch, bound at check time) and the ascribe-before variant (batch
 baked concrete by the deep pass).
+
+## 12. Implementation plan for direction (a) — handed off
+
+> Chosen by the author; implementation handed off.  This section is
+> self-contained: §9 is the why, this is the what.
+
+### 12.1 The change in one paragraph
+
+A struct instantiation whose field check is structurally valid compiles its
+**term to an operation node** (a new `LowOperator`, tentatively
+`Instantiate`) instead of the plain constant pair `pair_of(value_node,
+type_pair)` it builds today.  The operator's evaluation forces the callee,
+reads the struct shape out of the callee's fresh value, and **unifies the
+shape against the argument's type-slot array** — the same pairing the
+check-time `check_unify(value_shape, field_list)` already establishes, now
+re-established against whichever batch the call actually computed.  The
+operand-rewrite rule (`node_apply`, author-confirmed) re-runs the operator
+exactly when the expansion re-runs, so the field constraint becomes part of
+the per-call expansion.  The check-time check and everything it feeds
+(diagnostics, nominality, the name-table reorder) stay exactly as they are.
+
+### 12.2 Why this is safe to add beside the existing check
+
+* The check-time `check_unify` and the operator's per-call unify are
+  **idempotent against each other**: both are class merges over the same
+  pairing; the second merge binds nothing new at check time and everything
+  that matters per call.
+* Ordering is a non-issue: the unify is a class merge, so it is correct
+  whether it runs before or after the apply's parameter check binds the
+  argument's cells — replication carries a later write to the merged class.
+  (Traced: batch 1's field cell was bound *during* the parameter check, and
+  the merge still delivered it.)
+* A *declared* field type is already enforced per call through the parameter
+  channel (measured: `K = _x => struct<.x Int>; j = x => (K _)(.x x); j "s"`
+  fails with `expected Int, found string` today).  The operator adds the
+  missing *inference write* for hole fields; enforcement for declared fields
+  keeps working through the existing channel, with the operator as a second
+  opinion against the recomputed batch.
+
+### 12.3 The operator's contract
+
+Operand (one array node, three items):
+
+| slot | node | role |
+|---|---|---|
+| 0 | `callee_pair` | the struct type expression's term (today's `type_pair`) |
+| 1 | `value_node` | the instance's field values, definition order (today's `named_instantiate`/`positional` value) |
+| 2 | `value_shape` | the arguments' type slots, definition order (today's `order_ty` array) |
+
+Evaluation (mirror the `LowOperator::Apply` arm in
+`crates/lichen-lowlevel/src/evaluation.rs`):
+
+1. Evaluate the operand array; propagate `Parameterized`/`Void` markers
+   exactly as the `Apply`/`Index` arms do — **never** answer `Void` for an
+   unbound callee (the apply-frame note in `apply.rs` says why: a `Void`
+   caches as a decided value and certifies the node concrete).
+2. Evaluate slot 0 (the callee).  Read element 0 of its value pair — the
+   field-type shape.  A callee that is not a readable struct pair was
+   already refused at check time (the `!concrete` pin path re-checks per
+   call through this same unify).
+3. `self.unify(shape, value_shape)` — the per-call field check.  Arrays
+   descend elementwise; each field pair meets the argument's type slot.
+4. Answer the pair `[slot 1, slot 0]` (fresh two-element array in the node's
+   block) through `write_node_answer`, so the node *is* the instance pair
+   `[value, struct type]` exactly as today's `pair_of` makes it.
+
+### 12.4 The checker change
+
+In `check_instantiate` (`crates/lichen-highlevel/src/checker/structs.rs`):
+
+* Keep everything up to and including the `check_unify(value_shape,
+  field_list)` call unchanged.
+* When `valid` (the structural field checks passed), build the term as the
+  operation node (`op_node` with `LowOperator::Instantiate` and the §12.3
+  operand) instead of `pair_of(value_node, type_pair)`.
+  `state[e].ty = type_pair` and `state[e].val = value_node` stay as they
+  are — the `IR::ExprKind::Instantiate` contract ("the expression's type is
+  the struct type itself") is untouched.
+* When `!valid`, keep today's plain `pair_of` form: a mismatch was already
+  recorded, and there is no constraint to enforce per call.
+
+Nothing else in the checker changes: `named_instantiate`'s reorder, the
+`!concrete` pin, the mid-recursion probe cell, and the lazy-`Index`
+`field_list` all stay.
+
+### 12.5 Touch list
+
+* `crates/lichen-lowlevel/src/lib.rs` — the `LowOperator` variant (enum at
+  `:426`).
+* `crates/lichen-lowlevel/src/evaluation.rs` — the dispatch arm (`:178`),
+  beside `Apply`.
+* `crates/lichen-lowlevel/src/codec.rs` — the static-module serialization
+  discriminant (`:328`/`:337`); assign the next `u8`.
+* `crates/lichen-lowlevel/src/low_type.rs` — the operator's low-type
+  projection (`:106`); the answer is a pair, so the pair rule applies.
+* `crates/lichen-lowlevel/src/resolve.rs` — operand arity validation
+  (`:108`); three slots.
+* `crates/lichen-highlevel/src/checker/structs.rs` — the `check_instantiate`
+  term construction (§12.4).
+* `loop_conversion.rs:223/250` matches specific operators — check the arms
+  still cover what they must; no semantic change expected.
+
+### 12.6 Pitfalls (all measured, all avoidable)
+
+1. **The constraint must be on the read path.**  The instantiate's `term`
+   must *be* the operation node.  A constraint node on the side that nothing
+   references is never evaluated — evaluation is demand-driven.
+2. **Do not delete the check-time `check_unify`.**  It owns the diary
+   attribution for check-time field mismatches; the operator's unify records
+   ownerless errors, which surface as *orphan mismatches* positioned after
+   every attributed diagnostic (`diagnostic.rs:421-423`).  Keeping both
+   preserves today's diagnostics exactly.
+3. **Do not merge batch 1 and batch 2** (§11 answer 2): they are expansions
+   under, in general, different arguments.
+4. **Marker discipline**: an unbound callee must yield `Parameterized`, never
+   `Void` (§12.3.1).
+5. The deep pass's concreteness verdicts are load-bearing for the two
+   accidentally-working paths (§10): when the field cells bind at check
+   time, the instantiate operation node must come out *concrete* so
+   `node_apply` bakes it — it will, because its answer's cells are the same
+   bound ones the constant pair carried.
+
+### 12.7 Verification recipe
+
+Programs (all through `lichen_language::run::evaluate`; the first four are
+the note's own):
+
+| program | expected |
+|---|---|
+| `K = _x => struct<.x _>\nj1 = {T = _; 1: T; (K _)(.x T)}\nj1` | `(Int,): struct<.x Type>` (unchanged) |
+| `K = _x => struct<.x _>\nj = x => {T = _; x: T; (K _)(.x T) }\nj 1` | `(Int,): struct<.x Type>` (**the fix**) |
+| `j = x => {T = _; x: T; struct<.x _>(.x T) }\nj 1` | `(Int,): struct<.x Type>` (unchanged) |
+| `K = _x => struct<.x _>\nj = x => {T = _; x: T; 1: T; (K _)(.x T) }\nj 1` | `(Int,): struct<.x Type>` (unchanged) |
+| `K = _x => struct<.x Int>\nj = x => (K _)(.x x)\nj 1` | `(1,): struct<.x Int>` (unchanged) |
+| `K = _x => struct<.x Int>\nj = x => (K _)(.x x)\nj "s"` | `expected Int, found string` (unchanged) |
+| `h = X => struct<.x _>\nh Int` | `struct<.x raw[?a, ?b]>: TypeStruct` (unchanged — a genuinely unconstrained hole stays raw) |
+| `h2 = X => struct<.x X>\nh2 Int` | `struct<.x Int>: TypeStruct` (unchanged) |
+
+Suites (§7's baseline): lowlevel 155, checker 87, pipeline 137 of 140,
+compute 59 of 62 — unchanged except where the fix deliberately adds
+coverage.  A regression test belongs with the render tests
+(`crates/lichen-language/src/tests/render_tests.rs`'s `output()` helper);
+per team rule, add tests only with the author's say-so.
+
 
