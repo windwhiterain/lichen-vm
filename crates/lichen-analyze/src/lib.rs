@@ -172,6 +172,38 @@ impl Analysis {
         lichen_utils::disjoint::members(&self.build.module.nodes, representative).collect()
     }
 
+    /// Every node in the graph that was cloned from `template`: one run's clones
+    /// of a single template node.
+    ///
+    /// A question about what an *apply* did is a question about the clones it
+    /// made — the template is not written (that is what keeps a function
+    /// reusable) — so a reader that asks about the result of an applied program
+    /// asks here, and [`NodeReport::origin`] is the inverse map.  Linear in the
+    /// node count, so this answers one question once rather than sitting on a
+    /// path the compiler takes.
+    pub fn clones_of(&mut self, template: NodeId) -> Vec<NodeId> {
+        let nodes: Vec<NodeId> = self.build.module.nodes.keys().collect();
+        nodes
+            .into_iter()
+            .filter(|node| self.build.module.node_origin(*node) == Some(template))
+            .collect()
+    }
+
+    /// The template node `node` was cloned from, resolved to the end of the
+    /// origin chain: an apply's clone names its template, and a clone of a clone
+    /// names the previous clone, so a reader that wants the source node follows
+    /// the chain rather than one step.
+    pub fn source_of(&mut self, node: NodeId) -> NodeId {
+        let mut current = node;
+        for _ in 0..64 {
+            match self.build.module.node_origin(current) {
+                Some(origin) if origin != current => current = origin,
+                _ => break,
+            }
+        }
+        current
+    }
+
     /// The representative of `node`'s equality class.
     pub fn representative(&mut self, node: NodeId) -> Option<NodeId> {
         if !self.build.module.nodes.contains_key(node) {
