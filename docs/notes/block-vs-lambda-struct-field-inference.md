@@ -1,9 +1,10 @@
 # A block and an applied lambda disagree on a struct field's inferred type
 
-> Status: **open — root cause not found.**  This note is a handoff: it records
-> every measurement that was taken, what each one rules out, and the one
-> difference that held through all of them.  Nothing here is a fix, and no
-> behaviour change accompanies it except the two commits named in §7.
+> Status: **root cause found** (§9); fix direction not yet chosen (§11).  The
+> measurements in §1–§7 stand as the investigation that narrowed the question;
+> §9–§11 are the answer, found by tracing every root `unify`/`MERGE`/value
+> write during the build of both §1 programs and by three confirming
+> experiments (§10).
 >
 > Worktree `.worktrees/trace-order`, branch `feature/class-value-on-representative`,
 > HEAD `06b2b37`.
@@ -265,7 +266,7 @@ Everything else tried was reverted; the tree is clean at `06b2b37`, and the
 suites read **lowlevel 155 passed**, **checker 87 passed**, pipeline 137 of 140,
 compute 59 of 62 — the same numbers as before this work.
 
-## 8. Open questions for whoever picks this up
+## 8. Open questions for whoever picks this up — **answered in §9**
 
 1. **Which node does a `.name` argument contribute** when the field's declared
    type is a hole — and is that the same node a *type position* reads?
@@ -279,3 +280,117 @@ compute 59 of 62 — the same numbers as before this work.
    shape** (`IR::ExprKind::Instantiate`'s doc says "the expression's type is the
    struct type itself"), and if so, where does the argument's type enter that
    shape?
+
+## 9. The root cause
+
+**The field-list check runs once, at check time, against the callee's
+check-time evaluation batch — and its effect lives only in template-level
+class topology.  A callee that is an apply node embedded in a function
+template is recomputed on every call (its result holds unbound field cells, so
+the deep pass judges it parameterized and the apply clone can never carry the
+cached value); the recomputation mints fresh field cells that no constraint
+ever touches, and the instance's type is wired to that recomputation.  The
+field constraint is part of the *check*, not part of the *expansion*: macro
+expansion re-runs the callee's body per call but never re-checks the fields
+against the call's arguments.**
+
+The full write sequence, traced by logging every root `unify`, every
+`add_equality` merge and every `write_node_value` during the build of the
+lambda program (node ids as in §3):
+
+1. **Check time, `j`'s body.**  The force in `check_instantiate` evaluates the
+   `(K _)` apply node — batch 1 is born (`71 = [72, 73]`).  The field-list
+   check then issues `UNIFY value_shape(=[52]) field_list(=[71])`, descending
+   to `MERGE 52 71` with **both sides unbound** (`x: T` pins nothing).  The
+   class `{49, 52, 71}` commits the array `[72, 73]`; `72` and `73` themselves
+   stay unbound.  The constraint now exists *only* as this class topology.
+2. **`j 1`, clone walk.**  `52`'s clone (`110`) carries the class's committed
+   array `[72, 73]` — with `72`/`73` **referenced in place**, because both are
+   owned by `K`'s template and fail the walk's membership test.  The `(K _)`
+   clone's cached value is dropped (it is parameterized: the struct pair
+   contains unbound cells), so it recomputes: **batch 2** (`121 = [122, 123]`).
+   From here on, no unify in the whole run ever mentions `121`, `122` or
+   `123`.
+3. **`j 1`, parameter check.**  The descent into `x`'s type-cell clone — which
+   also carries the committed `[72, 73]` — unifies `Int`'s type pair against
+   it and binds **batch 1**: `MERGE 72 4` (`72 := Type`), `MERGE 73 11`.  The
+   right value arrives on the wrong generation: batch 1 is by then unreachable
+   from the result, because `wire_apply_result` wired the instance's type to
+   the recomputation (`MERGE 97 113`, `MERGE 113 119` — the root type *is*
+   batch 2's struct pair).
+4. The printer reads `122` — a cell nothing ever wrote — and falls through to
+   `raw[?a, ?b]`.
+
+The block's whole advantage, restated in these terms: there is **no enclosing
+template**, so the `(K _)` apply is evaluated exactly once — the batch the
+field check ran against is the batch the printer reads.  And because `1: T`
+precedes the instantiate in the same check pass, the field check's descent
+meets an already-bound `T` kind cell and writes `Type` into the field's value
+cell immediately.
+
+## 10. Confirming experiments
+
+* `j = x => {T = _; x: T; struct<.x _>(.x T) }; j 1` (no `K` at all) —
+  **works** (`struct<.x Type>`).  The field pair is then a member of `j`'s own
+  template: `unify_clone_groups` re-establishes the check-time merge among the
+  per-call clones, and the parameter check's descent binds them per call.
+  *The constraint survives per call exactly when its unify partner is a
+  template member.*
+* `j = x => {T = _; x: T; 1: T; (K _)(.x T) }; j 1` (pin `T` before the
+  instantiate, inside the same body) — **works**.  Batch 1's field cells are
+  bound at check time, so the `(K _)` node's value is concrete, the deep pass
+  proves it, `node_apply` bakes it (referenced in place, never recomputed),
+  and the instance reads batch 1.  Measured: exactly one field-pair batch,
+  `deep=concrete`.  (That a syntactic *ordering* inside the body decides
+  whether the program works is itself a symptom of the constraint living at
+  check time.)
+* `(K 0)(.x T)` in the lambda — still `raw`.  The argument does not decide the
+  recompute; the unbound field cells do (they keep the result parameterized,
+  so the clone is always dropped and re-run).  Two batches measured.
+
+## 11. Answers and fix directions
+
+**Answers to §8:**
+
+1. The argument's **type slot** — what `named_instantiate`'s `order_ty`
+   already pairs with the field pair.  The pairing is right; the timing and
+   scope are what is wrong.  (§5's conflicts came from attempts to pair the
+   argument's *value* with the field's *value cell* — a level error, correctly
+   rejected.)
+2. **No.**  The two batches are two macro expansions of `K`'s body under — in
+   general — different arguments (the second expansion's argument is the
+   call's own placeholder, bound per call), so merging them at clone creation
+   would be wrong.  The divergence is intended; what must hold is that the
+   field constraint applies to whichever expansion the instance reads.
+3. **Yes** — the instance's type is the per-call expansion.  The argument's
+   type therefore has to enter that shape *per call, at the apply*.
+
+**A fix has to make the field-list constraint part of the per-call expansion.
+Directions, not a decision:**
+
+* **(a) Encode the instantiate as a per-call computation.**  A struct
+  instantiation whose callee is not statically concrete compiles to an
+  operation (like `Apply`) whose evaluation unifies the just-evaluated
+  callee's shape against the argument's type slots — the operand-rewrite rule
+  then re-runs the check exactly when the expansion re-runs.  Matches the
+  macro-expansion semantics one for one; costs moving the field-check policy
+  (which nodes pair, and the diagnostics' attribution) into the runtime graph
+  or behind a callback, while keeping the check-time behaviour for concrete
+  callees unchanged.
+* **(b) Register the field constraint as a per-call obligation**, re-
+  instantiated by the apply the way the body's asserts already are
+  (`instantiate_stamped`'s assert walk).  Reuses existing re-registration
+  machinery, but asserts are evaluated predicates, not unifies: a pending-
+  unify channel is new, and the constraint's partner (the nested apply's fresh
+  batch) exists only *after* that apply runs, so an ordering has to be
+  defined.
+* **(c) Unify against a lazy read of the shape** (`Index(callee, 0)`) instead
+  of the forced batch — measured and rejected: the unify still runs once at
+  check time against the *template* read node, whose per-call clone is a
+  different class, so the constraint still never reaches batch 2.  Recorded so
+  it is not retried.
+
+Any of them must keep the two accidentally-working paths working: the block
+(single batch, bound at check time) and the ascribe-before variant (batch
+baked concrete by the deep pass).
+
