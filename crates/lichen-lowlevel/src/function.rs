@@ -618,6 +618,15 @@ impl<P: Program> Module<P> {
                 template_answer
                     && !value
                         .is_some_and(|value| matches!(value.as_enum(), Some(LowValue::Function(_))))
+                    // A structure *containing* a foreign function id is no more
+                    // carriable than a bare one: the id names a closure minted
+                    // by one symbolic application of this template (the
+                    // checker's own, with marker captures), and the deep-pass
+                    // proof cannot see through its body — the same reason the
+                    // bake guard above refuses to reference it in place.  The
+                    // clone must carry nothing and re-run, so the call mints
+                    // its own closure with this call's captures.
+                    && !self.value_contains_foreign_function(value, ctx.applied)
             }
         };
         // The mapping runs only for a value that is kept: an answer that is
