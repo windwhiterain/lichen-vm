@@ -157,6 +157,25 @@ identities is what answering that question positionally before asking it looks
 like. A special case would not have answered it; it would have hidden it behind
 an exception the next change has to unlearn.
 
+**Slot 0 of the parameter pair was tried as an exclusion, and made no
+difference.** The arm above unifies the whole `[value, type, attrs…]` pair. The
+design's own wording is narrower — the *tail* from the type slot on — and slot 0
+is the variable the body binds, the one the apply clone walk clones per call, so
+unifying it merges two functions' **arguments** and is a claim about values rather
+than about types. It looks like the polymorphism collapse, and it is: unifying
+whole pairs is what made `compute.jit`'s parameter render as
+`raw[Function, <signature>]` instead of the open `?a` — a wrapper that stopped
+being generic.
+
+Tried: unify the tail only, slot 1 onwards, positionally. **Measured identical
+on this workspace** — `compute::wrapper_functions_render_with_named_type_variables`
+still prints `raw[Function, …]`, and nothing else moved. So the arm's own pair
+unify is not what binds that cell; something else does, and it is not in this
+change. The tail version is also strictly less than the pair version, which
+already covers it. So the pair version shipped, and the open question is named
+here rather than answered: **whatever binds a wrapper's parameter value cell
+lives outside this arm.**
+
 ## What goes
 
 - `Program::unify_function_type`, `FunctionTypeUnify` and its three answers,
