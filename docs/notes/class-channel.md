@@ -126,6 +126,65 @@ comparison is the write rule's own question; the class's *value* is still read
 through the representative (`class_value`) — what is member-local is the write
 rule's test, not the read API.
 
+### 1.1.2 Planned: `OperatorExt::run` returns `Option`
+
+**The goal.** Delete [`LowValue::Parameterized`], so that *undecided* has exactly
+one representation on each side of the boundary: the **empty node slot**
+(`Node::value: Option<P::Value>`) inside the VM, and **`None`** from an operator
+that cannot decide.  Today `None` (an empty slot) and `Some(Parameterized)` (a
+marker in a slot) both mean undecided and `is_unbound`
+(`crates/lichen-lowlevel/src/lib.rs:825`) exists only to span them; that is the
+ambiguity every attempt in §1.1.1 kept tripping over.
+
+**Why the variant cannot simply be deleted.** It is load-bearing as a *value*,
+not merely as a slot state:
+
+- `OperatorExt::run` (`crates/lichen-lowlevel/src/lib.rs:696`) returns `P::Value`,
+  so an operator that finds its operand undecided has exactly one way to say so —
+  it returns the marker.  `compute.rs` alone does this in about eighty places
+  (every native operator that must propagate "not decided yet"), and
+  `run_deferred` (`:723`) does it for the structural operators.
+- The marker is also a **value in the graph**: it is written into slots, compared
+  (`PartialEq`), hashed as key content (`table.rs`, `KeyState::Undecided`), and
+  carries codec tag `4`.  A solution that only changes slots leaves all of those
+  in place.
+
+So the refactor is: **make the operator's return optional**, and let the VM own
+the marker's meaning — `None` from an operator *is* "ran, undecided", and the
+node's own slot stays empty.
+
+**Three uses are not undecidedness**, and each needs a different answer.  Do not
+replace these with `None`:
+
+| use | site | what `None` would mean there |
+|---|---|---|
+| a nullary operator's no-operand stand-in | `run_deferred`'s `None` arm (`crates/lichen-lowlevel/src/lib.rs:756`) | wrong: the operand is *absent*, not undecided |
+| a **lazy callee** — a callee that may become callable, so the apply must stay lazy | `LowOperator::Apply`'s marker-target arm (`crates/lichen-lowlevel/src/evaluation.rs:330`) | wrong: the read must stay lazy *and* the node must remain re-runnable |
+| a **non-function target** refused by the language's own gate | the same guard's other arm | wrong: the refusal is the program's answer, not the VM's |
+
+**Migration order**, each phase compiling and measured on its own:
+
+1. **The trait and the union leaves.** `run` and `run_deferred` return
+   `Option<P::Value>`; every implementation returns `Some(..)` unchanged and the
+   marker arms return `None`.  `lowlevel`'s VM postlude turns `None` into "node
+   marked run, needs no change to its own slot unless the written value is a
+   `Parameterized`".  No behaviour change; the suites must be untouched.
+2. **The compute extension.** Its ~80 marker constructions become `None`;
+   its ~20 `matches!(_, Some(LowValue::Parameterized))` guards become `is_none()`
+   — but only for the operand checks whose `None` arm then returns `None`.  This
+   is the phase with judgement in it, and the one to measure after each crate.
+3. **The codec and the value-level uses.** Drop tag `4` (keeping it reserved), the
+   `PartialEq` arm, the table's key-state arm, and the printers' spellings.  An
+   artifact that carries tag `4` must then be refused by version, not silently
+   read as something else.
+4. **Delete the variant**, and with it `is_unbound`'s two-case body — it becomes
+   `value.is_none()`.
+
+**What this does not settle.** The run axis stays: a node that returned `None`
+has run and may not re-run until its operands change.  That is the fact §1.1.1
+says the slot and `runned` must keep separately readable, and this refactor
+preserves it — the marker stops being the carrier of that fact, the slot does.
+
 **Four corrections were needed, and each says something about the rules.**
 
 1. **A refusal is not a report.**  The first version refused the write when the

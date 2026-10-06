@@ -3,7 +3,7 @@ use stacksafe::stacksafe;
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, BudgetExhausted, EvaluatedDeep,
     LowOperator, LowValue, Module, NodeId, OperatorExt, Program, StaticModuleCache,
-    ancestors::AncestorPairs, table::KeyState,
+    ancestors::AncestorPairs, is_unbound, table::KeyState,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -140,12 +140,20 @@ impl<P: Program> Module<P> {
             return self.evaluate_block(node);
         }
         if let Some(value) = self.nodes[node].value {
-            // An operator that has not run must run: a value in the slot that
-            // *this node's* operator did not produce ([`Module::has_no_result_yet`])
-            // was written by a unification — an assertion, not a computation —
-            // so the operator still owes its own answer.
+            // **An unbound result does not stand as this node's answer.**  With
+            // the class's value distributed over the members, the value found
+            // here may be the *class's* marker rather than something this
+            // operator produced — and a marker is precisely the answer the
+            // evaluator declines to cache, so that a later pass re-runs the
+            // operator once its operands bind.  Accepting it here would cache it
+            // through the side door and the deciding pass would never happen.
+            //
+            // `runned` is the other half of the same test and the reason it
+            // stays: it is true only when *this* operator produced the value, so
+            // a decided answer a unification wrote still lets the operator run
+            // and owes its own reconciliation.
             if self.nodes[node].operation.is_some()
-                && !self.nodes[node].runned
+                && (!self.nodes[node].runned || is_unbound(Some(value)))
                 && !self.nodes[node].visiting
             {
                 let guard = self.retain_node(node);
