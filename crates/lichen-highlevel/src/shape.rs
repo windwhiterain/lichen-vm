@@ -544,9 +544,10 @@ where
         return None;
     };
     let rep = module.equality_representative(node);
-    let carrier = module.class_committed_node(rep)?;
-    // SAFETY: `carrier` is a live node of `module`; nothing here drops a block.
-    let items = unsafe { array_items(module, AnyNodeId::Dynamic(carrier)) }?;
+    // The class's value slot is the representative's own slot, so the value a
+    // function-type is recognised by is read there directly.
+    // SAFETY: `rep` is a live node of `module`; nothing here drops a block.
+    let items = unsafe { array_items(module, AnyNodeId::Dynamic(rep)) }?;
     if items.len() != 2 {
         return None;
     }
@@ -731,10 +732,7 @@ where
     P::Value: ValueType,
 {
     let rep = module.equality_representative(node);
-    let Some(carrier) = module.class_committed_node(rep) else {
-        return false;
-    };
-    module.is_self_referential(AnyNodeId::Dynamic(carrier))
+    module.is_self_referential(AnyNodeId::Dynamic(rep))
 }
 
 /// Whether `ty` is a struct type:

@@ -175,6 +175,87 @@ producer's own slot is not the whole of it, and this is *not* the class-level
 read that the two refutations below measured.  The invariant above is the one
 that holds.
 
+### 1.1.2 In progress: `OperatorExt::run` returns `Option`
+
+**The goal.** Delete [`LowValue::Parameterized`], so that *undecided* has exactly
+one representation on each side of the boundary: the **empty node slot**
+(`Node::value: Option<P::Value>`) inside the VM, and **`None`** from an operator
+that cannot decide.  Today `None` (an empty slot) and `Some(Parameterized)` (a
+marker in a slot) both mean undecided and `is_unbound`
+(`crates/lichen-lowlevel/src/lib.rs:825`) exists only to span them; that is the
+ambiguity every attempt in §1.1.1 kept tripping over.
+
+**Why the variant cannot simply be deleted.** It is load-bearing as a *value*,
+not merely as a slot state:
+
+- `OperatorExt::run` (`crates/lichen-lowlevel/src/lib.rs:696`) returns `P::Value`,
+  so an operator that finds its operand undecided has exactly one way to say so —
+  it returns the marker.  `compute.rs` alone does this in about eighty places
+  (every native operator that must propagate "not decided yet"), and
+  `run_deferred` (`:723`) does it for the structural operators.
+- The marker is also a **value in the graph**: it is written into slots, compared
+  (`PartialEq`), hashed as key content (`table.rs`, `KeyState::Undecided`), and
+  carries codec tag `4`.  A solution that only changes slots leaves all of those
+  in place.
+
+So the refactor is: **make the operator's return optional**, and let the VM own
+the marker's meaning — `None` from an operator *is* "ran, undecided", and the
+node's own slot stays empty.
+
+**Three uses are not undecidedness**, and each needs a different answer.  Do not
+replace these with `None`:
+
+| use | site | what `None` would mean there |
+|---|---|---|
+| a nullary operator's no-operand stand-in | `run_deferred`'s `None` arm (`crates/lichen-lowlevel/src/lib.rs:756`) | wrong: the operand is *absent*, not undecided |
+| a **lazy callee** — a callee that may become callable, so the apply must stay lazy | `LowOperator::Apply`'s marker-target arm (`crates/lichen-lowlevel/src/evaluation.rs:330`) | wrong: the read must stay lazy *and* the node must remain re-runnable |
+| a **non-function target** refused by the language's own gate | the same guard's other arm | wrong: the refusal is the program's answer, not the VM's |
+
+**Migration order**, each phase compiling and measured on its own:
+
+1. **The trait and the union leaves.** `run` and `run_deferred` return
+   `Option<P::Value>`; every implementation returns `Some(..)` unchanged and the
+   marker arms return `None`.  `lowlevel`'s VM postlude turns `None` into "node
+   marked run, needs no change to its own slot unless the written value is a
+   `Parameterized`".  No behaviour change; the suites must be untouched.
+2. **The compute extension.** Its ~80 marker constructions become `None`;
+   its ~20 `matches!(_, Some(LowValue::Parameterized))` guards become `is_none()`
+   — but only for the operand checks whose `None` arm then returns `None`.  This
+   is the phase with judgement in it, and the one to measure after each crate.
+3. **The codec and the value-level uses.** Drop tag `4` (keeping it reserved), the
+   `PartialEq` arm, the table's key-state arm, and the printers' spellings.  An
+   artifact that carries tag `4` must then be refused by version, not silently
+   read as something else.
+4. **Delete the variant**, and with it `is_unbound`'s two-case body — it becomes
+   `value.is_none()`.
+
+**What this does not settle.** The run axis stays: a node that returned `None`
+has run and may not re-run until its operands change.  That is the fact §1.1.1
+says the slot and `runned` must keep separately readable, and this refactor
+preserves it — the marker stops being the carrier of that fact, the slot does.
+
+**Measured while planning it, and it changes the plan.** The marker is not only
+an operator's verdict: it is **copied into a clone's slot** by the two carry
+paths, and those copies are load-bearing.
+
+| finding | evidence |
+|---|---|
+| the marker enters a slot by exactly one path | instrumenting all three write sites (`write_node_value`, `write_node_answer`'s restore, `propagate_class_value`) over the whole example corpus: `write_node_value` fires 7542 times, the other two **never** |
+| it is a *copy*, not a computation | the two callers that pass it are `function.rs`'s clone walk (`write_node_value(clone, mapped)`) and the static materializer (`static_module/apply.rs`, `write_node_value(clone, Some(value))`) — both carry a source's value to a clone |
+| a marker never lands in a class that holds a value | a probe at the write path over the whole corpus: **0** cases where the class already held a decided value |
+| refusing the copy is not available | making `write_node_value` drop an unbound value (leaving the slot empty, the honest copy) breaks `let_bound_functions_are_polymorphic` and `a_wrappers_parameter_type_is_inferred_from_a_body_call` in `--test checker`, and panics the example sweep at `evaluation.rs`'s operation unwrap — the clone then has no operation and no value where the walk expected the carried one |
+
+**Superseded while planning.** The paragraph here claimed the clone's copied
+marker blocks the change — that phase 2 could not replace it with `None` until
+the clone walk was taught what an undecided source means.  **That was wrong, and
+phase 1 measured it wrong.**  With the trait returning `Option`, a copied
+undecided source is simply `None`: the carry still happens, only the thing
+carried is nothing instead of a marker, and the clone runs its own operator
+exactly as it did.  The migration is mechanical — the old logic is preserved by
+treating the empty slot and the marker as one, which `is_unbound` already did
+(`value.is_none_or(.. == Some(Parameterized))`).  The clone walk needed no
+redesign; it needed the boundary moved, which is what phase 1 did.
+
 **Four corrections were needed, and each says something about the rules.**
 
 1. **A refusal is not a report.**  The first version refused the write when the
@@ -240,6 +321,39 @@ value may sit on a member no write may touch (an operation-bearing
 representative), so the class's representative records **which** member carries
 it and the scan became one field read (§1.1).  The write walk stays O(class size)
 per write, which is inherent to distributing a value over members.
+
+**Re-measured: the veto cannot be removed and the carrier cannot be deleted**
+(branch `feature/unconditional-class-writes`, worktree
+`.worktrees/unconditional-nodes`).  A third attempt was made on the §1.1
+decision itself: `propagate_class_value` writes **every** member with no
+operation check, the class value is kept in the representative's own slot, and
+`class_carrier` — with `class_committed_node`, `commit_class_value`,
+`reselect_class_carrier`, and the two `class_committed_node` readers in
+`highlevel::shape` and `is_function_type_node` — is deleted.  The marks:
+
+| suite | result |
+|---|---|
+| `--test basic` + lib (`lichen-lowlevel`) | **155 of 155**, unchanged |
+| `--test checker` and the rest (`lichen-highlevel`) | **87 of 87** plus the small targets, unchanged |
+| `lichen-language --test examples` | **1 failed**: `examples/import/_.lichen` declares `(42, 10, 7)` and prints `(42, none, none)` |
+
+The minimal reproduction is `(geo.double 5)` with `geo`/`math` imported (both
+files from `examples/import/`): the value survives as `10`, but its **type cell
+does not resolve** — it renders `raw 10: ?a` where the example declares
+`10: Int`.  The two `none`s in the full example are the tuple's second and third
+apply results, whose slots are empty at render time.
+
+Instrumented rather than inferred, and each hypothesis refuted in turn: no
+operation's decided slot is ever overwritten with an unbound value
+(`write_node_value`), the class's value is never shadowed on the representative,
+and the merge preserves the class value through the new representative
+(a `debug_assert_eq!` on `class_committed_value(representative)` held for the
+whole suite).  What remains is the structural finding §1.1 already records: the
+**class value and a member's own value are two facts**, and readers of both the
+type channel and the evaluator's `runned` guard take the member's own slot as
+the source.  Distributing one value into every member makes the two
+indistinguishable, and moving it to the representative leaves the member slot
+empty.  The carrier is the third option, and it is the one that works.
 
 ## 2. Half one — refuted: a class's low type is not a second reading of a type slot
 

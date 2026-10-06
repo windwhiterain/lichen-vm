@@ -88,7 +88,7 @@ impl lichen_lowlevel::OperatorExt<HostProgram> for LangOperator {
         operand: <HostProgram as lichen_lowlevel::Program>::Value,
         block: lichen_lowlevel::BlockId,
         module: &mut lichen_lowlevel::Module<HostProgram>,
-    ) -> <HostProgram as lichen_lowlevel::Program>::Value {
+    ) -> Option<<HostProgram as lichen_lowlevel::Program>::Value> {
         match self {
             LangOperator::LowOperator(op) => op.run(operand, block, module),
             LangOperator::TypeOperator(op) => op.run(operand, block, module),

@@ -1198,634 +1198,680 @@ where
         }
     }
 
-    fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> P::Value {
-        // **A recorded body is a sequence of dispatches, and this is where
-        // anything else is stopped.** A `plrun` is the one operator that can
-        // consume a graph's placeholders, because a graph's values are edges into
-        // a run; every other operator handed one is asking for something a graph
-        // has no way to be. Checked here, once, rather than in each arm, because
-        // the arms all fail the same way — a bare `Parameterized` with no
-        // diagnostic — and a boundary that is drawn in four places is not a
-        // boundary.
-        //
-        // The reason is computed on an immutable borrow and recorded after it
-        // ends, so the walk's own module is not borrowed across the diagnostic.
-        if graph::is_recording()
-            && let Some(reason) = unrecordable(self, module, &operand)
-        {
-            module.record_extension_diagnostic(GRAPH_DIAGNOSTIC, None, reason);
-            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-        }
-        match self {
-            ComputeOperator::Jit => {
-                if matches!(
-                    AsEnum::<LowValue>::as_enum(&operand),
-                    Some(LowValue::Parameterized)
-                ) {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                }
-                let Some(LowValue::Function(function)) = AsEnum::<LowValue>::as_enum(&operand)
-                else {
-                    // A non-function jit target is a *reported* type error (the
-                    // checker's function-ness gate), not an invariant violation —
-                    // stay lazy rather than panicking.
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                };
-                match compile_fragment(module, function) {
-                    Ok(fragment) => {
-                        // Content-addressed, so recompiling the same function —
-                        // which is what a keystroke does — keeps one id and
-                        // lets the derived-module cache hit (`D15`).
-                        let id = intern_kernel(fragment);
-                        <P::Value as From<ComputeValue>>::from(ComputeValue::Kernel(id))
-                    }
-                    Err(err) => {
-                        // The body is outside the kernel-safe subset, or the
-                        // parameter's domain is undecided.  Either way the
-                        // honest result is a lazy value plus a recorded reason:
-                        // the definition pass reports the unbound result, and
-                        // this says *why* — which is the difference between a
-                        // user who can fix the program and one who cannot.
-                        module.record_extension_diagnostic(JIT_DIAGNOSTIC, None, err);
-                        <P::Value as From<LowValue>>::from(LowValue::Parameterized)
-                    }
-                }
+    fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> Option<P::Value> {
+        // The marker the compute operators produce *is* "cannot decide yet",
+        // which the trait states as `None`; a closure lets every early return
+        // yield the marker and one conversion cover them all.
+        let value = (|| {
+            // **A recorded body is a sequence of dispatches, and this is where
+            // anything else is stopped.** A `plrun` is the one operator that can
+            // consume a graph's placeholders, because a graph's values are edges into
+            // a run; every other operator handed one is asking for something a graph
+            // has no way to be. Checked here, once, rather than in each arm, because
+            // the arms all fail the same way — a bare `Parameterized` with no
+            // diagnostic — and a boundary that is drawn in four places is not a
+            // boundary.
+            //
+            // The reason is computed on an immutable borrow and recorded after it
+            // ends, so the walk's own module is not borrowed across the diagnostic.
+            if graph::is_recording()
+                && let Some(reason) = unrecordable(self, module, &operand)
+            {
+                module.record_extension_diagnostic(GRAPH_DIAGNOSTIC, None, reason);
+                return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
             }
-            ComputeOperator::Launch => {
-                if matches!(
-                    AsEnum::<LowValue>::as_enum(&operand),
-                    Some(LowValue::Parameterized)
-                ) {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                }
-                let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
-                    unreachable!("Launch expects an operand array of [kernel, arg]")
-                };
-                // SAFETY: `operands` is the operand array the VM just evaluated
-                // for this operation; its home block is alive for the duration
-                // of the run.
-                let operands = unsafe { operands.items() };
-                let Some(ComputeValue::Kernel(id)) = module
-                    .node_value(operands[0].node)
-                    .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
-                else {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                };
-                // The argument is a scalar for an arity-1 kernel, or an `Array`
-                // (possibly nested for a tuple-of-tuples domain) for a
-                // tuple-domain kernel.  Flatten it to the wasm argument vector.
-                // Anything else (a non-literal element, e.g. a computed scalar)
-                // stays lazy — the definition pass reports the unbound result —
-                // and each way that can happen records the cause it is, because
-                // the lazy marker alone tells the user nothing about the
-                // argument they wrote.
-                let args = match kernel_arguments(module, operands[1].node) {
-                    Ok(args) => args,
-                    Err(reason) => {
-                        module.record_extension_diagnostic(KERNEL_LAUNCH_DIAGNOSTIC, None, reason);
+            match self {
+                ComputeOperator::Jit => {
+                    if matches!(
+                        AsEnum::<LowValue>::as_enum(&operand),
+                        Some(LowValue::Parameterized)
+                    ) {
                         return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                     }
-                };
-                match run_kernel(id, &args) {
-                    Ok(results) => kernel_results_value(module, block, results),
-                    Err(err) => {
-                        // Whatever the wasm run said — the assembly, the `main`
-                        // export, or the call itself — is this refusal's own
-                        // cause, so it is recorded as it stands rather than
-                        // replaced by a summary that would name none of them.
-                        module.record_extension_diagnostic(KERNEL_LAUNCH_DIAGNOSTIC, None, err);
-                        <P::Value as From<LowValue>>::from(LowValue::Parameterized)
-                    }
-                }
-            }
-            ComputeOperator::Call => {
-                if matches!(
-                    AsEnum::<LowValue>::as_enum(&operand),
-                    Some(LowValue::Parameterized)
-                ) {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                }
-                let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
-                    unreachable!("Call expects an operand array of [kernel, arg]")
-                };
-                // SAFETY: `operands` is the operand array the VM just evaluated
-                // for this operation; its home block is alive for the duration
-                // of the run.
-                let operands = unsafe { operands.items() };
-                let Some(ComputeValue::Kernel(id)) = module
-                    .node_value(operands[0].node)
-                    .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
-                else {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                };
-                let args = match kernel_arguments(module, operands[1].node) {
-                    Ok(collected) => collected,
-                    Err(reason) => {
-                        module.record_extension_diagnostic(KERNEL_LAUNCH_DIAGNOSTIC, None, reason);
+                    let Some(LowValue::Function(function)) = AsEnum::<LowValue>::as_enum(&operand)
+                    else {
+                        // A non-function jit target is a *reported* type error (the
+                        // checker's function-ness gate), not an invariant violation —
+                        // stay lazy rather than panicking.
                         return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                    }
-                };
-                match run_kernel(id, &args) {
-                    Ok(results) => kernel_results_value(module, block, results),
-                    Err(err) => {
-                        // As in `Launch`: the run's own message is this
-                        // refusal's cause, so it is recorded as it stands.
-                        module.record_extension_diagnostic(KERNEL_LAUNCH_DIAGNOSTIC, None, err);
-                        <P::Value as From<LowValue>>::from(LowValue::Parameterized)
-                    }
-                }
-            }
-            ComputeOperator::Parallel => {
-                if matches!(
-                    AsEnum::<LowValue>::as_enum(&operand),
-                    Some(LowValue::Parameterized)
-                ) {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                }
-                let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
-                    unreachable!("Parallel expects an operand array of [function, backend]")
-                };
-                // SAFETY: `operands` is the operand array the VM just evaluated
-                // for this operation; its home block is alive for the run.
-                let operands = unsafe { operands.items() };
-                let Some(backend) = backend_argument(
-                    module,
-                    operands.get(1).and_then(|o| dyn_node(o.node).ok()),
-                    PARALLEL_DIAGNOSTIC,
-                ) else {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                };
-                let Some(LowValue::Function(function)) = module
-                    .node_value(operands[0].node)
-                    .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-                else {
-                    // A non-function parallel target is the checker's
-                    // function-ness gate; stay lazy rather than panicking.
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                };
-                match compile_parallel_fragment(module, function) {
-                    Ok(fragment) => {
-                        // Content-addressed like `jit`'s, and for the same
-                        // reason: the parallel launch path keys the module cache
-                        // on `(LaunchMode::Parallel, KernelId)`, so a fresh id
-                        // per compile is a re-assembly per compile.  The backend
-                        // is *not* part of the fragment, so the same body
-                        // compiled for either backend shares this one id.
-                        let id = intern_kernel(fragment);
-                        <P::Value as From<ComputeValue>>::from(ComputeValue::ParKernel(id, backend))
-                    }
-                    Err(err) => {
-                        module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
-                        <P::Value as From<LowValue>>::from(LowValue::Parameterized)
-                    }
-                }
-            }
-            ComputeOperator::ParLaunch => {
-                if matches!(
-                    AsEnum::<LowValue>::as_enum(&operand),
-                    Some(LowValue::Parameterized)
-                ) {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                }
-                // **A recording intercepts here, before anything is parsed.** A
-                // recorded dispatch has no buffers to look at and no count to
-                // read: its arguments are placeholders, which is the whole reason
-                // the body can be walked at all. So the interception is first and
-                // the real launch is the rest of the arm.
-                if graph::is_recording() {
-                    return record_launch::<P>(module, block, operand);
-                }
-                let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
-                    unreachable!("ParLaunch expects an operand array of [kernel, cfg]")
-                };
-                // SAFETY: `operands` is the operand array the VM just evaluated
-                // for this operation; the note covers this arm's `items()`
-                // calls, all of live nodes of `module`.
-                let operands = unsafe { operands.items() };
-                let Some(ComputeValue::ParKernel(id, backend)) = module
-                    .node_value(operands[0].node)
-                    .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
-                else {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                };
-                // The cfg value `(n, (buffer…))`.  Element 0 is the count `n`;
-                // element 1 is a tuple of input `Buffer` values.
-                let Ok(cfg_node) = dyn_node(operands[1].node) else {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                };
-                // SAFETY: as above — `cfg_node` names a live node of `module`.
-                let Some(cfg_items) = (unsafe { module.array_items(cfg_node) }) else {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                };
-                // **The cfg is the parameter's scalar leaves in field order, then
-                // the input buffers**: the leaves are the leading positions (the
-                // launch extent first — `docs/notes/compute-runtime-scalars.md`
-                // §1), and how many there are is a property of the fragment, so
-                // the leaf classes are read from it.
-                let leaf_classes = match parallel_leaf_classes(id) {
-                    Ok(classes) => classes,
-                    Err(err) => {
-                        module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                    }
-                };
-                let mut leaves: Vec<i64> = Vec::with_capacity(leaf_classes.len());
-                for (position, class) in leaf_classes.iter().enumerate() {
-                    let value = cfg_items
-                        .get(position)
-                        .and_then(|item| module.node_value(item.node))
-                        .and_then(|v| AsEnum::<LowValue>::as_enum(&v));
-                    // A leaf is read at the class its own field declares, and a
-                    // **decided** value of the wrong class is refused by name
-                    // rather than left lazy: staying lazy here would mean the
-                    // dispatch quietly does not run and nothing says so, which is
-                    // the one answer this channel exists to stop giving.  An
-                    // *undecided* leaf is still lazy — that is a program the
-                    // language has not evaluated yet, not a mistake.
-                    let word = match (class, value) {
-                        (ScalarClass::Int, Some(LowValue::USize(n))) => n as i64,
-                        (ScalarClass::Float, Some(LowValue::Float(x))) => float_bits(x),
-                        (ScalarClass::Int, Some(LowValue::Float(_))) => {
-                            module.record_extension_diagnostic(
-                                PARALLEL_DIAGNOSTIC,
-                                None,
-                                if position == 0 {
-                                    "the launch count is Float, but a dispatch extent is Int: \
-                                     Int and Float do not convert"
-                                } else {
-                                    "a parallel parameter's scalar leaf is Int here and the \
-                                     launch passes a Float for it: Int and Float do not convert"
-                                },
-                            );
-                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                        }
-                        (ScalarClass::Float, Some(LowValue::USize(_))) => {
-                            module.record_extension_diagnostic(
-                                PARALLEL_DIAGNOSTIC,
-                                None,
-                                "a parallel parameter's scalar leaf is Float here and the \
-                                 launch passes an Int for it: Int and Float do not convert",
-                            );
-                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                        }
-                        _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
                     };
-                    leaves.push(word);
+                    match compile_fragment(module, function) {
+                        Ok(fragment) => {
+                            // Content-addressed, so recompiling the same function —
+                            // which is what a keystroke does — keeps one id and
+                            // lets the derived-module cache hit (`D15`).
+                            let id = intern_kernel(fragment);
+                            <P::Value as From<ComputeValue>>::from(ComputeValue::Kernel(id))
+                        }
+                        Err(err) => {
+                            // The body is outside the kernel-safe subset, or the
+                            // parameter's domain is undecided.  Either way the
+                            // honest result is a lazy value plus a recorded reason:
+                            // the definition pass reports the unbound result, and
+                            // this says *why* — which is the difference between a
+                            // user who can fix the program and one who cannot.
+                            module.record_extension_diagnostic(JIT_DIAGNOSTIC, None, err);
+                            <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                        }
+                    }
                 }
-                // input buffers = the position after the leaves, a tuple of
-                // `Buffer` values.
-                let mut inputs: Vec<RunInput> = Vec::new();
-                if let Some(buf_tuple) = cfg_items.get(leaf_classes.len())
+                ComputeOperator::Launch => {
+                    if matches!(
+                        AsEnum::<LowValue>::as_enum(&operand),
+                        Some(LowValue::Parameterized)
+                    ) {
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    }
+                    let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
+                    else {
+                        unreachable!("Launch expects an operand array of [kernel, arg]")
+                    };
+                    // SAFETY: `operands` is the operand array the VM just evaluated
+                    // for this operation; its home block is alive for the duration
+                    // of the run.
+                    let operands = unsafe { operands.items() };
+                    let Some(ComputeValue::Kernel(id)) = module
+                        .node_value(operands[0].node)
+                        .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
+                    else {
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    };
+                    // The argument is a scalar for an arity-1 kernel, or an `Array`
+                    // (possibly nested for a tuple-of-tuples domain) for a
+                    // tuple-domain kernel.  Flatten it to the wasm argument vector.
+                    // Anything else (a non-literal element, e.g. a computed scalar)
+                    // stays lazy — the definition pass reports the unbound result —
+                    // and each way that can happen records the cause it is, because
+                    // the lazy marker alone tells the user nothing about the
+                    // argument they wrote.
+                    let args = match kernel_arguments(module, operands[1].node) {
+                        Ok(args) => args,
+                        Err(reason) => {
+                            module.record_extension_diagnostic(
+                                KERNEL_LAUNCH_DIAGNOSTIC,
+                                None,
+                                reason,
+                            );
+                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        }
+                    };
+                    match run_kernel(id, &args) {
+                        Ok(results) => kernel_results_value(module, block, results),
+                        Err(err) => {
+                            // Whatever the wasm run said — the assembly, the `main`
+                            // export, or the call itself — is this refusal's own
+                            // cause, so it is recorded as it stands rather than
+                            // replaced by a summary that would name none of them.
+                            module.record_extension_diagnostic(KERNEL_LAUNCH_DIAGNOSTIC, None, err);
+                            <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                        }
+                    }
+                }
+                ComputeOperator::Call => {
+                    if matches!(
+                        AsEnum::<LowValue>::as_enum(&operand),
+                        Some(LowValue::Parameterized)
+                    ) {
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    }
+                    let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
+                    else {
+                        unreachable!("Call expects an operand array of [kernel, arg]")
+                    };
+                    // SAFETY: `operands` is the operand array the VM just evaluated
+                    // for this operation; its home block is alive for the duration
+                    // of the run.
+                    let operands = unsafe { operands.items() };
+                    let Some(ComputeValue::Kernel(id)) = module
+                        .node_value(operands[0].node)
+                        .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
+                    else {
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    };
+                    let args = match kernel_arguments(module, operands[1].node) {
+                        Ok(collected) => collected,
+                        Err(reason) => {
+                            module.record_extension_diagnostic(
+                                KERNEL_LAUNCH_DIAGNOSTIC,
+                                None,
+                                reason,
+                            );
+                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        }
+                    };
+                    match run_kernel(id, &args) {
+                        Ok(results) => kernel_results_value(module, block, results),
+                        Err(err) => {
+                            // As in `Launch`: the run's own message is this
+                            // refusal's cause, so it is recorded as it stands.
+                            module.record_extension_diagnostic(KERNEL_LAUNCH_DIAGNOSTIC, None, err);
+                            <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                        }
+                    }
+                }
+                ComputeOperator::Parallel => {
+                    if matches!(
+                        AsEnum::<LowValue>::as_enum(&operand),
+                        Some(LowValue::Parameterized)
+                    ) {
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    }
+                    let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
+                    else {
+                        unreachable!("Parallel expects an operand array of [function, backend]")
+                    };
+                    // SAFETY: `operands` is the operand array the VM just evaluated
+                    // for this operation; its home block is alive for the run.
+                    let operands = unsafe { operands.items() };
+                    let Some(backend) = backend_argument(
+                        module,
+                        operands.get(1).and_then(|o| dyn_node(o.node).ok()),
+                        PARALLEL_DIAGNOSTIC,
+                    ) else {
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    };
+                    let Some(LowValue::Function(function)) = module
+                        .node_value(operands[0].node)
+                        .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+                    else {
+                        // A non-function parallel target is the checker's
+                        // function-ness gate; stay lazy rather than panicking.
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    };
+                    match compile_parallel_fragment(module, function) {
+                        Ok(fragment) => {
+                            // Content-addressed like `jit`'s, and for the same
+                            // reason: the parallel launch path keys the module cache
+                            // on `(LaunchMode::Parallel, KernelId)`, so a fresh id
+                            // per compile is a re-assembly per compile.  The backend
+                            // is *not* part of the fragment, so the same body
+                            // compiled for either backend shares this one id.
+                            let id = intern_kernel(fragment);
+                            <P::Value as From<ComputeValue>>::from(ComputeValue::ParKernel(
+                                id, backend,
+                            ))
+                        }
+                        Err(err) => {
+                            module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
+                            <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                        }
+                    }
+                }
+                ComputeOperator::ParLaunch => {
+                    if matches!(
+                        AsEnum::<LowValue>::as_enum(&operand),
+                        Some(LowValue::Parameterized)
+                    ) {
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    }
+                    // **A recording intercepts here, before anything is parsed.** A
+                    // recorded dispatch has no buffers to look at and no count to
+                    // read: its arguments are placeholders, which is the whole reason
+                    // the body can be walked at all. So the interception is first and
+                    // the real launch is the rest of the arm.
+                    if graph::is_recording() {
+                        return record_launch::<P>(module, block, operand);
+                    }
+                    let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
+                    else {
+                        unreachable!("ParLaunch expects an operand array of [kernel, cfg]")
+                    };
+                    // SAFETY: `operands` is the operand array the VM just evaluated
+                    // for this operation; the note covers this arm's `items()`
+                    // calls, all of live nodes of `module`.
+                    let operands = unsafe { operands.items() };
+                    let Some(ComputeValue::ParKernel(id, backend)) = module
+                        .node_value(operands[0].node)
+                        .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
+                    else {
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    };
+                    // The cfg value `(n, (buffer…))`.  Element 0 is the count `n`;
+                    // element 1 is a tuple of input `Buffer` values.
+                    let Ok(cfg_node) = dyn_node(operands[1].node) else {
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    };
+                    // SAFETY: as above — `cfg_node` names a live node of `module`.
+                    let Some(cfg_items) = (unsafe { module.array_items(cfg_node) }) else {
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    };
+                    // **The cfg is the parameter's scalar leaves in field order, then
+                    // the input buffers**: the leaves are the leading positions (the
+                    // launch extent first — `docs/notes/compute-runtime-scalars.md`
+                    // §1), and how many there are is a property of the fragment, so
+                    // the leaf classes are read from it.
+                    let leaf_classes = match parallel_leaf_classes(id) {
+                        Ok(classes) => classes,
+                        Err(err) => {
+                            module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
+                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        }
+                    };
+                    let mut leaves: Vec<i64> = Vec::with_capacity(leaf_classes.len());
+                    for (position, class) in leaf_classes.iter().enumerate() {
+                        let value = cfg_items
+                            .get(position)
+                            .and_then(|item| module.node_value(item.node))
+                            .and_then(|v| AsEnum::<LowValue>::as_enum(&v));
+                        // A leaf is read at the class its own field declares, and a
+                        // **decided** value of the wrong class is refused by name
+                        // rather than left lazy: staying lazy here would mean the
+                        // dispatch quietly does not run and nothing says so, which is
+                        // the one answer this channel exists to stop giving.  An
+                        // *undecided* leaf is still lazy — that is a program the
+                        // language has not evaluated yet, not a mistake.
+                        let word = match (class, value) {
+                            (ScalarClass::Int, Some(LowValue::USize(n))) => n as i64,
+                            (ScalarClass::Float, Some(LowValue::Float(x))) => float_bits(x),
+                            (ScalarClass::Int, Some(LowValue::Float(_))) => {
+                                module.record_extension_diagnostic(
+                                    PARALLEL_DIAGNOSTIC,
+                                    None,
+                                    if position == 0 {
+                                        "the launch count is Float, but a dispatch extent is Int: \
+                                     Int and Float do not convert"
+                                    } else {
+                                        "a parallel parameter's scalar leaf is Int here and the \
+                                     launch passes a Float for it: Int and Float do not convert"
+                                    },
+                                );
+                                return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                            }
+                            (ScalarClass::Float, Some(LowValue::USize(_))) => {
+                                module.record_extension_diagnostic(
+                                    PARALLEL_DIAGNOSTIC,
+                                    None,
+                                    "a parallel parameter's scalar leaf is Float here and the \
+                                 launch passes an Int for it: Int and Float do not convert",
+                                );
+                                return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                            }
+                            _ => {
+                                return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                            }
+                        };
+                        leaves.push(word);
+                    }
+                    // input buffers = the position after the leaves, a tuple of
+                    // `Buffer` values.
+                    let mut inputs: Vec<RunInput> = Vec::new();
+                    if let Some(buf_tuple) = cfg_items.get(leaf_classes.len())
                     && let Ok(buf_tuple_node) = dyn_node(buf_tuple.node)
                     // SAFETY: `buf_tuple_node` names a live node of `module`.
                     && let Some(buf_items) = (unsafe { module.array_items(buf_tuple_node) })
-                {
-                    for (position, item) in buf_items.iter().enumerate() {
-                        match module
-                            .node_value(item.node)
-                            .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
-                        {
-                            Some(ComputeValue::Buffer(payload, class)) => {
-                                // SAFETY: the buffer value is read out of
-                                // `module` on this borrow, so the payload's home
-                                // block is alive for the walk below.
-                                if let Some(data) = buffer_items(&payload) {
-                                    // The buffer's class travels with the words:
-                                    // a run reads a float input as `f32`s and an
-                                    // integer one as `Int`s, and the payload it
-                                    // came from is packed at that class's width.
-                                    inputs.push(RunInput::Host(BufferWords {
-                                        class,
-                                        words: unpack_elements(class, data),
-                                    }));
-                                } else {
-                                    return <P::Value as From<LowValue>>::from(
-                                        LowValue::Parameterized,
+                    {
+                        for (position, item) in buf_items.iter().enumerate() {
+                            match module
+                                .node_value(item.node)
+                                .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
+                            {
+                                Some(ComputeValue::Buffer(payload, class)) => {
+                                    // SAFETY: the buffer value is read out of
+                                    // `module` on this borrow, so the payload's home
+                                    // block is alive for the walk below.
+                                    if let Some(data) = buffer_items(&payload) {
+                                        // The buffer's class travels with the words:
+                                        // a run reads a float input as `f32`s and an
+                                        // integer one as `Int`s, and the payload it
+                                        // came from is packed at that class's width.
+                                        inputs.push(RunInput::Host(BufferWords {
+                                            class,
+                                            words: unpack_elements(class, data),
+                                        }));
+                                    } else {
+                                        return <P::Value as From<LowValue>>::from(
+                                            LowValue::Parameterized,
+                                        );
+                                    }
+                                }
+                                Some(ComputeValue::DeviceBuffer(resident)) => {
+                                    // Handed to the run as the id it already is.  This
+                                    // is the whole point: an intermediate result of a
+                                    // "gpu" chain never comes home in order to be sent
+                                    // straight back out.
+                                    inputs.push(RunInput::Resident(resident));
+                                }
+                                // **A decided non-buffer here is the one way a launch
+                                // can be handed something it cannot run on**, and it
+                                // used to answer `parameterized` with no diagnostic —
+                                // so a program that passed a plain array where a
+                                // buffer belonged ran to completion, printed
+                                // `parameterized` and an empty value.
+                                _ => {
+                                    return not_a_buffer::<P>(
+                                        module,
+                                        item.node,
+                                        "a parallel launch's `cfg(1)` is the tuple of buffers its \
+                                     kernel reads",
+                                        &format!("position {position} of it"),
                                     );
                                 }
                             }
-                            Some(ComputeValue::DeviceBuffer(resident)) => {
-                                // Handed to the run as the id it already is.  This
-                                // is the whole point: an intermediate result of a
-                                // "gpu" chain never comes home in order to be sent
-                                // straight back out.
-                                inputs.push(RunInput::Resident(resident));
-                            }
-                            // **A decided non-buffer here is the one way a launch
-                            // can be handed something it cannot run on**, and it
-                            // used to answer `parameterized` with no diagnostic —
-                            // so a program that passed a plain array where a
-                            // buffer belonged ran to completion, printed
-                            // `parameterized` and an empty value.
-                            _ => {
-                                return not_a_buffer::<P>(
-                                    module,
-                                    item.node,
-                                    "a parallel launch's `cfg(1)` is the tuple of buffers its \
-                                     kernel reads",
-                                    &format!("position {position} of it"),
-                                );
-                            }
                         }
                     }
-                }
-                match run_parallel_kernel(id, backend, leaves, inputs) {
-                    Ok(RunOutcome::Host(results)) => {
-                        // Several outputs are the **tuple** of them, which
-                        // `compute.read`/`compute.collect` address by ordinal.
-                        // Each buffer value becomes a node of this block first,
-                        // the way a collected element does, so the tuple holds
-                        // live nodes rather than detached values.
-                        //
-                        // Each buffer carries the class its producer declared for
-                        // the ordinal, so a float run's results are float buffers
-                        // all the way to `collect`.
-                        if results.len() != 1 {
-                            let items: Vec<ArrayItem> = results
-                                .iter()
-                                .map(|result| {
-                                    let node = module.add_node(
-                                        block,
-                                        None,
-                                        Some(<P::Value as From<ComputeValue>>::from(
-                                            ComputeValue::Buffer(
-                                                module.alloc_payload(&result.packed(), block),
-                                                result.class,
-                                            ),
-                                        )),
-                                    );
-                                    ArrayItem::new(AnyNodeId::Dynamic(node))
-                                })
-                                .collect();
-                            let handle = module.alloc_array(&items, block);
-                            return <P::Value as From<LowValue>>::from(LowValue::Array(handle));
-                        }
-                        // A single output is a bare `Buffer` — the single-output
-                        // form, exactly what it was.  Each payload lands in the
-                        // arena, so the buffer is owned by this block and dies
-                        // with it (`D15`) — the same bump allocation every other
-                        // payload uses.
-                        <P::Value as From<ComputeValue>>::from(ComputeValue::Buffer(
-                            module.alloc_payload(&results[0].packed(), block),
-                            results[0].class,
-                        ))
-                    }
-                    Ok(RunOutcome::Resident(results)) => {
-                        // The same single-or-tuple shape, with the results left
-                        // where the shader wrote them.  A resident buffer is plain
-                        // data rather than an arena pointer, so a node holding one
-                        // needs no payload and the copy path leaves it alone.
-                        let value = |resident: ResidentBuffer| {
-                            <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(
-                                resident,
+                    match run_parallel_kernel(id, backend, leaves, inputs) {
+                        Ok(RunOutcome::Host(results)) => {
+                            // Several outputs are the **tuple** of them, which
+                            // `compute.read`/`compute.collect` address by ordinal.
+                            // Each buffer value becomes a node of this block first,
+                            // the way a collected element does, so the tuple holds
+                            // live nodes rather than detached values.
+                            //
+                            // Each buffer carries the class its producer declared for
+                            // the ordinal, so a float run's results are float buffers
+                            // all the way to `collect`.
+                            if results.len() != 1 {
+                                let items: Vec<ArrayItem> = results
+                                    .iter()
+                                    .map(|result| {
+                                        let node = module.add_node(
+                                            block,
+                                            None,
+                                            Some(<P::Value as From<ComputeValue>>::from(
+                                                ComputeValue::Buffer(
+                                                    module.alloc_payload(&result.packed(), block),
+                                                    result.class,
+                                                ),
+                                            )),
+                                        );
+                                        ArrayItem::new(AnyNodeId::Dynamic(node))
+                                    })
+                                    .collect();
+                                let handle = module.alloc_array(&items, block);
+                                return <P::Value as From<LowValue>>::from(LowValue::Array(handle));
+                            }
+                            // A single output is a bare `Buffer` — the single-output
+                            // form, exactly what it was.  Each payload lands in the
+                            // arena, so the buffer is owned by this block and dies
+                            // with it (`D15`) — the same bump allocation every other
+                            // payload uses.
+                            <P::Value as From<ComputeValue>>::from(ComputeValue::Buffer(
+                                module.alloc_payload(&results[0].packed(), block),
+                                results[0].class,
                             ))
-                        };
-                        if results.len() != 1 {
-                            let items: Vec<ArrayItem> = results
-                                .iter()
-                                .map(|resident| {
-                                    let node = module.add_node(block, None, Some(value(*resident)));
-                                    ArrayItem::new(AnyNodeId::Dynamic(node))
-                                })
-                                .collect();
-                            let handle = module.alloc_array(&items, block);
-                            return <P::Value as From<LowValue>>::from(LowValue::Array(handle));
                         }
-                        value(results[0])
-                    }
-                    Err(err) => {
-                        // The refusal is the reason this launch produced no
-                        // value, so it is recorded rather than discarded: the
-                        // lazy marker alone would tell the user nothing about
-                        // why they got `parameterized`.  The general channel
-                        // owns it (see `P1-30`), because `BudgetExhausted` is
-                        // the *non-termination* verdict and every one of its
-                        // renderings says "never terminates" — false here, the
-                        // program terminated and merely asked for too much.
-                        module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
-                        <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                        Ok(RunOutcome::Resident(results)) => {
+                            // The same single-or-tuple shape, with the results left
+                            // where the shader wrote them.  A resident buffer is plain
+                            // data rather than an arena pointer, so a node holding one
+                            // needs no payload and the copy path leaves it alone.
+                            let value = |resident: ResidentBuffer| {
+                                <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(
+                                    resident,
+                                ))
+                            };
+                            if results.len() != 1 {
+                                let items: Vec<ArrayItem> = results
+                                    .iter()
+                                    .map(|resident| {
+                                        let node =
+                                            module.add_node(block, None, Some(value(*resident)));
+                                        ArrayItem::new(AnyNodeId::Dynamic(node))
+                                    })
+                                    .collect();
+                                let handle = module.alloc_array(&items, block);
+                                return <P::Value as From<LowValue>>::from(LowValue::Array(handle));
+                            }
+                            value(results[0])
+                        }
+                        Err(err) => {
+                            // The refusal is the reason this launch produced no
+                            // value, so it is recorded rather than discarded: the
+                            // lazy marker alone would tell the user nothing about
+                            // why they got `parameterized`.  The general channel
+                            // owns it (see `P1-30`), because `BudgetExhausted` is
+                            // the *non-termination* verdict and every one of its
+                            // renderings says "never terminates" — false here, the
+                            // program terminated and merely asked for too much.
+                            module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
+                            <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                        }
                     }
                 }
-            }
-            ComputeOperator::Read => {
-                if matches!(
-                    AsEnum::<LowValue>::as_enum(&operand),
-                    Some(LowValue::Parameterized)
-                ) {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                }
-                let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
-                    unreachable!("Read expects an operand array of [buffer, index]")
-                };
-                // SAFETY: `operands` is the operand array the VM just evaluated
-                // for this operation; its home block is alive for the duration
-                // of the run.
-                let operands = unsafe { operands.items() };
-                let index = match module
-                    .node_value(operands[1].node)
-                    .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-                {
-                    Some(LowValue::USize(n)) => n,
-                    _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
-                };
-                let element = match module
-                    .node_value(operands[0].node)
-                    .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
-                {
-                    Some(ComputeValue::Buffer(payload, class)) => {
-                        // SAFETY: the buffer value was just read out of `module`, so its
-                        // payload's home block is alive for this read.
-                        match buffer_items(&payload)
-                            .and_then(|items| element_bytes(class, items, index))
-                        {
-                            // The element becomes the value its class says it is
-                            // — the buffer's own class, which is what says how
-                            // many bytes the element occupies and how to read
-                            // them.
-                            Some(bytes) => match element_value(class, bytes) {
-                                Some(value) => <P::Value as From<LowValue>>::from(value),
+                ComputeOperator::Read => {
+                    if matches!(
+                        AsEnum::<LowValue>::as_enum(&operand),
+                        Some(LowValue::Parameterized)
+                    ) {
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    }
+                    let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
+                    else {
+                        unreachable!("Read expects an operand array of [buffer, index]")
+                    };
+                    // SAFETY: `operands` is the operand array the VM just evaluated
+                    // for this operation; its home block is alive for the duration
+                    // of the run.
+                    let operands = unsafe { operands.items() };
+                    let index = match module
+                        .node_value(operands[1].node)
+                        .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+                    {
+                        Some(LowValue::USize(n)) => n,
+                        _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                    };
+                    let element = match module
+                        .node_value(operands[0].node)
+                        .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
+                    {
+                        Some(ComputeValue::Buffer(payload, class)) => {
+                            // SAFETY: the buffer value was just read out of `module`, so its
+                            // payload's home block is alive for this read.
+                            match buffer_items(&payload)
+                                .and_then(|items| element_bytes(class, items, index))
+                            {
+                                // The element becomes the value its class says it is
+                                // — the buffer's own class, which is what says how
+                                // many bytes the element occupies and how to read
+                                // them.
+                                Some(bytes) => match element_value(class, bytes) {
+                                    Some(value) => <P::Value as From<LowValue>>::from(value),
+                                    None => {
+                                        return <P::Value as From<LowValue>>::from(
+                                            LowValue::Parameterized,
+                                        );
+                                    }
+                                },
                                 None => {
                                     return <P::Value as From<LowValue>>::from(
                                         LowValue::Parameterized,
                                     );
                                 }
-                            },
-                            None => {
+                            }
+                        }
+                        Some(ComputeValue::DeviceBuffer(resident)) => {
+                            // This is where a resident buffer stops being on the
+                            // device: a read asks for one number, so it is the point
+                            // at which the program has said it wants host data.
+                            if index >= resident.count {
                                 return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                             }
-                        }
-                    }
-                    Some(ComputeValue::DeviceBuffer(resident)) => {
-                        // This is where a resident buffer stops being on the
-                        // device: a read asks for one number, so it is the point
-                        // at which the program has said it wants host data.
-                        if index >= resident.count {
-                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                        }
-                        // The fetch brings back everything *up to* the index,
-                        // not one element, because the trait hands over owned
-                        // data rather than a view into a mapping.  Naming that
-                        // cost is better than a `fetch_range` nothing else needs
-                        // yet — and a read near the end of a large buffer is
-                        // therefore a whole-buffer transfer.
-                        match fetch_resident(
-                            ResidentBuffer {
-                                id: resident.id,
-                                count: index + 1,
-                                class: resident.class,
-                            },
-                            0,
-                        ) {
-                            // The element becomes the value its class says it
-                            // is: an integer element is the scalar it always
-                            // was, and a float element is the language's own
-                            // `Float` — not an integer it was never computed as.
-                            Ok(ScalarData::Int(elements)) => <P::Value as From<LowValue>>::from(
-                                LowValue::USize(elements[index] as usize),
-                            ),
-                            Ok(ScalarData::Float(elements)) => {
-                                <P::Value as From<LowValue>>::from(LowValue::Float(elements[index]))
+                            // The fetch brings back everything *up to* the index,
+                            // not one element, because the trait hands over owned
+                            // data rather than a view into a mapping.  Naming that
+                            // cost is better than a `fetch_range` nothing else needs
+                            // yet — and a read near the end of a large buffer is
+                            // therefore a whole-buffer transfer.
+                            match fetch_resident(
+                                ResidentBuffer {
+                                    id: resident.id,
+                                    count: index + 1,
+                                    class: resident.class,
+                                },
+                                0,
+                            ) {
+                                // The element becomes the value its class says it
+                                // is: an integer element is the scalar it always
+                                // was, and a float element is the language's own
+                                // `Float` — not an integer it was never computed as.
+                                Ok(ScalarData::Int(elements)) => {
+                                    <P::Value as From<LowValue>>::from(LowValue::USize(
+                                        elements[index] as usize,
+                                    ))
+                                }
+                                Ok(ScalarData::Float(elements)) => {
+                                    <P::Value as From<LowValue>>::from(LowValue::Float(
+                                        elements[index],
+                                    ))
+                                }
+                                Err(err) => {
+                                    module.record_extension_diagnostic(
+                                        PARALLEL_DIAGNOSTIC,
+                                        None,
+                                        err,
+                                    );
+                                    <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                                }
                             }
-                            Err(err) => {
-                                module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
-                                <P::Value as From<LowValue>>::from(LowValue::Parameterized)
-                            }
                         }
-                    }
-                    _ => {
-                        return not_a_buffer::<P>(
-                            module,
-                            operands[0].node,
-                            "a `compute.read` reads one element of one buffer",
-                            "its buffer position",
-                        );
-                    }
-                };
-                element
-            }
-            ComputeOperator::Range | ComputeOperator::Write => {
-                // Kernel-only operators: `range`/`write` are lowered by the
-                // parallel JIT to the index/write host imports and never reach
-                // the VM as a standalone apply.  Stay lazy.
-                <P::Value as From<LowValue>>::from(LowValue::Parameterized)
-            }
-            ComputeOperator::BufferCollect => {
-                if matches!(
-                    AsEnum::<LowValue>::as_enum(&operand),
-                    Some(LowValue::Parameterized)
-                ) {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        _ => {
+                            return not_a_buffer::<P>(
+                                module,
+                                operands[0].node,
+                                "a `compute.read` reads one element of one buffer",
+                                "its buffer position",
+                            );
+                        }
+                    };
+                    element
                 }
-                let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
-                    unreachable!("BufferCollect expects an operand array of [buffer]")
-                };
-                // SAFETY: `operands` is the operand array the VM just evaluated
-                // for this operation; its home block is alive for the duration
-                // of the run.
-                let operands = unsafe { operands.items() };
-                // A resident buffer is fetched here, in full: `collect` is the
-                // operation that says "give me these as host values", so this is
-                // the one point at which a `"gpu"` chain's results cross the bus.
-                let results: ScalarData = match module
-                    .node_value(operands[0].node)
-                    .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
-                {
-                    Some(ComputeValue::Buffer(payload, class)) => {
-                        // SAFETY: the buffer value was just read out of `module`, so its
-                        // payload's home block is alive while the elements are
-                        // materialized below.
-                        let Some(items) = buffer_items(&payload) else {
-                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                        };
-                        // The buffer's own class says how each element is read:
-                        // an integer value, or an `f32`'s bits — and, through
-                        // its width, how many bytes each element occupies.
-                        match class {
-                            ScalarClass::Int => ScalarData::Int(unpack_elements(class, items)),
-                            ScalarClass::Float => ScalarData::Float(
-                                unpack_elements(class, items)
-                                    .into_iter()
-                                    .map(|word| f32::from_bits(word as u32))
-                                    .collect(),
-                            ),
-                        }
+                ComputeOperator::Range | ComputeOperator::Write => {
+                    // Kernel-only operators: `range`/`write` are lowered by the
+                    // parallel JIT to the index/write host imports and never reach
+                    // the VM as a standalone apply.  Stay lazy.
+                    <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                }
+                ComputeOperator::BufferCollect => {
+                    if matches!(
+                        AsEnum::<LowValue>::as_enum(&operand),
+                        Some(LowValue::Parameterized)
+                    ) {
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                     }
-                    Some(ComputeValue::DeviceBuffer(resident)) => {
-                        match fetch_resident(resident, 0) {
-                            Ok(data) => data,
-                            Err(err) => {
-                                module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
+                    let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
+                    else {
+                        unreachable!("BufferCollect expects an operand array of [buffer]")
+                    };
+                    // SAFETY: `operands` is the operand array the VM just evaluated
+                    // for this operation; its home block is alive for the duration
+                    // of the run.
+                    let operands = unsafe { operands.items() };
+                    // A resident buffer is fetched here, in full: `collect` is the
+                    // operation that says "give me these as host values", so this is
+                    // the one point at which a `"gpu"` chain's results cross the bus.
+                    let results: ScalarData = match module
+                        .node_value(operands[0].node)
+                        .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
+                    {
+                        Some(ComputeValue::Buffer(payload, class)) => {
+                            // SAFETY: the buffer value was just read out of `module`, so its
+                            // payload's home block is alive while the elements are
+                            // materialized below.
+                            let Some(items) = buffer_items(&payload) else {
                                 return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                            };
+                            // The buffer's own class says how each element is read:
+                            // an integer value, or an `f32`'s bits — and, through
+                            // its width, how many bytes each element occupies.
+                            match class {
+                                ScalarClass::Int => ScalarData::Int(unpack_elements(class, items)),
+                                ScalarClass::Float => ScalarData::Float(
+                                    unpack_elements(class, items)
+                                        .into_iter()
+                                        .map(|word| f32::from_bits(word as u32))
+                                        .collect(),
+                                ),
                             }
                         }
-                    }
-                    _ => {
-                        return not_a_buffer::<P>(
-                            module,
-                            operands[0].node,
-                            "a `compute.collect` reads every element of one buffer",
-                            "its buffer position",
-                        );
-                    }
-                };
-                // Materialize each element as a fresh scalar node and build a
-                // real lichen array value over them, so `collect` yields an
-                // ordinary array the user can index/treat as `array<Int, n>` —
-                // or, for a float buffer, as the array of `Float` it is. The
-                // element's class is the buffer's, so an array collected from a
-                // float buffer holds floats rather than their bit patterns.
-                let items: Vec<ArrayItem> = match results {
-                    ScalarData::Int(values) => values
-                        .into_iter()
-                        .map(|value| {
-                            scalar_item::<P>(module, block, LowValue::USize(value as usize))
-                        })
-                        .collect(),
-                    ScalarData::Float(values) => values
-                        .into_iter()
-                        .map(|value| scalar_item::<P>(module, block, LowValue::Float(value)))
-                        .collect(),
-                };
-                let handle = module.alloc_array(&items, block);
-                <P::Value as From<LowValue>>::from(LowValue::Array(handle))
+                        Some(ComputeValue::DeviceBuffer(resident)) => {
+                            match fetch_resident(resident, 0) {
+                                Ok(data) => data,
+                                Err(err) => {
+                                    module.record_extension_diagnostic(
+                                        PARALLEL_DIAGNOSTIC,
+                                        None,
+                                        err,
+                                    );
+                                    return <P::Value as From<LowValue>>::from(
+                                        LowValue::Parameterized,
+                                    );
+                                }
+                            }
+                        }
+                        _ => {
+                            return not_a_buffer::<P>(
+                                module,
+                                operands[0].node,
+                                "a `compute.collect` reads every element of one buffer",
+                                "its buffer position",
+                            );
+                        }
+                    };
+                    // Materialize each element as a fresh scalar node and build a
+                    // real lichen array value over them, so `collect` yields an
+                    // ordinary array the user can index/treat as `array<Int, n>` —
+                    // or, for a float buffer, as the array of `Float` it is. The
+                    // element's class is the buffer's, so an array collected from a
+                    // float buffer holds floats rather than their bit patterns.
+                    let items: Vec<ArrayItem> = match results {
+                        ScalarData::Int(values) => values
+                            .into_iter()
+                            .map(|value| {
+                                scalar_item::<P>(module, block, LowValue::USize(value as usize))
+                            })
+                            .collect(),
+                        ScalarData::Float(values) => values
+                            .into_iter()
+                            .map(|value| scalar_item::<P>(module, block, LowValue::Float(value)))
+                            .collect(),
+                    };
+                    let handle = module.alloc_array(&items, block);
+                    <P::Value as From<LowValue>>::from(LowValue::Array(handle))
+                }
+                ComputeOperator::Graph => {
+                    // The operand has already been evaluated by the time `run` sees
+                    // it, so the only way to reach the function is the deep value.
+                    // That is enough here: a graph is a bare function, and the shape
+                    // that `run_deferred` needed to preserve is the shape of the
+                    // *body*, which the apply below walks itself.
+                    //
+                    // **A missing operand stays lazy rather than panicking**, and the
+                    // other arms' `unreachable!` does not apply: a deep pass over an
+                    // operand array holding a deferred function can come back holding
+                    // something other than an array, and a panic in a recording would
+                    // take down a program that has a perfectly good answer — that its
+                    // function is not decided yet.
+                    let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
+                    else {
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    };
+                    // SAFETY: `operands` is the operand array the VM just evaluated
+                    // for this operation; its home block is alive for the run.
+                    let operands = unsafe { operands.items() };
+                    let Some(function) = operands.first().map(|item| item.node) else {
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    };
+                    build_graph::<P>(module, block, function)
+                }
+                ComputeOperator::GraphRun => {
+                    let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
+                    else {
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    };
+                    // SAFETY: as above — a live node of `module`.
+                    let operands = unsafe { operands.items() };
+                    let Some(graph_node) = operands.first().map(|item| item.node) else {
+                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    };
+                    let arguments = operands.get(1).map(|item| item.node);
+                    run_graph::<P>(module, block, graph_node, arguments)
+                }
             }
-            ComputeOperator::Graph => {
-                // The operand has already been evaluated by the time `run` sees
-                // it, so the only way to reach the function is the deep value.
-                // That is enough here: a graph is a bare function, and the shape
-                // that `run_deferred` needed to preserve is the shape of the
-                // *body*, which the apply below walks itself.
-                //
-                // **A missing operand stays lazy rather than panicking**, and the
-                // other arms' `unreachable!` does not apply: a deep pass over an
-                // operand array holding a deferred function can come back holding
-                // something other than an array, and a panic in a recording would
-                // take down a program that has a perfectly good answer — that its
-                // function is not decided yet.
-                let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                };
-                // SAFETY: `operands` is the operand array the VM just evaluated
-                // for this operation; its home block is alive for the run.
-                let operands = unsafe { operands.items() };
-                let Some(function) = operands.first().map(|item| item.node) else {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                };
-                build_graph::<P>(module, block, function)
-            }
-            ComputeOperator::GraphRun => {
-                let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                };
-                // SAFETY: as above — a live node of `module`.
-                let operands = unsafe { operands.items() };
-                let Some(graph_node) = operands.first().map(|item| item.node) else {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                };
-                let arguments = operands.get(1).map(|item| item.node);
-                run_graph::<P>(module, block, graph_node, arguments)
-            }
+        })();
+        if matches!(value.as_enum(), Some(LowValue::Parameterized)) {
+            return None;
         }
+        Some(value)
     }
 
     /// The compute operators' low-type transfer: what a kernel's own operators

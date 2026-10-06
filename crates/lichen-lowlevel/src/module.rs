@@ -121,7 +121,6 @@ impl<P: Program> Module<P> {
             runned: false,
             operation,
             low_shape: None,
-            class_carrier: None,
             function: None,
             origin: None,
             depth: self.stamp_depth,
@@ -132,12 +131,6 @@ impl<P: Program> Module<P> {
             equality: disjoint::Meta::default(),
         });
         disjoint::make_set(&mut self.nodes, node);
-        // A node created already holding a decided value carries its class's
-        // value from birth: the class carrier names it, so a read through the
-        // class finds it without a member scan.
-        if !is_unbound(self.nodes[node].value) {
-            self.nodes[node].class_carrier = Some(node);
-        }
         self.blocks[block].nodes.push(node);
         // Allocation with a concrete value is the second of the two value-write
         // sites (`write_node_value` is the first), so the observation runs here

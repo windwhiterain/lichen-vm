@@ -181,10 +181,21 @@ impl<P: Program> Module<P> {
             survivors.push(member);
         }
         disjoint::rebuild(&mut self.nodes, &survivors);
-        // `rebuild` re-elected a representative among the survivors, so the
-        // class's value carrier has to be re-pointed at one of them: the member
-        // it named may be the one being dropped.
-        self.reselect_class_carrier(&survivors);
+        // `rebuild` re-elected a representative among the survivors, and the
+        // class's value slot is now that representative's own slot.  The member
+        // that carried the value may be the one being dropped, so the value the
+        // survivors carry is re-distributed from the new representative —
+        // without this, a class whose value outlived the drop would read as
+        // undecided.
+        let Some((&representative, _)) = survivors.split_first() else {
+            return;
+        };
+        if let Some(value) = survivors
+            .iter()
+            .find_map(|&member| self.nodes.get(member).and_then(|node| node.value))
+        {
+            self.propagate_class_value(representative, value);
+        }
     }
 
     /// Drops `block` and everything homed in it (children, functions,

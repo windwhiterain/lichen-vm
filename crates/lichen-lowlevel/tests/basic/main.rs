@@ -193,70 +193,79 @@ impl OperatorExt<TestProgram> for TestOperator {
         operand: TestValue,
         block: BlockId,
         module: &mut Module<TestProgram>,
-    ) -> TestValue {
-        match self {
-            // The structural operators never reach `run`: the VM dispatches
-            // them through `AsEnum` before falling through.
-            TestOperator::LowOperator(LowOperator::Index)
-            | TestOperator::LowOperator(LowOperator::Apply)
-            | TestOperator::LowOperator(LowOperator::TableGet) => {
-                unreachable!("structural operators are dispatched by the VM")
-            }
-            TestOperator::Id => operand,
-            // Binary ops receive their operands as an array of two node
-            // ids; the elements are already evaluated.  A parameterized
-            // operand means the body is still a template being defined —
-            // stay lazy so the definition pass can flag it.
-            TestOperator::Add
-            | TestOperator::Sub
-            | TestOperator::Concat
-            | TestOperator::Eq
-            | TestOperator::Lt => {
-                if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
-                    return TestValue::LowValue(LowValue::Parameterized);
+    ) -> Option<TestValue> {
+        // The marker this operator produces *is* "cannot decide yet", which the
+        // trait states as `None`; the conversion at the end covers the early
+        // returns and the answer alike.
+        let value = (|| {
+            match self {
+                // The structural operators never reach `run`: the VM dispatches
+                // them through `AsEnum` before falling through.
+                TestOperator::LowOperator(LowOperator::Index)
+                | TestOperator::LowOperator(LowOperator::Apply)
+                | TestOperator::LowOperator(LowOperator::TableGet) => {
+                    unreachable!("structural operators are dispatched by the VM")
                 }
-                let Some(LowValue::Array(operands)) = operand.as_enum() else {
-                    unreachable!("binary ops expect an array of two node ids")
-                };
-                // SAFETY: the operand is the value of a live node of `module`,
-                // whose block has not been dropped.
-                let operands = unsafe { operands.items() };
-                // Operands may be baked static refs (a constant operand of a
-                // materialized static function) — resolve through the module
-                // API, which reads a dynamic node's value or a static node's
-                // solved value.
-                let left = module.node_value(operands[0].node).unwrap();
-                let right = module.node_value(operands[1].node).unwrap();
-                match self {
-                    TestOperator::Add => {
-                        let sum = u128_of(left).wrapping_add(u128_of(right));
-                        let p = module.blocks[block].arena.alloc(sum);
-                        TestValue::U128(dyn_handle(p as *const u128))
+                TestOperator::Id => operand,
+                // Binary ops receive their operands as an array of two node
+                // ids; the elements are already evaluated.  A parameterized
+                // operand means the body is still a template being defined —
+                // stay lazy so the definition pass can flag it.
+                TestOperator::Add
+                | TestOperator::Sub
+                | TestOperator::Concat
+                | TestOperator::Eq
+                | TestOperator::Lt => {
+                    if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
+                        return TestValue::LowValue(LowValue::Parameterized);
                     }
-                    TestOperator::Sub => {
-                        let difference = u128_of(left).wrapping_sub(u128_of(right));
-                        let p = module.blocks[block].arena.alloc(difference);
-                        TestValue::U128(dyn_handle(p as *const u128))
+                    let Some(LowValue::Array(operands)) = operand.as_enum() else {
+                        unreachable!("binary ops expect an array of two node ids")
+                    };
+                    // SAFETY: the operand is the value of a live node of `module`,
+                    // whose block has not been dropped.
+                    let operands = unsafe { operands.items() };
+                    // Operands may be baked static refs (a constant operand of a
+                    // materialized static function) — resolve through the module
+                    // API, which reads a dynamic node's value or a static node's
+                    // solved value.
+                    let left = module.node_value(operands[0].node).unwrap();
+                    let right = module.node_value(operands[1].node).unwrap();
+                    match self {
+                        TestOperator::Add => {
+                            let sum = u128_of(left).wrapping_add(u128_of(right));
+                            let p = module.blocks[block].arena.alloc(sum);
+                            TestValue::U128(dyn_handle(p as *const u128))
+                        }
+                        TestOperator::Sub => {
+                            let difference = u128_of(left).wrapping_sub(u128_of(right));
+                            let p = module.blocks[block].arena.alloc(difference);
+                            TestValue::U128(dyn_handle(p as *const u128))
+                        }
+                        TestOperator::Eq => TestValue::LowValue(LowValue::USize(
+                            (u128_of(left) == u128_of(right)) as usize,
+                        )),
+                        TestOperator::Lt => TestValue::LowValue(LowValue::USize(
+                            (u128_of(left) < u128_of(right)) as usize,
+                        )),
+                        TestOperator::Concat => {
+                            let mut result = string_of(left);
+                            result.extend(string_of(right));
+                            let slice = module.blocks[block].arena.alloc_slice_copy(&result);
+                            TestValue::String(dyn_handle(std::ptr::slice_from_raw_parts(
+                                slice.as_ptr(),
+                                slice.len(),
+                            )))
+                        }
+                        _ => unreachable!("all binary ops are handled above"),
                     }
-                    TestOperator::Eq => TestValue::LowValue(LowValue::USize(
-                        (u128_of(left) == u128_of(right)) as usize,
-                    )),
-                    TestOperator::Lt => TestValue::LowValue(LowValue::USize(
-                        (u128_of(left) < u128_of(right)) as usize,
-                    )),
-                    TestOperator::Concat => {
-                        let mut result = string_of(left);
-                        result.extend(string_of(right));
-                        let slice = module.blocks[block].arena.alloc_slice_copy(&result);
-                        TestValue::String(dyn_handle(std::ptr::slice_from_raw_parts(
-                            slice.as_ptr(),
-                            slice.len(),
-                        )))
-                    }
-                    _ => unreachable!("all binary ops are handled above"),
                 }
             }
+        })();
+        if matches!(value.as_enum(), Some(LowValue::Parameterized)) {
+            return None;
         }
+        Some(value)
     }
 }
 
