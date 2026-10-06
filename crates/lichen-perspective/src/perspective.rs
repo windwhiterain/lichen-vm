@@ -25,8 +25,8 @@ use lichen_utils::extend::AsEnum;
 pub enum GcdOp {
     /// n-ary `gcd` over the operand array.  An empty operand array (a leaf
     /// with no sub-expressions) evaluates to `0` — the meet identity / top,
-    /// so `gcd(n, 0) = n` makes it neutral.  A lazy operand yields
-    /// `Parameterized`, like `Add`/`Sub`.
+    /// so `gcd(n, 0) = n` makes it neutral.  A lazy operand declines with
+    /// `None`, like `Add`/`Sub`.
     Gcd,
 }
 
@@ -115,16 +115,16 @@ where
     P::Value: AsEnum<LowValue> + From<LowValue>,
 {
     fn run(&self, operand: P::Value, _block: BlockId, module: &mut Module<P>) -> Option<P::Value> {
-        // The marker this operator produces *is* "cannot decide yet", which the
-        // trait states as `None`; a closure lets every early return yield the
-        // marker and one conversion cover them all.
-        let value = (|| match self {
+        // An operator that cannot decide yet answers `None`, which is the
+        // trait's own spelling of "undecided"; the closure gives every early
+        // return inside the single arm one return type to agree on.
+        (|| match self {
             GcdOp::Gcd => {
                 if matches!(
                     AsEnum::<LowValue>::as_enum(&operand),
                     Some(LowValue::Parameterized)
                 ) {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                    return None;
                 }
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
                     unreachable!("Gcd expects an operand array");
@@ -157,20 +157,13 @@ where
                             _ => None,
                         })
                     else {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     };
                     acc = gcd(acc, n);
                 }
-                <P::Value as From<LowValue>>::from(LowValue::USize(acc))
+                Some(<P::Value as From<LowValue>>::from(LowValue::USize(acc)))
             }
-        })();
-        if matches!(
-            AsEnum::<LowValue>::as_enum(&value),
-            Some(LowValue::Parameterized)
-        ) {
-            return None;
-        }
-        Some(value)
+        })()
     }
 }
 
