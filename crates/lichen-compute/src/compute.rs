@@ -1199,16 +1199,16 @@ where
     }
 
     fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> Option<P::Value> {
-        // The marker the compute operators produce *is* "cannot decide yet",
-        // which the trait states as `None`; a closure lets every early return
-        // yield the marker and one conversion cover them all.
-        let value = (|| {
+        // An operator that cannot decide yet answers `None`, which is the
+        // trait's own spelling of "undecided".  The closure gives every early
+        // return inside an arm one return type to agree on.
+        (|| {
             // **A recorded body is a sequence of dispatches, and this is where
             // anything else is stopped.** A `plrun` is the one operator that can
             // consume a graph's placeholders, because a graph's values are edges into
             // a run; every other operator handed one is asking for something a graph
             // has no way to be. Checked here, once, rather than in each arm, because
-            // the arms all fail the same way — a bare `Parameterized` with no
+            // the arms all fail the same way — an undecided answer with no
             // diagnostic — and a boundary that is drawn in four places is not a
             // boundary.
             //
@@ -1218,7 +1218,7 @@ where
                 && let Some(reason) = unrecordable(self, module, &operand)
             {
                 module.record_extension_diagnostic(GRAPH_DIAGNOSTIC, None, reason);
-                return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                return None;
             }
             match self {
                 ComputeOperator::Jit => {
@@ -1226,14 +1226,14 @@ where
                         AsEnum::<LowValue>::as_enum(&operand),
                         Some(LowValue::Parameterized)
                     ) {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     }
                     let Some(LowValue::Function(function)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
                         // A non-function jit target is a *reported* type error (the
                         // checker's function-ness gate), not an invariant violation —
                         // stay lazy rather than panicking.
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     };
                     match compile_fragment(module, function) {
                         Ok(fragment) => {
@@ -1241,7 +1241,9 @@ where
                             // which is what a keystroke does — keeps one id and
                             // lets the derived-module cache hit (`D15`).
                             let id = intern_kernel(fragment);
-                            <P::Value as From<ComputeValue>>::from(ComputeValue::Kernel(id))
+                            Some(<P::Value as From<ComputeValue>>::from(
+                                ComputeValue::Kernel(id),
+                            ))
                         }
                         Err(err) => {
                             // The body is outside the kernel-safe subset, or the
@@ -1251,7 +1253,7 @@ where
                             // this says *why* — which is the difference between a
                             // user who can fix the program and one who cannot.
                             module.record_extension_diagnostic(JIT_DIAGNOSTIC, None, err);
-                            <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                            None
                         }
                     }
                 }
@@ -1260,7 +1262,7 @@ where
                         AsEnum::<LowValue>::as_enum(&operand),
                         Some(LowValue::Parameterized)
                     ) {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     }
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
@@ -1274,7 +1276,7 @@ where
                         .node_value(operands[0].node)
                         .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
                     else {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     };
                     // The argument is a scalar for an arity-1 kernel, or an `Array`
                     // (possibly nested for a tuple-of-tuples domain) for a
@@ -1292,7 +1294,7 @@ where
                                 None,
                                 reason,
                             );
-                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                            return None;
                         }
                     };
                     match run_kernel(id, &args) {
@@ -1303,7 +1305,7 @@ where
                             // cause, so it is recorded as it stands rather than
                             // replaced by a summary that would name none of them.
                             module.record_extension_diagnostic(KERNEL_LAUNCH_DIAGNOSTIC, None, err);
-                            <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                            None
                         }
                     }
                 }
@@ -1312,7 +1314,7 @@ where
                         AsEnum::<LowValue>::as_enum(&operand),
                         Some(LowValue::Parameterized)
                     ) {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     }
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
@@ -1326,7 +1328,7 @@ where
                         .node_value(operands[0].node)
                         .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
                     else {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     };
                     let args = match kernel_arguments(module, operands[1].node) {
                         Ok(collected) => collected,
@@ -1336,7 +1338,7 @@ where
                                 None,
                                 reason,
                             );
-                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                            return None;
                         }
                     };
                     match run_kernel(id, &args) {
@@ -1345,7 +1347,7 @@ where
                             // As in `Launch`: the run's own message is this
                             // refusal's cause, so it is recorded as it stands.
                             module.record_extension_diagnostic(KERNEL_LAUNCH_DIAGNOSTIC, None, err);
-                            <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                            None
                         }
                     }
                 }
@@ -1354,7 +1356,7 @@ where
                         AsEnum::<LowValue>::as_enum(&operand),
                         Some(LowValue::Parameterized)
                     ) {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     }
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
@@ -1368,7 +1370,7 @@ where
                         operands.get(1).and_then(|o| dyn_node(o.node).ok()),
                         PARALLEL_DIAGNOSTIC,
                     ) else {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     };
                     let Some(LowValue::Function(function)) = module
                         .node_value(operands[0].node)
@@ -1376,7 +1378,7 @@ where
                     else {
                         // A non-function parallel target is the checker's
                         // function-ness gate; stay lazy rather than panicking.
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     };
                     match compile_parallel_fragment(module, function) {
                         Ok(fragment) => {
@@ -1387,13 +1389,13 @@ where
                             // is *not* part of the fragment, so the same body
                             // compiled for either backend shares this one id.
                             let id = intern_kernel(fragment);
-                            <P::Value as From<ComputeValue>>::from(ComputeValue::ParKernel(
-                                id, backend,
+                            Some(<P::Value as From<ComputeValue>>::from(
+                                ComputeValue::ParKernel(id, backend),
                             ))
                         }
                         Err(err) => {
                             module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
-                            <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                            None
                         }
                     }
                 }
@@ -1402,7 +1404,7 @@ where
                         AsEnum::<LowValue>::as_enum(&operand),
                         Some(LowValue::Parameterized)
                     ) {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     }
                     // **A recording intercepts here, before anything is parsed.** A
                     // recorded dispatch has no buffers to look at and no count to
@@ -1424,16 +1426,16 @@ where
                         .node_value(operands[0].node)
                         .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
                     else {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     };
                     // The cfg value `(n, (buffer…))`.  Element 0 is the count `n`;
                     // element 1 is a tuple of input `Buffer` values.
                     let Ok(cfg_node) = dyn_node(operands[1].node) else {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     };
                     // SAFETY: as above — `cfg_node` names a live node of `module`.
                     let Some(cfg_items) = (unsafe { module.array_items(cfg_node) }) else {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     };
                     // **The cfg is the parameter's scalar leaves in field order, then
                     // the input buffers**: the leaves are the leading positions (the
@@ -1444,7 +1446,7 @@ where
                         Ok(classes) => classes,
                         Err(err) => {
                             module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
-                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                            return None;
                         }
                     };
                     let mut leaves: Vec<i64> = Vec::with_capacity(leaf_classes.len());
@@ -1475,7 +1477,7 @@ where
                                      launch passes a Float for it: Int and Float do not convert"
                                     },
                                 );
-                                return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                                return None;
                             }
                             (ScalarClass::Float, Some(LowValue::USize(_))) => {
                                 module.record_extension_diagnostic(
@@ -1484,10 +1486,10 @@ where
                                     "a parallel parameter's scalar leaf is Float here and the \
                                  launch passes an Int for it: Int and Float do not convert",
                                 );
-                                return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                                return None;
                             }
                             _ => {
-                                return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                                return None;
                             }
                         };
                         leaves.push(word);
@@ -1519,9 +1521,7 @@ where
                                             words: unpack_elements(class, data),
                                         }));
                                     } else {
-                                        return <P::Value as From<LowValue>>::from(
-                                            LowValue::Parameterized,
-                                        );
+                                        return None;
                                     }
                                 }
                                 Some(ComputeValue::DeviceBuffer(resident)) => {
@@ -1578,16 +1578,20 @@ where
                                     })
                                     .collect();
                                 let handle = module.alloc_array(&items, block);
-                                return <P::Value as From<LowValue>>::from(LowValue::Array(handle));
+                                return Some(<P::Value as From<LowValue>>::from(LowValue::Array(
+                                    handle,
+                                )));
                             }
                             // A single output is a bare `Buffer` — the single-output
                             // form, exactly what it was.  Each payload lands in the
                             // arena, so the buffer is owned by this block and dies
                             // with it (`D15`) — the same bump allocation every other
                             // payload uses.
-                            <P::Value as From<ComputeValue>>::from(ComputeValue::Buffer(
-                                module.alloc_payload(&results[0].packed(), block),
-                                results[0].class,
+                            Some(<P::Value as From<ComputeValue>>::from(
+                                ComputeValue::Buffer(
+                                    module.alloc_payload(&results[0].packed(), block),
+                                    results[0].class,
+                                ),
                             ))
                         }
                         Ok(RunOutcome::Resident(results)) => {
@@ -1610,9 +1614,11 @@ where
                                     })
                                     .collect();
                                 let handle = module.alloc_array(&items, block);
-                                return <P::Value as From<LowValue>>::from(LowValue::Array(handle));
+                                return Some(<P::Value as From<LowValue>>::from(LowValue::Array(
+                                    handle,
+                                )));
                             }
-                            value(results[0])
+                            Some(value(results[0]))
                         }
                         Err(err) => {
                             // The refusal is the reason this launch produced no
@@ -1624,7 +1630,7 @@ where
                             // renderings says "never terminates" — false here, the
                             // program terminated and merely asked for too much.
                             module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
-                            <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                            None
                         }
                     }
                 }
@@ -1633,7 +1639,7 @@ where
                         AsEnum::<LowValue>::as_enum(&operand),
                         Some(LowValue::Parameterized)
                     ) {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     }
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
@@ -1648,7 +1654,7 @@ where
                         .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
                     {
                         Some(LowValue::USize(n)) => n,
-                        _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                        _ => return None,
                     };
                     let element = match module
                         .node_value(operands[0].node)
@@ -1665,17 +1671,13 @@ where
                                 // many bytes the element occupies and how to read
                                 // them.
                                 Some(bytes) => match element_value(class, bytes) {
-                                    Some(value) => <P::Value as From<LowValue>>::from(value),
+                                    Some(element) => <P::Value as From<LowValue>>::from(element),
                                     None => {
-                                        return <P::Value as From<LowValue>>::from(
-                                            LowValue::Parameterized,
-                                        );
+                                        return None;
                                     }
                                 },
                                 None => {
-                                    return <P::Value as From<LowValue>>::from(
-                                        LowValue::Parameterized,
-                                    );
+                                    return None;
                                 }
                             }
                         }
@@ -1684,7 +1686,7 @@ where
                             // device: a read asks for one number, so it is the point
                             // at which the program has said it wants host data.
                             if index >= resident.count {
-                                return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                                return None;
                             }
                             // The fetch brings back everything *up to* the index,
                             // not one element, because the trait hands over owned
@@ -1715,12 +1717,14 @@ where
                                     ))
                                 }
                                 Err(err) => {
+                                    // A failed fetch is a refusal like any other:
+                                    // it is recorded and the read stays undecided.
                                     module.record_extension_diagnostic(
                                         PARALLEL_DIAGNOSTIC,
                                         None,
                                         err,
                                     );
-                                    <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                                    return None;
                                 }
                             }
                         }
@@ -1733,20 +1737,20 @@ where
                             );
                         }
                     };
-                    element
+                    Some(element)
                 }
                 ComputeOperator::Range | ComputeOperator::Write => {
                     // Kernel-only operators: `range`/`write` are lowered by the
                     // parallel JIT to the index/write host imports and never reach
                     // the VM as a standalone apply.  Stay lazy.
-                    <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                    None
                 }
                 ComputeOperator::BufferCollect => {
                     if matches!(
                         AsEnum::<LowValue>::as_enum(&operand),
                         Some(LowValue::Parameterized)
                     ) {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     }
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
@@ -1768,7 +1772,7 @@ where
                             // payload's home block is alive while the elements are
                             // materialized below.
                             let Some(items) = buffer_items(&payload) else {
-                                return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                                return None;
                             };
                             // The buffer's own class says how each element is read:
                             // an integer value, or an `f32`'s bits — and, through
@@ -1792,9 +1796,7 @@ where
                                         None,
                                         err,
                                     );
-                                    return <P::Value as From<LowValue>>::from(
-                                        LowValue::Parameterized,
-                                    );
+                                    return None;
                                 }
                             }
                         }
@@ -1826,7 +1828,7 @@ where
                             .collect(),
                     };
                     let handle = module.alloc_array(&items, block);
-                    <P::Value as From<LowValue>>::from(LowValue::Array(handle))
+                    Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle)))
                 }
                 ComputeOperator::Graph => {
                     // The operand has already been evaluated by the time `run` sees
@@ -1843,35 +1845,31 @@ where
                     // function is not decided yet.
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     };
                     // SAFETY: `operands` is the operand array the VM just evaluated
                     // for this operation; its home block is alive for the run.
                     let operands = unsafe { operands.items() };
                     let Some(function) = operands.first().map(|item| item.node) else {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     };
                     build_graph::<P>(module, block, function)
                 }
                 ComputeOperator::GraphRun => {
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     };
                     // SAFETY: as above — a live node of `module`.
                     let operands = unsafe { operands.items() };
                     let Some(graph_node) = operands.first().map(|item| item.node) else {
-                        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        return None;
                     };
                     let arguments = operands.get(1).map(|item| item.node);
                     run_graph::<P>(module, block, graph_node, arguments)
                 }
             }
-        })();
-        if matches!(value.as_enum(), Some(LowValue::Parameterized)) {
-            return None;
-        }
-        Some(value)
+        })()
     }
 
     /// The compute operators' low-type transfer: what a kernel's own operators
@@ -5385,7 +5383,12 @@ where
 /// `subject` says what the position is *for* and `at` names it, so the three
 /// sites that reach this describe their own mistake rather than sharing one
 /// sentence.
-fn not_a_buffer<P>(module: &mut Module<P>, node: AnyNodeId, subject: &str, at: &str) -> P::Value
+fn not_a_buffer<P>(
+    module: &mut Module<P>,
+    node: AnyNodeId,
+    subject: &str,
+    at: &str,
+) -> Option<P::Value>
 where
     P: Program,
     P::Value: From<LowValue> + AsEnum<ComputeValue> + AsEnum<LowValue>,
@@ -5399,7 +5402,7 @@ where
             what_this_is(module, node)
         ),
     );
-    <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+    None
 }
 
 /// The value a completed kernel run produces: the bare scalar for a
@@ -5419,7 +5422,7 @@ fn kernel_results_value<P>(
     module: &mut Module<P>,
     block: BlockId,
     results: Vec<ScalarValue>,
-) -> P::Value
+) -> Option<P::Value>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
@@ -5429,11 +5432,11 @@ where
     let Some((first, rest)) = results.split_first() else {
         // A fragment always leaves at least one value, so an empty run is not
         // reachable; stay lazy rather than fabricating a value for it.
-        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+        return None;
     };
     if rest.is_empty() {
         // The single-result form is the bare scalar, exactly what it always was.
-        return scalar(first);
+        return Some(scalar(first));
     }
     let items: Vec<ArrayItem> = results
         .iter()
@@ -5443,7 +5446,7 @@ where
         })
         .collect();
     let handle = module.alloc_array(&items, block);
-    <P::Value as From<LowValue>>::from(LowValue::Array(handle))
+    Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle)))
 }
 
 /// Read a binary op/`Index` operand array `[a, b]` as two operand nodes.
@@ -5513,7 +5516,7 @@ where
 /// input the parameter supplied is refused here by name rather than coerced: this
 /// is the filter, and it is where a jit'd function's arbitrary values are sorted
 /// into the two roles a graph's value table has.
-fn record_launch<P>(module: &mut Module<P>, block: BlockId, operand: P::Value) -> P::Value
+fn record_launch<P>(module: &mut Module<P>, block: BlockId, operand: P::Value) -> Option<P::Value>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + From<LowValue> + ValueType,
@@ -5521,7 +5524,6 @@ where
 {
     let refuse = |module: &mut Module<P>, reason: String| {
         module.record_extension_diagnostic(GRAPH_DIAGNOSTIC, None, reason);
-        <P::Value as From<LowValue>>::from(LowValue::Parameterized)
     };
     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
         unreachable!("ParLaunch expects an operand array of [kernel, cfg]")
@@ -5530,40 +5532,45 @@ where
     // operation, and every walk below stays inside this borrow of `module`.
     let operands = unsafe { operands.items() };
     if operands.len() < 2 {
-        return refuse(
+        refuse(
             module,
             "a parallel launch's operand array is [kernel, cfg]".into(),
         );
+        return None;
     }
     let Some(ComputeValue::ParKernel(id, backend)) = module
         .node_value(operands[0].node)
         .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
     else {
-        return refuse(
+        refuse(
             module,
             "a recorded dispatch has to name a parallel kernel, and this one does not".into(),
         );
+        return None;
     };
     let fragment = {
         let kernels = kernels().lock().unwrap();
         match kernels.get(&id) {
             Some(fragment) => fragment.clone(),
             None => {
-                return refuse(
+                refuse(
                     module,
                     format!(
                         "parallel kernel {id} is not registered, so there is no fragment to record"
                     ),
                 );
+                return None;
             }
         }
     };
     let Ok(cfg) = dyn_node(operands[1].node) else {
-        return refuse(module, "a recorded dispatch's cfg is not a node".into());
+        refuse(module, "a recorded dispatch's cfg is not a node".into());
+        return None;
     };
     // SAFETY: `cfg` names a live node of `module`, and the items are read only.
     let Some(cfg_items) = (unsafe { module.array_items(cfg) }) else {
-        return refuse(module, "a recorded dispatch's cfg is not a tuple".into());
+        refuse(module, "a recorded dispatch's cfg is not a tuple".into());
+        return None;
     };
     // The extent, read on its own: a count is a different role from a buffer, and
     // a caller who swapped the two deserves to be told which was wrong rather
@@ -5603,7 +5610,7 @@ where
                                     .map(|value| graph::describe(&value).to_string())
                                     .unwrap_or_else(|| "not a value at all".to_string())
                             });
-                        return refuse(
+                        refuse(
                             module,
                             format!(
                                 "a dispatch's count is {found}, and a count has to be a literal or \
@@ -5611,15 +5618,17 @@ where
                                  while it is built or read from its own value table at run time"
                             ),
                         );
+                        return None;
                     }
                 },
             }
         }
         None => {
-            return refuse(
+            refuse(
                 module,
                 "a recorded dispatch's cfg has no count at position 0".into(),
             );
+            return None;
         }
     };
     // **The cfg's positions are the parameter's scalar leaves, then the buffers**
@@ -5630,7 +5639,7 @@ where
     // read as the buffer tuple.
     let leaf_count = param_classes(&fragment).len().saturating_sub(1);
     if leaf_count > 1 {
-        return refuse(
+        refuse(
             module,
             format!(
                 "this dispatch's kernel parameter declares {leaf_count} scalar leaves, and a \
@@ -5638,6 +5647,7 @@ where
                  edge of the recording, and that is not written yet"
             ),
         );
+        return None;
     }
     let mut inputs: Vec<Placed> = Vec::new();
     if let Some(tuple) = cfg_items.get(leaf_count)
@@ -5650,20 +5660,27 @@ where
                 .node_value(item.node)
                 .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
             else {
-                return refuse(
+                refuse(
                     module,
                     format!("argument {position} of this dispatch is not a compute value at all"),
                 );
+                return None;
             };
             match graph::place(&value, position) {
                 Ok(placed) => inputs.push(placed),
-                Err(reason) => return refuse(module, reason),
+                Err(reason) => {
+                    refuse(module, reason);
+                    return None;
+                }
             }
         }
     }
     let placed = match graph::record_dispatch(fragment, backend, extent, &inputs) {
         Ok(placed) => placed,
-        Err(reason) => return refuse(module, reason),
+        Err(reason) => {
+            refuse(module, reason);
+            return None;
+        }
     };
     // **The same shape a real launch produces**: a bare value for one output, the
     // tuple of them for several. Each placeholder becomes a node of this block
@@ -5671,18 +5688,20 @@ where
     // body downstream reads a result exactly as it reads a run's.
     let placeholder =
         |id: usize| <P::Value as From<ComputeValue>>::from(ComputeValue::GraphValue(id));
-    if placed.len() == 1 {
-        return placeholder(placed[0].edge());
-    }
-    let items: Vec<ArrayItem> = placed
-        .iter()
-        .map(|placed| {
-            let node = module.add_node(block, None, Some(placeholder(placed.edge())));
-            ArrayItem::new(AnyNodeId::Dynamic(node))
-        })
-        .collect();
-    let handle = module.alloc_array(&items, block);
-    <P::Value as From<LowValue>>::from(LowValue::Array(handle))
+    let value = if placed.len() == 1 {
+        placeholder(placed[0].edge())
+    } else {
+        let items: Vec<ArrayItem> = placed
+            .iter()
+            .map(|placed| {
+                let node = module.add_node(block, None, Some(placeholder(placed.edge())));
+                ArrayItem::new(AnyNodeId::Dynamic(node))
+            })
+            .collect();
+        let handle = module.alloc_array(&items, block);
+        <P::Value as From<LowValue>>::from(LowValue::Array(handle))
+    };
+    Some(value)
 }
 
 /// Build a graph by applying a function to placeholders and recording what it
@@ -5694,7 +5713,11 @@ where
 /// the pattern walk are the ones every other call gets. A lowering that hand-rolled
 /// those would be a second apply with its own bugs, and the bugs would be in the
 /// part nobody tests.
-fn build_graph<P>(module: &mut Module<P>, block: BlockId, function_node: AnyNodeId) -> P::Value
+fn build_graph<P>(
+    module: &mut Module<P>,
+    block: BlockId,
+    function_node: AnyNodeId,
+) -> Option<P::Value>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + From<LowValue> + ValueType,
@@ -5702,7 +5725,6 @@ where
 {
     let refuse = |module: &mut Module<P>, reason: String| {
         module.record_extension_diagnostic(GRAPH_DIAGNOSTIC, None, reason);
-        <P::Value as From<LowValue>>::from(LowValue::Parameterized)
     };
     // A **check, not a resolution.** The apply below consumes the operand *node*,
     // because a function id and a node id are different id spaces and `Apply`
@@ -5714,10 +5736,11 @@ where
         Some(LowValue::Function(_))
     );
     if !is_function {
-        return refuse(
+        refuse(
             module,
             "a graph is recorded from a function, and this operand is not one".into(),
         );
+        return None;
     }
     // **The arity is the parameter tuple's length, read without evaluating
     // anything.** A read of `ins(i)` compiles to a bare cell with no operation
@@ -5809,7 +5832,7 @@ where
         AsEnum::<LowValue>::as_enum(&result),
         Some(LowValue::Parameterized)
     ) {
-        return refuse(
+        refuse(
             module,
             format!(
                 "applying this function to its own input placeholders stayed undecided, so \
@@ -5818,6 +5841,7 @@ where
                 arity
             ),
         );
+        return None;
     }
     let recorded = returned_value_ids::<P>(module, &result);
     // **An unreadable return is a refusal, not an unrecorded one.** A graph with
@@ -5827,18 +5851,20 @@ where
     // answer that runs. The permissive reading of an unrecorded return belongs to
     // a graph nobody recorded, and the language path has just recorded one.
     let Some(values) = recorded else {
-        return refuse(
+        refuse(
             module,
             "this function's return is not a value a graph can hand back, so there is no \
              graph to record: a graph's value table holds what its dispatches produced and the \
              arguments it was run with, and this body's own value is not one of those"
                 .into(),
         );
+        return None;
     };
     if let Err(reason) = graph::record_return(values) {
-        return refuse(module, reason);
+        refuse(module, reason);
+        return None;
     }
-    match graph::finish() {
+    let value = match graph::finish() {
         Ok((graph, backend)) => {
             let id = graph::intern(graph);
             <P::Value as From<ComputeValue>>::from(ComputeValue::Graph(id, backend))
@@ -5858,9 +5884,11 @@ where
                     "{reason} (the body's own value came back as a decided value, not a lazy one)"
                 )
             };
-            refuse(module, reason)
+            refuse(module, reason);
+            return None;
         }
-    }
+    };
+    Some(value)
 }
 
 /// A lichen tuple as a **node**, which is what an operand or a result has to be.
@@ -5963,7 +5991,7 @@ fn run_graph<P>(
     block: BlockId,
     graph_node: AnyNodeId,
     arguments: Option<AnyNodeId>,
-) -> P::Value
+) -> Option<P::Value>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + From<LowValue> + ValueType,
@@ -5971,7 +5999,6 @@ where
 {
     let refuse = |module: &mut Module<P>, reason: String| {
         module.record_extension_diagnostic(GRAPH_DIAGNOSTIC, None, reason);
-        <P::Value as From<LowValue>>::from(LowValue::Parameterized)
     };
     let (id, backend) = match module
         .node_value(graph_node)
@@ -5979,10 +6006,11 @@ where
     {
         Some(ComputeValue::Graph(id, backend)) => (id, backend),
         _ => {
-            return refuse(
+            refuse(
                 module,
                 "a graph run has to be given a graph, and this is not one".into(),
             );
+            return None;
         }
     };
     // SAFETY: a live node of `module`, read only.
@@ -5990,16 +6018,20 @@ where
         Ok(Some(node)) => match unsafe { module.array_items(node) } {
             Some(items) => items.to_vec(),
             None => {
-                return refuse(
+                refuse(
                     module,
                     "a graph's arguments have to be a tuple, because the function that recorded \
                      the graph took one parameter"
                         .into(),
                 );
+                return None;
             }
         },
         Ok(None) => Vec::new(),
-        Err(reason) => return refuse(module, reason),
+        Err(reason) => {
+            refuse(module, reason);
+            return None;
+        }
     };
     let mut run_arguments: Vec<RunArgument> = Vec::new();
     for (position, item) in argument_items.iter().enumerate() {
@@ -6020,7 +6052,7 @@ where
                     continue;
                 }
                 _ => {
-                    return refuse(
+                    refuse(
                         module,
                         format!(
                             "argument {position} is {}, and a graph run reads a buffer or a number \
@@ -6028,6 +6060,7 @@ where
                             graph::describe(&ComputeValue::TypeWrite)
                         ),
                     );
+                    return None;
                 }
             }
         };
@@ -6041,16 +6074,17 @@ where
                         data: data.to_vec(),
                     },
                     None => {
-                        return refuse(
+                        refuse(
                             module,
                             format!("argument {position} is a buffer this process cannot read"),
                         );
+                        return None;
                     }
                 }
             }
             ComputeValue::DeviceBuffer(resident) => RunArgument::Resident(resident),
             other => {
-                return refuse(
+                refuse(
                     module,
                     format!(
                         "argument {position} is {}, and a graph run reads a buffer or a number — \
@@ -6058,6 +6092,7 @@ where
                         graph::describe(&other)
                     ),
                 );
+                return None;
             }
         });
     }
@@ -6068,15 +6103,18 @@ where
         GRAPH_POLICY.with(|policy| policy.get()),
     ) {
         Ok(values) => values,
-        Err(reason) => return refuse(module, reason),
+        Err(reason) => {
+            refuse(module, reason);
+            return None;
+        }
     };
     let produced = values;
     // **Left where they are.** A value the device wrote stays a resident id and
     // crosses the bus when the language asks for host data, which is the same
     // discipline a single launch follows; a run that fetched everything on the
     // way out would put a download on the path of every result.
-    if produced.len() == 1 {
-        return match &produced[0] {
+    let value = if produced.len() == 1 {
+        match &produced[0] {
             RunResult::Buffer { class, data } => <P::Value as From<ComputeValue>>::from(
                 ComputeValue::Buffer(module.alloc_payload(data, block), *class),
             ),
@@ -6084,28 +6122,30 @@ where
                 <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(*resident))
             }
             RunResult::Count(count) => <P::Value as From<LowValue>>::from(LowValue::USize(*count)),
-        };
-    }
-    let items: Vec<ArrayItem> = produced
-        .iter()
-        .map(|result| {
-            let value = match result {
-                RunResult::Buffer { class, data } => <P::Value as From<ComputeValue>>::from(
-                    ComputeValue::Buffer(module.alloc_payload(data, block), *class),
-                ),
-                RunResult::Resident(resident) => {
-                    <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(*resident))
-                }
-                RunResult::Count(count) => {
-                    <P::Value as From<LowValue>>::from(LowValue::USize(*count))
-                }
-            };
-            let node = module.add_node(block, None, Some(value));
-            ArrayItem::new(AnyNodeId::Dynamic(node))
-        })
-        .collect();
-    let handle = module.alloc_array(&items, block);
-    <P::Value as From<LowValue>>::from(LowValue::Array(handle))
+        }
+    } else {
+        let items: Vec<ArrayItem> = produced
+            .iter()
+            .map(|result| {
+                let value = match result {
+                    RunResult::Buffer { class, data } => <P::Value as From<ComputeValue>>::from(
+                        ComputeValue::Buffer(module.alloc_payload(data, block), *class),
+                    ),
+                    RunResult::Resident(resident) => <P::Value as From<ComputeValue>>::from(
+                        ComputeValue::DeviceBuffer(*resident),
+                    ),
+                    RunResult::Count(count) => {
+                        <P::Value as From<LowValue>>::from(LowValue::USize(*count))
+                    }
+                };
+                let node = module.add_node(block, None, Some(value));
+                ArrayItem::new(AnyNodeId::Dynamic(node))
+            })
+            .collect();
+        let handle = module.alloc_array(&items, block);
+        <P::Value as From<LowValue>>::from(LowValue::Array(handle))
+    };
+    Some(value)
 }
 
 fn dyn_node(id: AnyNodeId) -> Result<NodeId, String> {

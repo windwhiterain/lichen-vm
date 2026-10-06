@@ -920,16 +920,13 @@ where
     P::GlobalExt: AsField<HighGlobal>,
 {
     fn run(&self, operand: P::Value, _block: BlockId, module: &mut Module<P>) -> Option<P::Value> {
-        // The body answers with a value; the undecided marker it produces is
-        // this operator's way of saying "cannot decide yet", which the trait
-        // states as `None` (see `OperatorExt::run`).  A closure wraps the body
-        // so an early `return` inside an arm yields the marker, which the
-        // conversion below turns into `None` — every declining leaf is covered
-        // without an edit of its own.
-        let value = (|| match self {
+        // An operator that cannot decide yet answers `None`, which is the
+        // trait's own spelling of "undecided" (see `OperatorExt::run`).  The
+        // closure gives every early `return` inside an arm one return type.
+        (|| match self {
             TypeOperator::Fresh => {
                 let id = AsField::<HighGlobal>::get_mut(&mut module.global_ext).next_type_id();
-                P::Value::type_id_value(id)
+                Some(P::Value::type_id_value(id))
             }
             // The two class conversions — one operand, held the same way the
             // binary operators hold theirs but in a one-element array.  The
@@ -938,7 +935,7 @@ where
             // failed (and already reported): stay lazy rather than guess.
             TypeOperator::Int2Float | TypeOperator::Float2Int => {
                 if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
-                    return P::Value::from(LowValue::Parameterized);
+                    return None;
                 }
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("a conversion expects a one-element operand array")
@@ -949,7 +946,7 @@ where
                 let items = unsafe { operands.items() };
                 let value = module.node_value(items[0].node);
                 if is_unbound(value) {
-                    return P::Value::from(LowValue::Parameterized);
+                    return None;
                 }
                 let Some(value) = value else {
                     unreachable!("is_unbound covers the empty slot")
@@ -960,7 +957,7 @@ where
                     // fact rather than a refusal — no rounding was asked for,
                     // and an `Int` is wider than an `f32`'s significand.
                     (TypeOperator::Int2Float, Some(LowValue::USize(n))) => {
-                        P::Value::from(LowValue::Float(n as f32))
+                        Some(P::Value::from(LowValue::Float(n as f32)))
                     }
                     // Truncation toward zero, with the operand shapes that have
                     // no `Int` to land on named instead of answered by a
@@ -976,9 +973,9 @@ where
                         {
                             return out_of_range(module, f);
                         }
-                        P::Value::from(LowValue::USize(truncated as usize))
+                        Some(P::Value::from(LowValue::USize(truncated as usize)))
                     }
-                    _ => P::Value::from(LowValue::Parameterized),
+                    _ => None,
                 }
             }
             TypeOperator::Add
@@ -1001,7 +998,7 @@ where
                 // parameterized subtree, so an unbound operand is the lazy
                 // marker (the definition pass flags the node).
                 if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
-                    return P::Value::from(LowValue::Parameterized);
+                    return None;
                 }
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("binary operators expect an operand array of [left, right]")
@@ -1015,7 +1012,7 @@ where
                 let left = module.node_value(operands[0].node);
                 let right = module.node_value(operands[1].node);
                 if is_unbound(left) || is_unbound(right) {
-                    return P::Value::from(LowValue::Parameterized);
+                    return None;
                 }
                 let (Some(left), Some(right)) = (left, right) else {
                     unreachable!("is_unbound covers the empty slot")
@@ -1043,7 +1040,7 @@ where
                             _ => None,
                         };
                         let (Some(left), Some(right)) = (to_usize(&left), to_usize(&right)) else {
-                            return P::Value::from(LowValue::Parameterized);
+                            return None;
                         };
                         let value = match self {
                             TypeOperator::Rem => match left.checked_rem(right) {
@@ -1055,7 +1052,7 @@ where
                             TypeOperator::BitXor => left ^ right,
                             _ => unreachable!("the Int-only operators are handled above"),
                         };
-                        P::Value::from(LowValue::USize(value))
+                        Some(P::Value::from(LowValue::USize(value)))
                     }
                     // `+ - * /` and the four order comparisons compute over the
                     // two scalar classes and never over a mixture: the checker
@@ -1089,7 +1086,7 @@ where
                                     unreachable!("the float operators are handled beside this arm")
                                 }
                             };
-                            P::Value::from(LowValue::USize(value))
+                            Some(P::Value::from(LowValue::USize(value)))
                         }
                         // A float's arithmetic is IEEE, and that is the whole of
                         // its refusal story: `1.0 / 0.0` is an infinity and
@@ -1100,25 +1097,33 @@ where
                         // comparison is IEEE too: `NaN` is less than, greater
                         // than and equal to nothing.
                         (Some(LowValue::Float(left)), Some(LowValue::Float(right))) => match self {
-                            TypeOperator::Add => P::Value::from(LowValue::Float(left + right)),
-                            TypeOperator::Sub => P::Value::from(LowValue::Float(left - right)),
-                            TypeOperator::Mul => P::Value::from(LowValue::Float(left * right)),
-                            TypeOperator::Div => P::Value::from(LowValue::Float(left / right)),
+                            TypeOperator::Add => {
+                                Some(P::Value::from(LowValue::Float(left + right)))
+                            }
+                            TypeOperator::Sub => {
+                                Some(P::Value::from(LowValue::Float(left - right)))
+                            }
+                            TypeOperator::Mul => {
+                                Some(P::Value::from(LowValue::Float(left * right)))
+                            }
+                            TypeOperator::Div => {
+                                Some(P::Value::from(LowValue::Float(left / right)))
+                            }
                             TypeOperator::Lt => {
-                                P::Value::from(LowValue::USize((left < right) as usize))
+                                Some(P::Value::from(LowValue::USize((left < right) as usize)))
                             }
                             TypeOperator::Gt => {
-                                P::Value::from(LowValue::USize((left > right) as usize))
+                                Some(P::Value::from(LowValue::USize((left > right) as usize)))
                             }
                             TypeOperator::Leq => {
-                                P::Value::from(LowValue::USize((left <= right) as usize))
+                                Some(P::Value::from(LowValue::USize((left <= right) as usize)))
                             }
                             TypeOperator::Geq => {
-                                P::Value::from(LowValue::USize((left >= right) as usize))
+                                Some(P::Value::from(LowValue::USize((left >= right) as usize)))
                             }
                             _ => unreachable!("the Int operators are handled beside this arm"),
                         },
-                        _ => P::Value::from(LowValue::Parameterized),
+                        _ => None,
                     },
                     // `==`/`!=` are the generalized equality, and it is the
                     // values' own relation: [`ValueExt::value_eq`] is the
@@ -1132,12 +1137,12 @@ where
                     // is `1`.  The checker unifies the operands' types, so a
                     // cross-type comparison is already a reported error before
                     // `run`.
-                    TypeOperator::Eq => {
-                        P::Value::from(LowValue::USize(left.value_eq(&right) as usize))
-                    }
-                    TypeOperator::Neq => {
-                        P::Value::from(LowValue::USize((!left.value_eq(&right)) as usize))
-                    }
+                    TypeOperator::Eq => Some(P::Value::from(LowValue::USize(
+                        left.value_eq(&right) as usize,
+                    ))),
+                    TypeOperator::Neq => Some(P::Value::from(LowValue::USize(
+                        (!left.value_eq(&right)) as usize,
+                    ))),
                     TypeOperator::Fresh => unreachable!("Fresh is handled above"),
                     TypeOperator::Int2Float | TypeOperator::Float2Int => {
                         unreachable!("the conversions are unary, and handled above")
@@ -1154,7 +1159,7 @@ where
                         // allocation.
                         let member =
                             crate::set::contains(module, operands[1].node, operands[0].node);
-                        P::Value::from(LowValue::USize(member as usize))
+                        Some(P::Value::from(LowValue::USize(member as usize)))
                     }
                     // `[type value, universe]` — the named read's container
                     // requirement.  The decode is the tag-based
@@ -1165,23 +1170,15 @@ where
                     // module fact: the lowlevel has no universe to read).
                     TypeOperator::IsStructType => {
                         let AnyNodeId::Dynamic(universe) = operands[1].node else {
-                            return P::Value::from(LowValue::Parameterized);
+                            return None;
                         };
                         let is_struct =
                             crate::shape::is_struct_type_any(module, universe, operands[0].node);
-                        P::Value::from(LowValue::USize(is_struct as usize))
+                        Some(P::Value::from(LowValue::USize(is_struct as usize)))
                     }
                 }
             }
-        })();
-        // The undecided marker this operator produced *is* "cannot decide yet",
-        // which the trait states as `None`.  Converting here covers every arm
-        // and every early return at once, so a leaf that declines needs no edit
-        // of its own — only its answer's kind is read.
-        if matches!(value.as_enum(), Some(LowValue::Parameterized)) {
-            return None;
-        }
-        Some(value)
+        })()
     }
 
     /// The low-type transfer of the type-level operators.
@@ -1241,7 +1238,7 @@ where
 /// `remainder` picks the wording (a remainder by zero is as undefined as a
 /// division, and saying which operator it was is the difference between a
 /// message a reader can act on and one they have to guess at).
-fn divide_by_zero<P>(module: &mut Module<P>, remainder: bool) -> P::Value
+fn divide_by_zero<P>(module: &mut Module<P>, remainder: bool) -> Option<P::Value>
 where
     P: Program,
     P::Value: ValueType,
@@ -1253,7 +1250,7 @@ where
         None,
         format!("the divisor of this {operation} evaluated to 0, and there is no value for a {operation} by zero"),
     );
-    P::Value::from(LowValue::Parameterized)
+    None
 }
 
 /// A `Float2Int` whose operand has no `Int` to truncate toward: record which
@@ -1264,7 +1261,7 @@ where
 /// for each: a `NaN` came from a refused float computation, an infinity from an
 /// overflowing one, a negative needs the value re-derived (this language's `Int`
 /// is unsigned) and an out-of-range magnitude has no machine integer at all.
-fn out_of_range<P>(module: &mut Module<P>, value: f32) -> P::Value
+fn out_of_range<P>(module: &mut Module<P>, value: f32) -> Option<P::Value>
 where
     P: Program,
     P::Value: ValueType,
@@ -1284,7 +1281,7 @@ where
         None,
         format!("this float2int operand evaluated to {value}, which is {reason}, and there is no Int for it to truncate toward"),
     );
-    P::Value::from(LowValue::Parameterized)
+    None
 }
 
 /// The highlevel's associated-type collector: what the checker is generic
