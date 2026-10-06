@@ -1201,11 +1201,11 @@ pub struct EvaluatedDeep {
 pub struct Node<P: Program> {
     /// The node's value — **private**.  Read through [`Module::node_value`]
     /// (the node's own slot) or [`Module::class_value`] (through the class
-    /// representative); written only through the controlled
-    /// [`Module::write_node_value`] API, which maintains the class-consistency
-    /// invariant (a concrete value replicates to the class's unbound
-    /// pure-cell members).  External crates must never touch the field
-    /// directly.
+    /// representative, which carries the class's one value); written only
+    /// through the controlled [`Module::write_node_value`] API, which maintains
+    /// the class-consistency invariant (a concrete value reaches **every**
+    /// member of the class, the representative included).  External crates must
+    /// never touch the field directly.
     ///
     /// **This one slot carries two axes, and readers must say which they
     /// mean.**  The value axis is *decided or not*: a value that
@@ -1216,6 +1216,11 @@ pub struct Node<P: Program> {
     /// [`Module::has_no_result_yet`] are the named reads of the second axis;
     /// a reader that asks a run question through `is_unbound` is conflating
     /// the two.
+    ///
+    /// The two axes are independent on one node: an **operation-bearing member**
+    /// of a class that already holds a value has that value in its slot while
+    /// `runned` stays `false`, so the slot is an assertion the operator still
+    /// owes an answer for ([`Module::has_no_result_yet`]).
     value: Option<P::Value>,
     /// Whether this node's operator has **run** — the second axis of the slot
     /// above, and what tells a *produced* answer from an asserted one:
@@ -1232,18 +1237,6 @@ pub struct Node<P: Program> {
     /// absent for any node the backend will not trace (type-check-only
     /// scaffolding, or a node materialized before the backend runs).
     low_shape: Option<LowShape>,
-    /// The member of this node's equality class that carries the class's
-    /// committed value — **valid only on the class's representative**, exactly
-    /// as `low_shape` is, and for the same reason: a class has one value and it
-    /// may sit on any member (an operation-bearing member keeps its own
-    /// computation, so it is never written), which is why a reader needs to be
-    /// told which member to read rather than scanning for it.  `None` is a class
-    /// that has committed nothing.
-    ///
-    /// Private behind the same gate as `value`: written only through
-    /// [`Module::commit_class_value`], which is the value-write path, so a
-    /// carrier cannot outlive the value it names.
-    class_carrier: Option<NodeId>,
     /// The node's computation — the operator and its single operand edge, or
     /// `None` for a node that carries a value instead.  **Private**: read
     /// through [`Module::node_operation`], and defined once, either by

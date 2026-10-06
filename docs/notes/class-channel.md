@@ -192,6 +192,39 @@ representative), so the class's representative records **which** member carries
 it and the scan became one field read (§1.1).  The write walk stays O(class size)
 per write, which is inherent to distributing a value over members.
 
+**Re-measured: the veto cannot be removed and the carrier cannot be deleted**
+(branch `feature/unconditional-class-writes`, worktree
+`.worktrees/unconditional-nodes`).  A third attempt was made on the §1.1
+decision itself: `propagate_class_value` writes **every** member with no
+operation check, the class value is kept in the representative's own slot, and
+`class_carrier` — with `class_committed_node`, `commit_class_value`,
+`reselect_class_carrier`, and the two `class_committed_node` readers in
+`highlevel::shape` and `is_function_type_node` — is deleted.  The marks:
+
+| suite | result |
+|---|---|
+| `--test basic` + lib (`lichen-lowlevel`) | **155 of 155**, unchanged |
+| `--test checker` and the rest (`lichen-highlevel`) | **87 of 87** plus the small targets, unchanged |
+| `lichen-language --test examples` | **1 failed**: `examples/import/_.lichen` declares `(42, 10, 7)` and prints `(42, none, none)` |
+
+The minimal reproduction is `(geo.double 5)` with `geo`/`math` imported (both
+files from `examples/import/`): the value survives as `10`, but its **type cell
+does not resolve** — it renders `raw 10: ?a` where the example declares
+`10: Int`.  The two `none`s in the full example are the tuple's second and third
+apply results, whose slots are empty at render time.
+
+Instrumented rather than inferred, and each hypothesis refuted in turn: no
+operation's decided slot is ever overwritten with an unbound value
+(`write_node_value`), the class's value is never shadowed on the representative,
+and the merge preserves the class value through the new representative
+(a `debug_assert_eq!` on `class_committed_value(representative)` held for the
+whole suite).  What remains is the structural finding §1.1 already records: the
+**class value and a member's own value are two facts**, and readers of both the
+type channel and the evaluator's `runned` guard take the member's own slot as
+the source.  Distributing one value into every member makes the two
+indistinguishable, and moving it to the representative leaves the member slot
+empty.  The carrier is the third option, and it is the one that works.
+
 ## 2. Half one — refuted: a class's low type is not a second reading of a type slot
 
 **What was proposed**: route `shape::low_type_of_slot`'s dynamic slots through
