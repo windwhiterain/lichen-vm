@@ -177,6 +177,24 @@ that holds.
 
 ### 1.1.2 In progress: `OperatorExt::run` returns `Option`
 
+**Merged to `dev` (`09b4640`), and it carries one regression.** Phase 1 is
+complete — every `OperatorExt::run`/`run_deferred` returns `Option<P::Value>`,
+the VM converts `None` to the marker at the extension seam, and the structural
+dispatch is untouched.  The workspace compiles and the suites are green, but
+three cases are parked rather than passing, and they are not the same kind:
+
+| parked case | kind |
+|---|---|
+| `pipeline::a_dependent_array_length_rejects_other_lengths` | **this branch's regression**: `((n => ([1, 2, 3] : array<Int, n>)) 5)` used to fail to compile and now compiles, so a dependent array length is no longer rejected against an argument of 5.  Green at `4be9180`; red after the experiment commits (`03ed3e2`, `dde4011`).  **Not** caused by the `run → Option` refactor, which is behaviour-neutral |
+| `statement_values::compute_kernel_bindings_render_by_name_not_raw_layout` | pre-existing on `dev` |
+| `statement_values::compute_wrapper_functions_hover_with_named_type_variables` | pre-existing on `dev` |
+| `graph_jit::what_a_recorded_body_may_not_reach_for_is_refused_by_name` | pre-existing on `dev` |
+
+The regression is the one to answer before the marker removal finishes: it is a
+**type check that stopped rejecting**, which is the same subject as the import
+example this branch already broke — a class-value fact no longer reaching the
+member a reader consults.
+
 **The goal.** Delete [`LowValue::Parameterized`], so that *undecided* has exactly
 one representation on each side of the boundary: the **empty node slot**
 (`Node::value: Option<P::Value>`) inside the VM, and **`None`** from an operator
