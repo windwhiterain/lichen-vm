@@ -62,13 +62,15 @@ impl OperatorExt<MyProgram> for MyOperator {
         _operand: HighProgramValue,
         _block: BlockId,
         module: &mut Module<MyProgram>,
-    ) -> HighProgramValue {
+    ) -> Option<HighProgramValue> {
         match self {
             MyOperator::Bump => {
                 // The upstream's component is reachable in the composed host.
                 let _counter = AsField::<HighGlobal>::get(&module.global_ext).type_id_counter;
                 let n = AsField::<MyState>::get_mut(&mut module.global_ext).bump();
-                HighProgramValue::LowValue(lichen_lowlevel::LowValue::USize(n))
+                Some(HighProgramValue::LowValue(lichen_lowlevel::LowValue::USize(
+                    n,
+                )))
             }
             // The structural operators never reach `run`: the VM dispatches
             // them through `AsEnum` before falling through.

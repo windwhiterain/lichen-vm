@@ -322,7 +322,13 @@ impl<P: Program> Module<P> {
                     _ => unreachable!("Index operand must be an array of [array, index]"),
                 }
             }
-            None => operator.run_deferred(operation.operand, block, self),
+            // An extension operator reports "undecided" as `None`; the VM's
+            // marker is how that travels from here to the postlude, which is
+            // what decides whether the node keeps a value.  The structural arms
+            // above still answer with a `P::Value`, so the seam is here.
+            None => operator
+                .run_deferred(operation.operand, block, self)
+                .unwrap_or_else(|| P::Value::from(LowValue::Parameterized)),
             Some(LowOperator::Apply) => {
                 let Some(operands) = operation.operand else {
                     unreachable!("Apply expects an operand array node")
@@ -496,6 +502,10 @@ impl<P: Program> Module<P> {
         // node's slot holds a *decided* answer or nothing, which is what makes
         // `Module::has_no_result_yet`'s "has an operation and no cached value"
         // the same question as "has not produced an answer yet".
+        // An extension operator reports "undecided" as `None` and the seam above
+        // turns that into this marker, so the test below is the one place both
+        // spellings mean the same thing.  When the marker itself is gone, this
+        // becomes the `None` the operator returned, carried to here.
         if matches!(value.as_enum(), Some(LowValue::Parameterized)) {
             self.nodes[node].runned = true;
             return value;

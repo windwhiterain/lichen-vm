@@ -874,7 +874,7 @@ where
         operand: V,
         _block: BlockId,
         module: &mut Module<ProgramImpl<V, HighProgramOperator, A, L, G>>,
-    ) -> V {
+    ) -> Option<V> {
         match self {
             // The structural operators never reach `run`: the VM dispatches
             // them through `AsEnum` before falling through.
@@ -919,8 +919,14 @@ where
     P::Value: ValueType,
     P::GlobalExt: AsField<HighGlobal>,
 {
-    fn run(&self, operand: P::Value, _block: BlockId, module: &mut Module<P>) -> P::Value {
-        match self {
+    fn run(&self, operand: P::Value, _block: BlockId, module: &mut Module<P>) -> Option<P::Value> {
+        // The body answers with a value; the undecided marker it produces is
+        // this operator's way of saying "cannot decide yet", which the trait
+        // states as `None` (see `OperatorExt::run`).  A closure wraps the body
+        // so an early `return` inside an arm yields the marker, which the
+        // conversion below turns into `None` — every declining leaf is covered
+        // without an edit of its own.
+        let value = (|| match self {
             TypeOperator::Fresh => {
                 let id = AsField::<HighGlobal>::get_mut(&mut module.global_ext).next_type_id();
                 P::Value::type_id_value(id)
@@ -1167,7 +1173,15 @@ where
                     }
                 }
             }
+        })();
+        // The undecided marker this operator produced *is* "cannot decide yet",
+        // which the trait states as `None`.  Converting here covers every arm
+        // and every early return at once, so a leaf that declines needs no edit
+        // of its own — only its answer's kind is read.
+        if matches!(value.as_enum(), Some(LowValue::Parameterized)) {
+            return None;
         }
+        Some(value)
     }
 
     /// The low-type transfer of the type-level operators.

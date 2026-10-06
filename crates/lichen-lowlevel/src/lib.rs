@@ -693,7 +693,20 @@ pub trait ValueExt: Debug + Copy + PartialEq {
 }
 
 pub trait OperatorExt<P: Program>: Debug + Copy {
-    fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> P::Value;
+    /// This operator's answer, or **`None` when it cannot decide yet**.
+    ///
+    /// `None` is not an error and not a value: it is the operator declining to
+    /// produce one because its operands are not resolved.  The VM records that
+    /// as *ran, undecided* — the node's slot stays empty and the node stays
+    /// re-runnable, so a later pass settles it once its operands bind.  An
+    /// operator that answers answers with `Some`.
+    ///
+    /// This is the boundary the [`LowValue::Parameterized`] marker used to
+    /// serve, and it is being replaced by `None`: undecided has one
+    /// representation on each side — the **empty slot**
+    /// (`Node::value: Option<P::Value>`) inside the VM and **`None`** out of an
+    /// operator.  See `docs/notes/class-channel.md` §1.1.2.
+    fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> Option<P::Value>;
 
     /// Evaluate this operator's operand and hand the **value** to [`Self::run`].
     ///
@@ -725,23 +738,22 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
         operand: Option<NodeId>,
         block: BlockId,
         module: &mut Module<P>,
-    ) -> P::Value {
+    ) -> Option<P::Value> {
         let value = match operand {
             Some(node) => {
                 let value = module.evaluate_node_deep(node, Some(block));
                 // The deep pass returns before it writes `evaluated_deep` when
                 // it refuses on budget exhaustion, so an absent node or an unset
-                // flag means "concreteness unknown" — read as parameterized,
-                // never as proven concrete.
+                // flag means "concreteness unknown" — undecided, never proven
+                // concrete.
                 let parameterized = module
                     .nodes
                     .get(node)
                     .is_none_or(|node| node.evaluated_deep.is_none_or(|deep| deep.parameterized));
                 if parameterized {
-                    P::Value::from(LowValue::Parameterized)
-                } else {
-                    value
+                    return None;
                 }
+                value
             }
             // A nullary operator (e.g. `TypeOperator::Fresh`) has no operand
             // node: the honest stand-in is the computed-nothing value — never
@@ -801,7 +813,7 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
 // genuinely unreachable: a structural operator is never an extension
 // computation.
 impl<P: Program> OperatorExt<P> for LowOperator {
-    fn run(&self, _operand: P::Value, _block: BlockId, _module: &mut Module<P>) -> P::Value {
+    fn run(&self, _operand: P::Value, _block: BlockId, _module: &mut Module<P>) -> Option<P::Value> {
         unreachable!("structural operators are dispatched by the VM")
     }
 }
