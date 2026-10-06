@@ -1010,8 +1010,12 @@ impl<P: Program> Module<P> {
     /// ([`Self::commit_class_value`]), which every write goes through —
     /// [`Self::write_node_value`], the merge in [`Self::add_equality`], the
     /// evaluator, and the claim path — so a carrier cannot outlive the value it
-    /// names.  It is dropped when the member it names is released
-    /// ([`Self::forget_class_carrier`]).
+    /// names: a write that leaves the named member's slot unbound clears the
+    /// carrier instead of recording it.  A class whose named member is released
+    /// re-points it in [`Self::reselect_class_carrier`], called from the block
+    /// release's class splice.  A class that already has a carrier keeps it —
+    /// the value it names is still there, and a class does not gain a second
+    /// value.
     pub fn class_committed_node(&self, rep: NodeId) -> Option<NodeId> {
         let representative = self.class_root(rep);
         self.nodes[representative].class_carrier
