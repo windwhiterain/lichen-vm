@@ -198,6 +198,48 @@ sub-expressions' slots (which is only ever validated, never kept as the slot). A
 leaf with no attribute of its own has no provider, so the annotation *is* the slot
 (`1 # 4` → `4`).
 
+### The gate must compute its operands
+
+`check_unify_relaxed` computes **both** operands before it attempts the unify
+(`Checker::check_unify_relaxed`, `crates/lichen-highlevel/src/checker/diagnostics.rs`).
+That is not an optimization; it is what makes the gate a gate.
+
+A compound provider is a `Gcd`-meet **node**, not a value (`AttrExt::combine`), and
+nothing has evaluated the expression by the time its annotation is checked — the
+checker's statement pass runs *after* the whole build (`Checker::build`). An
+uncomputed provider meeting a decided requirement is *undecided against a value*,
+which is the one unification arm that **writes** instead of comparing: the
+requirement lands in the provider's slot and the check reports nothing. Every
+compound annotation was therefore accepted, whatever its numbers were, and the
+larger the annotation the less it constrained:
+
+| program | before | after |
+|---|---|---|
+| `((1 # 4) + (2 # 6)) # 5` | checks — `2 ≢ 5` is never compared | refused, "expected 5, found 2" |
+| `((1 # 2) + (2 # 2)) # 4` | checks | refused, "expected 4, found 2" |
+| `f = x # 4 => x; f (5 # [1,2][3])` | refused, but spelled "expected none, found none" | refused, "expected 4, found none" |
+
+The third row is the same cause read from the render side: with the provider
+unreadable, both sides of the mismatch read as unbound, so the two values the
+diagnostic prints were both `none` — including the declared `4`, which has
+nothing to do with the failed read. Computing the operands first is what lets the
+declared side print `4` and the failed read print its own `none`.
+
+A **leaf** annotation never showed this: its slot is a literal, decided when the
+checker builds it. That is why the defect only ever appeared on a compound, and
+why `f = x # 4 => x; f (5 # 2)` was refused correctly all along.
+
+The three tests that pinned these rows were parked
+(`perspective.rs::a_compound_annotation_rejects_a_mismatched_perspective`,
+`..._rejects_a_narrower_declared_perspective`,
+`..._a_failed_read_in_an_attribute_renders_as_none`) and are un-parked.
+
+What this does **not** decide: an operand that is still undecided *after* being
+computed — a runtime-dependent perspective, or a position behind a shallow mark —
+leaves the check on the unify arm, where a free cell is a wildcard. Whether a
+requirement may bind a runtime-dependent provider is a separate question, and it
+is the one this change leaves standing.
+
 ## Syntax
 
 `expr [: expr] [# expr] [? expr]` — `:` fills the type slot, `#` fills the

@@ -95,8 +95,6 @@ fn a_missing_child_reads_zero() {
 }
 
 #[test]
-#[ignore = "`((1 # 4) + (2 # 6)) # 5` checks: a compound annotation whose slot (2) \
-disagrees with the annotation (5) is not yet refused"]
 fn a_compound_annotation_rejects_a_mismatched_perspective() {
     // `((1 # 4) + (2 # 6)) # 5` — slot = 2; check 2 ≡ 5 ✗.
     assert!(!ok("((1 # 4) + (2 # 6)) # 5"));
@@ -181,8 +179,6 @@ fn a_compound_annotation_accepts_a_broader_derived_perspective() {
 }
 
 #[test]
-#[ignore = "`((1 # 2) + (2 # 2)) # 4` checks: a declared perspective the derived slot \
-does not divide is not yet refused"]
 fn a_compound_annotation_rejects_a_narrower_declared_perspective() {
     // `((1 # 2) + (2 # 2)) # 4` — the derived slot is gcd(2, 2) = 2 (uniform
     // over 2); `# 4` declares uniform over 4, and 4 ∤ 2, so the assertion
@@ -199,8 +195,6 @@ fn a_compound_annotation_rejects_a_narrower_declared_perspective() {
 // becomes `# 4`; `(x # 4) # 8` is not (uniform-4 does not entail uniform-8).
 
 #[test]
-#[ignore = "the mismatch spells `expected none, found none`: the argument's failed read \
-is rendered as a fresh class variable rather than the empty value"]
 fn a_failed_read_in_an_attribute_renders_as_none() {
     // The argument's perspective is a failed read — an empty value, a
     // concrete value.  The mismatch spells it `none`, never a fresh `?a`

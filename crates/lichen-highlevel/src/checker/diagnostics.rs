@@ -49,14 +49,27 @@ where
     /// curated context), and returns whether the relation is satisfied.  The
     /// attribute decides which operand is the subtype and which the supertype.
     ///
+    /// **Both operands are computed first**, and that is load-bearing rather
+    /// than an optimization.  A compound provider is a `Gcd`-meet node
+    /// ([`AttrExt::combine`](crate::attr::AttrExt::combine)), not a value, and
+    /// nothing else has evaluated the expression by the time its annotation is
+    /// checked — the checker's own statement pass runs afterwards
+    /// ([`Checker::build`]).  An uncomputed provider against a decided
+    /// requirement is *undecided against a value*, which is the one
+    /// unification arm that **writes** rather than compares: the requirement
+    /// would be written into the provider's slot and the check would report
+    /// nothing, so every compound annotation would be accepted whatever its
+    /// numbers were.  Forcing here is what makes the gate a gate
+    /// (`docs/notes/attributes.md` §"the gate must compute its operands").
+    ///
     /// Suppression truncates exactly the range this unify produced, which is
     /// what makes it safe without the "nothing was merged" argument: an
-    /// attribute unify's operands are scalar (a perspective is a `USize` or an
-    /// unbound cell, never a compound array), so a failed unify merges nothing
-    /// and the range names its own errors and no others.  The checker's
-    /// attribute check is a *validation gate* — the value itself flows in
-    /// through the lowlevel apply's separate clone-unify — so suppressing
-    /// leaves the graph correct.
+    /// attribute unify's operands are scalar once computed (a perspective is a
+    /// `USize` or an unbound cell, never a compound array), so a failed unify
+    /// merges nothing and the range names its own errors and no others.  The
+    /// checker's attribute check is a *validation gate* — the value itself
+    /// flows in through the lowlevel apply's separate clone-unify — so
+    /// suppressing leaves the graph correct.
     pub fn check_unify_relaxed(
         &mut self,
         a: NodeId,
@@ -65,6 +78,8 @@ where
         kind: DiagKind,
         is_subtype: &dyn Fn(&dyn Ctx<P>, NodeId, NodeId) -> bool,
     ) {
+        self.module.evaluate_node_deep(a, None);
+        self.module.evaluate_node_deep(b, None);
         let (_, errors) = self.module.try_unify(a, b);
         if errors.is_empty() {
             return;
