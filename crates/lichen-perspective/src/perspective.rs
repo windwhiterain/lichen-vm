@@ -114,8 +114,11 @@ where
     P: Program,
     P::Value: AsEnum<LowValue> + From<LowValue>,
 {
-    fn run(&self, operand: P::Value, _block: BlockId, module: &mut Module<P>) -> P::Value {
-        match self {
+    fn run(&self, operand: P::Value, _block: BlockId, module: &mut Module<P>) -> Option<P::Value> {
+        // The marker this operator produces *is* "cannot decide yet", which the
+        // trait states as `None`; a closure lets every early return yield the
+        // marker and one conversion cover them all.
+        let value = (|| match self {
             GcdOp::Gcd => {
                 if matches!(
                     AsEnum::<LowValue>::as_enum(&operand),
@@ -160,7 +163,14 @@ where
                 }
                 <P::Value as From<LowValue>>::from(LowValue::USize(acc))
             }
+        })();
+        if matches!(
+            AsEnum::<LowValue>::as_enum(&value),
+            Some(LowValue::Parameterized)
+        ) {
+            return None;
         }
+        Some(value)
     }
 }
 

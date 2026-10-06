@@ -267,7 +267,7 @@ where
         _operand: V,
         _block: BlockId,
         _module: &mut Module<ProgramImpl<V, ProbeOperator, NoAttr, L>>,
-    ) -> V {
+    ) -> Option<V> {
         unreachable!("the probe operator is only used to prove the type composes")
     }
 }

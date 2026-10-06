@@ -445,7 +445,7 @@ macro_rules! lang_compose_vocabulary {
                 operand: <LangProgram as ::lichen_lowlevel::Program>::Value,
                 block: ::lichen_lowlevel::BlockId,
                 module: &mut ::lichen_lowlevel::Module<LangProgram>,
-            ) -> <LangProgram as ::lichen_lowlevel::Program>::Value {
+            ) -> Option<<LangProgram as ::lichen_lowlevel::Program>::Value> {
                 match self {
                     LangOperator::$lowop_name(op) => op.run(operand, block, module),
                     LangOperator::$tyop_name(op) => op.run(operand, block, module),
@@ -808,7 +808,9 @@ mod sort_op_tests {
             .collect();
         let array = module.alloc_array(&items, block);
         let operand = LangValue::from(LowValue::Array(array));
-        let out = LangOperator::SortOp(SortOp::Sort).run(operand, block, &mut module);
+        let out = LangOperator::SortOp(SortOp::Sort)
+            .run(operand, block, &mut module)
+            .expect("the sort extension decides for a concrete array operand");
         let Some(LowValue::Array(array)) = out.as_enum() else {
             panic!("Sort must yield a USize array");
         };

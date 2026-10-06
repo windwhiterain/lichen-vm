@@ -643,7 +643,20 @@ pub trait ValueExt: Debug + Copy + PartialEq {
 }
 
 pub trait OperatorExt<P: Program>: Debug + Copy {
-    fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> P::Value;
+    /// This operator's answer, or **`None` when it cannot decide yet**.
+    ///
+    /// `None` is not an error and not a value: it is the operator declining to
+    /// produce one because its operands are not resolved.  The VM records that
+    /// as *ran, undecided* — the node's slot stays empty and the node stays
+    /// re-runnable, so a later pass settles it once its operands bind.  An
+    /// operator that answers answers with `Some`.
+    ///
+    /// This is the boundary the [`LowValue::Parameterized`] marker used to
+    /// serve, and it is being replaced by `None`: undecided has one
+    /// representation on each side — the **empty slot**
+    /// (`Node::value: Option<P::Value>`) inside the VM and **`None`** out of an
+    /// operator.  See `docs/notes/class-channel.md` §1.1.2.
+    fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> Option<P::Value>;
 
     /// Evaluate this operator's operand and hand the **value** to [`Self::run`].
     ///
@@ -675,23 +688,22 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
         operand: Option<NodeId>,
         block: BlockId,
         module: &mut Module<P>,
-    ) -> P::Value {
+    ) -> Option<P::Value> {
         let value = match operand {
             Some(node) => {
                 let value = module.evaluate_node_deep(node, Some(block));
                 // The deep pass returns before it writes `evaluated_deep` when
                 // it refuses on budget exhaustion, so an absent node or an unset
-                // flag means "concreteness unknown" — read as parameterized,
-                // never as proven concrete.
+                // flag means "concreteness unknown" — undecided, never proven
+                // concrete.
                 let parameterized = module
                     .nodes
                     .get(node)
                     .is_none_or(|node| node.evaluated_deep.is_none_or(|deep| deep.parameterized));
                 if parameterized {
-                    P::Value::from(LowValue::Parameterized)
-                } else {
-                    value
+                    return None;
                 }
+                value
             }
             // A nullary operator (e.g. `TypeOperator::Fresh`) has no operand
             // node: the honest stand-in is the computed-nothing value — never
@@ -751,7 +763,12 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
 // genuinely unreachable: a structural operator is never an extension
 // computation.
 impl<P: Program> OperatorExt<P> for LowOperator {
-    fn run(&self, _operand: P::Value, _block: BlockId, _module: &mut Module<P>) -> P::Value {
+    fn run(
+        &self,
+        _operand: P::Value,
+        _block: BlockId,
+        _module: &mut Module<P>,
+    ) -> Option<P::Value> {
         unreachable!("structural operators are dispatched by the VM")
     }
 }
@@ -1150,11 +1167,11 @@ pub struct EvaluatedDeep {
 pub struct Node<P: Program> {
     /// The node's value — **private**.  Read through [`Module::node_value`]
     /// (the node's own slot) or [`Module::class_value`] (through the class
-    /// representative); written only through the controlled
-    /// [`Module::write_node_value`] API, which maintains the class-consistency
-    /// invariant (a concrete value replicates to the class's unbound
-    /// pure-cell members).  External crates must never touch the field
-    /// directly.
+    /// representative, which carries the class's one value); written only
+    /// through the controlled [`Module::write_node_value`] API, which maintains
+    /// the class-consistency invariant (a concrete value reaches **every**
+    /// member of the class, the representative included).  External crates must
+    /// never touch the field directly.
     ///
     /// **This one slot carries two axes, and readers must say which they
     /// mean.**  The value axis is *decided or not*: a value that
@@ -1165,6 +1182,11 @@ pub struct Node<P: Program> {
     /// [`Module::has_no_result_yet`] are the named reads of the second axis;
     /// a reader that asks a run question through `is_unbound` is conflating
     /// the two.
+    ///
+    /// The two axes are independent on one node: an **operation-bearing member**
+    /// of a class that already holds a value has that value in its slot while
+    /// `runned` stays `false`, so the slot is an assertion the operator still
+    /// owes an answer for ([`Module::has_no_result_yet`]).
     value: Option<P::Value>,
     /// Whether this node's operator has **run** — the second axis of the slot
     /// above, and what tells a *produced* answer from an asserted one:
@@ -1181,18 +1203,6 @@ pub struct Node<P: Program> {
     /// absent for any node the backend will not trace (type-check-only
     /// scaffolding, or a node materialized before the backend runs).
     low_shape: Option<LowShape>,
-    /// The member of this node's equality class that carries the class's
-    /// committed value — **valid only on the class's representative**, exactly
-    /// as `low_shape` is, and for the same reason: a class has one value and it
-    /// may sit on any member (an operation-bearing member keeps its own
-    /// computation, so it is never written), which is why a reader needs to be
-    /// told which member to read rather than scanning for it.  `None` is a class
-    /// that has committed nothing.
-    ///
-    /// Private behind the same gate as `value`: written only through
-    /// [`Module::commit_class_value`], which is the value-write path, so a
-    /// carrier cannot outlive the value it names.
-    class_carrier: Option<NodeId>,
     /// The node's computation — the operator and its single operand edge, or
     /// `None` for a node that carries a value instead.  **Private**: read
     /// through [`Module::node_operation`], and defined once, either by

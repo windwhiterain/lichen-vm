@@ -3,7 +3,7 @@ use stacksafe::stacksafe;
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, BudgetExhausted, EvaluatedDeep,
     LowOperator, LowValue, Module, NodeId, OperatorExt, Program, StaticModuleCache,
-    ancestors::AncestorPairs, table::KeyState,
+    ancestors::AncestorPairs, is_unbound, table::KeyState,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -140,12 +140,20 @@ impl<P: Program> Module<P> {
             return self.evaluate_block(node);
         }
         if let Some(value) = self.nodes[node].value {
-            // An operator that has not run must run: a value in the slot that
-            // *this node's* operator did not produce ([`Module::has_no_result_yet`])
-            // was written by a unification — an assertion, not a computation —
-            // so the operator still owes its own answer.
+            // **An unbound result does not stand as this node's answer.**  With
+            // the class's value distributed over the members, the value found
+            // here may be the *class's* marker rather than something this
+            // operator produced — and a marker is precisely the answer the
+            // evaluator declines to cache, so that a later pass re-runs the
+            // operator once its operands bind.  Accepting it here would cache it
+            // through the side door and the deciding pass would never happen.
+            //
+            // `runned` is the other half of the same test and the reason it
+            // stays: it is true only when *this* operator produced the value, so
+            // a decided answer a unification wrote still lets the operator run
+            // and owes its own reconciliation.
             if self.nodes[node].operation.is_some()
-                && !self.nodes[node].runned
+                && (!self.nodes[node].runned || is_unbound(Some(value)))
                 && !self.nodes[node].visiting
             {
                 let guard = self.retain_node(node);
@@ -314,7 +322,13 @@ impl<P: Program> Module<P> {
                     _ => unreachable!("Index operand must be an array of [array, index]"),
                 }
             }
-            None => operator.run_deferred(operation.operand, block, self),
+            // An extension operator reports "undecided" as `None`; the VM's
+            // marker is how that travels from here to the postlude, which is
+            // what decides whether the node keeps a value.  The structural arms
+            // above still answer with a `P::Value`, so the seam is here.
+            None => operator
+                .run_deferred(operation.operand, block, self)
+                .unwrap_or_else(|| P::Value::from(LowValue::Parameterized)),
             Some(LowOperator::Apply) => {
                 let Some(operands) = operation.operand else {
                     unreachable!("Apply expects an operand array node")
@@ -488,6 +502,10 @@ impl<P: Program> Module<P> {
         // node's slot holds a *decided* answer or nothing, which is what makes
         // `Module::has_no_result_yet`'s "has an operation and no cached value"
         // the same question as "has not produced an answer yet".
+        // An extension operator reports "undecided" as `None` and the seam above
+        // turns that into this marker, so the test below is the one place both
+        // spellings mean the same thing.  When the marker itself is gone, this
+        // becomes the `None` the operator returned, carried to here.
         if matches!(value.as_enum(), Some(LowValue::Parameterized)) {
             self.nodes[node].runned = true;
             return value;

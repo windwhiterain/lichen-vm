@@ -134,20 +134,28 @@ impl<P: Program> Module<P> {
         // [`Self::write_node_value`] treats it.  Both sides decided is not a
         // conflict here — `unify_inner`'s arms decide that, and only agree to
         // merge two decided sides.
+        // A marker is not a fact to carry (`is_unbound`), so both reads are the
+        // *committed* values — an undecided class contributes nothing to the
+        // merged class, and `propagate_class_value` refuses the marker as well.
         let left_value = self.class_committed_value(a);
         let right_value = self.class_committed_value(b);
         let representative = disjoint::union(&mut self.nodes, a, b);
         for shape in [left, right].into_iter().flatten() {
             self.refine_class_low_type(representative, shape);
         }
-        // The class keeps the value it had, and the merged class's carrier has
-        // to name it.  The union re-elected a representative, so a chosen side's
-        // carrier is re-pointed at the winner — one assignment, and the value
-        // itself never moves, which is what keeps a value no member could take
-        // (an operation-bearing member's) reachable.
-        if let Some(carrier) = left_value.map(|_| a).or(right_value.map(|_| b)) {
-            self.commit_class_value(carrier);
+        // The class keeps the value it had, and the merged class's value slot
+        // has to carry it: the union re-elected a representative, and with the
+        // veto gone the value can be moved into that slot rather than pointed
+        // at.  The one value left over is the merged class's, because both
+        // sides decided is a conflict `unify_inner` reports instead of merging.
+        if let Some(value) = left_value.or(right_value) {
+            self.propagate_class_value(representative, value);
         }
+        debug_assert_eq!(
+            self.class_committed_value(representative),
+            left_value.or(right_value),
+            "the merge must keep the class's value, read through the new representative"
+        );
         representative
     }
 
@@ -346,17 +354,13 @@ impl<P: Program> Module<P> {
     /// site.  A `None`/`Parameterized` value only sets the node's own slot — a
     /// marker is not a fact to propagate.
     ///
-    /// **The rule is member-local, and the write is unconditional**
-    /// ([`docs/notes/class-channel.md`] §1.1).  A unification must write: the
-    /// write is *not* gated on the slot being unbound, and the test it puts to
-    /// a member is that member's own value against the propagated one — never
-    /// the class's.  A class here routinely holds *different* values on
-    /// different members (a term pair on one, the resolved value on another, a
-    /// type cell on a third), so a class-level read turns every ordinary write
-    /// into a conflict; that was measured, and it is why the read is
-    /// member-local.  The comparison happens in
-    /// [`Self::propagate_class_value`]; a member that cannot take the value
-    /// keeps the one it has.
+    /// **The write is unconditional, and it lands on every member**
+    /// ([`docs/notes/class-channel.md`] §1.1).  It is not gated on the slot
+    /// being unbound, and it skips nobody — so **one class has one value**: a
+    /// concrete write reaches every member *and* the class's representative,
+    /// which is where [`Self::class_value`] and [`Self::class_committed_value`]
+    /// read it from.  The representative is the class's single value slot, so
+    /// no reader has to know which member a write happened to start from.
     ///
     /// It is also one of the two **observation** sites of the low-type layer:
     /// a concrete value refines its class's low type from the value's variant
@@ -365,15 +369,17 @@ impl<P: Program> Module<P> {
     pub fn write_node_value(&mut self, node: NodeId, value: Option<P::Value>) {
         self.nodes[node].value = value;
         if let Some(value) = value.filter(|v| !is_unbound(Some(*v))) {
+            // A class whose sole member is the node — `parent` and `next` both
+            // `None` is `disjoint::Meta`'s contract for a lone representative —
+            // holds nobody to distribute to, so the slot write above is the
+            // whole effect.
             if self.nodes[node].equality.parent().is_none()
                 && self.nodes[node].equality.next().is_none()
             {
-                self.commit_class_value(node);
                 return;
             }
             let representative = self.equality_representative(node);
             self.propagate_class_value(representative, value);
-            self.commit_class_value(node);
             self.observe_class_low_type(representative, value);
         }
     }
@@ -381,25 +387,26 @@ impl<P: Program> Module<P> {
     /// Commit an **operation's answer** — the evaluator's write.
     ///
     /// The answer is a **value**: it has no class of its own, so it meets the
-    /// node through the one unification as a node-less side
-    /// ([`Side::value`]) — which is exactly the question "can this answer be the
-    /// value my class holds", asked *of* the recursion rather than beside it.
-    /// The conflict is the ordinary unification conflict, recorded at this
-    /// node's roots, so nothing needs a comparison path of its own.
+    /// node through the one unification as a node-less side ([`Side::value`]) —
+    /// which is exactly the question "can this answer be the value my class
+    /// holds", asked *of* the recursion rather than beside it.  The conflict is
+    /// the ordinary unification conflict, recorded at this node's roots, so
+    /// nothing needs a comparison path of its own.
     ///
-    /// `runned` is the part only the evaluator knows: *this* node's operator
-    /// produced the value, which is the axis [`Self::has_no_result_yet`] reads
-    /// and a value the unifier wrote cannot claim.
+    /// **The operator always runs, and this is where its own answer is kept.**
+    /// The class's value is distributed to the members, but *not* over the
+    /// producing operation's own slot: that slot is the node-local run state —
+    /// "this operator produced this" — which is what
+    /// [`Module::has_no_result_yet`] reads and what stops a second run.  A
+    /// propagated class value must never masquerade as a produced answer, or the
+    /// operator that owed one would never run again.
     pub(crate) fn write_node_answer(&mut self, node: NodeId, value: P::Value) {
         let mut path = AncestorPairs::new();
         let mut steps = Vec::new();
         // The answer against what the node's class holds, as two values: the
         // answer has no class of its own, and pulling the class's value out
         // explicitly is what makes the two comparable.
-        let held = {
-            let representative = self.equality_representative(node);
-            self.class_committed_value(representative)
-        };
+        let held = self.class_committed_value(node);
         self.unify_inner(
             Side::value(Some(value)),
             Side::value(held),
@@ -408,50 +415,36 @@ impl<P: Program> Module<P> {
             &mut steps,
             (node, node),
         );
+        // Distribute to the class, then restore this node's own answer: the walk
+        // visits every member, this one included, and a class value landing here
+        // would erase the run state the slot carries.
         self.write_node_value(node, Some(value));
+        self.nodes[node].value = Some(value);
         self.nodes[node].runned = true;
     }
 
-    /// Propagate a concrete `value` over `representative`'s class — the second
-    /// half of [`Self::write_node_value`], shared with [`Self::add_equality`],
-    /// where a merge carries the class's decided value to the members it adds
-    /// exactly as a write carries it to the members it finds.
+    /// Distribute a concrete `value` over the class of `representative` — the
+    /// distribution half of [`Self::write_node_value`], shared with
+    /// [`Self::add_equality`], where a merge carries the class's decided value
+    /// to the members it adds exactly as a write carries it to the members it
+    /// finds.
     ///
-    /// The walk is **unconditional**: a class has one value, the first member to
-    /// have one propagates it to every member that can take it, and no later
-    /// pass can meet a member that already holds a *different* one.  There is
-    /// therefore no comparison here and nothing to tolerate — a member either
-    /// has the class's value already (the write is idempotent) or does not and
-    /// takes it.  The condition that used to guard this ("a member that already
-    /// knows something is compared") described a state the invariant no longer
-    /// admits.
+    /// **A marker is not a fact to propagate** — the one guard, and it is on the
+    /// value rather than on a member.  An undecided class states nothing about
+    /// its members, so writing the marker into them would turn "this member has
+    /// not run" into "this member ran and did not decide" (and force a lazy
+    /// argument position that the apply deliberately left alone).
     ///
-    /// An **operation-bearing** member is the one veto: its own computation is
-    /// what settles it, and a value arriving from elsewhere is not a proof of
-    /// what that computation will produce.  That is why the class's value can be
-    /// reachable only through the class carrier
-    /// ([`Self::class_committed_node`]) rather than from every member's slot.
-    ///
-    /// The walk visits the representative too: the write site wrote *its own*
-    /// node, which need not be the representative — a class whose representative
-    /// is a value-less operation node is exactly the case
-    /// [`Self::add_equality`] exists for.
-    fn propagate_class_value(&mut self, representative: NodeId, value: P::Value) {
-        // A class whose sole member is the representative — `parent` and `next`
-        // both `None`, `disjoint::Meta`'s contract for a representative with no
-        // second member — holds nobody to propagate to, so the write site's own
-        // slot write is the whole effect.  See `P4-2` in
-        // `docs/notes/code-audit.md`.
-        if self.nodes[representative].equality.parent().is_none()
-            && self.nodes[representative].equality.next().is_none()
-        {
+    /// An operation-bearing member keeps its computation: its slot now holds the
+    /// class's value while `runned` stays `false`, which is what
+    /// [`Module::has_no_result_yet`] reads as "an assertion, so the operator
+    /// still owes its own answer".
+    pub(crate) fn propagate_class_value(&mut self, representative: NodeId, value: P::Value) {
+        if is_unbound(Some(value)) {
             return;
         }
         let members: Vec<NodeId> = self.class_members(representative).collect();
         for member in members {
-            if self.nodes[member].operation.is_some() {
-                continue;
-            }
             self.nodes[member].value = Some(value);
         }
     }
@@ -675,14 +668,13 @@ impl<P: Program> Module<P> {
     /// universe and a function's type stay tellable apart while both are
     /// self-referential arrays — and it is why the universe is *not* the thing
     /// a function's type is.
+    /// itself — and it is why the universe is *not* the thing a function's
+    /// type is.
     ///
-    /// Reads the class's committed carrier (a bare merge may leave the decided
-    /// value on a member other than the representative), so a class unified
-    /// against a function-type is recognised through whichever member carries
-    /// it.
+    /// Asked of the class's **representative**, which carries the class's value
+    /// ([`Self::propagate_class_value`]).
     fn function_type_function(&mut self, node: NodeId) -> Option<AnyFunctionId> {
-        let rep = self.equality_representative(node);
-        let carrier = self.class_committed_node(rep)?;
+        let carrier = self.equality_representative(node);
         if !self.is_self_referential(AnyNodeId::Dynamic(carrier)) {
             return None;
         }
@@ -1095,30 +1087,15 @@ impl<P: Program> Module<P> {
         self.evaluate_node(Dyn(target), Some(block));
     }
 
-    /// The class's value is named by the **representative**: a class has one
-    /// value, it may sit on any member (an operation-bearing member keeps its
-    /// own computation and is never written), and the representative records
-    /// which member that is.  A reader therefore pays one [`disjoint::find`]
-    /// plus one field read, instead of walking the member list looking for a
-    /// member that has run.
+    /// The concrete value `rep`'s class has committed, if any — the side of a
+    /// unification that is not the computation itself.
     ///
-    /// The carrier is maintained by the one value-write path
-    /// ([`Self::commit_class_value`]), which every write goes through —
-    /// [`Self::write_node_value`], the merge in [`Self::add_equality`], the
-    /// evaluator, and the claim path — so a carrier cannot outlive the value it
-    /// names.  It is dropped when the member it names is released
-    /// ([`Self::forget_class_carrier`]).
-    pub fn class_committed_node(&self, rep: NodeId) -> Option<NodeId> {
-        let representative = self.class_root(rep);
-        self.nodes[representative].class_carrier
-    }
-
-    /// The concrete value `rep`'s class has already committed, if any — the
-    /// side of a unification that is not the computation itself.  One read of
-    /// the member the class's carrier names ([`Self::class_committed_node`]),
-    /// so the cost does not depend on how many members the class has.
+    /// It is the class's **one value slot**, read through the representative,
+    /// which [`Self::propagate_class_value`] writes on every concrete write and
+    /// on every merge.  One parent walk plus one field read, independent of how
+    /// many members the class has.
     ///
-    /// `None` for a member whose slot is unbound **and** for the
+    /// `None` for a class that has committed nothing **and** for the
     /// [`LowValue::Parameterized`] marker, which is the same distinction
     /// [`Self::write_node_value`] draws — a marker is not a fact to carry.
     ///
@@ -1127,44 +1104,8 @@ impl<P: Program> Module<P> {
     /// the value was produced or merely asserted is the reporting question
     /// ([`Self::write_node_answer`]), not a reason to leave it out.
     pub(crate) fn class_committed_value(&self, rep: NodeId) -> Option<P::Value> {
-        let member = self.class_committed_node(rep)?;
-        self.nodes
-            .get(member)?
-            .value
+        self.class_value(rep)
             .filter(|value| !is_unbound(Some(*value)))
-    }
-
-    /// Record that `member` now carries its class's committed value — the one
-    /// place the class carrier moves, called by [`Self::commit_class_value`].
-    /// A member with nothing decided to carry clears it instead, so the carrier
-    /// never names a slot that does not hold a value; a class that already has a
-    /// carrier keeps it, because the value it names is still there and the
-    /// value-to-value rule says a class does not gain a second one.
-    fn commit_class_value(&mut self, member: NodeId) {
-        let representative = self.equality_representative(member);
-        if is_unbound(self.nodes[member].value) {
-            if self.nodes[representative].class_carrier == Some(member) {
-                self.nodes[representative].class_carrier = None;
-            }
-            return;
-        }
-        if self.nodes[representative].class_carrier.is_none() {
-            self.nodes[representative].class_carrier = Some(member);
-        }
-    }
-
-    /// Re-point a class's carrier after its member list was rebuilt and a
-    /// representative re-elected ([`Module::flatten_class`]).  It names the first
-    /// survivor that still holds a decided value, so a class whose carrier died
-    /// with a dropped block keeps answering from the value the survivors carry.
-    pub(crate) fn reselect_class_carrier(&mut self, members: &[NodeId]) {
-        let Some((&representative, rest)) = members.split_first() else {
-            return;
-        };
-        let carrier = std::iter::once(representative)
-            .chain(rest.iter().copied())
-            .find(|&member| !is_unbound(self.nodes[member].value));
-        self.nodes[representative].class_carrier = carrier;
     }
 
     /// Record a conflict between two **classes** — the pair a unification walked
