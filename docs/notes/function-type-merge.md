@@ -13,7 +13,10 @@
 > [the same defect in two lines of pure language](#the-same-defect-in-two-lines-of-pure-language-and-what-it-actually-takes).
 > Base: `dev` at `dcf0cf3`; re-merged with `8f45cd9` (the operator seam returns
 > `Option`) and `c21c88d` (`LowValue::Parameterized` deleted) before landing.
-> Branch `feature/function-type-merge`.
+> Branch `feature/function-type-merge`.  The
+> [isomorphism gap](#the-arm-and-the-array-arm-are-one-shape-and-two-codes) was
+> measured **after** landing, on `dev` at `eada614`, so it is a statement about
+> the code as merged rather than about a branch that no longer exists.
 
 ## The two representations, and why they are the problem
 
@@ -222,6 +225,7 @@ arm does that the function arm does not:
 | `path` | shared with the descent | fresh |
 | `steps` | pushed and popped around the descent | never pushed |
 | early break | the moment a child disagrees | never |
+| reports a failed child | once, at the child | **twice**, child and parent |
 | merges the class | only when *every* child agreed | whenever the recursion returns |
 
 The function arm also decides by comparing `unify_errors.len()` across a fresh
@@ -231,13 +235,81 @@ implementation of the same rule**, and it is the weaker one: it has no early
 break, so it pays for the whole tree, and it has no shared `steps`, so a failure
 deep in a signature records a diagnostic without the path that names where.
 
-The obvious repair is to make them one loop: treat the signature as the
-two-element sequence `[parameter, return_type]` and run the array arm's loop
-over it, parameterising only the arity. That buys back the early break, the
-shared path and the `steps` trail for free, and it deletes a rule rather than
-adding one. **It is not done here** — it is a refactor of a hot path with two
-red tests already attributed to this feature, and doing both at once would make
-the reds unattributable. It is the first thing the next change should do.
+### What that costs, measured
+
+The same program shape through each arm, on `dev` at `eada614`:
+
+| program | diagnostics |
+|---|---|
+| `[1, "s"] : array<Int, 2>` | 1 — `expected Int, found string` |
+| `[[1, "s"]] : array<array<Int, 2>, 1>` | **1** — the array arm does not re-report at the parent, so two levels deep is still one |
+| `f = x => 1` then `k = (f : Int -> string)` | **2** — the same text, twice |
+| the same signature inside an array | **2** — the outer array adds no third |
+
+**The function arm reports one conflict twice.** The array arm's parent breaks
+and returns without recording; the function arm's parent records whenever
+`unify_errors.len()` grew, so the child records the failure and then the parent
+records it again at the function-type level. Both messages are byte-identical,
+so the reader sees the same line twice and learns nothing the second time. The
+fourth row is what makes it a function-arm defect and not a nesting one: the
+array around it contributed no extra message.
+
+**The second message is also the wrong one to lead with.** The public `unify`
+builds its own `root`, so an error inside a signature names *the inner pair of
+cells* as its root, not the two function types, and starts its `steps` empty.
+`expected Int -> string, found Int -> Int` does not say **which** side of the
+signature conflicted — parameter or return — and the descent path that would say
+it is the one the fresh `steps` threw away. The array arm's version of the same
+message does carry the element path, which is the whole reason `UnifyStep`
+exists.
+
+**Not the same defect as `pipeline`'s parked "mirrored double diagnostic".**
+That one is *two different messages*, one per direction (`expected Int, found
+Float` and `expected Float, found Int`); this is one message repeated. Same
+symptom, different mechanism — do not close either with the other.
+
+### The one difference that is not a deficiency
+
+The other five are what a shared loop gives back for free. This one the shared
+abstraction has to be built around, because it is a fact about the operands
+rather than about the loop:
+
+**the two element sources live in different arenas.** The array arm iterates
+`ArrayItem`s out of `unsafe { pa.items() }` — indices inside a *value* payload.
+The function arm's elements are `Function::parameter` and
+`Function::return_type` — indices into `self.nodes`. And that side is neither
+total nor allocation-free: `materialize_static_signature` **copies** a frozen
+template into fresh dynamic leaves (the frozen original must never bind, and the
+whole prelude is a frozen module), and it answers `None` for a hand-built
+function whose `return_type` was never set. So the shared element source is
+fallible and, for one case, has a side effect:
+
+```rust
+fn elements(&mut self, node: NodeId) -> Option<[AnyNodeId; 2]>
+```
+
+The array arm answers with its own items, the function arm with
+`function_signature`. Nothing else in the loop changes: `UnifyStep` already
+records an `AnyNodeId`, so the index and `node_or_default` are common to both.
+
+### The repair
+
+Treat the signature as the two-element sequence `[parameter, return_type]` and
+run the array arm's loop over it, parameterising only the element source. That
+buys back the early break, the shared `path`, the `steps` trail and the real
+`root` for free, drops the diagnostic from two to one, and **deletes**
+`unify_function_types` rather than adding a rule to it. It also gives the
+signature descent a cycle guard and a depth bound for the first time — the
+fresh `self.unify` resets `depth` to 0 and the `path` to empty, so the bound
+`MAX_VALUE_DEPTH` and the ancestor-pair check both stop at the signature edge.
+**That gap was not shown to be reachable**: four mutually-recursive programs
+(`f = x => g` / `g = y => f`, with and without a call to force it, plus two
+controls) all terminate normally, so it is recorded as a structural property of
+the split rather than as a defect.
+
+**It is not done here** — it is a refactor of a hot path with two red tests
+already attributed to this feature, and doing both at once would make the reds
+unattributable. It is the first thing the next change should do.
 
 ## The same defect in two lines of pure language, and what it actually takes
 
@@ -333,9 +405,13 @@ it changes that quote, so it wants its own commit and its own note edit.
 - **What binds a wrapper's parameter value cell.** The two-line reproduction
   above, minus the function arm. This is the blocker for the compute wrapper
   work, and it is not in this change.
-- **Whether the function arm should be the array arm.** See
-  [one shape and two codes](#the-arm-and-the-array-arm-are-one-shape-and-two-codes).
-  The repair is known and is a deletion, not a design question.
+- **Whether the function arm should be the array arm.** The obstacle question
+  is settled: **one difference is mechanical** — the element source lives in
+  another arena and is fallible — and the other five are what a shared loop pays
+  back rather than what it costs.  A conflict inside a signature is **measured**
+  to report twice, where the array arm reports once even two levels deep; see
+  [what that costs, measured](#what-that-costs-measured).  The repair is a
+  deletion, not a design question.
 - **Two reds, parked.**
   `compute::wrapper_functions_render_with_named_type_variables` — the *unapplied*
   `compute.jit` no longer renders as a generic wrapper, because its parameter
