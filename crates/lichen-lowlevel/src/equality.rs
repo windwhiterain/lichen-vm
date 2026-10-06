@@ -933,28 +933,40 @@ impl<P: Program> Module<P> {
                 // structural value and merge two *different* functions' types
                 // without ever comparing a signature.
                 //
-                // **Both sides, or neither.**  When only one side is a
-                // function type the other is a *degenerate* one — a
-                // `[Function(fid), t]` pair whose type slot names another
-                // function rather than itself, which is what the apply clone
-                // walk builds for a closure a body returns — and the
-                // positional match is the right answer for that.  So the arm
-                // answers exactly one question and defers the rest.
-                //
                 // The descent reaches the **parameter pair**, so a signature
                 // carries attributes and can constrain values rather than only
                 // types; that is the capability the merge is for.
-                if let (Some(signature_a), Some(signature_b)) =
-                    (self.function_signature(ra), self.function_signature(rb))
-                {
-                    return self.unify_function_types(
-                        ra,
-                        rb,
-                        signature_a,
-                        signature_b,
-                        steps,
-                        root,
-                    );
+                let function_a = self.function_type_function(ra);
+                let function_b = self.function_type_function(rb);
+                if function_a.is_some() || function_b.is_some() {
+                    if let (Some(signature_a), Some(signature_b)) =
+                        (self.function_signature(ra), self.function_signature(rb))
+                    {
+                        return self.unify_function_types(
+                            ra,
+                            rb,
+                            signature_a,
+                            signature_b,
+                            steps,
+                            root,
+                        );
+                    }
+                    // **Exactly one side, and the other is a self-cycle that is
+                    // not a function type**: the universe `Type`, or a recursive
+                    // struct's type expression.  The positional match reads any
+                    // two self-cycles as one structural value, so it would merge
+                    // a function's type with `Type` — and `(\x. x) : Type` must
+                    // fail.  A *degenerate* function type (a `[Function(fid),
+                    // t]` pair whose type slot names another function rather
+                    // than itself, which is what the apply clone walk builds for
+                    // a closure a body returns) is **not** a self-cycle by this
+                    // test, so it still falls through — and the positional match
+                    // is the right answer for it.
+                    let other = if function_a.is_some() { rb } else { ra };
+                    if self.is_self_referential(AnyNodeId::Dynamic(other)) {
+                        self.record_error(ra, rb, steps, root);
+                        return false;
+                    }
                 }
                 match (x.as_enum(), y.as_enum()) {
                     (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {

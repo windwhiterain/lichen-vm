@@ -878,10 +878,14 @@ fn applying_a_non_function_reports_expected_function() {
         diags[0].value_a,
         Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
     );
-    // the expected side is the synthesized function type the guard built
+    // The expected side is the function the guard built — a real function, not
+    // an arrow term — so the first pair that fails to be the same value is the
+    // function itself against the callee's `int` marker.  That reads as
+    // "expected a function, found Int", which is what the guard means; under
+    // the arrow term the clash was one level out, on the term's shape array.
     assert!(matches!(
         diags[0].value_b,
-        Some(HighProgramValue::LowValue(LowValue::Array(_)))
+        Some(HighProgramValue::LowValue(LowValue::Function(_)))
     ));
 }
 
@@ -2096,10 +2100,12 @@ fn an_underscore_annotation_binds_a_function_type() {
 
 #[test]
 fn partial_inference_in_an_arrow_type() {
-    // (\x. x) : (Int -> _) — the clone-on-unify binds a per-site clone's
-    // domain to Int and its codomain to the placeholder, never the template,
-    // so the identity stays polymorphic and the template's parameter type
-    // stays unbound.
+    // (\x. x) : (Int -> _) — `Int -> _` is a real function, so the annotation
+    // binds the two functions' own cells: the identity's parameter type
+    // reaches the signature's `Int` and its return type reaches the
+    // placeholder.  Nothing is cloned, so the template is what the annotation
+    // touched — the identity is monomorphic at this type, and the cost is
+    // deliberate (`docs/notes/function-type-merge.md`).
     let mut ir = IR::new();
     let x = param(&mut ir);
     let l = lam(&mut ir, x, x);
@@ -2107,17 +2113,19 @@ fn partial_inference_in_an_arrow_type() {
     let h = hole(&mut ir);
     let t = arrow(&mut ir, it, h);
     let a = ann(&mut ir, l, t);
-    let b = build(a, ir);
+    let mut b = build(a, ir);
     assert!(b.ok, "the identity fits Int -> _");
-    // The template's parameter type cell stays unbound (the clone bound, not
-    // the template).
+    // The annotation's domain reached the template's own parameter type cell.
     let fid = function_type_id(&b, b.state[l].ty.unwrap());
+    let param_type = param_type_cell(&b, fid);
     assert!(
-        lichen_lowlevel::is_unbound(
-            b.module
-                .node_value(AnyNodeId::Dynamic(param_type_cell(&b, fid)))
-        ),
-        "the template's parameter type must not be guessed"
+        !lichen_lowlevel::is_unbound(b.module.node_value(AnyNodeId::Dynamic(param_type))),
+        "the template's parameter type is bound by the annotation, not left open"
+    );
+    assert_eq!(
+        b.module.equality_representative(param_type),
+        b.module.equality_representative(b.int_type),
+        "and it is the annotated domain itself"
     );
 }
 
