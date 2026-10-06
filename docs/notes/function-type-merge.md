@@ -1,10 +1,12 @@
 # A function's type is the function, and its signature is two cells
 
-> Status: **proposed, in flight.** This supersedes
+> Status: **landed, measured, and it does not fix what it was aimed at.** This
+> supersedes
 > [function-type-as-function](function-type-as-function.md): a function type
-> stops being a node of its own, and the arrow stops being a type. It is the
-> reason `lichen-compute`'s wrapper cannot state a kernel's domain, measured
-> and reproduced in [compute-type-wrapper.md](compute-type-wrapper.md).
+> stops being a node of its own, and the arrow stops being a type. See
+> [What the measurement said](#what-the-measurement-said) — the wrapper defect
+> in [compute-type-wrapper.md](compute-type-wrapper.md) survives the merge
+> unchanged, so its cause is somewhere this change never reached.
 > Base: `dev` at `6525147`.
 
 ## The two representations, and why they are the problem
@@ -89,6 +91,63 @@ twelve parked reds are re-run before anything else. If that family does not
 move, the merge is sound as written. If it moves, the merge is wrong and the
 arm needs a limit — for instance merging the parameter's value cells only when
 one side is a type-position signature.
+
+## What the measurement said
+
+Landed on `feature/function-type-merge` as `0c8cda9`, with every clause above
+in force. The capability the merge was for is real — the parameter pair is what
+a signature descends into, so `?a: Int => ?a: Int` is now expressible over
+values — and the mechanical parts all hold. What the measurement refused was
+the premise.
+
+**The wrapper defect is untouched.** The frozen-module reproduction
+(`docs/notes/compute-type-wrapper.md`) still prints
+
+```
+struct<.I raw[?a, ?b], .O raw[?c, ?d]>
+```
+
+before and after, and `examples/compute_jit.lichen` still types its `6` as
+`raw[Int, raw[?a, ?b]]` rather than `Int`. So the two representations of a
+function's type were never the cause. Whatever leaves `I` and `O` unbound
+across the module boundary is downstream of the arrow, not the arrow itself, and
+the earlier suspicion — `materialize_static_signature` reading a frozen
+template's cells without binding them — was a guess that the merge did not
+confirm. `examples/gcd.lichen` still reads `6: Int`, so nothing that used to
+work regressed.
+
+**Nine tests that were green are not**, and they are the honest cost of the
+merge rather than of a mistake in it: the three `lichen-highlevel --test
+checker` tests that pin the arrow's shape (`partial_inference_in_an_arrow_type`
+also pins clone-on-unify, which this change removes by construction),
+`a_compound_type_value_renders_in_type_syntax`,
+`a_float_domain_is_permitted_at_the_every_position_the_walk_reaches`,
+`wrapper_functions_render_with_named_type_variables`, the `examples` suite, and
+two more. None triaged. The twelve parked reds are all still parked, which is
+the soundness evidence the [soundness question](#the-soundness-question-this-forces-and-how-it-is-settled)
+asked for and got: the `apply-clone-ownership` family did not move.
+
+## Two things the implementation had to say that the design above did not
+
+**Both sides, or neither.** The arm fires only when *both* operands are
+function types. When only one is, the other is a *degenerate* function type — a
+`[Function(fid), t]` pair whose type slot names a **different** function rather
+than itself — and the positional match is the right answer for it. That shape is
+not invented here: `examples/closure.lichen` builds one, because a lambda whose
+body returns a nested closure gives the outer function a return type that *is*
+the inner function's type node, and the apply clone walk then pairs the two.
+Reading any one-sided case as a conflict broke `closure.lichen` outright; the
+design above assumed only the well-formed case exists, and that assumption was
+wrong.
+
+**The two classes stay apart.** When the signatures agree the arm does *not*
+merge the two function-type nodes, even though two arrays would merge. A
+function type is a self-cycle, and one self-cycle merged with another would hand
+every reader whichever `Function` value the merge happened to carry — so `f`'s
+type would answer with `g`'s value. The clone-on-unify policy this arm replaced
+chose the same thing for the same reason. "Positionally, like two arrays" is
+true of the *descent* and false of the *merge*, and the design said only the
+first.
 
 ## What goes
 
