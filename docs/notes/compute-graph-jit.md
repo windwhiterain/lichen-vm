@@ -159,7 +159,7 @@ right for an operator that answers from the value alone and wrong for one that
 must decide for itself *when* its operand is evaluated: it already has
 `&mut Module<P>`, and the one thing it lacks is the node to start from. The
 default reproduces the VM's former extension arm verbatim — deep pass,
-`Parameterized` read-back, nullary `Void` stand-in — so an operator that does not
+`Parameterized` read-back, nullary `Error` stand-in — so an operator that does not
 override it cannot tell the difference, and the VM's arm is now one line.
 
 `is_callable(module, callee: AnyNodeId)` was the existing precedent for handing

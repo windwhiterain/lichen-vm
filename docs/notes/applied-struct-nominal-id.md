@@ -151,7 +151,7 @@ table (a fresh handle with the same entries) that does not unify with the
 original. The identity that must be per-occurrence is therefore the whole
 marker payload `[id, names, names_in_order]`, not the id alone. (An *anonymous*
 struct has
-`LowValue::Void` in that slot, which copies to an equal value — which is why
+`LowValue::Error` in that slot, which copies to an equal value — which is why
 `struct<t>` in a function body appeared to work, and why the defect looked like
 it was about named fields.)
 

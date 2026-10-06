@@ -60,7 +60,7 @@ where
     module.evaluate_node_deep(build.root_ty, None);
     let produced_nothing = matches!(
         AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value),
-        Some(lichen_lowlevel::LowValue::Parameterized | lichen_lowlevel::LowValue::Void)
+        Some(lichen_lowlevel::LowValue::Parameterized | lichen_lowlevel::LowValue::Error)
     );
     if produced_nothing && !module.extension_diagnostics.is_empty() {
         // The refusing layer's own text, rendered by the host that owns the

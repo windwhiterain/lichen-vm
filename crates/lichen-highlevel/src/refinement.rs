@@ -24,7 +24,7 @@
 //!   Both follow from the reconciliation being a *plain unify*:
 //!   [`AttrExt::share_missing_slot`]'s contract says a unify writes whichever
 //!   side is unbound, so a concrete absent value could be shared and an unbound
-//!   one must not be; and `unify(Void, predicate)` would conflict, so no
+//!   one must not be; and `unify(Error, predicate)` would conflict, so no
 //!   refinement could ever pass from one side to the other.  Being an unbound
 //!   cell is what lets an annotation's predicate flow into an argument's slot —
 //!   the propagation the language already has for types.

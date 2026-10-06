@@ -1516,7 +1516,7 @@ where
                             // used to answer `parameterized` with no diagnostic —
                             // so a program that passed a plain array where a
                             // buffer belonged ran to completion, printed
-                            // `parameterized` and computed nothing.
+                            // `parameterized` and an empty value.
                             _ => {
                                 return not_a_buffer::<P>(
                                     module,
@@ -4794,7 +4794,7 @@ fn resolve_without_type(steps: &[IndexStep]) -> Result<Option<Vec<usize>>, Strin
 /// It walks the type/kind/marker/names chain one `array_items` at a time,
 /// exactly as `shape::struct_term_parts` does, so the two cannot disagree about
 /// the layout.  `None` when the term is not a named struct type: a positional
-/// struct's names slot is `Void`, and a term whose chain is not yet decided is
+/// struct's names slot is `Error`, and a term whose chain is not yet decided is
 /// a type this resolution has nothing to read.
 ///
 /// **The marker's `TypeStruct` tag is not checked here.**  This vocabulary's
@@ -5264,7 +5264,7 @@ fn argument_kind(value: Option<&LowValue>) -> &'static str {
         Some(LowValue::Table(_)) => "a table",
         Some(LowValue::Function(_)) => "a function",
         Some(LowValue::None) => "the unit value",
-        Some(LowValue::Void) => "nothing (the empty value of a failed read)",
+        Some(LowValue::Error) => "nothing (the empty value of a failed read)",
         Some(LowValue::Parameterized) => "a value that is not decided yet",
         _ => "no value",
     }
@@ -5330,7 +5330,8 @@ where
 /// makes an undecided argument stay undecided — but a program array *is*
 /// decided, it is an ordinary lichen value with ordinary elements, and
 /// answering `parameterized` for it made `compute.read ((compute.Read _)(.from
-/// data, .at i))` a plausible-looking program that computed nothing while still
+/// data, .at i))` a plausible-looking program that produced an empty value while
+/// still
 /// printing `array<?a, ?b>`. There is no way to make a buffer out of a program
 /// value, so the honest answer names that rather than waiting for a buffer that
 /// will not arrive.

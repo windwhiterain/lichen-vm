@@ -175,14 +175,26 @@ pub enum LowValue {
     Table(AnyHandle<[TableItem]>),
     Function(AnyFunctionId),
     None,
-    /// Computed nothing: the yield of a failed read (an out-of-bounds
-    /// index, a table miss — each produced together with a recorded
-    /// [`EvalError`], so consumers *propagate* it instead of
-    /// re-reporting), the anonymous struct's "no name table" marker, and
-    /// the no-operand sentinel the VM hands a nullary extension operator.
-    /// A concrete, decided value — distinct from both the [`Self::None`]
-    /// unit value and the unbound [`Self::Parameterized`] marker.
-    Void,
+    /// **The empty value of a failed read** — what a computation that declined
+    /// to produce a value yields: an out-of-bounds index, a subscript or target
+    /// that is not an index, an apply of a not-callable, a table miss.  Each is
+    /// produced *together with* a recorded [`EvalError`], so consumers
+    /// **propagate** it instead of re-reporting the failure.
+    ///
+    /// It is a value, and a **decided** one: `is_unbound` excludes it, the
+    /// evaluator caches it, and a later read of the node returns it without
+    /// re-running the computation — so one failed read is one recorded error.
+    /// That is what separates it from the *undecided* [`Self::Parameterized`],
+    /// which is deliberately never cached and re-runs on the next read (see
+    /// `evaluate_node_operation`'s postlude and the apply-budget refusal in
+    /// `apply.rs`).  It is also distinct from the [`Self::None`] unit value: a
+    /// refusal to compute is a failure, the unit value is not.
+    ///
+    /// Two build-time positions hold it as their marker rather than as a
+    /// failure: the anonymous struct's "no name table" slot, and the no-operand
+    /// sentinel the VM hands a nullary extension operator.  Both stand where no
+    /// value is, which is the same absence this variant denotes.
+    Error,
     Parameterized,
 }
 
@@ -220,7 +232,7 @@ impl PartialEq for LowValue {
             (LowValue::Table(a), LowValue::Table(b)) => a == b,
             (LowValue::Function(a), LowValue::Function(b)) => a == b,
             (LowValue::None, LowValue::None) => true,
-            (LowValue::Void, LowValue::Void) => true,
+            (LowValue::Error, LowValue::Error) => true,
             (LowValue::Parameterized, LowValue::Parameterized) => true,
             _ => false,
         }
@@ -436,7 +448,7 @@ pub enum LowOperator {
     /// A table read: the key is force-evaluated, deep-content-hashed, and
     /// matched against the table's sorted entries; a miss (no entry for
     /// the key, or a target/key that is still unbound or a computed
-    /// nothing) records a [`EvalError`] and yields [`LowValue::Void`].
+    /// nothing) records a [`EvalError`] and yields [`LowValue::Error`].
     TableGet,
 }
 
@@ -734,7 +746,7 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
             // A nullary operator (e.g. `TypeOperator::Fresh`) has no operand
             // node: the honest stand-in is the computed-nothing value — never
             // the `None` unit value, which a program can genuinely produce.
-            None => P::Value::from(LowValue::Void),
+            None => P::Value::from(LowValue::Error),
         };
         self.run(value, block, module)
     }
@@ -808,8 +820,8 @@ pub struct StaticOperation<P: Program> {
 
 /// A class is unbound while it carries no value or only the lazy marker.
 /// The highlevel checker uses the same rule for its diagnostics.
-/// [`LowValue::Void`] (a computed failure) and [`LowValue::None`] (the
-/// unit value) are concrete values, never unbound.
+/// [`LowValue::Error`] (the empty value of a failed read) and
+/// [`LowValue::None`] (the unit value) are concrete values, never unbound.
 pub fn is_unbound(value: Option<impl AsEnum<LowValue>>) -> bool {
     value.is_none_or(|value| value.as_enum() == Some(LowValue::Parameterized))
 }

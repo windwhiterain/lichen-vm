@@ -75,7 +75,7 @@ fn finish(
     // refusal was recorded is a failure, not an empty answer.
     let produced_nothing = matches!(
         AsEnum::<LowValue>::as_enum(&value),
-        Some(LowValue::Parameterized | LowValue::Void)
+        Some(LowValue::Parameterized | LowValue::Error)
     );
     assert!(
         !(produced_nothing && !module.extension_diagnostics.is_empty()),

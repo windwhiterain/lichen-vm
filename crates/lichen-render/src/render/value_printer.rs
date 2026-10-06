@@ -417,7 +417,7 @@ where
             Some(LowValue::Str(s)) => Some(format!("\"{s}\"")),
             Some(LowValue::Function(_)) => Some("Function".to_string()),
             Some(LowValue::Table(_)) => Some("Table".to_string()),
-            Some(LowValue::None) | Some(LowValue::Void) => Some("none".to_string()),
+            Some(LowValue::None) | Some(LowValue::Error) => Some("none".to_string()),
             Some(LowValue::Parameterized) => Some("parameterized".to_string()),
             Some(LowValue::Array(_)) => None,
             None => Some(

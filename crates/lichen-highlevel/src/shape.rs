@@ -194,11 +194,11 @@ pub const STRUCT_MARKER_TAG_SLOT: usize = 1;
 /// the nominal type id.
 pub const STRUCT_MARKER_ID_SLOT: usize = 0;
 /// Element 1 of a struct marker's payload — the optional name→index table
-/// (`LowValue::Void` for an anonymous positional struct).
+/// (`LowValue::Error` for an anonymous positional struct).
 pub const STRUCT_MARKER_NAMES_SLOT: usize = 1;
 /// Element 2 of a struct marker's payload — the field names in definition
 /// order, one array element per definition position (a `Str` for a named field,
-/// `Void` for a positional one; the whole field is `Void` when no field is
+/// `Error` for a positional one; the whole field is `Error` when no field is
 /// named).  This is the inverse of the [`STRUCT_MARKER_NAMES_SLOT`] table: a
 /// position's *name*, which the deferred named instantiation's reorder reads
 /// lazily (see [`STRUCT_KIND_NAMES_ORDER_PATH`]).

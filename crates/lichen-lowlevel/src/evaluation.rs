@@ -50,7 +50,7 @@ pub enum EvalError {
     /// A [`LowOperator::TableGet`] that found no entry for the key, or
     /// whose key is still unbound (a not-yet-concrete key can match nothing
     /// — the table's stored keys are all concrete), or whose target or key
-    /// is a computed nothing (a [`LowValue::Void`] never matches: it is the
+    /// is an empty value (a [`LowValue::Error`] never matches: it is the
     /// residue of an already-recorded failure, not a key).  `table` is the
     /// container operand node, `key` the key node.
     TableMiss { table: AnyNodeId, key: AnyNodeId },
@@ -61,14 +61,14 @@ pub enum EvalError {
     /// A [`LowOperator::Index`] whose target is not an array at all — a read
     /// of a scalar, a function, a table, or a type-level node.  Reachable from
     /// source (a field read applied to something that is not a container), so
-    /// it is a recorded failure and a computed nothing, never an internal
+    /// it is a recorded failure and an empty value, never an internal
     /// error: `target` is the container operand node, so the highlevel can
     /// attribute the diagnostic to the expression that was indexed.
     IndexTarget { target: AnyNodeId },
     /// A [`LowOperator::Index`] whose **subscript** is not an index at all —
     /// a read through a string, a tuple, a function, a table.  Reachable from
     /// source (`a[i]` with `i : string`, and the same through a parameter), so
-    /// it is a recorded failure and a computed nothing: `subscript` is the
+    /// it is a recorded failure and an empty value: `subscript` is the
     /// index operand node, so the highlevel can attribute the diagnostic to
     /// the expression that was used as a subscript.
     IndexSubscript { subscript: AnyNodeId },
@@ -76,7 +76,7 @@ pub enum EvalError {
     /// cannot be applied — a scalar, a string, a table, or the unit value.
     /// Reachable from source (`g 1` with `g : int`), including through a
     /// deferred callee whose unbound type the checker's function-ness guard
-    /// cannot see, so it is a recorded failure and a computed nothing:
+    /// cannot see, so it is a recorded failure and an empty value:
     /// `function` is the callee operand node, so the highlevel can attribute
     /// the diagnostic to the expression that was applied.
     ApplyTarget { function: AnyNodeId },
@@ -194,10 +194,10 @@ impl<P: Program> Module<P> {
                             Some(LowValue::Parameterized) => {
                                 P::Value::from(LowValue::Parameterized)
                             }
-                            // A computed-nothing index propagates: the
-                            // read's own failure was recorded where the
-                            // `Void` was produced.
-                            Some(LowValue::Void) => P::Value::from(LowValue::Void),
+                            // An empty index propagates: the read's own
+                            // failure was recorded where the
+                            // `Error` was produced.
+                            Some(LowValue::Error) => P::Value::from(LowValue::Error),
                             Some(LowValue::USize(index)) => {
                                 match self.evaluate_node(operands[0].node, Some(block)).as_enum() {
                                     Some(LowValue::Parameterized) => {
@@ -205,7 +205,7 @@ impl<P: Program> Module<P> {
                                     }
                                     // A computed-nothing target propagates
                                     // the same way — no second diagnostic.
-                                    Some(LowValue::Void) => P::Value::from(LowValue::Void),
+                                    Some(LowValue::Error) => P::Value::from(LowValue::Error),
                                     Some(LowValue::Array(array)) => {
                                         // SAFETY: `array` is the value the
                                         // module just evaluated for the target
@@ -213,7 +213,7 @@ impl<P: Program> Module<P> {
                                         let array = unsafe { array.items() };
                                         // An out-of-bounds index is a user error,
                                         // not an invariant violation: record it
-                                        // and yield a computed nothing (`Void`)
+                                        // and yield an empty value (`Error`)
                                         // instead of panicking in raw slice
                                         // indexing.
                                         if index < array.len() {
@@ -275,7 +275,7 @@ impl<P: Program> Module<P> {
                                                 index_value: index,
                                                 length: array.len(),
                                             });
-                                            P::Value::from(LowValue::Void)
+                                            P::Value::from(LowValue::Error)
                                         }
                                     }
                                     // The read's operands are a *pair*: every
@@ -284,15 +284,15 @@ impl<P: Program> Module<P> {
                                     // not a container, of an element that does
                                     // not exist, or through a subscript that is
                                     // not an index), never an invariant
-                                    // violation — record it and yield a computed
-                                    // nothing.  A late binding still reaches this
-                                    // position through the `Void`/`Parameterized`
+                                    // violation — record it and yield an empty
+                                    // value.  A late binding still reaches this
+                                    // position through the `Error`/`Parameterized`
                                     // arms, so nothing that could resolve is lost.
                                     _ => {
                                         self.eval_errors.push(EvalError::IndexTarget {
                                             target: operands[0].node,
                                         });
-                                        P::Value::from(LowValue::Void)
+                                        P::Value::from(LowValue::Error)
                                     }
                                 }
                             }
@@ -302,12 +302,12 @@ impl<P: Program> Module<P> {
                             // (neither is expressible in the type encoding,
                             // so the checker cannot reject either one
                             // statically): recorded, with the subscript node
-                            // carrying the fact, and a computed nothing.
+                            // carrying the fact, and an empty value.
                             _ => {
                                 self.eval_errors.push(EvalError::IndexSubscript {
                                     subscript: operands[1].node,
                                 });
-                                P::Value::from(LowValue::Void)
+                                P::Value::from(LowValue::Error)
                             }
                         }
                     }
@@ -369,12 +369,12 @@ impl<P: Program> Module<P> {
                                 self.eval_errors.push(EvalError::ApplyTarget {
                                     function: operands[0].node,
                                 });
-                                P::Value::from(LowValue::Void)
+                                P::Value::from(LowValue::Error)
                             }
-                            // A computed nothing is the residue of an
+                            // An empty value is the residue of an
                             // already-recorded failure: propagate it without
                             // recording a second one.
-                            Some(LowValue::Void) => P::Value::from(LowValue::Void),
+                            Some(LowValue::Error) => P::Value::from(LowValue::Error),
                             // A structural array and the program's own value
                             // both reach here, and neither is provably a
                             // function: the program's value variant is opaque
@@ -397,7 +397,7 @@ impl<P: Program> Module<P> {
                                     self.eval_errors.push(EvalError::ApplyTarget {
                                         function: operands[0].node,
                                     });
-                                    P::Value::from(LowValue::Void)
+                                    P::Value::from(LowValue::Error)
                                 }
                             }
                         }
@@ -438,7 +438,7 @@ impl<P: Program> Module<P> {
                                     }
                                     KeyState::Unhashable => {
                                         self.eval_errors.push(EvalError::TableMiss { table, key });
-                                        return P::Value::from(LowValue::Void);
+                                        return P::Value::from(LowValue::Error);
                                     }
                                     KeyState::Hashed(hash) => {
                                         // SAFETY: `payload` is the evaluated
@@ -465,9 +465,9 @@ impl<P: Program> Module<P> {
                             // struct's "no name table" marker behind a lazy
                             // named read) is a miss like any other: recorded,
                             // never a panic.
-                            Some(LowValue::Void) => {
+                            Some(LowValue::Error) => {
                                 self.eval_errors.push(EvalError::TableMiss { table, key });
-                                P::Value::from(LowValue::Void)
+                                P::Value::from(LowValue::Error)
                             }
                             _ => unreachable!("TableGet target must be a table"),
                         }
@@ -551,7 +551,7 @@ impl<P: Program> Module<P> {
             None => {
                 let (table, key) = self.table_get_operands(node);
                 self.eval_errors.push(EvalError::TableMiss { table, key });
-                P::Value::from(LowValue::Void)
+                P::Value::from(LowValue::Error)
             }
         }
     }
@@ -652,9 +652,9 @@ impl<P: Program> Module<P> {
             // process would start already past the limit and refuse too.
             // Restoring it scopes the refusal to the subtree that is too deep:
             // shallow siblings still walk and are decided, and only the nodes
-            // past the limit yield `Void`.
+            // past the limit yield `Error`.
             self.deep_depth -= 1;
-            return P::Value::from(LowValue::Void);
+            return P::Value::from(LowValue::Error);
         }
         // A forced evaluation forces the operand edge of an unevaluated
         // operation before the operation itself runs.  The operand is a
@@ -875,7 +875,7 @@ impl<P: Program> Module<P> {
         // a budget refusal returns before `evaluate_node`, and a
         // `Parameterized` answer is deliberately left uncached by the
         // postlude.  Both are leaf markers owned by no arena, so the pass's
-        // own answer is the block's value verbatim — `Void` for a refusal,
+        // own answer is the block's value verbatim — `Error` for a refusal,
         // whose budget verdict is already recorded, so this propagates the
         // refusal rather than reporting it a second time.
         self.garbage_collect(root).unwrap_or(value)

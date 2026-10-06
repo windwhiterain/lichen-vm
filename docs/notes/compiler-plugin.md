@@ -33,7 +33,7 @@ is reused unchanged.
 ## Extension point 1: the value / operator vocabularies
 
 The lowlevel ships the *structural* core: `LowValue` (`USize`/`Array`/`Table`/`Function`/
-`None`/`Void`/`Parameterized`) and `LowOperator` (`Index`/`Apply`/`TableGet`). A plugin composes
+`None`/`Error`/`Parameterized`) and `LowOperator` (`Index`/`Apply`/`TableGet`). A plugin composes
 its own plain enums in as **sibling carry variants** of one flat union with
 `lichen_utils::enum_ext!`:
 

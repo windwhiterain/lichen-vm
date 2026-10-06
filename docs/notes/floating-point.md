@@ -29,11 +29,11 @@
 `LowValue` is the whole of a value's structure:
 
 ```rust
-// crates/lichen-lowlevel/src/lib.rs:157
+// crates/lichen-lowlevel/src/lib.rs:153
 pub enum LowValue {
     USize(usize), Str(&'static str), Array(AnyHandle<[ArrayItem]>),
     Table(AnyHandle<[TableItem]>), Function(AnyFunctionId),
-    None, Void, Parameterized,
+    None, Error, Parameterized,
 }
 ```
 
@@ -238,7 +238,7 @@ without the others, and the same value is written under a different tag in each.
 
 | space | used | next | file and crate |
 |---|---|---|---|
-| `LowValue` variants | `0`–`7` (`Void` took `7` additively) | **`8`** | `crates/lichen-lowlevel/src/codec.rs:244-246` |
+| `LowValue` variants | `0`–`7` (`Error`, then named `Void`, took `7` additively) | **`8`** | `crates/lichen-lowlevel/src/codec.rs:244-246` |
 | kind markers | `0`–`7` (`TypeString` is `7`, deliberately not its list position) | **`9`** | `crates/lichen-highlevel/src/shape.rs:58-62` |
 | `LowShape` variants | `0`–`5` (`0`–`4` decided, `5` is `Unknown`, the lattice's bottom) | **`6`** | `crates/lichen-language/src/persist/container.rs:135-164` |
 

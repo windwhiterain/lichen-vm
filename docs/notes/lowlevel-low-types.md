@@ -33,7 +33,7 @@ turns into the real low-type layer.
 ## 1. The idea: low types
 
 Give the lowlevel **low types**: the `LowValue` variant tag of a node's value
-(`USize`, `Str`, `Array`, `Table`, `Function`, `None`, `Void`, …) plus,
+(`USize`, `Str`, `Array`, `Table`, `Function`, `None`, `Error`, …) plus,
 recursively, element/shape information (`Array(t)`, `Tuple([t, …])`). This is
 the existing `LowShape` concept (`lowlevel/src/lib.rs`) promoted from a
 compute-plugin side channel to a first-class lowlevel notion, with one added

@@ -122,7 +122,7 @@ impl<P: Program> Module<P> {
                 *codomain
             }
             // `TableGet(table, _)` yields the table's value shape.  A miss
-            // computes nothing (`Void`, which states no shape), so the table's
+            // computes nothing (`Error`, which states no shape), so the table's
             // value shape is still the right answer.
             LowOperator::TableGet => {
                 let LowShape::Table(_, value) = self.low_type_of_node(self.operand_at(node, 0)?)?

@@ -42,7 +42,7 @@ impl<P: Program> Module<P> {
             // The body never ran, so nothing was computed — and the answer
             // is *unknown*, not nothing: return the undecided marker, the
             // same refusal `apply_parameter_check` already issues for a body
-            // it declined to run.  `LowValue::Void` would instead be cached
+            // it declined to run.  `LowValue::Error` would instead be cached
             // by the `evaluate_node` postlude as a decided value, letting
             // the deep pass certify this node concrete (its
             // `evaluated_deep.parameterized` derives from the cached value)

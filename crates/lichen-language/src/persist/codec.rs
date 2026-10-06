@@ -176,7 +176,7 @@ mod codec_roundtrip {
         let values: &[LangValue] = &[
             LangValue::LowValue(LowValue::USize(41)),
             LangValue::LowValue(LowValue::None),
-            LangValue::LowValue(LowValue::Void),
+            LangValue::LowValue(LowValue::Error),
             LangValue::LowValue(LowValue::Parameterized),
             LangValue::LowValue(LowValue::Str("hello")),
             LangValue::TypeValue(TypeValue::TypeId(7)),

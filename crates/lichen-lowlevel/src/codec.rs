@@ -213,7 +213,7 @@ impl ValueCodec for LowValue {
                 w.u8(0);
                 w.u64(n as u64);
             }
-            // Tag 8 is additive (`Void` took 7), and the float travels as its
+            // Tag 8 is additive (`Error` took 7), and the float travels as its
             // 32-bit pattern: the artifact is bytes, and a decimal spelling
             // would not round-trip every value.
             LowValue::Float(n) => {
@@ -248,9 +248,11 @@ impl ValueCodec for LowValue {
                 return Err("cannot serialize a module carrying a dynamic function ref".into());
             }
             LowValue::None => w.u8(3),
-            // Tag 7 is additive: artifacts written before `Void` existed
-            // never carry it, and tag 3 keeps meaning the `None` unit value.
-            LowValue::Void => w.u8(7),
+            // Tag 7 is additive: artifacts written before the `Error` value
+            // existed never carry it, and tag 3 keeps meaning the `None` unit
+            // value.  The variant was named `Void` when tag 7 was introduced;
+            // the rename is source-level only, so the tag is unchanged.
+            LowValue::Error => w.u8(7),
             LowValue::Parameterized => w.u8(4),
             LowValue::Str(s) => {
                 w.u8(5);
@@ -296,7 +298,7 @@ impl ValueCodec for LowValue {
                 }))
             }
             3 => LowValue::None,
-            7 => LowValue::Void,
+            7 => LowValue::Error,
             4 => LowValue::Parameterized,
             5 => {
                 let len = r.u32()? as usize;
