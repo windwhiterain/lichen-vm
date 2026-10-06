@@ -140,14 +140,22 @@ Reading any one-sided case as a conflict broke `closure.lichen` outright; the
 design above assumed only the well-formed case exists, and that assumption was
 wrong.
 
-**The two classes stay apart.** When the signatures agree the arm does *not*
-merge the two function-type nodes, even though two arrays would merge. A
-function type is a self-cycle, and one self-cycle merged with another would hand
-every reader whichever `Function` value the merge happened to carry — so `f`'s
-type would answer with `g`'s value. The clone-on-unify policy this arm replaced
-chose the same thing for the same reason. "Positionally, like two arrays" is
-true of the *descent* and false of the *merge*, and the design said only the
-first.
+**The merge is the array's merge.** When the signatures agree the two
+function-type nodes become one class, exactly as two arrays with equal elements
+do. An earlier draft kept them apart on the argument that a self-cycle merged
+with another hands readers whichever `Function` value the merge carried — which
+is true, and was measured as *free* to remove: the red set over the workspace is
+identical with the merge and without it, `closure.lichen` and `gcd` unchanged.
+So the asymmetry bought nothing and cost the arm a second rule.
+
+The hole it leaves is the sub-typing question, stated rather than patched: the
+descent names the signature's two positions and never reads slot 0, so a merged
+class of two function types keeps one carrier and answers with whichever
+function the merge took. Whether two agreeing signatures are *the same type* or
+one a subtype of the other is not decided here, and a class carrying two
+identities is what answering that question positionally before asking it looks
+like. A special case would not have answered it; it would have hidden it behind
+an exception the next change has to unlearn.
 
 ## What goes
 
