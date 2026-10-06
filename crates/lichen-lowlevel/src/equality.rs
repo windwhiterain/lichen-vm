@@ -3,9 +3,9 @@ use std::collections::HashSet;
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, FunctionIdentity,
-    FunctionTypeUnify, LowShape, LowValue, Module, Node, NodeId, Program, StaticFunctionRef,
-    StaticNodeId, ValueExt as _, ancestors::AncestorPairs, is_unbound,
+    AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, FunctionIdentity, LowShape,
+    LowValue, Module, Node, NodeId, Program, StaticFunctionRef, StaticNodeId, ValueExt as _,
+    ancestors::AncestorPairs, is_unbound,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -652,38 +652,126 @@ impl<P: Program> Module<P> {
             .and_then(|function| function.origin)
     }
 
-    /// Whether `node`'s class holds a **function-type node**: the
-    /// self-referential `[Function(fid), ↺]` that *is* a function's own type
-    /// (`f : f`). Recognised by the same self-cycle the universe
-    /// `[Type, ↺]` uses, distinguished from it by slot 0 holding a
-    /// [`LowValue::Function`] (the universe holds the `Type` marker). This is
-    /// the lowlevel half of the recognition — the highlevel's `shape` module
-    /// reads the signature out of the function template the `Function` value
-    /// names, and the [`Program::unify_function_type`] hook clones that
-    /// signature rather than letting a positional unify bind the template's
-    /// shared cells.
+    /// Whether `node` names a **function type** — the self-referential
+    /// `[Function(fid), ↺]` that *is* a function's own type (`f : f`), or a
+    /// frozen module's copy of one.  Recognition only: it allocates nothing,
+    /// so a caller may ask "is this a function?" as often as it likes.
     ///
-    /// Reads the class's committed carrier (a bare merge may leave the
-    /// decided value on a member other than the representative), so a class
-    /// unified against a function-type is recognised through whichever member
-    /// carries it.
-    pub fn is_function_type_node(&mut self, node: NodeId) -> bool {
+    /// Public because "is this a function type" is the one question a layer
+    /// above asks — the checker's apply function-ness guard must recognise
+    /// exactly what the unifier descends into, or the guard would refuse a
+    /// function the unifier is happy to take.
+    pub fn is_function_type(&mut self, node: NodeId) -> bool {
+        self.function_type_function(node).is_some()
+    }
+
+    /// The function a **function-type node** names: `node`'s class holding the
+    /// self-referential `[Function(fid), ↺]` that *is* a function's own type
+    /// (`f : f`).  `None` for anything else.
+    ///
+    /// Recognised by the same self-cycle the universe `[Type, ↺]` uses,
+    /// distinguished from it by slot 0 holding a [`LowValue::Function`] (the
+    /// universe holds the `Type` marker).  That distinction is what lets the
+    /// universe and a function's type stay tellable apart while both are
+    /// self-referential arrays — and it is why the universe is *not* the thing
+    /// a function's type is.
+    ///
+    /// Reads the class's committed carrier (a bare merge may leave the decided
+    /// value on a member other than the representative), so a class unified
+    /// against a function-type is recognised through whichever member carries
+    /// it.
+    fn function_type_function(&mut self, node: NodeId) -> Option<AnyFunctionId> {
         let rep = self.equality_representative(node);
-        let Some(carrier) = self.class_committed_node(rep) else {
-            return false;
-        };
+        let carrier = self.class_committed_node(rep)?;
         if !self.is_self_referential(AnyNodeId::Dynamic(carrier)) {
-            return false;
+            return None;
         }
         // SAFETY: `carrier` is a live node of this module; nothing here drops
         // a block.
-        let Some(items) = (unsafe { self.array_items(carrier) }) else {
-            return false;
+        let items = (unsafe { self.array_items(carrier) })?;
+        if items.len() != 2 {
+            return None;
+        }
+        self.node_value(items[0].node)
+            .and_then(|v| match v.as_enum()? {
+                LowValue::Function(fid) => Some(fid),
+                _ => None,
+            })
+    }
+
+    /// The two cells a function's type **is** — the function template's
+    /// parameter pair and its return type cell — read from the function-type
+    /// node `node` names, or `None` when `node` is not one.
+    ///
+    /// **The pair, not a copy of it and not two *type* cells.**  A
+    /// `Function::parameter` is the `[value, type, attrs…]` node its body
+    /// binds the variable to and the apply clone walk clones; unifying two of
+    /// those positionally is what lets a signature constrain a **value**, not
+    /// only a type (`?a: Int => ?a: Int` lands the same cell in both
+    /// positions).  The return side is [`Function::return_type`] rather than
+    /// `r#return`, which may be an unevaluated operation node whose own slots
+    /// do not name the type.
+    fn function_signature(&mut self, node: NodeId) -> Option<(NodeId, NodeId)> {
+        let (parameter, return_type) = match self.function_type_function(node)? {
+            AnyFunctionId::Dynamic(function) => {
+                let (parameter, return_type) = {
+                    let function = &self.functions[function];
+                    (function.parameter, function.return_type)
+                };
+                // A hand-built function (a lowlevel test) may leave
+                // `return_type` unset, so its signature is not readable.
+                if !self.nodes.contains_key(return_type) {
+                    return None;
+                }
+                (parameter, return_type)
+            }
+            // A **frozen** function's template is immutable, so its signature
+            // is *copied* into fresh dynamic leaves rather than read in place
+            // and bound — the frozen original must never move.  This is not a
+            // corner case: the whole prelude is a frozen module, and its
+            // functions' type nodes carry a static self-cycle, so declining
+            // here would leave the unifier unable to see them.
+            AnyFunctionId::Static(sref) => return self.materialize_static_signature(sref),
         };
-        items.len() == 2
-            && self
-                .node_value(items[0].node)
-                .is_some_and(|v| matches!(v.as_enum(), Some(LowValue::Function(_))))
+        Some((parameter, return_type))
+    }
+
+    /// Unify two function types by descending into the two functions' own
+    /// cells, the same treatment two arrays get: the parameter pairs unify
+    /// positionally (value against value, type against type, attribute against
+    /// attribute) and the two return type cells unify.
+    ///
+    /// There is no hook here and no clone, because there is nothing left for a
+    /// host to decide.  The old policy had to ask its host *where* a function
+    /// type's signature lives and *whether it may be written*, and it answered
+    /// those two questions differently for a dynamic function and a frozen
+    /// module's — which is how a wrapper in an imported module ended up
+    /// reporting `struct<.I raw[?a, ?b], .O raw[?c, ?d]>` for a kernel whose
+    /// domain and codomain are plain types (`docs/notes/function-type-merge.md`).
+    fn unify_function_types(
+        &mut self,
+        ra: NodeId,
+        rb: NodeId,
+        signature_a: (NodeId, NodeId),
+        signature_b: (NodeId, NodeId),
+        steps: &mut Vec<UnifyStep>,
+        root: (NodeId, NodeId),
+    ) -> bool {
+        let pre = self.unify_errors.len();
+        self.unify(signature_a.0, signature_b.0);
+        self.unify(signature_a.1, signature_b.1);
+        if self.unify_errors.len() > pre {
+            self.record_error(ra, rb, steps, root);
+            return false;
+        }
+        // **The two classes stay apart.**  A function type is a self-cycle, so
+        // merging the two nodes would put both functions' `Function` values in
+        // one class — and whichever value a reader then finds is whichever
+        // function the merge happened to carry, so `f`'s type would answer
+        // with `g`'s value.  The clone-on-unify policy this arm replaces made
+        // the same choice for the same reason: the signature cells are bound
+        // and the *type nodes* keep their identity.
+        true
     }
 
     /// Recursive core of [`Self::unify`]; `path` holds the class pairs on
@@ -830,30 +918,36 @@ impl<P: Program> Module<P> {
             // comparison reads a free cell as "matches anything" and drops the
             // tie.
             (Some(x), Some(y)) => {
-                // A function-type node — the self-referential `[Function(fid),
-                // ↺]` that is a function's own type (`f : f`) — on either side is
-                // handled by the program's clone-on-unify policy before the
-                // positional match.  The positional match would otherwise either
-                // wrongly *merge* two self-referential function-types (binding
-                // the shared template's cells, the defect this fixes) or clash a
-                // `Function` slot 0 against an array. The policy clones the
-                // function's signature and unifies the clone, leaving the
-                // template untouched; on success the two sides are resolved
-                // *without* merging classes (the function-type stays a distinct,
-                // polymorphic class).
-                if self.is_function_type_node(ra) || self.is_function_type_node(rb) {
-                    match P::unify_function_type(self, ra, rb) {
-                        FunctionTypeUnify::Handled => return true,
-                        FunctionTypeUnify::Conflict => {
-                            self.record_error(ra, rb, steps, root);
-                            return false;
-                        }
-                        // One side is a self-referential `[Function, ↺]` the
-                        // program does not treat as a function-type (a build with
-                        // no highlevel, which never builds one): fall through to
-                        // the positional rules.
-                        FunctionTypeUnify::NotFunctionType => {}
-                    }
+                // **A function's type is the function.**  Two function-type
+                // nodes — the self-referential `[Function(fid), ↺]` that is
+                // `f : f` — unify by descending into the two functions' own
+                // cells, positionally, like two arrays.  The positional match
+                // below would instead read both their self-cycles as one
+                // structural value and merge two *different* functions' types
+                // without ever comparing a signature.
+                //
+                // **Both sides, or neither.**  When only one side is a
+                // function type the other is a *degenerate* one — a
+                // `[Function(fid), t]` pair whose type slot names another
+                // function rather than itself, which is what the apply clone
+                // walk builds for a closure a body returns — and the
+                // positional match is the right answer for that.  So the arm
+                // answers exactly one question and defers the rest.
+                //
+                // The descent reaches the **parameter pair**, so a signature
+                // carries attributes and can constrain values rather than only
+                // types; that is the capability the merge is for.
+                if let (Some(signature_a), Some(signature_b)) =
+                    (self.function_signature(ra), self.function_signature(rb))
+                {
+                    return self.unify_function_types(
+                        ra,
+                        rb,
+                        signature_a,
+                        signature_b,
+                        steps,
+                        root,
+                    );
                 }
                 match (x.as_enum(), y.as_enum()) {
                     (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
@@ -949,22 +1043,9 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The depth bound shared by the node-less comparisons: a structure reached
-    /// without classes cannot name a repeated pair, so its descent is bounded and
-    /// a pair past the bound is given the benefit of the doubt, exactly as the
-    /// unifier's cycle guard does.
-    /// Whether `rep`'s class holds a computation that has not produced an
-    /// answer yet ([`Module::has_no_result_yet`]) — a node whose operator still
-    /// owes a result.
-    fn class_has_pending_op(&self, rep: NodeId) -> bool {
-        self.class_members(rep)
-            .any(|member| self.has_no_result_yet(member))
-    }
-
     /// `rep`'s equality class's members, representative first — the union-find
-    /// member list's one walk.  Every reader that scans a class for a node
-    /// carrying something (a pending operation, a committed value) reads it
-    /// through here, so the walk and its bound live once.
+    /// member list's one walk.  A reader that scans a class for a node carrying
+    /// something reads it through here, so the walk lives once.
     fn class_members(&self, rep: NodeId) -> impl Iterator<Item = NodeId> + '_ {
         let mut member = Some(rep);
         std::iter::from_fn(move || {

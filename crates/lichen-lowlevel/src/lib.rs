@@ -65,56 +65,6 @@ pub trait Program: Sized + Copy + Debug + PartialEq {
     /// per-package state (for example highlevel package export refs) without
     /// putting that concept into the lowlevel.
     type PackageMeta: Default;
-
-    /// The function-type unification policy: what to do when a unification
-    /// reaches a **function-type node** — a self-referential
-    /// `[Function(fid), ↺]` that *is* a function's own type (`f : f`, the
-    /// function-as-its-own-type representation; see `lichen-highlevel::shape`).
-    ///
-    /// The lowlevel's positional array unify cannot soundly compare two such
-    /// nodes: their undecided slots are the *template's shared cells*, so a
-    /// direct positional unify would bind the template and kill let-polymorphism
-    /// (the defect this hook exists to fix).  So the program decides here: it
-    /// **clones the function template's signature** (its parameter and return
-    /// pairs, via [`Module::clone_signature`]) and unifies the clone's fresh
-    /// cells against the counterpart's structure — the template is never bound.
-    ///
-    /// The policy is given the module and the two class representatives `a`/`b`
-    /// (both concrete at this point).  It returns:
-    /// - [`FunctionTypeUnify::Handled`] when one side was a function-type node
-    ///   and the clone-unify **succeeded** — the lowlevel treats the unify as
-    ///   resolved *without merging the two classes* (the function-type stays a
-    ///   distinct, polymorphic class; only the clone's cells were bound);
-    /// - [`FunctionTypeUnify::Conflict`] when one side was a function-type node
-    ///   and the clone-unify found a mismatch — the lowlevel records the
-    ///   conflict;
-    /// - [`FunctionTypeUnify::NotFunctionType`] when neither side is a
-    ///   function-type node — the lowlevel's generic positional rules apply.
-    ///
-    /// The default refuses (`NotFunctionType`): a VM that does not know the
-    /// function-as-its-own-type encoding has no function-type nodes to see, so
-    /// the hook is never the right answer for it.
-    fn unify_function_type(module: &mut Module<Self>, a: NodeId, b: NodeId) -> FunctionTypeUnify {
-        let _ = (module, a, b);
-        FunctionTypeUnify::NotFunctionType
-    }
-}
-
-/// What a [`Program::unify_function_type`] policy decided about a unification
-/// that reached a function-type node.  See that hook for the contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FunctionTypeUnify {
-    /// One side was a function-type node and the clone-unify succeeded.  The
-    /// lowlevel resolves the unify **without merging the two classes** — the
-    /// function-type node stays a distinct, polymorphic class; only the
-    /// per-site clone's cells were bound against the counterpart.
-    Handled,
-    /// One side was a function-type node and the clone-unify found a
-    /// mismatch.  The lowlevel records the conflict.
-    Conflict,
-    /// Neither side is a function-type node; the lowlevel's generic positional
-    /// rules apply.
-    NotFunctionType,
 }
 
 /// Program-global extension state — the marker trait that stances the
@@ -1101,8 +1051,7 @@ pub struct Function {
     /// The return expression's **type cell** — `state[r#return].ty` in the
     /// checker, stored here because `r#return` itself may be an unevaluated
     /// operation node (a native-call return) whose own slots do not name the
-    /// type. The function-type clone-on-unify
-    /// ([`Module::clone_signature`]) reads the signature's codomain from
+    /// type. The function-type unify arm reads the signature's codomain from
     /// here, not from `r#return`'s slots.
     pub return_type: NodeId,
     /// The static function this dynamic closure was **materialized from**, when

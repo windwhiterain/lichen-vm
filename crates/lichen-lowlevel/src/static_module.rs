@@ -256,17 +256,22 @@ impl<P: Program> Module<P> {
         ))
     }
 
-    /// The materialized `[domain, codomain]` of a **static** function-type: the
-    /// frozen template's parameter and return *type* cells, copied into fresh
-    /// dynamic leaves so the clone-on-unify policy can reconcile them against
-    /// the counterpart.  `None` when `sref` is not a static function of a
-    /// registered module, or its parameter is not a pair.
+    /// The materialized `(parameter, return type)` of a **static** function's
+    /// signature: the frozen template's parameter pair and return type cell,
+    /// copied into fresh dynamic leaves so the unify arm can descend into them
+    /// positionally.  `None` when `sref` is not a static function of a
+    /// registered module.
+    ///
+    /// The pair, not just its type slot, because the unify arm treats a
+    /// signature like any other `[value, type, attrs…]` pair — that is what
+    /// gives a frozen function's signature the same attribute reach a dynamic
+    /// one has, instead of a weaker rule that only ever sees types.
     ///
     /// A static signature is immutable, so nothing is cloned as a *template*:
-    /// the leaves are copies, and unifying the counterpart against them is a
-    /// check — the frozen original never binds.  Used by the highlevel's
-    /// `signature_pair` when a `[Function(Static(sref)), ↺]` function-type node
-    /// is unified.
+    /// the leaves are copies, and the frozen original never binds.  This is not
+    /// a corner case — the whole prelude is a frozen module, and its functions'
+    /// type nodes carry a static self-cycle, so a dynamic-only reading would
+    /// leave the unifier blind to every one of them.
     pub fn materialize_static_signature(
         &mut self,
         sref: StaticFunctionRef,
@@ -276,34 +281,22 @@ impl<P: Program> Module<P> {
             let function = module.functions.get(sref.index.0)?;
             (function.parameter, function.return_type)
         };
-        // The parameter pair's slot 1 is the parameter type cell (a static ref).
-        let param_pair_ref = StaticNodeId {
-            module: sref.module,
-            index: param_pair,
-        };
-        let param_type = match self.static_read(param_pair_ref).as_enum() {
-            Some(LowValue::Array(array)) => {
-                // SAFETY: `array` is a static payload read through
-                // `param_pair_ref`, whose home module is registered — the
-                // registration pins its arena.
-                unsafe { array.items() }.get(1).map(|item| item.node)
-            }
-            _ => None,
-        };
-        let param_type = match param_type {
-            Some(AnyNodeId::Static(sr)) => sr,
-            _ => return None,
-        };
         let block = self.blocks.iter().next().map(|(block, _)| block)?;
-        let dom = self.materialize_leaf(param_type, block);
-        let cod = self.materialize_leaf(
+        let parameter = self.materialize_leaf(
+            StaticNodeId {
+                module: sref.module,
+                index: param_pair,
+            },
+            block,
+        );
+        let codomain = self.materialize_leaf(
             StaticNodeId {
                 module: sref.module,
                 index: return_type,
             },
             block,
         );
-        Some((dom, cod))
+        Some((parameter, codomain))
     }
 }
 

@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    AnyNodeId, BlockId, FunctionTypeUnify, GlobalExt, LowOperator, LowShape, LowValue, Module,
-    ModuleKey, NodeId, OperatorExt, Program, StaticModule, ValueExt, is_unbound,
+    AnyNodeId, BlockId, GlobalExt, LowOperator, LowShape, LowValue, Module, ModuleKey, NodeId,
+    OperatorExt, Program, StaticModule, ValueExt, is_unbound,
 };
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
@@ -1379,16 +1379,6 @@ where
     type Operator = O;
     type GlobalExt = G;
     type PackageMeta = HighPackageMeta;
-
-    /// The highlevel's function-type unify policy — see
-    /// [`crate::shape::unify_function_type`]: a function-type node
-    /// `[Function(fid), ↺]` (a function's own type, `f : f`) is unified by
-    /// cloning the function's signature, never binding the template's shared
-    /// cells. "Is this a function-type node" and "where its signature lives"
-    /// are facts about the encoding this crate owns.
-    fn unify_function_type(module: &mut Module<Self>, a: NodeId, b: NodeId) -> FunctionTypeUnify {
-        crate::shape::unify_function_type(module, a, b)
-    }
 }
 
 impl<V, O, A, L, G> HighProgram for ProgramImpl<V, O, A, L, G>

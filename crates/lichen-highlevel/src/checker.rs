@@ -1459,18 +1459,11 @@ where
                 parameter,
                 r#return,
             } => {
+                // The two sides are compiled first, in the enclosing scope —
+                // see [`Checker::check_signature`], whose shell they outlive.
                 let parameter_ty = self.check_type_element(parameter);
                 let return_ty = self.check_type_element(r#return);
-                let (shape, kind, pair) =
-                    self.arrow_parts(self.current_block, parameter_ty, return_ty);
-                // A source `T -> U` prints as an arrow, so its shape joins
-                // `arrows`; a *pattern* arrow (the apply's function-ness
-                // guard) deliberately does not — see [`Self::arrow`].
-                self.arrows.insert(shape);
-                self.state[e].term = Some(pair);
-                self.state[e].val = Some(shape);
-                self.state[e].ty = Some(kind);
-                pair
+                self.check_signature(e, parameter_ty, return_ty)
             }
             ExprKind::Tuple(_) => self.check_tuple_term(e),
             ExprKind::TypeTuple(_) => self.check_tuple_type(e),

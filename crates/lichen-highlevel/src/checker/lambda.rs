@@ -6,11 +6,11 @@
 use std::collections::HashMap;
 
 use lichen_lowlevel::{AnyFunctionId, AnyNodeId, ArrayItem, LowOperator, LowValue, NodeId};
+use lichen_utils::extend::AsEnum;
 
 use crate::diagnostic::DiagKind;
 use crate::ir::ExprId;
 use crate::program::{HighProgram, TypeOperator, ValueType};
-use crate::shape;
 
 use super::{ApplyEdge, Binding, Checker, LoopSite};
 
@@ -215,11 +215,10 @@ where
         // One node, not a separate type node beside the pair: a distinct
         // `[Function(fid), ftype]` would be value-equal to the pair
         // `[Function(fid), ftype]` and collide with it under the apply clone's
-        // topology re-establishment. The signature (domain/codomain) lives in
-        // the function template, reached through `fid`; unifying this type
-        // clones the signature (`Program::unify_function_type`) rather than
-        // binding the template's shared cells. See
-        // `docs/notes/function-type-as-function.md`.
+        // topology re-establishment. The signature (parameter and return) lives
+        // in the function template, reached through `fid`; unifying this type
+        // descends into those two cells directly. See
+        // `docs/notes/function-type-merge.md`.
         let items = [
             ArrayItem::new(AnyNodeId::Dynamic(func_node)),
             ArrayItem::new(AnyNodeId::Dynamic(pair)), // the self-reference
@@ -239,6 +238,104 @@ where
         self.state[e].val = Some(func_node);
         self.state[e].ty = Some(pair);
         pair
+    }
+
+    /// The **signature** a type-position `A -> B` lowers to: a real function
+    /// whose parameter is annotated `domain` and whose return is annotated
+    /// `codomain`.  Returns the function-type node — the self-referential
+    /// `[Function(fid), ↺]` — which is the term the arrow *was*.
+    ///
+    /// The lowering is the whole point.  `A -> B` used to compile to an arrow
+    /// **term** `[[dom, cod], [FunctionType, K]]`, a second representation of a
+    /// function's type beside the function's own — and a `[dom, cod]` shape
+    /// has nowhere to hang an attribute, which is why `attributes.md` records
+    /// "attributes do not flow through a function" as a non-goal.  Here the two
+    /// sides are the parameter's `[value, type, attrs…]` pair and the return's
+    /// term, so `?a: Int => ?a: Int` puts one cell in both positions and
+    /// constrains the **values** passing through, not merely their types.
+    ///
+    /// `domain` and `codomain` are compiled **before** the shell opens, so the
+    /// two type expressions' nodes belong to the *enclosing* template and are
+    /// cloned per call like any other node in scope; the shell's own parent is
+    /// that enclosing function, which is what keeps a signature written inside
+    /// a lambda body re-instantiated per call rather than shared.
+    ///
+    /// A signature is never applied — it exists to be unified against — so its
+    /// body is the bare return pair: no assert, no capture, nothing to run.
+    pub(super) fn check_signature(
+        &mut self,
+        e: ExprId,
+        domain: NodeId,
+        codomain: NodeId,
+    ) -> NodeId {
+        let (pair, func_node) = self.signature_node(Some(e), domain, codomain);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(func_node);
+        self.state[e].ty = Some(pair);
+        pair
+    }
+
+    /// The graph half of [`Self::check_signature`]: see its own doc.  Factored
+    /// out because the apply's function-ness guard needs a signature
+    /// **pattern** as well — the two cells it binds a callee's type against,
+    /// and nothing else.  The pattern is a real function because a function
+    /// type is the only function type there is: there is no second shape left
+    /// for a pattern to wear.
+    ///
+    /// `e` is the source expression the signature is, or `None` for a pattern;
+    /// a pattern has no expression to record, so it registers no
+    /// `function_of` entry and nothing reads one back.
+    fn signature_node(
+        &mut self,
+        e: Option<ExprId>,
+        domain: NodeId,
+        codomain: NodeId,
+    ) -> (NodeId, NodeId) {
+        let return_block = self.module.add_block(None);
+        let saved = self.current_block;
+        self.current_block = return_block;
+        let parent = self.current_function();
+        let function = self.module.begin_function(return_block, parent);
+        if let Some(e) = e {
+            self.function_of.insert(e, function);
+        }
+        self.function_stack.push((function, e));
+        let parameter_value = self.fresh_cell();
+        let parameter_type = self.fresh_cell();
+        let parameter = self.array_node(return_block, &[parameter_value, parameter_type]);
+        // The domain is *unified into* the parameter's type slot rather than
+        // written there, so an open class stays open exactly as a source
+        // lambda's `x : ?a` annotation leaves it — and so unifying a function
+        // against this signature binds the two, instead of this signature
+        // binding itself.
+        self.module.unify(parameter_type, domain);
+        let return_value = self.fresh_cell();
+        let body = self.array_node(return_block, &[return_value, codomain]);
+        self.module.finish_function(function, body, parameter);
+        self.module.functions[function].return_type = codomain;
+        let func_node = self.alloc_node(return_block, None, None);
+        self.module.write_node_value(
+            func_node,
+            Some(P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(
+                function,
+            )))),
+        );
+        let ty_cell = self.fresh_cell();
+        let pair = self.array_node(return_block, &[func_node, ty_cell]);
+        let items = [
+            ArrayItem::new(AnyNodeId::Dynamic(func_node)),
+            ArrayItem::new(AnyNodeId::Dynamic(pair)),
+        ];
+        self.module.write_node_value(
+            pair,
+            Some(P::Value::from(LowValue::Array(
+                self.module.alloc_array(&items, return_block),
+            ))),
+        );
+        self.module.unify(ty_cell, pair);
+        self.function_stack.pop();
+        self.current_block = saved;
+        (pair, func_node)
     }
 
     pub(super) fn check_app(&mut self, e: ExprId, function: ExprId, argument: ExprId) -> NodeId {
@@ -272,20 +369,43 @@ where
         };
         // Function-ness guard: catch *concretely* non-function types
         // statically (applying a literal is an error, not a runtime panic).
-        // Concrete function types and unbound types (parameters, lambdas,
-        // call results) are left to the runtime apply — unifying the shared
-        // cell here would chain the type cells of every use of a polymorphic
-        // value.  A failed unify never merges classes, so this cannot chain
-        // either.
+        // A concrete function type is the self-referential `[Function(fid),
+        // ↺]` and is recognised by the two cells it has; unbound types
+        // (parameters, lambdas, call results) are left to the runtime apply —
+        // unifying the shared cell here would chain the type cells of every use
+        // of a polymorphic value.  A failed unify never merges classes, so this
+        // cannot chain either.
         let function_ty = self.state[function].ty.unwrap();
         let concrete = self.type_is_concrete(function_ty);
-        if concrete && !shape::is_function_type(&mut self.module, self.type_expr, function_ty) {
+        if concrete && !self.module.is_function_type(function_ty) {
+            let dbg = self
+                .module
+                .node_value(AnyNodeId::Dynamic(function_ty))
+                .and_then(|v| {
+                    AsEnum::<LowValue>::as_enum(&v).map(|e| match e {
+                        LowValue::Array(a) => format!("{:?}", unsafe { a.items() }),
+                        other => format!("{other:?}"),
+                    })
+                });
+            let slot1 = self
+                .module
+                .node_value(AnyNodeId::Dynamic(function_ty))
+                .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+                .and_then(|e| match e {
+                    LowValue::Array(a) => Some(unsafe { a.items() }[1].node),
+                    _ => None,
+                });
+            eprintln!(
+                "GUARD fn_ty={function_ty:?} items={dbg:?} slot1={slot1:?} slot1_self={:?}",
+                slot1.map(|n| self.module.is_self_referential(n))
+            );
             let d = self.fresh_cell();
             let c = self.fresh_cell();
-            // A unification *pattern*, not a source arrow: it must stay out
-            // of `arrows` (see [`Checker::arrow`]), or every guard site would
-            // print as `?d -> ?c`.
-            let fn_ty = self.arrow(self.current_block, d, c);
+            // The pattern is a **function**, like every other function type:
+            // there is no second representation left for it to wear, so the
+            // guard binds the callee's type against two fresh cells of a real
+            // signature (`Checker::signature_node`).
+            let (fn_ty, _) = self.signature_node(None, d, c);
             self.check_unify(function_ty, fn_ty, self.loc(e, 1), DiagKind::Guard);
         }
         // The apply's attribute equality check: the function's declared
