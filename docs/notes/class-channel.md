@@ -185,6 +185,22 @@ has run and may not re-run until its operands change.  That is the fact §1.1.1
 says the slot and `runned` must keep separately readable, and this refactor
 preserves it — the marker stops being the carrier of that fact, the slot does.
 
+**Measured while planning it, and it changes the plan.** The marker is not only
+an operator's verdict: it is **copied into a clone's slot** by the two carry
+paths, and those copies are load-bearing.
+
+| finding | evidence |
+|---|---|
+| the marker enters a slot by exactly one path | instrumenting all three write sites (`write_node_value`, `write_node_answer`'s restore, `propagate_class_value`) over the whole example corpus: `write_node_value` fires 7542 times, the other two **never** |
+| it is a *copy*, not a computation | the two callers that pass it are `function.rs`'s clone walk (`write_node_value(clone, mapped)`) and the static materializer (`static_module/apply.rs`, `write_node_value(clone, Some(value))`) — both carry a source's value to a clone |
+| a marker never lands in a class that holds a value | a probe at the write path over the whole corpus: **0** cases where the class already held a decided value |
+| refusing the copy is not available | making `write_node_value` drop an unbound value (leaving the slot empty, the honest copy) breaks `let_bound_functions_are_polymorphic` and `a_wrappers_parameter_type_is_inferred_from_a_body_call` in `--test checker`, and panics the example sweep at `evaluation.rs`'s operation unwrap — the clone then has no operation and no value where the walk expected the carried one |
+
+So the clone's copied marker is a fact the apply walk relies on, and phase 2 of
+the order above cannot simply replace it with `None`: the clone walk must be
+taught what an undecided *source* means before the marker can go.  That is the
+first thing to design, not the last.
+
 **Four corrections were needed, and each says something about the rules.**
 
 1. **A refusal is not a report.**  The first version refused the write when the
