@@ -387,23 +387,25 @@ impl<P: Program> Module<P> {
     /// Commit an **operation's answer** — the evaluator's write.
     ///
     /// The answer is a **value**: it has no class of its own, so it meets the
-    /// node through the one unification as a node-less side
-    /// ([`Side::value`]) — which is exactly the question "can this answer be the
-    /// value my class holds", asked *of* the recursion rather than beside it.
-    /// The conflict is the ordinary unification conflict, recorded at this
-    /// node's roots, so nothing needs a comparison path of its own.
+    /// node through the one unification as a node-less side ([`Side::value`]) —
+    /// which is exactly the question "can this answer be the value my class
+    /// holds", asked *of* the recursion rather than beside it.  The conflict is
+    /// the ordinary unification conflict, recorded at this node's roots, so
+    /// nothing needs a comparison path of its own.
     ///
-    /// `runned` is the part only the evaluator knows: *this* node's operator
-    /// produced the value, which is the axis [`Self::has_no_result_yet`] reads
-    /// and a value the unifier wrote cannot claim.
+    /// **The operator always runs, and this is where its own answer is kept.**
+    /// The class's value is distributed to the members, but *not* over the
+    /// producing operation's own slot: that slot is the node-local run state —
+    /// "this operator produced this" — which is what
+    /// [`Module::has_no_result_yet`] reads and what stops a second run.  A
+    /// propagated class value must never masquerade as a produced answer, or the
+    /// operator that owed one would never run again.
     pub(crate) fn write_node_answer(&mut self, node: NodeId, value: P::Value) {
         let mut path = AncestorPairs::new();
         let mut steps = Vec::new();
         // The answer against what the node's class holds, as two values: the
         // answer has no class of its own, and pulling the class's value out
-        // explicitly is what makes the two comparable.  The node's own slot is
-        // that value already — it is a member of the class and the class's value
-        // slot was written — so one class read serves.
+        // explicitly is what makes the two comparable.
         let held = self.class_committed_value(node);
         self.unify_inner(
             Side::value(Some(value)),
@@ -413,7 +415,11 @@ impl<P: Program> Module<P> {
             &mut steps,
             (node, node),
         );
+        // Distribute to the class, then restore this node's own answer: the walk
+        // visits every member, this one included, and a class value landing here
+        // would erase the run state the slot carries.
         self.write_node_value(node, Some(value));
+        self.nodes[node].value = Some(value);
         self.nodes[node].runned = true;
     }
 
