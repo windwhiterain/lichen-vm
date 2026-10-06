@@ -500,7 +500,7 @@ fn jit_cross_kernel_wrapper() {
     // Style 3: the wrapper/`$launch` form `compute.launch k0 x` inside a kernel
     // body.  `launch = k => a => $launch(k, a)` is a *two-step* native
     // (assemble the module, then call it), so its argument is a run-time value
-    // and arrives as a `Parameterized` cell at codegen time.  The cell is
+    // and arrives as an undecided cell at codegen time.  The cell is
     // unified with the defining `x` read, and the JIT emits that through the
     // cell's equality class:  launch k1 6 = k0(6) = 7.
     // Unlike the bare `k x` apply, the wrapper's result is typed `Int`.  The
@@ -581,7 +581,7 @@ compile time, so the launch is refused by name: `the kernel parameter's class is
 decided when the kernel is compiled`"]
 fn jit_cross_kernel_tuple_argument_through_the_wrapper() {
     // Style 3 with a tuple argument: the wrapper's `launch` argument is a bare
-    // `Parameterized` cell — concrete only at run time — so the tuple is
+    // undecided cell — concrete only at run time — so the tuple is
     // reached through the cell's equality class rather than as an array value:
     //   launch k1 5 = k0(5, 1) = 6.
     let (_module, value, _root_ty) = run(r#"

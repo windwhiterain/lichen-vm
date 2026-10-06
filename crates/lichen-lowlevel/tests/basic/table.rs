@@ -51,21 +51,21 @@ fn usize_keys_round_trip_and_misses_record_an_error() {
 
     // A hit returns the stored value node's value.
     let get = table_get(&mut m, root, t, one);
-    let read = m.evaluate_node_deep(get, None);
+    let read = m.evaluate_node_deep(get, None).unwrap();
     assert_eq!(
         read,
         TestValue::LowValue(LowValue::USize(10)),
         "the stored value"
     );
     let get = table_get(&mut m, root, t, two);
-    let read = m.evaluate_node_deep(get, None);
+    let read = m.evaluate_node_deep(get, None).unwrap();
     assert_eq!(read, TestValue::LowValue(LowValue::USize(20)));
 
     // A miss is a recorded fact, not a panic: the error ledger gets an
     // entry and the read yields the computed-nothing value.
     let three = usize_node(&mut m, root, 3);
     let get = table_get(&mut m, root, t, three);
-    let read = m.evaluate_node_deep(get, None);
+    let read = m.evaluate_node_deep(get, None).unwrap();
     assert_eq!(read, TestValue::LowValue(LowValue::Error));
     assert_eq!(m.eval_errors.len(), 1);
     let EvalError::TableMiss { key, .. } = m.eval_errors[0] else {
@@ -96,7 +96,7 @@ fn keys_are_deep_content_distinct_but_equal_structures_match() {
     );
 
     let get = table_get(&mut m, root, t, key2);
-    let read = m.evaluate_node_deep(get, None);
+    let read = m.evaluate_node_deep(get, None).unwrap();
     assert_eq!(read, TestValue::LowValue(LowValue::USize(7)));
 
     // A different content (`[1, 3]`) misses.
@@ -104,7 +104,7 @@ fn keys_are_deep_content_distinct_but_equal_structures_match() {
     let c = usize_node(&mut m, root, 3);
     let other = array_node(&mut m, root, &[a, c], None);
     let get = table_get(&mut m, root, t, other);
-    let read = m.evaluate_node_deep(get, None);
+    let read = m.evaluate_node_deep(get, None).unwrap();
     assert_eq!(read, TestValue::LowValue(LowValue::Error));
 }
 
@@ -112,11 +112,7 @@ fn keys_are_deep_content_distinct_but_equal_structures_match() {
 fn an_unbound_key_is_dropped_with_a_recorded_error() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    let key = m.add_node(
-        root,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let key = m.add_node(root, None, None);
     let value = usize_node(&mut m, root, 1);
     let t = table_value(
         &mut m,
@@ -147,11 +143,7 @@ fn an_unbound_key_is_dropped_with_a_recorded_error() {
     // not key content — an `Error` — does miss; see the next test.)
     let get = table_get(&mut m, root, t, key);
     let read = m.evaluate_node_deep(get, None);
-    assert_eq!(
-        read,
-        TestValue::LowValue(LowValue::Parameterized),
-        "an undecided key leaves the read lazy"
-    );
+    assert_eq!(read, None, "an undecided key leaves the read lazy");
     assert_eq!(
         m.eval_errors.len(),
         1,
@@ -208,7 +200,7 @@ fn an_empty_key_is_never_a_phantom_hit() {
     // two computed-nothing keys.
     let read_key = oob_read(&mut m);
     let get = table_get(&mut m, root, t, read_key);
-    let read = m.evaluate_node_deep(get, None);
+    let read = m.evaluate_node_deep(get, None).unwrap();
     assert_eq!(read, TestValue::LowValue(LowValue::Error));
     assert!(
         m.eval_errors
@@ -220,7 +212,7 @@ fn an_empty_key_is_never_a_phantom_hit() {
 
 #[test]
 fn an_undecided_read_leaves_no_cycle_for_the_next_pass() {
-    // A `TableGet` whose key is undecided answers `Parameterized`, and that
+    // A `TableGet` whose key is undecided answers nothing, and that
     // answer is deliberately *not* cached — the next evaluation re-runs the
     // read.  The attempt must therefore release the node's visiting mark:
     // leaving it set makes the next evaluation see an ordinary re-read as a
@@ -235,30 +227,18 @@ fn an_undecided_read_leaves_no_cycle_for_the_next_pass() {
         &[(AnyNodeId::Dynamic(key), AnyNodeId::Dynamic(value))],
     );
     // A key that stays undecided: an unbound cell.
-    let other_key = m.add_node(
-        root,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let other_key = m.add_node(root, None, None);
     let get = table_get(&mut m, root, t, other_key);
 
     let read = m.evaluate_node_deep(get, None);
-    assert_eq!(
-        read,
-        TestValue::LowValue(LowValue::Parameterized),
-        "an undecided key leaves the read lazy"
-    );
+    assert_eq!(read, None, "an undecided key leaves the read lazy");
     assert_eq!(m.eval_errors.len(), 0, "an undecided key records no miss");
 
     // The second pass — the checker's statement pass then root pass, or a
     // later forced read — re-evaluates the same node.  A visiting mark leaked
     // by the first attempt panics here.
     let again = m.evaluate_node_deep(get, None);
-    assert_eq!(
-        again,
-        TestValue::LowValue(LowValue::Parameterized),
-        "the re-read is still undecided, not a cycle"
-    );
+    assert_eq!(again, None, "the re-read is still undecided, not a cycle");
 }
 
 #[test]
@@ -293,7 +273,7 @@ fn cyclic_keys_hash_and_compare_equal() {
     );
 
     let get = table_get(&mut m, root, t, key2);
-    let read = m.evaluate_node_deep(get, None);
+    let read = m.evaluate_node_deep(get, None).unwrap();
     assert_eq!(read, TestValue::LowValue(LowValue::USize(9)));
 }
 
@@ -318,10 +298,10 @@ fn table_values_key_by_identity() {
     // The stored table key is found by itself, never by an equal-looking
     // distinct table.
     let get = table_get(&mut m, root, outer, t1);
-    let read = m.evaluate_node_deep(get, None);
+    let read = m.evaluate_node_deep(get, None).unwrap();
     assert_eq!(read, TestValue::LowValue(LowValue::USize(42)));
     let get = table_get(&mut m, root, outer, t2);
-    let read = m.evaluate_node_deep(get, None);
+    let read = m.evaluate_node_deep(get, None).unwrap();
     assert_eq!(read, TestValue::LowValue(LowValue::Error));
 }
 
@@ -344,7 +324,7 @@ fn table_values_stay_lazy_until_read() {
         "the value stays lazy until the read"
     );
     let get = table_get(&mut m, root, t, key);
-    let read = m.evaluate_node_deep(get, None);
+    let read = m.evaluate_node_deep(get, None).unwrap();
     let TestValue::U128(AnyHandle::Dynamic(handle)) = read else {
         panic!("the read forces the stored value, got {read:?}")
     };
@@ -403,7 +383,7 @@ fn gc_compaction_moves_table_payloads_and_entries() {
     );
     let read = op_node(&mut m, root, TestOperator::Id, Some(t));
 
-    let result = m.evaluate_node_deep(read, None);
+    let result = m.evaluate_node_deep(read, None).unwrap();
     assert!(
         matches!(result, TestValue::LowValue(LowValue::Table(_))),
         "the hoisted value is the table itself: {result:?}"
@@ -415,7 +395,7 @@ fn gc_compaction_moves_table_payloads_and_entries() {
 
     // The hoisted table still reads after the compaction.
     let get = table_get(&mut m, root, t, key);
-    let read = m.evaluate_node_deep(get, None);
+    let read = m.evaluate_node_deep(get, None).unwrap();
     assert_eq!(read, TestValue::LowValue(LowValue::USize(5)));
 }
 
@@ -512,7 +492,7 @@ fn a_table_key_survives_a_freeze_and_a_reload() {
 
     let get = table_get(&mut m, root, outer, inner);
     assert_eq!(
-        m.evaluate_node_deep(get, None),
+        m.evaluate_node_deep(get, None).unwrap(),
         TestValue::LowValue(LowValue::USize(42)),
         "the table key is found before the freeze"
     );
@@ -521,7 +501,7 @@ fn a_table_key_survives_a_freeze_and_a_reload() {
     let outer_leaf = importer.materialize_leaf(sref_of(&freeze, outer), iroot);
     let inner_leaf = importer.materialize_leaf(sref_of(&freeze, inner), iroot);
     let get = table_get(&mut importer, iroot, outer_leaf, inner_leaf);
-    let read = importer.evaluate_node_deep(get, None);
+    let read = importer.evaluate_node_deep(get, None).unwrap();
     assert!(
         importer.eval_errors.is_empty(),
         "{:?}",
@@ -567,7 +547,7 @@ fn a_function_key_survives_a_freeze_and_a_reload() {
 
     let get = table_get(&mut m, root, table, function);
     assert_eq!(
-        m.evaluate_node_deep(get, None),
+        m.evaluate_node_deep(get, None).unwrap(),
         TestValue::LowValue(LowValue::USize(7)),
         "the function key is found before the freeze"
     );
@@ -580,7 +560,7 @@ fn a_function_key_survives_a_freeze_and_a_reload() {
     let table_leaf = importer.materialize_leaf(sref_of(&freeze, table), iroot);
     let function_leaf = importer.materialize_leaf(sref_of(&freeze, function), iroot);
     let get = table_get(&mut importer, iroot, table_leaf, function_leaf);
-    let read = importer.evaluate_node_deep(get, None);
+    let read = importer.evaluate_node_deep(get, None).unwrap();
     assert!(
         importer.eval_errors.is_empty(),
         "{:?}",
@@ -614,7 +594,7 @@ fn a_key_of_the_program_s_own_value_vocabulary_is_hashed_not_refused() {
     let same = u128_node(&mut m, root, 5);
     let get = table_get(&mut m, root, table, same);
     assert_eq!(
-        m.evaluate_node_deep(get, None),
+        m.evaluate_node_deep(get, None).unwrap(),
         TestValue::LowValue(LowValue::USize(3)),
         "an equal value of the program's own vocabulary is the same key"
     );
@@ -622,7 +602,7 @@ fn a_key_of_the_program_s_own_value_vocabulary_is_hashed_not_refused() {
     let other = u128_node(&mut m, root, 6);
     let get = table_get(&mut m, root, table, other);
     assert_eq!(
-        m.evaluate_node_deep(get, None),
+        m.evaluate_node_deep(get, None).unwrap(),
         TestValue::LowValue(LowValue::Error),
         "a different value misses"
     );
@@ -663,7 +643,7 @@ fn coinductively_equal_cyclic_keys_hash_equal_across_depth() {
         &[(AnyNodeId::Dynamic(a), AnyNodeId::Dynamic(value))],
     );
     let get = table_get(&mut m, root, table, b);
-    let read = m.evaluate_node_deep(get, None);
+    let read = m.evaluate_node_deep(get, None).unwrap();
     assert!(m.eval_errors.is_empty(), "{:?}", m.eval_errors);
     assert_eq!(
         read,
@@ -689,7 +669,7 @@ fn a_cyclic_key_is_found_across_the_static_boundary() {
     );
     let get = table_get(&mut m, root, table, key);
     assert_eq!(
-        m.evaluate_node_deep(get, None),
+        m.evaluate_node_deep(get, None).unwrap(),
         TestValue::LowValue(LowValue::USize(5)),
         "the cyclic key is found before the freeze"
     );
@@ -703,7 +683,7 @@ fn a_cyclic_key_is_found_across_the_static_boundary() {
     let query = array_node(&mut importer, iroot, &[one, inner], None);
 
     let get = table_get(&mut importer, iroot, table_leaf, query);
-    let read = importer.evaluate_node_deep(get, None);
+    let read = importer.evaluate_node_deep(get, None).unwrap();
     assert!(
         importer.eval_errors.is_empty(),
         "{:?}",

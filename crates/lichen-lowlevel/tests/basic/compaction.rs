@@ -13,7 +13,7 @@ fn redundant_nodes_are_not_compacted() {
     let y = u128_node(&mut m, child, 7); // redundant: never referenced
     let root_node = op_node(&mut m, root, TestOperator::Id, Some(x));
 
-    let value = m.evaluate_node_deep(root_node, None);
+    let value = m.evaluate_node_deep(root_node, None).unwrap();
 
     assert_eq!(u128_of(value), 5);
     assert_eq!(m.nodes.len(), 2); // root_node + child's kept return x
@@ -33,7 +33,7 @@ fn u128_payload_is_relocated_into_parent_and_block_releasable() {
     let x = u128_node(&mut m, child, 42);
     let root_node = op_node(&mut m, root, TestOperator::Id, Some(x));
 
-    let value = m.evaluate_node_deep(root_node, None);
+    let value = m.evaluate_node_deep(root_node, None).unwrap();
     let TestValue::U128(ptr) = value else {
         panic!("expected U128")
     };
@@ -62,7 +62,7 @@ fn array_return_compacts_elements_into_parent() {
     let ret = array_node(&mut m, child, &[a, b, c], None);
     let root_node = op_node(&mut m, root, TestOperator::Id, Some(ret));
 
-    let value = m.evaluate_node_deep(root_node, None);
+    let value = m.evaluate_node_deep(root_node, None).unwrap();
 
     // The element nodes keep their ids: their data was relocated into the
     // root's arena, so they stay readable after the child was released.
@@ -82,7 +82,7 @@ fn nested_scalar_return_compacts_into_grandparent() {
     let ret = array_node(&mut m, outer, &[x], None); // outer's return references inner's return x
     let root_node = op_node(&mut m, grandparent, TestOperator::Id, Some(ret));
 
-    let value = m.evaluate_node_deep(root_node, None);
+    let value = m.evaluate_node_deep(root_node, None).unwrap();
 
     assert_u128_array(&m, value, &[9]);
     assert_eq!(m.nodes.len(), 3); // root_node + outer's kept return + inner's kept return
@@ -99,7 +99,7 @@ fn nested_array_return_relocates_data_twice() {
     let outer_ret = array_node(&mut m, outer, &[inner_ret], None);
     let root_node = op_node(&mut m, grandparent, TestOperator::Id, Some(outer_ret));
 
-    let value = m.evaluate_node_deep(root_node, None);
+    let value = m.evaluate_node_deep(root_node, None).unwrap();
 
     // inner's data was relocated into outer first, then into grandparent;
     // all node ids survive unchanged.
@@ -129,7 +129,7 @@ fn compact_preserves_the_shallow_mask() {
     let add = op_node(&mut m, child, TestOperator::Add, Some(add_ops));
     let ret = array_node(&mut m, child, &[seven, add], Some(&[false, true]));
 
-    let value = m.evaluate_node_deep(ret, None);
+    let value = m.evaluate_node_deep(ret, None).unwrap();
     assert_eq!(array_mask(value), [false, true]);
 
     m.garbage_collect(ret);
@@ -157,7 +157,7 @@ fn unreferenced_child_blocks_are_released() {
     let orphan = u128_node(&mut m, grandchild, 9); // never referenced
     let root_node = op_node(&mut m, root, TestOperator::Id, Some(x));
 
-    let value = m.evaluate_node_deep(root_node, None);
+    let value = m.evaluate_node_deep(root_node, None).unwrap();
 
     assert_eq!(u128_of(value), 5);
     assert_eq!(m.nodes.len(), 2); // root_node + child's kept return x
@@ -176,7 +176,7 @@ fn block_run_pulls_outer_and_sibling_blocks() {
     let p_ret = op_node(&mut m, p, TestOperator::Id, Some(c_ret)); // p's return is c's result
     let root_node = op_node(&mut m, root, TestOperator::Id, Some(p_ret));
 
-    let value = m.evaluate_node_deep(root_node, None);
+    let value = m.evaluate_node_deep(root_node, None).unwrap();
 
     // Running p ran c, whose resolution pulled in p's outer node y,
     // which ran sibling s; the result is compacted up to the root.
@@ -224,7 +224,7 @@ fn deep_block_chain_evaluates_stack_safely() {
     }
     let root_node = op_node(&mut m, root, TestOperator::Id, Some(ret));
 
-    let value = m.evaluate_node_deep(root_node, None);
+    let value = m.evaluate_node_deep(root_node, None).unwrap();
 
     assert_eq!(u128_of(value), 7);
     assert_eq!(m.blocks.len(), 1); // only root remains, chain compacted into it
@@ -287,11 +287,7 @@ fn garbage_collect_rehomes_function_from_uncompacted_descendant() {
     let grandchild = m.add_block(Some(child));
     // f(x) = Id(x), homed in the un-compacted grandchild block.
     let ret_f = m.add_node(grandchild, None, None);
-    let param_f = m.add_node(
-        grandchild,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param_f = m.add_node(grandchild, None, None);
     m.close_operation_cycle(
         ret_f,
         Operation {
@@ -323,7 +319,7 @@ fn garbage_collect_rehomes_function_from_uncompacted_descendant() {
     assert!(!m.blocks.contains_key(grandchild));
     let arg = u128_node(&mut m, root, 42);
     let call = call_node(&mut m, root, func_node, arg);
-    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 42);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None).unwrap()), 42);
 }
 #[test]
 fn a_value_that_declares_a_node_keeps_it_across_compaction() {
@@ -346,7 +342,7 @@ fn a_value_that_declares_a_node_keeps_it_across_compaction() {
     assert!(!m.blocks.contains_key(grandchild));
     assert_eq!(m.node_block(held), root);
     // Still readable — the point of naming it, not merely of surviving.
-    assert_eq!(u128_of(m.evaluate_node_deep(held, None)), 7);
+    assert_eq!(u128_of(m.evaluate_node_deep(held, None).unwrap()), 7);
 }
 #[test]
 fn garbage_collect_hoists_unevaluated_scalar_operand() {
@@ -369,7 +365,7 @@ fn garbage_collect_hoists_unevaluated_scalar_operand() {
     assert!(!m.blocks.contains_key(grandchild));
     assert!(!m.nodes.contains_key(orphan));
     // The hoisted operand is still evaluable.
-    assert_eq!(u128_of(m.evaluate_node_deep(ret, None)), 42);
+    assert_eq!(u128_of(m.evaluate_node_deep(ret, None).unwrap()), 42);
 }
 #[test]
 fn garbage_collect_enters_unevaluated_subtree_via_operand() {
@@ -390,7 +386,7 @@ fn garbage_collect_enters_unevaluated_subtree_via_operand() {
     assert_eq!(m.node_block(x), root); // and its array element with it
     assert!(!m.blocks.contains_key(child));
     assert!(!m.blocks.contains_key(grandchild));
-    let value = m.evaluate_node_deep(ret, None);
+    let value = m.evaluate_node_deep(ret, None).unwrap();
     assert_u128_array(&m, value, &[7]);
 }
 #[test]
@@ -407,7 +403,7 @@ fn garbage_collect_skips_operands_of_evaluated_nodes() {
     // later collect must not drag the operand subtree up with it.  Only
     // the value-reachable element x survives; the operand array itself is
     // dropped with the vacated block.
-    let evaluated = m.evaluate_node_deep(ret, None);
+    let evaluated = m.evaluate_node_deep(ret, None).unwrap();
     assert_u128_array(&m, evaluated, &[7]);
     let value = m.garbage_collect(ret).expect("evaluated return node");
     assert_eq!(m.node_block(ret), root);
@@ -439,18 +435,18 @@ fn call_clones_are_compacted_with_the_calling_block() {
     // The call clones g's body into the child block.
     let five = u128_node(&mut m, child, 5);
     let call = call_node(&mut m, child, g_node, five);
-    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 6);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None).unwrap()), 6);
     assert_eq!(m.node_block(call), child);
 
     // Compacting the child moves the call node (with its cached result)
     // into the root; the clone nodes it used are released with the block.
     let root_node = op_node(&mut m, root, TestOperator::Id, Some(call));
-    assert_eq!(u128_of(m.evaluate_node_deep(root_node, None)), 6);
+    assert_eq!(u128_of(m.evaluate_node_deep(root_node, None).unwrap()), 6);
     assert_eq!(m.node_block(call), root);
     assert!(!m.blocks.contains_key(child));
 
     // The root-level function is untouched and still callable.
     let two = u128_node(&mut m, root, 2);
     let call2 = call_node(&mut m, root, g_node, two);
-    assert_eq!(u128_of(m.evaluate_node_deep(call2, None)), 3);
+    assert_eq!(u128_of(m.evaluate_node_deep(call2, None).unwrap()), 3);
 }

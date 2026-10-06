@@ -12,7 +12,7 @@ fn add_sums_u128_operands() {
     let operands = array_node(&mut m, root, &[a, b], None);
     let add = op_node(&mut m, root, TestOperator::Add, Some(operands));
 
-    let value = m.evaluate_node_deep(add, None);
+    let value = m.evaluate_node_deep(add, None).unwrap();
 
     assert_eq!(u128_of(value), 7);
 }
@@ -25,7 +25,7 @@ fn concat_joins_string_operands() {
     let operands = array_node(&mut m, root, &[a, b], None);
     let concat = op_node(&mut m, root, TestOperator::Concat, Some(operands));
 
-    let value = m.evaluate_node_deep(concat, None);
+    let value = m.evaluate_node_deep(concat, None).unwrap();
 
     assert_eq!(string_of(value), vec!['a', 'b', 'c', 'd']);
 }
@@ -45,7 +45,7 @@ fn index_selects_array_element() {
         Some(operands),
     );
 
-    let value = m.evaluate_node_deep(index, None);
+    let value = m.evaluate_node_deep(index, None).unwrap();
 
     assert_eq!(u128_of(value), 20);
 }
@@ -65,7 +65,7 @@ fn index_out_of_bounds_records_an_eval_error() {
         Some(operands),
     );
 
-    let value = m.evaluate_node_deep(index, None);
+    let value = m.evaluate_node_deep(index, None).unwrap();
 
     // No panic, no element: the failure is recorded as facts instead, and
     // the read yields the computed-nothing value.
@@ -102,7 +102,7 @@ fn out_of_bounds_index_is_recorded_once_and_in_bounds_still_selects() {
     );
 
     assert!(matches!(
-        m.evaluate_node_deep(index, None),
+        m.evaluate_node_deep(index, None).unwrap(),
         TestValue::LowValue(LowValue::Error)
     ));
     assert_eq!(m.eval_errors.len(), 1);
@@ -120,18 +120,14 @@ fn out_of_bounds_index_is_recorded_once_and_in_bounds_still_selects() {
         TestOperator::LowOperator(LowOperator::Index),
         Some(last_ops),
     );
-    assert_eq!(u128_of(m.evaluate_node_deep(last, None)), 20);
+    assert_eq!(u128_of(m.evaluate_node_deep(last, None).unwrap()), 20);
     assert_eq!(m.eval_errors.len(), 1);
 }
 #[test]
 fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    let param = m.add_node(
-        root,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(root, None, None);
     // f(x) = [x, [10, 20][5]]: the OOB index sits in the return pair, so a
     // deep evaluation of the return (the definition pass) hits it.
     let a = u128_node(&mut m, root, 10);
@@ -155,10 +151,10 @@ fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
         m.node_value(AnyNodeId::Dynamic(oob)),
         Some(TestValue::LowValue(LowValue::Error))
     ));
-    assert!(matches!(
-        m.node_value(AnyNodeId::Dynamic(param)),
-        Some(TestValue::LowValue(LowValue::Parameterized))
-    ));
+    assert!(
+        m.node_value(AnyNodeId::Dynamic(param)).is_none(),
+        "the parameter stays an empty slot"
+    );
 }
 #[test]
 fn applying_a_non_function_records_an_eval_error() {
@@ -177,7 +173,7 @@ fn applying_a_non_function_records_an_eval_error() {
         Some(operands),
     );
 
-    let value = m.evaluate_node_deep(apply, None);
+    let value = m.evaluate_node_deep(apply, None).unwrap();
 
     // No panic, no call: the failure is recorded as a fact, and the apply
     // yields the computed-nothing value.
@@ -232,7 +228,7 @@ fn deep_eval_cuts_a_self_referential_value_cycle() {
         ))),
     );
 
-    let value = m.evaluate_node_deep(k, None);
+    let value = m.evaluate_node_deep(k, None).unwrap();
 
     assert!(matches!(value, TestValue::LowValue(LowValue::Array(_))));
     assert!(m.nodes.keys().all(|id| !m.node_visiting(id)));
@@ -254,11 +250,7 @@ fn visiting_markers_are_cleared_after_evaluation() {
 fn evaluated_deep_marks_subtrees_with_parameters() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    let p = m.add_node(
-        root,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let p = m.add_node(root, None, None);
     let x = u128_node(&mut m, root, 5);
     let arr = array_node(&mut m, root, &[x, p], None);
     let id_arr = op_node(&mut m, root, TestOperator::Id, Some(arr));
@@ -316,7 +308,7 @@ fn deep_eval_skips_shallow_positions_until_an_index_read() {
     let add = op_node(&mut m, root, TestOperator::Add, Some(add_ops));
     let arr = array_node(&mut m, root, &[three, add], Some(&[false, true]));
 
-    let value = m.evaluate_node_deep(arr, None);
+    let value = m.evaluate_node_deep(arr, None).unwrap();
     assert!(matches!(value, TestValue::LowValue(LowValue::Array(_))));
 
     assert!(
@@ -346,7 +338,7 @@ fn deep_eval_skips_shallow_positions_until_an_index_read() {
         TestOperator::LowOperator(LowOperator::Index),
         Some(ops),
     );
-    assert_eq!(u128_of(m.evaluate_node_deep(read, None)), 9);
+    assert_eq!(u128_of(m.evaluate_node_deep(read, None).unwrap()), 9);
 }
 #[test]
 fn sub_eq_lt_operators_compute_concrete_results() {
@@ -357,19 +349,19 @@ fn sub_eq_lt_operators_compute_concrete_results() {
     // Sub: 3 - 2 = 1
     let sub_ops = array_node(&mut m, root, &[three, two], None);
     let sub = op_node(&mut m, root, TestOperator::Sub, Some(sub_ops));
-    assert_eq!(u128_of(m.evaluate_node_deep(sub, None)), 1);
+    assert_eq!(u128_of(m.evaluate_node_deep(sub, None).unwrap()), 1);
     // Eq: 3 == 3
     let eq_ops = array_node(&mut m, root, &[three, three], None);
     let eq = op_node(&mut m, root, TestOperator::Eq, Some(eq_ops));
     assert!(matches!(
-        m.evaluate_node_deep(eq, None),
+        m.evaluate_node_deep(eq, None).unwrap(),
         TestValue::LowValue(LowValue::USize(1))
     ));
     // Lt: 3 < 2 is false
     let lt_ops = array_node(&mut m, root, &[three, two], None);
     let lt = op_node(&mut m, root, TestOperator::Lt, Some(lt_ops));
     assert!(matches!(
-        m.evaluate_node_deep(lt, None),
+        m.evaluate_node_deep(lt, None).unwrap(),
         TestValue::LowValue(LowValue::USize(0))
     ));
 }
@@ -394,10 +386,7 @@ fn deep_budget_refusal_under_an_extension_operator_records_without_panicking() {
         Some(BudgetExhausted::EvaluateDepth { limit: 2 }),
         "the guard's verdict is the outcome, not a panic"
     );
-    assert!(matches!(
-        value,
-        TestValue::LowValue(LowValue::Parameterized)
-    ));
+    assert!(value.is_none(), "the refused frame stays undecided");
     assert_eq!(
         m.node_evaluated_deep(first),
         None,
@@ -418,7 +407,7 @@ fn a_block_root_the_budget_refuses_yields_an_empty_value() {
     let read = op_node(&mut m, root, TestOperator::Id, Some(child_op));
     m.evaluate_depth_limit = 2;
 
-    let value = m.evaluate_node_deep(read, None);
+    let value = m.evaluate_node_deep(read, None).unwrap();
 
     assert_eq!(
         m.budget_exhausted,
@@ -429,7 +418,7 @@ fn a_block_root_the_budget_refuses_yields_an_empty_value() {
 }
 #[test]
 fn a_block_root_that_stays_lazy_is_not_an_internal_error() {
-    // A `Parameterized` answer is deliberately never cached (the postlude
+    // An undecided answer is deliberately never cached (the postlude
     // writes only a decided value), so a block whose root is still lazy also
     // leaves the block's compaction with nothing to move.
     let mut m = Module::new();
@@ -441,8 +430,5 @@ fn a_block_root_that_stays_lazy_is_not_an_internal_error() {
 
     let value = m.evaluate_node_deep(read, None);
 
-    assert!(matches!(
-        value,
-        TestValue::LowValue(LowValue::Parameterized)
-    ));
+    assert!(value.is_none(), "the block root stays undecided");
 }

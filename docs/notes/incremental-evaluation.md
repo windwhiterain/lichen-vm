@@ -180,8 +180,11 @@ Two answers this inventory settles:
 
 ### 3.3 The three code facts that make a stability property checkable
 
-`is_unbound(value)` is `None` or `Parameterized` (`lib.rs:550`); everything else
-is a concrete value. Three predicates then say who can write what:
+An **undecided** value is an empty slot (`Node::value == None`); everything else
+is a concrete value.  (This section was written when `is_unbound(value)` spanned
+`None` and the `Parameterized` marker; the marker is now deleted, so the empty
+slot is the whole of "undecided" — `class-channel.md` §1.1.2.)  Three predicates
+then say who can write what:
 
 - **A concrete value is not overwritten in place of a different one.** `bind`
   takes `concrete = if is_unbound(va) { vb } else { va }`; `write_node_value`

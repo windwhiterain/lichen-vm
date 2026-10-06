@@ -35,8 +35,8 @@ impl<P: HighProgram> AttrExt<P> for Tag
 where
     P::Value: ValueType,
 {
-    fn missing_value(&self) -> LowValue {
-        LowValue::USize(0)
+    fn missing_value(&self) -> Option<LowValue> {
+        Some(LowValue::USize(0))
     }
 
     fn combine(&self, ctx: &mut dyn Ctx<P>, children: &[NodeId]) -> NodeId {

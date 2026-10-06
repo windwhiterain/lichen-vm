@@ -38,8 +38,9 @@ fn static_func_value(
 }
 
 /// The raw items of an evaluated array value.
-fn raw_items(value: TestValue) -> Vec<ArrayItem> {
-    let TestValue::LowValue(LowValue::Array(array)) = value else {
+fn raw_items(value: impl Into<Option<TestValue>>) -> Vec<ArrayItem> {
+    let TestValue::LowValue(LowValue::Array(array)) = value.into().expect("expected an array")
+    else {
         panic!("expected an array value")
     };
     // SAFETY: the value was just produced by the module under test, whose
@@ -50,15 +51,11 @@ fn raw_items(value: TestValue) -> Vec<ArrayItem> {
 #[test]
 fn static_apply_reruns_the_residual_spine_against_the_argument() {
     // Source: f(x) = x + 1.  At solve time the Add reads the marker
-    // parameter and freezes `Parameterized` with a dead residual operation;
+    // parameter and freezes the empty cell with a dead residual operation;
     // the materialize walk must clone that spine and re-run it per call.
     let mut m = Module::new();
     let body = m.add_block(None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     let one = u128_node(&mut m, body, 1);
     let add_ops = array_node(&mut m, body, &[param, one], None);
     let add = op_node(&mut m, body, TestOperator::Add, Some(add_ops));
@@ -72,12 +69,12 @@ fn static_apply_reruns_the_residual_spine_against_the_argument() {
     let _ = func_node;
     let arg = u128_node(&mut imp, root, 41);
     let call = call_node(&mut imp, root, f, arg);
-    assert_eq!(u128_of(imp.evaluate_node_deep(call, None)), 42);
+    assert_eq!(u128_of(imp.evaluate_node_deep(call, None).unwrap()), 42);
 
     // A second call materializes a fresh instance.
     let arg = u128_node(&mut imp, root, 10);
     let call = call_node(&mut imp, root, f, arg);
-    assert_eq!(u128_of(imp.evaluate_node_deep(call, None)), 11);
+    assert_eq!(u128_of(imp.evaluate_node_deep(call, None).unwrap()), 11);
 }
 
 #[test]
@@ -88,11 +85,7 @@ fn static_apply_bakes_constants_in_place() {
     let mut m = Module::new();
     let body = m.add_block(None);
     let ret = m.add_node(body, None, None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     let forty_two = u128_node(&mut m, body, 42);
     m.write_node_value(
         ret,
@@ -109,7 +102,7 @@ fn static_apply_bakes_constants_in_place() {
     let arg = u128_node(&mut imp, root, 7);
     let call = call_node(&mut imp, root, f, arg);
 
-    let value = imp.evaluate_node_deep(call, None);
+    let value = imp.evaluate_node_deep(call, None).unwrap();
     let _ = func_node;
     let items = raw_items(value);
     assert_eq!(items.len(), 2);
@@ -118,7 +111,7 @@ fn static_apply_bakes_constants_in_place() {
     let AnyNodeId::Static(_) = items[1].node else {
         panic!("the constant must be referenced in place, not cloned")
     };
-    assert_eq!(u128_of(imp.evaluate_node(items[1].node, None)), 42);
+    assert_eq!(u128_of(imp.evaluate_node(items[1].node, None).unwrap()), 42);
 
     // The baked constant's payload lives in the module's shared arena —
     // the read copied nothing into the importer.
@@ -137,7 +130,7 @@ fn static_apply_bakes_constants_in_place() {
             arena.as_ptr() as usize + arena.len(),
         )
     };
-    let constant = imp.evaluate_node(items[1].node, None);
+    let constant = imp.evaluate_node(items[1].node, None).unwrap();
     let TestValue::U128(AnyHandle::Static(h)) = constant else {
         panic!("expected the baked static constant")
     };
@@ -157,11 +150,7 @@ fn nested_index_over_a_static_array_reads_shared_values() {
     // so the cached value is unambiguous from any context).
     let mut m = Module::new();
     let body = m.add_block(None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     let n1 = u128_node(&mut m, body, 1);
     let n2 = u128_node(&mut m, body, 2);
     let n3 = u128_node(&mut m, body, 3);
@@ -196,15 +185,15 @@ fn nested_index_over_a_static_array_reads_shared_values() {
         TestOperator::LowOperator(LowOperator::Index),
         Some(idx2_ops),
     );
-    assert_eq!(u128_of(imp.evaluate_node_deep(idx2, None)), 3);
+    assert_eq!(u128_of(imp.evaluate_node_deep(idx2, None).unwrap()), 3);
 
     // The inner Index node cached the shared [3,4]; a direct re-read must
     // resolve it like any memoized node.
-    let again = imp.evaluate_node(Dyn(inner), None);
+    let again = imp.evaluate_node(Dyn(inner), None).unwrap();
     let items = raw_items(again);
     assert_eq!(items.len(), 2);
-    assert_eq!(u128_of(imp.evaluate_node(items[0].node, None)), 3);
-    assert_eq!(u128_of(imp.evaluate_node(items[1].node, None)), 4);
+    assert_eq!(u128_of(imp.evaluate_node(items[0].node, None).unwrap()), 3);
+    assert_eq!(u128_of(imp.evaluate_node(items[1].node, None).unwrap()), 4);
     let _ = func_node;
 }
 
@@ -218,11 +207,7 @@ fn registry_resolves_artifacts_by_device_key() {
     let mut m = Module::new();
     let body = m.add_block(None);
     let ret = m.add_node(body, None, None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     let seven = u128_node(&mut m, body, 7);
     m.write_node_value(
         ret,
@@ -242,9 +227,9 @@ fn registry_resolves_artifacts_by_device_key() {
         let f = static_func_value(&mut imp, root, k, 0);
         let arg = u128_node(&mut imp, root, 0);
         let call = call_node(&mut imp, root, f, arg);
-        let value = imp.evaluate_node_deep(call, None);
+        let value = imp.evaluate_node_deep(call, None).unwrap();
         let items = raw_items(value);
-        assert_eq!(u128_of(imp.evaluate_node(items[1].node, None)), 7);
+        assert_eq!(u128_of(imp.evaluate_node(items[1].node, None).unwrap()), 7);
     }
     // Repeated gets of one key return the same resident module.
     let a = imp.registry.read().unwrap().get(k1).unwrap().module.clone();
@@ -264,11 +249,7 @@ fn static_recursion_counts_down_through_a_lazy_branch() {
     // dispatches back to `static_function_apply` for the next.
     let mut m = Module::new();
     let body = m.add_block(None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     let func_node = m.add_node(body, None, None); // placeholder self-ref
     let zero = u128_node(&mut m, body, 0);
     let one = u128_node(&mut m, body, 1);
@@ -301,16 +282,12 @@ fn static_recursion_counts_down_through_a_lazy_branch() {
     let f = static_func_value(&mut imp, root, key, 0);
     let arg = u128_node(&mut imp, root, 3);
     let call = call_node(&mut imp, root, f, arg);
-    assert_eq!(u128_of(imp.evaluate_node_deep(call, None)), 0);
+    assert_eq!(u128_of(imp.evaluate_node_deep(call, None).unwrap()), 0);
 
     // The depth guard still bounds a non-terminating static self-apply.
     let mut m = Module::new();
     let body = m.add_block(None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     let g_func = m.add_node(body, None, None);
     let g_ops = array_node(&mut m, body, &[g_func, param], None);
     let g_ret = op_node(
@@ -348,16 +325,8 @@ fn static_parameter_topology_is_reestablished_among_clones() {
     // silently pass.
     let mut m = Module::new();
     let body = m.add_block(None);
-    let x0 = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
-    let x1 = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let x0 = m.add_node(body, None, None);
+    let x1 = m.add_node(body, None, None);
     m.unify(x0, x1);
     let items = [item(x0), item(x1)];
     let param = m.add_node(
@@ -380,7 +349,7 @@ fn static_parameter_topology_is_reestablished_among_clones() {
     let b = u128_node(&mut imp, root, 3);
     let arg = array_node(&mut imp, root, &[a, b], None);
     let call = call_node(&mut imp, root, f, arg);
-    assert_eq!(u128_of(imp.evaluate_node_deep(call, None)), 3);
+    assert_eq!(u128_of(imp.evaluate_node_deep(call, None).unwrap()), 3);
     assert!(imp.apply_errors.is_empty());
 
     // Differing elements: the re-established topology rejects the argument.
@@ -404,11 +373,7 @@ fn static_assert_rechecks_per_call() {
     let mut m = Module::new();
     let body = m.add_block(None);
     let ret = m.add_node(body, None, None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     let one = u128_node(&mut m, body, 1);
     let eq_ops = array_node(&mut m, body, &[param, one], None);
     let condition = op_node(&mut m, body, TestOperator::Eq, Some(eq_ops));
@@ -451,11 +416,7 @@ fn materialized_clones_survive_block_release() {
     // move them with it, and a second apply must still work.
     let mut m = Module::new();
     let body = m.add_block(None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     let one = u128_node(&mut m, body, 1);
     let add_ops = array_node(&mut m, body, &[param, one], None);
     let add = op_node(&mut m, body, TestOperator::Add, Some(add_ops));
@@ -472,7 +433,7 @@ fn materialized_clones_survive_block_release() {
     let child = imp.add_block(Some(root));
     let arg = u128_node(&mut imp, child, 41);
     let call = call_node(&mut imp, child, f, arg);
-    assert_eq!(u128_of(imp.evaluate_node_deep(call, None)), 42);
+    assert_eq!(u128_of(imp.evaluate_node_deep(call, None).unwrap()), 42);
     imp.garbage_collect(call).expect("the evaluated call node");
     assert!(
         !imp.blocks.contains_key(child),
@@ -482,7 +443,7 @@ fn materialized_clones_survive_block_release() {
     // The static function is still callable afterwards.
     let arg = u128_node(&mut imp, root, 10);
     let call = call_node(&mut imp, root, f, arg);
-    assert_eq!(u128_of(imp.evaluate_node_deep(call, None)), 11);
+    assert_eq!(u128_of(imp.evaluate_node_deep(call, None).unwrap()), 11);
     let _ = func_node;
 }
 
@@ -494,11 +455,7 @@ fn static_closure_value_applies_from_dynamic_context() {
     let mut m = Module::new();
     // g(x) = x + 1
     let g_body = m.add_block(None);
-    let g_param = m.add_node(
-        g_body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let g_param = m.add_node(g_body, None, None);
     let one = u128_node(&mut m, g_body, 1);
     let g_ops = array_node(&mut m, g_body, &[g_param, one], None);
     let g_add = op_node(&mut m, g_body, TestOperator::Add, Some(g_ops));
@@ -506,11 +463,7 @@ fn static_closure_value_applies_from_dynamic_context() {
     // f(y) = [y, g]
     let f_body = m.add_block(None);
     let f_ret = m.add_node(f_body, None, None);
-    let f_param = m.add_node(
-        f_body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let f_param = m.add_node(f_body, None, None);
     let g_value = m.add_node(f_body, None, None); // placeholder: g's value node
     m.write_node_value(g_value, m.node_value(AnyNodeId::Dynamic(g_func_node)));
     m.write_node_value(
@@ -531,18 +484,18 @@ fn static_closure_value_applies_from_dynamic_context() {
     let f = static_func_value(&mut imp, root, key, 1);
     let arg = u128_node(&mut imp, root, 5);
     let call = call_node(&mut imp, root, f, arg);
-    let value = imp.evaluate_node_deep(call, None);
+    let value = imp.evaluate_node_deep(call, None).unwrap();
     let items = raw_items(value);
     assert_eq!(items.len(), 2);
     // The second element is the baked g value: a static function ref.
-    let g_val = imp.evaluate_node(items[1].node, None);
+    let g_val = imp.evaluate_node(items[1].node, None).unwrap();
     let TestValue::LowValue(LowValue::Function(AnyFunctionId::Static(_))) = g_val else {
         panic!("expected a baked static function value")
     };
     let g_node = imp.add_node(root, None, Some(g_val));
     let arg = u128_node(&mut imp, root, 41);
     let g_call = call_node(&mut imp, root, g_node, arg);
-    assert_eq!(u128_of(imp.evaluate_node_deep(g_call, None)), 42);
+    assert_eq!(u128_of(imp.evaluate_node_deep(g_call, None).unwrap()), 42);
     let _ = f_func_node;
 }
 
@@ -580,11 +533,7 @@ fn static_array_cache_survives_block_release_verbatim() {
     // of), and the cached read must still resolve afterwards.
     let mut m = Module::new();
     let body = m.add_block(None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     let n1 = u128_node(&mut m, body, 1);
     let n2 = u128_node(&mut m, body, 2);
     let n3 = u128_node(&mut m, body, 3);
@@ -636,8 +585,8 @@ fn static_array_cache_survives_block_release_verbatim() {
     };
     let items = raw_items(moved);
     assert_eq!(items.len(), 2);
-    assert_eq!(u128_of(imp.evaluate_node(items[0].node, None)), 3);
-    assert_eq!(u128_of(imp.evaluate_node(items[1].node, None)), 4);
+    assert_eq!(u128_of(imp.evaluate_node(items[0].node, None).unwrap()), 3);
+    assert_eq!(u128_of(imp.evaluate_node(items[1].node, None).unwrap()), 4);
     let _ = func_node;
 }
 
@@ -660,10 +609,13 @@ fn freeze_mapped_returns_consistent_node_indices() {
         module: freeze.key,
         index: node_map[&arr],
     };
-    let raw = raw_items(imp.evaluate_node(AnyNodeId::Static(arr_sref), Some(root)));
+    let raw = raw_items(
+        imp.evaluate_node(AnyNodeId::Static(arr_sref), Some(root))
+            .unwrap(),
+    );
     assert_eq!(raw.len(), 2);
-    assert_eq!(u128_of(imp.evaluate_node(raw[0].node, None)), 10);
-    assert_eq!(u128_of(imp.evaluate_node(raw[1].node, None)), 20);
+    assert_eq!(u128_of(imp.evaluate_node(raw[0].node, None).unwrap()), 10);
+    assert_eq!(u128_of(imp.evaluate_node(raw[1].node, None).unwrap()), 20);
 }
 
 /// A dependency module frozen into a shared registry, plus the static refs
@@ -776,13 +728,13 @@ fn freezing_keeps_dependency_refs_verbatim() {
         index: freeze_b.node_map[&holder],
     };
     let node = imp.materialize_leaf(holder_sref, iroot);
-    let value = imp.evaluate_node(Dyn(node), None);
+    let value = imp.evaluate_node(Dyn(node), None).unwrap();
     let items = raw_items(value);
-    assert_eq!(u128_of(imp.evaluate_node(items[0].node, None)), 7);
-    let inner = raw_items(imp.evaluate_node(items[1].node, None));
-    assert_eq!(u128_of(imp.evaluate_node(inner[0].node, None)), 10);
-    assert_eq!(u128_of(imp.evaluate_node(inner[1].node, None)), 20);
-    assert_eq!(u128_of(imp.evaluate_node(items[2].node, None)), 42);
+    assert_eq!(u128_of(imp.evaluate_node(items[0].node, None).unwrap()), 7);
+    let inner = raw_items(imp.evaluate_node(items[1].node, None).unwrap());
+    assert_eq!(u128_of(imp.evaluate_node(inner[0].node, None).unwrap()), 10);
+    assert_eq!(u128_of(imp.evaluate_node(inner[1].node, None).unwrap()), 20);
+    assert_eq!(u128_of(imp.evaluate_node(items[2].node, None).unwrap()), 42);
 }
 
 #[test]
@@ -844,11 +796,7 @@ fn static_apply_keeps_foreign_items_in_place() {
 
     let mut b = Registry::new_module(&registry);
     let body = b.add_block(None);
-    let param = b.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = b.add_node(body, None, None);
     let ret = b.add_node(body, None, None);
     b.write_node_value(
         ret,
@@ -869,16 +817,16 @@ fn static_apply_keeps_foreign_items_in_place() {
     let f = static_func_value(&mut imp, root, freeze_b.key, 0);
     let arg = u128_node(&mut imp, root, 5);
     let call = call_node(&mut imp, root, f, arg);
-    let value = imp.evaluate_node_deep(call, None);
+    let value = imp.evaluate_node_deep(call, None).unwrap();
     let items = raw_items(value);
-    assert_eq!(u128_of(imp.evaluate_node(items[0].node, None)), 5);
+    assert_eq!(u128_of(imp.evaluate_node(items[0].node, None).unwrap()), 5);
     assert_eq!(
         items[1].node,
         AnyNodeId::Static(arr_sref),
         "the foreign item stays in place through the apply"
     );
-    let inner = raw_items(imp.evaluate_node(items[1].node, None));
-    assert_eq!(u128_of(imp.evaluate_node(inner[0].node, None)), 10);
-    assert_eq!(u128_of(imp.evaluate_node(inner[1].node, None)), 20);
+    let inner = raw_items(imp.evaluate_node(items[1].node, None).unwrap());
+    assert_eq!(u128_of(imp.evaluate_node(inner[0].node, None).unwrap()), 10);
+    assert_eq!(u128_of(imp.evaluate_node(inner[1].node, None).unwrap()), 20);
     let _ = func_node;
 }

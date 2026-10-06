@@ -146,7 +146,7 @@ fn run(source: &str) -> (Module<HostProgram>, LangValue, NodeId) {
     );
     let build = report.build.unwrap();
     let mut module = build.module;
-    let value = module.evaluate_node_deep(build.root_val, None);
+    let value = module.evaluate_node_deep(build.root_val, None).unwrap();
     module.evaluate_node_deep(build.root_ty, None);
     (module, value, build.root_ty)
 }

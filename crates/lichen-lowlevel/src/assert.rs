@@ -4,7 +4,7 @@
 //! node: an unbound condition stays untriggered rather than being forced to
 //! `1`, and the apply clone re-checks the instantiated condition per call.
 
-use crate::{AnyNodeId, LowValue, Module, NodeId, Program, is_unbound};
+use crate::{AnyNodeId, LowValue, Module, NodeId, Program};
 use lichen_utils::extend::AsEnum;
 
 /// A failed assert: the checked condition resolved to a concrete value
@@ -75,12 +75,14 @@ impl<P: Program> Module<P> {
                 continue; // the condition's block was garbage-collected
             };
             let block = node.block;
-            let value = self.evaluate_node_forced(condition, Some(block));
-            if is_unbound(Some(value)) {
+            let Some(value) = self.evaluate_node_forced(condition, Some(block)) else {
+                // Not triggered — deferred to the apply clone.  An undecided
+                // condition (an unbound parameter, or any computation whose
+                // operands cannot resolve) records no error.
                 self.asserts.swap(pending, i - 1);
-                pending += 1; // not triggered — deferred to the apply clone
+                pending += 1;
                 continue;
-            }
+            };
             if !matches!(value.as_enum(), Some(LowValue::USize(1))) {
                 self.assert_errors.push(AssertError {
                     condition,

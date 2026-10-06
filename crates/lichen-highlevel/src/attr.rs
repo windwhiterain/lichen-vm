@@ -115,9 +115,11 @@ where
     P::Value: ValueType,
 {
     /// The value read for an *absent* occurrence of this attribute.  A
-    /// perspective reads `USize(0)`: neutral in `gcd`, concrete in equality
-    /// unify.
-    fn missing_value(&self) -> LowValue;
+    /// perspective reads `Some(USize(0))`: neutral in `gcd`, concrete in
+    /// equality unify.  `None` means the absent form is an **unbound cell** — a
+    /// doc's or a refinement's — whose slot stays empty and which a unify binds
+    /// on purpose, so the attribute passes from one side to the other.
+    fn missing_value(&self) -> Option<LowValue>;
 
     /// The slot node read for an *absent* occurrence of this attribute.
     ///
@@ -127,8 +129,15 @@ where
     /// same shape).  A perspective therefore reads `[0, int]` (its missing
     /// lattice value in value position).  An attribute whose missing value is
     /// not a term expression overrides this.
+    ///
+    /// A `None` missing value is spelled by a **fresh empty cell**
+    /// ([`Ctx::fresh`]): undecided has no value spelling, so the slot's value
+    /// node simply holds nothing.
     fn missing_slot(&self, ctx: &mut dyn Ctx<P>) -> NodeId {
-        let value = ctx.value_node(P::Value::from(self.missing_value()));
+        let value = match self.missing_value() {
+            Some(value) => ctx.value_node(P::Value::from(value)),
+            None => ctx.fresh(),
+        };
         ctx.pair(value, ctx.int_type())
     }
 
@@ -160,7 +169,7 @@ where
 
     /// Combine the direct sub-expressions' attribute slots into one node
     /// (a perspective → the language's meet operator over the operand array, a
-    /// lazy operand → `Parameterized`).  `children` are the already-compiled
+    /// lazy operand → a fresh empty cell).  `children` are the already-compiled
     /// child slots, pre-padded with [`Self::missing_value`].  Built through
     /// the curated [`Ctx`], never raw lowlevel nodes.
     fn combine(&self, ctx: &mut dyn Ctx<P>, children: &[NodeId]) -> NodeId;
@@ -281,15 +290,14 @@ where
     }
 
     /// The slot value of an attribute node, read from the module — a helper
-    /// for [`Self::render`].  Returns the value as a `LowValue` enum.  Only
-    /// the unbound marker is filtered (an unbound slot spells nothing); a
-    /// empty value ([`LowValue::Error`]) is a concrete slot value and
+    /// for [`Self::render`].  Returns the value as a `LowValue` enum.  An
+    /// empty slot (an unbound attribute) spells nothing and reads `None`;
+    /// an empty value ([`LowValue::Error`]) is a concrete slot value and
     /// passes through.
     fn slot_value(&self, module: &Module<P>, slot: NodeId) -> Option<LowValue> {
         module
             .node_value(AnyNodeId::Dynamic(slot))
             .and_then(|v| v.as_enum())
-            .filter(|v| !matches!(v, LowValue::Parameterized))
     }
 }
 

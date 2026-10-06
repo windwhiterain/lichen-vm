@@ -27,7 +27,10 @@ fn run(
     let argument = u128_node(&mut m, root, argument);
     let call = call_node(&mut m, root, function, argument);
     let value = m.evaluate_node_deep(call, None);
-    let answer = matches!(value, TestValue::U128(_)).then(|| u128_of(value));
+    // An undecided answer (the loop's test did not decide, a budget refused)
+    // is no value at all.
+    let answer =
+        value.and_then(|value| matches!(value, TestValue::U128(_)).then(|| u128_of(value)));
     (answer, m.budget_exhausted)
 }
 

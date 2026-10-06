@@ -35,7 +35,9 @@ fn run(source: &str) -> (Module<LangProgram>, NodeId) {
 
 fn evaluate(source: &str) -> LangValue {
     let (mut module, root) = run(source);
-    module.evaluate_node_deep(root, None)
+    module
+        .evaluate_node_deep(root, None)
+        .expect("the program's root value is undecided")
 }
 
 /// The node ids of an array value.
@@ -115,7 +117,7 @@ fn the_polymorphic_identity_checks() {
     // let-polymorphic.
     let (module, root) = run("(((id => ((id 5 : Int), (id Type : Type))) (x => x)) : <Int, Type>)");
     let mut module = module;
-    let value = module.evaluate_node_deep(root, None);
+    let value = module.evaluate_node_deep(root, None).unwrap();
     let ids = array_ids(value);
     assert_eq!(ids.len(), 2, "the tuple has two elements");
     assert_eq!(
@@ -142,7 +144,7 @@ fn a_nested_function_captures_the_applied_outer_parameter() {
     // closure captures x's binding: the parameter must not leak through as
     // the unbound marker.
     let (mut module, root) = run("a = 1; f1 = x => { b = 2; f2 = y => [a, b, x, y]; f2 }; f1 3 4");
-    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     let expected = [1usize, 2, 3, 4];
     assert_eq!(ids.len(), expected.len());
     for (&id, &n) in ids.iter().zip(expected.iter()) {
@@ -306,7 +308,7 @@ fn a_binding_used_twice_shares_one_node() {
     // holds two fives.
     let (module, root) = run("a = 5; (a, a)");
     let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
     assert_eq!(
         usize_of(
@@ -335,7 +337,7 @@ fn a_bound_lambda_is_still_polymorphic() {
     // monomorphize functions.
     let (module, root) = run("a = x => x; ((a 5 : Int), (a Type : Type))");
     let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
     assert_eq!(
         usize_of(
@@ -429,7 +431,7 @@ fn a_block_bound_lambda_is_still_polymorphic() {
     let (module, root) =
         run("(((x => {g = y => y; ((g x : Int), (g Type : Type))}) 5) : <Int, Type>)");
     let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
     assert_eq!(
         usize_of(
@@ -951,7 +953,7 @@ fn mutually_recursive_functions_evaluate_in_place() {
     let (mut module, root) = run("f = n => if n <= 0 then 0 else g (n - 1);
          g = n => if n <= 0 then 0 else f (n - 1);
          f 5");
-    assert_eq!(usize_of(&module.evaluate_node_deep(root, None)), 0);
+    assert_eq!(usize_of(&module.evaluate_node_deep(root, None).unwrap()), 0);
     assert_eq!(module.functions.len(), 2, "peers are referenced in place");
 }
 
@@ -1010,16 +1012,13 @@ fn a_self_referential_field_read_checks_without_overflow() {
     // kind and the checker's cycle cut gates on block-root membership alone;
     // these three kinds fell through the old hand-maintained kind list and
     // overflowed the stack.  Each now checks like the `a = a + 1` control:
-    // no diagnostics, and the root deep-evaluates to the lazy parameterized
-    // marker instead of hanging.
+    // no diagnostics, and the root deep-evaluates to **undecided** (an empty
+    // slot) instead of hanging.
     for source in ["a = a + 1; a", "a = a(0); a", "a = a.x; a", "a = a::x; a"] {
         let (mut module, root) = run(source);
         assert!(
-            matches!(
-                module.evaluate_node_deep(root, None),
-                LangValue::LowValue(LowValue::Parameterized)
-            ),
-            "{source:?} must yield the parameterized marker like the control"
+            module.evaluate_node_deep(root, None).is_none(),
+            "{source:?} must stay undecided like the control"
         );
     }
 }
@@ -1030,9 +1029,9 @@ fn a_self_referential_record_checks_without_overflow() {
     // kind the old skeleton gate missed).  The record value is concrete — a
     // one-field struct whose single element is the knot itself — so the deep
     // evaluation terminates on the runtime cycle guard rather than yielding
-    // the bare parameterized marker.
+    // the bare undecided answer.
     let (mut module, root) = run("a = {x = a}; a");
-    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 1, "the record carries its one field");
     assert!(
         matches!(
@@ -1078,7 +1077,7 @@ fn a_bound_struct_type_is_reusable() {
     // nominal id survives).
     let (module, root) = run("s = struct<.f Int>; [s, s]");
     let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
     for id in ids {
         assert!(matches!(
@@ -1166,7 +1165,7 @@ fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
          y = (x : S2)\n\
          y");
     let mut module = module;
-    let instance = array_ids(module.evaluate_node_deep(root, None));
+    let instance = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(instance.len(), 2, "the instance wraps its two field values");
     assert_eq!(
         usize_of(
@@ -1177,7 +1176,7 @@ fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
         ),
         3
     );
-    let inner = array_ids(module.evaluate_node_deep(instance[1], None));
+    let inner = array_ids(module.evaluate_node_deep(instance[1], None).unwrap());
     assert_eq!(inner.len(), 2, "the inner struct wraps its own two fields");
     assert_eq!(
         usize_of(
@@ -1535,12 +1534,12 @@ fn a_struct_type_application_is_an_instance() {
     // type.
     let (module, root) = run("struct<.f Int, .g Int>(1, 2)");
     let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
     // a bound struct type instantiates the same way
     let (module, root) = run("s = struct<.f Int, .g Int>; s(1, 2)");
     let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
 }
 
@@ -1575,7 +1574,7 @@ fn a_struct_instance_reads_its_fields_by_name() {
     // element's type is the corresponding field type (Int and Type).
     let (module, root) = run("s = struct<.f Int, .t Type>; a = s(1, Int); (a.f, a.t)");
     let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
     assert_eq!(
         usize_of(
@@ -1598,7 +1597,7 @@ fn a_struct_instance_reads_its_fields_by_name() {
     // would parse as `(f s)(1, Int)`)
     let (module, root) = run("f = a => a.f; s = struct<.f Int, .t Type>; f (s(1, Int)) : Int");
     let mut module = module;
-    assert_eq!(usize_of(&module.evaluate_node_deep(root, None)), 1);
+    assert_eq!(usize_of(&module.evaluate_node_deep(root, None).unwrap()), 1);
 }
 
 #[test]
@@ -1631,7 +1630,7 @@ fn a_named_struct_instantiation_reorders_arguments() {
     // (Int).
     let (module, root) = run("S = struct<.x Int, .y Type>; a = S(.y Int, .x 1); (a.x, a.y)");
     let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
     assert_eq!(
         usize_of(
@@ -1665,7 +1664,7 @@ fn a_named_struct_instantiation_mixes_positional_and_named() {
     // unclaimed definition position (.x), so the instance is (1, Int).
     let (module, root) = run("S = struct<.x Int, .y Type>; a = S(.y Int, 1); (a.x, a.y)");
     let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(
         usize_of(
             module
@@ -1830,7 +1829,7 @@ fn a_named_instantiation_through_a_parameter_reorders_when_the_type_resolves() {
     let (module, root) =
         run("S = struct<.x Int, .y Type>\nf = s => s(.y Int, .x 1)\na = f (S)\n(a.x, a.y)");
     let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
     assert_eq!(
         usize_of(
@@ -1915,7 +1914,7 @@ fn a_deferred_instantiation_of_a_concrete_argument_type_is_accepted() {
     // call, so the named instantiation checks against the real fields.
     let (module, root) = run("A = struct<.x Int, .y Int>\nf = x: A => x\nf (_(.x 1, .y 2))");
     let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
     assert_eq!(
         usize_of(
@@ -1943,7 +1942,7 @@ fn a_mixed_positional_and_named_instantiation_reorders() {
     // position, so `.y 2, 1` gives `(.x = 1, .y = 2)`.
     let (module, root) = run("A = struct<.x Int, .y Int>\nf = s => s(.y 2, 1)\nf (A)");
     let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
     assert_eq!(
         usize_of(
@@ -2000,7 +1999,7 @@ fn a_block_without_a_tail_returns_an_anonymous_struct_instance() {
     // unnamed one) whose fields are the named bindings x and y, read by name.
     let (module, root) = run("a = { x = 1; y = Int }; (a.x, a.y)");
     let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2);
     assert_eq!(
         usize_of(
@@ -2025,7 +2024,7 @@ fn a_struct_block_with_pub_only_exposes_the_pub_fields() {
     // block-local, still compiled but not exposed.
     let (module, root) = run("a = { pub x = 1; y = 2 }; a.x");
     let mut module = module;
-    let value = module.evaluate_node_deep(root, None);
+    let value = module.evaluate_node_deep(root, None).unwrap();
     assert_eq!(usize_of(&value), 1, "a.x reads the exposed pub field");
     // y is not exposed: reading it is a named-field error.
     let d = diags("a = { pub x = 1; y = 2 }; a.y");
@@ -2045,7 +2044,7 @@ fn a_let_in_a_struct_block_is_a_local_not_a_field() {
     // a field that references it.
     let (module, root) = run("a = { let x = 1; y = x + 1 }; a.y");
     let mut module = module;
-    let value = module.evaluate_node_deep(root, None);
+    let value = module.evaluate_node_deep(root, None).unwrap();
     assert_eq!(usize_of(&value), 2, "a.y = x + 1");
     // x is not exposed: reading it is a named-field miss.
     let d = diags("a = { let x = 1; y = x + 1 }; a.x");
@@ -2067,9 +2066,9 @@ fn a_bare_expression_in_a_block_is_a_statement_not_a_field() {
     // the positional read `a(0)` has nothing to read there.
     let (module, root) = run("a = { 1; x = 2 }; (a, a.x)");
     let mut module = module;
-    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     assert_eq!(ids.len(), 2, "the record and the read of its field");
-    let fields = array_ids(module.evaluate_node_deep(ids[0], None));
+    let fields = array_ids(module.evaluate_node_deep(ids[0], None).unwrap());
     assert_eq!(fields.len(), 1, "only the binding is a field");
     assert_eq!(
         usize_of(
@@ -2146,7 +2145,7 @@ fn mutually_recursive_structs_check_and_evaluate() {
     );
     let build = report.build.unwrap();
     let mut module = build.module;
-    let value = module.evaluate_node_deep(build.root_val, None);
+    let value = module.evaluate_node_deep(build.root_val, None).unwrap();
     let ids = array_ids(value);
     assert_eq!(ids.len(), 4, "the final tuple holds A, B, a, b");
 }
@@ -2310,14 +2309,14 @@ fn indexing_a_function_is_an_index_target_error() {
     let (module, root) = run("a = x => (1, Int)(x); a 0 : Int");
     let mut module = module;
     assert_eq!(
-        usize_of(&module.evaluate_node_deep(root, None)),
+        usize_of(&module.evaluate_node_deep(root, None).unwrap()),
         1,
         "the dependent selector applied to 0 reads the value"
     );
     let (module, root) = run("a = x => (1, Int)(x); a 1 : Type");
     let mut module = module;
     assert_eq!(
-        module.evaluate_node_deep(root, None),
+        module.evaluate_node_deep(root, None).unwrap(),
         LangValue::TypeValue(TypeValue::TypeInt),
         "applied to 1 it reads the type constant"
     );
@@ -2465,7 +2464,7 @@ fn a_mismatch_against_a_partial_type_is_reported() {
 fn an_underscore_checks_as_a_value_hole() {
     // `_` is a placeholder in *value* position too: `_ : Int` is a typed hole
     // — it checks (the value's type slot unifies with Int) and its value is
-    // underdetermined (a `Parameterized` hole), never a resolve error.
+    // underdetermined (an empty slot), never a resolve error.
     let report = compile("_ : Int");
     assert!(
         report.ok(),
@@ -2475,7 +2474,7 @@ fn an_underscore_checks_as_a_value_hole() {
     let (mut module, root) = run("_ : Int");
     let value = module.evaluate_node_deep(root, None);
     assert!(
-        matches!(value, LangValue::LowValue(LowValue::Parameterized)),
+        value.is_none(),
         "the typed hole's value is underdetermined, got {value:?}"
     );
 }

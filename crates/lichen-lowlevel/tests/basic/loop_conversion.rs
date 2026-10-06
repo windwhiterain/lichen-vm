@@ -44,11 +44,7 @@ fn a_recursion_in_a_tuple_element_refuses() {
     // tuple — not the pair's first element — is what the spine reads.
     let mut m: Module<TestProgram> = Module::new();
     let body = m.add_block(None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     let func_node = m.add_node(body, None, None);
     let call_ops = array_node(&mut m, body, &[func_node, param], None);
     let call = op_node(

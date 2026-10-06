@@ -110,10 +110,7 @@ fn cloned_function_nodes_start_in_their_own_equality_class() {
 // `Module::unify_errors` without merging.
 
 fn is_unbound_value(value: Option<TestValue>) -> bool {
-    matches!(
-        value,
-        None | Some(TestValue::LowValue(LowValue::Parameterized))
-    )
+    value.is_none()
 }
 
 #[test]
@@ -588,7 +585,7 @@ fn apply_unifies_the_cloned_parameter_with_the_argument() {
     let f = m.add_function(root, param, param, [param], []);
     let arg = u128_node(&mut m, root, 42);
     let call = call_node(&mut m, root, f, arg);
-    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 42);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None).unwrap()), 42);
     assert!(m.unify_errors.is_empty());
     // the parameter's clone merged with the argument: one class of two
     let rep = m.equality_representative(arg);
@@ -603,10 +600,7 @@ fn apply_with_an_unbound_argument_stays_lazy() {
     let f = m.add_function(root, param, param, [param], []);
     let arg = unbound_node(&mut m, root);
     let call = call_node(&mut m, root, f, arg);
-    assert!(matches!(
-        m.evaluate_node_deep(call, None),
-        TestValue::LowValue(LowValue::Parameterized)
-    ));
+    assert!(m.evaluate_node_deep(call, None).is_none());
     assert!(m.unify_errors.is_empty());
     // two unbound nodes unify into one class, still unbound
     let rep = m.equality_representative(arg);
@@ -627,7 +621,7 @@ fn apply_unifies_array_parameters_elementwise() {
     let two = usize_node(&mut m, root, 2);
     let arg = array_node(&mut m, root, &[one, two], None);
     let call = call_node(&mut m, root, f, arg);
-    let value = m.evaluate_node_deep(call, None);
+    let value = m.evaluate_node_deep(call, None).unwrap();
     assert!(m.unify_errors.is_empty());
     // the cloned pattern's elements are bound to the argument's elements
     let ids = array_ids(value);
@@ -682,7 +676,7 @@ fn apply_unify_binds_an_unbound_argument_into_the_param_class() {
     let unbound = unbound_node(&mut m, root);
     let call = call_node(&mut m, root, f, unbound);
     assert!(matches!(
-        m.evaluate_node_deep(call, None),
+        m.evaluate_node_deep(call, None).unwrap(),
         TestValue::LowValue(LowValue::USize(1))
     ));
     assert!(m.unify_errors.is_empty());

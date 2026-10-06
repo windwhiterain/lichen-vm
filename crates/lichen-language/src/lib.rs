@@ -51,7 +51,7 @@ use lichen_highlevel::program::{
     HighGlobalExt, HighProgram, HighProgramLiteral, TypeOperator, ValueType,
 };
 use lichen_highlevel::{NativeOps, no_native_ops};
-use lichen_lowlevel::{Registry, StaticNodeId, is_unbound};
+use lichen_lowlevel::{Registry, StaticNodeId};
 
 use crate::cells::CellStore;
 use crate::path::Path;
@@ -176,7 +176,7 @@ pub fn compile_with_cells(
 /// Freeze the marked bindings a build compiled, and record each under its
 /// occurrence path.
 ///
-/// Only a **solved** pair is retained: a `Parameterized` one has no answer to
+/// Only a **solved** pair is retained: an undecided one has no answer to
 /// keep, so filing it would record an artifact that says nothing — the cell is
 /// left out and the next build compiles the binding again, which is the honest
 /// answer rather than a silent freeze of nothing.
@@ -205,7 +205,7 @@ fn freeze_cells<P>(
         let Some(pair) = build.state[expr.0 as usize].term else {
             continue;
         };
-        if is_unbound(build.module.class_value(pair)) {
+        if build.module.class_value(pair).is_none() {
             continue;
         }
         let key = registry.allocate_cell_key();

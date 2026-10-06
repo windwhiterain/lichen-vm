@@ -105,7 +105,7 @@ impl Analysis {
     /// asks after this.
     pub fn evaluate(&mut self) {
         let root = self.build.root_val;
-        self.build.module.evaluate_node_deep(root, None);
+        let _ = self.build.module.evaluate_node_deep(root, None);
     }
 
     /// Every expression the checker attributed, in index order.
@@ -141,7 +141,7 @@ impl Analysis {
         let width = unsafe { self.build.module.array_items(node) }.map(|items| items.len());
         NodeReport {
             node,
-            unbound: lichen_lowlevel::is_unbound(own),
+            unbound: own.is_none(),
             own,
             class,
             width,
@@ -272,12 +272,11 @@ impl Analysis {
     }
 }
 
-/// A value in a few characters: the marker names a cell that is undecided.
+/// A value in a few characters: `None` names a cell that is undecided.
 fn short(value: Option<&LangValue>) -> String {
     match value {
         None => "None".to_string(),
         Some(LangValue::TypeValue(kind)) => format!("TypeValue({kind:?})"),
-        Some(LangValue::LowValue(LowValue::Parameterized)) => "Parameterized".to_string(),
         Some(LangValue::LowValue(LowValue::Array(_))) => "Array(..)".to_string(),
         Some(LangValue::LowValue(LowValue::Table(_))) => "Table(..)".to_string(),
         Some(other) => format!("{other:?}").chars().take(24).collect(),

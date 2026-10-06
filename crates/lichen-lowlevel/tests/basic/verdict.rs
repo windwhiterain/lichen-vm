@@ -4,9 +4,9 @@
 
 use super::*;
 
-fn usize_of(value: TestValue) -> usize {
-    let TestValue::LowValue(LowValue::USize(n)) = value else {
-        panic!("expected a USize, got {value:?}");
+fn usize_of(value: impl Into<Option<TestValue>>) -> usize {
+    let Some(TestValue::LowValue(LowValue::USize(n))) = value.into() else {
+        panic!("expected a USize");
     };
     n
 }
@@ -161,6 +161,6 @@ fn an_operand_the_pass_never_walked_certifies_the_node() {
     let twenty_two = usize_node(&mut m, root, 22);
     let first = call_node(&mut m, root, func_node, eleven);
     let second = call_node(&mut m, root, func_node, twenty_two);
-    assert_eq!(usize_of(m.evaluate_node_deep(first, None)), 1);
-    assert_eq!(usize_of(m.evaluate_node_deep(second, None)), 1);
+    assert_eq!(usize_of(m.evaluate_node_deep(first, None).unwrap()), 1);
+    assert_eq!(usize_of(m.evaluate_node_deep(second, None).unwrap()), 1);
 }

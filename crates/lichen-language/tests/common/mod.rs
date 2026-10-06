@@ -69,20 +69,24 @@ fn finish(
 ) -> (Module<LangProgram>, LangValue, NodeId) {
     let mut module = build.module;
     let value = module.evaluate_node_deep(build.root_val, None);
-    module.evaluate_node_deep(build.root_ty, None);
+    let _ = module.evaluate_node_deep(build.root_ty, None);
     // Mirror `run::render_build`'s refusal gate: a runtime refusal explains a
     // value that never arrived, so a program that produced nothing while a
     // refusal was recorded is a failure, not an empty answer.
-    let produced_nothing = matches!(
-        AsEnum::<LowValue>::as_enum(&value),
-        Some(LowValue::Parameterized | LowValue::Error)
-    );
+    let produced_nothing = match value {
+        None => true,
+        Some(value) => matches!(value.as_enum(), Some(LowValue::Error)),
+    };
     assert!(
         !(produced_nothing && !module.extension_diagnostics.is_empty()),
         "a runtime refusal was recorded: {:?}",
         module.extension_diagnostics
     );
-    (module, value, build.root_ty)
+    (
+        module,
+        value.expect("the program's root value is undecided"),
+        build.root_ty,
+    )
 }
 
 /// The `usize` scalar behind a value.
@@ -196,10 +200,7 @@ pub fn type_is_float(module: &Module<LangProgram>, node: NodeId) -> bool {
 }
 
 /// Whether a type node is an undecided cell (what the printer spells `?` or a
-/// named `?a`): its value is the lazy marker, or it holds nothing at all.
+/// named `?a`): it holds nothing at all — an empty slot.
 pub fn type_is_undecided(module: &Module<LangProgram>, node: NodeId) -> bool {
-    match module.node_value(AnyNodeId::Dynamic(node)) {
-        None => true,
-        Some(value) => matches!(value.as_enum(), Some(LowValue::Parameterized)),
-    }
+    module.node_value(AnyNodeId::Dynamic(node)).is_none()
 }

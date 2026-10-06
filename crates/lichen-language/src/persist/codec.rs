@@ -177,7 +177,6 @@ mod codec_roundtrip {
             LangValue::LowValue(LowValue::USize(41)),
             LangValue::LowValue(LowValue::None),
             LangValue::LowValue(LowValue::Error),
-            LangValue::LowValue(LowValue::Parameterized),
             LangValue::LowValue(LowValue::Str("hello")),
             LangValue::TypeValue(TypeValue::TypeId(7)),
             LangValue::ComputeValue(::lichen_compute::ComputeValue::TypeBuffer),

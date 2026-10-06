@@ -63,15 +63,10 @@ where
         if self.path.contains(node) {
             return "…".to_string();
         }
-        // A value-less node is an unbound cell: the lazy marker is the
-        // honest stand-in so it routes to the class name.
-        let value = self
-            .module
-            .node_value(AnyNodeId::Dynamic(node))
-            .unwrap_or_else(|| P::Value::from(LowValue::Parameterized));
-        if matches!(value.as_enum(), Some(LowValue::Parameterized)) {
+        // A value-less node is an unbound cell: it renders as its class name.
+        let Some(value) = self.module.node_value(AnyNodeId::Dynamic(node)) else {
             return self.class_name(node);
-        }
+        };
         self.path.insert(node);
         let out = self.value(node, value);
         self.path.remove(node);
@@ -126,9 +121,6 @@ where
                 LowValue::Table(_) => "Table".to_string(),
                 LowValue::Function(_) => "Function".to_string(),
                 LowValue::None | LowValue::Error => "none".to_string(),
-                LowValue::Parameterized => {
-                    unreachable!("handled by node()")
-                }
             };
         }
         self.type_constant(&value)
@@ -345,7 +337,7 @@ where
                 representative(self.module, slot1) == representative(self.module, node)
             }
             AnyNodeId::Static(sref) => matches!(
-                self.module.static_read(sref).as_enum(),
+                self.module.static_read(sref).and_then(|value| value.as_enum()),
                 Some(LowValue::Array(array))
                     if unsafe { array.items() }.get(1)
                         .is_some_and(|item| item.node == AnyNodeId::Static(sref))
@@ -426,18 +418,15 @@ where
         if !visiting.insert(sref) {
             return "…".to_string();
         }
-        let value = self.module.node_value(AnyNodeId::Static(sref));
-        if value.is_none_or(|v| matches!(v.as_enum(), Some(LowValue::Parameterized))) {
+        let Some(value) = self.module.node_value(AnyNodeId::Static(sref)) else {
             visiting.remove(&sref);
             return self.static_class_name(sref);
-        }
-        let value = value.unwrap();
+        };
         let out = match value.as_enum() {
             Some(LowValue::USize(n)) => n.to_string(),
             // As in `value`: the float's digits, not the marker's name.
             Some(LowValue::Float(value)) => float_literal(value),
             Some(LowValue::Str(s)) => format!("\"{s}\""),
-            Some(LowValue::Parameterized) => self.static_class_name(sref),
             // An empty value is a concrete value, never a class letter.
             Some(LowValue::None | LowValue::Error) => "none".to_string(),
             Some(LowValue::Function(_)) => "Function".to_string(),

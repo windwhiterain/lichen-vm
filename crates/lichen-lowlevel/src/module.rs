@@ -134,9 +134,9 @@ impl<P: Program> Module<P> {
         self.blocks[block].nodes.push(node);
         // Allocation with a concrete value is the second of the two value-write
         // sites (`write_node_value` is the first), so the observation runs here
-        // too — otherwise a literal, a marker, or a freshly built array would
+        // too — otherwise a literal or a freshly built array would
         // carry no low type at all, and only the evaluated spine ever would.
-        if let Some(value) = value.filter(|v| !is_unbound(Some(*v))) {
+        if let Some(value) = value {
             self.observe_class_low_type(node, value);
         }
         node
@@ -249,7 +249,7 @@ impl<P: Program> Module<P> {
     /// A reader may rely on [`Some`] meaning the deep pass
     /// ([`Self::evaluate_node_deep`], [`Self::evaluate_node_forced`]) ran on
     /// this node and [`EvaluatedDeep::parameterized`] recording whether any
-    /// node in its reachable subtree is [`LowValue::Parameterized`] — i.e.
+    /// node in its reachable subtree is undecided — i.e.
     /// whether the pass could **not** prove the subtree concrete.  [`None`]
     /// means concreteness is *unknown*, which a reader must treat as
     /// parameterized, never as proven concrete: the apply clone walk and the
@@ -320,7 +320,7 @@ impl<P: Program> Module<P> {
             "a node's operation is defined once: {node:?} already computes one"
         );
         debug_assert!(
-            is_unbound(self.nodes[node].value),
+            self.nodes[node].value.is_none(),
             "an operation must not be defined on a node that already holds a concrete value: {node:?}"
         );
         self.nodes[node].operation = Some(operation);

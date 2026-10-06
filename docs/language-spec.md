@@ -733,7 +733,7 @@ maps every span back to the original file.
   the rest: `((x => x) : (Int -> _)) 5` fixes the input to `Int` and infers
   the output.  In value position the same hole is a *typed* hole: `_ : Int`
   checks as an underdetermined `Int` value (its value cell stays unbound,
-  reading `Parameterized`), and `f _` / `(1, _)` unify the hole's type with
+  an empty slot), and `f _` / `(1, _)` unify the hole's type with
   the context.  Kinding is deferred for `_` like any unbound type, so `_`
   never raises a kinding error; a `_` that never binds leaves the type
   underdetermined — not an error — and a mismatch against a

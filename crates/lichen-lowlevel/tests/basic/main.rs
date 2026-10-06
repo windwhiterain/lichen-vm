@@ -208,17 +208,12 @@ impl OperatorExt<TestProgram> for TestOperator {
                 }
                 TestOperator::Id => operand,
                 // Binary ops receive their operands as an array of two node
-                // ids; the elements are already evaluated.  A parameterized
-                // operand means the body is still a template being defined —
-                // stay lazy so the definition pass can flag it.
+                // ids; the elements are already evaluated.
                 TestOperator::Add
                 | TestOperator::Sub
                 | TestOperator::Concat
                 | TestOperator::Eq
                 | TestOperator::Lt => {
-                    if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
-                        return TestValue::LowValue(LowValue::Parameterized);
-                    }
                     let Some(LowValue::Array(operands)) = operand.as_enum() else {
                         unreachable!("binary ops expect an array of two node ids")
                     };
@@ -262,15 +257,12 @@ impl OperatorExt<TestProgram> for TestOperator {
                 }
             }
         })();
-        if matches!(value.as_enum(), Some(LowValue::Parameterized)) {
-            return None;
-        }
         Some(value)
     }
 }
 
-fn u128_of(value: TestValue) -> u128 {
-    let TestValue::U128(payload) = value else {
+fn u128_of(value: impl Into<Option<TestValue>>) -> u128 {
+    let Some(TestValue::U128(payload)) = value.into() else {
         panic!("expected U128")
     };
     let ptr = match payload {
@@ -284,8 +276,8 @@ fn u128_of(value: TestValue) -> u128 {
     )
 }
 
-fn string_of(value: TestValue) -> Vec<char> {
-    let TestValue::String(payload) = value else {
+fn string_of(value: impl Into<Option<TestValue>>) -> Vec<char> {
+    let Some(TestValue::String(payload)) = value.into() else {
         panic!("expected String")
     };
     match payload {
@@ -297,8 +289,9 @@ fn string_of(value: TestValue) -> Vec<char> {
 // --- builders ---------------------------------------------------------
 
 /// Unwrap a function value known to be dynamic (all test-built values).
-fn dyn_function(value: TestValue) -> FunctionId {
-    let TestValue::LowValue(LowValue::Function(func)) = value else {
+fn dyn_function(value: impl Into<Option<TestValue>>) -> FunctionId {
+    let TestValue::LowValue(LowValue::Function(func)) = value.into().expect("expected a function")
+    else {
         panic!("expected a function value")
     };
     let AnyFunctionId::Dynamic(func) = func else {
@@ -359,14 +352,11 @@ fn usize_node(m: &mut Module<TestProgram>, block: BlockId, n: usize) -> NodeId {
     m.add_node(block, None, Some(TestValue::LowValue(LowValue::USize(n))))
 }
 
-/// An unbound cell — `TestValue::LowValue(LowValue::Parameterized)`, so deep evaluation stays
-/// lazy instead of panicking on a missing operation.
+/// An unbound cell — an **empty node slot**, which is undecided's only in-VM
+/// representation, so deep evaluation stays lazy instead of panicking on a
+/// missing operation.
 fn unbound_node(m: &mut Module<TestProgram>, block: BlockId) -> NodeId {
-    m.add_node(
-        block,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    )
+    m.add_node(block, None, None)
 }
 
 fn unit_node(m: &mut Module<TestProgram>, block: BlockId) -> NodeId {
@@ -383,8 +373,9 @@ fn op_node(
 }
 
 /// The node ids inside `value` if it's an array (test arrays are dynamic).
-fn array_ids(value: TestValue) -> Vec<NodeId> {
-    let TestValue::LowValue(LowValue::Array(array)) = value else {
+fn array_ids(value: impl Into<Option<TestValue>>) -> Vec<NodeId> {
+    let TestValue::LowValue(LowValue::Array(array)) = value.into().expect("expected an array")
+    else {
         panic!("expected array")
     };
     // SAFETY: the value was just produced by the module under test, whose
@@ -399,8 +390,9 @@ fn array_ids(value: TestValue) -> Vec<NodeId> {
 }
 
 /// The shallow flags inside `value` if it's an array.
-fn array_mask(value: TestValue) -> Vec<bool> {
-    let TestValue::LowValue(LowValue::Array(array)) = value else {
+fn array_mask(value: impl Into<Option<TestValue>>) -> Vec<bool> {
+    let TestValue::LowValue(LowValue::Array(array)) = value.into().expect("expected an array")
+    else {
         panic!("expected array")
     };
     // SAFETY: the value was just produced by the module under test, whose
@@ -412,7 +404,11 @@ fn array_mask(value: TestValue) -> Vec<bool> {
 }
 
 /// Assert `value` is an array whose elements hold the given `u128`s.
-fn assert_u128_array(m: &Module<TestProgram>, value: TestValue, expected: &[u128]) {
+fn assert_u128_array(
+    m: &Module<TestProgram>,
+    value: impl Into<Option<TestValue>>,
+    expected: &[u128],
+) {
     let ids = array_ids(value);
     assert_eq!(ids.len(), expected.len());
     for (&id, &n) in ids.iter().zip(expected) {
@@ -476,11 +472,7 @@ fn function(
 ) -> (NodeId, NodeId, NodeId) {
     let block = m.add_block(None);
     let ret = m.add_node(block, None, None);
-    let param = m.add_node(
-        block,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(block, None, None);
     let asserts_before = m.asserts.len();
     wire(m, ret, param);
     let asserts = m.asserts[asserts_before..]
@@ -547,11 +539,7 @@ fn finish_function(
 /// function value node and id.
 fn recursive_function(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     let body = m.add_block(None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     // Placeholder for the function's own value node: the operand array must
     // reference it before the function exists, so `add_function` (which
     // creates the value node last) cannot be used here.
@@ -591,16 +579,8 @@ fn recursive_function(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
 /// value nodes.
 fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId) {
     let body = m.add_block(None);
-    let f_param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
-    let g_param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let f_param = m.add_node(body, None, None);
+    let g_param = m.add_node(body, None, None);
     // Both value nodes are placeholders: f's body references g before g
     // exists, and vice versa.
     let f_func = m.add_node(body, None, None);
@@ -670,11 +650,7 @@ fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId)
 /// forced.  Returns the function value node and id.
 fn fibonacci(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     let body = m.add_block(None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     // Placeholder for the function's own value node (the operand arrays
     // reference it before the function exists).
     let fib_func = m.add_node(body, None, None);
@@ -722,11 +698,7 @@ fn fibonacci(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
 /// base case, so any evaluation of a call never returns.
 fn unconditional_self_apply(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     let body = m.add_block(None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     let func_node = m.add_node(body, None, None); // placeholder self-ref
     let operands = array_node(m, body, &[func_node, param], None);
     let ret = op_node(
@@ -749,11 +721,7 @@ fn countdown(
     marked: bool,
 ) -> (NodeId, FunctionId, NodeId, NodeId, NodeId) {
     let body = m.add_block(None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     let func_node = m.add_node(body, None, None);
     let one = u128_node(m, body, 1);
     let decrement_ops = array_node(m, body, &[param, one], None);
@@ -789,11 +757,7 @@ fn countdown(
 /// makes that loop endless.
 fn stuck_loop(m: &mut Module<TestProgram>, marked: bool) -> (NodeId, FunctionId) {
     let body = m.add_block(None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     let func_node = m.add_node(body, None, None);
     let one = u128_node(m, body, 1);
     let call_ops = array_node(m, body, &[func_node, param], None);

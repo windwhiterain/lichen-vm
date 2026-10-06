@@ -76,15 +76,15 @@ where
     P::Value: From<LowValue> + AsEnum<LowValue>,
 {
     fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> Option<P::Value> {
-        // The marker produced here *is* "cannot decide yet", which the trait
-        // states as `None`; one conversion at the end covers the early return
-        // and the answer alike.
-        let value = (|| {
+        // An operator that cannot decide yet answers `None`, which is the
+        // trait's own spelling of "undecided"; the closure gives the early
+        // return and the answer one type.
+        (|| {
             let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(&operand) else {
                 // A non-array sort target is a *reported* type error (the checker's
                 // array gate), not an invariant violation — stay lazy rather than
                 // panicking.
-                return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                return None;
             };
             // SAFETY: `array` is the payload of the operand value the VM just
             // evaluated for this operation; its home block is alive for the
@@ -113,12 +113,8 @@ where
                 })
                 .collect();
             let handle = module.alloc_array(&items, block);
-            <P::Value as From<LowValue>>::from(LowValue::Array(handle))
-        })();
-        if matches!(value.as_enum(), Some(LowValue::Parameterized)) {
-            return None;
-        }
-        Some(value)
+            Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle)))
+        })()
     }
 }
 

@@ -24,7 +24,7 @@ immutable, shareable form (`static_module.rs`):
 pub struct StaticModule<P> { key: ModuleKey, nodes: Vec<StaticNode<P>>, functions: Vec<StaticFunction>, arena: Vec<u8> }
 ```
 
-- Every node holds its final answer (or a residual `Parameterized` operation).
+- Every node holds its final answer (or nothing, for a residual operation).
 - Payloads (array item slices, ext-value bytes) are laid out once into a single
   flat `arena: Vec<u8>`.
 - Every value ref is rewritten to static form keyed by `Self::key` — **absolute

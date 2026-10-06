@@ -57,11 +57,16 @@ where
 {
     let mut module = build.module;
     let value = module.evaluate_node_deep(build.root_val, None);
-    module.evaluate_node_deep(build.root_ty, None);
-    let produced_nothing = matches!(
-        AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value),
-        Some(lichen_lowlevel::LowValue::Parameterized | lichen_lowlevel::LowValue::Error)
-    );
+    let _ = module.evaluate_node_deep(build.root_ty, None);
+    // An undecided root is `None` — the empty slot — and a budget-refused one
+    // is the computed-nothing value.
+    let produced_nothing = match value {
+        None => true,
+        Some(value) => matches!(
+            AsEnum::<lichen_lowlevel::LowValue>::as_enum(&value),
+            Some(lichen_lowlevel::LowValue::Error)
+        ),
+    };
     if produced_nothing && !module.extension_diagnostics.is_empty() {
         // The refusing layer's own text, rendered by the host that owns the
         // message channel — see `docs/notes/compiler-plugin.md`.  No span: the
@@ -91,6 +96,10 @@ where
             print_type_lang::<P>(&module, build.root_ty)
         ));
     }
+    // An **undecided** root — an empty slot — has no value of its own, so it
+    // renders as the printer's no-value reading, exactly as a value-less
+    // element already does.
+    let value = value.unwrap_or_else(|| P::Value::from(lichen_lowlevel::LowValue::None));
     Ok(format!(
         "{}{}: {}",
         print_value_lang::<P>(&module, value, build.root_ty),

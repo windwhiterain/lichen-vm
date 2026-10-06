@@ -37,8 +37,8 @@ fn type_values_read_as_none_through_the_lowlevel_view() {
 #[test]
 fn markers_read_as_their_structural_self() {
     assert_eq!(
-        AsEnum::<LowValue>::as_enum(&HighProgramValue::LowValue(LowValue::Parameterized)),
-        Some(LowValue::Parameterized)
+        AsEnum::<LowValue>::as_enum(&HighProgramValue::LowValue(LowValue::Error)),
+        Some(LowValue::Error)
     );
     assert_eq!(
         AsEnum::<LowValue>::as_enum(&HighProgramValue::LowValue(LowValue::None)),

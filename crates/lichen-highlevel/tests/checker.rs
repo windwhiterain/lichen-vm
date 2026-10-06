@@ -342,7 +342,7 @@ fn an_error_block_is_skipped_and_never_cascades() {
     // surrounding context, so they have no value and no type conflict.
     let ty_cell = b.state[e].ty.unwrap();
     assert!(
-        lichen_lowlevel::is_unbound(b.module.node_value(AnyNodeId::Dynamic(ty_cell))),
+        b.module.node_value(AnyNodeId::Dynamic(ty_cell)).is_none(),
         "the type cell is a fresh, unbound cell"
     );
 }
@@ -772,7 +772,7 @@ fn built_program_runs_to_a_value() {
     let b = build(whole, ir);
     assert!(b.ok);
     let mut module = b.module;
-    let value = module.evaluate_node_deep(b.root_val, None);
+    let value = module.evaluate_node_deep(b.root_val, None).unwrap();
     assert!(matches!(
         value,
         HighProgramValue::LowValue(LowValue::USize(5))
@@ -806,7 +806,7 @@ fn inline_lambda_applies() {
     }
     assert!(b.ok);
     let mut module = b.module;
-    let value = module.evaluate_node_deep(b.root_val, None);
+    let value = module.evaluate_node_deep(b.root_val, None).unwrap();
     assert!(matches!(
         value,
         HighProgramValue::LowValue(LowValue::USize(5))
@@ -828,7 +828,7 @@ fn nested_polymorphic_applies_run() {
     let b = build(whole, ir);
     assert!(b.ok);
     let mut module = b.module;
-    let value = module.evaluate_node_deep(b.root_val, None);
+    let value = module.evaluate_node_deep(b.root_val, None).unwrap();
     assert!(matches!(
         value,
         HighProgramValue::LowValue(LowValue::USize(5))
@@ -1144,7 +1144,7 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
     let whole = app(&mut ir, call1, four);
     let mut b = build(whole, ir);
     assert!(b.ok, "the closure program must check");
-    let value = b.module.evaluate_node_deep(b.root_val, None);
+    let value = b.module.evaluate_node_deep(b.root_val, None).unwrap();
     let ids = array_ids_from(value);
     let expected = [1usize, 2, 3, 4];
     assert_eq!(ids.len(), expected.len());
@@ -1232,12 +1232,17 @@ fn tuple_index_selects_value_and_type() {
     assert!(b.ok, "(1, 2)[0] should check");
     assert!(
         matches!(
-            b.module.evaluate_node_deep(b.state[idx].val.unwrap(), None),
+            b.module
+                .evaluate_node_deep(b.state[idx].val.unwrap(), None)
+                .unwrap(),
             HighProgramValue::LowValue(LowValue::USize(1))
         ),
         "the value is the selected element"
     );
-    let ty_val = b.module.evaluate_node_deep(b.state[idx].ty.unwrap(), None);
+    let ty_val = b
+        .module
+        .evaluate_node_deep(b.state[idx].ty.unwrap(), None)
+        .unwrap();
     assert!(
         is_int_type_value(&b, ty_val),
         "the type is the element type"
@@ -1261,12 +1266,17 @@ fn array_index_selects_value_and_type() {
     assert!(b.ok, "[1, 2, 3][1] should check");
     assert!(
         matches!(
-            b.module.evaluate_node_deep(b.state[idx].val.unwrap(), None),
+            b.module
+                .evaluate_node_deep(b.state[idx].val.unwrap(), None)
+                .unwrap(),
             HighProgramValue::LowValue(LowValue::USize(2))
         ),
         "the value is the selected element"
     );
-    let ty_val = b.module.evaluate_node_deep(b.state[idx].ty.unwrap(), None);
+    let ty_val = b
+        .module
+        .evaluate_node_deep(b.state[idx].ty.unwrap(), None)
+        .unwrap();
     assert!(
         is_int_type_value(&b, ty_val),
         "the type is the element type"
@@ -2086,10 +2096,9 @@ fn an_underscore_annotation_binds_a_function_type() {
     // The template's parameter type cell stays unbound.
     let fid = function_type_id(&b, b.state[l].ty.unwrap());
     assert!(
-        lichen_lowlevel::is_unbound(
-            b.module
-                .node_value(AnyNodeId::Dynamic(param_type_cell(&b, fid)))
-        ),
+        b.module
+            .node_value(AnyNodeId::Dynamic(param_type_cell(&b, fid)))
+            .is_none(),
         "the template's parameter type must not be guessed"
     );
 }
@@ -2113,10 +2122,9 @@ fn partial_inference_in_an_arrow_type() {
     // the template).
     let fid = function_type_id(&b, b.state[l].ty.unwrap());
     assert!(
-        lichen_lowlevel::is_unbound(
-            b.module
-                .node_value(AnyNodeId::Dynamic(param_type_cell(&b, fid)))
-        ),
+        b.module
+            .node_value(AnyNodeId::Dynamic(param_type_cell(&b, fid)))
+            .is_none(),
         "the template's parameter type must not be guessed"
     );
 }
@@ -2180,22 +2188,31 @@ fn shallow_array_is_masked_and_typed_like_a_tuple() {
     let arr = ir.alloc_shallow_array(&[(one, 0), (two, usize::MAX)]);
     let mut b = build(arr, ir);
     assert!(b.ok, "the shallow array should check");
-    let value = b.module.evaluate_node_deep(b.state[arr].val.unwrap(), None);
+    let value = b
+        .module
+        .evaluate_node_deep(b.state[arr].val.unwrap(), None)
+        .unwrap();
     assert_eq!(
         array_mask_from(value),
         [false, true],
         "position 1 is marked"
     );
-    let ty_val = b.module.evaluate_node_deep(b.state[arr].ty.unwrap(), None);
+    let ty_val = b
+        .module
+        .evaluate_node_deep(b.state[arr].ty.unwrap(), None)
+        .unwrap();
     let HighProgramValue::LowValue(LowValue::Array(ty_pair)) = ty_val else {
         panic!("expected a type pair");
     };
-    let kind_val = b.module.evaluate_node_deep(
-        // SAFETY: `ty_pair` is the value just evaluated by the build under
-        // test, whose block has not been dropped.
-        dyn_node(unsafe { ty_pair.items() }[1].node),
-        None,
-    );
+    let kind_val = b
+        .module
+        .evaluate_node_deep(
+            // SAFETY: `ty_pair` is the value just evaluated by the build under
+            // test, whose block has not been dropped.
+            dyn_node(unsafe { ty_pair.items() }[1].node),
+            None,
+        )
+        .unwrap();
     let HighProgramValue::LowValue(LowValue::Array(kind)) = kind_val else {
         panic!("expected a kind expression");
     };
@@ -2261,7 +2278,8 @@ fn a_read_of_a_shallow_position_forces_the_element() {
     assert!(b.ok, "the read should check");
     assert_eq!(
         b.module
-            .evaluate_node_deep(b.state[read].val.unwrap(), None),
+            .evaluate_node_deep(b.state[read].val.unwrap(), None)
+            .unwrap(),
         HighProgramValue::LowValue(LowValue::USize(6)),
         "the read forces the apply at the masked position"
     );
@@ -2658,7 +2676,7 @@ fn an_annotated_tuple_parameter_function_reads_an_element() {
     assert!(b.ok, "f (1, 2) against the tuple domain must check");
     // And actually evaluate it: the apply's parameter check runs there.
     let mut module = b.module;
-    let value = module.evaluate_node_deep(b.root_val, None);
+    let value = module.evaluate_node_deep(b.root_val, None).unwrap();
     for e in &module.unify_errors {
         eprintln!(
             "PROBE tuple read eval error: a={:?} b={:?} va={:?} vb={:?} steps={:?}",
@@ -2704,7 +2722,7 @@ fn a_wrappers_parameter_type_is_inferred_from_a_body_call() {
     let gid = function_type_id(&b, gtype);
     let cell = param_type_cell(&b, gid);
     assert!(
-        !lichen_lowlevel::is_unbound(b.module.node_value(AnyNodeId::Dynamic(cell))),
+        b.module.node_value(AnyNodeId::Dynamic(cell)).is_some(),
         "the wrapper's parameter type must be inferred from the body call"
     );
 }

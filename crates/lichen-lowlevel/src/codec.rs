@@ -253,7 +253,6 @@ impl ValueCodec for LowValue {
             // value.  The variant was named `Void` when tag 7 was introduced;
             // the rename is source-level only, so the tag is unchanged.
             LowValue::Error => w.u8(7),
-            LowValue::Parameterized => w.u8(4),
             LowValue::Str(s) => {
                 w.u8(5);
                 w.u32(s.len() as u32);
@@ -299,7 +298,17 @@ impl ValueCodec for LowValue {
             }
             3 => LowValue::None,
             7 => LowValue::Error,
-            4 => LowValue::Parameterized,
+            // Tag 4 is **reserved**: it named the deleted `Parameterized`
+            // marker.  An artifact that carries it was written by a version
+            // that still had the marker, and its undecided values must be
+            // refused by name rather than silently read as something else.
+            4 => {
+                return Err(
+                    "artifact carries lowlevel value tag 4, the deleted `Parameterized` marker: \
+                     it was written by a version that still had that marker"
+                        .into(),
+                );
+            }
             5 => {
                 let len = r.u32()? as usize;
                 let bytes = r.take(len)?;
