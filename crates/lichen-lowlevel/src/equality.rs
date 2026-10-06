@@ -739,7 +739,8 @@ impl<P: Program> Module<P> {
     /// Unify two function types by descending into the two functions' own
     /// cells, the same treatment two arrays get: the parameter pairs unify
     /// positionally (value against value, type against type, attribute against
-    /// attribute) and the two return type cells unify.
+    /// attribute), the two return type cells unify, and the two classes merge
+    /// once the elements agree.  **The same rule, not a lookalike.**
     ///
     /// There is no hook here and no clone, because there is nothing left for a
     /// host to decide.  The old policy had to ask its host *where* a function
@@ -748,6 +749,23 @@ impl<P: Program> Module<P> {
     /// module's — which is how a wrapper in an imported module ended up
     /// reporting `struct<.I raw[?a, ?b], .O raw[?c, ?d]>` for a kernel whose
     /// domain and codomain are plain types (`docs/notes/function-type-merge.md`).
+    ///
+    /// **What this arm does not compare, and what the merge therefore says.**
+    /// The descent names the signature's two positions and never reads slot 0,
+    /// because slot 0 is the function the type is attached to rather than a
+    /// component of the type.  A merged class keeps **one** carrier and a class
+    /// of two function types has two, so the merge takes the left's
+    /// ([`Self::add_equality`]) and the merged class answers with one of the two
+    /// functions' identities — which one depending on the order the traversal
+    /// reached them.  That is a real hole: a later unify through the merged
+    /// class descends into whichever signature the carrier names.
+    ///
+    /// It is left open on purpose.  The question it belongs to is sub-typing —
+    /// whether two signatures that agree are *the same type* or a subtype
+    /// relation, and a type class with two identities in it is a symptom of
+    /// answering that question positionally before it has been asked.  A special
+    /// case here would not fix it, only hide it behind an asymmetry with arrays
+    /// that the next change would have to unlearn.
     fn unify_function_types(
         &mut self,
         ra: NodeId,
@@ -764,13 +782,10 @@ impl<P: Program> Module<P> {
             self.record_error(ra, rb, steps, root);
             return false;
         }
-        // **The two classes stay apart.**  A function type is a self-cycle, so
-        // merging the two nodes would put both functions' `Function` values in
-        // one class — and whichever value a reader then finds is whichever
-        // function the merge happened to carry, so `f`'s type would answer
-        // with `g`'s value.  The clone-on-unify policy this arm replaces made
-        // the same choice for the same reason: the signature cells are bound
-        // and the *type nodes* keep their identity.
+        // The elements agree, so the two function types are one type — the same
+        // merge the array arm makes, with no value written back, because both
+        // sides already carry one.
+        self.add_equality(ra, rb);
         true
     }
 
