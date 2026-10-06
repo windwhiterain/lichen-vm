@@ -3,13 +3,11 @@
   doc = "Euclid's algorithm — the shape a real algorithm has: a recursive function
 whose base case is a comparison and whose step is a remainder.  The parameter is a
 pair, so the recursion carries both numbers.  A function's type is the function
-itself (`f : f`), and unifying it clones the signature rather than binding the
-template — so an annotation `: <Int, Int> -> Int` *checks* the signature but does
-not fix a self-recursive result's type, which stays undetermined (`raw 6: ?a`)
-until a separate recursive-type mechanism lands.  The value is still the right
-number — the `raw` mark says the printer dumped it rather than reading it
-against a type, which is exactly what an undetermined type means."
-  output = "raw 6: ?a"
+itself (`f : f`), and an annotation states one by binding that function's own two
+cells — so `: <Int, Int> -> Int` *is* the constraint rather than a check beside it,
+and the self-recursive result's type follows from it (`6: Int`).  Nothing carries
+the `raw` mark, because the type is decided."
+  output = "6: Int"
 ---
 gcd = (p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : <Int, Int> -> Int
 gcd (48, 18)

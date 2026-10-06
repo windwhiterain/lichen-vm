@@ -158,11 +158,21 @@ fn an_array_value_keeps_brackets() {
 
 #[test]
 fn a_compound_type_value_renders_in_type_syntax() {
-    // `Int -> Int` as a value is the shape `[Int, Int]`; read against its
-    // kind it prints as the arrow, not the raw pair.
-    assert_eq!(output("Int -> Int"), "Int -> Int: TypeFunction");
+    // A tuple or array type expression is a value whose value *is* the type,
+    // so the value reads in type syntax and its own type is the kind.
+    // A written arrow is not in this test any more: it is a function
+    // (see `a_written_arrow_is_a_function`).
     assert_eq!(output("<Int, Type>"), "<Int, Type>: TypeTuple");
     assert_eq!(output("array<Int, 3>"), "array<Int, 3>: TypeArray");
+}
+
+#[test]
+fn a_written_arrow_is_a_function() {
+    // `Int -> Int` in a type position lowers to a real function, so what the
+    // program evaluates is that function — not a compound type value with the
+    // function kind as its type.  Its own type is its signature, which reads
+    // back as the arrow it was written with.
+    assert_eq!(output("Int -> Int"), "Function: Int -> Int");
 }
 
 #[test]
