@@ -126,6 +126,55 @@ comparison is the write rule's own question; the class's *value* is still read
 through the representative (`class_value`) — what is member-local is the write
 rule's test, not the read API.
 
+### 1.1.1 The invariant this rule exists to keep
+
+**A class holds one value; a node's own answer is a separate, per-node fact.**
+Both are needed, and the rule above is what keeps them apart:
+
+- an operator's answer is written into **its own slot** by
+  `write_node_answer` (`crates/lichen-lowlevel/src/equality.rs`), and is
+  reconciled against the class's value through the one unification;
+- the class's value reaches the members only through
+  `propagate_class_value`, and that walk **skips operation-bearing members**;
+- `runned` therefore means exactly *this operator produced the answer in this
+  slot*, which is what [`Module::has_no_result_yet`] reads and what stops a
+  second run.
+
+**Both halves must stay separate, and each has a reader.**  The class value is
+read by the unifier (`class_committed_value`) and by the class channel's
+consumers; the node's own answer is read by the evaluator's
+`if let Some(value) = node.value` arm, which returns a value it finds there
+**without running the operator**.  If that arm sees a value the operator did not
+produce, the operator never runs: its answer is never reconciled, `runned` never
+becomes true, and the class's value is all any reader can see.
+
+That is what "unconditional propagation" breaks.  A third attempt on the rule
+measured it (branch `feature/unconditional-class-writes`, worktree
+`.worktrees/unconditional-nodes`): the walk visits **every** member and the
+carrier is deleted, keeping the class value in the representative's own slot.
+
+| suite | result |
+|---|---|
+| `--test basic` + lib (`lichen-lowlevel`) | **155 of 155**, unchanged |
+| `--test checker` and the small targets (`lichen-highlevel`) | **87 of 87**, unchanged |
+| `lichen-language --test examples` | **1 failed**: `examples/import/_.lichen` declares `(42, 10, 7)`, prints `(42, none, none)` |
+
+Instrumented, one hypothesis at a time: a write that replaces an operation's
+decided slot with an unbound value (**never fired**), a member write that leaves
+the representative unbound (**never fired**), a merge that drops the class value
+(a `debug_assert_eq!` on `class_committed_value(representative)`, **held all
+suite**).  What the trace did show is the mechanism in numbers: **4069
+propagation writes change an operation member's slot from `None` to the class's
+value**, e.g. `class 17v1 value USize(5)` into operation member `63v1`.  Every
+one of those slots stays `None` under the rule above.
+
+A second step kept the producing operator's own answer while still distributing
+to everyone (`write_node_answer` restores the node's slot after the walk).  The
+unit suites stayed green and the example **still failed the same way** — so the
+producer's own slot is not the whole of it, and this is *not* the class-level
+read that the two refutations below measured.  The invariant above is the one
+that holds.
+
 **Four corrections were needed, and each says something about the rules.**
 
 1. **A refusal is not a report.**  The first version refused the write when the
