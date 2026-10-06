@@ -1,7 +1,7 @@
 //! Tables: the constant `LowValue::Table` — deep-content keys (the pure
 //! coinductive structural equality plus the matching content hash), the
 //! hash-sorted payload, and the `TableGet` read (a miss records an
-//! [`EvalError::TableMiss`] and yields `Void`; an unforceable key is
+//! [`EvalError::TableMiss`] and yields `Error`; an unforceable key is
 //! dropped with a [`EvalError::TableKeyUnbound`] at build).
 
 use super::*;
@@ -66,7 +66,7 @@ fn usize_keys_round_trip_and_misses_record_an_error() {
     let three = usize_node(&mut m, root, 3);
     let get = table_get(&mut m, root, t, three);
     let read = m.evaluate_node_deep(get, None);
-    assert_eq!(read, TestValue::LowValue(LowValue::Void));
+    assert_eq!(read, TestValue::LowValue(LowValue::Error));
     assert_eq!(m.eval_errors.len(), 1);
     let EvalError::TableMiss { key, .. } = m.eval_errors[0] else {
         panic!("a missed read records a TableMiss failure")
@@ -105,7 +105,7 @@ fn keys_are_deep_content_distinct_but_equal_structures_match() {
     let other = array_node(&mut m, root, &[a, c], None);
     let get = table_get(&mut m, root, t, other);
     let read = m.evaluate_node_deep(get, None);
-    assert_eq!(read, TestValue::LowValue(LowValue::Void));
+    assert_eq!(read, TestValue::LowValue(LowValue::Error));
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn an_unbound_key_is_dropped_with_a_recorded_error() {
     // Reading with a still-unbound key does **not** miss: the key is undecided,
     // not absent, so the lookup has not happened yet and the read stays lazy
     // for a later pass, when the key is bound.  (A key that is *decided* and
-    // not key content — a `Void` — does miss; see the next test.)
+    // not key content — an `Error` — does miss; see the next test.)
     let get = table_get(&mut m, root, t, key);
     let read = m.evaluate_node_deep(get, None);
     assert_eq!(
@@ -160,8 +160,8 @@ fn an_unbound_key_is_dropped_with_a_recorded_error() {
 }
 
 #[test]
-fn a_computed_nothing_key_is_never_a_phantom_hit() {
-    // Two *different* failed reads both evaluate to `Void`; neither may key
+fn an_empty_key_is_never_a_phantom_hit() {
+    // Two *different* failed reads both evaluate to `Error`; neither may key
     // a table entry, and the read must miss rather than the two residues
     // colliding on a shared hash token.
     let mut m = Module::new();
@@ -186,7 +186,7 @@ fn a_computed_nothing_key_is_never_a_phantom_hit() {
         &[(AnyNodeId::Dynamic(build_key), AnyNodeId::Dynamic(value))],
     );
 
-    // The entry was dropped at build: a `Void` key is not hashable.
+    // The entry was dropped at build: an `Error` key is not hashable.
     let TestValue::LowValue(LowValue::Table(payload)) =
         m.node_value(AnyNodeId::Dynamic(t)).unwrap()
     else {
@@ -195,7 +195,7 @@ fn a_computed_nothing_key_is_never_a_phantom_hit() {
     assert!(
         // SAFETY: `t` is a live node of `m`, whose block has not been dropped.
         unsafe { payload.items() }.is_empty(),
-        "the `Void`-keyed entry is dropped"
+        "the `Error`-keyed entry is dropped"
     );
     assert!(
         m.eval_errors
@@ -209,7 +209,7 @@ fn a_computed_nothing_key_is_never_a_phantom_hit() {
     let read_key = oob_read(&mut m);
     let get = table_get(&mut m, root, t, read_key);
     let read = m.evaluate_node_deep(get, None);
-    assert_eq!(read, TestValue::LowValue(LowValue::Void));
+    assert_eq!(read, TestValue::LowValue(LowValue::Error));
     assert!(
         m.eval_errors
             .iter()
@@ -322,7 +322,7 @@ fn table_values_key_by_identity() {
     assert_eq!(read, TestValue::LowValue(LowValue::USize(42)));
     let get = table_get(&mut m, root, outer, t2);
     let read = m.evaluate_node_deep(get, None);
-    assert_eq!(read, TestValue::LowValue(LowValue::Void));
+    assert_eq!(read, TestValue::LowValue(LowValue::Error));
 }
 
 #[test]
@@ -623,7 +623,7 @@ fn a_key_of_the_program_s_own_value_vocabulary_is_hashed_not_refused() {
     let get = table_get(&mut m, root, table, other);
     assert_eq!(
         m.evaluate_node_deep(get, None),
-        TestValue::LowValue(LowValue::Void),
+        TestValue::LowValue(LowValue::Error),
         "a different value misses"
     );
     assert!(

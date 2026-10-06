@@ -57,7 +57,7 @@ where
     }
 
     /// Render a type node; an unbound cell renders as its class name.  A
-    /// computed nothing ([`LowValue::Void`]) is a concrete value and renders
+    /// empty value ([`LowValue::Error`]) is a concrete value and renders
     /// as `none` — it is never a fresh class variable.
     pub fn node(&mut self, node: NodeId) -> String {
         if self.path.contains(node) {
@@ -125,7 +125,7 @@ where
                 LowValue::Array(array) => self.elements(node, unsafe { array.items() }),
                 LowValue::Table(_) => "Table".to_string(),
                 LowValue::Function(_) => "Function".to_string(),
-                LowValue::None | LowValue::Void => "none".to_string(),
+                LowValue::None | LowValue::Error => "none".to_string(),
                 LowValue::Parameterized => {
                     unreachable!("handled by node()")
                 }
@@ -438,8 +438,8 @@ where
             Some(LowValue::Float(value)) => float_literal(value),
             Some(LowValue::Str(s)) => format!("\"{s}\""),
             Some(LowValue::Parameterized) => self.static_class_name(sref),
-            // A computed nothing is a concrete value, never a class letter.
-            Some(LowValue::None | LowValue::Void) => "none".to_string(),
+            // An empty value is a concrete value, never a class letter.
+            Some(LowValue::None | LowValue::Error) => "none".to_string(),
             Some(LowValue::Function(_)) => "Function".to_string(),
             Some(LowValue::Table(_)) => "Table".to_string(),
             // SAFETY: `array` is a static payload read through `sref`, whose

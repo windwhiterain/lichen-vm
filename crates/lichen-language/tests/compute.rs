@@ -634,7 +634,8 @@ k
 "#,
     );
     assert_eq!(
-        out, "(raw Kernel, raw Int, raw Int): struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>",
+        out,
+        "(raw Kernel, raw Int, raw Int): struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>",
         "kernel value/type: {out:?}"
     );
 }

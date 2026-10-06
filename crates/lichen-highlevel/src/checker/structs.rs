@@ -1235,8 +1235,8 @@ where
     }
 
     /// The struct name→index table value for a field-name list: the
-    /// [`LowValue::Void`] marker when every field is unnamed (an anonymous
-    /// positional struct has no name table — a *computed nothing*, not the
+    /// [`LowValue::Error`] marker when every field is unnamed (an anonymous
+    /// positional struct has no name table — an *empty value*, not the
     /// unit value), otherwise a constant `Table` mapping each field name to
     /// its positional index.  The table's keys are the field names (string
     /// values), its values the field indices — the map an `a.name` read
@@ -1247,7 +1247,7 @@ where
             return self.alloc_node(
                 self.current_block,
                 None,
-                Some(P::Value::from(LowValue::Void)),
+                Some(P::Value::from(LowValue::Error)),
             );
         }
         let mut entries = Vec::new();
@@ -1271,9 +1271,9 @@ where
     }
 
     /// The struct's field names **in definition order** for a field-name list:
-    /// one array element per definition position, the [`LowValue::Void`] marker
+    /// one array element per definition position, the [`LowValue::Error`] marker
     /// when every field is unnamed (the anonymous positional struct, mirroring
-    /// [`Self::build_struct_names`]), a [`LowValue::Void`] element for an
+    /// [`Self::build_struct_names`]), a [`LowValue::Error`] element for an
     /// unnamed field otherwise.
     ///
     /// This is the marker's `names_in_order` slot — the *inverse* of the
@@ -1287,7 +1287,7 @@ where
             return self.alloc_node(
                 self.current_block,
                 None,
-                Some(P::Value::from(LowValue::Void)),
+                Some(P::Value::from(LowValue::Error)),
             );
         }
         let mut items = Vec::with_capacity(names.len());
@@ -1297,12 +1297,12 @@ where
                 // An unnamed field has no name for a position to state.  Every
                 // struct field must be named (the definition is refused
                 // otherwise), so this is a refused build's hole, not a case a
-                // read resolves through — and a `Void` element reads as the
-                // computed nothing, never as a name.
+                // read resolves through — and an `Error` element reads as the
+                // empty value, never as a name.
                 None => self.alloc_node(
                     self.current_block,
                     None,
-                    Some(P::Value::from(LowValue::Void)),
+                    Some(P::Value::from(LowValue::Error)),
                 ),
             });
         }

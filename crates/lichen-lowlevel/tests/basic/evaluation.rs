@@ -69,7 +69,7 @@ fn index_out_of_bounds_records_an_eval_error() {
 
     // No panic, no element: the failure is recorded as facts instead, and
     // the read yields the computed-nothing value.
-    assert!(matches!(value, TestValue::LowValue(LowValue::Void)));
+    assert!(matches!(value, TestValue::LowValue(LowValue::Error)));
     assert_eq!(m.eval_errors.len(), 1);
     let EvalError::Index {
         index,
@@ -103,7 +103,7 @@ fn out_of_bounds_index_is_recorded_once_and_in_bounds_still_selects() {
 
     assert!(matches!(
         m.evaluate_node_deep(index, None),
-        TestValue::LowValue(LowValue::Void)
+        TestValue::LowValue(LowValue::Error)
     ));
     assert_eq!(m.eval_errors.len(), 1);
     // Re-evaluating the same node reads the cached error result — no
@@ -153,7 +153,7 @@ fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
     assert_eq!(m.eval_errors.len(), 1);
     assert!(matches!(
         m.node_value(AnyNodeId::Dynamic(oob)),
-        Some(TestValue::LowValue(LowValue::Void))
+        Some(TestValue::LowValue(LowValue::Error))
     ));
     assert!(matches!(
         m.node_value(AnyNodeId::Dynamic(param)),
@@ -181,7 +181,7 @@ fn applying_a_non_function_records_an_eval_error() {
 
     // No panic, no call: the failure is recorded as a fact, and the apply
     // yields the computed-nothing value.
-    assert!(matches!(value, TestValue::LowValue(LowValue::Void)));
+    assert!(matches!(value, TestValue::LowValue(LowValue::Error)));
     assert_eq!(m.eval_errors.len(), 1);
     let EvalError::ApplyTarget { function } = m.eval_errors[0] else {
         panic!("applying a non-function records an ApplyTarget failure")
@@ -405,7 +405,7 @@ fn deep_budget_refusal_under_an_extension_operator_records_without_panicking() {
     );
 }
 #[test]
-fn a_block_root_the_budget_refuses_yields_a_computed_nothing() {
+fn a_block_root_the_budget_refuses_yields_an_empty_value() {
     // The delegation into a child block runs a fresh deep pass whose first
     // frame is the child's root.  At the limit the pass refuses before it
     // evaluates the root, so the root caches no value at all and the block's
@@ -425,7 +425,7 @@ fn a_block_root_the_budget_refuses_yields_a_computed_nothing() {
         Some(BudgetExhausted::EvaluateDepth { limit: 2 }),
         "the guard's verdict is the outcome, not a panic"
     );
-    assert!(matches!(value, TestValue::LowValue(LowValue::Void)));
+    assert!(matches!(value, TestValue::LowValue(LowValue::Error)));
 }
 #[test]
 fn a_block_root_that_stays_lazy_is_not_an_internal_error() {

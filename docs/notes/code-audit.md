@@ -678,7 +678,7 @@ so the highlevel attributes the diagnostic to the expression that was applied
 (`diagnostic.rs`'s `RuntimeApplyTarget`, rendered as *"this value is not a
 function — it cannot be applied"*). The `Apply` arm's catch-all is split: a
 scalar, a string, a table, or the unit value records `ApplyTarget` and yields
-`Void`; `Void` propagates silently (it is the residue of an already-recorded
+`Error`; `Error` propagates silently (it is the residue of an already-recorded
 failure); everything else — the program's own value *and* a structural array —
 stayed lazy (`Parameterized`) *at the time of this item*. `P1-21` later made that
 laziness conditional on the program's own dispatch; see its Outcome.
@@ -715,7 +715,7 @@ is now caught in the runtime arm instead.
 
 **Tests.** `crates/lichen-lowlevel/tests/basic/evaluation.rs`'s
 `applying_a_non_function_records_an_eval_error` pins the lowlevel fact (recorded
-exactly once, blamed on the callee node, `Void` yielded), and
+exactly once, blamed on the callee node, `Error` yielded), and
 `crates/lichen-language/tests/pipeline.rs`'s
 `an_apply_of_a_deferred_non_function_reports_a_runtime_apply_target_error` pins
 the user-visible diagnostic for the reproduction. The first was confirmed to fail
@@ -1582,7 +1582,7 @@ before the commit.
 
 Found while fixing `P1-2`, same class, second site: `evaluation.rs`'s
 `evaluate_block` ends with `.expect("evaluated return node")` after
-`evaluate_node_deep(root, None)`. A depth refusal returns `Void` before
+`evaluate_node_deep(root, None)`. A depth refusal returns `Error` before
 `evaluate_node`, so the root's cached value stays `None`, `garbage_collect`
 returns `None`, and the `expect` fires — **after** `drop_block` has already run.
 `Parameterized` is a first-class, expected answer everywhere else in the crate,
@@ -1605,12 +1605,12 @@ let value = self.evaluate_node_deep(root, None);
 self.garbage_collect(root).unwrap_or(value)
 ```
 
-`unwrap_or(value)`, not `unwrap_or_else(Void)`, because the two no-cached-value
+`unwrap_or(value)`, not `unwrap_or_else(Error)`, because the two no-cached-value
 cases answer differently and the pass already said which: a refusal returns
-`Void` *before* `evaluate_node` and never ran anything (its budget verdict is
+`Error` *before* `evaluate_node` and never ran anything (its budget verdict is
 already recorded, so the return is a **propagation** of that verdict, not a
 second report), while a lazy block returns `Parameterized` and must stay lazy —
-yielding `Void` there would forge a "computed nothing" (the residue of a
+yielding `Error` there would forge an empty value (the residue of a
 recorded failure) out of a legitimate "try again later", which readers like the
 `TableGet` arm act on. Both markers are leaf values owned by no arena, so
 neither needs the relocation `garbage_collect` exists to perform; the postlude
@@ -1619,12 +1619,12 @@ pass's answer was one of the two leaves.
 
 **Tests.** Both triggers are pinned in
 `crates/lichen-lowlevel/tests/basic/evaluation.rs`:
-`a_block_root_the_budget_refuses_yields_a_computed_nothing` (limit 2, the
+`a_block_root_the_budget_refuses_yields_an_empty_value` (limit 2, the
 refusal lands on the child block's root; asserts the recorded
-`BudgetExhausted::EvaluateDepth` and a `Void` result) and
+`BudgetExhausted::EvaluateDepth` and an `Error` result) and
 `a_block_root_that_stays_lazy_is_not_an_internal_error` (an unbound operand
 makes the child block's root stay `Parameterized`; asserts the result is
-`Parameterized`, not `Void`). Both were confirmed to fail against the unfixed
+`Parameterized`, not `Error`). Both were confirmed to fail against the unfixed
 line — `panicked at crates\lichen-lowlevel\src\evaluation.rs:717:36: evaluated
 return node` — before the fix. The whole `basic` target (134 tests) passes
 after it.
@@ -2780,7 +2780,7 @@ positional first field. And with an empty struct type (`struct<>`) and an empty
 block (`{}`)
 both unspellable, every reachable struct type now has at least one field and all
 of them named, so
-the name-table-less `Void` struct marker — and `DiagKind::StructAnonymousField`,
+the name-table-less `Error` struct marker — and `DiagKind::StructAnonymousField`,
 the `.name`-argument-against-no-names-table error — is **unreachable from
 source**; it survives only for hand-built IR.
 

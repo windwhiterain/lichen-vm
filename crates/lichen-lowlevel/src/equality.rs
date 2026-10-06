@@ -256,7 +256,7 @@ impl<P: Program> Module<P> {
     ///
     /// O(1) and monotone by construction: only the top-level tag is read, never
     /// the payload.  A value the vocabulary has no shape for (`Str`, the unit
-    /// `None`, a computed-nothing `Void`) states nothing, so it never widens
+    /// `None`, an empty `Error`) states nothing, so it never widens
     /// and never narrows; a value that refines nothing leaves the class
     /// untouched.  Called from both value-write sites — [`Self::write_node_value`]
     /// and [`Module::add_node`].
@@ -1107,7 +1107,7 @@ fn node_or_default(id: AnyNodeId) -> NodeId {
 /// the payload — the observation half of the low-type layer.
 ///
 /// `None` for a value the vocabulary has no shape for: the `Str` literal, the
-/// unit `None`, a computed-nothing `Void`, and the undecided `Parameterized`
+/// unit `None`, an empty `Error`, and the undecided `Parameterized`
 /// marker.  Those state nothing at all, which is what keeps observation from
 /// ever widening a class it knows more about.
 ///

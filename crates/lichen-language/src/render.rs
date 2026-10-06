@@ -371,7 +371,7 @@ where
             _ => {
                 let value = match d.assert_value.as_ref().and_then(|v| v.as_enum()) {
                     Some(LowValue::USize(n)) => n.to_string(),
-                    Some(LowValue::None | LowValue::Void) => "none".to_string(),
+                    Some(LowValue::None | LowValue::Error) => "none".to_string(),
                     Some(other) => format!("{other:?}"),
                     None => "—".to_string(),
                 };

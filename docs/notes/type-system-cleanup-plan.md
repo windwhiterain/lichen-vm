@@ -120,7 +120,7 @@ are implemented but undocumented, `docs/README.md` indexes 14 of 30 notes).
 | B5 | **`Ctx::value_node` omitted `type_marker`** → non-canonical universe node | **fixed** (`ab03da4`) |
 | B6 | **Freeze layout fragility**: double payload copy; write/read arena-base alignment mismatch | **fixed** (`cfe6f44`): shared `arena_align::<P>()`, single copy, invariant-checked lookup |
 | B7 | **`TypeOperator` semantics duplicated ×3 and divergent** (`Eq` USize-only vs generalized) | **fixed** (`bd0d30b`): one program-generic blanket impl carrying the spec's generalized `==`; both copies deleted |
-| B8 | **`LowValue::None` conflates "unbound" with "computed nothing"** (five meanings; predicates disagree; lazy named-read over an anonymous struct hit `unreachable!` misreported as `NonTerminating` — probe-confirmed) | **fixed** (`816b886`): new `LowValue::Void` for computed-nothing (additive codec tag 7; `None` keeps tag 3 as the unit value), `is_unbound` = `Parameterized`-only, defined arms for TableGet/Index/assert/printer/key_hash, `Doc::missing_value` → `Parameterized`, diagnostic dedup keyed by (kind, node) |
+| B8 | **`LowValue::None` conflates "unbound" with "computed nothing"** (five meanings; predicates disagree; lazy named-read over an anonymous struct hit `unreachable!` misreported as `NonTerminating` — probe-confirmed) | **fixed** (`816b886`): new `LowValue::Void` (renamed `LowValue::Error` afterwards) for computed-nothing (additive codec tag 7; `None` keeps tag 3 as the unit value), `is_unbound` = `Parameterized`-only, defined arms for TableGet/Index/assert/printer/key_hash, `Doc::missing_value` → `Parameterized`, diagnostic dedup keyed by (kind, node) |
 
 ## 3. The keystone: name the encoding once (Phase 1)
 
@@ -220,7 +220,8 @@ Either way, independent of D1:
   diagnostic channel".)
 - ~~Resolve the `LowValue::None` ambiguity (B8): `is_unbound` should match only
   `Parameterized`; a nullary-op result and an error yield need distinct
-  representation.~~ **Done in Phase 0, as B8** (`816b886`): `LowValue::Void` is
+  representation.~~ **Done in Phase 0, as B8** (`816b886`): `LowValue::Void` —
+  renamed `LowValue::Error` afterwards, source-level only — is
   the computed-nothing value and `is_unbound` matches `Parameterized` only —
   see the B8 row in §2.
 - Consolidate the four parallel structural-descent implementations
@@ -307,8 +308,8 @@ Either way, independent of D1:
   | Site | Class | Evidence | New behaviour |
   |---|---|---|---|
   | `highlevel/src/checker.rs` | user-reachable, check time | a package whose last statement is a raw read (`[1, 2]<0>`), imported by another file | a recorded `ImportExport` guard at the import's location; the expression still compiles to a pair of fresh cells, so the descent stays total |
-  | `lowlevel/src/evaluation.rs:162` | user-reachable, runtime | `a = [1,2,3]` / `i = "x"` / `a[i]`; also `a(k)`, raw `<…>`, and the same through a parameter (`f = x => a[x]`; `f "x"`) | `EvalError::IndexSubscript` + a computed nothing (`Void`), rendered as "this value is not an index" at the subscript's own span |
-  | `lowlevel/src/evaluation.rs:154` (target not an array) | user-reachable, runtime | `f = s => s.x; f (1)` | `EvalError::IndexTarget` + `Void` — done at `62aad04`, kept as the model for the rows above |
+  | `lowlevel/src/evaluation.rs:162` | user-reachable, runtime | `a = [1,2,3]` / `i = "x"` / `a[i]`; also `a(k)`, raw `<…>`, and the same through a parameter (`f = x => a[x]`; `f "x"`) | `EvalError::IndexSubscript` + an empty value (`Error`), rendered as "this value is not an index" at the subscript's own span |
+  | `lowlevel/src/evaluation.rs:154` (target not an array) | user-reachable, runtime | `f = s => s.x; f (1)` | `EvalError::IndexTarget` + `Error` — done at `62aad04`, kept as the model for the rows above |
 
   Every row above previously panicked the process and then reported a *bogus*
   "this binding never terminates" (the caught guard had inflated the depth
@@ -373,7 +374,7 @@ Either way, independent of D1:
   match" for both a key that is **not decided yet** and a key that is decided
   and **simply absent**.  Only the second is a miss.  `key_hash` now reports
   which of the three states it is in (`KeyState`), an undecided key leaves the
-  read lazy, a `Void` key still misses, and a build still drops an undecidable
+  read lazy, an `Error` key still misses, and a build still drops an undecidable
   entry.  The program evaluates to `2`.
 
   The same reasoning fixed a latent hazard found while narrowing it:

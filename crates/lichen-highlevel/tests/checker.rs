@@ -1403,7 +1403,7 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
         Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
     ));
     // a named struct's payload carries a name table in its names slot (the
-    // `Void` marker is the no-names case, reachable only from hand-built IR:
+    // `Error` marker is the no-names case, reachable only from hand-built IR:
     // every source struct type now has named fields).
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(payload_ids[1])),

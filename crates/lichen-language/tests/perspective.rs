@@ -198,9 +198,9 @@ fn a_compound_annotation_rejects_a_narrower_declared_perspective() {
 
 #[test]
 #[ignore = "the mismatch spells `expected none, found none`: the argument's failed read \
-is rendered as a fresh class variable rather than the computed nothing"]
+is rendered as a fresh class variable rather than the empty value"]
 fn a_failed_read_in_an_attribute_renders_as_none() {
-    // The argument's perspective is a failed read — a computed nothing, a
+    // The argument's perspective is a failed read — an empty value, a
     // concrete value.  The mismatch spells it `none`, never a fresh `?a`
     // class variable.
     let source = "f = x # 4 => x\nf (5 # [1,2][3])";

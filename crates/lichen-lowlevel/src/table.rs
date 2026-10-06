@@ -64,7 +64,7 @@
 //! decided content — so a stored key is fully concrete and its hash is
 //! stable for the table's whole life.  A key that cannot be forced concrete
 //! (its subtree holds an unbound cell or a parameterized computation) or
-//! whose content is a computed nothing ([`LowValue::Void`], the residue of
+//! whose content is an empty value ([`LowValue::Error`], the residue of
 //! a failed read) records a [`EvalError::TableKeyUnbound`] and drops the
 //! entry.  Values are stored as lazy refs and read on demand, like array
 //! items.
@@ -95,7 +95,10 @@ const FRONTIER_TOKEN: u64 = 0x6672_6f6e_0000_0005; // "fron"
 const FUNCTION_TOKEN: u64 = 0x6675_6e63_0000_0006; // "func"
 const OPERATION_TOKEN: u64 = 0x6f70_6572_0000_0007; // "oper"
 const UNDECIDED_TOKEN: u64 = 0x756e_6465_0000_0008; // "unde"
-const VOID_TOKEN: u64 = 0x766f_6964_0000_0009; // "void"
+// The bytes are unchanged from when the variant was named `Void`: a key's
+// content hash is compared across a frozen artifact and the module that wrote
+// it, so the token is not free to move with a rename.
+const ERROR_TOKEN: u64 = 0x766f_6964_0000_0009; // "void"
 const EXTENSION_TOKEN: u64 = 0x6578_7465_0000_000a; // "exte"
 const NULL_TOKEN: u64 = 0x6e75_6c6c_0000_000b; // "null"
 /// The fold seed for an array's positional item hashes.
@@ -152,7 +155,7 @@ pub(crate) enum KeyState {
     /// must stay lazy rather than miss.
     Undecided,
     /// The key is decided and will never be key content (it holds a
-    /// [`LowValue::Void`](crate::LowValue::Void), the residue of a failed
+    /// [`LowValue::Error`](crate::LowValue::Error), the residue of a failed
     /// read).  A read can miss.
     Unhashable,
 }
@@ -189,7 +192,7 @@ impl<P: Program> Module<P> {
     /// The deep content hash of `key`, or `None` when the key's subtree is
     /// not fully concrete — its content is not yet decided, so nothing can
     /// be hashed or matched (a build drops the entry, a read misses) — or
-    /// when the content holds a [`LowValue::Void`], the residue of an
+    /// when the content holds a [`LowValue::Error`], the residue of an
     /// already-recorded failed read: not hashable, same class as an unbound
     /// subtree.
     pub(crate) fn key_hash(&mut self, key: AnyNodeId) -> Option<u64> {
@@ -300,13 +303,13 @@ impl<P: Program> Module<P> {
                 .iter()
                 .fold(0u64, |hash, &byte| mix(hash ^ byte as u64)))),
             Some(LowValue::None) => KeyState::Hashed(NONE_TOKEN),
-            // A computed nothing is never key content: it is a failed read's
+            // An empty value is never key content: it is a failed read's
             // residue, so the key is not hashable — the same class as an
             // unbound subtree (a build drops the entry, a read misses).  A
             // template is not key content at all, so there it is only a shape.
-            Some(LowValue::Void) => match mode {
+            Some(LowValue::Error) => match mode {
                 UnfoldMode::Key => KeyState::Unhashable,
-                UnfoldMode::Template => KeyState::Hashed(VOID_TOKEN),
+                UnfoldMode::Template => KeyState::Hashed(ERROR_TOKEN),
             },
             // Undecided content, wherever it sits in the key: the key cannot be
             // hashed yet, and must not collapse onto one constant (two

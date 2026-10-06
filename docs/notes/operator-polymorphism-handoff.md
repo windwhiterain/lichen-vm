@@ -74,7 +74,7 @@ it.
 - The **refinement attribute** (`crates/lichen-highlevel/src/refinement.rs`):
   `e : T ! p` carries **one predicate function** in the pair's tail; `combine`
   returns a fresh unbound cell (**no propagation**); `missing_value` is
-  `Parameterized` (**not** a concrete `Void` — the reconciliation is a plain
+  `Parameterized` (**not** a concrete `Error` — the reconciliation is a plain
   unify, and a concrete absent value could not be written and would conflict);
   `unify_slots` is that plain unify (over-strict on purpose).
 - Enforcement is the **existing assert channel**, through the new

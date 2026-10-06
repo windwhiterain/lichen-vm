@@ -71,7 +71,7 @@ had guessed:
    the field type read as `?a` forever.
 3. **The error half was that same predicate, correct by accident.** A struct
    type value's kind `[[payload, TypeStruct], K]` contains a
-   `LowValue::Table` (the names table; `Void` when anonymous) — a genuine
+   `LowValue::Table` (the names table; `Error` when anonymous) — a genuine
    structural value, correctly judged non-skeleton. With the skeleton merge
    unavailable and the deferral guard unmatched, the unify recorded the
    spurious `expected [?a], found [TypeStruct]` error. `class_holds_type`'s

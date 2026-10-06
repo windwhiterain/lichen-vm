@@ -62,9 +62,9 @@ fn assert_resolves_through_a_computation() {
 }
 
 #[test]
-fn assert_on_a_computed_nothing_fails() {
+fn assert_on_an_empty_value_fails() {
     // A condition whose evaluation fails (an out-of-bounds read) resolves to
-    // the concrete `Void` — a decided value, not an unbound cell — so the
+    // the concrete `Error` — a decided value, not an unbound cell — so the
     // assert FAILS rather than staying untriggered.
     let mut m = Module::new();
     let root = m.add_block(None);
@@ -82,10 +82,10 @@ fn assert_on_a_computed_nothing_fails() {
 
     m.check_asserts();
 
-    assert_eq!(m.assert_errors.len(), 1, "a `Void` condition fails");
+    assert_eq!(m.assert_errors.len(), 1, "an `Error` condition fails");
     assert_eq!(
         m.assert_errors[0].value,
-        TestValue::LowValue(LowValue::Void),
+        TestValue::LowValue(LowValue::Error),
         "the failed read's residue is recorded"
     );
     assert!(

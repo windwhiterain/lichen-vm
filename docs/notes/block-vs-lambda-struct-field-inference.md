@@ -459,9 +459,9 @@ Operand (one array node, three items):
 Evaluation (mirror the `LowOperator::Apply` arm in
 `crates/lichen-lowlevel/src/evaluation.rs`):
 
-1. Evaluate the operand array; propagate `Parameterized`/`Void` markers
-   exactly as the `Apply`/`Index` arms do — **never** answer `Void` for an
-   unbound callee (the apply-frame note in `apply.rs` says why: a `Void`
+1. Evaluate the operand array; propagate `Parameterized`/`Error` markers
+   exactly as the `Apply`/`Index` arms do — **never** answer `Error` for an
+   unbound callee (the apply-frame note in `apply.rs` says why: an `Error`
    caches as a decided value and certifies the node concrete).
 2. Evaluate slot 0 (the callee).  Read element 0 of its value pair — the
    field-type shape.  A callee that is not a readable struct pair was
@@ -522,7 +522,7 @@ Nothing else in the checker changes: `named_instantiate`'s reorder, the
 3. **Do not merge batch 1 and batch 2** (§11 answer 2): they are expansions
    under, in general, different arguments.
 4. **Marker discipline**: an unbound callee must yield `Parameterized`, never
-   `Void` (§12.3.1).
+   `Error` (§12.3.1).
 5. The deep pass's concreteness verdicts are load-bearing for the two
    accidentally-working paths (§10): when the field cells bind at check
    time, the instantiate operation node must come out *concrete* so

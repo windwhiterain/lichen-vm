@@ -153,12 +153,12 @@ to end, and the refinement sits between them:
 | `is_label` | `false` | `true` | **`false`** |
 
 The `missing_value` row is not a free choice, and it corrects an earlier draft of
-this section (which said `Void`): an absent refinement has to be an **unbound
+this section (which said `Error`): an absent refinement has to be an **unbound
 cell**, because the reconciliation is a *plain unify*.
 [`AttrExt::share_missing_slot`](../../crates/lichen-highlevel/src/attr.rs)'s own contract
 states why — a unify *writes* whichever side is unbound, so a concrete absent
 value can be shared and an unbound one must not be — and a concrete absent value
-is wrong on its own terms anyway, because `unify(Void, predicate)` conflicts and
+is wrong on its own terms anyway, because `unify(Error, predicate)` conflicts and
 no refinement could ever pass from one side to the other.  Being an unbound cell
 is exactly what lets an annotation's predicate flow into an argument's slot,
 which is the propagation the language already has for types ("`a : b; a : c`

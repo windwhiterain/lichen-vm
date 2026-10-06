@@ -206,7 +206,7 @@ impl<P: Program> Module<P> {
             // `else` arm and `1` the `then` arm. **Any other index is the
             // evaluator's own out-of-bounds read**, not a third arm: taking the
             // return here hands the same read to the same `Index` arm, which
-            // records it and yields the computed nothing — one rule, one place.
+            // records it and yields the empty value — one rule, one place.
             let arm = match choice {
                 0 => test.on_zero,
                 1 => test.on_one,

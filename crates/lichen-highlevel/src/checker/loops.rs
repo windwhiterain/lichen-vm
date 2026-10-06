@@ -423,7 +423,7 @@ where
             return false;
         };
         match value.as_enum() {
-            Some(LowValue::Parameterized | LowValue::Void) => false,
+            Some(LowValue::Parameterized | LowValue::Error) => false,
             Some(LowValue::Array(array)) => {
                 // SAFETY: the payload is the value this module holds for
                 // `node`, whose home block is alive — the walk below releases
