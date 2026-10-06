@@ -33,7 +33,7 @@ use crate::{
     AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, Function,
     FunctionId, LocalNodeId, LowShape, LowValue, Module, ModuleKey, NodeId, Operation,
     PendingAssert, Program, StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle,
-    StaticModule, StaticNode, StaticNodeId, StaticOperation, TableItem, ValueExt as _, is_unbound,
+    StaticModule, StaticNode, StaticNodeId, StaticOperation, TableItem, ValueExt as _,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -75,7 +75,7 @@ impl<P: Program> StaticModuleCache<P> {
     }
 
     /// [`StaticModule::read`] through the cache.
-    pub(crate) fn read(&mut self, host: &Module<P>, sref: StaticNodeId) -> P::Value {
+    pub(crate) fn read(&mut self, host: &Module<P>, sref: StaticNodeId) -> Option<P::Value> {
         self.module(host, sref.module).read(sref.index)
     }
 }
@@ -96,10 +96,11 @@ impl<P: Program> Module<P> {
     }
 
     /// Read a static node through its ref: the module's solved value,
-    /// verbatim.  Refs are absolute (keyed), so the value stores anywhere
+    /// verbatim, or [`None`] when the node is a residual computation with no
+    /// cached answer.  Refs are absolute (keyed), so the value stores anywhere
     /// with no conversion, and its payloads stay in the module's shared
     /// arena — nothing is copied.
-    pub fn static_read(&self, sref: StaticNodeId) -> P::Value {
+    pub fn static_read(&self, sref: StaticNodeId) -> Option<P::Value> {
         self.static_module(sref.module).read(sref.index)
     }
 
@@ -134,7 +135,7 @@ impl<P: Program> Module<P> {
     }
 
     /// The raw value behind `id` — no evaluation.  A static ref reads its
-    /// solved value (which may be `Parameterized`); refs are absolute, so
+    /// solved value (or nothing, for a residual); refs are absolute, so
     /// the raw value is safe to store anywhere.  A dynamic ref that names a
     /// released node reads `None` (via `SlotMap::get`), so the read API is
     /// safe for a node the executor may have dropped.
@@ -147,40 +148,39 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Whether `node` has **produced an answer** — its own slot carries one,
-    /// decided or undecided.
+    /// Whether `node` has **produced an answer** — its own slot carries one.
     ///
-    /// This is the *has run* half of the value slot, and it is deliberately
-    /// not [`is_unbound`]: an operation node whose answer is the undecided
-    /// marker ([`LowValue::Parameterized`]) **has** run — the attempt
-    /// happened and could not resolve — whereas a node with no cached value
-    /// at all never ran.  A reader deciding whether to *run* the node's
+    /// This is the *has run* half of the value slot: an operation node whose
+    /// answer was undecided **has** run — the attempt happened and could not
+    /// resolve, so the slot stays empty — whereas a node that never ran has no
+    /// answer either.  A reader deciding whether to *run* the node's
     /// operation asks [`Self::has_no_result_yet`]; a reader deciding whether
-    /// it may *compare* the node's value asks [`is_unbound`], because an
+    /// it may *compare* the node's value reads the slot directly, because an
     /// undecided answer is not comparable.  Conflating the two is what made
-    /// `is_unbound(node_value)` the effective authority for both.
+    /// the slot's emptiness the effective authority for both.
     ///
     /// A released node (absent from [`Self::nodes`]) reads `false`: there is
     /// nothing left to run.
     pub fn has_run(&self, node: NodeId) -> bool {
-        !is_unbound(self.node_value(Dyn(node)))
+        self.node_value(Dyn(node)).is_some()
     }
 
     /// Whether `node`'s operation — the computation it will produce its
     /// answer by — **has not produced an answer yet**.
     ///
-    /// `false` for a node with no operation (a marker, a bound constant, a
+    /// `false` for a node with no operation (a bound constant, a
     /// released node): there is no computation left to run.  For an operation
     /// node this asks whether the slot holds an answer, decided **or**
-    /// undecided, disagreeing with [`is_unbound`] exactly on the undecided
-    /// marker: that marker is an answer that says "not decided", so it is
-    /// *not* pending.  The evaluator declines to cache the marker (see
+    /// undecided, disagreeing with the slot's emptiness exactly on the
+    /// undecided case: an undecided answer still means the attempt happened,
+    /// so it is *not* pending.  The evaluator declines to cache an undecided
+    /// answer (see
     /// [`Self::evaluate_node_operation`]'s postlude), which only matters on a
     /// path that writes the slot directly — the apply clone walk preserves a
     /// source's value on an operation-free node and drops an operation node's
     /// cached value entirely ([`crate::function`]), so an operation node's
-    /// slot holds a decided answer or nothing, and a pure cell holding the
-    /// marker is correctly not "run" (nothing ran).
+    /// slot holds a decided answer or nothing, and a pure cell with an empty
+    /// slot is correctly not "run" (nothing ran).
     pub fn has_no_result_yet(&self, node: NodeId) -> bool {
         self.nodes[node].operation.is_some() && (!self.has_run(node) || !self.nodes[node].runned)
     }
@@ -211,7 +211,7 @@ impl<P: Program> Module<P> {
     /// and bind it like any other node.
     pub fn materialize_leaf(&mut self, sref: StaticNodeId, block: BlockId) -> NodeId {
         let value = self.static_read(sref);
-        self.add_node(block, None, Some(value))
+        self.add_node(block, None, value)
     }
 
     /// [`AnyNodeId::Dynamic`] as-is, or a static ref materialized into a leaf.
@@ -240,7 +240,10 @@ impl<P: Program> Module<P> {
             module: sref.module,
             index: param_pair,
         };
-        let param_type = match self.static_read(param_pair_ref).as_enum() {
+        let param_type = match self
+            .static_read(param_pair_ref)
+            .and_then(|value| value.as_enum())
+        {
             // SAFETY: `array` is a static payload read through `param_pair_ref`,
             // whose home module is registered — the registration pins its
             // arena.

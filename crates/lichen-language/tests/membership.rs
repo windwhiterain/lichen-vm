@@ -23,7 +23,9 @@ fn evaluate(source: &str) -> LangValue {
     );
     let build = report.build.expect("a checked program has a build");
     let mut module = build.module;
-    module.evaluate_node_deep(build.root_val, None)
+    module
+        .evaluate_node_deep(build.root_val, None)
+        .expect("the program's root value is undecided")
 }
 
 fn usize_of(value: &LangValue) -> usize {

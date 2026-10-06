@@ -5,7 +5,7 @@ use stacksafe::stacksafe;
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, FunctionIdentity, LowShape,
     LowValue, Module, Node, NodeId, Program, StaticFunctionRef, StaticNodeId, ValueExt as _,
-    ancestors::AncestorPairs, is_unbound,
+    ancestors::AncestorPairs,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -129,14 +129,13 @@ impl<P: Program> Module<P> {
         let right = self.class_low_type(b).cloned();
         // The same argument for the value, and for the same reason: the union
         // re-elects the representative, so what either side already knew has to
-        // be read **before** it and committed to the winner afterwards.  A
-        // marker is not a fact to carry (`is_unbound`), exactly as
+        // be read **before** it and committed to the winner afterwards.  An
+        // **undecided** class (an empty slot) is not a fact to carry, exactly as
         // [`Self::write_node_value`] treats it.  Both sides decided is not a
         // conflict here — `unify_inner`'s arms decide that, and only agree to
-        // merge two decided sides.
-        // A marker is not a fact to carry (`is_unbound`), so both reads are the
-        // *committed* values — an undecided class contributes nothing to the
-        // merged class, and `propagate_class_value` refuses the marker as well.
+        // merge two decided sides.  So both reads are the *committed* values —
+        // an undecided class contributes nothing to the merged class, and
+        // `propagate_class_value` is never handed an undecided value.
         let left_value = self.class_committed_value(a);
         let right_value = self.class_committed_value(b);
         let representative = disjoint::union(&mut self.nodes, a, b);
@@ -351,8 +350,8 @@ impl<P: Program> Module<P> {
     /// This is the single choke-point for value writes: every place a value
     /// lands on a node that might be a member of a unified class goes through
     /// here, so the class-consistency invariant is maintained at exactly one
-    /// site.  A `None`/`Parameterized` value only sets the node's own slot — a
-    /// marker is not a fact to propagate.
+    /// site.  A `None` value only clears the node's own slot — undecided is not
+    /// a fact to propagate.
     ///
     /// **The write is unconditional, and it lands on every member**
     /// ([`docs/notes/class-channel.md`] §1.1).  It is not gated on the slot
@@ -368,7 +367,7 @@ impl<P: Program> Module<P> {
     /// [`Module::add_node`], where a value arrives already concrete.
     pub fn write_node_value(&mut self, node: NodeId, value: Option<P::Value>) {
         self.nodes[node].value = value;
-        if let Some(value) = value.filter(|v| !is_unbound(Some(*v))) {
+        if let Some(value) = value {
             // A class whose sole member is the node — `parent` and `next` both
             // `None` is `disjoint::Meta`'s contract for a lone representative —
             // holds nobody to distribute to, so the slot write above is the
@@ -429,20 +428,15 @@ impl<P: Program> Module<P> {
     /// to the members it adds exactly as a write carries it to the members it
     /// finds.
     ///
-    /// **A marker is not a fact to propagate** — the one guard, and it is on the
-    /// value rather than on a member.  An undecided class states nothing about
-    /// its members, so writing the marker into them would turn "this member has
-    /// not run" into "this member ran and did not decide" (and force a lazy
-    /// argument position that the apply deliberately left alone).
+    /// **Undecided is not a fact to propagate** — there is no such value to
+    /// pass here: a class states nothing about its members until it holds a
+    /// decided value, and no caller has an undecided `P::Value` to hand over.
     ///
     /// An operation-bearing member keeps its computation: its slot now holds the
     /// class's value while `runned` stays `false`, which is what
     /// [`Module::has_no_result_yet`] reads as "an assertion, so the operator
     /// still owes its own answer".
     pub(crate) fn propagate_class_value(&mut self, representative: NodeId, value: P::Value) {
-        if is_unbound(Some(value)) {
-            return;
-        }
         let members: Vec<NodeId> = self.class_members(representative).collect();
         for member in members {
             self.nodes[member].value = Some(value);
@@ -581,7 +575,8 @@ impl<P: Program> Module<P> {
     }
 
     fn is_static_universe_id(&self, sref: StaticNodeId) -> bool {
-        let Some(LowValue::Array(array)) = self.static_read(sref).as_enum() else {
+        let Some(LowValue::Array(array)) = self.static_read(sref).and_then(|value| value.as_enum())
+        else {
             return false;
         };
         // SAFETY: `array` is a static payload read through `sref`, whose home
@@ -823,8 +818,6 @@ impl<P: Program> Module<P> {
             // cells as `Int` and were discarded, so a placeholder
             // instantiation across the boundary never learned its field types
             // (`crates/lichen-language/tests/registry.rs`).
-            let va = va.filter(|value| !is_unbound(Some(*value)));
-            let vb = vb.filter(|value| !is_unbound(Some(*value)));
             match (a.node, b.node) {
                 // A class against a bare value (a static ref's, or an answer a
                 // write is distributing).  The **value is the fact the class is
@@ -1107,9 +1100,8 @@ impl<P: Program> Module<P> {
     /// on every merge.  One parent walk plus one field read, independent of how
     /// many members the class has.
     ///
-    /// `None` for a class that has committed nothing **and** for the
-    /// [`LowValue::Parameterized`] marker, which is the same distinction
-    /// [`Self::write_node_value`] draws — a marker is not a fact to carry.
+    /// `None` for a class that has committed nothing — an empty slot, which is
+    /// the only representation of undecided.
     ///
     /// No other condition: what the class holds is what a unification compares
     /// against, runned or not — the comparison is unconditional, and whether
@@ -1117,7 +1109,6 @@ impl<P: Program> Module<P> {
     /// ([`Self::write_node_answer`]), not a reason to leave it out.
     pub(crate) fn class_committed_value(&self, rep: NodeId) -> Option<P::Value> {
         self.class_value(rep)
-            .filter(|value| !is_unbound(Some(*value)))
     }
 
     /// Record a conflict between two **classes** — the pair a unification walked
@@ -1156,8 +1147,8 @@ fn node_or_default(id: AnyNodeId) -> NodeId {
 /// the payload — the observation half of the low-type layer.
 ///
 /// `None` for a value the vocabulary has no shape for: the `Str` literal, the
-/// unit `None`, an empty `Error`, and the undecided `Parameterized`
-/// marker.  Those state nothing at all, which is what keeps observation from
+/// unit `None`, and an empty `Error`.  Those state nothing at all, which is
+/// what keeps observation from
 /// ever widening a class it knows more about.
 ///
 /// A payload-carrying shape is recorded with `Unknown` positions: the element,

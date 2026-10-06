@@ -18,7 +18,7 @@ use std::sync::Arc;
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
     AnyNodeId, BlockId, GlobalExt, LowOperator, LowShape, LowValue, Module, ModuleKey, NodeId,
-    OperatorExt, Program, StaticModule, ValueExt, is_unbound,
+    OperatorExt, Program, StaticModule, ValueExt,
 };
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
@@ -671,7 +671,7 @@ pub enum TypeOperator {
     /// [`crate::shape::low_type_of`] does.
     ///
     /// A side whose class is still undecided leaves the whole operator lazy
-    /// (`Parameterized`), which is what keeps a refinement on an open parameter
+    /// (undecided), which is what keeps a refinement on an open parameter
     /// **pending** rather than failed until an application supplies the class.
     InDomain,
     /// Whether a type value is a **struct type** — `[shape, [marker, K]]`
@@ -934,9 +934,6 @@ where
             // wrong shape here arrived through an argument unify that already
             // failed (and already reported): stay lazy rather than guess.
             TypeOperator::Int2Float | TypeOperator::Float2Int => {
-                if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
-                    return None;
-                }
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("a conversion expects a one-element operand array")
                 };
@@ -944,12 +941,9 @@ where
                 // for this operation node, so its home block is alive for the
                 // duration of the run.
                 let items = unsafe { operands.items() };
-                let value = module.node_value(items[0].node);
-                if is_unbound(value) {
+                // An unbound operand keeps the operator lazy.
+                let Some(value) = module.node_value(items[0].node) else {
                     return None;
-                }
-                let Some(value) = value else {
-                    unreachable!("is_unbound covers the empty slot")
                 };
                 match (self, value.as_enum()) {
                     // A machine-sized `Int` into an `f32`: exact up to `2^24`,
@@ -995,11 +989,8 @@ where
             | TypeOperator::InDomain
             | TypeOperator::IsStructType => {
                 // The VM already deep-evaluates the operand and gates on its
-                // parameterized subtree, so an unbound operand is the lazy
-                // marker (the definition pass flags the node).
-                if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
-                    return None;
-                }
+                // parameterized subtree, so an undecided operand never reaches
+                // this operator (the definition pass flags the node instead).
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("binary operators expect an operand array of [left, right]")
                 };
@@ -1007,15 +998,11 @@ where
                 // evaluated for this operation node, so its home block is
                 // alive for the duration of the run.
                 let operands = unsafe { operands.items() };
-                // An unbound side (an empty slot or the lazy marker) keeps
-                // the operator lazy.
+                // An unbound side (an empty slot) keeps the operator lazy.
                 let left = module.node_value(operands[0].node);
                 let right = module.node_value(operands[1].node);
-                if is_unbound(left) || is_unbound(right) {
-                    return None;
-                }
                 let (Some(left), Some(right)) = (left, right) else {
-                    unreachable!("is_unbound covers the empty slot")
+                    return None;
                 };
                 match self {
                     // A non-`Int` operand is a *reported* type error, not an

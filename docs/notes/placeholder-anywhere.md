@@ -18,7 +18,7 @@ value alike — and is **never** a name:
 
 - `5 : _` — type inference (unchanged).
 - `_ : Int` — a typed *value* hole: checks, the type slot binds to `Int`, and
-  the value stays underdetermined (`Parameterized`).
+  the value stays underdetermined (an empty slot).
 - `f _`, `(1, _)` — a value hole the context unifies.
 - `_ = 5` and `_ => e` — **parse errors** (`_` cannot be bound / a parameter).
 

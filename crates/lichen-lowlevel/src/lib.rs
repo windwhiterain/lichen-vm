@@ -131,21 +131,21 @@ pub enum LowValue {
     /// produced *together with* a recorded [`EvalError`], so consumers
     /// **propagate** it instead of re-reporting the failure.
     ///
-    /// It is a value, and a **decided** one: `is_unbound` excludes it, the
-    /// evaluator caches it, and a later read of the node returns it without
-    /// re-running the computation — so one failed read is one recorded error.
-    /// That is what separates it from the *undecided* [`Self::Parameterized`],
-    /// which is deliberately never cached and re-runs on the next read (see
-    /// `evaluate_node_operation`'s postlude and the apply-budget refusal in
-    /// `apply.rs`).  It is also distinct from the [`Self::None`] unit value: a
-    /// refusal to compute is a failure, the unit value is not.
+    /// It is a value, and a **decided** one: the evaluator caches it, and a
+    /// later read of the node returns it without re-running the computation —
+    /// so one failed read is one recorded error.  That is what separates it
+    /// from *undecided*, which is an **empty node slot**
+    /// (`Node::value == None`) and is deliberately never cached, so it re-runs
+    /// on the next read (see `evaluate_node_operation`'s postlude and the
+    /// apply-budget refusal in `apply.rs`).  It is also distinct from the
+    /// [`Self::None`] unit value: a refusal to compute is a failure, the unit
+    /// value is not.
     ///
     /// Two build-time positions hold it as their marker rather than as a
     /// failure: the anonymous struct's "no name table" slot, and the no-operand
     /// sentinel the VM hands a nullary extension operator.  Both stand where no
     /// value is, which is the same absence this variant denotes.
     Error,
-    Parameterized,
 }
 
 /// Value identity as the lowlevel decides it: field-wise like the derive, with
@@ -183,7 +183,6 @@ impl PartialEq for LowValue {
             (LowValue::Function(a), LowValue::Function(b)) => a == b,
             (LowValue::None, LowValue::None) => true,
             (LowValue::Error, LowValue::Error) => true,
-            (LowValue::Parameterized, LowValue::Parameterized) => true,
             _ => false,
         }
     }
@@ -192,9 +191,9 @@ impl PartialEq for LowValue {
 /// A host-side, **optional** static shape of a node's eventual value.
 ///
 /// This closes the gap that blocks emitting bytecode directly from the
-/// lowlevel: a [`Node`] carries a value (possibly still [`LowValue::Parameterized`])
-/// and an operator, but has no compile-time notion of *what shape* the value
-/// will take.  A layer above the lowlevel — the checker, or a compute
+/// lowlevel: a [`Node`] carries a value (possibly still undecided — an empty
+/// slot) and an operator, but has no compile-time notion of *what shape* the
+/// value will take.  A layer above the lowlevel — the checker, or a compute
 /// frontend that *has* the type — generates a [`LowShape`] for exactly the
 /// nodes a backend will **trace**, and stores it in [`Module::shapes`].  The
 /// backend reads the shape and emits code without consulting the type half,
@@ -405,8 +404,8 @@ pub enum LowOperator {
 /// The cheap, structural equality a value vocabulary must provide —
 /// marker/`USize` variants compare by their fields, a float by its bits
 /// ([`LowValue`]'s [`PartialEq`]), handle payloads compare by pointer identity
-/// ([`Handle`]'s [`PartialEq`]).  It decides the fast checks (`is_unbound`,
-/// kind-marker lookups); the *full* equality unification merges on is
+/// ([`Handle`]'s [`PartialEq`]).  It decides the fast checks (kind-marker
+/// lookups); the *full* equality unification merges on is
 /// [`ValueExt::value_eq`], which compares handle payloads by content.
 /// Equality *through* arrays is not any `==`'s job — unification recurses into
 /// them elementwise.
@@ -651,18 +650,18 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
     /// re-runnable, so a later pass settles it once its operands bind.  An
     /// operator that answers answers with `Some`.
     ///
-    /// This is the boundary the [`LowValue::Parameterized`] marker used to
-    /// serve, and it is being replaced by `None`: undecided has one
-    /// representation on each side — the **empty slot**
-    /// (`Node::value: Option<P::Value>`) inside the VM and **`None`** out of an
-    /// operator.  See `docs/notes/class-channel.md` §1.1.2.
+    /// This is the boundary the deleted `LowValue::Parameterized` marker used
+    /// to serve, and `None` has replaced it: undecided has one representation
+    /// on each side — the **empty slot** (`Node::value: Option<P::Value>`)
+    /// inside the VM and **`None`** out of an operator.  See
+    /// `docs/notes/class-channel.md` §1.1.2.
     fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> Option<P::Value>;
 
     /// Evaluate this operator's operand and hand the **value** to [`Self::run`].
     ///
     /// The VM calls this rather than `run`, and the default is exactly what the
     /// VM did before this method existed — including the deep pass, the
-    /// `Parameterized` read-back, and the nullary stand-in — so an operator that
+    /// undecided read-back, and the nullary stand-in — so an operator that
     /// does not override it cannot tell the difference.
     ///
     /// # Why an operator would override it
@@ -703,7 +702,9 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
                 if parameterized {
                     return None;
                 }
-                value
+                // A deep pass that answered nothing means the same thing this
+                // operator must say: undecided.
+                value?
             }
             // A nullary operator (e.g. `TypeOperator::Fresh`) has no operand
             // node: the honest stand-in is the computed-nothing value — never
@@ -783,14 +784,6 @@ pub struct Operation<P: Program> {
 pub struct StaticOperation<P: Program> {
     pub operator: P::Operator,
     pub operand: Option<LocalNodeId>,
-}
-
-/// A class is unbound while it carries no value or only the lazy marker.
-/// The highlevel checker uses the same rule for its diagnostics.
-/// [`LowValue::Error`] (the empty value of a failed read) and
-/// [`LowValue::None`] (the unit value) are concrete values, never unbound.
-pub fn is_unbound(value: Option<impl AsEnum<LowValue>>) -> bool {
-    value.is_none_or(|value| value.as_enum() == Some(LowValue::Parameterized))
 }
 
 /// Pointer into a [`Block::arena`] — or, after a freeze, into a
@@ -1157,9 +1150,9 @@ pub struct StaticFunction {
 /// covers is parameterized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EvaluatedDeep {
-    /// `true` when any node in self's reachable subtree has a
-    /// [`LowValue::Parameterized`] — i.e. the deep pass could not prove the
-    /// subtree concrete.
+    /// `true` when any node in self's reachable subtree is undecided — an
+    /// empty value slot the pass could not fill — i.e. the deep pass could not
+    /// prove the subtree concrete.
     pub parameterized: bool,
 }
 
@@ -1174,14 +1167,13 @@ pub struct Node<P: Program> {
     /// never touch the field directly.
     ///
     /// **This one slot carries two axes, and readers must say which they
-    /// mean.**  The value axis is *decided or not*: a value that
-    /// [`is_unbound`] is not comparable.  The evaluation axis is *has run or
-    /// not*: an operation node whose answer is the undecided
-    /// [`LowValue::Parameterized`] marker **has** run, while one with no
-    /// cached value never ran.  [`Module::has_run`] and
-    /// [`Module::has_no_result_yet`] are the named reads of the second axis;
-    /// a reader that asks a run question through `is_unbound` is conflating
-    /// the two.
+    /// mean.**  The value axis is *decided or not*: an empty slot is not
+    /// comparable and means undecided.  The evaluation axis is *has run or
+    /// not*: an operation node whose answer was undecided **has** run (the
+    /// slot stays empty), while one that never ran has no answer either.
+    /// [`Module::has_run`] and [`Module::has_no_result_yet`] are the named
+    /// reads of the second axis; a reader that asks a run question through the
+    /// slot's emptiness is conflating the two.
     ///
     /// The two axes are independent on one node: an **operation-bearing member**
     /// of a class that already holds a value has that value in its slot while
@@ -1272,7 +1264,7 @@ pub struct Node<P: Program> {
     /// [`Module::evaluate_node_forced`]) has run on this node, and what it
     /// proved.  [`Some`] means the deep pass ran and
     /// [`EvaluatedDeep::parameterized`] records whether any node in self's
-    /// reachable subtree has a [`LowValue::Parameterized`].  [`None`] means
+    /// reachable subtree is undecided.  [`None`] means
     /// it never ran, so the node's concreteness is unknown.  **Private**:
     /// read through [`Module::node_evaluated_deep`].
     ///
@@ -1487,7 +1479,7 @@ pub struct Package<P: Program> {
 }
 
 /// A fully-solved module frozen into an immutable, shareable form.  Every
-/// node holds its final answer (`Parameterized` for a residual computation —
+/// node holds its final answer (or nothing, for a residual computation —
 /// never re-run in place); values carry refs keyed by [`Self::key`] —
 /// absolute from birth, so an importer reads and stores them verbatim.
 pub struct StaticModule<P: Program> {

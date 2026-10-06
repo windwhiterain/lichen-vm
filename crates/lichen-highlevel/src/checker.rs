@@ -1005,14 +1005,11 @@ where
         node
     }
 
-    /// A fresh, unbound type cell (a parameterized node — evaluating it
-    /// yields the lazy marker, never a panic).
+    /// A fresh, unbound type cell — an **empty** node slot, which is
+    /// undecided's only in-VM representation (evaluating it yields nothing,
+    /// never a panic).
     pub fn fresh_cell(&mut self) -> NodeId {
-        self.alloc_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::Parameterized)),
-        )
+        self.alloc_node(self.current_block, None, None)
     }
 
     /// A plain value node in the current block — the way a native operator

@@ -32,7 +32,7 @@
 //!
 //! A `NodeId` is not a value. The apply clone walk **unifies** a substituted
 //! parameter with its argument, so two node ids can be one value; and a cell the
-//! deep pass left `Parameterized` resolves through its equality class to a node
+//! deep pass left undecided resolves through its equality class to a node
 //! that *computes* it, which is **not one of its operands**. An ordered list of
 //! nodes therefore cannot say which node defines a value.
 //!
@@ -168,7 +168,7 @@ impl<P: Program> Module<P> {
     /// extraction — that is a view of a `[value, type]` pair rather than the
     /// computation itself.
     ///
-    /// The deep pass collapses some values to a bare `Parameterized` cell and
+    /// The deep pass collapses some values to a bare empty cell and
     /// unifies that cell with the defining computation (a kernel call's result, a
     /// `launch` argument, a substituted parameter), so the definition is reached
     /// through the class rather than through an operand.

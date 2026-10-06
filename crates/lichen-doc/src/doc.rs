@@ -61,18 +61,18 @@ where
     P: HighProgram,
     P::Value: ValueType + AsEnum<LowValue>,
 {
-    /// The value read for an *absent* occurrence: *no doc* — spelled as the
-    /// unbound marker, because an absent doc is an *unbound cell* by intent:
+    /// The value read for an *absent* occurrence: *no doc* — spelled as **no
+    /// value at all**, because an absent doc is an *unbound cell* by intent:
     /// a real unify binds it, so a doc passes from one side to the other.
-    fn missing_value(&self) -> LowValue {
-        LowValue::Parameterized
+    fn missing_value(&self) -> Option<LowValue> {
+        None
     }
 
     /// A doc never combines over its children: a compound's doc is its own
     /// annotation, not a meet of its children's.  Returns an unbound cell —
-    /// the shared no-doc marker.
+    /// the per-site no-doc marker.
     fn combine(&self, ctx: &mut dyn Ctx<P>, _children: &[NodeId]) -> NodeId {
-        ctx.value_node(P::Value::from(LowValue::Parameterized))
+        ctx.fresh()
     }
 
     /// Propagate the doc and never fail: a real unify (an unbound doc cell

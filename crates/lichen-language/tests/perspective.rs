@@ -40,7 +40,7 @@ fn root_persp(source: &str) -> usize {
         .attr
         .expect("the root carries a perspective slot");
     let mut module = build.module;
-    let value = module.evaluate_node_deep(slot, None);
+    let value = module.evaluate_node_deep(slot, None).unwrap();
     // A slot is a `[value, type]` term pair; the lattice value is element 0.
     let value = match value.as_enum() {
         Some(LowValue::Array(items)) => {
@@ -50,7 +50,9 @@ fn root_persp(source: &str) -> usize {
                 Some(AnyNodeId::Dynamic(n)) => n,
                 _ => panic!("expected a dynamic perspective value"),
             };
-            module.evaluate_node_deep(node, None)
+            module
+                .evaluate_node_deep(node, None)
+                .expect("the perspective value is decided")
         }
         other => {
             // A bare slot (not yet a pair) already holds the lattice value.

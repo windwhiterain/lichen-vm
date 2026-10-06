@@ -114,10 +114,7 @@ fn assert_on_an_unbound_condition_is_not_triggered() {
         "an untriggered assert is no failure"
     );
     assert!(
-        matches!(
-            m.node_value(AnyNodeId::Dynamic(x)),
-            Some(TestValue::LowValue(LowValue::Parameterized))
-        ),
+        m.node_value(AnyNodeId::Dynamic(x)).is_none(),
         "the unbound cell was not bound by the assert"
     );
 }
@@ -283,10 +280,7 @@ fn forced_evaluation_ignores_shallow_markers() {
     m.add_assert(eq);
 
     assert!(
-        matches!(
-            m.evaluate_node_deep(eq, Some(root)).as_enum(),
-            Some(LowValue::Parameterized)
-        ),
+        m.evaluate_node_deep(eq, Some(root)).is_none(),
         "the lazy pass cannot resolve the masked operand"
     );
 

@@ -21,7 +21,10 @@ fn print_float(source: &str) -> String {
     let report = compile(source);
     assert!(report.ok(), "{source} must check: {:?}", report.diagnostics);
     let mut build = report.build.expect("a build");
-    let value = build.module.evaluate_node_deep(build.root_val, None);
+    let value = build
+        .module
+        .evaluate_node_deep(build.root_val, None)
+        .unwrap();
     assert!(
         matches!(value.as_enum(), Some(LowValue::Float(_))),
         "{source} must evaluate to a float"
@@ -39,7 +42,10 @@ fn value_of(text: &str) -> (f32, String) {
         report.diagnostics
     );
     let mut build = report.build.expect("a build");
-    let value = build.module.evaluate_node_deep(build.root_val, None);
+    let value = build
+        .module
+        .evaluate_node_deep(build.root_val, None)
+        .unwrap();
     let ty = print_type(&build.module, build.root_ty);
     let Some(LowValue::Float(value)) = value.as_enum() else {
         panic!("{text} must re-check as a float, not as a different LowValue")

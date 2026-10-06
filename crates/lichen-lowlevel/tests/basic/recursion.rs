@@ -25,7 +25,7 @@ fn recursive_function_applies_itself_lazily() {
     // argument (so it carries the argument's value).
     let five = u128_node(&mut m, root, 5);
     let call = call_node(&mut m, root, f_node, five);
-    let level0 = m.evaluate_node(AnyNodeId::Dynamic(call), None);
+    let level0 = m.evaluate_node(AnyNodeId::Dynamic(call), None).unwrap();
     let ids = array_ids(level0);
     let rep_five = m.equality_representative(five);
     assert_eq!(ids.len(), 2);
@@ -49,7 +49,7 @@ fn recursive_function_applies_itself_lazily() {
     assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
 
     // Forcing that level runs the same function against the same argument.
-    let level1 = m.evaluate_node(AnyNodeId::Dynamic(c1), None);
+    let level1 = m.evaluate_node(AnyNodeId::Dynamic(c1), None).unwrap();
     let ids1 = array_ids(level1);
     assert_eq!(ids1.len(), 2);
     assert_eq!(m.equality_representative(ids1[0]), rep_five);
@@ -60,7 +60,7 @@ fn recursive_function_applies_itself_lazily() {
     assert_eq!(operand_ids[0], f_node);
     assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
 
-    let level2 = m.evaluate_node(AnyNodeId::Dynamic(c2), None);
+    let level2 = m.evaluate_node(AnyNodeId::Dynamic(c2), None).unwrap();
     let ids2 = array_ids(level2);
     assert_eq!(ids2.len(), 2);
     assert_eq!(m.equality_representative(ids2[0]), rep_five);
@@ -88,7 +88,7 @@ fn undefined_recursive_function_clones_a_function_per_level() {
 
     let five = u128_node(&mut m, root, 5);
     let call = call_node(&mut m, root, f_node, five);
-    let level0 = m.evaluate_node(AnyNodeId::Dynamic(call), None);
+    let level0 = m.evaluate_node(AnyNodeId::Dynamic(call), None).unwrap();
     let ids = array_ids(level0);
     let rep_five = m.equality_representative(five);
     assert_eq!(ids.len(), 2);
@@ -102,7 +102,7 @@ fn undefined_recursive_function_clones_a_function_per_level() {
     assert_eq!(m.functions[cloned].block, root);
     assert_eq!(m.functions[cloned].nodes.len(), 5);
 
-    let level1 = m.evaluate_node(AnyNodeId::Dynamic(c1), None);
+    let level1 = m.evaluate_node(AnyNodeId::Dynamic(c1), None).unwrap();
     let ids1 = array_ids(level1);
     assert_eq!(ids1.len(), 2);
     assert_eq!(m.equality_representative(ids1[0]), rep_five);
@@ -125,7 +125,7 @@ fn mutually_recursive_functions_call_each_other() {
     // with the argument.
     let five = u128_node(&mut m, root, 5);
     let call = call_node(&mut m, root, f_node, five);
-    let level0 = m.evaluate_node(AnyNodeId::Dynamic(call), None);
+    let level0 = m.evaluate_node(AnyNodeId::Dynamic(call), None).unwrap();
     let ids = array_ids(level0);
     let rep_five = m.equality_representative(five);
     assert_eq!(ids.len(), 2);
@@ -137,7 +137,7 @@ fn mutually_recursive_functions_call_each_other() {
     assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
 
     // Forcing that level runs g's body: g(5) = [5, f(5)].
-    let level1 = m.evaluate_node(AnyNodeId::Dynamic(g_app), None);
+    let level1 = m.evaluate_node(AnyNodeId::Dynamic(g_app), None).unwrap();
     let ids = array_ids(level1);
     assert_eq!(ids.len(), 2);
     assert_eq!(m.equality_representative(ids[0]), rep_five);
@@ -180,7 +180,7 @@ fn fibonacci_recurses_through_index_branches() {
         let arg = u128_node(&mut m, root, n);
         let call = call_node(&mut m, root, fib_node, arg);
         assert_eq!(
-            u128_of(m.evaluate_node_deep(call, None)),
+            u128_of(m.evaluate_node_deep(call, None).unwrap()),
             expected,
             "fib({n})"
         );
@@ -196,11 +196,7 @@ fn countdown_definition_pass_terminates() {
     // behind a lazy branch, so the definition pass completes even though
     // the body applies itself.
     let body = m.add_block(None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     let func_node = m.add_node(body, None, None); // placeholder self-ref
     let zero = u128_node(&mut m, body, 0);
     let one = u128_node(&mut m, body, 1);
@@ -240,10 +236,10 @@ fn countdown_definition_pass_terminates() {
 
     let zero_arg = u128_node(&mut m, root, 0);
     let call = call_node(&mut m, root, func_node, zero_arg);
-    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 0);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None).unwrap()), 0);
     let five = u128_node(&mut m, root, 5);
     let call = call_node(&mut m, root, func_node, five);
-    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 5);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None).unwrap()), 5);
     assert_eq!(m.functions.len(), 1);
     assert_eq!(m.functions[function].block, body);
 }
@@ -254,16 +250,8 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
     // even(x) = if x == 0 then 1 else odd(x-1)
     // odd(x)  = if x == 0 then 0 else even(x-1)
     let body = m.add_block(None);
-    let e_param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
-    let o_param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let e_param = m.add_node(body, None, None);
+    let o_param = m.add_node(body, None, None);
     let e_func = m.add_node(body, None, None); // placeholders
     let o_func = m.add_node(body, None, None);
     let zero = u128_node(&mut m, body, 0);
@@ -397,10 +385,10 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
 
     let six = u128_node(&mut m, root, 6);
     let call = call_node(&mut m, root, e_func, six);
-    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 1);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None).unwrap()), 1);
     let seven = u128_node(&mut m, root, 7);
     let call = call_node(&mut m, root, e_func, seven);
-    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 0);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None).unwrap()), 0);
     assert_eq!(m.functions.len(), 2); // cross-references stay in place
 }
 #[test]
@@ -459,11 +447,7 @@ fn flattened_recursion_records_the_total_apply_budget() {
     // nested-depth guard.  The total-application budget is the work bound
     // that catches it.
     let body = m.add_block(None);
-    let param = m.add_node(
-        body,
-        None,
-        Some(TestValue::LowValue(LowValue::Parameterized)),
-    );
+    let param = m.add_node(body, None, None);
     let func_node = m.add_node(body, None, None);
     let ops = array_node(&mut m, body, &[func_node, param], None);
     let call = op_node(

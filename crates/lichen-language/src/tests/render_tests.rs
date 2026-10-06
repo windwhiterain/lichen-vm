@@ -380,7 +380,9 @@ fn an_extended_value_renders_through_the_hook() {
     let build = Checker::<ProbeProgram>::build(ir);
     assert!(build.ok);
     let mut module = build.module;
-    let value = module.evaluate_node_deep(build.root_val, None);
+    let value = module
+        .evaluate_node_deep(build.root_val, None)
+        .expect("the probe root is decided");
     module.evaluate_node_deep(build.root_ty, None);
     let render_ext = |value: &ProbeValue| match value {
         ProbeValue::FloatType => Some("FloatType".to_string()),
@@ -400,7 +402,9 @@ fn an_extended_value_without_a_hook_prints_a_placeholder() {
     ir.set_root(float_ty);
     let build = Checker::<ProbeProgram>::build(ir);
     let mut module = build.module;
-    let value = module.evaluate_node_deep(build.root_val, None);
+    let value = module
+        .evaluate_node_deep(build.root_val, None)
+        .expect("the probe root is decided");
     module.evaluate_node_deep(build.root_ty, None);
     assert_eq!(ValuePrinter::new(&module).print(value, build.root_ty), "?");
 }

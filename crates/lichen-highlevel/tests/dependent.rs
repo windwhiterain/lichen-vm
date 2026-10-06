@@ -30,11 +30,7 @@ fn usize_node(m: &mut Module<ProgramImpl>, block: BlockId, n: usize) -> NodeId {
 }
 
 fn unbound_node(m: &mut Module<ProgramImpl>, block: BlockId) -> NodeId {
-    m.add_node(
-        block,
-        None,
-        Some(HighProgramValue::LowValue(LowValue::Parameterized)),
-    )
+    m.add_node(block, None, None)
 }
 
 fn array_node(m: &mut Module<ProgramImpl>, block: BlockId, ids: &[NodeId]) -> NodeId {
@@ -131,7 +127,7 @@ fn dependent_type_resolves_per_argument_via_laziness() {
     // selects the `int` branch
     let one = usize_node(&mut m, root, 1);
     let call = apply_node(&mut m, root, f, one);
-    let value = m.evaluate_node_deep(call, None);
+    let value = m.evaluate_node_deep(call, None).unwrap();
     assert!(m.unify_errors.is_empty());
     let ids = array_ids(value);
     assert!(matches!(
@@ -142,7 +138,7 @@ fn dependent_type_resolves_per_argument_via_laziness() {
     // applied to 0: the same template picks the `float` branch
     let zero = usize_node(&mut m, root, 0);
     let call = apply_node(&mut m, root, f, zero);
-    let value = m.evaluate_node_deep(call, None);
+    let value = m.evaluate_node_deep(call, None).unwrap();
     assert!(m.unify_errors.is_empty());
     let ids = array_ids(value);
     assert!(matches!(

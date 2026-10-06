@@ -15,11 +15,11 @@ impl<P: Program> Module<P> {
         block: BlockId,
         node: NodeId,
         cell: Option<NodeId>,
-    ) -> P::Value {
+    ) -> Option<P::Value> {
         // The nesting guard, on the same fact as the dynamic path: the apply
         // node's own depth, which a materialization would deepen by one.
         if self.depth_exhausted(node) {
-            return P::Value::from(LowValue::Parameterized);
+            return None;
         }
         let stamp = self.stamp_depth;
         self.stamp_depth = self.node_depth(node) + 1;
@@ -91,7 +91,7 @@ impl<P: Program> Module<P> {
                     AnyFunctionId::Static(function),
                     cloned_param,
                 ) {
-                    return P::Value::from(LowValue::Parameterized);
+                    return None;
                 }
             }
             let result = module.evaluate_node(Dyn(applied), Some(block));
@@ -147,9 +147,12 @@ impl<P: Program> Module<P> {
                     .map(|operand| self.static_node_apply(operand, ctx)),
             });
             if operation.is_none() {
-                let value = ctx.module.read(local);
-                let value = self.static_remap_value(value, ctx);
-                self.write_node_value(clone, Some(value));
+                // A node the walk leaves empty stays undecided: the slot is
+                // not written at all, which is undecided's only representation.
+                if let Some(value) = ctx.module.read(local) {
+                    let value = self.static_remap_value(value, ctx);
+                    self.write_node_value(clone, Some(value));
+                }
             }
             self.nodes[clone].operation = operation;
         } else {
@@ -157,9 +160,10 @@ impl<P: Program> Module<P> {
             // with item refs re-pointed at per-call clones where the walk
             // made one; untouched items stay inline absolute static refs.
             // The residual operation (if any) is dead — the value is final.
-            let value = ctx.module.read(local);
-            let value = self.static_remap_value(value, ctx);
-            self.write_node_value(clone, Some(value));
+            if let Some(value) = ctx.module.read(local) {
+                let value = self.static_remap_value(value, ctx);
+                self.write_node_value(clone, Some(value));
+            }
         }
         clone
     }
@@ -168,7 +172,7 @@ impl<P: Program> Module<P> {
     /// cloned (walked) when the walk already made one, or when its static
     /// node is itself parameterized — a residual behind a value edge must
     /// re-open against the argument (a condition or branch frozen as
-    /// `Parameterized` at solve time reads as unbound forever otherwise).
+    /// undecided at solve time reads as unbound forever otherwise).
     /// Concrete items stay inline absolute static refs.  An item naming
     /// *another* module (a frozen dependency the applied function's module
     /// itself imported) is not this template's to clone: local indices are

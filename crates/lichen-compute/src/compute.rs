@@ -564,7 +564,7 @@ where
 /// body closed over is ordinary host arithmetic, and if its result is used as a
 /// count or an input the value-table filter already refuses that by name.
 ///
-/// Both of these used to fall through to a bare `Parameterized` with no
+/// Both of these used to fall through to a bare undecided answer with no
 /// diagnostic, and that is not a smaller mistake than a wrong number — it is an
 /// absent one. A body that collected a dispatch's result mid-chain recorded a
 /// graph that was quietly missing the collect, and the chain's own numbers looked
@@ -1021,14 +1021,14 @@ pub enum ComputeOperator {
     /// for a single output and the **tuple** of them for several.
     ParLaunch,
     /// `[n]` operand — the loop index of the current parallel invocation,
-    /// `i ∈ [0, n)`.  Kernel-only; the VM sees `Parameterized`.
+    /// `i ∈ [0, n)`.  Kernel-only; the VM sees an undecided operand.
     Range,
     /// `[buffer, index]` operand — read one buffer element → `?b`.  Inside a
     /// kernel this lowers to a host `read` import; at the VM it reads a
     /// `Buffer` value's element (the post-`plrun` read).
     Read,
     /// `[length, index, value]` operand — a pending parallel write.  Kernel-only
-    /// (lowers to a host `write` import); the VM sees `Parameterized`.
+    /// (lowers to a host `write` import); the VM sees an undecided operand.
     Write,
     /// `[buffer]` operand — collect the whole buffer into a lichen array `[?b]`.
     BufferCollect,
@@ -1222,12 +1222,6 @@ where
             }
             match self {
                 ComputeOperator::Jit => {
-                    if matches!(
-                        AsEnum::<LowValue>::as_enum(&operand),
-                        Some(LowValue::Parameterized)
-                    ) {
-                        return None;
-                    }
                     let Some(LowValue::Function(function)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
                         // A non-function jit target is a *reported* type error (the
@@ -1258,12 +1252,6 @@ where
                     }
                 }
                 ComputeOperator::Launch => {
-                    if matches!(
-                        AsEnum::<LowValue>::as_enum(&operand),
-                        Some(LowValue::Parameterized)
-                    ) {
-                        return None;
-                    }
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
                         unreachable!("Launch expects an operand array of [kernel, arg]")
@@ -1310,12 +1298,6 @@ where
                     }
                 }
                 ComputeOperator::Call => {
-                    if matches!(
-                        AsEnum::<LowValue>::as_enum(&operand),
-                        Some(LowValue::Parameterized)
-                    ) {
-                        return None;
-                    }
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
                         unreachable!("Call expects an operand array of [kernel, arg]")
@@ -1352,12 +1334,6 @@ where
                     }
                 }
                 ComputeOperator::Parallel => {
-                    if matches!(
-                        AsEnum::<LowValue>::as_enum(&operand),
-                        Some(LowValue::Parameterized)
-                    ) {
-                        return None;
-                    }
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
                         unreachable!("Parallel expects an operand array of [function, backend]")
@@ -1400,12 +1376,6 @@ where
                     }
                 }
                 ComputeOperator::ParLaunch => {
-                    if matches!(
-                        AsEnum::<LowValue>::as_enum(&operand),
-                        Some(LowValue::Parameterized)
-                    ) {
-                        return None;
-                    }
                     // **A recording intercepts here, before anything is parsed.** A
                     // recorded dispatch has no buffers to look at and no count to
                     // read: its arguments are placeholders, which is the whole reason
@@ -1635,12 +1605,6 @@ where
                     }
                 }
                 ComputeOperator::Read => {
-                    if matches!(
-                        AsEnum::<LowValue>::as_enum(&operand),
-                        Some(LowValue::Parameterized)
-                    ) {
-                        return None;
-                    }
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
                         unreachable!("Read expects an operand array of [buffer, index]")
@@ -1746,12 +1710,6 @@ where
                     None
                 }
                 ComputeOperator::BufferCollect => {
-                    if matches!(
-                        AsEnum::<LowValue>::as_enum(&operand),
-                        Some(LowValue::Parameterized)
-                    ) {
-                        return None;
-                    }
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
                         unreachable!("BufferCollect expects an operand array of [buffer]")
@@ -2377,7 +2335,7 @@ where
 /// same walk: a bare value node is the single-leaf form (a scalar codomain),
 /// and a **materialized tuple value** is the multi-leaf one (a tuple codomain,
 /// `p => (p(0), p(1))`), reached through a `value_of` extraction or a
-/// `Parameterized` cell exactly as an argument tuple is.
+/// undecided cell exactly as an argument tuple is.
 ///
 /// A *nested* tuple is not flattened into extra leaves here: each leaf is emitted
 /// by [`emit_node`], which produces exactly one value, so a nested tuple would
@@ -3019,7 +2977,7 @@ where
 /// member carrying a computational operator (anything but a `value_of` index
 /// extraction, which is a view of a `[value, type]` pair rather than the
 /// computation itself).  The deep pass collapses some values to a bare
-/// `Parameterized` cell and unifies that cell with the defining computation
+/// undecided cell and unifies that cell with the defining computation
 /// (a kernel call's result, a `launch` argument); the emitter reaches the
 /// computation through the class.  Returns `None` when the class has no such
 /// member — the value is genuinely opaque (an uncomputable leaf).
@@ -3653,7 +3611,7 @@ where
                 return Ok(());
             }
         }
-        // A value collapsed to a bare `Parameterized` cell resolves through its
+        // A value collapsed to a bare empty cell resolves through its
         // equality class to the computation that defines it — a kernel call's
         // result, or a `launch` argument (whose cell is *expected* to be
         // parameterized: `launch` is two-step, assemble then call, so the
@@ -4322,7 +4280,7 @@ whole parameter read; build the argument from its elements (or pass the paramete
 /// The argument reaches a call in one of two **encodings**, and they cannot be
 /// told apart by shape: a bare kernel apply carries the `[value, type]` pair
 /// whose element 0 is the argument, while a `launch` argument arrives as a
-/// bare `Parameterized` cell (concrete only at run time) — and a pair has
+/// bare empty cell (concrete only at run time) — and a pair has
 /// exactly as many elements as the two-element tuple it wraps.  So each
 /// encoding is *emitted* and the first that produces one leaf per domain
 /// element is kept.  That is not a guess: the leaves have to emit anyway, and a
@@ -4384,7 +4342,7 @@ where
 
 /// The ways one call argument can be encoded, in the order they are tried — the
 /// same peel order the rest of the emitter resolves through: the `[value, type]`
-/// pair, a `value_of` extraction, the value a `Parameterized` class committed
+/// pair, a `value_of` extraction, the value an undecided class committed
 /// to, then the node itself.
 fn callee_arg_encodings<P>(module: &Module<P>, arg: NodeId) -> Vec<NodeId>
 where
@@ -4417,7 +4375,7 @@ where
 /// - Anything else must be a **concrete tuple value** of exactly `items.len()`
 ///   elements, each emitted against its own element shape (recursively, for a
 ///   nested domain).  A scalar element goes through [`emit_node`], so a
-///   constant, a parameter read, a call result, and a `Parameterized` cell
+///   constant, a parameter read, a call result, and an undecided cell
 ///   resolved through its class all keep working inside a tuple argument.
 ///
 /// `depth` is the level of the calling `emit_node` frame, and a nested domain
@@ -4521,7 +4479,7 @@ where
 ///
 /// Three ways a tuple argument reaches its array: it is the array value
 /// itself, it is a `value_of` extraction over one, or it is a
-/// `Parameterized` cell whose class is committed to the tuple that defines it
+/// undecided cell whose class is committed to the tuple that defines it
 /// (a `launch` argument, which is only concrete at run time).  The third
 /// resolves through the class's *value* members, because a materialized tuple
 /// is a value node and so states no operation for the emitter to trace.
@@ -5309,7 +5267,6 @@ fn argument_kind(value: Option<&LowValue>) -> &'static str {
         Some(LowValue::Function(_)) => "a function",
         Some(LowValue::None) => "the unit value",
         Some(LowValue::Error) => "nothing (the empty value of a failed read)",
-        Some(LowValue::Parameterized) => "a value that is not decided yet",
         _ => "no value",
     }
 }
@@ -5369,7 +5326,7 @@ where
 
 /// A buffer position holding something that is not a buffer.
 ///
-/// **This is a refusal, and the `Parameterized` it replaces was a silent
+/// **This is a refusal, and the undecided answer it replaces was a silent
 /// no-op.** The lazy cell is what makes a kernel's own read deferrable and what
 /// makes an undecided argument stay undecided — but a program array *is*
 /// decided, it is an ordinary lichen value with ordinary elements, and
@@ -5732,7 +5689,9 @@ where
     // operand a function at all" — and it answers it by reading the node's own
     // value, which is the same read the apply's callee extraction will do.
     let is_function = matches!(
-        module.evaluate_node(function_node, Some(block)).as_enum(),
+        module
+            .evaluate_node(function_node, Some(block))
+            .and_then(|value| value.as_enum()),
         Some(LowValue::Function(_))
     );
     if !is_function {
@@ -5771,11 +5730,7 @@ where
     // has to stay undecided rather than be invented, because a parameter's type
     // is what says which role each argument has — and that is precisely the
     // question this recording is going to answer by looking at the values.
-    let undecided = module.add_node(
-        block,
-        None,
-        Some(<P::Value as From<LowValue>>::from(LowValue::Parameterized)),
-    );
+    let undecided = module.add_node(block, None, None);
     let argument = array_node::<P>(
         module,
         block,
@@ -5828,10 +5783,7 @@ where
     // dispatches, and turning `force_operand` on alone empties the return slot
     // with the shallow mask untouched. See the landmine.
     let result = module.evaluate_node_deep(apply, Some(block));
-    if matches!(
-        AsEnum::<LowValue>::as_enum(&result),
-        Some(LowValue::Parameterized)
-    ) {
+    let Some(result) = result else {
         refuse(
             module,
             format!(
@@ -5842,7 +5794,7 @@ where
             ),
         );
         return None;
-    }
+    };
     let recorded = returned_value_ids::<P>(module, &result);
     // **An unreadable return is a refusal, not an unrecorded one.** A graph with
     // no recorded return answers with its whole value table, so treating "I
@@ -5873,17 +5825,11 @@ where
             // **An empty recording with a decided result is a different mistake
             // from an empty one with no result**, and only this one says the body
             // *ran* — so the two refusals have to name different causes or a
-            // caller will go looking in the wrong place.
-            let reason = if matches!(
-                AsEnum::<LowValue>::as_enum(&result),
-                Some(LowValue::Parameterized)
-            ) {
-                reason
-            } else {
-                format!(
-                    "{reason} (the body's own value came back as a decided value, not a lazy one)"
-                )
-            };
+            // caller will go looking in the wrong place.  An undecided result
+            // was refused above, so the body's own value here is decided.
+            let reason = format!(
+                "{reason} (the body's own value came back as a decided value, not a lazy one)"
+            );
             refuse(module, reason);
             return None;
         }
@@ -6798,7 +6744,7 @@ pub fn parallel_launch_workers() -> usize {
 /// `count > `[`MAX_PARALLEL_ELEMENTS`] is refused with an `Err` before the
 /// buffers are allocated.  The caller records the reason through
 /// [`Module::record_extension_diagnostic`] and returns the lazy
-/// (`Parameterized`) marker, which is this plugin's channel for every runtime
+/// (undecided) answer, which is this plugin's channel for every runtime
 /// refusal: `Module::eval_errors` is a closed enum of structural value facts,
 /// and its `BudgetExhausted` names the apply/depth budgets — false here, the
 /// program terminated and merely asked for too much.  **Queueing is not the

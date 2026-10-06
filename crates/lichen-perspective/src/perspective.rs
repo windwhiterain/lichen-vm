@@ -120,12 +120,6 @@ where
         // return inside the single arm one return type to agree on.
         (|| match self {
             GcdOp::Gcd => {
-                if matches!(
-                    AsEnum::<LowValue>::as_enum(&operand),
-                    Some(LowValue::Parameterized)
-                ) {
-                    return None;
-                }
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
                     unreachable!("Gcd expects an operand array");
                 };
@@ -184,8 +178,8 @@ where
     /// `0` — neutral in `gcd` (the meet identity), concrete in equality
     /// unify.  The slot's absent form is `[0, int]` (see
     /// [`AttrExt::missing_slot`]).
-    fn missing_value(&self) -> LowValue {
-        LowValue::USize(0)
+    fn missing_value(&self) -> Option<LowValue> {
+        Some(LowValue::USize(0))
     }
 
     /// The absent form is the constant `0` — concrete, so reconciliation only

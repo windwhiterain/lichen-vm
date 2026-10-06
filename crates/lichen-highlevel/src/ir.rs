@@ -252,7 +252,7 @@ pub struct IR<A = NoAttr, L = HighProgramLiteral> {
     /// expression.  The build's cascade deep pass already computed each one's
     /// value/type; a reader (the language server) reads them by id rather than
     /// re-deriving them from the root, and never re-evaluates (lazy/recursive
-    /// bindings stay a `Parameterized` cell and are not forced).
+    /// bindings stay undecided and are not forced).
     pub stmt_roots: Vec<ExprId>,
     /// The per-expression static schema, index-aligned with [`IR::expr`] — one
     /// [`SchemaId`] each.  `alloc` stamps the default (empty-`tail`) schema.

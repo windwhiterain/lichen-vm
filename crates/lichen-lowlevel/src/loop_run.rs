@@ -31,7 +31,7 @@
 //! # What decides, and what is refused
 //!
 //! An iteration whose test does not decide ends the loop **undecided**: the
-//! apply answers with the lazy marker, exactly as a body the evaluator could
+//! apply answers with `None`, exactly as a body the evaluator could
 //! not decide. That is the kernel-runtime state — a count the host cannot see —
 //! and the checker's refusal (`DiagKind::LoopNotRecorded` /
 //! `LoopNotEmitted`) is still what a program meets for it.
@@ -92,7 +92,7 @@ impl<P: Program> Module<P> {
         block: BlockId,
         node: NodeId,
         cell: Option<NodeId>,
-    ) -> P::Value {
+    ) -> Option<P::Value> {
         // **The entering call is one application.** It charges the apply budget
         // and one level of nesting like any other call, however many iterations
         // it goes on to run; only what the loop does *inside* is the loop's own
@@ -111,7 +111,7 @@ impl<P: Program> Module<P> {
         block: BlockId,
         node: NodeId,
         cell: Option<NodeId>,
-    ) -> P::Value {
+    ) -> Option<P::Value> {
         let mut argument = argument;
         loop {
             // **An iteration is an application.** The unwound level it replaces
@@ -126,7 +126,7 @@ impl<P: Program> Module<P> {
                         limit: self.apply_total_limit,
                     });
                 }
-                return P::Value::from(LowValue::Parameterized);
+                return None;
             }
             match self.loop_iteration(conversion, function, argument, block, node) {
                 Iteration::Step(next) => {
@@ -155,7 +155,7 @@ impl<P: Program> Module<P> {
                     let Some(r#type) = r#type else {
                         // A function whose return is stated bare: the value is
                         // the result, and there is no cell to bind.
-                        self.write_node_value(node, Some(decided.clone()));
+                        self.write_node_value(node, decided);
                         return decided;
                     };
                     let items = vec![ArrayItem::new(Dyn(value)), ArrayItem::new(Dyn(r#type))];
@@ -166,16 +166,16 @@ impl<P: Program> Module<P> {
                         // The return type is resolved before the cell binds, as
                         // the unroll's tail does: the deep pass resolves the
                         // node later but does not replicate to class members.
-                        self.evaluate_node(Dyn(r#type), Some(block));
+                        let _ = self.evaluate_node(Dyn(r#type), Some(block));
                         self.unify(cell, r#type);
                     }
-                    return result;
+                    return Some(result);
                 }
                 Iteration::Unnamed { applied } => {
                     return self.evaluate_node(Dyn(applied), Some(block));
                 }
                 Iteration::Undecided | Iteration::Refused => {
-                    return P::Value::from(LowValue::Parameterized);
+                    return None;
                 }
             }
         }
@@ -199,7 +199,7 @@ impl<P: Program> Module<P> {
             let test = conversion.tests[index];
             let condition = instantiation.node_of(test.condition);
             let value = self.evaluate_node(Dyn(condition), Some(block));
-            let Some(LowValue::USize(choice)) = value.as_enum() else {
+            let Some(LowValue::USize(choice)) = value.and_then(|value| value.as_enum()) else {
                 return Iteration::Undecided;
             };
             // The selector is an index into `[else, then]`, so `0` is the
@@ -277,7 +277,8 @@ impl<P: Program> Module<P> {
         let r#type = self.pair_type_half(entering).unwrap_or_else(|| {
             // No entering type to re-state: a fresh cell leaves the shape
             // unchecked rather than pinning it to the template's own cell.
-            self.add_node(block, None, Some(P::Value::from(LowValue::Parameterized)))
+            // Its slot is empty — the in-VM representation of "undecided".
+            self.add_node(block, None, None)
         });
         let items = vec![ArrayItem::new(Dyn(value)), ArrayItem::new(Dyn(r#type))];
         let array = self.alloc_array(&items, block);

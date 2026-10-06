@@ -4,7 +4,7 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, Function, FunctionId,
-    LowValue, Module, NodeId, Operation, PendingAssert, Program, TableItem, is_unbound,
+    LowValue, Module, NodeId, Operation, PendingAssert, Program, TableItem,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -137,7 +137,7 @@ impl<P: Program> Module<P> {
         block: BlockId,
         node: NodeId,
         cell: Option<NodeId>,
-    ) -> P::Value {
+    ) -> Option<P::Value> {
         // **The nesting guard, before any work.** `node` is the apply node this
         // instantiation is for, and the node's own depth is how many apply
         // levels it already sits under — a fact of the graph, so an expansion
@@ -146,7 +146,7 @@ impl<P: Program> Module<P> {
         // same entering apply node every iteration, so it stays at that node's
         // depth however long it runs: it spends work, never nesting.
         if self.depth_exhausted(node) {
-            return P::Value::from(LowValue::Parameterized);
+            return None;
         }
         // **A marked recursion runs as a loop.** `@loop` is permission to
         // convert, and a shape that converts ([`Module::loop_conversion`]) is
@@ -164,7 +164,7 @@ impl<P: Program> Module<P> {
             let Some(instantiation) = module.instantiate(function, argument, block, node) else {
                 // A failed parameter check leaves the apply's result unknown:
                 // the body must not run under a mismatched argument.
-                return P::Value::from(LowValue::Parameterized);
+                return None;
             };
             let result = module.evaluate_node(Dyn(instantiation.applied), Some(block));
             module.wire_apply_result(node, cell, result, instantiation.applied, block)
@@ -357,11 +357,14 @@ impl<P: Program> Module<P> {
         self.evaluate_node(argument, Some(block));
         let pattern_value = match pattern {
             Dyn(pattern) => self.nodes[pattern].value.and_then(|value| value.as_enum()),
-            AnyNodeId::Static(pattern) => self.static_read(pattern).as_enum(),
+            AnyNodeId::Static(pattern) => {
+                self.static_read(pattern).and_then(|value| value.as_enum())
+            }
         };
         let (Some(LowValue::Array(pattern)), Some(LowValue::Array(argument))) = (
             pattern_value,
-            self.evaluate_node(argument, Some(block)).as_enum(),
+            self.evaluate_node(argument, Some(block))
+                .and_then(|value| value.as_enum()),
         ) else {
             return;
         };
@@ -797,8 +800,8 @@ impl<P: Program> Module<P> {
         // SAFETY: `array` is the payload of `value`, a value the caller holds
         // reachable; this method only reads, so its home block is not released.
         unsafe { array.items() }.iter().any(|item| match item.node {
-            AnyNodeId::Dynamic(node) => is_unbound(self.node_value(Dyn(node))),
-            AnyNodeId::Static(sref) => is_unbound(Some(self.static_read(sref))),
+            AnyNodeId::Dynamic(node) => self.node_value(Dyn(node)).is_none(),
+            AnyNodeId::Static(sref) => self.static_read(sref).is_none(),
         })
     }
 

@@ -3,7 +3,7 @@ use stacksafe::stacksafe;
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, BudgetExhausted, EvaluatedDeep,
     LowOperator, LowValue, Module, NodeId, OperatorExt, Program, StaticModuleCache,
-    ancestors::AncestorPairs, is_unbound, table::KeyState,
+    ancestors::AncestorPairs, table::KeyState,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -90,7 +90,7 @@ impl<P: Program> Module<P> {
     /// otherwise a deep recursion overflows the native stack before the
     /// guard panics.
     #[stacksafe]
-    pub fn evaluate_node(&mut self, node: AnyNodeId, referer: Option<BlockId>) -> P::Value {
+    pub fn evaluate_node(&mut self, node: AnyNodeId, referer: Option<BlockId>) -> Option<P::Value> {
         // A static ref is a decided leaf: read its solved value (absolute
         // refs, shared arena) and return.  Nothing is evaluated, cached
         // into importer nodes, or marked — the static module already solved
@@ -106,12 +106,13 @@ impl<P: Program> Module<P> {
     /// returned guard drops.
     ///
     /// Invariant: a frame owns `Node::visiting` for exactly its own scope, and
-    /// the guard clears it on every exit — a cached answer, a lazy
-    /// (`Parameterized`) answer, and an unwinding panic alike.  A node is
+    /// the guard clears it on every exit — a cached answer, an undecided
+    /// (`None`) answer, and an unwinding panic alike.  A node is
     /// therefore never left flagged visiting once no frame is computing it,
     /// because the next evaluation of that node must not read the stale flag
-    /// as a cycle: a node the postlude deliberately declined to cache (a
-    /// `Parameterized` answer) is evaluated again by a later pass, and before
+    /// as a cycle: a node the postlude deliberately declined to cache (an
+    /// undecided answer, whose slot stays empty) is evaluated again by a later
+    /// pass, and before
     /// this invariant that second attempt saw `visiting == true` and panicked.
     /// [`Drop`] is what makes the invariant hold on the unwind path, so a
     /// future internal panic inside an attempt costs one node instead of
@@ -125,7 +126,7 @@ impl<P: Program> Module<P> {
     /// leaf rule, which [`Self::evaluate_node`] handles before the mark is
     /// taken: a static node has no visit mark to own.
     #[stacksafe]
-    fn evaluate_node_body(&mut self, node: NodeId, referer: Option<BlockId>) -> P::Value {
+    fn evaluate_node_body(&mut self, node: NodeId, referer: Option<BlockId>) -> Option<P::Value> {
         let block = self.nodes[node].block;
         debug_assert!(
             self.blocks.contains_key(block),
@@ -140,27 +141,23 @@ impl<P: Program> Module<P> {
             return self.evaluate_block(node);
         }
         if let Some(value) = self.nodes[node].value {
-            // **An unbound result does not stand as this node's answer.**  With
-            // the class's value distributed over the members, the value found
-            // here may be the *class's* marker rather than something this
-            // operator produced — and a marker is precisely the answer the
-            // evaluator declines to cache, so that a later pass re-runs the
-            // operator once its operands bind.  Accepting it here would cache it
-            // through the side door and the deciding pass would never happen.
-            //
-            // `runned` is the other half of the same test and the reason it
-            // stays: it is true only when *this* operator produced the value, so
-            // a decided answer a unification wrote still lets the operator run
+            // **A value a unification wrote is not an answer the operator gave.**
+            // With the class's value distributed over the members, the value
+            // found here may be the *class's* rather than something this
+            // operator produced, and the operator still owes its own
+            // reconciliation with it.  `runned` is that test: it is true only
+            // when *this* operator produced the value, so a decided answer a
+            // unification wrote still lets the operator run
             // and owes its own reconciliation.
             if self.nodes[node].operation.is_some()
-                && (!self.nodes[node].runned || is_unbound(Some(value)))
+                && !self.nodes[node].runned
                 && !self.nodes[node].visiting
             {
                 let guard = self.retain_node(node);
                 guard.run(|module, node| module.evaluate_node_operation(node));
-                return self.nodes[node].value.unwrap_or(value);
+                return self.nodes[node].value;
             }
-            return value;
+            return Some(value);
         }
         // A node flagged visiting with no cached value is being computed by an
         // inner frame, so this read is genuinely cyclic.  The flag is cleared
@@ -169,6 +166,13 @@ impl<P: Program> Module<P> {
         // than a leaked one.
         if self.nodes[node].visiting {
             unreachable!("cycle detected: node {node:?} is being evaluated");
+        }
+        // A node with neither a value nor a computation is an **empty slot** —
+        // the only in-VM representation of undecided (a fresh cell whose
+        // shape nothing has pinned yet).  There is nothing to run and nothing
+        // to answer.
+        if self.nodes[node].operation.is_none() {
+            return None;
         }
         let guard = self.retain_node(node);
         guard.run(|module, node| module.evaluate_node_operation(node))
@@ -179,7 +183,7 @@ impl<P: Program> Module<P> {
     /// cached.  Runs while the caller holds the node's [`VisitGuard`], so an
     /// early return here cannot leak the mark.
     #[stacksafe]
-    fn evaluate_node_operation(&mut self, node: NodeId) -> P::Value {
+    fn evaluate_node_operation(&mut self, node: NodeId) -> Option<P::Value> {
         let block = self.nodes[node].block;
         let operation = self.nodes[node].operation.unwrap();
         let operator = operation.operator;
@@ -188,32 +192,36 @@ impl<P: Program> Module<P> {
                 let Some(operands) = operation.operand else {
                     unreachable!("Index expects an operand array node")
                 };
-                // A marker anywhere in the operand chain means the index
-                // can't be resolved yet — stay lazy so the definition pass
-                // can flag the node.
-                match self.evaluate_node(Dyn(operands), Some(block)).as_enum() {
-                    Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
+                // An undecided operand chain means the index can't be resolved
+                // yet — stay lazy so the definition pass can flag the node.
+                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                    return self.ran_undecided(node);
+                };
+                match operand.as_enum() {
                     Some(LowValue::Array(array)) => {
                         // SAFETY: `array` is the value the module just
                         // evaluated for the operand node; its home block is
                         // alive and not dropped.
                         let operands = unsafe { array.items() };
-                        match self.evaluate_node(operands[1].node, Some(block)).as_enum() {
-                            Some(LowValue::Parameterized) => {
-                                P::Value::from(LowValue::Parameterized)
-                            }
+                        let Some(subscript) = self.evaluate_node(operands[1].node, Some(block))
+                        else {
+                            return self.ran_undecided(node);
+                        };
+                        match subscript.as_enum() {
                             // An empty index propagates: the read's own
                             // failure was recorded where the
                             // `Error` was produced.
-                            Some(LowValue::Error) => P::Value::from(LowValue::Error),
+                            Some(LowValue::Error) => Some(P::Value::from(LowValue::Error)),
                             Some(LowValue::USize(index)) => {
-                                match self.evaluate_node(operands[0].node, Some(block)).as_enum() {
-                                    Some(LowValue::Parameterized) => {
-                                        P::Value::from(LowValue::Parameterized)
-                                    }
+                                let Some(target) =
+                                    self.evaluate_node(operands[0].node, Some(block))
+                                else {
+                                    return self.ran_undecided(node);
+                                };
+                                match target.as_enum() {
                                     // A computed-nothing target propagates
                                     // the same way — no second diagnostic.
-                                    Some(LowValue::Error) => P::Value::from(LowValue::Error),
+                                    Some(LowValue::Error) => Some(P::Value::from(LowValue::Error)),
                                     Some(LowValue::Array(array)) => {
                                         // SAFETY: `array` is the value the
                                         // module just evaluated for the target
@@ -257,11 +265,6 @@ impl<P: Program> Module<P> {
                                                         let rep =
                                                             self.equality_representative(node);
                                                         self.class_committed_value(rep)
-                                                            .unwrap_or_else(|| {
-                                                                P::Value::from(
-                                                                    LowValue::Parameterized,
-                                                                )
-                                                            })
                                                     } else {
                                                         self.evaluate_node(
                                                             Dyn(element),
@@ -283,7 +286,7 @@ impl<P: Program> Module<P> {
                                                 index_value: index,
                                                 length: array.len(),
                                             });
-                                            P::Value::from(LowValue::Error)
+                                            Some(P::Value::from(LowValue::Error))
                                         }
                                     }
                                     // The read's operands are a *pair*: every
@@ -294,13 +297,13 @@ impl<P: Program> Module<P> {
                                     // not an index), never an invariant
                                     // violation — record it and yield an empty
                                     // value.  A late binding still reaches this
-                                    // position through the `Error`/`Parameterized`
+                                    // position through the `Error`/undecided
                                     // arms, so nothing that could resolve is lost.
                                     _ => {
                                         self.eval_errors.push(EvalError::IndexTarget {
                                             target: operands[0].node,
                                         });
-                                        P::Value::from(LowValue::Error)
+                                        Some(P::Value::from(LowValue::Error))
                                     }
                                 }
                             }
@@ -315,37 +318,35 @@ impl<P: Program> Module<P> {
                                 self.eval_errors.push(EvalError::IndexSubscript {
                                     subscript: operands[1].node,
                                 });
-                                P::Value::from(LowValue::Error)
+                                Some(P::Value::from(LowValue::Error))
                             }
                         }
                     }
                     _ => unreachable!("Index operand must be an array of [array, index]"),
                 }
             }
-            // An extension operator reports "undecided" as `None`; the VM's
-            // marker is how that travels from here to the postlude, which is
-            // what decides whether the node keeps a value.  The structural arms
-            // above still answer with a `P::Value`, so the seam is here.
-            None => operator
-                .run_deferred(operation.operand, block, self)
-                .unwrap_or_else(|| P::Value::from(LowValue::Parameterized)),
+            // An extension operator reports "undecided" as `None`, which is
+            // exactly what this function answers, so the seam is direct.
+            None => operator.run_deferred(operation.operand, block, self),
             Some(LowOperator::Apply) => {
                 let Some(operands) = operation.operand else {
                     unreachable!("Apply expects an operand array node")
                 };
-                // A marker target — the body's own parameter during the
+                // An undecided target — the body's own parameter during the
                 // definition pass — stays lazy instead of panicking.
-                match self.evaluate_node(Dyn(operands), Some(block)).as_enum() {
-                    Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
+                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                    return self.ran_undecided(node);
+                };
+                match operand.as_enum() {
                     Some(LowValue::Array(array)) => {
                         // SAFETY: `array` is the value the module just
                         // evaluated for the Apply operand node; its home block
                         // is alive and not dropped.
                         let operands = unsafe { array.items() };
-                        match self.evaluate_node(operands[0].node, Some(block)).as_enum() {
-                            Some(LowValue::Parameterized) => {
-                                P::Value::from(LowValue::Parameterized)
-                            }
+                        let Some(callee) = self.evaluate_node(operands[0].node, Some(block)) else {
+                            return self.ran_undecided(node);
+                        };
+                        match callee.as_enum() {
                             Some(LowValue::Function(function)) => {
                                 // Element 2 is the checker-wired result
                                 // cell, when present — the lowlevel tests
@@ -383,12 +384,12 @@ impl<P: Program> Module<P> {
                                 self.eval_errors.push(EvalError::ApplyTarget {
                                     function: operands[0].node,
                                 });
-                                P::Value::from(LowValue::Error)
+                                Some(P::Value::from(LowValue::Error))
                             }
                             // An empty value is the residue of an
                             // already-recorded failure: propagate it without
                             // recording a second one.
-                            Some(LowValue::Error) => P::Value::from(LowValue::Error),
+                            Some(LowValue::Error) => Some(P::Value::from(LowValue::Error)),
                             // A structural array and the program's own value
                             // both reach here, and neither is provably a
                             // function: the program's value variant is opaque
@@ -406,12 +407,12 @@ impl<P: Program> Module<P> {
                                     self,
                                     operands[0].node,
                                 ) {
-                                    P::Value::from(LowValue::Parameterized)
+                                    self.ran_undecided(node)
                                 } else {
                                     self.eval_errors.push(EvalError::ApplyTarget {
                                         function: operands[0].node,
                                     });
-                                    P::Value::from(LowValue::Error)
+                                    Some(P::Value::from(LowValue::Error))
                                 }
                             }
                         }
@@ -423,8 +424,10 @@ impl<P: Program> Module<P> {
                 let Some(operands) = operation.operand else {
                     unreachable!("TableGet expects an operand array node")
                 };
-                match self.evaluate_node(Dyn(operands), Some(block)).as_enum() {
-                    Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
+                let Some(operand) = self.evaluate_node(Dyn(operands), Some(block)) else {
+                    return self.ran_undecided(node);
+                };
+                match operand.as_enum() {
                     Some(LowValue::Array(array)) => {
                         // SAFETY: `array` is the value the module just
                         // evaluated for the TableGet operand node; its home
@@ -432,10 +435,10 @@ impl<P: Program> Module<P> {
                         let operands = unsafe { array.items() };
                         let table = operands[0].node;
                         let key = operands[1].node;
-                        match self.evaluate_node(table, Some(block)).as_enum() {
-                            Some(LowValue::Parameterized) => {
-                                P::Value::from(LowValue::Parameterized)
-                            }
+                        let Some(target) = self.evaluate_node(table, Some(block)) else {
+                            return self.ran_undecided(node);
+                        };
+                        match target.as_enum() {
                             Some(LowValue::Table(payload)) => {
                                 // The key is force-evaluated and
                                 // deep-content-hashed; a key that is
@@ -448,11 +451,15 @@ impl<P: Program> Module<P> {
                                 // the key bound, decides it.
                                 match self.key_state(key) {
                                     KeyState::Undecided => {
-                                        return P::Value::from(LowValue::Parameterized);
+                                        // The lookup never happened, so this
+                                        // node has not run to an answer: the
+                                        // slot stays empty and `runned` stays
+                                        // false, exactly as before.
+                                        return None;
                                     }
                                     KeyState::Unhashable => {
                                         self.eval_errors.push(EvalError::TableMiss { table, key });
-                                        return P::Value::from(LowValue::Error);
+                                        return Some(P::Value::from(LowValue::Error));
                                     }
                                     KeyState::Hashed(hash) => {
                                         // SAFETY: `payload` is the evaluated
@@ -481,7 +488,7 @@ impl<P: Program> Module<P> {
                             // never a panic.
                             Some(LowValue::Error) => {
                                 self.eval_errors.push(EvalError::TableMiss { table, key });
-                                P::Value::from(LowValue::Error)
+                                Some(P::Value::from(LowValue::Error))
                             }
                             _ => unreachable!("TableGet target must be a table"),
                         }
@@ -490,26 +497,22 @@ impl<P: Program> Module<P> {
                 }
             }
         };
-        // A transient marker is not a final answer: an operation whose
+        // An undecided answer is not a final answer: an operation whose
         // operands were unbound at evaluation time re-runs on the next read,
         // so a later binding is observed regardless of evaluation order
         // (concrete results are memoized as usual).  Cells never reach this
-        // postlude — they return their cached marker from the top.
+        // postlude — they return their cached value from the top.
         //
-        // Note what is *not* claimed here: an operation node **may** compute
-        // this marker (a probe measured `Eq` over an unbound operand doing
-        // exactly that).  What is declined is caching it — so an operation
-        // node's slot holds a *decided* answer or nothing, which is what makes
-        // `Module::has_no_result_yet`'s "has an operation and no cached value"
-        // the same question as "has not produced an answer yet".
-        // An extension operator reports "undecided" as `None` and the seam above
-        // turns that into this marker, so the test below is the one place both
-        // spellings mean the same thing.  When the marker itself is gone, this
-        // becomes the `None` the operator returned, carried to here.
-        if matches!(value.as_enum(), Some(LowValue::Parameterized)) {
+        // Note what is *not* claimed here: an operation node **may** answer
+        // "undecided".  What is declined is caching such an answer — so an
+        // operation node's slot holds a *decided* answer or nothing, which is
+        // what makes `Module::has_no_result_yet`'s "has an operation and no
+        // cached value" the same question as "has not produced an answer yet".
+        // `runned` is set even here: the attempt happened.
+        let Some(value) = value else {
             self.nodes[node].runned = true;
-            return value;
-        }
+            return None;
+        };
         // The computation produced an answer: it is committed through the one
         // value-write path, so the class's value reaches the representative
         // rather than sitting on this member beside it, and it is reconciled
@@ -518,12 +521,25 @@ impl<P: Program> Module<P> {
         // writes, it does not compute), and a disagreement is exactly the
         // conflict the unify deferred to here.
         self.write_node_answer(node, value);
-        value
+        Some(value)
+    }
+
+    /// The postlude's answer for an operation that **ran** but could not
+    /// decide: the node's slot stays empty — undecided's only in-VM
+    /// representation — and the node is marked as having run, so a later pass
+    /// re-runs it once its operands bind.
+    fn ran_undecided(&mut self, node: NodeId) -> Option<P::Value> {
+        self.nodes[node].runned = true;
+        None
     }
 
     /// Run [`Self::evaluate_node`] for all nodes in the reachable subtree of `id`.
     #[stacksafe]
-    pub fn evaluate_node_deep(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
+    pub fn evaluate_node_deep(
+        &mut self,
+        node: NodeId,
+        current: Option<BlockId>,
+    ) -> Option<P::Value> {
         let mut cache = StaticModuleCache::new();
         self.evaluate_node_deep_inner(Dyn(node), current, true, false, &mut cache)
     }
@@ -542,7 +558,11 @@ impl<P: Program> Module<P> {
     /// per apply, which preserves the deep pass's laziness invariants at the
     /// cost of redundant clones.
     #[stacksafe]
-    pub fn evaluate_node_forced(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
+    pub fn evaluate_node_forced(
+        &mut self,
+        node: NodeId,
+        current: Option<BlockId>,
+    ) -> Option<P::Value> {
         let mut cache = StaticModuleCache::new();
         self.evaluate_node_deep_inner(Dyn(node), current, false, true, &mut cache)
     }
@@ -556,7 +576,7 @@ impl<P: Program> Module<P> {
         node: NodeId,
         found: Option<AnyNodeId>,
         block: BlockId,
-    ) -> P::Value {
+    ) -> Option<P::Value> {
         match found {
             Some(Dyn(element)) => {
                 self.alias_read(node, element);
@@ -569,7 +589,7 @@ impl<P: Program> Module<P> {
             None => {
                 let (table, key) = self.table_get_operands(node);
                 self.eval_errors.push(EvalError::TableMiss { table, key });
-                P::Value::from(LowValue::Error)
+                Some(P::Value::from(LowValue::Error))
             }
         }
     }
@@ -611,7 +631,7 @@ impl<P: Program> Module<P> {
         skip_shallow: bool,
         force_operand: bool,
         cache: &mut StaticModuleCache<P>,
-    ) -> P::Value {
+    ) -> Option<P::Value> {
         // A static ref is a decided leaf: the module solved it, so there is
         // nothing to evaluate, descend, or mark — read its value.
         // Even a forced pass gains nothing from a solved subtree (residuals
@@ -643,7 +663,7 @@ impl<P: Program> Module<P> {
             // universe's `[Type, ↺]`) and a longer cycle read alike, and it is
             // cleared where the real verdict is written below.
             self.nodes[node].assumed_concrete = true;
-            return value;
+            return Some(value);
         }
         self.deep_depth += 1;
         if self.deep_depth > self.evaluate_depth_limit {
@@ -654,7 +674,7 @@ impl<P: Program> Module<P> {
             }
             // Nothing was computed, and nothing here can ever compute it:
             // return the computed-nothing value — the same shape the VM gives
-            // a read it declined to perform.  The undecided marker would
+            // a read it declined to perform.  An undecided answer would
             // promise "try again later", which nothing downstream can honour:
             // this frame already owns the budget verdict, and a later read
             // reaches the same refusal.  Unlike the apply frame's refusal
@@ -672,7 +692,7 @@ impl<P: Program> Module<P> {
             // shallow siblings still walk and are decided, and only the nodes
             // past the limit yield `Error`.
             self.deep_depth -= 1;
-            return P::Value::from(LowValue::Error);
+            return Some(P::Value::from(LowValue::Error));
         }
         // A forced evaluation forces the operand edge of an unevaluated
         // operation before the operation itself runs.  The operand is a
@@ -703,7 +723,7 @@ impl<P: Program> Module<P> {
             self.evaluate_node_deep_inner(Dyn(operand), Some(block), false, true, cache);
         }
         let value = self.evaluate_node(Dyn(node), current);
-        if let Some(LowValue::Array(array)) = value.as_enum() {
+        if let Some(LowValue::Array(array)) = value.and_then(|value| value.as_enum()) {
             // The descent below may reach `node` again through the array's own
             // items (a self-referential value), so it is marked for the
             // duration: the same structural-cycle cut as the entry above.
@@ -736,7 +756,7 @@ impl<P: Program> Module<P> {
         // A table's entries are edges like array items: its keys were
         // already forced concrete at build, but its values are lazy refs —
         // both must be proven (or disproven) concrete by the descent.
-        if let Some(LowValue::Table(table)) = value.as_enum() {
+        if let Some(LowValue::Table(table)) = value.and_then(|value| value.as_enum()) {
             let guard = self.retain_node(node);
             guard.run(|module, node| {
                 let block = module.nodes[node].block;
@@ -762,8 +782,8 @@ impl<P: Program> Module<P> {
                 }
             });
         }
-        // An array is unproven while any position resolved to the lazy
-        // marker, or any position at all sits behind a shallow mark.  A
+        // An array is unproven while any position is itself undecided, or any
+        // position at all sits behind a shallow mark.  A
         // static position's concreteness is the module's solved flag — it
         // was already decided by the deep pass that solved the module.
         let parameterized = self.value_is_parameterized(cache, value, node);
@@ -809,8 +829,9 @@ impl<P: Program> Module<P> {
     }
 
     /// Whether `value` — the value this module just evaluated for `node` — is
-    /// unproven: the lazy marker itself, an array or table with a shallow
-    /// position or a parameterized element, or an operation whose operand is
+    /// unproven: an **undecided** answer (`None`, the empty slot), an array or
+    /// table with a shallow position or an undecided element, or an operation
+    /// whose operand is
     /// parameterized.  `cache` is the walk's static-module resolution cache,
     /// so a static element's solved flag costs one lookup per module for the
     /// whole walk rather than one per element.
@@ -822,80 +843,77 @@ impl<P: Program> Module<P> {
     fn value_is_parameterized(
         &self,
         cache: &mut StaticModuleCache<P>,
-        value: P::Value,
+        value: Option<P::Value>,
         node: NodeId,
     ) -> bool {
-        // The value's extension view is taken once: every arm below tests the
+        // An empty answer is undecided by construction.  Otherwise the
+        // value's extension view is taken once: every arm below tests the
         // same value, and taking the view clones the extension leaf out of the
         // composed union, so re-taking it per arm is work already done.
+        let Some(value) = value else { return true };
         let view = value.as_enum();
-        matches!(view, Some(LowValue::Parameterized))
-            || matches!(
-                view,
-                Some(LowValue::Array(array))
-                    // An array holding a shallow position can never be
-                    // proven concrete — its marked subtree was deliberately
-                    // not evaluated, and even an assert's forced pass that
-                    // cached values in it leaves it unproven by this flag,
-                    // so it is never referenced in place across applies.
-                    // SAFETY: `array` is the payload of `value`, the value this
-                    // module just evaluated for `node`, so its home block is
-                    // alive.  The note covers the two `items()` calls in this
-                    // arm.
-                    if unsafe { array.items() }.iter().any(|item| item.shallow)
-                        || unsafe { array.items() }
-                            .iter()
-                            .any(|item| self.ref_is_parameterized(cache, item.node))
-            )
-            || matches!(
-                view,
-                Some(LowValue::Table(table))
-                    // SAFETY: `table` is the payload of `value`, the value this
-                    // module just evaluated for `node`, so its home block is
-                    // alive.  The note covers the two `items()` calls in this
-                    // arm.
-                    if unsafe { table.items() }
+        matches!(
+            view,
+            Some(LowValue::Array(array))
+                // An array holding a shallow position can never be
+                // proven concrete — its marked subtree was deliberately
+                // not evaluated, and even an assert's forced pass that
+                // cached values in it leaves it unproven by this flag,
+                // so it is never referenced in place across applies.
+                // SAFETY: `array` is the payload of `value`, the value this
+                // module just evaluated for `node`, so its home block is
+                // alive.  The note covers the two `items()` calls in this
+                // arm.
+                if unsafe { array.items() }.iter().any(|item| item.shallow)
+                    || unsafe { array.items() }
                         .iter()
-                        .any(|item| self.ref_is_parameterized(cache, item.key))
-                        || unsafe { table.items() }
-                            .iter()
-                            .any(|item| self.ref_is_parameterized(cache, item.value))
-            )
-            || self.nodes[node].operation.is_some_and(|op| {
-                op.operand.is_some_and(|operand| {
-                    // Deliberately **not** read through `ref_is_parameterized`.
-                    // A core operator's operand is the argument array a layer
-                    // above synthesized for it, and the deep pass descends
-                    // value-reachable edges only, so "this operand was never
-                    // walked" is the normal case rather than an anomaly —
-                    // reading it as unproven would flip every pair read
-                    // (`Index(pair, 0)`) in a template and clone it per apply.
-                    // The operand's effect on the node's *value* is already
-                    // decided where the value is: the value arm above for a
-                    // structural operator (a read of an unbound element yields
-                    // the marker), and the `Parameterized` gate the operation
-                    // postlude applies to an extension operator's operand
-                    // (`Self::evaluate_node_operation`'s `None` arm) for the
-                    // rest.  Operands are static graph edges, not
-                    // value-reachable, so a nested block release may have
-                    // dropped the node by now.
-                    self.nodes
-                        .get(operand)
-                        .is_some_and(|node| node.evaluated_deep.is_some_and(|e| e.parameterized))
-                })
+                        .any(|item| self.ref_is_parameterized(cache, item.node))
+        ) || matches!(
+            view,
+            Some(LowValue::Table(table))
+                // SAFETY: `table` is the payload of `value`, the value this
+                // module just evaluated for `node`, so its home block is
+                // alive.  The note covers the two `items()` calls in this
+                // arm.
+                if unsafe { table.items() }
+                    .iter()
+                    .any(|item| self.ref_is_parameterized(cache, item.key))
+                    || unsafe { table.items() }
+                        .iter()
+                        .any(|item| self.ref_is_parameterized(cache, item.value))
+        ) || self.nodes[node].operation.is_some_and(|op| {
+            op.operand.is_some_and(|operand| {
+                // Deliberately **not** read through `ref_is_parameterized`.
+                // A core operator's operand is the argument array a layer
+                // above synthesized for it, and the deep pass descends
+                // value-reachable edges only, so "this operand was never
+                // walked" is the normal case rather than an anomaly —
+                // reading it as unproven would flip every pair read
+                // (`Index(pair, 0)`) in a template and clone it per apply.
+                // The operand's effect on the node's *value* is already
+                // decided where the value is: the value arm above for a
+                // structural operator (a read of an unbound element yields
+                // no value), and the undecided gate the operation
+                // postlude applies to an extension operator's operand
+                // (`Self::evaluate_node_operation`'s `None` arm) for the
+                // rest.  Operands are static graph edges, not
+                // value-reachable, so a nested block release may have
+                // dropped the node by now.
+                self.nodes
+                    .get(operand)
+                    .is_some_and(|node| node.evaluated_deep.is_some_and(|e| e.parameterized))
             })
+        })
     }
 
-    fn evaluate_block(&mut self, root: NodeId) -> P::Value {
+    fn evaluate_block(&mut self, root: NodeId) -> Option<P::Value> {
         let value = self.evaluate_node_deep(root, None);
         // The deep pass answers without caching the root in two legitimate
         // cases, so the compaction below may have no moved value to return:
-        // a budget refusal returns before `evaluate_node`, and a
-        // `Parameterized` answer is deliberately left uncached by the
-        // postlude.  Both are leaf markers owned by no arena, so the pass's
-        // own answer is the block's value verbatim — `Error` for a refusal,
-        // whose budget verdict is already recorded, so this propagates the
-        // refusal rather than reporting it a second time.
-        self.garbage_collect(root).unwrap_or(value)
+        // a budget refusal returns before `evaluate_node`, and an undecided
+        // answer leaves the slot empty.  A refusal is the computed-nothing
+        // value, whose budget verdict is already recorded, so this propagates
+        // the refusal rather than reporting it a second time.
+        self.garbage_collect(root).or(value)
     }
 }

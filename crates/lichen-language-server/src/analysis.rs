@@ -51,7 +51,7 @@ use lichen_language::preprocess::ResolvedImport;
 use lichen_language::program::GcdOp;
 use lichen_language::render::{print_type_lang, print_value_lang, struct_type_named_fields};
 use lichen_language::{build_report, frontend_at};
-use lichen_lowlevel::{AnyNodeId, LowValue};
+use lichen_lowlevel::AnyNodeId;
 use lichen_utils::extend::AsEnum;
 
 use crate::lsp::{
@@ -131,7 +131,7 @@ struct ImportBinding {
 /// snapshot is taken by *reading* `build.ty`/`build.val`/`module.node_value`;
 /// it never re-evaluates a node, never forces a lazy cell, and never calls
 /// `evaluate_node`/`evaluate_node_deep`.  A lazy or recursive binding whose
-/// value the program defers (a `Parameterized` cell, e.g. `paradox` in the
+/// value the program defers (an undecided cell, e.g. `paradox` in the
 /// `Type : Type` encoding) reports `value: None` and its type only — forcing
 /// it would run the compiler-generated recursion clones, which are not
 /// user-written and are irrelevant to editor needs.
@@ -143,7 +143,7 @@ pub struct StatementValue {
     pub ty: String,
     /// The statement's value, rendered when the cascade computed a concrete
     /// one; `None` when the statement is lazy/recursive (its value is a
-    /// deferred `Parameterized` cell) or has no value node.
+    /// deferred undecided cell) or has no value node.
     pub value: Option<String>,
 }
 
@@ -568,17 +568,15 @@ where
                         );
                     }
                     let value = build.state[id].val.and_then(|vn| {
-                        match build.module.node_value(AnyNodeId::Dynamic(vn)) {
-                            // A `Parameterized` value is a deferred (lazy /
-                            // recursive) binding — report type only, never force.
-                            Some(v) if matches!(v.as_enum(), Some(LowValue::Parameterized)) => None,
-                            Some(v) => Some(print_value_lang(
+                        // An empty slot is a deferred (lazy / recursive)
+                        // binding — report type only, never force.
+                        build.module.node_value(AnyNodeId::Dynamic(vn)).map(|v| {
+                            print_value_lang(
                                 &build.module,
                                 v,
                                 build.state[id].ty.unwrap_or_default(),
-                            )),
-                            None => None,
-                        }
+                            )
+                        })
                     });
                     statements.push(StatementValue { span, ty, value });
                     starts.push(start as u32);
@@ -613,17 +611,14 @@ where
                             None => String::new(),
                         };
                         let value = build.state[val_id].val.and_then(|vn| {
-                            match build.module.node_value(AnyNodeId::Dynamic(vn)) {
-                                Some(v) if matches!(v.as_enum(), Some(LowValue::Parameterized)) => {
-                                    None
-                                }
-                                Some(v) => Some(print_value_lang(
+                            // An empty slot is a deferred binding: type only.
+                            build.module.node_value(AnyNodeId::Dynamic(vn)).map(|v| {
+                                print_value_lang(
                                     &build.module,
                                     v,
                                     build.state[val_id].ty.unwrap_or_default(),
-                                )),
-                                None => None,
-                            }
+                                )
+                            })
                         });
                         field_types.insert(
                             name.to_string(),
@@ -669,15 +664,14 @@ where
                         .and_then(|mty| field_type_in_struct(mty, name))
                         .unwrap_or_default();
                     let value = build.state[eid].val.and_then(|vn| {
-                        match build.module.node_value(AnyNodeId::Dynamic(vn)) {
-                            Some(v) if matches!(v.as_enum(), Some(LowValue::Parameterized)) => None,
-                            Some(v) => Some(print_value_lang(
+                        // An empty slot is a deferred binding: type only.
+                        build.module.node_value(AnyNodeId::Dynamic(vn)).map(|v| {
+                            print_value_lang(
                                 &build.module,
                                 v,
                                 build.state[eid].ty.unwrap_or_default(),
-                            )),
-                            None => None,
-                        }
+                            )
+                        })
                     });
                     module_field_types.insert(
                         (module_name.to_string(), name.to_string()),
@@ -976,7 +970,7 @@ impl DocIndex {
     /// This is a **read-only** snapshot already taken at [`Doc::new`].  It
     /// never re-evaluates an expression, never forces a lazy cell, and never
     /// calls `evaluate_node` / `evaluate_node_deep`: a statement the cascade
-    /// left lazy/recursive (a deferred `Parameterized` cell) reports
+    /// left lazy/recursive (a deferred undecided cell) reports
     /// [`StatementValue::value`] as `None` and its type only.  The statement's
     /// *value* is only present when the build actually computed a concrete one
     /// for that user-written statement (a terminal binding, a literal).

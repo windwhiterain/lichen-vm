@@ -28,8 +28,8 @@ impl<P: Program> Module<P> {
     /// built or walked later — see [`Module::function_apply`].
     pub(super) fn with_apply_frame(
         &mut self,
-        body: impl FnOnce(&mut Self) -> P::Value,
-    ) -> P::Value {
+        body: impl FnOnce(&mut Self) -> Option<P::Value>,
+    ) -> Option<P::Value> {
         self.apply_total += 1;
         let exhausted =
             (self.apply_total > self.apply_total_limit).then_some(BudgetExhausted::ApplyTotal {
@@ -40,7 +40,8 @@ impl<P: Program> Module<P> {
                 self.budget_exhausted = Some(exhausted);
             }
             // The body never ran, so nothing was computed — and the answer
-            // is *unknown*, not nothing: return the undecided marker, the
+            // is *unknown*, not nothing: return `None`, the undecided
+            // answer, the
             // same refusal `apply_parameter_check` already issues for a body
             // it declined to run.  `LowValue::Error` would instead be cached
             // by the `evaluate_node` postlude as a decided value, letting
@@ -48,7 +49,7 @@ impl<P: Program> Module<P> {
             // `evaluated_deep.parameterized` derives from the cached value)
             // and every parent array along with it — a proven-concrete
             // claim about a computation that never happened.
-            return P::Value::from(LowValue::Parameterized);
+            return None;
         }
         body(self)
     }
@@ -147,17 +148,17 @@ impl<P: Program> Module<P> {
         &mut self,
         node: NodeId,
         cell: Option<NodeId>,
-        result: P::Value,
+        result: Option<P::Value>,
         applied: NodeId,
         block: BlockId,
-    ) -> P::Value {
-        match (cell, result.as_enum()) {
+    ) -> Option<P::Value> {
+        match (cell, result.and_then(|value| value.as_enum())) {
             // SAFETY: `array` is the payload of `result`, a value this module
             // just evaluated, so its home block is alive and not dropped; the
             // note covers both `items()` calls in this arm.
             (Some(cell), Some(LowValue::Array(array))) if unsafe { array.items() }.len() >= 2 => {
                 let items = unsafe { array.items() };
-                self.write_node_value(node, Some(result));
+                self.write_node_value(node, result);
                 self.unify(node, applied);
                 // Resolve the return type before binding the cell: the deep
                 // pass resolves the node later but does not replicate to

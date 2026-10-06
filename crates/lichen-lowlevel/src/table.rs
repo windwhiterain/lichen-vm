@@ -287,6 +287,11 @@ impl<P: Program> Module<P> {
             return KeyState::Hashed(mix(OPERATION_TOKEN ^ nested));
         }
         let Some(value) = self.node_value(id) else {
+            // No value at all — an empty slot — is undecided content,
+            // wherever it sits in the key: the key cannot be
+            // hashed yet, and must not collapse onto one constant (two
+            // different undecided keys would then collide).  A template's hole
+            // is not undecided — it is what the shape says.
             return match mode {
                 UnfoldMode::Key => KeyState::Undecided,
                 UnfoldMode::Template => KeyState::Hashed(UNDECIDED_TOKEN),
@@ -310,14 +315,6 @@ impl<P: Program> Module<P> {
             Some(LowValue::Error) => match mode {
                 UnfoldMode::Key => KeyState::Unhashable,
                 UnfoldMode::Template => KeyState::Hashed(ERROR_TOKEN),
-            },
-            // Undecided content, wherever it sits in the key: the key cannot be
-            // hashed yet, and must not collapse onto one constant (two
-            // different undecided keys would then collide).  A template's hole
-            // is not undecided — it is what the shape says.
-            Some(LowValue::Parameterized) => match mode {
-                UnfoldMode::Key => KeyState::Undecided,
-                UnfoldMode::Template => KeyState::Hashed(UNDECIDED_TOKEN),
             },
             Some(LowValue::Function(function)) => {
                 match self.hash_function(function, unfolding, depth - 1) {

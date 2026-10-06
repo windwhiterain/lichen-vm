@@ -28,7 +28,7 @@
 //!
 //! **But nothing in a template's body is decided**, and that is the fact the
 //! lowering turns on: the count and the buffers in the `cfg` are
-//! `Parameterized` until the function is applied. So a graph is built by
+//! undecided until the function is applied. So a graph is built by
 //! *applying* the function and recording what it dispatches, not by reading a
 //! template. See
 //! [`a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied`].
@@ -106,7 +106,7 @@ fn items(module: &Module<LangProgram>, node: NodeId) -> Vec<NodeId> {
 
 /// The function the program evaluates to, without applying it.
 fn function_of(module: &mut Module<LangProgram>, root: NodeId) -> AnyFunctionId {
-    let value = module.evaluate_node_deep(root, None);
+    let value = module.evaluate_node_deep(root, None).unwrap();
     match value.as_enum() {
         Some(LowValue::Function(function)) => function,
         other => panic!("expected the program to evaluate to a function, got {other:?}"),
@@ -279,7 +279,7 @@ fn through_index(module: &Module<LangProgram>, node: NodeId) -> NodeId {
 /// how a graph has to be built.**
 ///
 /// The cfg tuple is readable without any evaluation, and reading it is not
-/// enough: its two elements — the count and the buffer — are `Parameterized`.
+/// enough: its two elements — the count and the buffer — are undecided.
 /// The `4` and the `data` in the body are unbound cells until the function is
 /// applied, because nothing has applied it.
 ///
@@ -314,8 +314,7 @@ fn a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied(
             .node_value(AnyNodeId::Dynamic(node))
             .and_then(|v| AsEnum::<LowValue>::as_enum(&v));
         assert_eq!(
-            value,
-            Some(LowValue::Parameterized),
+            value, None,
             "cfg[{position}] is {node:?}, and it is an unbound cell: the count and the buffer \
              in the body are decided by applying the function, not before it"
         );
@@ -438,7 +437,7 @@ fn a_parameter_read_is_a_bare_cell_and_pins_an_open_tuple_type() {
             module
                 .node_value(AnyNodeId::Dynamic(cell))
                 .and_then(|v| AsEnum::<LowValue>::as_enum(&v)),
-            Some(LowValue::Parameterized),
+            None,
             "cfg[{position}] is unbound until the function is applied"
         );
     }
@@ -469,7 +468,7 @@ fn a_parameter_read_is_a_bare_cell_and_pins_an_open_tuple_type() {
         module
             .node_value(AnyNodeId::Dynamic(value_cell))
             .and_then(|v| AsEnum::<LowValue>::as_enum(&v)),
-        Some(LowValue::Parameterized),
+        None,
         "and the value cell is unbound until the function is applied"
     );
     assert!(
@@ -482,7 +481,7 @@ fn a_parameter_read_is_a_bare_cell_and_pins_an_open_tuple_type() {
         module
             .node_value(AnyNodeId::Dynamic(pinned[0]))
             .and_then(|v| AsEnum::<LowValue>::as_enum(&v)),
-        Some(LowValue::Parameterized),
+        None,
         "the pinned tuple's shape is an open cell: `ins(0)` and `ins(1)` state \
          the kind but not how many inputs a caller has to satisfy"
     );
@@ -556,7 +555,7 @@ fn buffer_data(handle: &lichen_lowlevel::AnyHandle<[u8]>) -> Vec<i64> {
 fn a_parameter_is_bound_by_the_position_the_source_names_and_not_by_read_order() {
     let (mut module, root) = run(BACK_TO_FRONT);
 
-    let value = module.evaluate_node_deep(root, None);
+    let value = module.evaluate_node_deep(root, None).unwrap();
     let Some(ComputeValue::Buffer(handle, _)) = AsEnum::<ComputeValue>::as_enum(&value) else {
         panic!("the dispatch ran, so the root is a buffer, got {value:?}");
     };

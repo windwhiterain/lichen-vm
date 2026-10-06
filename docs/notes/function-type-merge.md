@@ -11,8 +11,9 @@
 > now reproduced in two lines of pure language, with no JIT and no operator
 > involved; see
 > [the same defect in two lines of pure language](#the-same-defect-in-two-lines-of-pure-language-and-what-it-actually-takes).
-> Base: `dev` at `dcf0cf3`; re-merged with `8f45cd9` before landing.
-> Branch `feature/function-type-merge`, seven commits.
+> Base: `dev` at `dcf0cf3`; re-merged with `8f45cd9` (the operator seam returns
+> `Option`) and `c21c88d` (`LowValue::Parameterized` deleted) before landing.
+> Branch `feature/function-type-merge`.
 
 ## The two representations, and why they are the problem
 
@@ -368,6 +369,17 @@ it changes that quote, so it wants its own commit and its own note edit.
    reason. — `b8d7daf`, `3220fb0`, `7819381`
 5. Merge `dev`, then fix the single-sided self-cycle hole the merge exposed
    (`(\x. x) : Type` must fail). — `cf21c76`, `b8d7daf`
+6. Merge `dev` twice more, under `c21c88d` which deleted
+   `LowValue::Parameterized`.  The two changes touched the same four files for
+   the same reason — each was one way of writing *this node is not decided
+   yet* — so the conflicts were import lists and one test that asserts the
+   opposite thing about the same cell.  That test is the interesting one: `dev`
+   says a frozen template's parameter type **must not be guessed** and this
+   branch says the annotation **does** reach it.  Both cannot hold.  This
+   branch's claim is the one kept, because the note's whole argument is that
+   a signature is a pair the unifier descends into, and a template whose
+   parameter type nothing can reach is the failure mode `materialize_static_
+   signature` exists to fix.
 6. **Verify, in this order — the first is the whole point, and it did not
    happen:**
    - the frozen-module reproduction goes from

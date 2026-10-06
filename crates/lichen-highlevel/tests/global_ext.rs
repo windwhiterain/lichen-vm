@@ -104,12 +104,16 @@ fn a_downstream_global_ext_composes_flat_and_reaches_both_components() {
     let value = m.evaluate_node_deep(bump1, None);
     assert_eq!(
         value,
-        HighProgramValue::LowValue(lichen_lowlevel::LowValue::USize(0))
+        Some(HighProgramValue::LowValue(
+            lichen_lowlevel::LowValue::USize(0)
+        ))
     );
     let value = m.evaluate_node_deep(bump2, None);
     assert_eq!(
         value,
-        HighProgramValue::LowValue(lichen_lowlevel::LowValue::USize(1))
+        Some(HighProgramValue::LowValue(
+            lichen_lowlevel::LowValue::USize(1)
+        ))
     );
 
     // The operator's `Fresh`-style co-existence check never fired: the

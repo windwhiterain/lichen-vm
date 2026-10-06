@@ -1,14 +1,12 @@
 //! Freezing a solved module into static form under its registry-allocated key.
 
 use super::*;
-use crate::{Release, is_unbound};
+use crate::Release;
 impl<P: Program> StaticModule<P> {
-    /// The node's solved value — `Parameterized` when the node is a
-    /// residual computation with no cached answer.
-    pub fn read(&self, node: LocalNodeId) -> P::Value {
-        self.nodes[node.index]
-            .value
-            .unwrap_or_else(|| P::Value::from(LowValue::Parameterized))
+    /// The node's solved value, or [`None`] when the node is a residual
+    /// computation with no cached answer.
+    pub fn read(&self, node: LocalNodeId) -> Option<P::Value> {
+        self.nodes[node.index].value
     }
 
     /// Freeze a solved module into static form under the registry-allocated
@@ -22,9 +20,9 @@ impl<P: Program> StaticModule<P> {
     /// final key.
     ///
     /// The source must be fully solved: every node holds its final answer,
-    /// or a residual operation whose `Parameterized` value is the answer.
-    /// Module-level pending asserts of the source are dropped — a solved
-    /// module has decided everything decidable.
+    /// or is a residual operation with no cached answer, which reads as
+    /// undecided.  Module-level pending asserts of the source are dropped — a
+    /// solved module has decided everything decidable.
     ///
     /// Static refs the source already carries name its frozen dependencies.
     /// They are absolute from birth (keyed by the dependency's final key), so
@@ -523,7 +521,7 @@ fn closure<P: Program>(module: &Module<P>, roots: &[NodeId]) -> (Vec<NodeId>, Ve
         let Some(entry) = module.nodes.get(node) else {
             continue;
         };
-        if is_unbound(entry.value) {
+        if entry.value.is_none() {
             let class = class_root(module, node);
             if decided.insert(class) {
                 for member in class_members(module, class) {
