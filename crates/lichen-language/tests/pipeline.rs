@@ -2244,11 +2244,13 @@ fn an_annotation_mismatch_reports_expected_and_found() {
         check.value_a,
         Some(LangValue::TypeValue(TypeValue::TypeInt))
     );
-    // the expected side is the arrow type — an array of two elements
-    assert_eq!(
-        array_ids(check.value_b.expect("the expected arrow type")).len(),
-        2
-    );
+    // the expected side is the arrow — and an arrow is a function now, so what
+    // the annotation named is that function rather than the two-element shape
+    // the arrow term used to compile to.
+    assert!(matches!(
+        check.value_b.expect("the expected arrow"),
+        LangValue::LowValue(LowValue::Function(_))
+    ));
 }
 
 #[test]
