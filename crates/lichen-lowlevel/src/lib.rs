@@ -813,7 +813,12 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
 // genuinely unreachable: a structural operator is never an extension
 // computation.
 impl<P: Program> OperatorExt<P> for LowOperator {
-    fn run(&self, _operand: P::Value, _block: BlockId, _module: &mut Module<P>) -> Option<P::Value> {
+    fn run(
+        &self,
+        _operand: P::Value,
+        _block: BlockId,
+        _module: &mut Module<P>,
+    ) -> Option<P::Value> {
         unreachable!("structural operators are dispatched by the VM")
     }
 }
