@@ -1,23 +1,29 @@
 # A function's type is the function itself
 
-> Status: **Phase 1 landed** on `feature/function-type-as-function` (merged to
-> `dev`); Phase 2 (attribute slots in the signature) is open.
-> Points at: `crates/lichen-highlevel/src/checker/lambda.rs` (`check_lam`'s
-> pair mutation), `crates/lichen-highlevel/src/shape.rs`
-> (`is_function_type` / `unify_function_type` / `signature_pair`),
-> `crates/lichen-lowlevel/src/equality.rs`
-> (`unify_inner`'s `Program::unify_function_type` hook),
-> `crates/lichen-lowlevel/src/lib.rs` (`Program`, `FunctionIdentity`),
-> `crates/lichen-lowlevel/src/function.rs` (`clone_signature`), the printer, the
-> codec, `low_type_of`.
-> Supersedes the "attribute flow is a non-goal" line in
-> [`attributes.md`](attributes.md) (Phase 2).
+> Status: **historical.** Phase 1 landed on `feature/function-type-as-function`
+> (merged to `dev`) and is still true: a function's type is the function, so
+> `f : f`. **Phase 2 never arrived in the form planned here**, and the note is
+> kept because the `f : f` half of it is current — but the arrow half it
+> describes is gone. A written arrow no longer compiles to a type term at all;
+> it lowers to a function, and
+> [a function's type is the function](function-type-merge.md) is the note that
+> describes today's representation. **Most of the symbols listed below no longer
+> exist** — `Program::unify_function_type`, `shape`'s `is_function_type` /
+> `unify_function_type` / `signature_pair`, `Module::clone_signature` and the
+> `FunctionType` marker were all deleted by that change; the ones that survived
+> are `FunctionIdentity` in `lichen-lowlevel/src/lib.rs` and `f : f` itself.
+> Read this for why Phase 1 was worth landing, not for what the code is.
 >
 > **Known open, deferred to the compute session:** `compute::jit_cross_kernel_subexpr`
 > — an un-annotated kernel (`k1 = compute.jit (x => k0 (x) + 1)`) has its launch
 > gate bind a cell other than the template's parameter type cell, so the JIT's
 > parameter class stays undecided and it refuses. Disabling the clone does not
 > change it, so it is a JIT/checker interaction, not this feature's clone.
+> **Measured since, and this note's framing of it is wrong**: it needs no JIT
+> and no operator at all. The minimum is a frozen (imported) module plus a
+> written arrow annotation — see
+> [function-type-merge](function-type-merge.md) §"The same defect in two lines
+> of pure language, and what it actually takes".
 
 ## The defect, measured
 

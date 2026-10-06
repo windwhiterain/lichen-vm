@@ -181,7 +181,10 @@ that holds.
 complete — every `OperatorExt::run`/`run_deferred` returns `Option<P::Value>`,
 the VM converts `None` to the marker at the extension seam, and the structural
 dispatch is untouched.  The workspace compiles and the suites are green, but
-three cases are parked rather than passing, and they are not the same kind:
+cases are parked rather than passing, and they are not the same kind.  The
+first four belong to this feature; the last two arrived with
+[function-type-merge](function-type-merge.md) and are listed here so the
+workspace's parked set has one place to be read from:
 
 | parked case | kind |
 |---|---|
@@ -189,6 +192,8 @@ three cases are parked rather than passing, and they are not the same kind:
 | `statement_values::compute_kernel_bindings_render_by_name_not_raw_layout` | pre-existing on `dev` |
 | `statement_values::compute_wrapper_functions_hover_with_named_type_variables` | pre-existing on `dev` |
 | `graph_jit::what_a_recorded_body_may_not_reach_for_is_refused_by_name` | pre-existing on `dev` |
+| `compute::wrapper_functions_render_with_named_type_variables` | **one defect, not this feature's own** — a written arrow in a *frozen* module collapses the signature onto the `Function` marker, so an unapplied wrapper no longer renders as the open `?a` the test states it must be.  **Do not re-pin it**: the test's own comment says the wrapper stays generic, so re-pinning would record the defect as intended |
+| `compute::a_float_domain_is_permitted_at_every_position_the_walk_reaches` | same cause, reached through a domain that contains a function — the walk refuses at the `jit` rather than at the launch argument, and the message asks the author to annotate a parameter the test already annotated.  That misleading message is a second defect in its own right |
 
 The regression is the one to answer before the marker removal finishes: it is a
 **type check that stopped rejecting**, which is the same subject as the import

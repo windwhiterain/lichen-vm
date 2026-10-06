@@ -15,7 +15,7 @@ Build type system over untyped lowlevel from IR (intermediate representation).
 
 ### Philosophy:
 - No Curry
-- `Type : Type`: the type chain closes in a cycle at `Type` (the terminal of the chain, not a supertype) — the cycle is what admits recursive types. A function's type is the function itself (`f : f`), so its chain closes at `f` the same way ([function-type-as-function](docs/notes/function-type-as-function.md)).
+- `Type : Type`: the type chain closes in a cycle at `Type` (the terminal of the chain, not a supertype) — the cycle is what admits recursive types. A function's type is the function itself (`f : f`), so its chain closes at `f` the same way ([function-type-merge](docs/notes/function-type-merge.md)).
 
 ## [Lowlevel](crates/lichen-lowlevel/)
 

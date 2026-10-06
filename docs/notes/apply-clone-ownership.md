@@ -292,7 +292,7 @@ class in the regroup, and the parameter unify binds it.
 The red tests that remain are the ones this note does not touch: the mirrored
 double diagnostic (`pipeline`), the refinement and perspective suites whose
 expectations predate the `f : f` encoding
-(`docs/notes/function-type-as-function.md`), the parked compute case, the
+(`docs/notes/function-type-merge.md`), the parked compute case, the
 `dependent` checker case, and `compute_jit`'s `raw[...]` rendering.  Each of
 them is now an `#[ignore]` naming its own symptom rather than a red run, and
 `compute_jit` is skipped by name in `tests/examples.rs`: the type it prints

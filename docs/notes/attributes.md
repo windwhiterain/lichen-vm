@@ -223,11 +223,14 @@ label's shape is hardcoded.
 ## Non-goals (currently)
 
 - The apply **checks** an attribute (equality + subtype) but does not yet *flow* it out
-  through a function (auto-derivation); the return value reads the body's slot. This
-  non-goal is superseded by Phase 2 of
-  [a function's type is the function itself](function-type-as-function.md), which makes
-  the signature carry the parameter and return pairs so a signature can share an
-  attribute cell between them.
+  through a function (auto-derivation); the return value reads the body's slot. That
+  was blamed on the representation — an arrow carried `dom` and `cod` and nowhere to
+  hang an attribute — and
+  [a function's type is the function](function-type-merge.md) removed the excuse: a
+  function type *is* a function, so a signature's parameter and return are terms and
+  carry attribute cells, and `?a: Int => ?a: Int` states one cell on both the
+  argument and the result. What landed is the ability to *state* the constraint, not
+  the flow of it, so auto-derivation remains a non-goal here.
 - A second *constraint* attribute in the same program (only `Perspective` ships;
   `Schema::tail` is a `Vec`, so one could be added). Labels like `Doc` already share
   the tail.

@@ -257,7 +257,11 @@ k = compute.parallel_sig f "cpu" Sig
 wrapper's field type taken from the function instead of from `s`
 (`.sig (type_of f)` with the value still `s`), the *expected* side becomes the
 right arrow but the error stays, because **a type value's own type is its kind**:
-`Sig`'s type is `[FunctionType, K]`, whose marker renders `TypeFunction`.  So the
+`Sig`'s type is `[FunctionType, K]`, whose marker renders `TypeFunction`.  Both
+terms are quoted from the arrow representation that
+[function-type-merge](function-type-merge.md) removed — a function type's own type
+is now the function, so nothing builds that pair — so read this as what was
+measured, not as what today's error message says.  So the
 two ends pull apart in the checker's own vocabulary:
 
 - a **type position** fed by a bound variable contributes that variable's *type*,
