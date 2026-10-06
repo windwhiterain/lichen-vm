@@ -37,13 +37,11 @@ use lichen_tools::readme;
 /// because a directory's `_.lichen` face shares its basename with every other
 /// directory's.
 ///
-/// `import/_.lichen` is parked by `docs/notes/class-channel.md` §1.1.2: its two
-/// cross-module calls (`geo.double`, `geo.inc_twice`) print `none` where they
-/// declare `10` and `7`, while `42` — the same-module call — is right.  The
-/// value reaches the right node and its type resolves; what is lost is the
-/// class's committed value on the imported path.  Every other program here,
-/// including the two files this one imports, is still the living spec.
-const WORK_IN_PROGRESS: &[&str] = &["compute_jit.lichen", "import/_.lichen"];
+/// `import/_.lichen` was parked here for two cross-module calls that printed
+/// `none` where they declare `10` and `7`.  It is un-parked again: the merge no
+/// longer overwrites a member's own value, which is what the walk that resolved
+/// those calls descended through (`docs/notes/class-channel.md` §1.1.3).
+const WORK_IN_PROGRESS: &[&str] = &["compute_jit.lichen"];
 
 #[test]
 fn every_example_runs_and_prints_what_it_declares() {

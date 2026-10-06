@@ -91,13 +91,21 @@ rather than a second case:
 
 - **A unification is unconditional: it must write.**  A write is not gated on the
   slot being unbound — "this member already knows something" is not a reason to
-  skip it.
-- **The one veto is an operation-bearing member.**  Its own computation is what
-  settles it, and a value arriving from elsewhere is not a proof of what that
-  computation will produce.  This is a decision, not a gap.
+  skip it.  It reaches **every** member, operation-bearing ones included.
+- **The run axis, not a veto, keeps a computation's own answer readable.**  The
+  operation-bearing member does receive the class's value in its slot, and
+  `runned` — which a propagated value never sets — is what keeps "this operator
+  produced this" distinct from "this is asserted of it"
+  ([`crates/lichen-lowlevel/src/evaluation.rs`]).  An earlier version of this
+  rule made the operation-bearing member a *veto* instead; §1.1.3 measures why
+  that veto is not the protection, and the guard on the evaluator's cached-value
+  arm is.
 - **A member that already holds a value is compared**, and the comparison is the
   unify recursion — a structure's elements are nodes, so comparing binds the
   cells inside it.  Two values that cannot be one value are **reported**.
+- **A merge is not a write** (§1.1.3): it carries the class's value to the
+  members that hold nothing and leaves every member that holds something with
+  what it holds.
 
 So "unify, report, merge" are one recursion and there is no variant of it, on the
 class's own members or between classes.
@@ -118,13 +126,14 @@ same unification.
 behaviour of its own.
 
 **The write rule landed.**  Its statements in this note are now true:
-`propagate_class_value` asks every operation-free member, and `write_node_value`
+`propagate_class_value` asks every member of the class, and `write_node_value`
 writes its node's slot unconditionally.  Read the corrections below before
 touching it — three of the four were mistakes a later session would repeat.
 `write_node_value`'s distribution half is `propagate_class_value`, and its
-comparison is the write rule's own question; the class's *value* is still read
-through the representative (`class_value`) — what is member-local is the write
-rule's test, not the read API.
+comparison is the write rule's own question; the class's *value* is read through
+the representative (`class_value`) — what is member-local is the write rule's
+test, not the read API.  A **merge** is a separate rule, and §1.1.3 is where it
+is stated and measured.
 
 ### 1.1.1 The invariant this rule exists to keep
 
@@ -135,25 +144,32 @@ Both are needed, and the rule above is what keeps them apart:
   `write_node_answer` (`crates/lichen-lowlevel/src/equality.rs`), and is
   reconciled against the class's value through the one unification;
 - the class's value reaches the members only through
-  `propagate_class_value`, and that walk **skips operation-bearing members**;
+  `propagate_class_value`, and that walk reaches **every** member — an
+  operation-bearing one included, which is what makes the next bullet load
+  bearing rather than decorative;
 - `runned` therefore means exactly *this operator produced the answer in this
-  slot*, which is what [`Module::has_no_result_yet`] reads and what stops a
-  second run.
+  slot* — a propagated value never sets it — which is what
+  [`Module::has_no_result_yet`] reads, what stops a second run, and what lets
+  the evaluator tell an **asserted** value from a **produced** one.
 
 **Both halves must stay separate, and each has a reader.**  The class value is
 read by the unifier (`class_committed_value`) and by the class channel's
 consumers; the node's own answer is read by the evaluator's
-`if let Some(value) = node.value` arm, which returns a value it finds there
-**without running the operator**.  If that arm sees a value the operator did not
-produce, the operator never runs: its answer is never reconciled, `runned` never
-becomes true, and the class's value is all any reader can see.
+`if let Some(value) = node.value` arm.  That arm **still runs the operator** when
+the slot holds a value this operator did not produce
+(`evaluate_node`'s `operation.is_some() && !runned && !visiting` guard), so an
+asserted value cannot silence the computation that owes an answer: the operator
+runs, its answer is reconciled, and `runned` becomes true.
 
-That is what "unconditional propagation" breaks.  A third attempt on the rule
-measured it (branch `feature/unconditional-class-writes`, worktree
-`.worktrees/unconditional-nodes`): the walk visits **every** member and the
-carrier is deleted, keeping the class value in the representative's own slot.
+An earlier version of this section made the operation-bearing member a **veto**
+in `propagate_class_value` instead, and argued from a `runned`-less evaluator.
+§1.1.3 measures what actually broke when the veto was removed — it was not this.
 
-| suite | result |
+The two red cases this section listed are **fixed**; §1.1.3 is the measurement
+and the rule that fixes them.  Kept here as the record of what the third attempt
+measured at the time:
+
+| suite at the time | result |
 |---|---|
 | `--test basic` + lib (`lichen-lowlevel`) | **155 of 155**, unchanged |
 | `--test checker` and the small targets (`lichen-highlevel`) | **87 of 87**, unchanged |
@@ -163,17 +179,19 @@ Instrumented, one hypothesis at a time: a write that replaces an operation's
 decided slot with an unbound value (**never fired**), a member write that leaves
 the representative unbound (**never fired**), a merge that drops the class value
 (a `debug_assert_eq!` on `class_committed_value(representative)`, **held all
-suite**).  What the trace did show is the mechanism in numbers: **4069
-propagation writes change an operation member's slot from `None` to the class's
-value**, e.g. `class 17v1 value USize(5)` into operation member `63v1`.  Every
-one of those slots stays `None` under the rule above.
+suite**).  What the trace did show is a count of the writes the veto was blocking:
+**4069 propagation writes change an operation member's slot from `None` to the
+class's value**, e.g. `class 17v1 value USize(5)` into operation member `63v1`.
 
-A second step kept the producing operator's own answer while still distributing
-to everyone (`write_node_answer` restores the node's slot after the walk).  The
-unit suites stayed green and the example **still failed the same way** — so the
-producer's own slot is not the whole of it, and this is *not* the class-level
-read that the two refutations below measured.  The invariant above is the one
-that holds.
+Those three refutations are correct, and none of them is the defect.  The
+comparison was made against the **wrong partner**: every one of them asks about
+the *write* (`write_node_value`) and the *read* (`class_committed_value`), while
+the loss happened at the **merge**, which was the experiment's third write site
+and the only one that could overwrite a member's own value.  §1.1.3 is that
+measurement.  A second step kept the producing operator's own answer while still
+distributing to everyone (`write_node_answer` restores the node's slot after the
+walk); that change is still in the code and is still right — the producer's slot
+is what stops a second run.
 
 ### 1.1.2 Done: `LowValue::Parameterized` is deleted
 
@@ -375,14 +393,14 @@ representative), so the class's representative records **which** member carries
 it and the scan became one field read (§1.1).  The write walk stays O(class size)
 per write, which is inherent to distributing a value over members.
 
-**Re-measured: the veto cannot be removed and the carrier cannot be deleted**
-(branch `feature/unconditional-class-writes`, worktree
-`.worktrees/unconditional-nodes`).  A third attempt was made on the §1.1
-decision itself: `propagate_class_value` writes **every** member with no
-operation check, the class value is kept in the representative's own slot, and
-`class_carrier` — with `class_committed_node`, `commit_class_value`,
-`reselect_class_carrier`, and the two `class_committed_node` readers in
-`highlevel::shape` and `is_function_type_node` — is deleted.  The marks:
+**Re-measured, and the conclusion above is superseded** (branch
+`feature/unconditional-class-writes`, worktree `.worktrees/unconditional-nodes`,
+merged as `09b4640`).  A third attempt was made on the §1.1 decision itself:
+`propagate_class_value` writes **every** member with no operation check, the
+class value is kept in the representative's own slot, and `class_carrier` — with
+`class_committed_node`, `commit_class_value`, `reselect_class_carrier`, and the
+two `class_committed_node` readers in `highlevel::shape` and
+`is_function_type_node` — is deleted.  The marks at the time:
 
 | suite | result |
 |---|---|
@@ -401,12 +419,93 @@ operation's decided slot is ever overwritten with an unbound value
 (`write_node_value`), the class's value is never shadowed on the representative,
 and the merge preserves the class value through the new representative
 (a `debug_assert_eq!` on `class_committed_value(representative)` held for the
-whole suite).  What remains is the structural finding §1.1 already records: the
-**class value and a member's own value are two facts**, and readers of both the
-type channel and the evaluator's `runned` guard take the member's own slot as
-the source.  Distributing one value into every member makes the two
-indistinguishable, and moving it to the representative leaves the member slot
-empty.  The carrier is the third option, and it is the one that works.
+whole suite).
+
+**All three of those hypotheses are true, and this passage's conclusion — "the
+carrier is the third option, and it is the one that works" — was wrong.**  They
+all ask about the class's *value*, and what breaks is the class's **structure**:
+the merge, the experiment's third write site, overwrote a member's own value, and
+the walk that later descends through the value graph took the other branch.
+§1.1.3 states the rule and carries the measurement; with it, both reds this
+passage lists are green and no carrier is needed.
+
+#### Superseded: the scan stood in for the carrier
+
+The paragraph above (before this re-measurement) read the O(1) question as
+"`class_committed_value`'s scan was load-bearing in the merge path, so the
+representative must record which member carries the value".  That is no longer
+true: the merge does not need a class-level read of the merged class at all — it
+reads both sides **before** the union, which is where their values still live on
+the members they were written to.  What the representative's slot must be is the
+class's value slot for *later* readers, and §1.1.3's rule keeps it that way
+without a carrier.
+
+### 1.1.3 A merge is not a write: it fills the members that hold nothing
+
+**Landed**, and it un-parks both red cases the sections above had parked:
+`pipeline::a_dependent_array_length_rejects_other_lengths` and
+`examples/import/_.lichen`.
+
+The experiment made `add_equality` distribute `left_value.or(right_value)` over
+**every** member of the merged class.  The pre-experiment merge wrote **nothing**
+there — it nominated the side that held a decided value as the class's carrier
+and left every member's own slot as it was.  Deleting the carrier turned the
+merge into a second, unconditional write site, and that is the whole of both
+regressions.
+
+**What was measured.**  `((n => ([1, 2, 3] : array<Int, n>)) 5)` must fail to
+compile: the annotation pins the parameter `n` to 3, and applying 5 clashes at
+the apply.  Green at `4be9180`, red from `03ed3e2` + `dde4011`.  One node dump at
+the apply and one `evaluate_node` trace per tree (worktree
+`.worktrees/green-4be9180`, instrumented identically):
+
+| what | green | red |
+|---|---|---|
+| the parameter's own value cell (`17v1`) | a member of the class that holds `USize(3)` | alone, empty |
+| that class's size | 3 | 2 |
+| the annotation's length cell (`37v1`, an `Index` view) | **evaluated** | **never evaluated** |
+| the cell the deep walk descends through (`40v1`) | its **own** array `[38v1, 39v1]` | the merged class's array `[32v1, 33v1]` |
+
+The chain, every step read off a trace rather than argued:
+
+1. the annotation's length position is a **view** (`37v1 = Index(36v1, 0)`); the
+   parameter's cell joins the class that holds 3 through `alias_read`, which is
+   what *evaluating the view* runs — so the pin exists only if the view runs;
+2. the view runs when the deep pass descends into the array **item** that names
+   it (`evaluate_node_deep_inner`'s item loop).  Nothing else evaluates it: an
+   operation whose slot holds a value still runs (the `runned` guard), but a walk
+   that never reaches the node asks nothing of it;
+3. the array that walk descended through was `40v1`'s **own**, and merging
+   `40v1`'s class with `34v1`'s overwrote it with the other side's array — so the
+   item list it read changed from `[38v1, 39v1]` to `[32v1, 33v1]`;
+4. the walk therefore never reached `37v1`, `alias_read` never ran, `17v1` never
+   joined the class, the parameter stayed undecided, and the apply's
+   `(None, Some(5))` arm **learned 5** instead of reporting the clash.
+
+Two candidate causes were **refuted** on the way, and neither is this defect:
+restoring the operation-bearing **veto** in `propagate_class_value` leaves the
+test red — the overwritten member `40v1` has **no** operation, so no veto can
+protect it; and reading the class's value by scanning the members instead of
+through the representative also leaves it red — the value was not misplaced, the
+structure was rewritten.
+
+**The rule, and why it is a rule.**  A merge is the one place two decided sides
+meet *without* their values being compared: the positional descent agrees they
+**unify**, which is not their being one value — two type terms that unify still
+name different nodes.  A class can therefore hold two values, on two members, and
+the merge may not choose between them by overwriting, because the structure still
+names the node it would erase.  So:
+
+- a **write** states the class's value and reaches every member
+  (`propagate_class_value`, unconditional);
+- a **merge** carries the value to the members that hold nothing, and leaves
+  every member that holds something with what it holds (`add_equality`).
+
+**Measured after the change**: `pipeline` 138 of 140 (both remaining ignores
+pre-existing and unrelated), `examples` green with `import/_.lichen` un-parked,
+`lichen-lowlevel` 155 of 155, every `lichen-highlevel` target green, and
+`lichen-language`'s whole test set green — **670 passed, 0 failed, 13 ignored**
+across the three crates.
 
 ## 2. Half one — refuted: a class's low type is not a second reading of a type slot
 

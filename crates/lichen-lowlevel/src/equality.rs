@@ -103,24 +103,31 @@ impl<P: Program> disjoint::Node for Node<P> {
 
 impl<P: Program> Module<P> {
     /// Merge the classes of `a` and `b`, carrying the merged class's decided
-    /// value to the members the merge adds to it.
+    /// value to the members that **hold nothing**.
     ///
     /// The two low-type reads at the top are the shape half; the value half is
     /// the class-channel invariant ([`Self::write_node_value`]) applied to the
-    /// merge that **grows** a class rather than to the write that fills one.  A
-    /// decided value is not necessarily on the representative: replication
-    /// skips operation-bearing members, so a class whose representative is a
-    /// pending operation holds its value on some other member.  A merge that
-    /// read only the two representatives' slots would therefore see no value
-    /// and carry nothing, leaving the cell that just joined the class
-    /// undecided while the class has been decided all along — a read that
-    /// happened before the unification which decided the class, with nothing
-    /// to wake it afterwards (`docs/notes/eval-before-unify.md` §2.1).
+    /// merge that **grows** a class rather than to the write that fills one.
+    /// Both sides are read **before** the union, which re-elects a
+    /// representative: what either side already knew has to be read off the
+    /// class it was on, not off a node that may stop being the one a class read
+    /// reaches.  A merge that read only the two representatives' slots would
+    /// see no value and carry nothing, leaving the cell that just joined the
+    /// class undecided while the class has been decided all along — a read that
+    /// happened before the unification which decided the class, with nothing to
+    /// wake it afterwards (`docs/notes/eval-before-unify.md` §2.1).
     ///
-    /// Gated on the representative's own slot being unbound and the class
-    /// having more than one member: a representative that is a pure cell is
-    /// written by every commit (replication covers it), and a class of one has
-    /// no other member to hide a value on.
+    /// **The distribution reaches the members that hold nothing, and only
+    /// those.**  A merge is the one place two decided sides meet without their
+    /// values being compared for equality: the positional descent agrees they
+    /// *unify*, which is not the same as their being one value — two type terms
+    /// that unify still name different nodes — so a class may hold two values,
+    /// on two members, and each member's slot keeps the one it holds.  A merge
+    /// that overwrote them would move a node out of a slot the structure still
+    /// names, and a later walk descending through that structure would silently
+    /// take the other branch; that is how a parameter's pinned dependent length
+    /// became an undecided cell, and why this is a rule and not a tolerance
+    /// (`docs/notes/class-channel.md` §1.1.3).
     pub fn add_equality(&mut self, a: NodeId, b: NodeId) -> NodeId {
         // Both sides' low types are read *before* the union (which leaves the
         // authoritative copy on whichever node becomes the representative) and
@@ -133,28 +140,16 @@ impl<P: Program> Module<P> {
         // **undecided** class (an empty slot) is not a fact to carry, exactly as
         // [`Self::write_node_value`] treats it.  Both sides decided is not a
         // conflict here — `unify_inner`'s arms decide that, and only agree to
-        // merge two decided sides.  So both reads are the *committed* values —
-        // an undecided class contributes nothing to the merged class, and
-        // `propagate_class_value` is never handed an undecided value.
+        // merge two decided sides.
         let left_value = self.class_committed_value(a);
         let right_value = self.class_committed_value(b);
         let representative = disjoint::union(&mut self.nodes, a, b);
         for shape in [left, right].into_iter().flatten() {
             self.refine_class_low_type(representative, shape);
         }
-        // The class keeps the value it had, and the merged class's value slot
-        // has to carry it: the union re-elected a representative, and with the
-        // veto gone the value can be moved into that slot rather than pointed
-        // at.  The one value left over is the merged class's, because both
-        // sides decided is a conflict `unify_inner` reports instead of merging.
         if let Some(value) = left_value.or(right_value) {
-            self.propagate_class_value(representative, value);
+            self.fill_class_holes(representative, value);
         }
-        debug_assert_eq!(
-            self.class_committed_value(representative),
-            left_value.or(right_value),
-            "the merge must keep the class's value, read through the new representative"
-        );
         representative
     }
 
@@ -423,10 +418,11 @@ impl<P: Program> Module<P> {
     }
 
     /// Distribute a concrete `value` over the class of `representative` — the
-    /// distribution half of [`Self::write_node_value`], shared with
-    /// [`Self::add_equality`], where a merge carries the class's decided value
-    /// to the members it adds exactly as a write carries it to the members it
-    /// finds.
+    /// distribution half of [`Self::write_node_value`], and **only** that: a
+    /// write states the class's value, so it reaches every member.  A merge
+    /// does not distribute this way; it fills the members that hold nothing
+    /// ([`Self::add_equality`]), because a merge is where two decided sides
+    /// meet and neither may be overwritten.
     ///
     /// **Undecided is not a fact to propagate** — there is no such value to
     /// pass here: a class states nothing about its members until it holds a
@@ -440,6 +436,20 @@ impl<P: Program> Module<P> {
         let members: Vec<NodeId> = self.class_members(representative).collect();
         for member in members {
             self.nodes[member].value = Some(value);
+        }
+    }
+
+    /// Fill the class's members that hold nothing with `value` — the merge's
+    /// half of the distribution, against [`Self::propagate_class_value`]'s
+    /// write.  A member that already holds something **keeps it**: a merge is
+    /// where two decided sides meet, and neither may be overwritten
+    /// ([`Self::add_equality`], `docs/notes/class-channel.md` §1.1.3).
+    fn fill_class_holes(&mut self, representative: NodeId, value: P::Value) {
+        let members: Vec<NodeId> = self.class_members(representative).collect();
+        for member in members {
+            if self.nodes[member].value.is_none() {
+                self.nodes[member].value = Some(value);
+            }
         }
     }
 
