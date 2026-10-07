@@ -93,8 +93,9 @@ had guessed:
   arity guesses. The marker set is **open**: extension leaves declare their
   own type constants through `LeafKindMarkers` (compute's
   `TypeBuffer`/`TypeWrite` then; both since deleted —
-   [compute-buffer-wrapper](compute-buffer-wrapper.md)), and the composed vocabulary's
-  `ValueType::is_kind_marker` consults it (`lang_compose_vocabulary!`).
+  [compute-buffer-wrapper](compute-buffer-wrapper.md)), and the composed
+  vocabulary's `ValueType::is_kind_marker` consults it
+  (`lang_compose_vocabulary!`).
 - **The deferral gate covers reads and calls, and a Merge verdict pins.**
   `PendingSide` gained `pending_apply`; `shape::defer_pending` accepts a
   pending `Index` or a pending `Apply` against a class that holds a type. On
