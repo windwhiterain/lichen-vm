@@ -148,8 +148,6 @@ fn dependent_type_resolves_per_argument_via_laziness() {
 }
 
 #[test]
-#[ignore = "a codomain that resolves to a different value records two conflicts where the \
-test pins one"]
 fn a_concrete_type_is_never_bound_over_a_dependent_codomain() {
     let mut m = Module::new();
     let root = m.add_block(None);

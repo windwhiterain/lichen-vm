@@ -507,6 +507,49 @@ pre-existing and unrelated), `examples` green with `import/_.lichen` un-parked,
 `lichen-language`'s whole test set green — **670 passed, 0 failed, 13 ignored**
 across the three crates.
 
+### 1.1.4 The read's join does not report: the reconcile owns the conflict
+
+**Landed**, and it un-parks `highlevel::dependent::
+a_concrete_type_is_never_bound_over_a_dependent_codomain`.
+
+The case is the deferral working as designed: a dependent codomain
+(`[0, 1][x]`) meets a concrete `1` while `x` is still unbound — unify does not
+evaluate, so the class holds `1` and the computation is left owing an answer
+(the §1.1.3 rule) — and when the read runs it selects the `0` branch.  That is
+**one** disagreement.  It arrived as two, mirrored:
+
+| record | roots | value_a | value_b | mechanism |
+|---|---|---|---|---|
+| the read's join | `(10v1, 1v1)` — reader, element | `USize(1)` | `USize(0)` | `alias_read`'s `unify(reader, target)` |
+| the answer's reconcile | `(10v1, 10v1)` — the reader twice | `USize(0)` | `USize(1)` | `write_node_answer` against what the class held |
+
+So a reader is shown `expected 1, found 0` **and** `expected 0, found 1` for one
+conflict.  The mirrored shape is `pipeline`'s parked
+`an_applied_struct_constructor_keeps_the_occurrence_identity`'s;
+`function-type-merge.md` measured a *non*-mirrored double in the function arm
+(one message, twice).  This is a **third** mechanism, and it is none of theirs:
+both of those are still parked and neither moved when this one was closed.
+
+**Why the reconcile is the one that stays.**  The join is the read's own
+bookkeeping — "a read of a cell is a reference, not a snapshot" — not a
+unification the program states, and it cannot be the report: a failed join
+merges nothing, so the read falls through to the target's own value, and the
+postlude's reconcile compares exactly that answer against the class it could not
+join (`write_node_answer`'s *"a disagreement is exactly the conflict the unify
+deferred to here"*).  One disagreement, one report — attributed to the
+expression that was read, and with the descent path the reconcile's own
+`steps` rebuilds.
+
+So `alias_read` keeps the merge and drops its own error range: `try_unify` plus
+`Vec::truncate`, the suppression form `try_unify`'s own doc names for a caller's
+own failures.  The target's evaluation runs **after** the truncate, so a failure
+of the computation itself is still recorded.
+
+**Measured after the change**: `lichen-lowlevel` + `lichen-highlevel` +
+`lichen-perspective` + `lichen-compute` + `lichen-language` = **695 passed,
+0 failed, 7 ignored** (was 694/0/8), and the parked set went 8 → 7 with the
+other six reds byte-identical.
+
 ## 2. Half one — refuted: a class's low type is not a second reading of a type slot
 
 **What was proposed**: route `shape::low_type_of_slot`'s dynamic slots through

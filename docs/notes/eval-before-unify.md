@@ -211,7 +211,9 @@ plain reads it works — §2.1's controls resolve:
   so any later read re-evaluates against whatever has since bound;
 - a read of a pure cell **joins the cell's class** (`alias_read`,
   `equality.rs`), so a later bind replicates the value to the reader through
-  `write_node_value`;
+  `write_node_value`.  A join that *cannot* merge reports nothing itself — the
+  read's answer is what gets reconciled, once
+  ([class-channel.md §1.1.4](class-channel.md#114-the-reads-join-does-not-report-the-reconcile-owns-the-conflict));
 - a unify that meets a pending computation **forces** it
   (`force_pending`) or **defers and pins** (`defer_pending` +
   `pin_committed_value`), reconciling when the computation finally runs.

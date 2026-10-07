@@ -1096,8 +1096,23 @@ impl<P: Program> Module<P> {
     ///
     /// The reader keeps its operation: the operand edge must stay live for the
     /// apply's clone machinery, and for the read's own resolution path to find it.
+    ///
+    /// **The join does not report.**  It is the read's own bookkeeping, not a
+    /// unification the program states, and a disagreement it meets is the *same*
+    /// one the reader's answer is reconciled against when its operator finishes
+    /// ([`Self::write_node_answer`]): a failed join merges nothing, so the read
+    /// answers with the target's own value and that reconcile reports it against
+    /// the reader.  Recording here as well reports one conflict twice, mirrored —
+    /// measured on `lichen-highlevel`'s
+    /// `a_concrete_type_is_never_bound_over_a_dependent_codomain`, one
+    /// disagreement arriving as `expected 1, found 0` (the join, roots reader and
+    /// target) and `expected 0, found 1` (the reconcile, the reader twice;
+    /// `docs/notes/class-channel.md`).  The dropped range is this call's own, so
+    /// the merge's effect, every other failure and the evaluation below are
+    /// untouched.
     pub(crate) fn alias_read(&mut self, reader: NodeId, target: NodeId) {
-        self.unify(reader, target);
+        let (_, errors) = self.try_unify(reader, target);
+        self.unify_errors.truncate(errors.start);
         let block = self.nodes[target].block;
         self.evaluate_node(Dyn(target), Some(block));
     }
