@@ -1,11 +1,18 @@
 # Graph JIT: a chain of dispatches as one submission
 
-> Status: **the IR and the seams are in and tested; the lowering is decided and
-> not written.** The two lowlevel seams, the graph IR crate, and the return
-> recording all exist and are tested. The half that builds a graph — the
-> `compute.graph` operator, the `Graph` value, and the recording that fills
-> `Graph::push` — is designed below and unwritten. Branch `feature/graph-jit`,
-> not pushed.
+> Status: **the IR, the seams, the lowering and its tests are in, and the branch is
+> `dev`.** The two lowlevel seams, the graph IR crate, the return recording, the
+> `compute.graph` operator, the `Graph` value and the recording that fills
+> `Graph::push` all exist and are tested (`lichen-language --test graph_jit`: 8
+> passed, one documented `#[ignore]`).
+>
+> **The recorded body's parameter is the named struct** since
+> [compute-buffer-wrapper](compute-buffer-wrapper.md): the placeholders are the
+> parameter's own cells, wrapped per role (a buffer field's cell is a `Buf` around
+> its `GraphInput`, a scalar's is bare), a run is handed the cells its dispatches
+> read in first-read order, and the graph hands back the body's return — a bare
+> `Buf` when it is one dispatch's result. The claims below that speak of a `cfg`
+> tuple are the record of what the lowering was designed against.
 >
 > **Correction since the body below was written** (found by
 > [gpu-algorithms-ladder](gpu-algorithms-ladder.md), fixed on
