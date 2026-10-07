@@ -30,10 +30,22 @@ Two more decisions came with it:
   what the emitter already works from (it never read the first operand at all —
   `compute.rs:3993` reads `items[1]` and `items[2]` and takes the ordinal from
   `tally.writes`).
-- **`O`'s fields are buffers.** `plrun`'s result is the kernel's own codomain —
-  the structure the author wrote, with `Buf` fields — which is why `plrun` can
-  state `r: k.O` and does not need a separate "bare buffer or tuple of buffers"
-  shape.
+- **`O`'s fields are buffers, and `O` is the *parameter's* `.out` group.** A
+  parallel body **produces no value**: it dispatches writes, and the result is the
+  structure the author declared under `.out` (`P = T: KT _ => struct<.n Int, .in
+  T.I, .out T.O>`, so `O` is the author's own `Out`, whose fields are `Buf`s).
+  So `parallel` must set the kernel struct's `.O` to the parameter type's `.out`
+  field — `(K _)(.native $parallel(f, b), .I I, .O I.out)` — and *not* to the
+  body's codomain. Setting it to the body's codomain is what left `k.O` bound to
+  the body's own (unconstrained) value cell, which is why `plrun`'s `r: k.O`
+  could not name the output fields.
+  The ABI already tells this story from the other side: a parallel fragment's
+  emitted function "only has side effects", and `compile_parallel_fragment`
+  appends a trailing `Const(0)` purely so the `-> i64` signature has a result.
+  The language has **no unit type** to spell `P -> None` with (the kind markers
+  are int/float/string/`Type`/function/tuple/array/struct/table/set), so the
+  prelude leaves a parallel `f`'s codomain unconstrained (`f: I -> _`) and the
+  writes' roles are the real contract.
 
 ## Why the kernel's shape, and not a kind marker
 
@@ -55,14 +67,21 @@ marker unnecessary rather than half-implemented.
 Buf     = T => struct<.native _, .element T>
 Read    = T => struct<.from (Buf T), .at Int>
 Write   = T => struct<.to (Buf T), .at Int, .value T>
-read    = (x : (Read _))  => $read(x.from.native, x.at): x.from.element
-write   = (x : (Write _)) => $write(x.to.native, x.at, x.value)
-collect = (b : (Buf _))   => $collect(b.native)
+read    = (x : (Read _))  => $read(x.from, x.at): x.from.element
+write   = (x : (Write _)) => $write(x.to, x.at, x.value)
+collect = (b : (Buf _))   => $collect(b)
 ```
 
-- The ops see only the **payload** (`.native`), the way `$launch`/`$call` see
-  `k.native` — the struct is the type level's business, the artifact is the
-  op's.
+- The ops take the **`Buf` value**, and the engine takes the payload: the path
+  the checker resolves for `x.from` is then *the same path* the role walk records
+  for that field, which is what lets the emitter match a read against
+  `roles.inputs`. Spelling `.native` in the prelude put the source's path one
+  step deeper than the role table and had the emitter decline a read that is
+  plainly an input buffer. `buf_payload` (`compute.rs`) is where the payload is
+  taken — the wrapper's first item, whose order `is_buf_shape` fixes — and the
+  run's input decoding and the two VM arms that consume a buffer (`Read`,
+  `BufferCollect`) each fall back to the operand itself, so nothing that already
+  names a payload breaks.
 - `read`'s result is **`x.from.element`**, the buffer's own element cell: a fact
   of the value, now *stated* where it lives instead of left to the call's fresh
   cell (`ReadOp`'s note explains why the cell used to stay open). A program that
@@ -71,23 +90,43 @@ collect = (b : (Buf _))   => $collect(b.native)
 - `Read`/`Write` keep their `_` instantiation spelling at the call sites
   (`(compute.Read _)(…)`): the element cell is what the buffer's `.element` binds.
 
-## What the JIT owes this
+## What blocks it now, measured
 
-`parallel_roles` (`compute.rs:2045`) already walks the **parameter's type** —
-not a value — finds `.in`/`.out` **by name**, and its own comment says it: "A
-field under `.in`/`.out` is a buffer" (`compute.rs:2071`). Two things follow:
+`parallel` reading the result type from the parameter — `I.out`, where `I` is a
+**type** — is a *named read on a type value*, and that does not resolve today.
+The probe (`.probe/one.lichen`: one named-form kernel, then `collect inbuf.z`)
+never reaches its `BufferCollect`, and the VM logs the two lookups that stay
+undecided:
 
-- Its enumeration is **one level** (`count_under` reads the sub-struct's field
-  count, `compute.rs:2078`), while the checker's `param_path` (`compute.rs:4636`)
-  already resolves a named read of *any* depth against the parameter's type. The
-  enumerator has to recurse and keep collecting **paths** — which is already the
-  shape it stores (`ParallelRoles::inputs: Vec<Vec<usize>>`).
-- A leaf under `.in`/`.out` is no longer a buffer *by position*: it is a buffer
-  when it **is** a `Buf`, and anything else is a leaf the walk must either lower
-  (a runtime scalar) or refuse **by name** — the model this note opened with.
+- `TableGet key="z"` — the author's `inbuf.z`, undecided because `inbuf`'s stated
+  type (`plrun`'s `r: k.O`) has no name table to look `z` up in;
+- `TableGet key="out"` — the same lookup written the model-faithful way
+  (`r: k.I.out`), undecided because the *table* it would read is the type value
+  `k.I`, whose runtime value is undecided.
 
-The walk and the fragment's `param_shape` (`kernel_domain`/`emit`) must be the
-same enumeration, or the ABI's leaf order and the walk's paths can disagree.
+So the next piece is the checker's: a named read whose target is a struct **type**
+value folds to the field's type (and position) against the type's kind name table
+— the table `parallel_roles` and `field_names` already read — rather than
+emitting a runtime `TableGet`. Then `parallel` can say `.O I.out`, `plrun`'s
+`r: k.O` names the author's `Out`, and the host's `inbuf.z` resolves.
+
+## What the JIT owes this (landed)
+
+`parallel_roles` already walked the **parameter's type** — not a value — and its
+own comment said it: "A field under `.in`/`.out` is a buffer". Its enumeration was
+**one level** while the checker's `param_path` already resolves a named read of
+*any* depth against the parameter's type, so it now recurses and keeps collecting
+**paths** (which was already the shape it stored). A leaf under `.in`/`.out` is no
+longer a buffer *by position*: it is a buffer when it **is** a `Buf`-shaped struct,
+a runtime scalar when it is a scalar, and anything else is refused **by name with
+its path** — the model this note opened with.
+
+The walk's paths travel in the fragment (`KernelRoles` in `lichen-kernel-ir`,
+hashed by `fragment_digest` like every other field), because the run side has the
+cfg **value** and no type: the run reads its leaves and inputs at those paths, and
+builds the result structure by placing each output buffer where the walk found it.
+The walk, the ABI's leaf order and the emitter's reads are then one enumeration
+rather than three.
 
 ## The migration, measured
 
@@ -99,6 +138,9 @@ crates: `algorithms.rs` 115, `recursion.rs` 44, `graph_jit.rs` 41, `bench.rs` 29
 it passes, not constructing wrappers by hand.
 
 Phases: (1) this file; (2) the JIT walk, the `Buf`-shaped results the run
-produces, and the marker deletion; (3) the call sites and their expectations;
-(4) the notes that still spell `.sig`/`BufferId` (`compute.rs`'s module docs,
-`compute-param-struct-handoff.md`, `compute-runtime-scalars.md`).
+produces, the marker deletion, and the role paths in the fragment — landed, with
+`lichen-language --test compute` still at 35 passed / 21 failed / 5 ignored, the
+21 being the tuple-form call sites; (3) the call sites and their expectations,
+blocked on the type-value named read above; (4) the notes that still spell
+`.sig`/`BufferId` (`compute.rs`'s module docs, `compute-param-struct-handoff.md`,
+`compute-runtime-scalars.md`).
