@@ -158,6 +158,10 @@ Phases: (1) this file; (2) the JIT walk, the `Buf`-shaped results the run
 produces, the marker deletion, and the role paths in the fragment — landed, with
 `lichen-language --test compute` still at 35 passed / 21 failed / 5 ignored, the
 21 being the tuple-form call sites; (3) the call sites and their expectations,
-blocked on the type-value named read above; (4) the notes that still spell
-`.sig`/`BufferId` (`compute.rs`'s module docs, `compute-param-struct-handoff.md`,
-`compute-runtime-scalars.md`).
+under way: the language tests first (three migrated, the rest in flight), then
+the examples whose programs only dispatch (`algorithms`, `recursion`, `bench`,
+`crossbackend`), and **the graph tests last** — `graph_jit` is where the recorded
+body's placeholders meet the named parameter (26 graph call sites), so it waits
+on the recording path rather than on spelling; (4) the notes that spelled
+`.sig`/`BufferId` (`compute.rs`'s module docs — done — and the
+`lichen-compute*`/handoff/runtime-scalars/graph-jit notes).
