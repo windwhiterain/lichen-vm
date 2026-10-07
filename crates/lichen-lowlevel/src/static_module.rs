@@ -148,41 +148,30 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Whether `node` has **produced an answer** — its own slot carries one.
+    /// Whether `node`'s operator **owes an answer** — the evaluator's run gate,
+    /// so the definition and its only use cannot drift apart:
+    /// [`Self::evaluate_node`] runs the operator when this is `true` and no
+    /// frame is already computing the node.
     ///
-    /// This is the *has run* half of the value slot: an operation node whose
-    /// answer was undecided **has** run — the attempt happened and could not
-    /// resolve, so the slot stays empty — whereas a node that never ran has no
-    /// answer either.  A reader deciding whether to *run* the node's
-    /// operation asks [`Self::has_no_result_yet`]; a reader deciding whether
-    /// it may *compare* the node's value reads the slot directly, because an
-    /// undecided answer is not comparable.  Conflating the two is what made
-    /// the slot's emptiness the effective authority for both.
+    /// Both axes of [`Node::value`] meet here: an operation is present, and
+    /// either the slot holds no value (no answer in hand — the operator never
+    /// ran, or ran and could not decide) or the value it holds is **not this
+    /// operator's**, because a unification wrote it and the operator still owes
+    /// its own reconciliation with it ([`Self::write_node_answer`]).
     ///
-    /// A released node (absent from [`Self::nodes`]) reads `false`: there is
-    /// nothing left to run.
-    pub fn has_run(&self, node: NodeId) -> bool {
-        self.node_value(Dyn(node)).is_some()
-    }
-
-    /// Whether `node`'s operation — the computation it will produce its
-    /// answer by — **has not produced an answer yet**.
+    /// `false` for a node with no operation (a bound constant: nothing to run),
+    /// for a released node (nothing left to run), and for an operator whose
+    /// answer sits in its slot and is its own.
     ///
-    /// `false` for a node with no operation (a bound constant, a
-    /// released node): there is no computation left to run.  For an operation
-    /// node this asks whether the slot holds an answer, decided **or**
-    /// undecided, disagreeing with the slot's emptiness exactly on the
-    /// undecided case: an undecided answer still means the attempt happened,
-    /// so it is *not* pending.  The evaluator declines to cache an undecided
-    /// answer (see
-    /// [`Self::evaluate_node_operation`]'s postlude), which only matters on a
-    /// path that writes the slot directly — the apply clone walk preserves a
-    /// source's value on an operation-free node and drops an operation node's
-    /// cached value entirely ([`crate::function`]), so an operation node's
-    /// slot holds a decided answer or nothing, and a pure cell with an empty
-    /// slot is correctly not "run" (nothing ran).
+    /// A caller asking the **value** axis ("is this answer concrete") asks
+    /// [`Self::node_evaluated_deep`] instead.  The two disagree in both
+    /// directions: an operator that ran and could not decide is owed (the slot
+    /// stays empty and the next read runs it again) yet undecided, while a
+    /// member holding a value a unification propagated is owed yet concrete.
     pub fn has_no_result_yet(&self, node: NodeId) -> bool {
-        self.nodes[node].operation.is_some() && (!self.has_run(node) || !self.nodes[node].runned)
+        self.nodes
+            .get(node)
+            .is_some_and(|node| node.operation.is_some() && (node.value.is_none() || !node.runned))
     }
 
     /// The optional [`LowShape`] a layer above the lowlevel computed for

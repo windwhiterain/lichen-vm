@@ -171,14 +171,24 @@ called.
 
 ## 4. What landed from this review
 
-The **run axis** is now named rather than inferred from the value slot
-(`Module::has_run` / `Module::has_no_result_yet`,
-`crates/lichen-lowlevel/src/static_module.rs`), and the class scans that asked
-"has this computation run?" through `is_unbound` read the named query instead.
-The representation is deliberately **derived** from the value slot, not a second
-stored field: a stored `state` beside `value` would have to be updated at every
-write site (including the ones that write `Parameterized` on purpose), and the
-whole point is to remove a dual bookkeeping of one fact.
+The **run axis** is now named rather than inferred from the value slot: it is the
+`runned` field beside the value, read through `Module::has_no_result_yet`
+(`crates/lichen-lowlevel/src/static_module.rs`) — which is also the evaluator's
+own run gate, so the named query and the decision it feeds are one definition.
+The class scans that asked "has this computation run?" through `is_unbound` are
+gone; of them only `class_committed_value` survives.
+
+This section first recorded the representation as deliberately **derived** from
+the value slot, arguing that a stored `state` beside `value` would have to be
+updated at every write site (including the ones that wrote `Parameterized` on
+purpose) and would be a dual bookkeeping of one fact.  The measurement below is
+what broke that argument: what the class channel needs is *an answer this
+operator produced* versus *a value a unification asserted into its slot*, and the
+slot cannot tell the two apart (`class-channel.md` §1.1).  The field is that
+distinction; the derivation and its predicates were deleted
+([lowlevel-low-types](lowlevel-low-types.md) §7).  What the slot still decides is
+whether a *read* runs the operator — an empty slot is re-read, which is how a
+later binding is observed.
 
 One measured finding from building it: an operation node **can compute** the
 undecided marker — a probe watched `Eq` over an undecided operand do exactly that

@@ -215,10 +215,10 @@ impl<P: Program> Module<P> {
     /// the node exists, from [`Self::close_operation_cycle`].  It is never
     /// replaced, so an operand edge read once is the edge that computes the
     /// node.  [`Some`] does not mean "unevaluated": an operation node caches
-    /// its result, and [`Self::node_value`] is the current value.  Ask
-    /// [`Self::has_run`] whether that result exists — an operation whose
-    /// answer is the undecided marker has run — and
-    /// [`Self::has_no_result_yet`] whether the computation is still pending.
+    /// its result, and [`Self::node_value`] is the current value.
+    /// [`Self::has_no_result_yet`] answers whether a read would still run the
+    /// operator — the `runned` read of [`Node::value`]'s second axis, not the
+    /// slot's emptiness.
     ///
     /// Panics if `node` is not in [`Self::nodes`].
     pub fn node_operation(&self, node: NodeId) -> Option<Operation<P>> {
@@ -234,8 +234,8 @@ impl<P: Program> Module<P> {
     /// unwinding-panic paths alike (see the invariant on the module's
     /// evaluation-attempt mark, `retain_node`), so `true` means an active
     /// frame holds the node right now; it never means "already evaluated"
-    /// (read [`Self::has_run`]) and never means "known concrete" (read
-    /// [`Self::node_evaluated_deep`]).  Because the mark is never sticky,
+    /// (read the value slot through [`Self::node_value`]) and never means
+    /// "known concrete" (read [`Self::node_evaluated_deep`]).  Because the mark is never sticky,
     /// `true` on a node with no cached value is a genuine cyclic read.
     ///
     /// Panics if `node` is not in [`Self::nodes`].

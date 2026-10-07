@@ -195,7 +195,11 @@ then say who can write what:
   (`equality.rs:853-856`) and `class_has_pending_op` (`:669-672`) select members
   with `operation.is_some() && is_unbound(value)`, which is exactly what
   `force_pending` (`:963-966`) re-runs — so a node holding a concrete value is
-  never re-derived by unification.
+  never re-derived by unification.  *(Superseded: those scans, `is_unbound` and
+  `force_pending` are all deleted.  The rule now reads the run axis, not the
+  slot: a value a unification propagated into an operation-bearing member does
+  **not** clear its obligation, and `Module::has_no_result_yet` is the read
+  `evaluate_node` runs it by — `class-channel.md` §1.1.)*
 - **A node with a value cannot gain an operand edge.** `close_operation_cycle`
   asserts the node is undecided and never evaluated (`module.rs:261-272`).
 

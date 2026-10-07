@@ -157,9 +157,10 @@ read by the unifier (`class_committed_value`) and by the class channel's
 consumers; the node's own answer is read by the evaluator's
 `if let Some(value) = node.value` arm.  That arm **still runs the operator** when
 the slot holds a value this operator did not produce
-(`evaluate_node`'s `operation.is_some() && !runned && !visiting` guard), so an
-asserted value cannot silence the computation that owes an answer: the operator
-runs, its answer is reconciled, and `runned` becomes true.
+(`evaluate_node`'s `has_no_result_yet(node) && !visiting` guard, whose `runned`
+term is exactly that distinction), so an asserted value cannot silence the
+computation that owes an answer: the operator runs, its answer is reconciled, and
+`runned` becomes true.
 
 An earlier version of this section made the operation-bearing member a **veto**
 in `propagate_class_value` instead, and argued from a `runned`-less evaluator.

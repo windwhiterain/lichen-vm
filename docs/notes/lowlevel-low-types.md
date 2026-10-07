@@ -228,21 +228,29 @@ that only the compiler could settle, and that the first version of
 
 Low types are built on the value slot's **decided or not** axis: `Unknown` is
 the conservative read of a class whose value is not decided yet (§2's lattice).
-That slot carries a second, orthogonal axis, and the class scans used to infer
-it from the first: **has the computation run**.  A node with an operation and no
-cached value has not run; an operation node whose answer is the undecided
-marker **has** run (the attempt happened and could not resolve), while a pure
-cell holding that marker has nothing to run.
+That slot carries a second, orthogonal axis: **has the computation run**.  A node
+with an operation and no cached value has not answered; an operation node whose
+answer was undecided **has** run (the attempt happened and could not resolve, and
+the slot stays empty), while a pure cell with an empty slot has nothing to run at
+all.
 
-That inference is gone from the readers: `Module::has_run` and
-`Module::has_no_result_yet` (`static_module.rs`) are the named reads, the class
-scans (`pending_op`, `class_has_pending_op`, `class_is_pure_cell`,
-`class_committed_node`) go through them, and `Node::value`'s own doc states both
-axes.  The state stays **derived** from the slot — a second stored field would
-be the dual bookkeeping this change removes — and the only invariant it needs
-(an operation node's *cached* answer is decided or absent; it may still
-*compute* the marker) is stated where it is enforced,
-`evaluate_node_operation`'s postlude.  The design question this came out of —
-whether the pending/force/commit machinery can go entirely — is
-[unify-without-forcing](unify-without-forcing.md), recorded there as proposed
+The axis is a **stored field** (`Node::runned`) with one named read,
+`Module::has_no_result_yet` (`static_module.rs`) — the evaluator's own run gate,
+so the definition and its only use cannot drift apart — and `Node::value`'s own
+doc states both axes.  This section first recorded the opposite shape: the axis
+*derived* from the slot through a pair of predicates (`Module::has_run` /
+`Module::has_no_result_yet`) that the class scans (`pending_op`,
+`class_has_pending_op`, `class_is_pure_cell`, `class_committed_node`) read.  What
+broke that derivation is the distinction the class channel needs
+(`class-channel.md` §1.1): an answer an operator *produced* versus a value a
+unification *asserted* into its slot — the slot cannot tell them apart, so the
+field answers it, the derived `has_run` is deleted, and of the class scans only
+`class_committed_value` survives.  What the slot still decides is whether a
+*read* runs the operator, and it must: an empty slot is re-read, which is how a
+later binding is observed (measured — making that gate `runned`-only fails 16 of
+the lowlevel tests).  The only invariant the field needs (an operation node's
+*cached* answer is decided or absent; it may still *compute* undecided) is stated
+where it is enforced, `evaluate_node_operation`'s postlude.  The design question
+this came out of — whether the pending/force/commit machinery can go entirely —
+is [unify-without-forcing](unify-without-forcing.md), recorded there as proposed
 rather than settled.

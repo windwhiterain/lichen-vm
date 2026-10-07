@@ -145,14 +145,10 @@ impl<P: Program> Module<P> {
             // With the class's value distributed over the members, the value
             // found here may be the *class's* rather than something this
             // operator produced, and the operator still owes its own
-            // reconciliation with it.  `runned` is that test: it is true only
-            // when *this* operator produced the value, so a decided answer a
-            // unification wrote still lets the operator run
-            // and owes its own reconciliation.
-            if self.nodes[node].operation.is_some()
-                && !self.nodes[node].runned
-                && !self.nodes[node].visiting
-            {
+            // reconciliation with it — the run gate is
+            // [`Self::has_no_result_yet`], whose `runned` term is true only
+            // when *this* operator produced the value.
+            if self.has_no_result_yet(node) && !self.nodes[node].visiting {
                 let guard = self.retain_node(node);
                 guard.run(|module, node| module.evaluate_node_operation(node));
                 return self.nodes[node].value;
@@ -167,11 +163,14 @@ impl<P: Program> Module<P> {
         if self.nodes[node].visiting {
             unreachable!("cycle detected: node {node:?} is being evaluated");
         }
-        // A node with neither a value nor a computation is an **empty slot** —
-        // the only in-VM representation of undecided (a fresh cell whose
-        // shape nothing has pinned yet).  There is nothing to run and nothing
-        // to answer.
-        if self.nodes[node].operation.is_none() {
+        // An **empty slot** is the only in-VM representation of undecided (a
+        // fresh cell whose shape nothing has pinned yet); with no operation
+        // behind it there is nothing to run and nothing to answer.  The gate is
+        // [`Self::has_no_result_yet`], whose slot term is what it rests on here:
+        // an operator that already ran and could not decide answers an empty
+        // slot too, and it does run again — a later binding is observed through
+        // that re-read.
+        if !self.has_no_result_yet(node) {
             return None;
         }
         let guard = self.retain_node(node);
@@ -505,10 +504,11 @@ impl<P: Program> Module<P> {
         //
         // Note what is *not* claimed here: an operation node **may** answer
         // "undecided".  What is declined is caching such an answer — so an
-        // operation node's slot holds a *decided* answer or nothing, which is
-        // what makes `Module::has_no_result_yet`'s "has an operation and no
-        // cached value" the same question as "has not produced an answer yet".
-        // `runned` is set even here: the attempt happened.
+        // operation node's slot holds a *decided* answer or nothing, and the
+        // empty slot an undecided attempt leaves behind is what makes the next
+        // read run the operator again ([`Self::has_no_result_yet`] is true of
+        // it): that re-read is how a later binding is observed.  `runned` is
+        // set even here: the attempt happened.
         let Some(value) = value else {
             self.nodes[node].runned = true;
             return None;

@@ -1168,12 +1168,14 @@ pub struct Node<P: Program> {
     ///
     /// **This one slot carries two axes, and readers must say which they
     /// mean.**  The value axis is *decided or not*: an empty slot is not
-    /// comparable and means undecided.  The evaluation axis is *has run or
-    /// not*: an operation node whose answer was undecided **has** run (the
-    /// slot stays empty), while one that never ran has no answer either.
-    /// [`Module::has_run`] and [`Module::has_no_result_yet`] are the named
-    /// reads of the second axis; a reader that asks a run question through the
-    /// slot's emptiness is conflating the two.
+    /// comparable and means undecided, and [`Module::node_value`] is its read.
+    /// The evaluation axis is *has run or not*, and it is the `runned` field
+    /// beside the slot: an operation node whose answer was undecided **has**
+    /// run (the slot stays empty, and the next read runs it again), while one
+    /// that never ran has no answer either.  [`Module::has_no_result_yet`] is
+    /// the named read of that axis — the evaluator's run gate — and a reader
+    /// that asks a run question through the slot's emptiness is conflating the
+    /// two.
     ///
     /// The two axes are independent on one node: an **operation-bearing member**
     /// of a class that already holds a value has that value in its slot while
