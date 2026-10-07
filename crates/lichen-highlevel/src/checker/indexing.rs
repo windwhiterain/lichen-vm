@@ -210,7 +210,14 @@ where
             P::Operator::from(LowOperator::Index),
             Some(ty_ops),
         );
-        self.module.evaluate_node_deep(ty_node, None);
+        // Run the slot read now, so the type it names is a **decided** class
+        // value by the time a check asks (see the doc above).  This is the
+        // single-node run, not the deep pass: the chain it needs — the element,
+        // the name table's `TableGet`, the container's own value — is followed
+        // through the operand edges `evaluate_node` walks anyway, and the deep
+        // pass would additionally descend the *whole container type value* (every
+        // field pair and every field's type expression) for every raw read.
+        self.module.evaluate_node(AnyNodeId::Dynamic(ty_node), None);
         (self.pair_of(value_node, ty_node), element, ty_node)
     }
 
