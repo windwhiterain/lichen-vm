@@ -1,8 +1,9 @@
 //! The `lichen-compute` extension: a native "compute" wrapper package.
 //!
 //! The native part injects a [`ComputeValue`] vocabulary — the **`Kernel`**
-//! value (a compiled, runnable wasm artifact), a **`ParKernel`** value, and a
-//! **`Buffer`** value — plus
+//! value (a compiled, runnable wasm artifact), a **`ParKernel`** value, a
+//! **`Buffer`** value (a packed payload), and a **`DeviceBuffer`** one (a
+//! resident result) — plus
 //! the first-class **`Native` Operator values** (`jit`, `launch`, `call`,
 //! `parallel`, `plrun`, `range`, `read`, `write`, `collect`), and the
 //! [`ComputeOperator`]s
@@ -10,12 +11,19 @@
 //! `BufferCollect`, whose [`OperatorExt::run`] does the wasm compile/execute
 //! and the global kernel/buffer registries.
 //!
-//! A **kernel value is a lichen struct** `struct<.native _, .sig sig>`: the
-//! `.native` field holds the opaque artifact (a `Kernel`/`ParKernel`), the
-//! `.sig` field the function signature.  There is **no** `TypeKernel`/
-//! `TypeParKernel` kind marker — the vocabulary does not special-case a kernel
-//! type, so the checker and the shared renderer treat a kernel as an ordinary
-//! struct.
+//! **A kernel and a buffer are both ordinary lichen structs**:
+//!
+//! ```lichen
+//! K   = _x => struct<.native _, .I _, .O _>       # the artifact + its signature
+//! Buf = T => struct<.native _, .element T>        # the payload + its element type
+//! ```
+//!
+//! There is **no** `TypeKernel`/`TypeParKernel` kind marker, and no
+//! `TypeBuffer`/`TypeWrite` counterpart: the vocabulary does not special-case
+//! either type, so the checker and the shared renderer treat them as ordinary
+//! structs.  The type level allows **anything under `I`/`O` at any depth**;
+//! finding the buffers is the JIT's job, and it refuses what it does not support
+//! **by name with its path** (`docs/notes/compute-buffer-wrapper.md`).
 //!
 //! Operators are bound to source through the `NativeCall` IR: `$jit`, `$launch`,
 //! and friends parse to a `NativeCall` that the checker routes to the matching
@@ -34,21 +42,23 @@
 //! ## Type-checking coverage
 //!
 //! - `jit f` requires `f` to be a *function* (function-ness gate) and wraps the
-//!   bare artifact into a kernel struct `struct<.native _, .sig (type_of f)>`.
-//! - `launch k a` reads `k.native`/`k.sig`, gates the `.sig` (a function type,
-//!   binding the domain/codomain lazily), unifies `a` against the domain, and
-//!   its result is the kernel's codomain — a function-style apply over a kernel.
-//!   A **tuple** codomain is the multi-result form: the body is flattened to one
-//!   stack slot per leaf, the wasm function returns one `i64` per leaf, and the
-//!   launch yields the tuple of them.
-//! - `parallel f` lifts a single-arg `?cfg -> Write` index function into a
-//!   parallel kernel struct (`cfg = (n, (buffer…))` — the count is `cfg(0)`,
-//!   the input buffers a tuple at `cfg(1)`); `plrun k cfg` runs it over
-//!   `[0, cfg(0))`, the index function reading inputs via
-//!   `compute.read ((compute.Read _)(.from cfg(1)(k), .at i))` and writing via
-//!   `compute.write ((compute.Write _)(.to n, .at i, .value val))`.
-//!   A **tuple** codomain of `Write`s is the multi-output form: the `k`-th write
-//!   is output buffer `k`, and `plrun` returns the buffers as a tuple.
+//!   bare artifact into a kernel struct `(K _)(.native $jit(f), .I I, .O O)`.
+//! - `launch k a` reads `k.native` with `k.I`/`k.O` for the signature: it gates
+//!   the domain lazily, unifies `a` against it, and its result is the kernel's
+//!   codomain — a function-style apply over a kernel.  A **tuple** codomain is
+//!   the multi-result form: the body is flattened to one stack slot per leaf,
+//!   the wasm function returns one `i64` per leaf, and the launch yields the
+//!   tuple of them.
+//! - `parallel f` lifts an index function into a parallel kernel struct.  The
+//!   body's parameter is the **named** struct `struct<.n Int, .in …, .out …>`
+//!   (`compute.P (compute.KT _)(.I In, .O Out)`): `.n` is the launch extent,
+//!   `.in`'s fields are the input buffers, `.out`'s are the outputs, and the
+//!   body produces no value — it dispatches writes.  `plrun k a` runs it over
+//!   `[0, k.n)`, a body reading an input as
+//!   `compute.read ((compute.Read _)(.from k.in.b, .at i))` and writing as
+//!   `compute.write ((compute.Write _)(.to k.out.z, .at i, .value val))`, and
+//!   its result is the parameter's `.out` structure — one `Buf` field per
+//!   output, which is why multiple outputs are fields rather than a tuple.
 
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
