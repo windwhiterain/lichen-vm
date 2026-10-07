@@ -1436,13 +1436,14 @@ note's line numbers had drifted (the file splits and the later compute items);
 every citation below is re-derived.
 
 **Claim 1 — the registries: verified, and it needs an owner rather than a
-bound.** `KERNELS` (`compute.rs:91`) and `BUFFERS` (`:106`) are
-`OnceLock<Mutex<HashMap<…>>>` whose only writers are the two compile arms
-(`:348`, `:458`) and `ParLaunch` (`:535`); a workspace grep finds no `remove`,
-`clear`, reset or LRU, and `KernelId`/`BufferId` are `pub type … = usize`, so a
-value carries a bare `Copy` index. Measured: **one distinct program evaluation
-adds exactly one kernel fragment and one buffer**, monotonically — 60
-evaluations took the registries from 179 to 239 kernels and 2 to 62 buffers.
+bound.** *As the audit found them*, `KERNELS` (`compute.rs:91`) and `BUFFERS`
+(`:106`) were `OnceLock<Mutex<HashMap<…>>>` whose only writers were the two
+compile arms (`:348`, `:458`) and `ParLaunch` (`:535`); a workspace grep found no
+`remove`, `clear`, reset or LRU, and `KernelId`/`BufferId` were
+`pub type … = usize`, so a value carried a bare `Copy` index. Measured: **one
+distinct program evaluation adds exactly one kernel fragment**, monotonically.
+It added one buffer too, while `BUFFERS` existed: 60 evaluations took the
+registries from 179 to 239 kernels and 2 to 62 buffers.
 
 *Why a bound is not the fix.* What makes an entry unreachable is "no live
 `Kernel`/`ParKernel`/`Buffer` value references it", and the registry cannot
