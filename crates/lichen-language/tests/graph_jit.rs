@@ -400,9 +400,15 @@ compute.collect (compute.graphrun built (3,))
 /// test here for a gap that measurement closed.
 #[test]
 #[ignore = "pre-existing on dev (fails identically at 4be9180, before the OperatorExt::run \
-refactor and before the class-value experiment): the third case's refusal no longer carries \
-both 'a collect is asked here' and 'after the graph has run', so the assertion at the end of \
-this test finds no message naming the cause and the way out.  The first two cases still pass."]
+refactor and before the class-value experiment), and the wrapper migration moved which case \
+fails first: the original reason was the third case's refusal no longer carrying both 'a collect \
+is asked here' and 'after the graph has run', and now the first case stops earlier — its program \
+still spells the retired tuple form, so `compute.collect` is handed a structure and refuses with \
+'its buffer position holds an array'.  Reviving the test is a decision about what those three \
+refusal cases are about under the named parameter, not a re-spelling: the count and the buffer a \
+body reaches for are typed now, which is what retired the count-filter case in \
+`a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one`.  The eight \
+other tests in this file pass."]
 fn what_a_recorded_body_may_not_reach_for_is_refused_by_name() {
     let (_guard, _stub) = stub();
     // **Each case puts the offending operator where it cannot be skipped.** A
