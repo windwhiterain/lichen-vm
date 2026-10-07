@@ -1471,7 +1471,9 @@ where
                     let mut inputs: Vec<RunInput> = Vec::new();
                     if !facts.roles.inputs.is_empty() {
                         for (position, path) in facts.roles.inputs.iter().enumerate() {
-                            let Some(node) = value_at_path::<P>(module, cfg_node, path) else {
+                            let Some(node) = value_at_path::<P>(module, cfg_node, path)
+                                .and_then(|buf| buf_payload::<P>(module, buf))
+                            else {
                                 return None;
                             };
                             let Some(input) = run_input::<P>(
@@ -1647,8 +1649,12 @@ where
                         Some(LowValue::USize(n)) => n,
                         _ => return None,
                     };
+                    // The operand is a `Buf` value — the wrapper the type level
+                    // reads — so the buffer it names is that wrapper's payload.
+                    let buffer =
+                        buf_payload::<P>(module, operands[0].node).unwrap_or(operands[0].node);
                     let element = match module
-                        .node_value(operands[0].node)
+                        .node_value(buffer)
                         .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
                     {
                         Some(ComputeValue::Buffer(payload, class)) => {
@@ -1748,8 +1754,12 @@ where
                     // A resident buffer is fetched here, in full: `collect` is the
                     // operation that says "give me these as host values", so this is
                     // the one point at which a `"gpu"` chain's results cross the bus.
+                    // The operand is a `Buf` value, as it is for a read: the
+                    // buffer it names is the wrapper's payload.
+                    let buffer =
+                        buf_payload::<P>(module, operands[0].node).unwrap_or(operands[0].node);
                     let results: ScalarData = match module
-                        .node_value(operands[0].node)
+                        .node_value(buffer)
                         .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
                     {
                         Some(ComputeValue::Buffer(payload, class)) => {
@@ -2114,22 +2124,21 @@ where
 {
     if let Some((names, shape)) = struct_fields_of_slot(module, field) {
         if is_buf_shape(&names) {
-            let native = names
-                .iter()
-                .position(|name| *name == Some(BUF_NATIVE_FIELD))
-                .expect("a `Buf`-shaped struct has a `.native` field");
-            let mut path = path.to_vec();
-            path.push(native);
+            // The path is the **`Buf` field itself** — the same path the
+            // checker resolves for the source's own read (`read`'s `.from`,
+            // `write`'s `.to`), which is what lets the two sides compare them.
+            // The payload is one constant step in, and the engine takes it when
+            // it reads or writes the buffer.
             return match role {
                 LeafRole::Input => {
-                    roles.inputs.push(path);
+                    roles.inputs.push(path.to_vec());
                     Ok(())
                 }
                 LeafRole::Output => {
-                    roles.outputs.push(path);
+                    roles.outputs.push(path.to_vec());
                     Ok(())
                 }
-                LeafRole::Scalar => Err(role_refusal(&path, "a buffer outside `.in`/`.out`")),
+                LeafRole::Scalar => Err(role_refusal(path, "a buffer outside `.in`/`.out`")),
             };
         }
         // SAFETY: `shape` is a live node of `module`.
@@ -3396,6 +3405,23 @@ where
     }
 }
 
+/// The payload a `Buf` value carries — its `.native` slot.
+///
+/// A role path names the wrapper, because that is the path the checker resolves
+/// for the source's own read; the operator wants the payload, and the wrapper's
+/// field order is fixed by [`is_buf_shape`], so this is its first item.
+fn buf_payload<P>(module: &mut Module<P>, node: AnyNodeId) -> Option<AnyNodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+{
+    let dynamic = node.dynamic()?;
+    // SAFETY: `dynamic` is a live node of `module` on this borrow.
+    (unsafe { module.array_items(dynamic) })?
+        .first()
+        .map(|item| item.node)
+}
+
 /// The node a role path names in a cfg value: each step is an array index, the
 /// way the checker resolves the same read against the parameter's type.
 fn value_at_path<P>(module: &mut Module<P>, root: NodeId, path: &[usize]) -> Option<AnyNodeId>
@@ -3519,9 +3545,10 @@ where
     let mut placed: Vec<(Vec<usize>, NodeId)> = Vec::with_capacity(outputs.len());
     for (position, &(payload, class)) in outputs.iter().enumerate() {
         let path = roles.outputs.get(position)?;
-        // Drop the `.out` step at the front and the `.native` step at the back:
-        // the result is the codomain, and a `Buf` value holds its payload first.
-        let inner = path.get(1..path.len().checked_sub(1)?)?;
+        // Drop the `.out` step at the front: the result is the codomain itself,
+        // and a role path names the `Buf` field, which is exactly the field the
+        // result holds.
+        let inner = path.get(1..)?;
         let value = buf_value::<P>(module, block, AnyNodeId::Dynamic(payload), class)?;
         placed.push((inner.to_vec(), value));
     }
