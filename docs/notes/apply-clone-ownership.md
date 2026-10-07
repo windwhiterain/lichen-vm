@@ -175,6 +175,10 @@ structure whose own elements are decided is a fact a clone may answer with,
 however open its interior is (a struct type's field cells are bound by the
 enclosing call's checks, and carrying that answer is what keeps the holes from
 being minted twice — the property the workaround of the companion note needs).
+*(Narrowed since: the claim follows `mapped`, not `carried` —
+`runned = mapped.is_some_and(|value| !answer_elements_are_undecided(value))` — so
+a template that ran and could not decide leaves the clone `runned = false` with
+an empty slot, rather than claiming an answer it does not hold.)*
 
 ## 7. Hypotheses that measurement ruled out
 

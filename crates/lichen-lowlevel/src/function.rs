@@ -482,10 +482,13 @@ impl<P: Program> Module<P> {
         // **Whether the operator runs is `runned`, and nothing else** — the
         // operand's rewrite does not decide it.  The clone carries the
         // template's answer, mapped recursively so every node the answer names
-        // is this call's node, and it carries the answer's `runned` with it:
-        // an answer the template's own operator produced is this call's answer
-        // (the mapping has already substituted this call's nodes), so the
-        // operator owes nothing more.  A value whose cells are still undecided is
+        // is this call's node, and it claims that answer the way the template's
+        // operator did: an answer the template's own operator produced is this
+        // call's answer (the mapping has already substituted this call's
+        // nodes), so the operator owes nothing more.  The claim is conditional
+        // on there **being** an answer: a template that ran and could not decide
+        // leaves nothing to carry, and a clone claiming `runned` for it would
+        // hold an answer it does not have (see the assignment below).  A value whose cells are still undecided is
         // exactly that case — the remap substituted the cells, and whatever
         // binds them (the parameter unify, a field check) binds *these* cells.
         // A struct type expression's answer is one such answer, and carrying it
@@ -551,8 +554,16 @@ impl<P: Program> Module<P> {
         // answer: `runned` stays false, so a read runs it and the computed
         // answer is reconciled with the carried one instead of the open slots
         // being read as final.
-        let owes_answer = mapped.is_some_and(|value| self.answer_elements_are_undecided(value));
-        self.nodes[clone].runned = carried && !owes_answer;
+        //
+        // The claim follows `mapped`, not `carried`: `runned` says "this node's
+        // own answer is in the slot", so it may be set only for an answer that
+        // is really there.  A clone of a template that ran and could not decide
+        // maps to `None`, and `runned` stays false with the slot empty — the
+        // state of a node that has not run, which is what this clone is: the
+        // template's attempt was against the template's operand, and this
+        // clone's operator has not run against this call's.
+        self.nodes[clone].runned =
+            mapped.is_some_and(|value| !self.answer_elements_are_undecided(value));
         self.nodes[clone].operation = operation;
         // The clone is still a singleton class here, so the slot write *is* the
         // class write; a later unify joins the two through `add_equality`.
