@@ -53,12 +53,16 @@ compute.launch k1 3
 const CALL_IN_PARALLEL_BODY: &str = r#"
 --- compute = import "compute.lichen" ---
 k0 = compute.jit (v : Int => v + 1)
-p = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value compute.call k0 i))
-}) "BACKEND"
-compute.read ((compute.Read _)(.from compute.plrun p (8,), .at 3))
+Out  = struct<.z (compute.Buf _)>
+Par  = struct<.n Int, .out Out>
+Host = struct<.n Int>
+f = (k : Par) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value compute.call k0 i))
+}
+p = compute.parallel f "BACKEND"
+out = (compute.plrun p (Host(.n 8)) : Out)
+compute.read ((compute.Read _)(.from out.z, .at 3))
 "#;
 
 /// A **module-level** helper called from inside a parallel body — the
@@ -66,19 +70,25 @@ compute.read ((compute.Read _)(.from compute.plrun p (8,), .at 3))
 const MODULE_HELPER: &str = r#"
 --- compute = import "compute.lichen" ---
 square = x => x * x
-p = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
-  compute.write ((compute.Write _)(.to n, .at i, .value square v))
-}) "BACKEND"
-seed = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value i + 1))
-}) "BACKEND"
-s = compute.plrun seed (8,)
-compute.collect (compute.plrun p (8, (s,)))
+Out   = struct<.z (compute.Buf _)>
+Par0  = struct<.n Int, .out Out>
+Host0 = struct<.n Int>
+seedf = (k : Par0) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 1))
+}
+seed = compute.parallel seedf "BACKEND"
+s = (compute.plrun seed (Host0(.n 8)) : Out)
+In1  = struct<.b (compute.Buf _)>
+Par1 = compute.P (compute.KT _)(.I In1, .O Out)
+pf = (k : Par1) => {
+  i = compute.range k.n
+  v = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value square v))
+}
+p = compute.parallel pf "BACKEND"
+out = (compute.plrun p ((compute.A In1)(.n 8, .I In1(.b s.z))) : Out)
+compute.collect out.z
 "#;
 
 /// A single-parameter recursive helper whose trip count is a **literal** at the
@@ -87,12 +97,16 @@ compute.collect (compute.plrun p (8, (s,)))
 const RECURSIVE_LITERAL: &str = r#"
 --- compute = import "compute.lichen" ---
 steps = k => if k == 0 then 0 else steps (k - 1) + 1
-p = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value steps 4 + compute.range n * 0))
-}) "BACKEND"
-compute.read ((compute.Read _)(.from compute.plrun p (8,), .at 3))
+Out  = struct<.z (compute.Buf _)>
+Par  = struct<.n Int, .out Out>
+Host = struct<.n Int>
+f = (k : Par) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value steps 4 + i * 0))
+}
+p = compute.parallel f "BACKEND"
+out = (compute.plrun p (Host(.n 8)) : Out)
+compute.read ((compute.Read _)(.from out.z, .at 3))
 "#;
 
 /// A **body-local alias** and no call at all. This is the control for the two
@@ -100,19 +114,25 @@ compute.read ((compute.Read _)(.from compute.plrun p (8,), .at 3))
 /// resolved in an unapplied template.
 const BODY_LOCAL_ALIAS: &str = r#"
 --- compute = import "compute.lichen" ---
-p = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
-  compute.write ((compute.Write _)(.to n, .at i, .value v))
-}) "BACKEND"
-seed = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value i + 1))
-}) "BACKEND"
-s = compute.plrun seed (8,)
-compute.collect (compute.plrun p (8, (s,)))
+Out   = struct<.z (compute.Buf _)>
+Par0  = struct<.n Int, .out Out>
+Host0 = struct<.n Int>
+seedf = (k : Par0) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 1))
+}
+seed = compute.parallel seedf "BACKEND"
+s = (compute.plrun seed (Host0(.n 8)) : Out)
+In1  = struct<.b (compute.Buf _)>
+Par1 = compute.P (compute.KT _)(.I In1, .O Out)
+pf = (k : Par1) => {
+  i = compute.range k.n
+  v = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value v))
+}
+p = compute.parallel pf "BACKEND"
+out = (compute.plrun p ((compute.A In1)(.n 8, .I In1(.b s.z))) : Out)
+compute.collect out.z
 "#;
 
 /// The helper called with a **literal** argument, so nothing but the callee is
@@ -121,12 +141,16 @@ compute.collect (compute.plrun p (8, (s,)))
 const HELPER_LITERAL_ARG: &str = r#"
 --- compute = import "compute.lichen" ---
 square = x => x * x
-p = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value square 3))
-}) "BACKEND"
-compute.collect (compute.plrun p (4,))
+Out  = struct<.z (compute.Buf _)>
+Par  = struct<.n Int, .out Out>
+Host = struct<.n Int>
+f = (k : Par) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value square 3))
+}
+p = compute.parallel f "BACKEND"
+out = (compute.plrun p (Host(.n 4)) : Out)
+compute.collect out.z
 "#;
 
 /// The same helper, called with an argument the **host cannot reduce** —
@@ -135,12 +159,16 @@ compute.collect (compute.plrun p (4,))
 const HELPER_INDEX_ARG: &str = r#"
 --- compute = import "compute.lichen" ---
 square = x => x * x
-p = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value square (i + 1)))
-}) "BACKEND"
-compute.collect (compute.plrun p (4,))
+Out  = struct<.z (compute.Buf _)>
+Par  = struct<.n Int, .out Out>
+Host = struct<.n Int>
+f = (k : Par) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value square (i + 1)))
+}
+p = compute.parallel f "BACKEND"
+out = (compute.plrun p (Host(.n 4)) : Out)
+compute.collect out.z
 "#;
 
 /// **A `loop` operator written in pure lichen — no Rust, no new operator.** It is
@@ -157,12 +185,16 @@ const LOOP_IN_LICHEN: &str = r#"
 --- compute = import "compute.lichen" ---
 loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
 inc = x => x + 1
-p = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value loop inc 3 i))
-}) "BACKEND"
-compute.collect (compute.plrun p (4,))
+Out  = struct<.z (compute.Buf _)>
+Par  = struct<.n Int, .out Out>
+Host = struct<.n Int>
+body = (k : Par) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value loop inc 3 i))
+}
+p = compute.parallel body "BACKEND"
+out = (compute.plrun p (Host(.n 4)) : Out)
+compute.collect out.z
 "#;
 
 /// The same, with the trip count the **kernel's own count** — a runtime value.
@@ -173,12 +205,16 @@ const LOOP_RUNTIME_COUNT: &str = r#"
 --- compute = import "compute.lichen" ---
 @loop loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
 inc = x => x + 1
-p = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value loop inc n i))
-}) "BACKEND"
-compute.read ((compute.Read _)(.from compute.plrun p (4,), .at 3))
+Out  = struct<.z (compute.Buf _)>
+Par  = struct<.n Int, .out Out>
+Host = struct<.n Int>
+body = (k : Par) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value loop inc k.n i))
+}
+p = compute.parallel body "BACKEND"
+out = (compute.plrun p (Host(.n 4)) : Out)
+compute.read ((compute.Read _)(.from out.z, .at 3))
 "#;
 
 /// The same, `@loop`-marked, with the trip count a **literal** — the marker as
@@ -189,12 +225,16 @@ const LOOP_RUNTIME_COUNT_MARKED_DECIDABLE: &str = r#"
 --- compute = import "compute.lichen" ---
 @loop loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
 inc = x => x + 1
-p = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value loop inc 3 i))
-}) "BACKEND"
-compute.read ((compute.Read _)(.from compute.plrun p (4,), .at 3))
+Out  = struct<.z (compute.Buf _)>
+Par  = struct<.n Int, .out Out>
+Host = struct<.n Int>
+body = (k : Par) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value loop inc 3 i))
+}
+p = compute.parallel body "BACKEND"
+out = (compute.plrun p (Host(.n 4)) : Out)
+compute.read ((compute.Read _)(.from out.z, .at 3))
 "#;
 
 /// A `@loop`-marked recursion whose trip count is **decided** and whose whole
@@ -204,12 +244,16 @@ compute.read ((compute.Read _)(.from compute.plrun p (4,), .at 3))
 const RECURSIVE_LITERAL_MARKED: &str = r#"
 --- compute = import "compute.lichen" ---
 @loop steps = k => if k == 0 then 0 else steps (k - 1) + 1
-p = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value steps 4 + compute.range n * 0))
-}) "BACKEND"
-compute.read ((compute.Read _)(.from compute.plrun p (8,), .at 3))
+Out  = struct<.z (compute.Buf _)>
+Par  = struct<.n Int, .out Out>
+Host = struct<.n Int>
+f = (k : Par) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value steps 4 + i * 0))
+}
+p = compute.parallel f "BACKEND"
+out = (compute.plrun p (Host(.n 8)) : Out)
+compute.read ((compute.Read _)(.from out.z, .at 3))
 "#;
 
 /// Two-stage **curried** recursion — `sum_to (n - 1) (x + 1)` is *two*
@@ -218,12 +262,16 @@ compute.read ((compute.Read _)(.from compute.plrun p (8,), .at 3))
 const TWO_STAGE_CURRIED: &str = r#"
 --- compute = import "compute.lichen" ---
 sum_to = n => x => if n == 0 then x else sum_to (n - 1) (x + 1)
-p = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value sum_to 3 i))
-}) "BACKEND"
-compute.collect (compute.plrun p (4,))
+Out  = struct<.z (compute.Buf _)>
+Par  = struct<.n Int, .out Out>
+Host = struct<.n Int>
+f = (k : Par) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value sum_to 3 i))
+}
+p = compute.parallel f "BACKEND"
+out = (compute.plrun p (Host(.n 4)) : Out)
+compute.collect out.z
 "#;
 
 /// The same, with the two arguments in **one** tuple — one application, so one
@@ -231,12 +279,16 @@ compute.collect (compute.plrun p (4,))
 const ONE_STAGE_TUPLE: &str = r#"
 --- compute = import "compute.lichen" ---
 sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)
-p = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value sum_to (3, i)))
-}) "BACKEND"
-compute.collect (compute.plrun p (4,))
+Out  = struct<.z (compute.Buf _)>
+Par  = struct<.n Int, .out Out>
+Host = struct<.n Int>
+f = (k : Par) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value sum_to (3, i)))
+}
+p = compute.parallel f "BACKEND"
+out = (compute.plrun p (Host(.n 4)) : Out)
+compute.collect out.z
 "#;
 
 /// The proposed operator, written over a **tuple** state instead of a curried
@@ -245,12 +297,16 @@ const LOOP_TUPLE: &str = r#"
 --- compute = import "compute.lichen" ---
 loop = f => s => if s(0) == 0 then s(1) else loop f (s(0) - 1, f s(1))
 inc = x => x + 1
-p = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value loop inc (3, i)))
-}) "BACKEND"
-compute.collect (compute.plrun p (4,))
+Out  = struct<.z (compute.Buf _)>
+Par  = struct<.n Int, .out Out>
+Host = struct<.n Int>
+body = (k : Par) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value loop inc (3, i)))
+}
+p = compute.parallel body "BACKEND"
+out = (compute.plrun p (Host(.n 4)) : Out)
+compute.collect out.z
 "#;
 
 /// `loop` in the shape that **does** check: the step is baked into the binding
@@ -261,12 +317,16 @@ fn loop_program(trip: usize) -> String {
     format!(
         r#"--- compute = import "compute.lichen" ---
 sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)
-p = compute.parallel (cfg => {{
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value sum_to ({trip}, i)))
-}}) "BACKEND"
-compute.read ((compute.Read _)(.from compute.plrun p (4,), .at 3))
+Out  = struct<.z (compute.Buf _)>
+Par  = struct<.n Int, .out Out>
+Host = struct<.n Int>
+f = (k : Par) => {{
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value sum_to ({trip}, i)))
+}}
+p = compute.parallel f "BACKEND"
+out = (compute.plrun p (Host(.n 4)) : Out)
+compute.read ((compute.Read _)(.from out.z, .at 3))
 "#
     )
 }
@@ -289,9 +349,14 @@ fn host_program(trip: usize) -> String {
 fn runtime_count_probe(recursion: &str, call: &str) -> String {
     format!(
         "--- compute = import \"compute.lichen\" ---\n\
-         p = compute.parallel (cfg => {{\n  n = cfg(0)\n  i = compute.range n\n  {recursion}\n  \
-         compute.write ((compute.Write _)(.to n, .at i, .value {call}))\n}}) \"BACKEND\"\n\
-         compute.read ((compute.Read _)(.from compute.plrun p (8,), .at 3))\n"
+         Out  = struct<.z (compute.Buf _)>\n\
+         Par  = struct<.n Int, .out Out>\n\
+         Host = struct<.n Int>\n\
+         f = (k : Par) => {{\n  i = compute.range k.n\n  {recursion}\n  \
+         compute.write ((compute.Write _)(.to k.out.z, .at i, .value {call}))\n}}\n\
+         p = compute.parallel f \"BACKEND\"\n\
+         out = (compute.plrun p (Host(.n 8)) : Out)\n\
+         compute.read ((compute.Read _)(.from out.z, .at 3))\n"
     )
 }
 
@@ -347,12 +412,16 @@ const LOOP_ANNOTATED: &str = r#"
 --- compute = import "compute.lichen" ---
 loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x)) : (Int -> Int) -> Int -> Int -> Int
 inc = x => x + 1
-p = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value loop inc 3 i))
-}) "BACKEND"
-compute.collect (compute.plrun p (4,))
+Out  = struct<.z (compute.Buf _)>
+Par  = struct<.n Int, .out Out>
+Host = struct<.n Int>
+body = (k : Par) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value loop inc 3 i))
+}
+p = compute.parallel body "BACKEND"
+out = (compute.plrun p (Host(.n 4)) : Out)
+compute.collect out.z
 "#;
 
 /// The annotated operator, with **no kernel** — which separates "the annotation
@@ -375,11 +444,7 @@ fn chain(depth: usize) -> String {
         ));
     }
     source.push_str(&format!(
-        "p = compute.parallel (cfg => {{
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value compute.call k{last} i))
-}}) \"BACKEND\"\ncompute.read ((compute.Read _)(.from compute.plrun p (COUNT,), .at 3))\n",
+        "Out = struct<.z (compute.Buf _)>\nPar = struct<.n Int, .out Out>\nHost = struct<.n Int>\nf = (k : Par) => {{\n  i = compute.range k.n\n  compute.write ((compute.Write _)(.to k.out.z, .at i, .value compute.call k{last} i))\n}}\np = compute.parallel f \"BACKEND\"\nout = (compute.plrun p (Host(.n COUNT)) : Out)\ncompute.read ((compute.Read _)(.from out.z, .at 3))\n",
         last = depth - 1
     ));
     source
@@ -392,25 +457,33 @@ fn unrolled(depth: usize) -> String {
         body.push_str(" + 1");
     }
     format!(
-        "{HEADER}p = compute.parallel (cfg => {{
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value {body}))
-}}) \"BACKEND\"
-compute.read ((compute.Read _)(.from compute.plrun p (COUNT,), .at 3))\n"
+        "{HEADER}In = struct<.a Int>
+Out = struct<.z (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {{
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value {body}))
+}}
+p = compute.parallel f \"BACKEND\"
+out = (compute.plrun p ((compute.A In)(.n COUNT, .I In(.a 0))) : Out)
+compute.read ((compute.Read _)(.from out.z, .at 3))\n"
     )
 }
 
 /// A self-recursive function, called from inside a kernel body.
 const RECURSIVE_INLINE: &str = r#"
 --- compute = import "compute.lichen" ---
-p = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  @loop count_up = s => k => if k == 0 then s else count_up (s + 1) (k - 1)
-  compute.write ((compute.Write _)(.to n, .at i, .value count_up 0 i))
-}) "BACKEND"
-compute.read ((compute.Read _)(.from compute.plrun p (8,), .at 3))
+In  = struct<.a Int>
+Out = struct<.z (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {
+  i = compute.range k.n
+  @loop count_up = s => m => if m == 0 then s else count_up (s + 1) (m - 1)
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value count_up 0 i))
+}
+p = compute.parallel f "BACKEND"
+out = (compute.plrun p ((compute.A In)(.n 8, .I In(.a 0))) : Out)
+compute.read ((compute.Read _)(.from out.z, .at 3))
 "#;
 
 /// A kernel whose own body names the kernel it is being compiled into.
@@ -437,6 +510,24 @@ fn probe(name: &str, source: &str) {
 
 fn main() {
     let _ = lichen_compute_gpu::install_default();
+    if std::env::var("RECURSION_PROBE").is_ok() {
+        for backend in ["cpu", "gpu"] {
+            probe(
+                "helper, literal argument",
+                &HELPER_LITERAL_ARG.replace("BACKEND", backend),
+            );
+            probe(
+                "module-level helper in a body",
+                &MODULE_HELPER.replace("BACKEND", backend),
+            );
+            probe(
+                "loop, decidable trip count",
+                &LOOP_IN_LICHEN.replace("BACKEND", backend),
+            );
+        }
+        lichen_compute_gpu::uninstall();
+        return;
+    }
     let count = 262_144;
     let repeats = 10;
 
