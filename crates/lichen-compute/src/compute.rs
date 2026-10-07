@@ -2077,9 +2077,16 @@ where
         return Err(PARALLEL_PARAMETER_UNDECIDED.into());
     };
     let named = |wanted: &str| names.iter().position(|name| *name == Some(wanted));
-    let (Some(inputs_at), Some(outputs_at)) = (named("in"), named("out")) else {
-        return Err(PARALLEL_PARAM_FIELDS.into());
-    };
+    // **Either reserved group may be absent.**  A kernel that reads nothing has no
+    // `.in`, one that writes nothing has no `.out`, and a *recorded* body that
+    // produces a value rather than dispatching its own writes has no `.out`
+    // either.  The alternative was a dummy field per missing group, which the
+    // caller then had to fill with a `Buf` it does not have yet — and an empty
+    // struct is not expressible, so there was no way to write the shape without
+    // one.  Whether a body actually reads an input or writes an output is the
+    // emitter's and the run's question, and both refuse it there, by name.
+    let inputs_at = named("in");
+    let outputs_at = named("out");
     // SAFETY: `shape` is a live node of `module`.
     let Some(fields) = (unsafe { array_items_any(module, shape) }) else {
         return Err(PARALLEL_PARAMETER_UNDECIDED.into());
@@ -2088,8 +2095,8 @@ where
     let mut roles = KernelRoles::default();
     for (field, &field_type) in fields.iter().enumerate() {
         let role = match field {
-            at if at == inputs_at => LeafRole::Input,
-            at if at == outputs_at => LeafRole::Output,
+            at if inputs_at == Some(at) => LeafRole::Input,
+            at if outputs_at == Some(at) => LeafRole::Output,
             _ => LeafRole::Scalar,
         };
         walk_role(module, field_type, &[field], role, &mut roles)?;
@@ -2216,12 +2223,6 @@ fn role_refusal(path: &[usize], what: &str) -> String {
         path.join(".")
     )
 }
-
-/// The `[value, type]` parameter pair of a parallel kernel whose parameter is a
-/// named struct term but which does not carry both of the reserved field names.
-const PARALLEL_PARAM_FIELDS: &str = "a parallel kernel's parameter is \
-     `struct<.n Int, .in <inputs>, .out <outputs>>`, and this one is a struct \
-     without both `.in` and `.out`";
 
 /// A parallel kernel whose parameter's type **has not resolved yet**: the
 /// annotation is still a cell with no value, so there is nothing to read and
