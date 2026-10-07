@@ -66,7 +66,7 @@ A `ParKernel` reuses the kernel registry (`kernels()`/`NEXT_KERNEL_ID`); a
 
 `plrun` is deliberately **2-arg** (kernel, then the `(config, count)` tuple), not
 3-arg-curried.  A 3-level curry (`k => cfg => n => …`) nests two closure clones,
-and the deep pass's `evaluated_deep.parameterized` flag then sticks to the op's
+and the deep pass's `evaluated_deep.undecided` flag then sticks to the op's
 operand array and makes the launcher read a lazily-`Parameterized` operand; the
 2-arg shape mirrors `launch` and keeps the operand concrete.
 

@@ -169,7 +169,7 @@ final, and neither the operator's re-run nor `wire_apply_result`'s wiring (which
 binds the call's cell and its type) ever happens.
 
 Fixed in `dffdb74`: the value still carries, but a clone whose carried answer
-has an unbound element does **not** claim the operator's run —
+has an undecided element does **not** claim the operator's run —
 `runned = carried && !owes_answer`.  The test is one level deep by design: a
 structure whose own elements are decided is a fact a clone may answer with,
 however open its interior is (a struct type's field cells are bound by the
@@ -214,7 +214,7 @@ markers, and the runtime argument never reaches the body.
 Fixed in `5019fbb`: the carry side consumes the same recursive predicate as
 the bake side.  An answer holding a foreign closure carries nothing; the clone
 re-runs the operator and mints this call's closure.  Re-run versus carry needs
-no deep information: re-run is decided by the answer's own slots being unbound
+no deep information: re-run is decided by the answer's own slots being undecided
 (§6), and carry is suppressed by a value-recursive scan for a foreign function
 id — a minted closure's mere presence in an answer marks it per-call, whatever
 its captures hold.
@@ -226,7 +226,7 @@ inside "the scope" depends on *which apply is cloning*, and a verdict is
 computed without a caller.  Reading the node's own owner as the scope is a
 different fact, not that one: the check-time closure's owner is the closure
 itself, so `half`'s answer read as concrete again.  Counting *every* dynamic
-function as unproven instead makes the recursion self-reference unproven, so
+function as undecided instead makes the recursion self-reference undecided, so
 the recursion point and the body are cloned once per level — and the walk that
 descends into a function value reaches the closure mint below, which did not
 terminate even for `fib 3`.
@@ -255,7 +255,7 @@ breaks only when the wrapper lives in an intermediate module.
 Measured at run time, the machinery almost works: the inner apply is a
 residual and re-runs, the fresh closure is minted (`REHOME`) with its capture
 bound to `5` — and the outer apply *still* applies the frozen solve-time
-closure.  The frozen closure's value node is op-less and `parameterized`, so
+closure.  The frozen closure's value node is op-less and `undecided`, so
 materialization keeps its value; whether to re-home it was decided by
 `static_function_captures`, which walked the closure's body for a value edge
 to **the applied function's parameter node**.  A frozen closure's captured
@@ -267,7 +267,7 @@ origin, capture-blind by design for re-exports), and a read of the stale slot
 handed the outer apply the closure whose captures are dead markers.
 
 Fixed in `7ceee3e`: the test asks what the machinery needs — whether the
-closure's body reaches any `parameterized` node **outside its own template
+closure's body reaches any `undecided` node **outside its own template
 scope** (`StaticFunction::nodes`).  An own-scope open cell re-opens per call
 through the residual clone rule, so it is not a capture; a captured open cell
 is outside the scope by definition.  No equality-class walk is needed: the

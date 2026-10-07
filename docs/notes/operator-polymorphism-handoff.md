@@ -73,7 +73,7 @@ it.
   compare unequal).
 - The **refinement attribute** (`crates/lichen-highlevel/src/refinement.rs`):
   `e : T ! p` carries **one predicate function** in the pair's tail; `combine`
-  returns a fresh unbound cell (**no propagation**); `missing_value` is
+  returns a fresh undecided cell (**no propagation**); `missing_value` is
   `Parameterized` (**not** a concrete `Error` — the reconciliation is a plain
   unify, and a concrete absent value could not be written and would conflict);
   `unify_slots` is that plain unify (over-strict on purpose).
@@ -390,7 +390,7 @@ workstream's job and unsound, because the cell is shared while the kernel is not
   stays untagged so a concrete leaf keeps its fast path.  The trap to keep: the
   defect needs the checker's definition pass — it is what writes the residual's
   *type* value into the caller's template — and the fix rests on `evaluated_deep ==
-  None` reading as parameterized in `node_apply`; if `None` ever reads as concrete,
+  None` reading as undecided in `node_apply`; if `None` ever reads as concrete,
   an untagged residual is referenced in place again and the bug returns silently.
 - **`@in`'s left operand must stay unconstrained.**  Pinning it to the set's
   element cell (or to `Type`) looks like a better diagnostic and is a trap: a

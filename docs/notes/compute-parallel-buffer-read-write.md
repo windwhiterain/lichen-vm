@@ -146,7 +146,7 @@ one as a bare `Buffer`).
   against its domain.  Its **result type is a fresh cell**, deliberately: the
   arity that decides the result's shape (a `Buffer` versus a tuple of them) is
   not knowable at check time, because `NativeOp::build` runs once on the frozen
-  wrapper template where `.sig` is still an unbound cell.  A tuple type is a
+  wrapper template where `.sig` is still an undecided cell.  A tuple type is a
   value node with one element per position, so no check-time node can name a
   tuple of unknown arity; naming it `[?b, BufferKind]` instead would be
   check-time *decided*, and a decided non-positional type is exactly what the

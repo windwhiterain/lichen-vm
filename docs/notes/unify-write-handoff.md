@@ -16,7 +16,7 @@
 
 One unification, no variants.  `unify` is recursive; writing a value, reporting a
 conflict and merging classes are one recursion, not a comparison path beside a
-write path.  **Landed**: `union_with_value` — the separate "unbound side" merge
+write path.  **Landed**: `union_with_value` — the separate "undecided side" merge
 with its agree-then-copy — is deleted (`fd92bef`), and `unify_inner` answers in a
 single match over the two classes' values.  **Landed after this note**: the write
 path no longer skips a member that already holds a value

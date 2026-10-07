@@ -79,7 +79,7 @@ pub struct NativeApply { pub node: NodeId, pub val: Option<NodeId>, pub ty: Node
 - The args are **already compiled** (value/type wired), so `build` only checks the
   operator's types and emits the op node — through the curated `Ctx`, never raw lowlevel
   nodes.
-- `Ctx` is the checker's encoding surface: `fresh` (a new unbound cell), `array_node`,
+- `Ctx` is the checker's encoding surface: `fresh` (a new undecided cell), `array_node`,
   `op_node`, `pair`, `kind_expr`, `universe`, the marker nodes, and `check_unify(_relaxed)`.
 - **Privacy**: the registry is per-module and only the plugin's own file is compiled against
   it, so `$jit` resolves privately — a second plugin's `$jit` never collides. Every other
@@ -99,7 +99,7 @@ fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> P::V
 
 A plugin's `Operator` variants are the ones `AsEnum<LowOperator>` doesn't recognise, so
 they land here. `run` sees the possibly-lazy operand and returns a (possibly
-`Parameterized`) value — staying lazy on an unbound operand is the disciplined behaviour,
+`Parameterized`) value — staying lazy on an undecided operand is the disciplined behaviour,
 leaving the type-error reporting to the definition pass.
 
 `run` has one sibling, `low_type`, which states what the operator's computation *produces*

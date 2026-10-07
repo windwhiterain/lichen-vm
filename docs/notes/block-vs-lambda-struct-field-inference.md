@@ -300,8 +300,8 @@ compute 59 of 62 — the same numbers as before this work.
 **The field-list check runs once, at check time, against the callee's
 check-time evaluation batch — and its effect lives only in template-level
 class topology.  A callee that is an apply node embedded in a function
-template is recomputed on every call (its result holds unbound field cells, so
-the deep pass judges it parameterized and the apply clone can never carry the
+template is recomputed on every call (its result holds undecided field cells, so
+the deep pass judges it undecided and the apply clone can never carry the
 cached value); the recomputation mints fresh field cells that no constraint
 ever touches, and the instance's type is wired to that recomputation.  The
 field constraint is part of the *check*, not part of the *expansion*: macro
@@ -315,14 +315,14 @@ lambda program (node ids as in §3):
 1. **Check time, `j`'s body.**  The force in `check_instantiate` evaluates the
    `(K _)` apply node — batch 1 is born (`71 = [72, 73]`).  The field-list
    check then issues `UNIFY value_shape(=[52]) field_list(=[71])`, descending
-   to `MERGE 52 71` with **both sides unbound** (`x: T` pins nothing).  The
+   to `MERGE 52 71` with **both sides undecided** (`x: T` pins nothing).  The
    class `{49, 52, 71}` commits the array `[72, 73]`; `72` and `73` themselves
-   stay unbound.  The constraint now exists *only* as this class topology.
+   stay undecided.  The constraint now exists *only* as this class topology.
 2. **`j 1`, clone walk.**  `52`'s clone (`110`) carries the class's committed
    array `[72, 73]` — with `72`/`73` **referenced in place**, because both are
    owned by `K`'s template and fail the walk's membership test.  The `(K _)`
-   clone's cached value is dropped (it is parameterized: the struct pair
-   contains unbound cells), so it recomputes: **batch 2** (`121 = [122, 123]`).
+   clone's cached value is dropped (it is undecided: the struct pair
+   contains undecided cells), so it recomputes: **batch 2** (`121 = [122, 123]`).
    From here on, no unify in the whole run ever mentions `121`, `122` or
    `123`.
 3. **`j 1`, parameter check.**  The descent into `x`'s type-cell clone — which
@@ -359,7 +359,7 @@ cell immediately.
   whether the program works is itself a symptom of the constraint living at
   check time.)
 * `(K 0)(.x T)` in the lambda — still `raw`.  The argument does not decide the
-  recompute; the unbound field cells do (they keep the result parameterized,
+  recompute; the undecided field cells do (they keep the result undecided,
   so the clone is always dropped and re-run).  Two batches measured.
 
 ## 11. Answers and fix directions
@@ -461,7 +461,7 @@ Evaluation (mirror the `LowOperator::Apply` arm in
 
 1. Evaluate the operand array; propagate `Parameterized`/`Error` markers
    exactly as the `Apply`/`Index` arms do — **never** answer `Error` for an
-   unbound callee (the apply-frame note in `apply.rs` says why: an `Error`
+   undecided callee (the apply-frame note in `apply.rs` says why: an `Error`
    caches as a decided value and certifies the node concrete).
 2. Evaluate slot 0 (the callee).  Read element 0 of its value pair — the
    field-type shape.  A callee that is not a readable struct pair was
@@ -521,7 +521,7 @@ Nothing else in the checker changes: `named_instantiate`'s reorder, the
    preserves today's diagnostics exactly.
 3. **Do not merge batch 1 and batch 2** (§11 answer 2): they are expansions
    under, in general, different arguments.
-4. **Marker discipline**: an unbound callee must yield `Parameterized`, never
+4. **Marker discipline**: an undecided callee must yield `Parameterized`, never
    `Error` (§12.3.1).
 5. The deep pass's concreteness verdicts are load-bearing for the two
    accidentally-working paths (§10): when the field cells bind at check

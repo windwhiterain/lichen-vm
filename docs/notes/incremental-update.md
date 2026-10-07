@@ -395,7 +395,7 @@ closure. The closure must be **closed under four edge kinds**, or the existing
 - `operation.operand` — a residual node must be able to re-run later, so unlike the
   GC's walk, which deliberately does not follow a cached value's operand, this one
   must;
-- the equality class of a node **whose own value is still unbound** — the class is
+- the equality class of a node **whose own value is still undecided** — the class is
   what holds that node's answer, so it is taken whole. A node that already carries
   its own solved value takes nothing from its class (§7.7), and the class the
   artifact does not hold whole is spliced to the members it holds, exactly as the GC
@@ -815,7 +815,7 @@ binding's type slot unifies with the same `Int` type node) — so freezing one c
 things were wrong, and both are about who reads a frozen class.
 
 - **The class edge was taken from every node.** It is now taken only from a node whose
-  **own value is still unbound**: that node's answer *is* its class — the shared
+  **own value is still undecided**: that node's answer *is* its class — the shared
   inference cell, the template's pattern — so the class is a structure a later read
   depends on and is taken whole. A node that already carries its own solved value needs
   nothing of its class. A solved class reads alike at every member (that is what
@@ -1066,7 +1066,7 @@ filed into; and the whole-module path still checks its own way. Plus the influen
 | `9039f90` | the note records the three costs and their fixes |
 | `64db7c4` | the caller's view (code region, base, imports), the report's frontend artifacts, the registry-owned cell key space, a reuse that moves its spans |
 | `4400d6a` | the language server as the first real caller: the compile worker, one registry, the replacing freeze, the import record (§7.6) |
-| `c0b5f56` | the artifact's size: the class edge only from an unbound node, a spliced class, the walk's ordering without a module scan (§7.7) |
+| `c0b5f56` | the artifact's size: the class edge only from an undecided node, a spliced class, the walk's ordering without a module scan (§7.7) |
 | `06e4ba3` | the dependency check is the closure's own keys, and it runs before the freeze (§7.7, §12.4) |
 | `4bea81f` | the tests the caller's landing added are removed |
 
@@ -1254,13 +1254,13 @@ The two costs §7.5 and §7.6 opened — the artifact's size and the per-mark de
   this was the landmine the graph work would have hit).
 - **A frozen class is only ever read by `static_find`, and only about nodes the artifact
   holds** (§7.7). That is what lets the closure take a class whole *only* from a node
-  whose own value is unbound, and lets `freeze_set` **splice** a class the artifact does
+  whose own value is undecided, and lets `freeze_set` **splice** a class the artifact does
   not hold whole down to the members it holds (`disjoint::rebuild`'s splice, as the GC's
   `flatten_class` does). Two consequences to keep in view if this edge changes again:
   the splice must keep the **partition** the source's classes induce on the artifact's
   nodes (a member the artifact drops has no clone to be grouped with, but two it holds
   that shared a class must still share one), and a member the artifact holds whose own
-  slot is unbound must not lose the value its class carries — which is why the class is
+  slot is undecided must not lose the value its class carries — which is why the class is
   taken whole from such a node. A shared type makes one class the program: a scalar
   cell's class measured **601** members, and taking it per cell was 600 copies of it
   (~0.3 ms per mark of first analysis; §7.5, §7.7). Anything that changes the edge must

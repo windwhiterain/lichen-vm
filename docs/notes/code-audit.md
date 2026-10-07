@@ -434,7 +434,7 @@ artifact under the old key: exactly the shadowing the message claims to prevent.
 
 ```rust
 let value = self.evaluate_node_deep(operand, Some(block));
-if self.nodes[operand].evaluated_deep.unwrap().parameterized {
+if self.nodes[operand].evaluated_deep.unwrap().undecided {
 ```
 
 `evaluate_node_deep_inner` returns **before** writing `evaluated_deep` when it
@@ -448,7 +448,7 @@ have dropped the node by now"*, so the node may be **absent** as well as the fla
 unset.
 
 **Outcome.** The arm now reads
-`self.nodes.get(operand).is_none_or(|node| node.evaluated_deep.is_none_or(|deep| deep.parameterized))`
+`self.nodes.get(operand).is_none_or(|node| node.evaluated_deep.is_none_or(|deep| deep.undecided))`
 — an absent node or an unset flag is "concreteness unknown", never "proven
 concrete". (`is_none_or`, not `map_or(true, ..)`: the latter draws
 `unnecessary_map_or` on this toolchain.) The only paths whose behaviour changed
@@ -512,7 +512,7 @@ by, so the fold is a function of the key *set* — and a freeze copies the paylo
 verbatim, which is exactly why the number is the same before and after a reload.
 **A function** now hashes as the shape of its template: its return and its asserts,
 unfolded in a second, *total* mode (`UnfoldMode::Template`), because a template is
-expected to hold unbound cells (its own parameter is one) and `key_eq` never
+expected to hold undecided cells (its own parameter is one) and `key_eq` never
 compares it.  That mode reads a node's operation edge in preference to its
 memoized value, so the hash does not drift when the definition pass runs the body
 between the build and the freeze — a hazard the regression test pins deliberately.
@@ -651,7 +651,7 @@ let concrete = …matches!(value.as_enum(), None | Some(USize(_)) | Some(Array(_
 if concrete && !shape::is_function_type(…) { /* record Guard */ }
 ```
 
-When the callee is a parameter or a call result its type is an unbound cell,
+When the callee is a parameter or a call result its type is an undecided cell,
 `concrete` is false, and the guard is **skipped entirely**. Every sibling rule
 *pins* instead (`indexing.rs:47-52`, `indexing.rs:149-154`, `structs.rs:424-429`,
 with a test at `tests/checker.rs:1900-1912`). `check_app` is the only weakened
@@ -710,7 +710,7 @@ a lambda *parameter* that cell is shared by every instantiation of the function,
 so the unify resolves it to one concrete arrow and let-polymorphism dies for the
 natural pattern `apply = f => x => f x` used at two types —
 `examples/let_polymorphism.lichen` is a documented, advertised feature. The gate
-is what keeps a callee with an unbound type out of that unify; the deferred case
+is what keeps a callee with an undecided type out of that unify; the deferred case
 is now caught in the runtime arm instead.
 
 **Tests.** `crates/lichen-lowlevel/tests/basic/evaluation.rs`'s
@@ -1622,7 +1622,7 @@ pass's answer was one of the two leaves.
 `a_block_root_the_budget_refuses_yields_an_empty_value` (limit 2, the
 refusal lands on the child block's root; asserts the recorded
 `BudgetExhausted::EvaluateDepth` and an `Error` result) and
-`a_block_root_that_stays_lazy_is_not_an_internal_error` (an unbound operand
+`a_block_root_that_stays_lazy_is_not_an_internal_error` (an undecided operand
 makes the child block's root stay `Parameterized`; asserts the result is
 `Parameterized`, not `Error`). Both were confirmed to fail against the unfixed
 line — `panicked at crates\lichen-lowlevel\src\evaluation.rs:717:36: evaluated
@@ -2297,13 +2297,13 @@ program to fail: "parameterized: Int"`.
 
 `Node::evaluated_deep: Option<EvaluatedDeep>` is documented as a two-state fact:
 `None` means the deep pass never ran on the node, and a reader "must treat [it] as
-parameterized, **never** as proven concrete" (`module.rs:200-213`,
+undecided, **never** as proven concrete" (`module.rs:200-213`,
 `lib.rs:882-889`). Two reads honour that (`evaluation.rs:285-287`,
 `is_none_or`, and `freeze.rs:71-73`), and `function.rs:325` is conservative by a
-different route (`is_some_and(|e| !e.parameterized)`, where `None` means *not
+different route (`is_some_and(|e| !e.undecided)`, where `None` means *not
 proven*, so the node is cloned). **Three did not**: the verdict's own array arm
 (`evaluation.rs:739-745`), table arm (`:754-764`) and operand arm (`:766-774`) all
-use `is_some_and(|e| e.parameterized)`, so `None` reads as *not* parameterized;
+use `is_some_and(|e| e.undecided)`, so `None` reads as *not* undecided;
 `Module::key_state` does the same after forcing the key
 (`table.rs:217-222`). Two of those three reads are gone in the follow-up at the end
 of this item — the operand arm, and the forced key read with it — so the two value
@@ -2315,7 +2315,7 @@ self-referential array — `write_node_value(universe, Array([type_marker, unive
 (`checker.rs:844-854`) — so the descent reaches `universe` while its own frame
 holds the `visiting` mark, the structural-cycle cut returns **without writing a
 verdict** (`evaluation.rs:593-597`), and the verdict computation then reads that
-`None`. Read conservatively, the universe would be flagged parameterized, and
+`None`. Read conservatively, the universe would be flagged undecided, and
 `checker.rs:627-632` states the consequence: the apply clone machinery would clone
 it, "creat[ing] a fresh self-loop that unification cannot equate with the
 canonical one" — a path-guard conflict on the `Type : Type` spine. So *"in
@@ -2329,25 +2329,25 @@ The defect is that the same `None` also meant *"never ran"*, and the fix is to
 structural-cycle cut returns (`evaluate_node_deep_inner`), cleared where the real
 verdict is written and where a late operand edge invalidates one
 (`Module::close_operation_cycle`). Every verdict read inside the verdict
-computation now goes through one helper, `ref_is_parameterized`, whose rule is
+computation now goes through one helper, `ref_is_undecided`, whose rule is
 **the assumption fills a missing verdict and never overrides one**:
 
 ```rust
 match entry.evaluated_deep {
-    Some(deep) => deep.parameterized,
+    Some(deep) => deep.undecided,
     None => !entry.assumed_concrete,
 }
 ```
 
 `None` therefore means exactly "the pass never ran here", and a position no frame
-is computing reads unproven. Behaviour is unchanged for the coinductive cases (a
+is computing reads undecided. Behaviour is unchanged for the coinductive cases (a
 direct self-reference and a longer cycle stay concrete) and changes in exactly one
 direction: a subtree the pass **refused on** — a depth refusal returns before it
 writes (`evaluation.rs:599-625`) — no longer certifies its parent.
 
 **Verified, with the pins.** `crates/lichen-lowlevel/tests/basic/verdict.rs`:
-`a_refused_subtree_leaves_its_parent_unproven` fails on the old read
-(`parameterized: false` where the fix gives `true`), and
+`a_refused_subtree_leaves_its_parent_undecided` fails on the old read
+(`undecided: false` where the fix gives `true`), and
 `a_cyclic_value_is_proven_concrete` pins the coinductive case the change must
 preserve. The lowlevel suite (139 + 3) and `lichen-highlevel`, `lichen-language`
 and `lichen-compute` all pass.
@@ -2357,17 +2357,17 @@ with the reason each.** *(The first retraction is itself superseded: the operand
 arm was later deleted outright, see the follow-up at the end of this item. The
 second stands.)*
 
-- **The operand arm** (`value_is_parameterized`) is a deliberate exemption, and
+- **The operand arm** (`value_is_undecided`) is a deliberate exemption, and
   flipping it is not a local fix. A core operator's operand is the argument array
   a layer above synthesized, and the deep pass descends value-reachable edges
   only, so "this operand was never walked" is the *normal* case; reading it as
-  unproven would turn every pair read (`Index(pair, 0)`) in a template unproven
+  undecided would turn every pair read (`Index(pair, 0)`) in a template undecided
   and clone all of them per apply. The reason is now stated at the site, and
   `an_operand_the_pass_never_walked_certifies_the_node` pins both the exemption
   and the harm question below.
 - **`Module::key_state`** is correct as it stands, for a reason the draft missed:
   the content unfolding is **total** — it cuts at `UNFOLD_DEPTH` and reports its
-  own failure as `TableKeyUnbound` (`table.rs:1-70`) — so a key with no verdict is
+  own failure as `TableKeyUndecided` (`table.rs:1-70`) — so a key with no verdict is
   still hashable, and gating it is *too* conservative. Three cyclic-key tests
   (`table::cyclic_keys_hash_and_compare_equal`,
   `coinductively_equal_cyclic_keys_hash_equal_across_depth`,
@@ -2386,19 +2386,19 @@ sibling. That is a pin, not a proof that no shape is harmed.
 
 **Follow-up — a verdict can outlive what it waited on** (`feature/deferred-instantiate`).
 *(Superseded: the operand arm this follow-up patched is deleted outright, below.)*
-The operand arm's exemption reads `Some(parameterized: true)` as unproven, and
+The operand arm's exemption reads `Some(undecided: true)` as undecided, and
 nothing cleared it when the operand chain *did* resolve: `write_node_value`
 caches a resolved value on the operation's own slot, and the forced pass skipped
 the operand walk for any node that already held a value
 (`if force_operand && self.nodes[node].value.is_none()`).  A node that was walked
-while it still waited therefore kept reading unproven forever — visible where a
+while it still waited therefore kept reading undecided forever — visible where a
 reader treats the verdict as "not decided yet": `Module::key_state` gates a
 `TableGet` on it, so a lookup keyed by a resolved read stayed lazy and the read
 it stood for never ran.  The forced pass now re-forces the operand of an
-**unproven** node as well as of an unevaluated one
+**undecided** node as well as of an unevaluated one
 (`evaluation.rs`, next to the arm above), which recomputes the verdict bottom-up
 from the values that have since arrived.  It re-walks only nodes flagged
-unproven, so no proven node's verdict or baking changes; the lowlevel,
+undecided, so no proven node's verdict or baking changes; the lowlevel,
 `lichen-highlevel` and `lichen-language` suites and `examples` are green after
 it.  This is what the deferred named instantiation's supplying lookup needs, and
 why its per-field type check is that lookup's own key comparison rather than a
@@ -2406,7 +2406,7 @@ unify (`crates/lichen-highlevel/src/checker/structs.rs`,
 `Checker::lazy_named_instantiate`).
 
 **Why this mattered beyond the contract.** `docs/notes/incremental-evaluation.md`
-needs `parameterized` to be a function of the graph rather than of where a walk
+needs `undecided` to be a function of the graph rather than of where a walk
 started — a dirty-flag recomputation restarts elsewhere — and it needs the deep
 pass's redundancy to be worth removing. That note's step 0 measured the redundancy
 at 1.7–8.2 node-evaluations per decided node over six shapes, worst on the
@@ -2434,9 +2434,9 @@ other targets, `lichen-compute` 19), green at every step:
 
 | step | change |
 |---|---|
-| A | the operand arm is deleted from `value_is_parameterized` |
+| A | the operand arm is deleted from `value_is_undecided` |
 | B | `Module::key_state` runs `evaluate_node_deep`, not the forced walk |
-| C | the forced pass drops the follow-up's `unproven` re-force |
+| C | the forced pass drops the follow-up's `undecided` re-force |
 | D | `force_operand` is deleted from `evaluate_node_deep_inner` |
 
 Step D left two public walks differing in one knob, `skip_shallow`; the next
@@ -2444,12 +2444,12 @@ paragraph deletes that one too, so only the lazy walk is left.
 
 **Why it is sound, beyond the tests.** A `LowValue` is a *computed answer*, not a
 thunk: a decided value cannot depend on an operand its operator did not read, so
-the arm could only ever add unproven-ness for a dependency the answer does not
+the arm could only ever add undecided-ness for a dependency the answer does not
 have. Every dependency that *can* change an answer sits in the value graph, where
-`ref_is_parameterized` reads it — an unbound cell is an empty position, and a
-shallow position is unproven by its own flag.
+`ref_is_undecided` reads it — an undecided cell is an empty position, and a
+shallow position is undecided by its own flag.
 
-**What is *not* established.** Flipping a verdict from unproven to proven is the
+**What is *not* established.** Flipping a verdict from undecided to proven is the
 direction that can wrong-share (bake instead of clone), and the corpus is not an
 oracle for it. The differential harness `incremental-evaluation.md` §5 step 2 asks
 for — values, verdicts and diagnostics compared over the corpus — does not exist,
@@ -2467,12 +2467,12 @@ The assert's contract was *"an asserted condition must be fully evaluated whatev
 markers"*; a probe on `assert::forced_evaluation_ignores_shallow_markers` shows the
 masked condition is **deferred under both walks**. The gate is not in the walk but in
 the operator: `OperatorExt::run_deferred` (`lib.rs:685-715`) calls the *lazy* walk on
-its operand and refuses when the operand's verdict is parameterized, and a shallow
-position makes the array's verdict parameterized by itself
-(`value_is_parameterized`). So descending the masked subtree reached only nodes the
+its operand and refuses when the operand's verdict is undecided, and a shallow
+position makes the array's verdict undecided by itself
+(`value_is_undecided`). So descending the masked subtree reached only nodes the
 condition never reads — a read ignores the mask — and gave them a verdict the gate
 discounts anyway. Making the old contract true would need the *marker's* semantics
-changed (a shallow region that drops its unproven flag once evaluated, which the
+changed (a shallow region that drops its undecided flag once evaluated, which the
 apply-bake rule leans on; or a gate that stops reading the operand verdict), not a
 second walk.
 
@@ -2872,7 +2872,7 @@ runtime array or tuple it produces no value.
 first-hand on `dev@a972a79`, the mechanism is not located.
 
 The read is specified as working over any container: `docs/notes/raw-index.md:24-33`
-says it reads a component of a type-as-value **and** that "an unbound container (a
+says it reads a component of a type-as-value **and** that "an undecided container (a
 parameter, a call result) stays lazy and resolves at the apply, which is what makes
 it usable generically: `f = k => k<0>` reads the first field of whatever type `k`
 is applied to". Its documented failure mode for a non-positional or out-of-bounds
@@ -3539,7 +3539,7 @@ and are unaffected.
 `lowlevel/src/lib.rs:636` makes `value` private with an explicit contract
 (*"External crates must never touch the field directly"*), but `:646-666` leaves
 `operation`, `function`, `block`, `visiting`, `evaluated_deep` and `equality`
-`pub`. From safe host code: writing `evaluated_deep = Some(..parameterized:
+`pub`. From safe host code: writing `evaluated_deep = Some(..undecided:
 false)` makes `function.rs:315` treat a parameter-dependent body as proven
 concrete and reuse it across calls (silently wrong results); a wrong `block`
 makes GC (`gc.rs:148, 216, 224`) drop a live node or retain a dead one; a wrong
@@ -3651,9 +3651,9 @@ may rely on; that contract is what a public field cannot give.
   cached value is a genuine cyclic read.
 - `evaluated_deep` → `Module::node_evaluated_deep(node)` →
   `Option<EvaluatedDeep>`.  `Some` means the deep pass ran on the node and
-  `parameterized` records whether any node in its reachable subtree is
+  `undecided` records whether any node in its reachable subtree is
   `Parameterized` — the pass could **not** prove the subtree concrete.  `None`
-  means concreteness is **unknown** and must be read as parameterized, never as
+  means concreteness is **unknown** and must be read as undecided, never as
   proven concrete: a budget refusal and a node reached only as an operand both
   leave `None`, and the apply clone walk and the operation postlude both read it
   that way.
@@ -4049,7 +4049,7 @@ closure is gone.  A marker that cannot be resolved is a check-time refusal:
 kind, rendered by `render::checker_message` as *"this expression carries an
 attribute, but this build has no attribute extension to lower it"* — and
 returns the same well-formed hole the other check-time guards leave: a fresh
-unbound `[value, type]` pair, the shape every attribute slot has, so the
+undecided `[value, type]` pair, the shape every attribute slot has, so the
 runtime pair keeps the arity its schema declared and no reader meets an absent
 element.  Nothing unifies against the hole (the guard has already failed the
 build, so `check_failed` skips the definition pass), and the guard is recorded
@@ -4677,7 +4677,7 @@ three are refuted and three are left**, each with its reason below.
   dynamic sites (`function.rs:154`, `:488`) decide "was it instantiated per
   call" from `instantiated != condition` and name the template `Dyn(condition)`;
   the two static sites (`static_module.rs:148`, `:348`) decide it from the
-  template node's own `parameterized` flag, name it `static_ref`, and read nodes
+  template node's own `undecided` flag, name it `static_ref`, and read nodes
   from a `StaticModule` rather than the live `Module`; two of the four also
   collect the clone list.  One helper would take three axes as parameters and
   still not remove the per-site decision, so the note's "merge" is not obviously
@@ -4999,7 +4999,7 @@ almost all of it.
 larger than the note's account. Re-derived, the deep pass's per-element calls
 are in `evaluate_node_deep_inner`: the **descent** loop over an array's items
 (`evaluation.rs:646-661` before the fix — one `static_read` per element, which
-is one registry lookup) *and* the parameterized check's `.iter().any(...)`
+is one registry lookup) *and* the undecided check's `.iter().any(...)`
 closures for the array arm and the table's key/value arms
 (`evaluation.rs:703-746`, one lookup per static element each). The equality
 side is `value_is_skeleton`
@@ -5008,7 +5008,7 @@ side is `value_is_skeleton`
 
 *Measured, before:* one `evaluate_node_deep` of a 20,000-element array whose
 items are all static refs into one frozen module — **40,000 registry lookups**
-(2 per element: the descent read plus the parameterized check), 9.9 ms in the
+(2 per element: the descent read plus the undecided check), 9.9 ms in the
 `test` profile. *After:* **1 lookup**, 2.4 ms, same input and profile. (The
 counter was a temporary probe inside `Module::static_module`; it is removed.)
 
@@ -5020,9 +5020,9 @@ threads one cache through the whole walk
 (`evaluate_node_deep` creates it — `evaluate_node_forced`, which did too, has since
 been deleted, see the `P1-31` operand-arm follow-up; `evaluate_node_deep_inner`
 carries it), so the descent
-read and the parameterized check share it — the check moved into
-`value_is_parameterized` (`:716-771`), whose `.any()` closures now go through
-`cache.node_parameterized`. The equality walk threads one cache per
+read and the undecided check share it — the check moved into
+`value_is_undecided` (`:716-771`), whose `.any()` closures now go through
+`cache.node_undecided`. The equality walk threads one cache per
 `class_is_skeleton` (`equality.rs:529-596`). The lookup's *result* is unchanged:
 `StaticModuleCache::read` is `StaticModule::read` on the same registered
 module, and a key's entry is never replaced once registered (`freeze_mapped`
@@ -5071,7 +5071,7 @@ the whole list:
 | site | what it needs |
 |---|---|
 | `propagate_class_value` `:342` | every operation-free member — a member that knows nothing takes the value, one that holds a value has it compared and is left at its own when the two cannot be one (`class-channel.md` §1.1) |
-| `class_has_pending_op` `:489` | **any** member with an unbound operation |
+| `class_has_pending_op` `:489` | **any** member with an undecided operation |
 | `class_is_pure_cell` `:507` | **every** member is not an independent pending computation |
 | `class_is_skeleton` `:529` | **every** member is a cell or a skeleton array |
 | `pending_op` `:673` | the **first** pending member *in member-list order* — its identity is used (`alias_index` binds that node, `force_pending` evaluates it) |
@@ -5517,7 +5517,7 @@ node-list clone was not touched — it is not on this path.
 
 ### Repeated `as_enum` — held, extent corrected
 
-`value_is_parameterized` (`evaluation.rs:716-771`, not the note's `:588-634`,
+`value_is_undecided` (`evaluation.rs:716-771`, not the note's `:588-634`,
 which is the cycle-cut region above it) took `value.as_enum()` **three** times,
 not four, and iterated `array.items()` twice and `table.items()` **twice**, not
 four times.  The view is now taken once into a local.  Measured: one
@@ -6871,6 +6871,6 @@ Recorded so the next pass does not re-audit them.
   enforced by `crates/lichen-language/tests/readme.rs`.
 - **`AttrExt` (`highlevel/src/attr.rs:113-232`) is the best-designed trait in the
   codebase** — it states `share_missing_slot`'s invariant and why, documents
-  `is_subtype`'s conservative answer for unbound values, and explains that
+  `is_subtype`'s conservative answer for undecided values, and explains that
   label-vs-constraint is purely semantic. The model `NativeOp` should follow
   (`P2-5`).

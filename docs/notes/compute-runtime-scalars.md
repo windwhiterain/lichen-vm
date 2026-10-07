@@ -131,7 +131,7 @@ types.
 **Landed for it**: a named field read on a **concrete** container folds to its
 constant position (`Checker::check_named_field`, `f51e4eb`) — the other half of
 `slot_read`'s decided type read, and the property a lowering needs to walk a
-struct argument's fields as positions (`Index(value, k)`).  An unbound container
+struct argument's fields as positions (`Index(value, k)`).  An undecided container
 keeps the lazy `TableGet`, which is the case the two-pass `param_path` exists for.
 
 **The types must be lambdas, not type values** (superior's diagnosis, measured).

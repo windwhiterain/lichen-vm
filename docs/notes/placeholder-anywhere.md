@@ -34,7 +34,7 @@ and `<a, b>` always a tuple *type*, so `_` is a placeholder in both positions
 with no position-dependent treatment.
 
 Because `_` is a distinct token, the discard/binder uses are gone rather than
-semantically repurposed: there is no scope-dependent "unbound `_` is a hole,
+semantically repurposed: there is no scope-dependent "undecided `_` is a hole,
 bound `_` is a name" ambiguity (that was the rejected alternative, Design A).
 
 ## Files touched

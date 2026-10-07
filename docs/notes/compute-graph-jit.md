@@ -575,7 +575,7 @@ Two facts that fall out and are now checked:
 had settled on.** The probe's next fact:
 
 > The cfg tuple is readable. Its two elements — the count and the buffer — are
-> **`Parameterized`**. The `4` and the `data` in the body are unbound cells
+> **`Parameterized`**. The `4` and the `data` in the body are undecided cells
 > until the function is applied, because nothing has applied it.
 
 So walking the structure without evaluating gets the graph's **shape** and
@@ -1443,7 +1443,7 @@ descending past the mask. That empties the value `returned_value_ids` has to rea
 every recording refuses, including bodies with nothing unread in them. Reading an unread
 body item in order does not help either: it reads back `Parameterized` and caches
 nothing, which is the VM's own documented contract for an operation whose operands were
-unbound when it was last evaluated.
+undecided when it was last evaluated.
 
 **So the gap closed by being measured, and nothing in `lichen-lowlevel` had to change.**
 

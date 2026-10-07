@@ -187,7 +187,7 @@ and above — the values where a signed reading would take the other branch.
 `x / 0` and `x % 0` have no value. The interpreter is the only layer that can say
 so: `TypeOperator::run` records `operator.divide_by_zero` on the lowlevel's
 general extension channel and answers the lazy marker, exactly as every other
-refused computation in this language does — so the program reports an unbound
+refused computation in this language does — so the program reports an undecided
 result and the recorded reason explains it. Checked by
 `a_zero_divisor_is_recorded_rather_than_answered`.
 

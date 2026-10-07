@@ -23,7 +23,7 @@
 
 ## 1. The repro
 
-Two field reads of one unbound placeholder, in one type expression:
+Two field reads of one undecided placeholder, in one type expression:
 
 ```lichen
 P = ins => struct<.I ins.x, .O ins.y>
@@ -64,9 +64,9 @@ had guessed:
    `class_is_skeleton`/`value_is_skeleton` (lowlevel `equality.rs`) read
    values through the [`LowValue`] projection, so a node holding a **concrete
    extension atom** — any kind marker (`Type`, `TypeTuple`, `ArrayType`) —
-   looked identical to an unbound cell. Type-level structures built purely
+   looked identical to an undecided cell. Type-level structures built purely
    from markers (`K = [Type, ↺]`, `[int, K]`, the tuple/array kinds) therefore
-   counted as "all-unbound skeletons", and the pending read merged onto a
+   counted as "all-undecided skeletons", and the pending read merged onto a
    class that held concrete content — with `add_equality` writing nothing, so
    the field type read as `?a` forever.
 3. **The error half was that same predicate, correct by accident.** A struct

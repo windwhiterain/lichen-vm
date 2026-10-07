@@ -115,7 +115,7 @@ emits the operator via `ctx.op_node(...)`, and returns the `[value, type]` pair.
   one-output index function
   and a *tuple* of buffers for a several-output one, and the arity that decides
   which is not knowable here — `build` runs once on the frozen wrapper template,
-  where `.sig` is still an unbound cell, and a tuple type is a value node with
+  where `.sig` is still an undecided cell, and a tuple type is a value node with
   one element per position.  So the result type is a **fresh cell**: `read` and
   `collect` accept each buffer by ordinal.  That costs static precision, not
   safety — a non-existent ordinal is still refused at check time with a span

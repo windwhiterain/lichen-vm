@@ -220,7 +220,7 @@ larger the annotation the less it constrained:
 | `f = x # 4 => x; f (5 # [1,2][3])` | refused, but spelled "expected none, found none" | refused, "expected 4, found none" |
 
 The third row is the same cause read from the render side: with the provider
-unreadable, both sides of the mismatch read as unbound, so the two values the
+unreadable, both sides of the mismatch read as undecided, so the two values the
 diagnostic prints were both `none` — including the declared `4`, which has
 nothing to do with the failed read. Computing the operands first is what lets the
 declared side print `4` and the failed read print its own `none`.

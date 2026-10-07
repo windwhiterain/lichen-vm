@@ -124,7 +124,7 @@ struct<.I raw[?a, ?b], .O raw[?c, ?d]>
 
 before and after, and `examples/compute_jit.lichen` still types its `6` as
 `raw[Int, raw[?a, ?b]]` rather than `Int`. So the two representations of a
-function's type were never the cause. Whatever leaves `I` and `O` unbound
+function's type were never the cause. Whatever leaves `I` and `O` undecided
 across the module boundary is downstream of the arrow, not the arrow itself, and
 the earlier suspicion — `materialize_static_signature` reading a frozen
 template's cells without binding them — was a guess that the merge did not

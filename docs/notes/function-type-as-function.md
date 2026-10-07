@@ -88,7 +88,7 @@ specialization (the template is not bound). Consequence, accepted by superior:
 the `gcd` example (`gcd : <Int, Int> -> Int`) currently relies on the annotation
 to fix its recursive return type to `Int` (the gcd note: without it gcd reports
 `6: ?a`). Under full clone-on-unify the annotation checks a clone, the
-template's return cell stays unbound, and the apply clones that unbound cell —
+template's return cell stays undecided, and the apply clones that undecided cell —
 so gcd reports `6: ?a`. This regression is accepted for Phase 1; a separate
 mechanism for recursive types comes later.
 
@@ -103,7 +103,7 @@ signature against the counterpart** (the template is never bound):
   clone.param.type ↔ dom, clone.return.type ↔ cod.
 - counterpart is **another function-type** → clone it too; unify the two
   clones' param.type ↔ param.type, return.type ↔ return.type.
-- counterpart is an **unbound cell** → the function-type is a concrete value;
+- counterpart is an **undecided cell** → the function-type is a concrete value;
   the cell binds to it (the ordinary `bind` path, no clone). The clone fires
   later, when that bound cell meets a signature.
 - counterpart is a **concrete non-function type** → fail (the function-ness

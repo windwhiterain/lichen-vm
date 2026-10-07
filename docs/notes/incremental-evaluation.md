@@ -43,7 +43,7 @@ compile. In this codebase there is none:
   (`:764-766`). The "definition pass" *is* the program running.
 - **The run adds two more walks** on the same module (`run.rs:59-60`).
 - **`evaluate_node_deep` is also invoked from inside evaluation itself**
-  (`evaluation.rs:279`, the operation postlude's parameterized gate).
+  (`evaluation.rs:279`, the operation postlude's undecided gate).
 
 So the object is the `Module` the checker builds and evaluates, and the passes it
 runs over it.
@@ -142,7 +142,7 @@ of the node's operator and its **operand**'s value (`:174`, `:279`, `:309`,
 reads one (`Index` `:176-230`, `TableGet` `:405-446`), and the **class** it
 belongs to (`equality.rs:273-297`).
 
-**The verdict** (`value_is_parameterized`, `evaluation.rs:716-775`) is a function
+**The verdict** (`value_is_undecided`, `evaluation.rs:716-775`) is a function
 of the node's own `value` variant, every array item's verdict and `shallow` flag
 (`:739-745`), every table entry's key and value verdict (`:754-764`), and the
 operand's verdict (`:766-774`).
@@ -197,13 +197,13 @@ then say who can write what:
   `force_pending` (`:963-966`) re-runs — so a node holding a concrete value is
   never re-derived by unification.
 - **A node with a value cannot gain an operand edge.** `close_operation_cycle`
-  asserts the node is unbound and never evaluated (`module.rs:261-272`).
+  asserts the node is undecided and never evaluated (`module.rs:261-272`).
 
 ## 4. The design: a settled cut, with no index and no dirty tracking
 
 ### 4.1 The property
 
-Give the verdict a second bit. `EvaluatedDeep { parameterized, settled }` where
+Give the verdict a second bit. `EvaluatedDeep { undecided, settled }` where
 **`settled` means: this node's value is concrete, no position it read was
 in-progress (the `P1-31` assumption), every value-reachable item's verdict is
 itself settled, and its operand — if the node has an operation — is absent, has
@@ -211,9 +211,9 @@ been dropped, or has a settled verdict.**
 
 Two consequences fall out of the definition:
 
-- **`settled` implies `!parameterized`**: a settled node's own value is concrete
-  and every item is settled (hence non-parameterized), which is exactly what
-  `value_is_parameterized` tests for. So the bit is not a second opinion about
+- **`settled` implies `!undecided`**: a settled node's own value is concrete
+  and every item is settled (hence non-undecided), which is exactly what
+  `value_is_undecided` tests for. So the bit is not a second opinion about
   concreteness; it is the *proof that concreteness is final*.
 - **`settled` is monotone and needs no invalidation.** By §3.3 nothing can write
   into a settled subtree, the operand edge cannot appear under it, and the
@@ -251,7 +251,7 @@ What remains is one bit to compute and one early return to add.
 - **The operand edge no longer constrains a verdict** *(this bullet was the note's
   second limit; it is void)*. It read: a node whose operand was never walked cannot
   be settled, because a later `evaluate_node_forced` walks operand edges and could
-  certify the operand parameterized, leaving the parent's `false` stale. The
+  certify the operand undecided, leaving the parent's `false` stale. The
   verdict computation now reads the **value graph only** — the operand arm is
   deleted and the operand forcing with it (`code-audit.md`, `P1-31`, the
   operand-arm follow-up) — so "the operand has no verdict" cannot make a parent's
@@ -276,7 +276,7 @@ What remains is one bit to compute and one early return to add.
 
 ### 4.4 What the flag costs
 
-Computing `settled` needs no new traversal: `value_is_parameterized` already walks
+Computing `settled` needs no new traversal: `value_is_undecided` already walks
 the same positions, so the flag is a second accumulator over that walk (an item
 counts as settled iff its verdict is `Some(settled)`). The cut is one early return
 in `evaluate_node_deep_inner`, after the static-leaf and cycle-cut cases and
@@ -313,7 +313,7 @@ entry point, and that nothing further should be built.
    without the cut over the existing test corpus and compare every value, every
    verdict and **every diagnostic**. It is the only oracle for §4.3's two
    obligations (the apply ordering, the budget observability), and it is also how
-   the "settled implies not-parameterized" claim is checked rather than argued.
+   the "settled implies not-undecided" claim is checked rather than argued.
 3. **Re-measure** the six shapes and decide. If the delta is small, stop: the
    residual redundancy is the cost of re-deriving cyclic verdicts, and an
    SCC-atomic recomputation would be the only remaining lever — a change to the
@@ -377,7 +377,7 @@ entry point, and that nothing further should be built.
 | Step | File / function | Change |
 |---|---|---|
 | 0 | `evaluation.rs` `evaluate_node_deep_inner` + the two entry points | **removed**: the temporary walks / visits / cheap / revisit counters that took §1.3's numbers; re-add them (or a real profile) for the wall-clock split |
-| 1 | `lib.rs` `EvaluatedDeep`; `evaluation.rs` `value_is_parameterized` + `evaluate_node_deep_inner` | the `settled` bit and the early return |
+| 1 | `lib.rs` `EvaluatedDeep`; `evaluation.rs` `value_is_undecided` + `evaluate_node_deep_inner` | the `settled` bit and the early return |
 | 1 | `module.rs` `close_operation_cycle` | clear `settled` with the verdict it invalidates |
 | 2 | `crates/lichen-lowlevel/tests/` (new file) | the differential harness: with and without the cut, over the existing corpus |
 | 3 | — | re-run the measurement; the delta is the decision |

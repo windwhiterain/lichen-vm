@@ -169,7 +169,7 @@ farg     := '.' name expr                         -- named instantiation argumen
   is a prefix assert: `@assert e` compiles to the highlevel `assert(e)` — a side
   constraint, not a unify.  The checker deep-evaluates `e` after the
   definition pass and requires `USize(1)`; a condition
-  that stays undecided — an unbound parameter, or a computation sitting behind a
+  that stays undecided — an undecided parameter, or a computation sitting behind a
   lazy marker — is not triggered, and the apply
   clone re-checks the instantiated condition per call.  The expression
   itself *is* the condition — an assert checks its subject, it does not
@@ -293,7 +293,7 @@ delimiter is a fresh atom — an argument of an application:
   struct type value's kind is `TypeStruct` (its components read by name,
   `X::a`), a tuple *value*'s type is the tuple shape `<Int, Int>` rather than
   the kind, and an atomic type's kind is `Type` — none of the three is accepted,
-  and the requirement is stated as a unify, so an unbound container is refused by
+  and the requirement is stated as a unify, so an undecided container is refused by
   the apply that binds it.  A spaced `<` is a fresh tuple-type
   atom — an application argument (`f <3>` is a parse error, a single-element
   tuple type; a two-element one, `f <Int, Type>`, applies `f` to it).  A type
@@ -685,7 +685,7 @@ maps every span back to the original file.
   `Instantiate`; there is no frontend callee-kind dispatch, the checker
   decides whether the callee is a struct type, and a callee that is not one
   fails at check time (the `InstantiateCallee` diagnostic — structs are
-  nominal, so a tuple or function type cannot instantiate).  An unbound
+  nominal, so a tuple or function type cannot instantiate).  An undecided
   callee (a parameter, a deferred read) is *pinned* to a struct kind, so a
   non-struct actual callee fails the apply's argument check per call; a
   call-result callee (`(mk (Int))(1, 2)`) is force-evaluated at check time,
@@ -715,7 +715,7 @@ maps every span back to the original file.
   hand-built IR).  After
   reordering, each argument's type is checked against its field's type as
   usual.
-  When the struct type is **not statically known** — an unbound callee (a
+  When the struct type is **not statically known** — an undecided callee (a
   parameter) or a placeholder — nothing is refused: the instantiation is
   unresolved too, and the reorder is a **lazy read** that resolves at the
   unification binding the callee's type.  `f = s => s(.y Int, .x 1); f (S)`
@@ -739,15 +739,15 @@ maps every span back to the original file.
   length fails at the apply — the pinned value is enforced per application
   (the apply's argument unify compares the cloned parameter, which carries
   the pinned length, against the argument).
-- **The `_` placeholder.**  A `_` in any position compiles to an unbound
+- **The `_` placeholder.**  A `_` in any position compiles to an undecided
   cell: the annotation unifies the value's type against it, so the cell
   binds to that type — `5 : _` infers `Int`, `x => x : _` the arrow
   `?a → ?a`, and `[1, 2, 3] : array<Int, _>` the length `3`.  Partial types infer
   the rest: `((x => x) : (Int -> _)) 5` fixes the input to `Int` and infers
   the output.  In value position the same hole is a *typed* hole: `_ : Int`
-  checks as an underdetermined `Int` value (its value cell stays unbound,
+  checks as an underdetermined `Int` value (its value cell stays undecided,
   an empty slot), and `f _` / `(1, _)` unify the hole's type with
-  the context.  Kinding is deferred for `_` like any unbound type, so `_`
+  the context.  Kinding is deferred for `_` like any undecided type, so `_`
   never raises a kinding error; a `_` that never binds leaves the type
   underdetermined — not an error — and a mismatch against a
   partial type is still an error (`5 : Int -> _` fails).
@@ -757,7 +757,7 @@ maps every span back to the original file.
   annotation `x : t` unifies that cell with the argument's type, and the body
   returns it, so the call's value *is* the operand's type expression: the value
   is its shape and the type its kind.  Everything a builtin read would give
-  follows from that unification, with nothing forced (a read of an unbound
+  follows from that unification, with nothing forced (a read of an undecided
   parameter resolves at the apply): `type_of (1)` is `Int : Type`,
   `type_of [1, 2]` is `array<Int, 2>`, `type_of Type` is `Type`, and in a type
   position it is exactly the operand's type, so `5 : type_of (1)` checks.  The
@@ -892,7 +892,7 @@ diagnostics.
 
 Checker messages are rendered by the same printer as the CLI output, so
 types appear in the language's own syntax: `Int`, `Type`, `T1 -> T2`,
-`<T1, T2>`, `array<T, len>`, `struct<...>`, and unbound cells as stable `?a`,
+`<T1, T2>`, `array<T, len>`, `struct<...>`, and undecided cells as stable `?a`,
 `?b`, … names (cells in one unification class share a name).  The boxed
 highlevel `Diag` in `check` stays raw — it carries the structured facts
 (`kind`, the classes `a`/`b` and their values, the `error_index` into

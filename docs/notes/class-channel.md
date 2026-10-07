@@ -90,7 +90,7 @@ The write side is **one rule**, and the replication below is a deviation from it
 rather than a second case:
 
 - **A unification is unconditional: it must write.**  A write is not gated on the
-  slot being unbound — "this member already knows something" is not a reason to
+  slot being undecided — "this member already knows something" is not a reason to
   skip it.  It reaches **every** member, operation-bearing ones included.
 - **The run axis, not a veto, keeps a computation's own answer readable.**  The
   operation-bearing member does receive the class's value in its slot, and
@@ -176,8 +176,8 @@ measured at the time:
 | `lichen-language --test examples` | **1 failed**: `examples/import/_.lichen` declares `(42, 10, 7)`, prints `(42, none, none)` |
 
 Instrumented, one hypothesis at a time: a write that replaces an operation's
-decided slot with an unbound value (**never fired**), a member write that leaves
-the representative unbound (**never fired**), a merge that drops the class value
+decided slot with an undecided value (**never fired**), a member write that leaves
+the representative undecided (**never fired**), a merge that drops the class value
 (a `debug_assert_eq!` on `class_committed_value(representative)`, **held all
 suite**).  What the trace did show is a count of the writes the veto was blocking:
 **4069 propagation writes change an operation member's slot from `None` to the
@@ -223,7 +223,7 @@ the `evaluate_node_forced` entry point that stood beside it until it was deleted
 `code-audit.md`, the operand-arm follow-up), `with_apply_frame`, `wire_apply_result`, `function_apply`,
 `apply_loop`, `StaticModule::read` / `static_read`, `static_function_apply`,
 and `AttrExt::missing_value` (now `Option<LowValue>`, with the curated
-`Ctx::fresh` supplying the empty cell when the absent form is an unbound one).
+`Ctx::fresh` supplying the empty cell when the absent form is an undecided one).
 
 **Three judgement calls, each recorded where it is made.**
 
@@ -314,7 +314,7 @@ paths, and those copies are load-bearing.
 | the marker enters a slot by exactly one path | instrumenting all three write sites (`write_node_value`, `write_node_answer`'s restore, `propagate_class_value`) over the whole example corpus: `write_node_value` fires 7542 times, the other two **never** |
 | it is a *copy*, not a computation | the two callers that pass it are `function.rs`'s clone walk (`write_node_value(clone, mapped)`) and the static materializer (`static_module/apply.rs`, `write_node_value(clone, Some(value))`) — both carry a source's value to a clone |
 | a marker never lands in a class that holds a value | a probe at the write path over the whole corpus: **0** cases where the class already held a decided value |
-| refusing the copy is not available | making `write_node_value` drop an unbound value (leaving the slot empty, the honest copy) breaks `let_bound_functions_are_polymorphic` and `a_wrappers_parameter_type_is_inferred_from_a_body_call` in `--test checker`, and panics the example sweep at `evaluation.rs`'s operation unwrap — the clone then has no operation and no value where the walk expected the carried one |
+| refusing the copy is not available | making `write_node_value` drop an undecided value (leaving the slot empty, the honest copy) breaks `let_bound_functions_are_polymorphic` and `a_wrappers_parameter_type_is_inferred_from_a_body_call` in `--test checker`, and panics the example sweep at `evaluation.rs`'s operation unwrap — the clone then has no operation and no value where the walk expected the carried one |
 
 **Superseded while planning.** The paragraph here claimed the clone's copied
 marker blocks the change — that phase 2 could not replace it with `None` until
@@ -415,7 +415,7 @@ does not resolve** — it renders `raw 10: ?a` where the example declares
 apply results, whose slots are empty at render time.
 
 Instrumented rather than inferred, and each hypothesis refuted in turn: no
-operation's decided slot is ever overwritten with an unbound value
+operation's decided slot is ever overwritten with an undecided value
 (`write_node_value`), the class's value is never shadowed on the representative,
 and the merge preserves the class value through the new representative
 (a `debug_assert_eq!` on `class_committed_value(representative)` held for the
@@ -513,7 +513,7 @@ across the three crates.
 a_concrete_type_is_never_bound_over_a_dependent_codomain`.
 
 The case is the deferral working as designed: a dependent codomain
-(`[0, 1][x]`) meets a concrete `1` while `x` is still unbound — unify does not
+(`[0, 1][x]`) meets a concrete `1` while `x` is still undecided — unify does not
 evaluate, so the class holds `1` and the computation is left owing an answer
 (the §1.1.3 rule) — and when the read runs it selects the `0` branch.  That is
 **one** disagreement.  It arrived as two, mirrored:
@@ -709,7 +709,7 @@ type a **fresh cell**, and its own doc says why:
 > "The signature's *arity* is what decides the result's shape — a bare `Buffer`
 > for a one-write index function, a tuple of buffers for a several-write one — and
 > the arity cannot be read here: `build` runs once, on the frozen `plrun` template,
-> where `.sig` is an unbound cell that only resolves at run time."
+> where `.sig` is an undecided cell that only resolves at run time."
 
 §3 established that the run cannot repair that cell afterwards, so the cell has to
 stop being late: **the signature must be concrete before `build` runs**.  Then the
@@ -831,9 +831,9 @@ can be stated.  Each is a trap that cost an attempt:
    that nothing computed.  The statement must be made by an operator that already
    runs (`$jit`/`$parallel`), so the wrapper has to hand the signature expression
    to it as a value — `.sig s` **and** `$jit(f, s)`.
-2. **`run_deferred` reports an unstamped node as `parameterized`.**  Putting the
+2. **`run_deferred` reports an unstamped node as `undecided`.**  Putting the
    function's *type* node (`f.ty`) in an operand array makes the whole array read
-   `parameterized` and the arm never runs at all (`OperatorExt::run_deferred`,
+   `undecided` and the arm never runs at all (`OperatorExt::run_deferred`,
    `lowlevel/src/lib.rs`); the deep pass never stamps a type node.  So the
    signature expression must reach the operator without a type node among its
    operands.
@@ -897,14 +897,14 @@ therefore fails.  So the writer needs one of:
 - **an operand that is already concrete** — **refuted by measurement**: giving
   `ComputeOperator::Jit`'s operand array the shape as an inert second element (the
   `LaunchOp` idiom) turns the deep pass's answer for the whole array into
-  `parameterized`, so the default gate returns before the arm runs and the artifact
+  `undecided`, so the default gate returns before the arm runs and the artifact
   is never compiled: `35 of 58` `--test compute` cases go red, every one of them
   reading `parameterized`.  A bound array whose items are still-open cells is
   *not* concrete, and the shape's items are those cells by construction;
 - **a `run_deferred` override** on the compute vocabulary: the one op that must
   read its operand *structurally* is exactly the case the default gate cannot
   serve.  The default's body (deep-evaluate the operand node, refuse when its
-  stamp says parameterized, hand the arm the value) is **one policy**, so the
+  stamp says undecided, hand the arm the value) is **one policy**, so the
   clean landing is to factor it into a shared step both the default and the
   override call — otherwise the override restates it for all ten other arms; or
 - **a node-carrying opaque value**: a `ComputeValue` variant holding the shape is

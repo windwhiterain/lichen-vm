@@ -43,7 +43,7 @@ universe, and the lowlevel refuses to read an array as a table
 of the read's type — `docs/notes/type-system-cleanup-plan.md`'s census called that third
 case frontend-only, and the refusal is what makes it so).  The expression carries the hole
 a refused definition carries instead ([`Checker::refused_pair`]), and the refusal is the
-whole answer: the read is defined for a struct type value and nothing else.  An *unbound*
+whole answer: the read is defined for a struct type value and nothing else.  An *undecided*
 container (a parameter, a call result) is **pinned** to the struct kind and stays lazy,
 resolving at the apply that binds it.
 
@@ -65,7 +65,7 @@ fact a later check can compare instead of a cell that check writes into.  Measur
 | `S::a == Int` | `1` | `1` |
 | `(5 : Type)` — the decided control | `error: expected Type, found Int` | same |
 
-The forced read stays lazy where nothing can be computed yet (an unbound container), which
+The forced read stays lazy where nothing can be computed yet (an undecided container), which
 is what the per-apply re-check of the pin relies on: `f = s => s::a; f (struct<.a Int>) ==
 5` is refused by that re-check, at the argument, with the same wording the direct case now
 gives.

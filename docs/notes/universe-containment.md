@@ -200,7 +200,7 @@ TypeFunction`.
 
 This is a soundness hole, not a rendering quirk: any program that unifies two
 frozen-module types whose shapes happen to match (or whose mismatching parts are
-unbound cells) skips the kind comparison entirely.
+undecided cells) skips the kind comparison entirely.
 
 ### 3.2 The verified fix (lowlevel)
 
@@ -286,7 +286,7 @@ Instrumented facts (a `RECORD-ERROR`/`PARAM-CHECK-FAIL` probe in
   `range`, `read`, `write`, `collect`, …) index 13 is **`collect`'s parameter
   lambda** `b => $collect(b)` — consistent with the declared side, whose type
   slot is a buffer type `[?, [TypeBuffer, K]]` with everything frozen/static.
-- the actual argument's type slot is `[?, K_frozen]`: shape unbound, **kind the
+- the actual argument's type slot is `[?, K_frozen]`: shape undecided, **kind the
   bare frozen universe** — not a marker-kind.  The honest descent therefore
   reaches `TypeBuffer` (declared kind's marker) vs `Type` (the universe's head)
   and records the conflict; the permissive predicate used to merge the two

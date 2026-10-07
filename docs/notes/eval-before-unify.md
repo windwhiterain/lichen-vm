@@ -41,7 +41,7 @@ can force a computation.  The ordering hazard this creates:
 
 > An expression (or a check-time decision about one) reads a cell **before**
 > the unification that would bind it has happened.  The read finds the cell
-> unresolved — `Parameterized`, unbound, "not concrete" — and acts on that
+> unresolved — `Parameterized`, undecided, "not concrete" — and acts on that
 > answer.  The binding arrives later; nothing re-asks the question.
 
 The runtime half of the system is built around this (§3.1): a lazy answer is
@@ -256,7 +256,7 @@ describes (the instrumentation was reverted).  For the **read-first** order of
 §2.1, with `T₁` the first `x(0)` read's lazy type and `T₂` the second's:
 
 1. `check_field` leaves each read's type as `Index(Index(container_ty, 0), k)`:
-   the container type is still an unbound cell, so `slot_read` keeps the lazy
+   the container type is still an undecided cell, so `slot_read` keeps the lazy
    form and neither read is decided.
 2. `check_binop` finds neither operand stated, takes the polymorphic path, and
    unifies the two reads **with each other**.  Both are pending `Index` reads, so
@@ -264,10 +264,10 @@ describes (the instrumentation was reverted).  For the **read-first** order of
    `add_equality` — no value and no computation to carry.
 3. The statement's `check_term` skeleton epilogue then unifies the skeleton's
    type cell into that same class, again down `bind` with both representatives
-   unbound, so again nothing is carried.  The class now has three members and
+   undecided, so again nothing is carried.  The class now has three members and
    still holds no value.
 4. The annotation `p = x: <Int, Int>` unifies the **template's** parameter type
-   cell — still an unbound cell — with the tuple type.  That is a concrete value,
+   cell — still an undecided cell — with the tuple type.  That is a concrete value,
    so `bind` writes it and replication covers *that* class: the annotation
    decides the container, and therefore what the lazy reads of steps 1–3 resolve
    to, but it touches no member of their class.
@@ -278,9 +278,9 @@ describes (the instrumentation was reverted).  For the **read-first** order of
    class's representative (itself a pending `Index` read) keeps an empty slot
    while two other members carry the value.
 6. The apply wires its result cell: `wire_apply_result` unifies the cell (a
-   fresh unbound pure cell) with the cloned return's type, which is the class of
+   fresh undecided pure cell) with the cloned return's type, which is the class of
    step 5.  `bind` reads only the two **representatives'** slots, finds both
-   unbound, and merges with nothing to carry.  The cell joins a class decided
+   undecided, and merges with nothing to carry.  The cell joins a class decided
    since step 5 and never receives the value, so the printed type reads `?a`
    while the value `20` arrives normally.
 
@@ -367,7 +367,7 @@ starts computing because something bound; what changes is that a cell added
 after the commit reads the value its class already had.
 
 **Sketch.**  A **blocked list** on each class — the operations that evaluated to
-`Parameterized` because they read the class while it was unbound — drained on
+`Parameterized` because they read the class while it was undecided — drained on
 commit by forcing each one (`force_pending` turned event-driven instead of
 unify-driven) remains a proposal.  **Neither measured row needs it**: §2.1's
 missing fact was a value the class already had, and §2.2 is not a runtime

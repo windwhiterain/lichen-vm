@@ -38,7 +38,7 @@
 >   checked by *evaluating* it, not by reconciling types. That is a refinement.
 >
 > A refinement needs no narrowing and no new type: the operand's cell stays an
-> ordinary unbound `?a`, narrowed by the plain let-polymorphic cloning that
+> ordinary undecided `?a`, narrowed by the plain let-polymorphic cloning that
 > already makes `x => x` polymorphic.
 >
 > Points at: `crates/lichen-highlevel/src/checker/operators.rs` (`check_binop`,
@@ -146,20 +146,20 @@ to end, and the refinement sits between them:
 | | [`Perspective`](../../crates/lichen-perspective/src/perspective.rs) | [`Doc`](../../crates/lichen-doc/src/doc.rs) | refinement |
 |---|---|---|---|
 | slot holds | a lattice value (a thread count) | the doc's own pair | **one predicate function** |
-| `combine` | `Gcd` — the meet, propagated from the children | a fresh unbound cell | **a fresh unbound cell: no propagation** |
-| `missing_value` | `0`, the `gcd` identity | `None` (an unbound cell) | **`None` (an unbound cell)** |
+| `combine` | `Gcd` — the meet, propagated from the children | a fresh undecided cell | **a fresh undecided cell: no propagation** |
+| `missing_value` | `0`, the `gcd` identity | `None` (an undecided cell) | **`None` (an undecided cell)** |
 | `share_missing_slot` | `true` (its absent value is concrete) | `false` | **`false`** |
 | `unify_slots` | an equality unify of the two **slot values** (element 0) | relaxed, `is_subtype` always true (a later doc overrides) | **a plain unify of the two predicates — over-strict, by decision** |
 | `is_label` | `false` | `true` | **`false`** |
 
 The `missing_value` row is not a free choice, and it corrects an earlier draft of
-this section (which said `Error`): an absent refinement has to be an **unbound
+this section (which said `Error`): an absent refinement has to be an **undecided
 cell**, because the reconciliation is a *plain unify*.
 [`AttrExt::share_missing_slot`](../../crates/lichen-highlevel/src/attr.rs)'s own contract
-states why — a unify *writes* whichever side is unbound, so a concrete absent
-value can be shared and an unbound one must not be — and a concrete absent value
+states why — a unify *writes* whichever side is undecided, so a concrete absent
+value can be shared and an undecided one must not be — and a concrete absent value
 is wrong on its own terms anyway, because `unify(Error, predicate)` conflicts and
-no refinement could ever pass from one side to the other.  Being an unbound cell
+no refinement could ever pass from one side to the other.  Being an undecided cell
 is exactly what lets an annotation's predicate flow into an argument's slot,
 which is the propagation the language already has for types ("`a : b; a : c`
 makes `b` and `c` unify"): an unrefined expression costs a fresh cell and
@@ -253,7 +253,7 @@ operand at the `->` level, like `#`/`?`, so the predicate is written explicitly:
 **Nothing unifies against a refinement.**  It is not in a type slot, no rule is
 added to `unify_inner`, and the type cell stays open — that is the polymorphism.
 The lowlevel apply does unify the parameter pair positionally, so the
-parameter's live refinement slot must stay *unbound*, the same trick `check_lam`
+parameter's live refinement slot must stay *undecided*, the same trick `check_lam`
 already plays for a perspective: binding it would let the deep pass bake it and
 make the apply enforce the declared refinement by equality.
 
@@ -496,7 +496,7 @@ load-bearing:
   refuse `"a"` and accept `1.5`.  No new machinery: it is
   `register_assert`'s documented behaviour, the same one `check_index`'s bounds
   constraint already relies on.
-- **The pin was also hiding a printer bug.**  A type printer names an unbound
+- **The pin was also hiding a printer bug.**  A type printer names an undecided
   cell by its **equality class** — `TypePrinter::class_name` keys its name table
   by the class representative — but `static_class_name` (a *frozen* module's
   cell) keyed by the ref alone, with no representative walk, and the lowlevel had
@@ -506,7 +506,7 @@ load-bearing:
   (`geo.double`'s hover) while the same type rendered dynamically printed
   `?a -> ?a` (the example's own `output =`).  Fixed by
   `Module::static_equality_representative` — the freeze keeps the class of a node
-  whose own value is unbound *whole*, so following `parent` over the artifact's
+  whose own value is undecided *whole*, so following `parent` over the artifact's
   local ids is well defined — and the printer now mirrors `class_name` exactly.
 
 - **Definition.** `x : ?a{in_num}` and `y : ?a{in_num}` put the predicate in the

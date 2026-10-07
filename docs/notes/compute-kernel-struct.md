@@ -58,16 +58,16 @@ takes the extracted `.native` and `.sig`, `$call(k.native, a)` the bare kernel, 
 
 Reading `.native`/`.sig` off a **generic** wrapper parameter (`k` in `launch = k => a => …`,
 whose type is a fresh `?a` in the frozen compute module) makes each field-read's TYPE a lazy
-`Index(Index(?a,0), key)` that can't be forced while `?a` is unbound. Two things make this
+`Index(Index(?a,0), key)` that can't be forced while `?a` is undecided. Two things make this
 resolve correctly:
 
 1. **The program's unification-deferral policy** (`Program::defer_pending`, lowlevel
    `program.rs`; decided for the highlevel in `lichen-highlevel/src/shape.rs`): a pending
-   `Index` field/positional read over an unbound container, unified against a *type value*,
+   `Index` field/positional read over an undecided container, unified against a *type value*,
    joins the classes (defers) instead of recording a false "expected X, found Y". "Holds a
    type" is a fact about the highlevel's pair encoding, so the rule lives with the encoding
    authority; the lowlevel itself merges only what is a generic graph fact (a pending
-   computation against an all-unbound skeleton, and two pending `Index` reads). Targeted to
+   computation against an all-undecided skeleton, and two pending `Index` reads). Targeted to
    `Index` reads and type values only, so real errors (a pending computation against a
    scalar) are still reported.
 2. **Lazy signature reads** in `LaunchOp::build`/`ParLaunchOp::build`: the domain/codomain

@@ -129,7 +129,7 @@ struct-type construction and in the apply clone walk):
   struct and **twice for the outer**, once per application of `A`.
 - The clone walk is where the second run comes from. `node_apply` copies a
   member node unless the deep pass proved it concrete
-  (`evaluated_deep == Some(EvaluatedDeep { parameterized: false })`). The outer
+  (`evaluated_deep == Some(EvaluatedDeep { undecided: false })`). The outer
   struct's `Fresh` node was reported as `deep=None` — nothing had proven it —
   so it was copied per apply, and the copy re-ran the operator (the walk drops
   a copied operation node's cached value, so the clone recomputes). *Why* the
@@ -208,7 +208,7 @@ it in place instead of copying it. Both halves of the identity are covered by
 the one evaluation: the nullary `Fresh` node and the constant name table are the
 marker's items, and each gets its own verdict from that descent. The same
 verdict is what `static_module/freeze.rs` reads to mark a solved module's node
-non-parameterized, so a persisted artifact bakes the identity too rather than
+non-undecided, so a persisted artifact bakes the identity too rather than
 re-minting it per materialization.
 
 `Checker::fresh_nominal_id` remains the id's allocation point (one `Fresh` node

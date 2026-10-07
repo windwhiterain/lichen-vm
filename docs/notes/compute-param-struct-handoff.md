@@ -202,7 +202,7 @@ implemented, in the two-pass form described above.**
   forcing the parameter's type term does **not** fold the `TableGet`, because the
   name table is not value-reachable.
 - **(c) Have the checker emit the resolved index.** Rejected: at check time the
-  kernel body's parameter type is an unbound cell, so the checker has no index to
+  kernel body's parameter type is an undecided cell, so the checker has no index to
   emit; it is the apply that makes it concrete, which is why the resolution
   belongs to the lowering.
 
@@ -217,7 +217,7 @@ not `.sig s` (reverting it to `.sig (type_of f)` did not move the failure).
 
 **Diagnosis, measured.** Instrumenting the operand element by element (a
 minimal tuple-shaped `parallel_sig` probe, plus the `$parallel` op node's clone
-chain) showed the unbound element was the **backend**: the innermost closure's
+chain) showed the undecided element was the **backend**: the innermost closure's
 body read the *first* apply's generation of the backend cell — a fresh clone no
 unify ever bound — while the second apply's unify had bound a *different*
 clone. Two defects in the static-module apply
@@ -230,7 +230,7 @@ closures:
    so a capture one closure layer down (`f`, read inside `s => …`'s body) was
    invisible: the middle closure (`b => s => …`) was **baked** as a frozen
    static ref instead of re-homed. Its later apply then materialized the body
-   fresh from the static template, where `f`'s cell is unbound and nothing can
+   fresh from the static template, where `f`'s cell is undecided and nothing can
    bind it. Fixed by descending into same-module static function values' entry
    points — a nested closure's captures are the enclosing closure's captures.
 2. **`static_clone_function` hung every re-home under `parent: None`.** Sound

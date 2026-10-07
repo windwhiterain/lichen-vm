@@ -120,7 +120,7 @@ are implemented but undocumented, `docs/README.md` indexes 14 of 30 notes).
 | B5 | **`Ctx::value_node` omitted `type_marker`** → non-canonical universe node | **fixed** (`ab03da4`) |
 | B6 | **Freeze layout fragility**: double payload copy; write/read arena-base alignment mismatch | **fixed** (`cfe6f44`): shared `arena_align::<P>()`, single copy, invariant-checked lookup |
 | B7 | **`TypeOperator` semantics duplicated ×3 and divergent** (`Eq` USize-only vs generalized) | **fixed** (`bd0d30b`): one program-generic blanket impl carrying the spec's generalized `==`; both copies deleted |
-| B8 | **`LowValue::None` conflates "unbound" with "computed nothing"** (five meanings; predicates disagree; lazy named-read over an anonymous struct hit `unreachable!` misreported as `NonTerminating` — probe-confirmed) | **fixed** (`816b886`): new `LowValue::Void` (renamed `LowValue::Error` afterwards) for computed-nothing (additive codec tag 7; `None` keeps tag 3 as the unit value), `is_unbound` = `Parameterized`-only, defined arms for TableGet/Index/assert/printer/key_hash, `Doc::missing_value` → `Parameterized`, diagnostic dedup keyed by (kind, node) |
+| B8 | **`LowValue::None` conflates "undecided" with "computed nothing"** (five meanings; predicates disagree; lazy named-read over an anonymous struct hit `unreachable!` misreported as `NonTerminating` — probe-confirmed) | **fixed** (`816b886`): new `LowValue::Void` (renamed `LowValue::Error` afterwards) for computed-nothing (additive codec tag 7; `None` keeps tag 3 as the unit value), `is_unbound` = `Parameterized`-only, defined arms for TableGet/Index/assert/printer/key_hash, `Doc::missing_value` → `Parameterized`, diagnostic dedup keyed by (kind, node) |
 
 ## 3. The keystone: name the encoding once (Phase 1)
 
@@ -171,7 +171,7 @@ later phase reviewable.
   read-only view.  The highlevel states the policy in `shape.rs`, where
   "this class holds a type" is decided by the encoding authority; the
   lowlevel keeps only generic graph facts (a pending computation against an
-  all-unbound skeleton, two pending `Index` reads) and gains one honest
+  all-undecided skeleton, two pending `Index` reads) and gains one honest
   primitive, `Module::is_self_referential` — a cycle of length one, stated
   without claiming to know what the cycle means.  `class_holds_type` is gone
   from the lowlevel.  The wiring lives in the highlevel `ProgramImpl` *and*
@@ -376,7 +376,7 @@ Either way, independent of D1:
   match" for both a key that is **not decided yet** and a key that is decided
   and **simply absent**.  Only the second is a miss.  `key_hash` now reports
   which of the three states it is in (`KeyState`), an undecided key leaves the
-  read lazy, an `Error` key still misses, and a build still drops an undecidable
+  read lazy, an `Error` key still misses, and a build still drops an undecided
   entry.  The program evaluates to `2`.
 
   The same reasoning fixed a latent hazard found while narrowing it:
@@ -504,7 +504,7 @@ These change or bless semantics; each needs an explicit decision (§7):
   a frontend alias-placeholder bug.  **Landed** (`fix/phase1-instantiate`):
   the checker is total and type-directed for `Instantiate` — a concretely
   non-struct callee is an `InstantiateCallee` diagnostic at the callee, an
-  unbound callee is pinned to a struct kind (re-checked per apply), a
+  undecided callee is pinned to a struct kind (re-checked per apply), a
   call-result callee is force-evaluated at check time, and named arguments
   through a non-statically-known callee were an honest
   `InstantiateNamesNotStatic` diagnostic.  ~~A ≠2-field struct through a
@@ -701,7 +701,7 @@ the experiment.
   operator's own template scope and **cloned per apply** instead of referenced
   in place — the opposite of what sharing buys.  That is a semantic change, not
   a port, and the two read sites also must keep their lazy `Index` chain
-  (an unbound signature resolves at apply time), so `shape::function_type_parts`
+  (an undecided signature resolves at apply time), so `shape::function_type_parts`
   does not apply to them either.  Recording the reason beats guessing at it.
 
 - **The checker's IR is now read-only by construction — LANDED.**  `Checker`
@@ -724,7 +724,7 @@ the experiment.
   (`AttrExt::missing_slot`, `attr.rs`), by analogy with the `USize` constants.
   A design review recommended **not** doing it, and improved on the original
   reasoning: the barrier is not that `Doc`'s missing value is "not a `USize`"
-  but that it is `Parameterized` — **an unbound cell `unify_slots` binds by
+  but that it is `Parameterized` — **an undecided cell `unify_slots` binds by
   design** (`doc.rs`), so sharing one across occurrences would let the first
   bind poison every later read.  That is a correctness argument, and it holds
   (`unify_slots` calls `check_unify_relaxed`, which binds).  The separate
@@ -790,11 +790,11 @@ the experiment.
   missing slot may be one shared node for the whole build, and the checker only
   asks and caches the answer.  The contract is stated as the fact it is — *a
   shareable missing value must be **concrete*** — because reconciling two slots
-  is a real unification that writes whichever side is unbound; a concrete node
-  is only ever read, so one can serve every occurrence, while an unbound one
+  is a real unification that writes whichever side is undecided; a concrete node
+  is only ever read, so one can serve every occurrence, while an undecided one
   would be written by whichever occurrence reconciled first.  That single fact
   is what separates the two attributes: a perspective's absent form is the
-  constant `0` and opts in; a doc's is an unbound cell that a unify binds on
+  constant `0` and opts in; a doc's is an undecided cell that a unify binds on
   purpose, and keeps the per-site form.  Default `false`, so an attribute that
   says nothing behaves exactly as before.
 
