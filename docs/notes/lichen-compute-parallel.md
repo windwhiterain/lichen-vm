@@ -5,7 +5,13 @@
 > ([compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md)):
 > `parallel`/`plrun` survive as the launcher, but `pget`/`pcollect` are gone
 > (`compute.read` / `compute.collect` take their place) and the index function is
-> single-arg over a fixed-shape `cfg = (n, (buffer…))`.  **The runtime is now
+> single-arg over a parameter struct.  **The type spellings below are superseded
+> too**: a kernel is the `struct<.native _, .I _, .O _>` struct rather than a
+> `.sig`-carrying one, a buffer is `Buf = T => struct<.native _, .element T>` (no
+> `TypeBuffer` kind marker and no `BufferId`), and a parallel parameter is the
+> named `struct<.n Int, .in …, .out …>` whose `.out` group is the run's result —
+> [compute-buffer-wrapper](compute-buffer-wrapper.md) is the record of that
+> change.  **The runtime is now
 > parallel, but not by the mechanism §5 describes**: there is no worker pool of
 > `run_kernel` calls reassembling chunks, and no warm-call validation.  A run
 > partitions the index range across worker threads, each instantiating the one
