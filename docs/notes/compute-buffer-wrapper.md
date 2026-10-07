@@ -198,12 +198,19 @@ stops for the environment's reason ("this graph dispatches to a device, but no
 compute backend is installed"), so the test harness that installs one is where
 the graph tests exercise it once their programs are migrated.
 
-**A recorded body's parameter is the named struct too**, with one wart the model
-owes an answer to: `parallel_roles` looks for both reserved names, and an empty
-struct is not expressible, so a body that produces a value rather than dispatching
-its own writes still declares one unused `Buf` field under `.out`.  The
-placeholders are wrapped **per role**: a buffer field's cell is a `Buf` around the
-`GraphInput` (a dispatch reads the wrapper's payload, `buf_payload`), while a
+**An empty group is not expressible, and that is the one wart the shape has.**
+`struct<>` is not valid source, so a parameter that has no inputs still declares
+one field under `.in`, and the natural filler is a scalar — which the CPU path
+accepts as a runtime scalar and the device path refuses ("a fragment's parameter
+declares 3 leaf/leaves … and a dispatch pushes the extent alone"), so a *producer*
+kernel that reads nothing is expressible on the CPU path only.  A recorded body
+has the same wart on `.out`, where `parallel_roles` looks for both reserved names
+and the field is never read at all.  Both want the same answer: either an empty
+group becomes expressible, or a parameter that genuinely has none of a group may
+leave it out.
+
+The placeholders are wrapped **per role**: a buffer field's cell is a `Buf` around
+the `GraphInput` (a dispatch reads the wrapper's payload, `buf_payload`), while a
 scalar field's cell is the bare `GraphInput` (the extent is a number).  The body's
 own return is what the graph hands back — a bare `Buf` when it returns one
 dispatch's result — and the host annotates the run's result accordingly
