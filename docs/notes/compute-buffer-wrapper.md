@@ -173,6 +173,28 @@ wrong.  What is needed is the distinction the walk cannot currently draw:
 The same distinction is what the checker's `type_is_concrete` draws for its own
 guards, so it is a shaping question rather than new machinery.
 
+## The graph path, and the two walks it still owes
+
+Recording a body with a **named** parameter now gets all the way to its run, and
+the steps that were needed are landed (the recorder reads its argument by role
+path; the return walk descends the `.out` structure and skips the `Buf`
+wrapper's type slot, which names no value).  One pair of walks is left, and they
+must change **together** because they define one numbering:
+
+- `graph()` builds the placeholder structure the body is applied to, one
+  `GraphInput(slot)` per parameter cell, and it still builds a **flat tuple** of
+  `arity` cells;
+- `graphrun` reads its argument as that same flat tuple and refuses anything that
+  is not a buffer or a number (`argument 1 is neither a buffer nor a number` on a
+  `struct<.n Int, .in …>` argument).
+
+Both sides want the same enumeration the rest of this work uses: the role walk
+over the parameter's type (`parallel_roles` takes any function's parameter pair,
+not only a kernel's), with the slots numbered depth-first in field order — which
+is lexicographic in the paths — and the wrapper's type slot skipped on both
+sides.  Until they move together, a graph whose body takes a named parameter
+records and then refuses at its run.
+
 ## The migration, measured
 
 `compute.read` 103, `compute.write` 127, `compute.collect` 48, `compute.plrun`
