@@ -111,10 +111,21 @@ payload back.
 kernel's *result type* does not reach the host read's container cell. The same
 probe with the host read written `inbuf.z` fails (the read stays a lazy
 `TableGet` whose name table is never materialised, and `build_outputs`' answer
-never lands where the pair reads look); written `(inbuf : Out).z` — the
-annotation the author already has — it prints the values above. So the fix is
-the propagation of a call's returned type into the caller's container cell, and
-the annotation is the workaround that shows the rest of the chain is sound.
+never lands where the pair reads look). Measured, in this order:
+
+- the container's type cell is a lazy `Index` chain over empty nodes (the
+  callee's returned `k.O`), so `type_is_concrete` is false and the checker has no
+  field position to write as a constant;
+- writing the read as `(inbuf : Out).z` — the author's own type, stated — prints
+  the values above, and so does annotating the **binding** instead
+  (`inbuf = (compute.plrun kg … : Out)`), after which every other read stays a
+  plain named one.
+
+So the **migration recipe** is: annotate a parallel run's result once, at its
+binding, with the codomain type the author already declared (`Out`), and read its
+fields by name as usual. The annotation is not a workaround that the type fix
+would invalidate — it states what the kernel's `O` already means — so call sites
+migrated this way stay correct when the propagation is fixed.
 
 ## What the JIT owes this (landed)
 
