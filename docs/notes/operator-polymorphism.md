@@ -147,9 +147,9 @@ to end, and the refinement sits between them:
 |---|---|---|---|
 | slot holds | a lattice value (a thread count) | the doc's own pair | **one predicate function** |
 | `combine` | `Gcd` — the meet, propagated from the children | a fresh unbound cell | **a fresh unbound cell: no propagation** |
-| `missing_value` | `0`, the `gcd` identity | `Parameterized` | **`Parameterized`** |
+| `missing_value` | `0`, the `gcd` identity | `None` (an unbound cell) | **`None` (an unbound cell)** |
 | `share_missing_slot` | `true` (its absent value is concrete) | `false` | **`false`** |
-| `unify_slots` | an equality unify | relaxed, `is_subtype` always true (a later doc overrides) | **a plain unify — over-strict, by decision** |
+| `unify_slots` | an equality unify of the two **slot values** (element 0) | relaxed, `is_subtype` always true (a later doc overrides) | **a plain unify of the two predicates — over-strict, by decision** |
 | `is_label` | `false` | `true` | **`false`** |
 
 The `missing_value` row is not a free choice, and it corrects an earlier draft of
@@ -209,6 +209,34 @@ a weaker one is over-strict, and deliberately so: weakening needs implication
 between predicates (`fact ⊨ requirement`), which is the subtyping this language
 does not have.  A unify never wrongly *accepts*, so the strictness costs
 expressiveness and buys soundness.
+
+**Measured: the plain unify is of the two *predicates*, not of the two slots.**
+`Refinement::unify_slots` mapped nothing and handed `check_unify` the two
+`[value, type]` **slots**, while `Perspective::unify_slots` had always mapped
+each through its element 0.  For an *absent* refinement that slot is
+`[fresh cell, int]` (`AttrExt::missing_slot`'s default, and `int` is the shared
+`Int` type expression), and the fresh cell is unified with the predicate's own
+value node — that is how a refinement passes from an annotation to an argument's
+absent slot.  The slot therefore *reads* as `[<the predicate function>, Int]`,
+and unifying it against the other side's slot — the predicate's own type, the
+self-referential `[Function(fid), ↺]` — compares two different shapes: the
+positional descent walked into the cycle and refused a refinement that should
+have passed.
+
+| program | before | after |
+|---|---|---|
+| `5 : (_ ! (t => 1))` | refused — `expected ?a -> Int, found raw[Function, Int]` | checks and prints `5: Int` |
+| `x : (_ ! in_num)` on a parameter | refused at every application | checks; `Int` and `Float` pass, `string` is refused |
+| `membership::a_refinement_written_on_a_type_refines_the_class` | parked | passes |
+
+**The function encoding was not at fault.**  The `[Function(fid), t]` the
+diagnostic printed is that absent slot's `[value, type]` term pair, not a
+leftover arrow or a degenerate function type; nothing about `[Function(fid), ↺]`
+needs to change.  The one shape rule that was missing is now shared:
+`slot_value_node` in `lichen-highlevel`'s `attr` module returns a slot's element
+0 (or the slot itself when it is already bare), and both attributes call it — so
+"compare the attribute's *value*, not its slot" is stated once, where the
+attribute's semantics live.
 
 **The surface spelling is `!`** — the annotation chain's fourth piece, beside
 `# p` and `? d`: `x : Int ! p`.  `!` was the prefix assert, and the assert moved

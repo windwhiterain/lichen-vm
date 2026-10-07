@@ -44,7 +44,7 @@
 use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, Module, NodeId};
 use lichen_utils::extend::AsEnum;
 
-use crate::attr::{AttrExt, AttrExtRegistry, AttrSpec};
+use crate::attr::{AttrExt, AttrExtRegistry, AttrSpec, slot_value_node};
 use crate::diagnostic::DiagKind;
 use crate::ir::Loc;
 use crate::program::{Ctx, HighProgram, ValueType};
@@ -93,7 +93,17 @@ where
     /// is required, and two differing predicates conflict.  Over-strict by
     /// decision — the alternative is predicate implication, which this language
     /// has no subtyping to express.
+    ///
+    /// The comparison is of the two slots' **value** nodes
+    /// ([`slot_value_node`]): the predicate each slot holds is its `[value,
+    /// type]` pair's element 0, and comparing the slots themselves would unify
+    /// that pair against the predicate's own type — the self-referential
+    /// `[Function(fid), ↺]` — which is not the same shape, so the positional
+    /// descent walks into the cycle and refuses a refinement that should pass
+    /// (`docs/notes/attributes.md` §"the gate must compute its operands").
     fn unify_slots(&self, ctx: &mut dyn Ctx<P>, a: NodeId, b: NodeId, loc: Loc) {
+        let a = slot_value_node(ctx, a);
+        let b = slot_value_node(ctx, b);
         ctx.check_unify(a, b, loc, DiagKind::Attribute);
     }
 

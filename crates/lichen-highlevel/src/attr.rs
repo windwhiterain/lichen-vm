@@ -357,3 +357,35 @@ where
 /// [`DiagKind::NoAttributeExtension`](crate::diagnostic::DiagKind), never a
 /// panic.
 pub type AttrExtRegistry<P, Attr> = Box<dyn Fn(&Attr) -> &'static dyn AttrExt<P>>;
+
+/// The **lattice-value node** of an attribute slot: a `[value, type]` term
+/// pair's element 0 (the bare value), or the slot itself when it is already
+/// bare — an un-annotated edge that never became a pair.
+///
+/// [`AttrExt::unify_slots`] implementations that compare the attribute's
+/// *value* (a perspective compares lattice numbers, a refinement compares
+/// predicates) map through this first.  Comparing the two **slots** instead
+/// unifies a `[value, type]` term pair against whatever the other side holds —
+/// and for a refinement that is the predicate's own type, the self-referential
+/// `[Function(fid), ↺]`, a different shape whose positional descent walks into
+/// its cycle and reports a conflict (`docs/notes/attributes.md` §"the gate must
+/// compute its operands" and the refinement's own note).  A slot whose value is
+/// not a pair (`None`, or a bare value) is returned as it stands, so a caller
+/// needs no case analysis.
+pub fn slot_value_node<P: HighProgram>(ctx: &dyn Ctx<P>, slot: NodeId) -> NodeId
+where
+    P::Value: ValueType + AsEnum<LowValue>,
+{
+    let Some(value) = ctx.class_value(slot) else {
+        return slot;
+    };
+    match AsEnum::<LowValue>::as_enum(&value) {
+        // SAFETY: `items` is the payload of `ctx.class_value(slot)` — a value
+        // of a live node of the checked module.
+        Some(LowValue::Array(items)) => match unsafe { items.items() }.first().map(|i| i.node) {
+            Some(AnyNodeId::Dynamic(node)) => node,
+            _ => slot,
+        },
+        _ => slot,
+    }
+}

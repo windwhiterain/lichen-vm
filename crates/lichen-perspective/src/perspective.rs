@@ -9,7 +9,7 @@
 //! the registry to its checker; the codesign (grammar, IR schema tail, persist
 //! discriminator) stays in the host language layer.
 
-use lichen_highlevel::attr::{AttrExt, AttrExtRegistry, AttrSpec};
+use lichen_highlevel::attr::{AttrExt, AttrExtRegistry, AttrSpec, slot_value_node};
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::Loc;
 use lichen_highlevel::program::{Ctx, HighProgram, ValueType};
@@ -280,29 +280,5 @@ where
             _ => return None,
         };
         Some(format!("# {n}"))
-    }
-}
-
-/// The lattice-value node of a slot: a `[value, type]` term pair's element 0
-/// (the bare value), or the slot itself when it is already bare — an
-/// un-annotated edge that never became a pair.  Used so the apply-time check
-/// and its diagnostics read the bare `4`, not the whole `[4, Int]`.
-fn slot_value_node<P: HighProgram>(ctx: &dyn Ctx<P>, slot: NodeId) -> NodeId
-where
-    P::Value: ValueType + AsEnum<LowValue>,
-{
-    let Some(value) = ctx.class_value(slot) else {
-        return slot;
-    };
-    match AsEnum::<LowValue>::as_enum(&value) {
-        // SAFETY: `items` is the payload of `ctx.class_value(slot)` — a value
-        // of a live node of the checked module.
-        Some(LowValue::Array(items)) => {
-            match unsafe { items.items() }.first().map(|item| item.node) {
-                Some(AnyNodeId::Dynamic(n)) => n,
-                _ => slot,
-            }
-        }
-        _ => slot,
     }
 }
