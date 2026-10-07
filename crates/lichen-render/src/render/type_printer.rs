@@ -336,13 +336,49 @@ where
             AnyNodeId::Dynamic(slot1) => {
                 representative(self.module, slot1) == representative(self.module, node)
             }
-            AnyNodeId::Static(sref) => matches!(
-                self.module.static_read(sref).and_then(|value| value.as_enum()),
-                Some(LowValue::Array(array))
-                    if unsafe { array.items() }.get(1)
-                        .is_some_and(|item| item.node == AnyNodeId::Static(sref))
-            ),
+            AnyNodeId::Static(sref) => self.static_function_type_function(sref).is_some(),
         }
+    }
+
+    /// The function a **static** node's value is the type of — `Some(fid)` for
+    /// `[Function(fid), t]` whose slot 1 `t` is itself a function type (a
+    /// self-cycle), which is what makes the pair a *type* rather than a
+    /// `[value, type]` pair.  `None` for anything else.
+    ///
+    /// The slot-1 test is about the node `t` names, **never about the node
+    /// being printed**: a materialized member of a function type's class
+    /// carries the frozen type's value, so its slot 1 names the frozen node that
+    /// *is* the cycle rather than the member itself.  That is the static form of
+    /// the relation the dynamic arm of [`Self::slot1_is_self`] reads as "one
+    /// class": a class has one value, and a member carries it
+    /// (`docs/notes/class-channel.md`).
+    fn static_function_type_function(
+        &self,
+        sref: lichen_lowlevel::StaticNodeId,
+    ) -> Option<AnyFunctionId> {
+        let value = self.module.static_read(sref)?;
+        let LowValue::Array(array) = value.as_enum()? else {
+            return None;
+        };
+        // SAFETY: `array` is the value read through `sref`, whose registered
+        // module pins the arena.
+        let items = unsafe { array.items() };
+        let [head, tail] = items else {
+            return None;
+        };
+        let head = self.module.node_value(head.node)?;
+        let LowValue::Function(fid) = head.as_enum()? else {
+            return None;
+        };
+        let AnyNodeId::Static(tail) = tail.node else {
+            return None;
+        };
+        matches!(
+            self.module.static_read(tail).and_then(|value| value.as_enum()),
+            Some(LowValue::Array(items))
+                if unsafe { items.items() }.get(1).is_some_and(|item| item.node == AnyNodeId::Static(tail))
+        )
+        .then_some(fid)
     }
 
     /// The `domain -> codomain` spelling of a function-type node's signature,
@@ -435,14 +471,11 @@ where
             // registered module pins the arena.
             Some(LowValue::Array(array)) => {
                 let items = unsafe { array.items() };
-                // A static **function-type node** `[Function(fid), ↺]`: slot 1
-                // is the node's own static self-cycle, so print the template's
-                // signature rather than the raw pair.  The dynamic case is in
-                // `elements`.
-                if items.len() == 2
-                    && items[1].node == AnyNodeId::Static(sref)
-                    && let Some(fv) = self.module.node_value(items[0].node)
-                    && let Some(LowValue::Function(fid)) = fv.as_enum()
+                // A static **function-type node** `[Function(fid), ↺]` — or a
+                // member carrying one (a materialized class member's slot 1
+                // names the frozen cycle): print the template's signature rather
+                // than the raw pair.  The dynamic case is in `elements`.
+                if let Some(fid) = self.static_function_type_function(sref)
                     && let Some((dom, cod)) = self.function_signature(fid)
                 {
                     format!("{dom} -> {cod}")

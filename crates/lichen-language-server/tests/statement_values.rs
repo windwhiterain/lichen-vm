@@ -96,18 +96,17 @@ if 0 then (paradox : Int) else 5";
 }
 
 #[test]
-#[ignore = "pre-existing on dev (fails identically at 4be9180): the `compute_jit` kernel binding \
-renders as the raw recursive-pair layout rather than by name.  Parked, not caused by any work in \
-this branch."]
 fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     // The `compute_jit` example's two kernel bindings are `compute.jit` results:
-    // a kernel struct whose `.sig` field carries the signature.  Dropping
-    // `TypeKernel` means no renderer special-case: the value renders by name via
-    // the compute vocabulary hook (`Kernel`) and the type renders as the struct
-    // `struct<.native <_>, .sig Int -> Int>` — not the raw recursive-pair layout.
-    // The struct's type names no class for either field, so each renders under
-    // the raw mark — `raw Kernel`, `raw undecided` — which says the printer
-    // dumped the field rather than spelling it like a form the chain explained.
+    // a kernel struct whose `.I`/`.O` fields carry the signature's two sides.
+    // Dropping `TypeKernel` means no renderer special-case: the value renders by
+    // name via the compute vocabulary hook (`Kernel`, and the two classes the
+    // body decided — `Int`, `Int`) and the type renders as the struct
+    // `struct<.native <_>, .I <_>, .O <_>`, not the raw recursive-pair layout.
+    // The struct's type still names no class for its fields — the field *type*
+    // cells are the wrapper's own, read back through `.I`/`.O` — so each renders
+    // under the raw mark, which says the printer dumped the field rather than
+    // spelling it like a form the chain explained.
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
     let doc = ShipsDoc::new_with_base(source, Some(&dir));
@@ -117,12 +116,12 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     for sv in vals {
         assert_eq!(
             sv.value.as_deref(),
-            Some("(raw Kernel, raw undecided)"),
+            Some("(raw Kernel, raw Int, raw Int)"),
             "value = {:?}",
             sv.value
         );
         assert_eq!(
-            sv.ty, "struct<.native raw[?a, ?b], .sig Int -> Int>",
+            sv.ty, "struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>",
             "type = {:?}",
             sv.ty
         );
@@ -137,7 +136,8 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
         .expect("hover on k_double");
     assert_eq!(
         hover,
-        "`k_double` — `(raw Kernel, raw undecided) : struct<.native raw[?a, ?b], .sig Int -> Int>`"
+        "`k_double` — `(raw Kernel, raw Int, raw Int) : \
+         struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>`"
     );
 }
 
@@ -171,16 +171,13 @@ fn type_variables(rendered: &str) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "pre-existing on dev (fails identically at 4be9180): the frozen `compute.jit` / \
-`compute.launch` wrapper types render as a bare `? -> ? -> ?` rather than named `?a`/`?b`.  \
-Parked, not caused by any work in this branch."]
 fn compute_wrapper_functions_hover_with_named_type_variables() {
     // `compute.jit` / `compute.launch` are generic wrappers from a frozen
     // module.  Their type variables are undecided cells that must render as
     // *named* `?a`/`?b` (and stay shared across a kernel's signature), not as
     // an opaque bare `? -> ? -> ? -> ?` — the LSP-visible half of the same
     // "raw layout" bug for the wrapper functions themselves.  A `jit` result is
-    // a kernel struct, so its type renders as `struct<.native <_>, .sig ?>`.
+    // a kernel struct, so its type renders as `struct<.native <_>, .I <_>, .O <_>`.
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
     let doc = ShipsDoc::new_with_base(source, Some(&dir));
@@ -193,35 +190,41 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
             character: 19,
         })
         .expect("hover on `jit`");
-    // `jit` names six cells: its two arguments, the kernel struct's raw pair, and
-    // then `.sig`'s domain and codomain — which are those same two arguments
-    // rather than fresh cells, and that is the property this test is about.  A
-    // frozen module's own type lambdas claim cells before these, so the letters
-    // begin wherever they begin.
+    // `jit` names twelve cells: its two arguments' own names in the wrapper's
+    // two arrows, the kernel struct's `.native` raw pair, and then `.I`'s and
+    // `.O`'s domain/codomain — which are those same argument cells rather than
+    // fresh ones, and that is the property this test is about.  A frozen
+    // module's own type lambdas claim cells before these, so the letters begin
+    // wherever they begin.
     let cells = type_variables(&hover);
     assert_eq!(
         cells.len(),
-        6,
-        "jit names six cells (two arguments, the raw pair, and `.sig`'s repeat): {hover}"
+        12,
+        "jit names twelve cells (four per arrow side, four in `.I`/`.O`, and the \
+         two signature sides repeated): {hover}"
     );
     assert_eq!(
+        (&cells[8], &cells[9]),
+        (&cells[1], &cells[2]),
+        "`.I`'s domain and codomain are the parameter's own cells: {hover}"
+    );
+    assert_eq!(
+        (&cells[10], &cells[11]),
         (&cells[4], &cells[5]),
-        (&cells[0], &cells[1]),
-        "`.sig`'s domain and codomain are the wrapper's own cells: {hover}"
+        "`.O`'s domain and codomain are the return's own cells: {hover}"
     );
     assert_ne!(
         cells[0], cells[1],
         "the wrapper's two arguments are distinct cells: {hover}"
     );
     assert!(
-        hover.contains(".sig"),
-        "a kernel's signature is named as the struct's `.sig` field: {hover}"
+        hover.contains(".I") && hover.contains(".O") && !hover.contains(".sig"),
+        "a kernel's signature is named as the struct's `.I`/`.O` fields: {hover}"
     );
 
     // `launch` at line 7 (0-based): "compute.launch k_outer 3" — char 9.  It
-    // reads the kernel's `.sig` lazily and returns its codomain, so it stays a
-    // generic function of three named, distinct cells rather than the opaque
-    // `? -> ? -> ?`.
+    // reads the kernel's `.O` and returns it, so it stays a generic function of
+    // named, distinct cells rather than the opaque `? -> ? -> ?`.
     let (hover, _range) = doc
         .hover_at(Position {
             line: 7,
@@ -229,13 +232,11 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
         })
         .expect("hover on `launch`");
     let cells = type_variables(&hover);
-    assert_eq!(
-        cells.len(),
-        3,
-        "launch names three cells, so none of them is anonymous: {hover}"
-    );
-    assert!(
-        cells[0] != cells[1] && cells[1] != cells[2] && cells[0] != cells[2],
-        "launch's three cells are distinct: {hover}"
-    );
+    assert_eq!(cells.len(), 5, "launch names five cells: {hover}");
+    for (index, cell) in cells.iter().enumerate() {
+        assert!(
+            !cells[..index].contains(cell),
+            "launch's cells are distinct, `{cell}` repeats: {hover}"
+        );
+    }
 }
