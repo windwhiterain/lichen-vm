@@ -391,8 +391,6 @@ pub fn describe(value: &ComputeValue) -> &'static str {
         ComputeValue::ParKernel(..) => "a parallel kernel",
         ComputeValue::Buffer(..) => "a buffer",
         ComputeValue::DeviceBuffer(_) => "a buffer that is still on a device",
-        ComputeValue::TypeBuffer => "the buffer type marker",
-        ComputeValue::TypeWrite => "the write type marker",
         ComputeValue::Graph(..) => "a graph",
         ComputeValue::GraphInput(_) => "a placeholder for a graph's own input",
         ComputeValue::GraphValue(_) => "a placeholder for a value the graph has produced",

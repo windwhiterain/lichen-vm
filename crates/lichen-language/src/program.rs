@@ -394,7 +394,7 @@ macro_rules! lang_compose_vocabulary {
         // nominal-id methods plus the **open** marker predicate: the core
         // `TypeValue` markers (every variant but `TypeId`) and, for each
         // extension leaf, the leaf's own `LeafKindMarkers` (a plugin's type
-        // constants, e.g. compute's `TypeBuffer`).  The
+        // constants, if it has any).  The
         // `<path>::Variant` qualified path bypasses the macro_rules rule that
         // a `$path:path` fragment cannot be followed directly by `::`.
         impl ::lichen_highlevel::program::ValueType for LangValue {

@@ -1,8 +1,8 @@
 //! The `lichen-compute` extension: a native "compute" wrapper package.
 //!
 //! The native part injects a [`ComputeValue`] vocabulary — the **`Kernel`**
-//! value (a compiled, runnable wasm artifact), a **`ParKernel`** value, a
-//! **`Buffer`** value, and the **`TypeBuffer`**/`TypeWrite` kind markers — plus
+//! value (a compiled, runnable wasm artifact), a **`ParKernel`** value, and a
+//! **`Buffer`** value — plus
 //! the first-class **`Native` Operator values** (`jit`, `launch`, `call`,
 //! `parallel`, `plrun`, `range`, `read`, `write`, `collect`), and the
 //! [`ComputeOperator`]s
@@ -770,12 +770,6 @@ pub enum ComputeValue {
     /// refused because the device is full.  The discipline is deliberately the
     /// same as [`Self::Buffer`], which likewise has no individual free.
     DeviceBuffer(ResidentBuffer),
-    /// The kind marker of buffer types — a buffer's type is
-    /// `[element_type, [TypeBuffer, Type]]`.
-    TypeBuffer,
-    /// The kind marker of write types — a `Write`'s type is
-    /// `[element_type, [TypeWrite, Type]]`.
-    TypeWrite,
     /// A built graph, as its registry slot.
     ///
     /// **A `usize` and nothing else.** A graph is kernel ids, edge numbers and
@@ -903,14 +897,14 @@ enum RunInput {
     Resident(ResidentBuffer),
 }
 
-/// The compute leaf's kind markers: `TypeBuffer`/`TypeWrite` are its type
-/// constants — every other variant is a runtime value (a kernel, a buffer, a
-/// graph), never a marker a kind slot could hold.  A composed vocabulary's
-/// `ValueType::is_kind_marker` consults this for the leaf
-/// ([`LeafKindMarkers`]).
+/// The compute leaf has **no kind markers**: a buffer's type is the struct the
+/// type level reads (`docs/notes/compute-buffer-wrapper.md`), and a kernel
+/// never had a marker of its own, so nothing here is a type constant a kind
+/// slot could hold.  The impl exists because a composed vocabulary asks every
+/// leaf ([`LeafKindMarkers`]).
 impl LeafKindMarkers for ComputeValue {
     fn is_kind_marker(&self) -> bool {
-        matches!(self, ComputeValue::TypeBuffer | ComputeValue::TypeWrite)
+        false
     }
 }
 
@@ -1051,8 +1045,9 @@ pub enum ComputeOperator {
 // A kernel/par-kernel/buffer value and every compute operator are **runtime
 // only**: they are process-local registry handles/operations with no stable
 // on-disk identity, so a persistent artifact must never carry them (a frozen
-// module is a *type* artifact, not a runnable kernel).  `TypeBuffer` is a pure
-// type-constant marker and is serializable like the other kind markers.
+// module is a *type* artifact, not a runnable kernel).  No compute value is
+// serializable at all — a buffer's type is a struct the type level reads
+// (`docs/notes/compute-buffer-wrapper.md`), not a kind marker this leaf owns.
 //
 // These arms **refuse** rather than panic, and the difference is reachable, not
 // cosmetic: a package that `$jit`s at its top level and is then imported holds a
@@ -1063,13 +1058,11 @@ pub enum ComputeOperator {
 
 impl ValueCodec for ComputeValue {
     fn write_value<P: Program>(
-        w: &mut Writer,
+        _w: &mut Writer,
         value: Self,
         _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
     ) -> Result<(), String> {
         match value {
-            ComputeValue::TypeBuffer => w.u8(0),
-            ComputeValue::TypeWrite => w.u8(1),
             // The value's own name, so a reader can tell which of the three it
             // met without a debugger.
             ComputeValue::Kernel(_) => {
@@ -1124,7 +1117,6 @@ impl ValueCodec for ComputeValue {
                 );
             }
         }
-        Ok(())
     }
 
     fn read_value<P: Program>(
@@ -1134,11 +1126,10 @@ impl ValueCodec for ComputeValue {
         _self_base: *const u8,
         _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
     ) -> Result<Self, String> {
-        Ok(match r.u8()? {
-            0 => ComputeValue::TypeBuffer,
-            1 => ComputeValue::TypeWrite,
-            tag => return Err(format!("unknown compute-value tag {tag}")),
-        })
+        // No tag reaches here: every compute value is a runtime value and
+        // [`Self::write_value`] refuses each of them, so an artifact that
+        // carries one was not written by this codec.
+        Err(format!("unknown compute-value tag {}", r.u8()?))
     }
 }
 
@@ -6006,9 +5997,8 @@ where
                     refuse(
                         module,
                         format!(
-                            "argument {position} is {}, and a graph run reads a buffer or a number \
-                             — the two roles a dispatch has",
-                            graph::describe(&ComputeValue::TypeWrite)
+                            "argument {position} is neither a buffer nor a number, and a graph run \
+                             reads a buffer or a number — the two roles a dispatch has"
                         ),
                     );
                     return None;
