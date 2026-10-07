@@ -5852,18 +5852,25 @@ where
         refuse(module, "a recorded dispatch's cfg is not a node".into());
         return None;
     };
-    // SAFETY: `cfg` names a live node of `module`, and the items are read only.
-    let Some(cfg_items) = (unsafe { module.array_items(cfg) }) else {
-        refuse(module, "a recorded dispatch's cfg is not a tuple".into());
-        return None;
-    };
+    // Every leaf of the argument is read at the path the role walk found
+    // (`KernelRoles`), not at a position: that walk is the one enumeration the
+    // emitter, the run and this recorder read, so a recorded body walks the
+    // parameter the way a real run does.
+    let roles = fragment.roles.clone();
+    // The declared class of each output, read before the fragment is handed to
+    // the recorder: the `.element` of the `Buf` the result structure wraps.
+    let output_classes = fragment.output_classes.clone();
     // The extent, read on its own: a count is a different role from a buffer, and
     // a caller who swapped the two deserves to be told which was wrong rather
     // than that a shape did not match.
-    let extent = match cfg_items.first() {
-        Some(item) => {
+    let extent = match roles
+        .scalars
+        .first()
+        .and_then(|path| value_at_path::<P>(module, cfg, path))
+    {
+        Some(node) => {
             let literal = module
-                .node_value(item.node)
+                .node_value(node)
                 .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
                 .and_then(|value| match value {
                     // A literal the build already had. Collapsing it into a value
@@ -5875,7 +5882,7 @@ where
             match literal {
                 Some(extent) => extent,
                 None => match module
-                    .node_value(item.node)
+                    .node_value(node)
                     .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
                     .and_then(|value| match value {
                         ComputeValue::GraphInput(slot) => Some(Extent::Value(Placed::Input(slot))),
@@ -5885,12 +5892,12 @@ where
                     Some(extent) => extent,
                     None => {
                         let found = module
-                            .node_value(item.node)
+                            .node_value(node)
                             .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
                             .map(|value| format!("{value:?}"))
                             .unwrap_or_else(|| {
                                 module
-                                    .node_value(item.node)
+                                    .node_value(node)
                                     .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
                                     .map(|value| graph::describe(&value).to_string())
                                     .unwrap_or_else(|| "not a value at all".to_string())
@@ -5911,23 +5918,22 @@ where
         None => {
             refuse(
                 module,
-                "a recorded dispatch's cfg has no count at position 0".into(),
+                "a recorded dispatch's parameter states no extent at its first scalar leaf".into(),
             );
             return None;
         }
     };
-    // **The cfg's positions are the parameter's scalar leaves, then the buffers**
-    // (`docs/notes/compute-runtime-scalars.md` §1), so where the buffer tuple
-    // starts is the fragment's leaf count and not the constant `1` it used to be.
-    // A recorded dispatch carries the extent alone for now: a runtime scalar would
-    // have to be an edge like the extent is, so it is refused by name rather than
-    // read as the buffer tuple.
-    let leaf_count = param_classes(&fragment).len().saturating_sub(1);
-    if leaf_count > 1 {
+    // **The argument's leaves are the parameter's**, whatever shape the author
+    // wrote, so the runtime scalars are `roles.scalars` rather than a positional
+    // count.  A recorded dispatch carries the extent alone for now: a runtime
+    // scalar would have to be an edge like the extent is, so it is refused by
+    // name rather than read as an input buffer.
+    let scalar_leaves = roles.scalars.len().saturating_sub(1);
+    if scalar_leaves > 1 {
         refuse(
             module,
             format!(
-                "this dispatch's kernel parameter declares {leaf_count} scalar leaves, and a \
+                "this dispatch's kernel parameter declares {scalar_leaves} runtime scalars, and a \
                  recorded body carries the extent alone: a runtime scalar would have to be an \
                  edge of the recording, and that is not written yet"
             ),
@@ -5935,28 +5941,33 @@ where
         return None;
     }
     let mut inputs: Vec<Placed> = Vec::new();
-    if let Some(tuple) = cfg_items.get(leaf_count)
-        && let Ok(tuple_node) = dyn_node(tuple.node)
-        // SAFETY: `tuple_node` names a live node of `module`.
-        && let Some(items) = (unsafe { module.array_items(tuple_node) })
-    {
-        for (position, item) in items.iter().enumerate() {
-            let Some(value) = module
-                .node_value(item.node)
-                .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
-            else {
-                refuse(
-                    module,
-                    format!("argument {position} of this dispatch is not a compute value at all"),
-                );
+    for (position, path) in roles.inputs.iter().enumerate() {
+        // An input path names the `Buf` the caller passes; the placeholder rides
+        // in the wrapper's payload, which is what `buf_payload` takes.
+        let Some(node) =
+            value_at_path::<P>(module, cfg, path).and_then(|buf| buf_payload::<P>(module, buf))
+        else {
+            refuse(
+                module,
+                format!("argument {position} of this dispatch is not a buffer"),
+            );
+            return None;
+        };
+        let Some(value) = module
+            .node_value(node)
+            .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
+        else {
+            refuse(
+                module,
+                format!("argument {position} of this dispatch is not a compute value at all"),
+            );
+            return None;
+        };
+        match graph::place(&value, position) {
+            Ok(placed) => inputs.push(placed),
+            Err(reason) => {
+                refuse(module, reason);
                 return None;
-            };
-            match graph::place(&value, position) {
-                Ok(placed) => inputs.push(placed),
-                Err(reason) => {
-                    refuse(module, reason);
-                    return None;
-                }
             }
         }
     }
@@ -5967,26 +5978,57 @@ where
             return None;
         }
     };
-    // **The same shape a real launch produces**: a bare value for one output, the
-    // tuple of them for several. Each placeholder becomes a node of this block
-    // first, so the tuple holds live nodes rather than detached values, and the
-    // body downstream reads a result exactly as it reads a run's.
-    let placeholder =
-        |id: usize| <P::Value as From<ComputeValue>>::from(ComputeValue::GraphValue(id));
-    let value = if placed.len() == 1 {
-        placeholder(placed[0].edge())
-    } else {
-        let items: Vec<ArrayItem> = placed
-            .iter()
-            .map(|placed| {
-                let node = module.add_node(block, None, Some(placeholder(placed.edge())));
-                ArrayItem::new(AnyNodeId::Dynamic(node))
-            })
-            .collect();
-        let handle = module.alloc_array(&items, block);
-        <P::Value as From<LowValue>>::from(LowValue::Array(handle))
-    };
-    Some(value)
+    // **The same shape a real launch produces**: the parameter's `.out`
+    // structure, one `Buf`-wrapped placeholder per declared output at the path
+    // the walk found.  Each placeholder becomes a node of this block first, so
+    // the structure holds live nodes rather than detached values, and the body
+    // downstream reads a result exactly as it reads a run's.
+    if roles.outputs.is_empty() {
+        return match placed.first() {
+            // A parameter with no `.out` fields: the body produced nothing, and
+            // the unit value is what a run of it would return too.
+            Some(placed) => {
+                let node = module.add_node(
+                    block,
+                    None,
+                    Some(<P::Value as From<ComputeValue>>::from(
+                        ComputeValue::GraphValue(placed.edge()),
+                    )),
+                );
+                module.node_value(AnyNodeId::Dynamic(node))
+            }
+            None => Some(<P::Value as From<LowValue>>::from(LowValue::None)),
+        };
+    }
+    let mut fields: Vec<(Vec<usize>, NodeId)> = Vec::with_capacity(placed.len());
+    for (position, placed) in placed.iter().enumerate() {
+        let Some(inner) = roles.outputs.get(position).and_then(|path| path.get(1..)) else {
+            refuse(
+                module,
+                format!("output {position} has no path in the parameter's `.out` group"),
+            );
+            return None;
+        };
+        let payload = module.add_node(
+            block,
+            None,
+            Some(<P::Value as From<ComputeValue>>::from(
+                ComputeValue::GraphValue(placed.edge()),
+            )),
+        );
+        let class = output_classes
+            .get(position)
+            .copied()
+            .unwrap_or(ScalarClass::Int);
+        let Some(buf) = buf_value::<P>(module, block, AnyNodeId::Dynamic(payload), class) else {
+            return None;
+        };
+        fields.push((inner.to_vec(), buf));
+    }
+    match assemble_result::<P>(module, block, &fields, &[], 0) {
+        Some(root) => module.node_value(AnyNodeId::Dynamic(root)),
+        None => None,
+    }
 }
 
 /// Build a graph by applying a function to placeholders and recording what it
