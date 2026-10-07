@@ -58,7 +58,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use lichen_graph_ir::Policy;
 use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
-use lichen_highlevel::program::{Ctx, HighProgram, LeafKindMarkers, TypeOperator, ValueType};
+use lichen_highlevel::program::{
+    Ctx, HighProgram, LeafKindMarkers, TypeOperator, TypeValue, ValueType,
+};
 use lichen_highlevel::shape::{
     KIND_MARKER_SLOT, PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, STRUCT_MARKER_NAMES_SLOT,
     STRUCT_MARKER_PAYLOAD_SLOT, TYPE_KIND_SLOT, TYPE_SHAPE_SLOT, TypeRef,
@@ -1411,11 +1413,17 @@ where
                             return None;
                         }
                     };
+                    let facts = fragment_facts(id);
                     let mut leaves: Vec<i64> = Vec::with_capacity(leaf_classes.len());
                     for (position, class) in leaf_classes.iter().enumerate() {
-                        let value = cfg_items
-                            .get(position)
-                            .and_then(|item| module.node_value(item.node))
+                        // The named form reads a leaf where the walk found it; the
+                        // tuple form states no roles and reads the leading positions.
+                        let node = match facts.roles.scalars.get(position) {
+                            Some(path) => value_at_path::<P>(module, cfg_node, path),
+                            None => cfg_items.get(position).map(|item| item.node),
+                        };
+                        let value = node
+                            .and_then(|node| module.node_value(node))
                             .and_then(|v| AsEnum::<LowValue>::as_enum(&v));
                         // A leaf is read at the class its own field declares, and a
                         // **decided** value of the wrong class is refused by name
@@ -1456,63 +1464,70 @@ where
                         };
                         leaves.push(word);
                     }
-                    // input buffers = the position after the leaves, a tuple of
+                    // Input buffers: the named form reads each one where the walk
+                    // found it — the path ends at the `Buf` wrapper's payload — and
+                    // the tuple form reads the position after the leaves, a tuple of
                     // `Buffer` values.
                     let mut inputs: Vec<RunInput> = Vec::new();
-                    if let Some(buf_tuple) = cfg_items.get(leaf_classes.len())
+                    if !facts.roles.inputs.is_empty() {
+                        for (position, path) in facts.roles.inputs.iter().enumerate() {
+                            let Some(node) = value_at_path::<P>(module, cfg_node, path) else {
+                                return None;
+                            };
+                            let Some(input) = run_input::<P>(
+                                module,
+                                node,
+                                "a parallel parameter's input buffer is one of the kernel's own \
+                                 `Buf` fields",
+                                &format!("position {position} of it"),
+                            ) else {
+                                return None;
+                            };
+                            inputs.push(input);
+                        }
+                    } else if let Some(buf_tuple) = cfg_items.get(leaf_classes.len())
                     && let Ok(buf_tuple_node) = dyn_node(buf_tuple.node)
                     // SAFETY: `buf_tuple_node` names a live node of `module`.
                     && let Some(buf_items) = (unsafe { module.array_items(buf_tuple_node) })
                     {
                         for (position, item) in buf_items.iter().enumerate() {
-                            match module
-                                .node_value(item.node)
-                                .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
-                            {
-                                Some(ComputeValue::Buffer(payload, class)) => {
-                                    // SAFETY: the buffer value is read out of
-                                    // `module` on this borrow, so the payload's home
-                                    // block is alive for the walk below.
-                                    if let Some(data) = buffer_items(&payload) {
-                                        // The buffer's class travels with the words:
-                                        // a run reads a float input as `f32`s and an
-                                        // integer one as `Int`s, and the payload it
-                                        // came from is packed at that class's width.
-                                        inputs.push(RunInput::Host(BufferWords {
-                                            class,
-                                            words: unpack_elements(class, data),
-                                        }));
-                                    } else {
-                                        return None;
-                                    }
-                                }
-                                Some(ComputeValue::DeviceBuffer(resident)) => {
-                                    // Handed to the run as the id it already is.  This
-                                    // is the whole point: an intermediate result of a
-                                    // "gpu" chain never comes home in order to be sent
-                                    // straight back out.
-                                    inputs.push(RunInput::Resident(resident));
-                                }
-                                // **A decided non-buffer here is the one way a launch
-                                // can be handed something it cannot run on**, and it
-                                // used to answer `parameterized` with no diagnostic —
-                                // so a program that passed a plain array where a
-                                // buffer belonged ran to completion, printed
-                                // `parameterized` and an empty value.
-                                _ => {
-                                    return not_a_buffer::<P>(
-                                        module,
-                                        item.node,
-                                        "a parallel launch's `cfg(1)` is the tuple of buffers its \
-                                     kernel reads",
-                                        &format!("position {position} of it"),
-                                    );
-                                }
-                            }
+                            let Some(input) = run_input::<P>(
+                                module,
+                                item.node,
+                                "a parallel launch's `cfg(1)` is the tuple of buffers its \
+                                 kernel reads",
+                                &format!("position {position} of it"),
+                            ) else {
+                                return None;
+                            };
+                            inputs.push(input);
                         }
                     }
                     match run_parallel_kernel(id, backend, leaves, inputs) {
                         Ok(RunOutcome::Host(results)) => {
+                            // The named form's result **is** the kernel's codomain:
+                            // every output buffer placed where the walk found it and
+                            // wrapped as the `Buf` the type level reads
+                            // (`docs/notes/compute-buffer-wrapper.md`).
+                            if !facts.roles.outputs.is_empty() {
+                                let outputs: Vec<(NodeId, ScalarClass)> = results
+                                    .iter()
+                                    .map(|result| {
+                                        let payload = module.add_node(
+                                            block,
+                                            None,
+                                            Some(<P::Value as From<ComputeValue>>::from(
+                                                ComputeValue::Buffer(
+                                                    module.alloc_payload(&result.packed(), block),
+                                                    result.class,
+                                                ),
+                                            )),
+                                        );
+                                        (payload, result.class)
+                                    })
+                                    .collect();
+                                return build_outputs::<P>(module, block, &facts.roles, &outputs);
+                            }
                             // Several outputs are the **tuple** of them, which
                             // `compute.read`/`compute.collect` address by ordinal.
                             // Each buffer value becomes a node of this block first,
@@ -1557,15 +1572,35 @@ where
                             ))
                         }
                         Ok(RunOutcome::Resident(results)) => {
-                            // The same single-or-tuple shape, with the results left
-                            // where the shader wrote them.  A resident buffer is plain
-                            // data rather than an arena pointer, so a node holding one
-                            // needs no payload and the copy path leaves it alone.
+                            // The same shape, with the results left where the shader
+                            // wrote them.  A resident buffer is plain data rather than
+                            // an arena pointer, so a node holding one needs no payload
+                            // and the copy path leaves it alone.
                             let value = |resident: ResidentBuffer| {
                                 <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(
                                     resident,
                                 ))
                             };
+                            // The named form's result is the codomain here too, with
+                            // each output's declared class from the fragment: a
+                            // resident buffer carries no class of its own.
+                            if !facts.roles.outputs.is_empty() {
+                                let outputs: Vec<(NodeId, ScalarClass)> = results
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(position, resident)| {
+                                        let class = facts
+                                            .output_classes
+                                            .get(position)
+                                            .copied()
+                                            .unwrap_or(ScalarClass::Int);
+                                        let payload =
+                                            module.add_node(block, None, Some(value(*resident)));
+                                        (payload, class)
+                                    })
+                                    .collect();
+                                return build_outputs::<P>(module, block, &facts.roles, &outputs);
+                            }
                             if results.len() != 1 {
                                 let items: Vec<ArrayItem> = results
                                     .iter()
@@ -3295,6 +3330,203 @@ fn parallel_leaf_classes(id: KernelId) -> Result<Vec<ScalarClass>, String> {
         .ok_or_else(|| format!("parallel kernel {id} is not registered"))?;
     let classes = param_classes(fragment);
     Ok(classes[..classes.len().saturating_sub(1)].to_vec())
+}
+
+/// The facts a run reads off the fragment's own register: the walk's paths, and
+/// the class each declared output's elements are.  A fragment that states no
+/// roles is the tuple form, whose leaves and buffers are read positionally.
+struct FragmentFacts {
+    roles: KernelRoles,
+    output_classes: Vec<ScalarClass>,
+}
+
+fn fragment_facts(id: KernelId) -> FragmentFacts {
+    kernels()
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|fragment| FragmentFacts {
+            roles: fragment.roles.clone(),
+            output_classes: fragment.output_classes.clone(),
+        })
+        .unwrap_or(FragmentFacts {
+            roles: KernelRoles::default(),
+            output_classes: Vec::new(),
+        })
+}
+
+/// The run input a buffer node names: the payload's words, or the resident
+/// result a device left behind — the two roles a dispatch reads.  `None`, with
+/// the refusal recorded under `where_`, for anything else: a decided non-buffer
+/// here is the one way a launch can be handed something it cannot run on, and it
+/// used to answer `parameterized` with no diagnostic at all.
+fn run_input<P>(
+    module: &mut Module<P>,
+    node: AnyNodeId,
+    where_: &str,
+    position: &str,
+) -> Option<RunInput>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+{
+    match module
+        .node_value(node)
+        .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
+    {
+        Some(ComputeValue::Buffer(payload, class)) => {
+            // SAFETY: the buffer value is read out of `module` on this borrow, so
+            // the payload's home block is alive for the walk below.
+            let data = buffer_items(&payload)?;
+            // The buffer's class travels with the words: a run reads a float input
+            // as `f32`s and an integer one as `Int`s, and the payload it came from
+            // is packed at that class's width.
+            Some(RunInput::Host(BufferWords {
+                class,
+                words: unpack_elements(class, data),
+            }))
+        }
+        // Handed to the run as the id it already is: an intermediate result of a
+        // "gpu" chain never comes home in order to be sent straight back out.
+        Some(ComputeValue::DeviceBuffer(resident)) => Some(RunInput::Resident(resident)),
+        _ => {
+            not_a_buffer::<P>(module, node, where_, position);
+            None
+        }
+    }
+}
+
+/// The node a role path names in a cfg value: each step is an array index, the
+/// way the checker resolves the same read against the parameter's type.
+fn value_at_path<P>(module: &mut Module<P>, root: NodeId, path: &[usize]) -> Option<AnyNodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+{
+    let mut node = AnyNodeId::Dynamic(root);
+    for &at in path {
+        let dynamic = node.dynamic()?;
+        // SAFETY: every node on the way is a live node of `module` on this
+        // borrow — the root is the cfg the VM just evaluated for this operation.
+        let items = unsafe { module.array_items(dynamic) }?;
+        node = items.get(at)?.node;
+    }
+    Some(node)
+}
+
+/// The type a buffer's elements are, for the wrapper's `.element` slot.
+fn element_type(class: ScalarClass) -> TypeValue {
+    match class {
+        ScalarClass::Int => TypeValue::TypeInt,
+        ScalarClass::Float => TypeValue::TypeFloat,
+    }
+}
+
+/// One `Buf` value: the payload an operator produced, then the element type —
+/// the wrapper's own field order, which is what the type level reads back.
+fn buf_value<P>(
+    module: &mut Module<P>,
+    block: BlockId,
+    payload: AnyNodeId,
+    class: ScalarClass,
+) -> Option<NodeId>
+where
+    P: Program,
+    P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
+{
+    let element = module.add_node(
+        block,
+        None,
+        Some(<P::Value as From<TypeValue>>::from(element_type(class))),
+    );
+    let items = [
+        ArrayItem::new(payload),
+        ArrayItem::new(AnyNodeId::Dynamic(element)),
+    ];
+    let handle = module.alloc_array(&items, block);
+    Some(module.add_node(
+        block,
+        None,
+        Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle))),
+    ))
+}
+
+/// Assemble one level of a result structure: the fields at `depth` of the
+/// outputs whose result paths start with `prefix`.
+///
+/// A group's arity is one past the highest field any path names, and a position
+/// no path names is not built — the structure is exactly what the walk found,
+/// which is why the codomain's field list and the result's agree.
+fn assemble_result<P>(
+    module: &mut Module<P>,
+    block: BlockId,
+    outputs: &[(Vec<usize>, NodeId)],
+    prefix: &[usize],
+    depth: usize,
+) -> Option<NodeId>
+where
+    P: Program,
+    P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
+{
+    let under = |path: &Vec<usize>| path.len() > depth && path[..depth] == *prefix;
+    let arity = outputs
+        .iter()
+        .filter(|(path, _)| under(path))
+        .filter_map(|(path, _)| path.get(depth))
+        .max()
+        .map(|highest| highest + 1)?;
+    let mut items: Vec<ArrayItem> = Vec::with_capacity(arity);
+    for at in 0..arity {
+        let leaf = outputs
+            .iter()
+            .find(|(path, _)| under(path) && path.len() == depth + 1 && path[depth] == at);
+        let node = match leaf {
+            Some((_, value)) => AnyNodeId::Dynamic(*value),
+            None => {
+                let mut nested = prefix.to_vec();
+                nested.push(at);
+                AnyNodeId::Dynamic(assemble_result(module, block, outputs, &nested, depth + 1)?)
+            }
+        };
+        items.push(ArrayItem::new(node));
+    }
+    let handle = module.alloc_array(&items, block);
+    Some(module.add_node(
+        block,
+        None,
+        Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle))),
+    ))
+}
+
+/// The `O` structure a run hands back: every output buffer placed where the role
+/// walk found it, wrapped as the `Buf` the type level reads.
+///
+/// A role path starts at the parameter's `.out` field and ends at the buffer's
+/// own `.native` slot, and the result *is* the codomain, so the builder drops
+/// both ends and reconstructs the nesting between them.  `outputs` is one
+/// payload node and element class per declared output, in ordinal order — the
+/// order the emitter numbered the writes in.
+fn build_outputs<P>(
+    module: &mut Module<P>,
+    block: BlockId,
+    roles: &KernelRoles,
+    outputs: &[(NodeId, ScalarClass)],
+) -> Option<P::Value>
+where
+    P: Program,
+    P::Value: ValueType + From<ComputeValue> + AsEnum<ComputeValue>,
+{
+    let mut placed: Vec<(Vec<usize>, NodeId)> = Vec::with_capacity(outputs.len());
+    for (position, &(payload, class)) in outputs.iter().enumerate() {
+        let path = roles.outputs.get(position)?;
+        // Drop the `.out` step at the front and the `.native` step at the back:
+        // the result is the codomain, and a `Buf` value holds its payload first.
+        let inner = path.get(1..path.len().checked_sub(1)?)?;
+        let value = buf_value::<P>(module, block, AnyNodeId::Dynamic(payload), class)?;
+        placed.push((inner.to_vec(), value));
+    }
+    let root = assemble_result::<P>(module, block, &placed, &[], 0)?;
+    module.node_value(AnyNodeId::Dynamic(root))
 }
 
 /// The class a node's value is, read **with the kernel's parameter slots in
