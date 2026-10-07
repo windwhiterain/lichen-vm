@@ -530,8 +530,10 @@ macro_rules! define_value_type_marker_methods {
     };
 }
 
-/// An extension value leaf's contribution to the **open** kind-marker set:
-/// the leaf's own type-constant atoms (compute's `TypeBuffer`/`TypeWrite`).
+/// An extension value leaf's contribution to the **open** kind-marker set: the
+/// leaf's own type-constant atoms.  (Compute used to contribute
+/// `TypeBuffer`/`TypeWrite` here and contributes none now that a buffer is an
+/// ordinary `Buf` struct — but the leaf's own set is what this trait is for.)
 ///
 /// The highlevel's 9 kind markers are closed ([`crate::shape::for_each_kind_marker`]),
 /// but the marker *concept* is open: any plugin composing its own value leaf

@@ -44,8 +44,8 @@ pub use lichen_render::{
 
 /// The compute plugin's value-variant spelling: a bare kernel artifact and a
 /// buffer both read by name (`Kernel`/`ParKernel`/`Buffer`) — a kernel value is
-/// an opaque compiled artifact (its *signature* rides in the struct's `.sig`
-/// field, not in a marker), so one name suffices.
+/// an opaque compiled artifact (its *signature* rides in the struct's `.I`/`.O`
+/// fields, not in a marker), so one name suffices.
 fn lang_value_render<P>(value: &P::Value) -> Option<String>
 where
     P: HighProgram,
@@ -73,8 +73,8 @@ where
 }
 
 /// [`print_type`] with the language's extension vocabulary: a kernel value's
-/// signature rides in its struct's `.sig` field, so its type renders as the
-/// struct `struct<.native _, .sig in -> out>` and the artifact value
+/// signature rides in its struct's `.I`/`.O` fields, so its type renders as the
+/// struct `struct<.native _, .I in, .O out>` and the artifact value
 /// (`Kernel`/`ParKernel`/`Buffer`) by name.
 pub fn print_type_lang<P>(module: &Module<P>, root: NodeId) -> String
 where
