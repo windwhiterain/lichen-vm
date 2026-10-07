@@ -108,13 +108,15 @@ k
 | with the builtin (before the removal) | `(Kernel, parameterized): struct<.native raw[?a, ?b], .sig Int -> Int>` |
 | with the library `type_of` | `(Kernel, parameterized): struct<.native raw[?a, ?b], .sig TypeStruct>` |
 
-The kernel's `.sig` field is *declared* as the read of the argument's type; the
-read's **value** is right (`compute.launch k 5` is `10`, and `k.sig` still gates
-as a function type), and — as it turns out — so is its **declared type**: a
-class dump of the `.sig` field-type node shows the committed value *is* the
-arrow `[[Int, Int], [TypeFunction, K]]`.  Only the **printing** was wrong.  Three
-assertions measured it (the middle row above is what they pinned, and they were
-`#[ignore]`d until the printer fix landed):
+The kernel's `.sig` field **was** *declared* as the read of the argument's type;
+the read's **value** was right (`compute.launch k 5` returned `10`, and `k.sig`
+gated as a function type), and — as it turns out — so was its **declared type**: a
+class dump of the `.sig` field-type node showed the committed value *was* the
+arrow `[[Int, Int], [TypeFunction, K]]`.  Only the **printing** was wrong.  That
+read is what the removal exposed: it rides in the successors of that field, the
+`.I`/`.O` of `struct<.native _, .I _, .O _>`.  Three assertions measured it (the
+middle row above is what they pinned, and they were `#[ignore]`d until the
+printer fix landed):
 
 - `a_kernel_value_and_type_render_by_name` and
   `a_tuple_domain_kernel_type_renders_as_a_function` in
@@ -124,6 +126,9 @@ assertions measured it (the middle row above is what they pinned, and they were
   half: the same kernel type through the language server's snapshot).
 
 ### The minimal reproducer (no native plugin needed)
+
+The program is the wrapper spelling of the time, with its retired `.sig` field;
+the wrapper carries the signature in `.I`/`.O` now:
 
 ```lichen
 let type_of = x => {t = _; x: t; t}

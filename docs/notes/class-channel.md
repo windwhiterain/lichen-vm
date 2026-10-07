@@ -13,8 +13,9 @@
 > it.  §1 is the incoherence as first read; §2 and §3 record what measurement says
 > that first reading got wrong.
 > Worktree `.worktrees/kernel-param-struct`, branch `feature/kernel-param-struct`.
-> §5.1 (the class a lowering runs in) and §5.3 (the wrapper owning its signature
-> arrow) are landed.  The remaining half — §5.2's statement and §5.4's carrier —
+> §5.1 (the class a lowering runs in) and §5.3 (the wrapper's `.I`/`.O` cells
+> carrying its signature) are landed.  The remaining half — §5.2's statement and
+> §5.4's carrier —
 > is the **open class** itself, which is the operator-polymorphism workstream's to
 > decide ([operator-polymorphism](operator-polymorphism.md) §8.4,
 > [operator-polymorphism-handoff](operator-polymorphism-handoff.md) §5: the class
@@ -710,7 +711,7 @@ type a **fresh cell**, and its own doc says why:
 > "The signature's *arity* is what decides the result's shape — a bare `Buffer`
 > for a one-write index function, a tuple of buffers for a several-write one — and
 > the arity cannot be read here: `build` runs once, on the frozen `plrun` template,
-> where `.sig` is an undecided cell that only resolves at run time."
+> where the kernel's `.I`/`.O` are undecided cells that only resolve at run time."
 
 §3 established that the run cannot repair that cell afterwards, so the cell has to
 stop being late: **the signature must be concrete before `build` runs**.  Then the
@@ -743,7 +744,7 @@ prints `(raw Kernel, raw parameterized): struct<.native raw[?a, ?b], .sig Int ->
 the target string, already, on today's tree.  The red target is the *unannotated*
 body, where `+`'s class is open and the recorded choice is the class domain's
 `default`.  So the slice is: **choose the class where the domain says to choose
-it, and state it as the kernel's signature** — not a new lowering path.
+it, and state it in the kernel's `.I`/`.O`** — not a new lowering path.
 
 ### 5.1 Superseded: the class a lowering runs in is the **author's** statement
 
@@ -822,16 +823,23 @@ comparison: a whole two-kernel float chain, both sides, every element `false`).
 Read through the slots, the chain computes.  `--test compute` went 12 of 60
 (after the routing) to **58 of 60** with the other suites unchanged.
 
-### 5.2 Open: the signature the wrapper publishes
+### 5.2 Open: the signature the wrapper publishes in `.I`/`.O`
 
-`.sig`'s type must be a **decided arrow**, and four measurements constrain how it
-can be stated.  Each is a trap that cost an attempt:
+The signature a `jit` result publishes lives in its `.I`/`.O` fields, and they
+must be **decided** — a scalar kernel's fields are the function's own argument
+and result slots, and a parallel wrapper binds `.O` to the parameter type's
+`.out` group rather than to the body's codomain.  Four measurements constrain
+how the statement reaches them.  Each is a trap that cost an attempt:
 
-1. **A node that appears only in the type graph is never evaluated.**  An operator
-   whose whole life is `.sig`'s field type never runs: the printer reads a value
-   that nothing computed.  The statement must be made by an operator that already
-   runs (`$jit`/`$parallel`), so the wrapper has to hand the signature expression
-   to it as a value — `.sig s` **and** `$jit(f, s)`.
+1. **A node that appears only in the type graph is never evaluated.**  A
+   statement that exists only as a type never runs: the printer reads a value
+   that nothing computed.  The statement must therefore be one an operator
+   already runs over, and that operator is `$jit`/`$parallel`, whose operand is
+   the function itself.  In the model that preceded this one the signature had
+   to ride in *as a value* for exactly that reason — `.sig s` beside
+   `$jit(f, s)`; the statement now is the wrapper's own annotation
+   (`f: I -> O`), checked against the function's type, and `.I`/`.O` are the
+   cells every later read of the kernel resolves through.
 2. **`run_deferred` reports an unstamped node as `undecided`.**  Putting the
    function's *type* node (`f.ty`) in an operand array makes the whole array read
    `undecided` and the arm never runs at all (`OperatorExt::run_deferred`,
@@ -845,10 +853,11 @@ can be stated.  Each is a trap that cost an attempt:
    wrapper with a cell-sided signature passes 7 of 7.
 4. **The generic wrapper's type must still render as an arrow with the function's
    own variables.**  `wrapper_functions_render_with_named_type_variables` pins
-   `.sig ?a -> ?b` — the *same* classes as the wrapper parameter's own type.  A
-   fresh arrow renders its own names, and a shape slot that is an unset operator
-   renders `raw[?c, TypeFunction]` (the printer's kind branch needs the shape
-   slot's *value* to be a two-element array).
+   the arrow — `.sig ?a -> ?b` then, `.I ?a` / `.O ?b` now — at the *same*
+   classes as the wrapper parameter's own type.  A fresh arrow renders its own
+   names, and a shape slot that is an unset operator renders
+   `raw[?c, TypeFunction]` (the printer's kind branch needs the shape slot's
+   *value* to be a two-element array).
 
 Traps 3 and 4 pull apart: the sides must be *cells in the function's own type
 classes* (4) yet must never be written (the pin the handoff forbids), while a
@@ -872,20 +881,25 @@ makes any statement of it possible:**
   a shape the *wrapper* owns, because the function's own shape node is what every
   other use of the function reads.
 
-### 5.3 Landed: the wrapper owns its signature arrow (`$sig`)
+### 5.3 Landed: the wrapper's `.I`/`.O` cells carry its signature
 
-`$sig(f)` (`compute.rs`) builds the arrow `JitOp`'s own gate builds — two fresh
-cells through `ctx.arrow`'s shape/kind/pair triple — and unifies it against `f`'s
-type, so its sides are *cells in the function's own classes* (trap 4) while the
-shape node belongs to the wrapper (no pin).  `jit`'s `.sig` field is
-`($sig(f))` instead of `(type_of f)`.
+`jit` and `parallel` no longer reach for a signature operator: their wrappers
+bind their own cells (`I = _; O = _`) and state `f: I -> O` on the function, so
+the unify against `f`'s type makes those cells the function's own argument and
+result slots (trap 4) without pinning a polymorphic body.  The retired carrier
+that first published such an arrow was `$sig(f)` (`compute.rs`), which built the
+arrow `JitOp`'s own gate built — two fresh cells through `ctx.arrow`'s
+shape/kind/pair triple — and unified it against `f`'s type, with the shape node
+belonging to the wrapper (no pin); `jit`'s `.sig` field was `($sig(f))` instead
+of `(type_of f)`, and the operator was deleted once the struct carried
+`.I`/`.O`.
 
-Measured: the wrapper definition still renders
+Measured this session: the wrapper definition then rendered
 `Function: ?a -> ?b -> struct<.native raw[?c, ?d], .sig ?a -> ?b>` — a native call
-*is* accepted in a type position and its term is what the field type becomes — an
-applied result still renders `.sig ?c -> ?c`, and the tree stays `57 of 58` with
-every other suite unchanged.  `$sig`'s *value* node is the shape: the node §5.2's
-statement has to rewrite.
+*is* accepted in a type position and its term is what the field type becomes — and
+an applied result then rendered `.sig ?c -> ?c`, with the tree at `57 of 58` and
+every other suite unchanged.  `$sig`'s *value* node was the shape: the node §5.2's
+statement used to have to rewrite.
 
 ### 5.4 Open: who rewrites the shape, and how it reaches them
 
@@ -929,10 +943,11 @@ cargo test -q -p lichen-language --test compute --test pipeline --test graph_jit
 [operator-polymorphism](operator-polymorphism.md) §8.8 recorded as red:
 
 - `a_kernel_value_and_type_render_by_name` (`crates/lichen-language/tests/compute.rs:466`)
-  — `.sig ?c -> ?c` must become `.sig Int -> Int`;
+  — the open `.sig ?c -> ?c` this test recorded then had to become the decided
+  `.I`/`.O` the struct carries now;
 - `an_imported_package_that_jits_at_its_top_level_still_runs`
   (`crates/lichen-language/tests/runtime_only_package.rs:41`) — the `launch` gate
-  must resolve the domain of an open `.sig`.
+  must resolve the domain of an open kernel signature.
 
 **Where the tree stands after §5.1 and §5.1.1** (`--test compute`, 60 cases): 58
 pass.  The two reds are one shape each, and neither is a printer:
