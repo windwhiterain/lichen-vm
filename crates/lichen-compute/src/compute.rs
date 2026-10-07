@@ -6252,7 +6252,7 @@ where
 fn place_of_node<P>(module: &Module<P>, node: AnyNodeId) -> Option<Vec<Placed>>
 where
     P: Program,
-    P::Value: AsEnum<ComputeValue> + AsEnum<LowValue>,
+    P::Value: AsEnum<ComputeValue> + AsEnum<LowValue> + ValueType,
 {
     let value = module.node_value(node)?;
     if let Some(ComputeValue::GraphValue(id)) = AsEnum::<ComputeValue>::as_enum(&value) {
@@ -6271,6 +6271,17 @@ where
     let items = unsafe { array.items() };
     let mut placed = Vec::new();
     for item in items {
+        // **A type slot is not a value.**  The `Buf` wrapper's `.element` holds
+        // the element's type, which is not something the table names — it is the
+        // type level's half of the wrapper, and the payload beside it is the
+        // half a run reads.  Anything else this walk cannot name is the refusal
+        // it reports.
+        if module
+            .node_value(item.node)
+            .is_some_and(|value| ValueType::is_kind_marker(&value))
+        {
+            continue;
+        }
         placed.extend(place_of_node::<P>(module, item.node)?);
     }
     Some(placed)
@@ -6299,7 +6310,7 @@ where
 fn returned_value_ids<P>(module: &Module<P>, value: &P::Value) -> Option<Vec<Placed>>
 where
     P: Program,
-    P::Value: AsEnum<ComputeValue> + AsEnum<LowValue>,
+    P::Value: AsEnum<ComputeValue> + AsEnum<LowValue> + ValueType,
 {
     // The items of a result are **nodes**, not values, so each one is read back
     // through the module rather than matched in place. That is the same reason a
