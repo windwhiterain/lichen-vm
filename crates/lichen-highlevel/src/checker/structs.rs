@@ -286,12 +286,20 @@ where
         let container_ty = self.state[container].ty.unwrap();
         let concrete = self.type_is_concrete(container_ty);
         // The field's position, resolved **once** for both the guard below and
-        // the read's type: a concrete struct that has this field states where it
-        // is, and `slot_read` uses that to read the field's type out of the field
-        // list rather than leaving an `Index` no class question can see through.
-        let position = concrete
-            .then(|| self.named_field_index_any(AnyNodeId::Dynamic(container_ty), name))
-            .flatten();
+        // the read's type: a struct that has this field states where it is, and
+        // `slot_read` uses that to read the field's type out of the field list
+        // rather than leaving an `Index` no class question can see through.
+        //
+        // The lookup is the **structural** reader, and it is asked whether or
+        // not the container's cell is decided: `type_is_concrete` answers "the
+        // cell holds an array right now", while a container whose type is stated
+        // through a class (`inbuf` where `inbuf = compute.plrun …`, whose type is
+        // the callee's returned `k.O`) is readable — and a lazy `TableGet` built
+        // for it resolves the name against a name table the *statement* pass has
+        // not materialized, which leaves the read and everything downstream
+        // undecided.  A container whose names are genuinely unreadable still gets
+        // `None` here and keeps the lazy form.
+        let position = self.named_field_index_any(AnyNodeId::Dynamic(container_ty), name);
         // The requirement is the container's **kind** — the corresponding slot of
         // the `[shape, kind]` term — stated as a unify for a **decided**
         // container, so the refusal names the two kinds (`expected TypeStruct,
