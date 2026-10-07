@@ -915,7 +915,7 @@ where
     /// shape half of the callee's pair is unified before its kind half, so no
     /// name-dependent read can resolve yet), and a pinned read is masked from
     /// then on.  The lookup, by contrast, is *evaluated* when the instance is,
-    /// and the lowlevel's table read force-evaluates its key.
+    /// and the lowlevel's table read deep-evaluates its key.
     ///
     /// Two facts stay check-time, because neither depends on the struct type.
     /// A **duplicate** name is refused here — whatever the field list is, one

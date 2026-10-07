@@ -60,9 +60,9 @@
 //! identity, so a comparison would not call those the same key either); and
 //! two of the program's own value variants, which are one opaque token each.
 //!
-//! Keys are force-evaluated when the table is built — hashing needs the
+//! Keys are deep-evaluated when the table is built — hashing needs the
 //! decided content — so a stored key is fully concrete and its hash is
-//! stable for the table's whole life.  A key that cannot be forced concrete
+//! stable for the table's whole life.  A key that cannot be decided
 //! (its subtree holds an unbound cell or a parameterized computation) or
 //! whose content is an empty value ([`LowValue::Error`], the residue of
 //! a failed read) records a [`EvalError::TableKeyUnbound`] and drops the
@@ -162,9 +162,9 @@ pub(crate) enum KeyState {
 
 impl<P: Program> Module<P> {
     /// Build a constant table value from raw `(key, value)` node pairs (see
-    /// the module docs).  Every key is force-evaluated first
-    /// ([`Self::evaluate_node_forced`]; a static key reads its solved
-    /// value), an unforceable key records a
+    /// the module docs).  Every key is deep-evaluated first
+    /// ([`Self::evaluate_node_deep`]; a static key reads its solved
+    /// value), an undecidable key records a
     /// [`EvalError::TableKeyUnbound`] and drops the entry, and the
     /// survivors are deep-content-hashed and stored sorted by hash for the
     /// binary-search lookup.  The payload is a plain arena slice like an
@@ -216,7 +216,10 @@ impl<P: Program> Module<P> {
     pub(crate) fn key_state(&mut self, key: AnyNodeId) -> KeyState {
         match key {
             Dyn(node) => {
-                self.evaluate_node_forced(node, None);
+                // The **lazy** deep pass, not the forced one: the key's verdict
+                // comes from its own value and that value's structure only, so
+                // nothing here needs a walk that descends past the shallow mask.
+                self.evaluate_node_deep(node, None);
                 // Deliberately only `Some(parameterized)`: a key with **no**
                 // verdict is not gated here, because the content unfolding is
                 // total — it cuts at `UNFOLD_DEPTH` and reports its own failure

@@ -368,7 +368,9 @@ Either way, independent of D1:
   aliasing the census hypothesised: `TableGet` is a structural operator and
   evaluates its operands shallowly.  The forcing came from `key_hash`, which
   force-evaluated the key *before* asking whether it was decided, so the
-  forced descent reached the very apply being evaluated.
+  forced descent reached the very apply being evaluated.  (That read is the
+  **lazy** deep pass now: the forced variant and the operand edge it walked were
+  deleted — `code-audit.md`, the operand-arm follow-up.)
 
   The real defect was a conflation, not a cycle: a read answered "cannot
   match" for both a key that is **not decided yet** and a key that is decided

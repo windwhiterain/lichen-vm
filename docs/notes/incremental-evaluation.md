@@ -248,16 +248,17 @@ What remains is one bit to compute and one early return to add.
   not by oversight. That is also where §1.3's worst redundancy sits
   (`struct_recursion`: 8.15 real/stamped, 72.4% revisits), so **the measured
   headroom is an upper bound, not a forecast**.
-- **A node whose operand was never walked cannot be settled** unless the operand's
-  verdict is settled. For a *core* operator the operand is the argument array a
-  layer above synthesized, and the deep pass descends value-reachable edges only,
-  so "operand has no verdict" is the normal case. Cutting there would be unsound:
-  a later `evaluate_node_forced` *does* walk operand edges (`evaluation.rs:633-639`),
-  and if it certified such an operand parameterized the parent's `false` would be
-  stale. The saving grace is that the missed cuts are cheap ones — a core
-  operator's own value is usually a scalar, so there is little subtree behind it —
-  while the expensive re-descents are at operation-free array and table values,
-  which have no operand at all and *are* settlable.
+- **The operand edge no longer constrains a verdict** *(this bullet was the note's
+  second limit; it is void)*. It read: a node whose operand was never walked cannot
+  be settled, because a later `evaluate_node_forced` walks operand edges and could
+  certify the operand parameterized, leaving the parent's `false` stale. The
+  verdict computation now reads the **value graph only** — the operand arm is
+  deleted and the operand forcing with it (`code-audit.md`, `P1-31`, the
+  operand-arm follow-up) — so "the operand has no verdict" cannot make a parent's
+  verdict stale, and no cut has to wait on it. The rest of the bullet's finding
+  still holds as a description of where the cheap and expensive descents sit: a core
+  operator's own value is usually a scalar, while operation-free array and table
+  values are the ones with a subtree behind them.
 - **It cannot cut across the apply clone walk's decisions.** `function.rs:318-338`
   materializes bake-vs-clone into new topology; that is a consumer that freezes
   its inputs, and today's ordering (lambda value nodes proven at
@@ -402,11 +403,14 @@ entry point, and that nothing further should be built.
   `cache` marks. All of it is [incremental-update](incremental-update.md); this note
   keeps the within-build cut.
 - `P1-31` (named in the previous revision of this note) landed: the verdict's
-  `None` now means one thing, with the in-progress case named. Two sites an
-  earlier draft had named as defects were **retracted** — the operand arm is a
-  deliberate exemption, and `Module::key_state` is correct because the content
-  unfolding is total and self-reporting. Both retractions are recorded in
-  `P1-31` rather than dropped.
+  `None` now means one thing, with the in-progress case named. The first of the two
+  sites an earlier draft had named as defects — the **operand arm** — was not
+  retracted after all: it was deleted outright, together with the operand forcing
+  and the forced key read it fed, because it made the verdict a function of the
+  walk rather than of the graph (`code-audit.md`, the operand-arm follow-up, with
+  the measurement). That removes this note's §4.3 operand obligation. The second
+  site, `Module::key_state`, stands as retracted — the content unfolding is total
+  and self-reporting — and it no longer forces the key either.
 - What this note deliberately does **not** claim: that the cut is worth building.
   §4.3 lists two reasons its reach is limited and §4.5 says the take is a
   measurement. The note's durable results are the measurement, the mutation

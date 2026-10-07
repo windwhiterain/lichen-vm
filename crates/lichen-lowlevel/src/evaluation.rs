@@ -440,7 +440,7 @@ impl<P: Program> Module<P> {
                         };
                         match target.as_enum() {
                             Some(LowValue::Table(payload)) => {
-                                // The key is force-evaluated and
+                                // The key is deep-evaluated and
                                 // deep-content-hashed; a key that is
                                 // decided-and-absent misses like any other
                                 // absent key.  A key that is not *decided
@@ -541,22 +541,26 @@ impl<P: Program> Module<P> {
         current: Option<BlockId>,
     ) -> Option<P::Value> {
         let mut cache = StaticModuleCache::new();
-        self.evaluate_node_deep_inner(Dyn(node), current, true, false, &mut cache)
+        self.evaluate_node_deep_inner(Dyn(node), current, true, &mut cache)
     }
 
     /// Deep-evaluate `id` *ignoring laziness*: unlike
     /// [`Self::evaluate_node_deep`], every array position is descended into
-    /// (the shallow mask does not hold a subtree back) and an unevaluated
-    /// operation's operand chain is forced before the operation itself runs,
-    /// so the whole reachable subtree — values and operand edges — is
-    /// evaluated.  The assert check ([`Module::check_asserts`]) uses this: an
-    /// asserted condition must be fully evaluated whatever its markers.
+    /// (the shallow mask does not hold a subtree back), so the whole
+    /// value-reachable subtree is evaluated.  The assert check
+    /// ([`Module::check_asserts`]) uses this: an asserted condition must be
+    /// fully evaluated whatever its markers.
     ///
-    /// Forcing caches concrete values inside shallow regions but does *not*
-    /// upgrade their concreteness proofs: an array with a shallow mark stays
-    /// flagged unproven by [`Node::evaluated_deep`] and keeps cloning
-    /// per apply, which preserves the deep pass's laziness invariants at the
-    /// cost of redundant clones.
+    /// It descends shallow-marked positions but does **not** force an
+    /// operation's operand edge — a `LowValue` is a computed answer rather than
+    /// a thunk, so a decided value cannot depend on an operand its operator did
+    /// not read (see the operand-arm follow-up in `docs/notes/code-audit.md`).
+    ///
+    /// Evaluating a shallow region caches its concrete values but does *not*
+    /// upgrade the region's concreteness proof: an array with a shallow mark
+    /// stays flagged unproven by [`Node::evaluated_deep`] and keeps cloning per
+    /// apply, which preserves the deep pass's laziness invariants at the cost of
+    /// redundant clones.
     #[stacksafe]
     pub fn evaluate_node_forced(
         &mut self,
@@ -564,7 +568,7 @@ impl<P: Program> Module<P> {
         current: Option<BlockId>,
     ) -> Option<P::Value> {
         let mut cache = StaticModuleCache::new();
-        self.evaluate_node_deep_inner(Dyn(node), current, false, true, &mut cache)
+        self.evaluate_node_deep_inner(Dyn(node), current, false, &mut cache)
     }
 
     /// The tail of a [`LowOperator::TableGet`] once the entry is located: a
@@ -618,18 +622,15 @@ impl<P: Program> Module<P> {
 
     /// Shared core of the deep and forced passes.  `skip_shallow` keeps the
     /// deep pass's laziness (a marked position's subtree is not descended
-    /// into); `force_operand` runs an unevaluated operation's operand chain
-    /// first, so a forced evaluation resolves the operation against fully
-    /// evaluated operands instead of the parameterized gate keeping it lazy.
-    /// `cache` is the walk's one-entry static-module resolution cache (see
-    /// [`StaticModuleCache`]) — one lookup per module per walk, not per ref.
+    /// into).  `cache` is the walk's one-entry static-module resolution cache
+    /// (see [`StaticModuleCache`]) — one lookup per module per walk, not per
+    /// ref.
     #[stacksafe]
     fn evaluate_node_deep_inner(
         &mut self,
         node: AnyNodeId,
         current: Option<BlockId>,
         skip_shallow: bool,
-        force_operand: bool,
         cache: &mut StaticModuleCache<P>,
     ) -> Option<P::Value> {
         // A static ref is a decided leaf: the module solved it, so there is
@@ -694,34 +695,6 @@ impl<P: Program> Module<P> {
             self.deep_depth -= 1;
             return Some(P::Value::from(LowValue::Error));
         }
-        // A forced evaluation forces the operand edge of an unevaluated
-        // operation before the operation itself runs.  The operand is a
-        // static graph edge, not value-reachable, so the deep pass only
-        // propagates flags through it; the forced pass runs the computation
-        // behind it — shallow markers included — so a masked operand
-        // resolves instead of gating the operation lazy.
-        //
-        // An **unproven** node needs that walk even when it already holds a
-        // value: its concreteness is derived partly from its operand's verdict
-        // ([`Self::value_is_parameterized`]), so an operation whose operand
-        // chain was walked while it was still waiting keeps reading as
-        // unproven after the chain resolves — while the value it computed is
-        // decided.  A reader that takes the verdict for "this is not decided
-        // yet" (`Module::key_state`, which gates a `TableGet` on it) would then
-        // never see that value.  Re-forcing the operand is what makes the
-        // verdict fresh; it is the same walk an unevaluated operation gets.
-        // Read only under `force_operand`, so the deep pass pays nothing.
-        let unproven = force_operand
-            && self.nodes[node]
-                .evaluated_deep
-                .is_some_and(|deep| deep.parameterized);
-        if force_operand
-            && (self.nodes[node].value.is_none() || unproven)
-            && let Some(operand) = self.nodes[node].operation.and_then(|op| op.operand)
-        {
-            let block = self.nodes[node].block;
-            self.evaluate_node_deep_inner(Dyn(operand), Some(block), false, true, cache);
-        }
         let value = self.evaluate_node(Dyn(node), current);
         if let Some(LowValue::Array(array)) = value.and_then(|value| value.as_enum()) {
             // The descent below may reach `node` again through the array's own
@@ -743,13 +716,7 @@ impl<P: Program> Module<P> {
                     if skip_shallow && item.shallow {
                         continue;
                     }
-                    module.evaluate_node_deep_inner(
-                        item.node,
-                        Some(block),
-                        skip_shallow,
-                        force_operand,
-                        cache,
-                    );
+                    module.evaluate_node_deep_inner(item.node, Some(block), skip_shallow, cache);
                 }
             });
         }
@@ -765,20 +732,8 @@ impl<P: Program> Module<P> {
                 // a block — `drop_block` is called only from `garbage_collect` —
                 // so the payload's arena stays alive for the whole loop.
                 for item in unsafe { table.items() } {
-                    module.evaluate_node_deep_inner(
-                        item.key,
-                        Some(block),
-                        skip_shallow,
-                        force_operand,
-                        cache,
-                    );
-                    module.evaluate_node_deep_inner(
-                        item.value,
-                        Some(block),
-                        skip_shallow,
-                        force_operand,
-                        cache,
-                    );
+                    module.evaluate_node_deep_inner(item.key, Some(block), skip_shallow, cache);
+                    module.evaluate_node_deep_inner(item.value, Some(block), skip_shallow, cache);
                 }
             });
         }
@@ -786,7 +741,7 @@ impl<P: Program> Module<P> {
         // position at all sits behind a shallow mark.  A
         // static position's concreteness is the module's solved flag — it
         // was already decided by the deep pass that solved the module.
-        let parameterized = self.value_is_parameterized(cache, value, node);
+        let parameterized = self.value_is_parameterized(cache, value);
         self.nodes[node].evaluated_deep = Some(EvaluatedDeep { parameterized });
         // The real verdict supersedes any cycle-cut assumption: the node is no
         // longer in progress, so the mark must not outlive the frame.
@@ -829,12 +784,19 @@ impl<P: Program> Module<P> {
     }
 
     /// Whether `value` — the value this module just evaluated for `node` — is
-    /// unproven: an **undecided** answer (`None`, the empty slot), an array or
-    /// table with a shallow position or an undecided element, or an operation
-    /// whose operand is
-    /// parameterized.  `cache` is the walk's static-module resolution cache,
-    /// so a static element's solved flag costs one lookup per module for the
-    /// whole walk rather than one per element.
+    /// unproven: an **undecided** answer (`None`, the empty slot), or an array
+    /// or table with a shallow position or an undecided element.  `cache` is the
+    /// walk's static-module resolution cache, so a static element's solved flag
+    /// costs one lookup per module for the whole walk rather than one per
+    /// element.
+    ///
+    /// **Only the value graph decides this.** An operation's operand edge is
+    /// deliberately not read: it is not value-reachable, so a verdict read from
+    /// it would be a fact about which walk happened to run rather than about the
+    /// graph — and it cannot be needed, because a decided value cannot depend on
+    /// an operand the operator did not read (a `LowValue` is a computed answer,
+    /// not a thunk).  See the operand-arm follow-up in
+    /// `docs/notes/code-audit.md`.
     ///
     /// Every position's own verdict is read through
     /// [`Self::ref_is_parameterized`], so an **in-progress** position is
@@ -844,7 +806,6 @@ impl<P: Program> Module<P> {
         &self,
         cache: &mut StaticModuleCache<P>,
         value: Option<P::Value>,
-        node: NodeId,
     ) -> bool {
         // An empty answer is undecided by construction.  Otherwise the
         // value's extension view is taken once: every arm below tests the
@@ -881,29 +842,7 @@ impl<P: Program> Module<P> {
                     || unsafe { table.items() }
                         .iter()
                         .any(|item| self.ref_is_parameterized(cache, item.value))
-        ) || self.nodes[node].operation.is_some_and(|op| {
-            op.operand.is_some_and(|operand| {
-                // Deliberately **not** read through `ref_is_parameterized`.
-                // A core operator's operand is the argument array a layer
-                // above synthesized for it, and the deep pass descends
-                // value-reachable edges only, so "this operand was never
-                // walked" is the normal case rather than an anomaly —
-                // reading it as unproven would flip every pair read
-                // (`Index(pair, 0)`) in a template and clone it per apply.
-                // The operand's effect on the node's *value* is already
-                // decided where the value is: the value arm above for a
-                // structural operator (a read of an unbound element yields
-                // no value), and the undecided gate the operation
-                // postlude applies to an extension operator's operand
-                // (`Self::evaluate_node_operation`'s `None` arm) for the
-                // rest.  Operands are static graph edges, not
-                // value-reachable, so a nested block release may have
-                // dropped the node by now.
-                self.nodes
-                    .get(operand)
-                    .is_some_and(|node| node.evaluated_deep.is_some_and(|e| e.parameterized))
-            })
-        })
+        )
     }
 
     fn evaluate_block(&mut self, root: NodeId) -> Option<P::Value> {

@@ -1424,6 +1424,12 @@ knobs in `evaluate_node_deep_inner` make four walks, and all four were run:
 | off | on (`evaluate_node_forced`) | 3 | **empty** |
 | on | on | — | **empty** |
 
+*(The `force_operand` knob the third and fourth rows name has since been deleted —
+together with the operand-verdict arm that consumed its product — so those two rows
+are no longer buildable and `evaluate_node_forced` is now the second row. See the
+operand-arm follow-up in `code-audit.md`. The measurement below is the record that
+motivated the deletion: operand forcing was pure cost with no reader.)*
+
 The first two rows are the finding: descending every position in order reaches nothing
 extra, because the unread statement is not behind a shallow mark — the deep pass already
 reaches its node. It hangs on the **operand edge** of the apply, because the frontend

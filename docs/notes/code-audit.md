@@ -2301,11 +2301,13 @@ parameterized, **never** as proven concrete" (`module.rs:200-213`,
 `lib.rs:882-889`). Two reads honour that (`evaluation.rs:285-287`,
 `is_none_or`, and `freeze.rs:71-73`), and `function.rs:325` is conservative by a
 different route (`is_some_and(|e| !e.parameterized)`, where `None` means *not
-proven*, so the node is cloned). **Three do not**: the verdict's own array arm
+proven*, so the node is cloned). **Three did not**: the verdict's own array arm
 (`evaluation.rs:739-745`), table arm (`:754-764`) and operand arm (`:766-774`) all
 use `is_some_and(|e| e.parameterized)`, so `None` reads as *not* parameterized;
 `Module::key_state` does the same after forcing the key
-(`table.rs:217-222`).
+(`table.rs:217-222`). Two of those three reads are gone in the follow-up at the end
+of this item — the operand arm, and the forced key read with it — so the two value
+arms are the whole of the verdict computation now.
 
 The two arms reached by the **value descent** are non-conservative on purpose, and
 the reason is a third state `Option` cannot express. The canonical universe is a
@@ -2351,7 +2353,9 @@ preserve. The lowlevel suite (139 + 3) and `lichen-highlevel`, `lichen-language`
 and `lichen-compute` all pass.
 
 **Two sites an earlier draft of this item named are *not* defects — retracted,
-with the reason each.**
+with the reason each.** *(The first retraction is itself superseded: the operand
+arm was later deleted outright, see the follow-up at the end of this item. The
+second stands.)*
 
 - **The operand arm** (`value_is_parameterized`) is a deliberate exemption, and
   flipping it is not a local fix. A core operator's operand is the argument array
@@ -2381,6 +2385,7 @@ cached value is call-independent and nothing re-reads the parameter-dependent
 sibling. That is a pin, not a proof that no shape is harmed.
 
 **Follow-up — a verdict can outlive what it waited on** (`feature/deferred-instantiate`).
+*(Superseded: the operand arm this follow-up patched is deleted outright, below.)*
 The operand arm's exemption reads `Some(parameterized: true)` as unproven, and
 nothing cleared it when the operand chain *did* resolve: `write_node_value`
 caches a resolved value on the operation's own slot, and the forced pass skipped
@@ -2411,6 +2416,47 @@ re-exports and the `deep_pass_stats` example with them — on the same rule this
 queue's `P4-1` records ("a temporary counter … removed after"). The numbers are
 the record; the instrument is not. The pass's share of a build's wall-clock is
 still unmeasured.
+
+**The operand arm and the operand forcing are gone**
+(`experiment/verdict-operand-arm`, landed). The arm read the verdict of the
+operation's `operand` node — a **static graph edge**, so `evaluate_node_deep`
+never enters it, and the only writer of a verdict there is a *forced* pass. The
+parent's verdict was therefore a function of which walk happened to run, not of
+the graph: with the arm's exemption (a missing verdict reads as fine) an operand
+verdict written by one walk leaked into another walk's verdicts, and the stale
+`Some(true)` that survived its operand's resolution is exactly what the follow-up
+above had to re-force. A temporary probe on the pre-change tree counted the arm's
+condition: **10 firings in the whole corpus**, all inside
+`compute::a_scalar_leaf_of_the_wrong_class_is_refused_by_name`, on ten
+`op/operand` pairs. Four changes, each measured over the whole corpus
+(`lichen-lowlevel` 155, `lichen-highlevel` 87, `lichen-language` 139 plus its
+other targets, `lichen-compute` 19), green at every step:
+
+| step | change |
+|---|---|
+| A | the operand arm is deleted from `value_is_parameterized` |
+| B | `Module::key_state` runs `evaluate_node_deep`, not the forced walk |
+| C | the forced pass drops the follow-up's `unproven` re-force |
+| D | `force_operand` is deleted from `evaluate_node_deep_inner` |
+
+The two public walks now differ in exactly one knob, `skip_shallow`; the forced
+one is the assert check's, and its only remaining extra work is descending
+shallow-marked positions.
+
+**Why it is sound, beyond the tests.** A `LowValue` is a *computed answer*, not a
+thunk: a decided value cannot depend on an operand its operator did not read, so
+the arm could only ever add unproven-ness for a dependency the answer does not
+have. Every dependency that *can* change an answer sits in the value graph, where
+`ref_is_parameterized` reads it — an unbound cell is an empty position, and a
+shallow position is unproven by its own flag.
+
+**What is *not* established.** Flipping a verdict from unproven to proven is the
+direction that can wrong-share (bake instead of clone), and the corpus is not an
+oracle for it. The differential harness `incremental-evaluation.md` §5 step 2 asks
+for — values, verdicts and diagnostics compared over the corpus — does not exist,
+so this is measured support rather than proof. The note's §4.3 obligation about
+operand verdicts is void with the arm, which makes the cut it plans easier rather
+than riskier.
 
 ### P1-32 — A run of separators is refused inside every list form `verified`
 

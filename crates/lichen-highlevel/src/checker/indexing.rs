@@ -350,7 +350,7 @@ where
     /// like an array's elements, against a shared key-type cell and a shared
     /// value-type cell, and the value is built eagerly by the lowlevel
     /// [`Module::build_table`](lichen_lowlevel::Module::build_table): every key
-    /// is force-evaluated and
+    /// is deep-evaluated and
     /// deep-content-hashed, an entry whose key is not concrete is dropped
     /// with a recorded [`EvalError::TableKeyUnbound`], and the survivors are
     /// stored sorted by hash.  The type is the kinded pair

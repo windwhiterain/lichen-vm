@@ -491,7 +491,7 @@ pub enum ExprKind<L> {
     /// against two shared cells, like an array's single element cell).  The
     /// entries are stored interleaved in [`IR::children`]:
     /// `[k1, v1, k2, v2, …]`.  The checker builds the lowlevel table value
-    /// eagerly — keys must be force-evaluated to hash them — and drops an
+    /// eagerly — keys must be deep-evaluated to hash them — and drops an
     /// entry whose key is not concrete (recording the error), per the table
     /// contract.
     Table(ChildRange),

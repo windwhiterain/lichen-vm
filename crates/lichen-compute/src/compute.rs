@@ -5774,14 +5774,17 @@ where
     // adding a dispatch the program never makes.
     //
     // **Forcing was tried anyway, and it broke more than it reached.**
-    // `Module::evaluate_node_forced` performs every statement, and it also leaves
+    // `Module::evaluate_node_forced` performed every statement, and it also left
     // the function's return slot empty, so the reader that has to name the return
     // finds no value and *every* recording refuses — including bodies with no
     // unread statement at all. The empty slot was isolated to the operand forcing
     // rather than the shallow descent: a walk that descends every position in
-    // order (`skip_shallow` off, `force_operand` off) records the same two
-    // dispatches, and turning `force_operand` on alone empties the return slot
-    // with the shallow mask untouched. See the landmine.
+    // order (`skip_shallow` off, `force_operand` off) recorded the same two
+    // dispatches, and turning `force_operand` on alone emptied the return slot
+    // with the shallow mask untouched. See the landmine. (The `force_operand`
+    // knob those two rows name has since been deleted — see the operand-arm
+    // follow-up in `docs/notes/code-audit.md` — so only the first row is still
+    // buildable; the measurement is what stands.)
     let result = module.evaluate_node_deep(apply, Some(block));
     let Some(result) = result else {
         refuse(

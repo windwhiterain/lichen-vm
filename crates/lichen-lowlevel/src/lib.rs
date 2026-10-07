@@ -394,7 +394,7 @@ pub enum LowOperator {
     /// - `operand[0]`: table.
     /// - `operand[1]`: key.
     ///
-    /// A table read: the key is force-evaluated, deep-content-hashed, and
+    /// A table read: the key is deep-evaluated, deep-content-hashed, and
     /// matched against the table's sorted entries; a miss (no entry for
     /// the key, or a target/key that is still unbound or a computed
     /// nothing) records a [`EvalError`] and yields [`LowValue::Error`].

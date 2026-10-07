@@ -253,10 +253,15 @@ pub const STRUCT_KIND_NAMES_PATH: [usize; 3] = [
 /// deferred named instantiation reads through it rather than through the
 /// [`STRUCT_TYPE_NAMES_PATH`] spelling: a callee's `[shape, kind]` term is a
 /// pair, and reading *its* slot 1 would pull the shape half into the read's
-/// operand chain — the forced pass walks every element of an operation's
+/// operand chain — the forced pass used to walk every element of an operation's
 /// operand array, not only the selected one, so the shape half (which holds the
 /// deferred reorder's own field-type probe) would be forced mid-read and the
-/// read would meet itself.  The kind node is the same node, read directly.
+/// read would meet itself.  **That operand forcing is gone** (`code-audit.md`,
+/// the operand-arm follow-up): a read evaluates its operand array and then the
+/// element it selects, so the sibling is not pulled in and the hazard this path
+/// was cut for no longer exists.  The path is kept as the direct read of the
+/// kind node; whether the [`STRUCT_TYPE_NAMES_PATH`] spelling is safe again is a
+/// follow-up, not re-derived here.
 pub const STRUCT_KIND_NAMES_ORDER_PATH: [usize; 3] = [
     KIND_MARKER_SLOT,
     STRUCT_MARKER_PAYLOAD_SLOT,
