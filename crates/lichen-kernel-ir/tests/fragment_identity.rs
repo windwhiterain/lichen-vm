@@ -6,11 +6,12 @@
 //! surface only.
 
 use lichen_kernel_ir::{
-    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ScalarClass,
+    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelRoles, KernelShape, ScalarClass,
 };
 
 fn fragment() -> KernelFragment {
     KernelFragment {
+        roles: KernelRoles::default(),
         param_shape: KernelShape::Scalar(ScalarClass::Int),
         body: vec![
             KernelInstr::Const(ScalarClass::Int, 1),
@@ -46,6 +47,7 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
         (
             "param_shape",
             KernelFragment {
+                roles: KernelRoles::default(),
                 param_shape: KernelShape::Tuple(vec![
                     KernelShape::Scalar(ScalarClass::Int),
                     KernelShape::Scalar(ScalarClass::Int),
@@ -56,6 +58,7 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
         (
             "body",
             KernelFragment {
+                roles: KernelRoles::default(),
                 body: vec![
                     KernelInstr::Const(ScalarClass::Int, 2),
                     KernelInstr::LocalGet(0),
@@ -67,6 +70,7 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
         (
             "inputs",
             KernelFragment {
+                roles: KernelRoles::default(),
                 inputs: 1,
                 ..base.clone()
             },
@@ -74,6 +78,7 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
         (
             "outputs",
             KernelFragment {
+                roles: KernelRoles::default(),
                 outputs: 1,
                 ..base.clone()
             },
@@ -81,6 +86,7 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
         (
             "input_classes",
             KernelFragment {
+                roles: KernelRoles::default(),
                 input_classes: vec![ScalarClass::Int],
                 ..base.clone()
             },
@@ -88,6 +94,7 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
         (
             "output_classes",
             KernelFragment {
+                roles: KernelRoles::default(),
                 output_classes: vec![ScalarClass::Float],
                 ..base.clone()
             },
@@ -95,6 +102,7 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
         (
             "result_classes",
             KernelFragment {
+                roles: KernelRoles::default(),
                 result_classes: vec![ScalarClass::Int, ScalarClass::Int],
                 ..base.clone()
             },
@@ -103,6 +111,7 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
     variants.push((
         "body instruction kind",
         KernelFragment {
+            roles: KernelRoles::default(),
             body: vec![
                 KernelInstr::Const(ScalarClass::Int, 1),
                 KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),

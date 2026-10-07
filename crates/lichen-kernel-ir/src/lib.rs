@@ -656,6 +656,60 @@ pub enum KernelInstr {
     BufferWriteCall(ScalarClass),
 }
 
+/// The role of every field of a parallel kernel's parameter struct.
+///
+/// The parameter is a struct whose `.in` and `.out` fields are the reserved
+/// names for the buffer groups, and every other field is a scalar parameter.
+/// A field under `.in` is an input buffer, one under `.out` is an output buffer,
+/// and both may sit at **any depth**: a struct of another shape is a group and
+/// the walk descends into it.
+///
+/// # Why the paths, and not the field types
+///
+/// A field's *role* is a fact of where it sits, not of what it holds, and the
+/// walk is what decides it — a struct of another shape is a group, a `Buf`-shaped
+/// one is a buffer, and anything else is a runtime scalar a leaf may be. The
+/// paths are the checker's own shape for the same read (an index path, as
+/// [`Self::input_pos`] compares them), so the checker's name resolution stays the
+/// only thing that decides *which* field a body read, and these lists only say
+/// what that field is *for*.
+///
+/// An input or output path ends at the buffer's **payload** — the `.native` slot
+/// of the `Buf` wrapper the type level reads — because that is the part an
+/// operator hands to `$read`/`$write`.
+///
+/// # The order is the ABI's
+///
+/// A path's index in [`Self::inputs`] is the position the host `read` import
+/// takes; its index in [`Self::outputs`] is the position the `write` import
+/// takes; its index in [`Self::scalars`] is the wasm local's offset. All three
+/// are field order, and the emitter and the run read them from here rather than
+/// counting, so the two sides cannot disagree about it. A scalar fragment states
+/// none of them: its parameter *is* its domain, so the default (three empty
+/// lists) is its answer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KernelRoles {
+    /// Scalar parameter paths, in the order they become wasm locals.
+    pub scalars: Vec<Vec<usize>>,
+    /// Input buffer payload paths, in declaration order.
+    pub inputs: Vec<Vec<usize>>,
+    /// Output buffer payload paths, in declaration order.
+    pub outputs: Vec<Vec<usize>>,
+}
+
+impl KernelRoles {
+    /// The ordinal of `path` among the input buffers — the position a read of it
+    /// takes.
+    pub fn input_pos(&self, path: &[usize]) -> Option<usize> {
+        self.inputs.iter().position(|candidate| candidate == path)
+    }
+
+    /// The wasm local offset of a scalar parameter read, within its slot.
+    pub fn scalar_offset(&self, path: &[usize]) -> Option<usize> {
+        self.scalars.iter().position(|candidate| candidate == path)
+    }
+}
+
 /// A compiled kernel-callable unit: a lowered function body plus the facts a
 /// caller needs to build and run it.
 ///
@@ -667,6 +721,11 @@ pub struct KernelFragment {
     /// The parameter domain, flattened by [`KernelShape::flat_arity`] into the
     /// backend's parameter list.
     pub param_shape: KernelShape,
+    /// Where the parameter's leaves sit in the **value** a caller hands over, as
+    /// index paths — [`KernelRoles`] has why paths rather than counts, and why
+    /// the payload rather than the wrapper. The run reads a leaf by this rather
+    /// than by a position it guesses.
+    pub roles: KernelRoles,
     /// The lowered body, as structured control flow.
     ///
     /// **A backend must call [`KernelBody::validate`] before reading it.** That
@@ -778,6 +837,7 @@ pub fn fragment_digest(fragment: &KernelFragment) -> u64 {
     use std::hash::{Hash as _, Hasher as _};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     format!("{:?}", fragment.param_shape).hash(&mut hasher);
+    format!("{:?}", fragment.roles).hash(&mut hasher);
     format!("{:?}", fragment.body).hash(&mut hasher);
     fragment.inputs.hash(&mut hasher);
     fragment.outputs.hash(&mut hasher);

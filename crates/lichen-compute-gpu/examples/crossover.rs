@@ -20,7 +20,8 @@ use std::time::Instant;
 use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X};
 use lichen_kernel_ir::BufferSlot;
 use lichen_kernel_ir::{
-    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, Pending, ScalarClass, ScalarData,
+    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelRoles, KernelShape, Pending,
+    ScalarClass, ScalarData,
 };
 
 /// The **packed** bytes of `words`, one `i64` each — the host payload an integer
@@ -47,6 +48,7 @@ fn words(data: ScalarData) -> Vec<i64> {
 /// launch overhead, and the same shape the acceptance tests use.
 fn fragment() -> KernelFragment {
     KernelFragment {
+        roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),

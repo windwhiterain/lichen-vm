@@ -16,13 +16,14 @@ mod common;
 use lichen_compute_gpu::{GpuContext, RunError};
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
-    ScalarClass,
+    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelRoles, KernelShape,
+    ResidentId, ScalarClass,
 };
 
 /// `out[i] = in[i] + in[i] + 1`.
 fn adds() -> KernelFragment {
     KernelFragment {
+        roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
@@ -63,6 +64,7 @@ fn adds() -> KernelFragment {
 /// missing — `docs/notes/compute-runtime-scalars.md` §3.
 fn sums() -> KernelFragment {
     KernelFragment {
+        roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
@@ -97,6 +99,7 @@ fn sums() -> KernelFragment {
 /// names it has something to refuse.
 fn with_a_runtime_scalar() -> KernelFragment {
     KernelFragment {
+        roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),

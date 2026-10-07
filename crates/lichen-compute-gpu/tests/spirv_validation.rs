@@ -18,7 +18,7 @@ use std::process::{Command, Stdio};
 
 use lichen_compute_gpu::spirv::{self, Binding};
 use lichen_kernel_ir::{
-    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ScalarClass,
+    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelRoles, KernelShape, ScalarClass,
 };
 
 /// The validator, spelled the way it is installed on `PATH`.
@@ -40,6 +40,7 @@ const TWO_POINT_FIVE: i64 = 0x4020_0000;
 /// pushed before it.
 fn adds_one() -> KernelFragment {
     KernelFragment {
+        roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
@@ -118,6 +119,7 @@ fn scales_a_float() -> KernelFragment {
     body.push(KernelInstr::BufferWriteCall(ScalarClass::Float));
     body.push(KernelInstr::Const(ScalarClass::Int, 0));
     KernelFragment {
+        roles: KernelRoles::default(),
         // `(config, index)`, integers, however the buffers are classed: this
         // target's index is the invocation id, not a value of that domain.
         param_shape: KernelShape::Tuple(vec![
@@ -241,6 +243,7 @@ fn the_emitted_module_validates() {
 /// `f32`).  One body, one crossing, one float buffer in and out.
 fn index_to_float() -> KernelFragment {
     KernelFragment {
+        roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
@@ -280,6 +283,7 @@ fn index_to_float() -> KernelFragment {
 /// says so with both opcodes.
 fn crosses_both_ways() -> KernelFragment {
     KernelFragment {
+        roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),

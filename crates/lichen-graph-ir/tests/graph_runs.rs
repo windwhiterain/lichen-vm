@@ -11,13 +11,14 @@ use std::sync::{Arc, Mutex};
 
 use lichen_graph_ir::{Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ParallelBackend,
-    Pending, ResidentId, ScalarClass, ScalarData,
+    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelRoles, KernelShape,
+    ParallelBackend, Pending, ResidentId, ScalarClass, ScalarData,
 };
 
 /// `out[i] = in[i] + in[i] + 1`, which is `adds` everywhere else in this tree.
 fn fragment() -> KernelFragment {
     KernelFragment {
+        roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),

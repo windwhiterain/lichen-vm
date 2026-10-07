@@ -16,8 +16,8 @@ mod common;
 
 use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X, RunError};
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, Pending,
-    ScalarClass, ScalarData,
+    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelRoles, KernelShape,
+    Pending, ScalarClass, ScalarData,
 };
 
 /// The **packed** bytes of `words`, one `i64` each — what the ABI carries, and
@@ -51,6 +51,7 @@ fn words(data: ScalarData) -> Vec<i64> {
 /// the one a reader has to be able to check against the body by eye.
 fn fragment(body: Vec<KernelInstr>) -> KernelFragment {
     KernelFragment {
+        roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),

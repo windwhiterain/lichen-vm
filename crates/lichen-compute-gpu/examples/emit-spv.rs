@@ -13,7 +13,7 @@
 //! ```
 
 use lichen_kernel_ir::{
-    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ScalarClass,
+    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelRoles, KernelShape, ScalarClass,
 };
 
 fn main() {
@@ -39,6 +39,7 @@ fn main() {
     ];
 
     let fragment = KernelFragment {
+        roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),

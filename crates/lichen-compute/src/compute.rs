@@ -65,8 +65,8 @@ use lichen_highlevel::shape::{
     array_items as array_items_any, field_list, field_names, field_type, low_type_of_slot,
 };
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
-    ScalarClass, ScalarData, fragment_digest,
+    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelRoles, KernelShape,
+    ResidentId, ScalarClass, ScalarData, fragment_digest,
 };
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
@@ -237,6 +237,7 @@ mod kernel_intern_tests {
     fn fragment(body: Vec<KernelInstr>) -> KernelFragment {
         KernelFragment {
             param_shape: KernelShape::Scalar(ScalarClass::Int),
+            roles: KernelRoles::default(),
             body: body.into(),
             inputs: 0,
             outputs: 0,
@@ -1869,51 +1870,6 @@ where
 
 /// One parameter group of a kernel being emitted.
 ///
-/// The role of every field of a parallel kernel's parameter struct.
-///
-/// The parameter is `struct<.n Int, .in <inputs>, .out <outputs>>` — what
-/// `compute.K (compute.P _)(…)` builds.  `.in` and `.out` are the reserved
-/// field names; every other top-level field is a scalar parameter, a field under
-/// `.in` is an input buffer, and one under `.out` is an output.
-///
-/// # Why the paths, and not the field types
-///
-/// A field's *role* is a fact of where it sits, not of what it holds: a kernel
-/// written `struct<.x _, .y _>` gives its buffer fields **undecided** types
-/// (`raw[?a, ?b]`), so no type test could classify them.  The paths are
-/// [`param_path`]'s own shape — `[i]` for a top-level field, `[io, j]` for one
-/// under `.in`/`.out` — so the checker's name resolution stays the only thing
-/// that decides which field a body read, and this table only says what that
-/// field is *for*.
-///
-/// # The order is the ABI's
-///
-/// A path's index in [`Self::inputs`] is the `cfg_pos` the host `read` import
-/// takes; its index in [`Self::outputs`] is the `out_pos` the `write` import
-/// takes.  Both are declaration order, and the emitter reads them from here
-/// rather than counting, so the two sides cannot disagree about it.
-#[derive(Debug, Default, Clone)]
-struct ParallelRoles {
-    /// Scalar parameter paths, in the order they become wasm locals.
-    scalars: Vec<Vec<usize>>,
-    /// Input buffer paths, in declaration order.
-    inputs: Vec<Vec<usize>>,
-    /// Output buffer paths, in declaration order.
-    outputs: Vec<Vec<usize>>,
-}
-
-impl ParallelRoles {
-    /// The index of `path` among the input buffers — the `cfg_pos` a read of it
-    /// takes.
-    fn input_pos(&self, path: &[usize]) -> Option<usize> {
-        self.inputs.iter().position(|candidate| candidate == path)
-    }
-    /// The wasm local offset of a scalar parameter read, within its slot.
-    fn scalar_offset(&self, path: &[usize]) -> Option<usize> {
-        self.scalars.iter().position(|candidate| candidate == path)
-    }
-}
-
 /// The way a **type slot** holds its type: the `[shape, kind]` term itself, or a
 /// node that holds one — an annotated parameter's type cell is the annotation's
 /// own `[value, type]` pair ([`low_type_of_slot`] resolves the same indirection
@@ -1978,7 +1934,7 @@ where
 fn scalar_leaf_classes<P>(
     module: &mut Module<P>,
     cfg_pair: NodeId,
-    roles: Option<&ParallelRoles>,
+    roles: Option<&KernelRoles>,
 ) -> Result<Vec<ScalarClass>, String>
 where
     P: Program,
@@ -2034,7 +1990,7 @@ where
 fn parallel_roles<P>(
     module: &mut Module<P>,
     cfg_pair: NodeId,
-) -> Result<Option<ParallelRoles>, String>
+) -> Result<Option<KernelRoles>, String>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
@@ -2063,7 +2019,7 @@ where
         return Err(PARALLEL_PARAM_FIELDS.into());
     };
     let fields: Vec<AnyNodeId> = fields.iter().map(|item| item.node).collect();
-    let mut roles = ParallelRoles::default();
+    let mut roles = KernelRoles::default();
     for (field, &field_type) in fields.iter().enumerate() {
         let role = match field {
             at if at == inputs_at => LeafRole::Input,
@@ -2114,7 +2070,7 @@ fn walk_role<P>(
     field: AnyNodeId,
     path: &[usize],
     role: LeafRole,
-    roles: &mut ParallelRoles,
+    roles: &mut KernelRoles,
 ) -> Result<(), String>
 where
     P: Program,
@@ -2224,7 +2180,7 @@ struct ParamSlot {
     /// term (`struct<.n Int, .in …, .out …>`).  `None` for a scalar `jit` kernel
     /// and for a parallel kernel in the older `(n, (buffers…))` shape, whose
     /// reads name their position directly.
-    roles: Option<ParallelRoles>,
+    roles: Option<KernelRoles>,
 }
 
 /// The wasm local offset of `node`, if it is a parameter read of one of
@@ -2407,6 +2363,9 @@ where
 
     Ok(KernelFragment {
         param_shape: kernel_shape(&param_shape),
+        // A scalar kernel's parameter is its domain: there are no named roles for
+        // a walk to find, so the lists are empty.
+        roles: KernelRoles::default(),
         body: body.into(),
         inputs: tally.reads,
         outputs: tally.writes,
@@ -2666,6 +2625,10 @@ where
         // is an `i64`: the conversion that made it an `f32` existed only because
         // the fragment had one class, and the host's `read`/`write` imports no
         // longer convert it.
+        // The run reads the cfg by these paths, which is the same walk the
+        // emitter's reads and this ABI came from — one enumeration, three
+        // readers.
+        roles: roles.clone().unwrap_or_default(),
         param_shape: KernelShape::Tuple(
             scalar_classes
                 .iter()
@@ -7338,6 +7301,9 @@ mod parallel_launch_tests {
                 KernelShape::Scalar(ScalarClass::Int),
                 KernelShape::Scalar(ScalarClass::Int),
             ]),
+            // The tuple form's parameter shape: a count at position 0 and the
+            // buffers at position 1, which is what a walk-less ABI reads.
+            roles: KernelRoles::default(),
             body: vec![
                 KernelInstr::Const(ScalarClass::Int, 0),
                 KernelInstr::LocalGet(1),

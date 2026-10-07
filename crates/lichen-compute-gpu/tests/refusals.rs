@@ -5,7 +5,9 @@
 //! a machine without one.
 
 use lichen_compute_gpu::spirv::{self, Binding, SpirvRefusal};
-use lichen_kernel_ir::{IntWidth, KernelFragment, KernelInstr, KernelShape, ScalarClass};
+use lichen_kernel_ir::{
+    IntWidth, KernelFragment, KernelInstr, KernelRoles, KernelShape, ScalarClass,
+};
 
 /// A one-output fragment over `(input, index)`.
 ///
@@ -21,6 +23,7 @@ fn body_with(inputs: usize, tail: Vec<KernelInstr>) -> KernelFragment {
     ];
     body.extend(tail);
     KernelFragment {
+        roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
@@ -97,6 +100,7 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
     // Read input 1, write output 0. With the position spaces collapsed, that
     // write would land on input 0 and the output would stay zero.
     let fragment = KernelFragment {
+        roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
@@ -127,6 +131,7 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
     // A write naming an output that does not exist is refused, and the message
     // says which space was addressed.
     let beyond = KernelFragment {
+        roles: KernelRoles::default(),
         body: vec![
             KernelInstr::Const(ScalarClass::Int, 1), // out_pos 1, but there is one output
             KernelInstr::LocalGet(1),
@@ -154,6 +159,7 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
 fn an_unbalanced_body_is_refused() {
     // No operands pushed before the operator, so it pops from an empty stack.
     let fragment = KernelFragment {
+        roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
