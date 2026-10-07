@@ -33,18 +33,22 @@
 //! template. See
 //! [`a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied`].
 //!
-//! **And a read of the parameter is a bare cell, while the positional read pins
-//! an open tuple type on the parameter.** The parameter is the `[value, type]`
-//! pair: the value cell carries no operation and stays undecided until the apply,
-//! and the type cell is `[?shape, [TypeTuple, K]]` — a tuple kind whose shape is
-//! still a cell, because the syntax that reads the parameter names no arity (the
-//! open tuple the printer renders `<?a, …>`). So the arity is **not** readable
-//! from the unapplied function: the placeholder tuple a build binds the parameter
-//! to is built at a ceiling and trimmed to the slots the body read
-//! (`compute.rs`, `MAX_GRAPH_INPUTS`). Which read is which slot is not visible
-//! structurally at all; the apply settles it, and it settles it by the position
-//! the source names rather than by the order the body reads. See
-//! [`a_parameter_read_is_a_bare_cell_and_pins_an_open_tuple_type`] and
+//! **And the parameter is the named struct, so a body's reads are field reads.**
+//! The parameter is still the `[value, type]` pair: the value cell carries no
+//! operation and stays undecided until the apply, and the type cell is the
+//! annotation's own struct term. What the retired *tuple* form made unpredictable
+//! is now written down — the extent is read at `.n`, each input is a `Buf` field
+//! under `.in` — so a graph's inputs are named rather than counted, and the
+//! recording binds each cell at the path the role walk found.
+//!
+//! Two tests the tuple form needed are gone with it: the one that pinned an open
+//! tuple type on the parameter through positional reads (the annotation states
+//! the struct now), and the one that pinned the body's read *order* against the
+//! argument's positions in a cfg *tuple*. The fact they were protecting — that
+//! **nothing in a template's body is decided** — is still checked, on the leaves
+//! of the argument the dispatch is handed
+//! ([`a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied`]),
+//! and the binding fact is checked by running
 //! [`a_parameter_is_bound_by_the_position_the_source_names_and_not_by_read_order`].
 
 use std::sync::Arc;
@@ -192,31 +196,41 @@ fn the_dispatch(module: &Module<LangProgram>, fid: AnyFunctionId) -> Option<Node
     })
 }
 
-/// A `plrun` chain in a function that closes over its data. This is the shape a
-/// graph is compiled from.
+/// A `plrun` chain in a function that closes over its kernels and its data. This
+/// is the shape a graph is compiled from.
 ///
 /// **`x => body` is the only lambda there is** — the grammar's
 /// `lambda := annotated ('=>' expr)?` puts a *name* on the left, so a lichen
 /// function always has exactly one parameter and a "free variable" is simply a
-/// name the body reads that is not that parameter. `unused` is therefore a
-/// parameter rather than a free variable, which is what makes `data` one.
+/// name the body reads that is not that parameter. `s` is therefore a parameter
+/// rather than a free variable, which is what makes `doubler` and `data` free
+/// ones — and the captured kernel struct is exactly what
+/// [`the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct`]
+/// is about.
 const CHAIN: &str = r#"---
   compute = import "compute.lichen"
 ---
-adder = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value i + 3))
+InA  = struct<.a Int>
+OutA = struct<.z (compute.Buf _)>
+ParA = compute.P (compute.KT _)(.I InA, .O OutA)
+adder = compute.parallel ((k : ParA) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
 }) "Cpu"
-doubler = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  j = compute.read ((compute.Read _)(.from cfg(1), .at i))
-  compute.write ((compute.Write _)(.to n, .at i, .value j + j))
+InB  = struct<.b (compute.Buf _)>
+OutB = struct<.w (compute.Buf _)>
+ParB = compute.P (compute.KT _)(.I InB, .O OutB)
+doubler = compute.parallel ((k : ParB) => {
+  i = compute.range k.n
+  j = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.w, .at i, .value j + j))
 }) "Cpu"
-data = compute.plrun adder (4,)
-step = unused => {
-  out = compute.plrun doubler (4, data)
+data = (compute.plrun adder ((compute.A InA)(.n 4, .I InA(.a 0))) : OutA)
+InS  = struct<.b (compute.Buf _)>
+OutS = struct<.unused (compute.Buf _)>
+ParS = compute.P (compute.KT _)(.I InS, .O OutS)
+step = (s : ParS) => {
+  out = (compute.plrun doubler ((compute.A InB)(.n 4, .I InB(.b data.z))) : OutB)
   out
 }
 step
@@ -275,12 +289,58 @@ fn through_index(module: &Module<LangProgram>, node: NodeId) -> NodeId {
     items(module, operation.operand.expect("an operand"))[0]
 }
 
+/// A graph function whose dispatch reads **both its count and its buffer out of
+/// its own parameter**, which is where a graph's inputs come from.
+///
+/// The parameter is the named struct, so the argument the dispatch is handed is
+/// that struct built from the parameter's own fields — `(compute.A InB)(.n s.n,
+/// .I InB(.b s.in.b))` — and there is no literal and no captured value anywhere
+/// in it. That is what makes the leaves of this dispatch's argument undecided
+/// cells, which is the fact the test below is about.
+const FROM_PARAMETER: &str = r#"---
+  compute = import "compute.lichen"
+---
+InA  = struct<.a Int>
+OutA = struct<.z (compute.Buf _)>
+ParA = compute.P (compute.KT _)(.I InA, .O OutA)
+adder = compute.parallel ((k : ParA) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
+}) "Cpu"
+InB  = struct<.b (compute.Buf _)>
+OutB = struct<.w (compute.Buf _)>
+ParB = compute.P (compute.KT _)(.I InB, .O OutB)
+step = (s : ParB) => {
+  out = (compute.plrun adder ((compute.A InA)(.n s.n, .I InA(.a 0))) : OutA)
+  compute.plrun adder ((compute.A InA)(.n s.n, .I InA(.a out.z)))
+}
+step
+"#;
+
+/// The nodes a value is made of at its leaves: a nested array is descended, and
+/// anything else is a leaf.
+///
+/// A struct value is an array ([`lichen_highlevel::shape`]), so this is how a
+/// test reaches the cells an argument is built from rather than the wrapper the
+/// argument is.
+fn leaves_of(module: &Module<LangProgram>, node: NodeId) -> Vec<NodeId> {
+    // SAFETY: `node` is a live node of `module`, whose blocks are all alive —
+    // nothing has been dropped.
+    match unsafe { module.array_items(node) } {
+        Some(items) => items
+            .iter()
+            .flat_map(|item| leaves_of(module, dyn_node(item.node)))
+            .collect(),
+        None => vec![node],
+    }
+}
+
 /// **Nothing in a template's body is decided, and that is the fact that decides
 /// how a graph has to be built.**
 ///
-/// The cfg tuple is readable without any evaluation, and reading it is not
-/// enough: its two elements — the count and the buffer — are undecided.
-/// The `4` and the `data` in the body are undecided cells until the function is
+/// The argument the dispatch is handed is readable without any evaluation, and
+/// reading it is not enough: its **leaves** — the count and the buffer the body
+/// reads out of its own parameter — are undecided cells until the function is
 /// applied, because nothing has applied it.
 ///
 /// So a graph cannot be built by *reading* a template. It has to be built by
@@ -292,11 +352,12 @@ fn through_index(module: &Module<LangProgram>, node: NodeId) -> NodeId {
 ///
 /// Applying is safe, and is equivalent to not applying, for the reason the
 /// language gives for free: **every** lichen function has exactly one
-/// parameter, and this one does not read it, so what is applied does not
-/// matter. A body that dispatched its own parameter is the unrecordable case.
+/// parameter, and this one reads it, so what is applied is exactly the structure
+/// the recording builds. A body that dispatched a captured buffer is the
+/// unrecordable case.
 #[test]
 fn a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied() {
-    let (mut module, root) = run(CHAIN);
+    let (mut module, root) = run(FROM_PARAMETER);
     let function = function_of(&mut module, root);
     let dispatch = the_dispatch(&module, function).expect("the body dispatches");
     let operands = items(
@@ -304,19 +365,29 @@ fn a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied(
         module.node_operation(dispatch).unwrap().operand.unwrap(),
     );
 
-    // The cfg reaches the dispatch through an `Index` extraction, so following
-    // it is the whole of the lookup — the same walk `value_of_node` does.
+    // The argument reaches the dispatch through an `Index` extraction, so
+    // following it is the whole of the lookup — the same walk `value_of_node`
+    // does.
     let cfg = through_index(&module, operands[1]);
     let cfg_items = items(&module, cfg);
-    assert_eq!(cfg_items.len(), 2, "(count, buffers), read off the value");
-    for (position, &node) in cfg_items.iter().enumerate() {
-        let value = module
-            .node_value(AnyNodeId::Dynamic(node))
-            .and_then(|v| AsEnum::<LowValue>::as_enum(&v));
+    assert_eq!(
+        cfg_items.len(),
+        2,
+        "the argument is the parameter's own structure: the extent and the input group"
+    );
+    let leaves = leaves_of(&module, cfg);
+    assert!(
+        !leaves.is_empty(),
+        "the argument names the cells a graph has to bind"
+    );
+    for &cell in &leaves {
         assert_eq!(
-            value, None,
-            "cfg[{position}] is {node:?}, and it is an undecided cell: the count and the buffer \
-             in the body are decided by applying the function, not before it"
+            module
+                .node_value(AnyNodeId::Dynamic(cell))
+                .and_then(|v| AsEnum::<LowValue>::as_enum(&v)),
+            None,
+            "the leaf {cell:?} is an undecided cell: the count and the buffer in the body are \
+             decided by applying the function, not before it"
         );
     }
 }
@@ -360,158 +431,34 @@ fn index_position(module: &Module<LangProgram>, node: NodeId) -> Option<usize> {
     }
 }
 
-/// A graph function: its dispatch reads both its count and its buffer out of
-/// its own parameter, which is where a graph's inputs come from.
-///
-/// The buffer slot is a **tuple**, because that is the shape `ParLaunch` reads
-/// (`cfg(1)` is a tuple of `Buffer` values) and therefore the shape a source
-/// program has to write — `compute.plrun k (n, (buffer,))`, not
-/// `compute.plrun k (n, buffer)`.
-const FROM_PARAMETER: &str = r#"---
-  compute = import "compute.lichen"
----
-adder = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value i + 3))
-}) "Cpu"
-step = ins => {
-  out = compute.plrun adder (ins(0), (ins(1),))
-  out
-}
-step
-"#;
-
-/// **A parameter read is a bare cell, and the read pins an open tuple type on
-/// the parameter.** The second correction this probe forced, and it is what
-/// decides how a graph is sized.
-///
-/// `ins(0)` and `ins(1)` do not compile to two extractions off the parameter.
-/// The compiler resolves each read into a cell of its own, so the cfg that
-/// reaches the dispatch has two elements that carry **no operation, no
-/// subscript, and an undecided value** — there is no `ins(i)` whose `i` a walk
-/// could read. The design had assumed there was, because the operand pair's
-/// subscript is a decided `USize(0)`; that subscript belongs to the extraction
-/// of the **cfg slot**, not to the body's read, and reading it as an input
-/// position would conclude the graph takes one input and silently drop the rest.
-///
-/// **The parameter is the `[value, type]` pair, and the positional reads pin the
-/// type slot.** The value cell is a bare cell — no operation, undecided until the
-/// apply. The type cell is `[?shape, [TypeTuple, K]]`: the reads pin the
-/// parameter to a *tuple type* whose shape is still a cell, because the syntax
-/// that reads it names no arity (the open tuple the printer renders `<?a, …>`).
-/// So the arity is **not** decidable before the apply, and the parameter's two
-/// slots are the value/type pair rather than one cell per read: that is why the
-/// graph recording builds its placeholder tuple at a ceiling and trims it to the
-/// slots the body read (`compute.rs`, `MAX_GRAPH_INPUTS`).
-///
-/// Which read is which slot is *not* visible here — the cfg's cells are not the
-/// parameter's cells, and are not even in their classes. That half is settled by
-/// the apply, and is checked behaviourally in
-/// [`a_parameter_is_bound_by_the_position_the_source_names_and_not_by_read_order`].
-#[test]
-fn a_parameter_read_is_a_bare_cell_and_pins_an_open_tuple_type() {
-    let (mut module, root) = run(FROM_PARAMETER);
-    let function = function_of(&mut module, root);
-    let parameter = module.functions[dynamic(function)].parameter;
-
-    let dispatch = the_dispatch(&module, function).expect("the body dispatches");
-    let operands = items(
-        &module,
-        module.node_operation(dispatch).unwrap().operand.unwrap(),
-    );
-    let cfg = through_index(&module, operands[1]);
-
-    // The cfg is a readable two-element array, and both of its elements are
-    // **bare cells**: no operation, and an undecided value. There is no `ins(i)`
-    // subscript anywhere in them.
-    let cfg_items = items(&module, cfg);
-    assert_eq!(cfg_items.len(), 2, "(count, buffers)");
-    for (position, &cell) in cfg_items.iter().enumerate() {
-        assert!(
-            module.node_operation(cell).is_none(),
-            "cfg[{position}] is {cell:?} and carries no operation, so it is a \
-             cell the apply binds rather than an extraction that names a slot"
-        );
-        assert_eq!(
-            module
-                .node_value(AnyNodeId::Dynamic(cell))
-                .and_then(|v| AsEnum::<LowValue>::as_enum(&v)),
-            None,
-            "cfg[{position}] is undecided until the function is applied"
-        );
-    }
-
-    // The one subscript that *is* decided belongs to the extraction of the cfg
-    // slot out of the operand pair, so it says nothing about `ins(i)`. Reading
-    // it as an input position is the mistake this test is named for.
-    assert_eq!(
-        index_position(&module, operands[1]),
-        Some(0),
-        "and the cfg sits at position 0 of the operand pair, which is not an \
-         input position"
-    );
-
-    // The parameter is the `[value, type]` pair. The value cell is a **bare
-    // cell**: no operation, and undecided until the apply. The type cell is what
-    // the two positional reads pin — an open tuple type whose shape is a cell,
-    // so the two reads state no arity here.
-    let slots = items(&module, parameter);
-    assert_eq!(slots.len(), 2, "the parameter pair is [value, type]");
-    let value_cell = slots[0];
-    assert!(
-        module.node_operation(value_cell).is_none(),
-        "the parameter's value cell is {value_cell:?} and carries no operation, \
-         so the apply binds it rather than a read naming a slot"
-    );
-    assert_eq!(
-        module
-            .node_value(AnyNodeId::Dynamic(value_cell))
-            .and_then(|v| AsEnum::<LowValue>::as_enum(&v)),
-        None,
-        "and the value cell is undecided until the function is applied"
-    );
-    assert!(
-        module.node_operation(slots[1]).is_none(),
-        "the parameter's type cell carries no operation either"
-    );
-    let pinned = items(&module, slots[1]);
-    assert_eq!(pinned.len(), 2, "the pinned type is [shape, kind]");
-    assert_eq!(
-        module
-            .node_value(AnyNodeId::Dynamic(pinned[0]))
-            .and_then(|v| AsEnum::<LowValue>::as_enum(&v)),
-        None,
-        "the pinned tuple's shape is an open cell: `ins(0)` and `ins(1)` state \
-         the kind but not how many inputs a caller has to satisfy"
-    );
-    let kind = items(&module, pinned[1]);
-    assert_eq!(kind.len(), 2, "the kind is [marker, K]");
-}
-
 /// A graph function that reads its parameter **back to front**, and then runs,
 /// which is the only way to tell position from order.
 const BACK_TO_FRONT: &str = r#"---
   compute = import "compute.lichen"
 ---
-adder = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value i + 3))
+InA  = struct<.a Int>
+OutA = struct<.z (compute.Buf _)>
+ParA = compute.P (compute.KT _)(.I InA, .O OutA)
+adder = compute.parallel ((k : ParA) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 3))
 }) "cpu"
-doubler = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  j = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
-  compute.write ((compute.Write _)(.to n, .at i, .value j + j))
+InB  = struct<.b (compute.Buf _)>
+OutB = struct<.w (compute.Buf _)>
+ParB = compute.P (compute.KT _)(.I InB, .O OutB)
+doubler = compute.parallel ((k : ParB) => {
+  i = compute.range k.n
+  j = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.w, .at i, .value j + j))
 }) "cpu"
-data = compute.plrun adder (4,)
-step = ins => {
-  buffer = ins(1)
-  count = ins(0)
-  compute.plrun doubler (count, (buffer,))
+data = (compute.plrun adder ((compute.A InA)(.n 4, .I InA(.a 0))) : OutA)
+step = (s : ParB) => {
+  buffer = s.in.b
+  count = s.n
+  out = (compute.plrun doubler ((compute.A InB)(.n count, .I InB(.b buffer))) : OutB)
+  out.w.native
 }
-step (4, data)
+step ((ParB)(.n 4, .in InB(.b data.z), .out OutB(.w data.z)))
 "#;
 
 /// The `i64`s behind a buffer value.
