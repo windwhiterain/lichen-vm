@@ -4,16 +4,17 @@ K = _x => struct<.native _, .I _, .O _>
 A = I => struct<.n Int, .I I>
 P = T: KT _ => struct<.n Int, .in T.I, .out T.O>
 S = T: KT _ => A T.I -> T.O
+Buf = T => struct<.native _, .element T>
 jit = f => {I = _; O = _; f: I -> O; (K _)(.native $jit(f), .I I, .O O)}
 launch = k: (K _) => a: k.I => {r = $launch(k.native, a); r: k.O; r}
 call = k: (K _) => a: k.I => {r = $call(k.native, a); r: k.O; r}
 parallel = f => b: string => {I = _; O = _; f: I -> O; (K _)(.native $parallel(f, b), .I I, .O O)}
 plrun = k: (K _) => a: k.I => {r = $plrun(k.native, a); r: k.O; r}
 range = x: Int => $range(x): Int
-Read = _x => struct<.from _, .at Int>
-Write = _x => struct<.to _, .at Int, .value _>
-read = (x : Read _) => $read(x.from, x.at)
-write = (x : Write _) => $write(x.to, x.at, x.value)
-collect = b => $collect(b)
+Read = T => struct<.from (Buf T), .at Int>
+Write = T => struct<.to (Buf T), .at Int, .value T>
+read = (x : (Read _)) => $read(x.from.native, x.at): x.from.element
+write = (x : (Write _)) => $write(x.to.native, x.at, x.value)
+collect = (b : (Buf _)) => $collect(b.native)
 graph = f => {f: _ -> _; $graph(f)}
 graphrun = g => a => $graphrun(g, a)
