@@ -1,11 +1,21 @@
 # lichen-compute: parallel buffer map (`range` / `read` / `write`)
 
-> Status: **current** — the parallel primitive lifted to a buffer map over a
-> **fixed-shape `cfg` = `(n, (buffer…))`** (count `n` at cfg position 0, a tuple
-> of input buffers at cfg position 1), with a **single-arg** index function that
-> reads inputs via `compute.read` and writes one or more output buffers via
-> `compute.write`.  Replaces the earlier two-level-curry `parallel`/`plrun`/
-> `pget`/`pcollect` design (superseded).
+> Status: **the design, with its parameter shape superseded.**  The primitive is
+> still a buffer map over one index function, and what this note says about the
+> operators, the emission ordinals, the host imports and the ABI still holds.  What
+> changed is the **shape of the parameter**: it is no longer a fixed
+> `cfg = (n, (buffer…))` tuple.  A parallel parameter is the named struct
+> `struct<.n Int, .in …, .out …>` (`compute.P (compute.KT _)(.I In, .O Out)`), a
+> body reads the extent at `k.n` and each input as a field under `k.in`, a buffer
+> is the wrapper `Buf = struct<.native _, .element T>` rather than a bare
+> extension value, the body **produces no value** — it dispatches writes — and a
+> run's result is the parameter's `.out` structure, one `Buf` field per output
+> rather than a tuple of them.
+>
+> The snippets below keep the superseded spelling on purpose: they are the record
+> of what changed, which is what makes this note worth keeping.  The shipped model
+> is `docs/notes/compute-buffer-wrapper.md`.
+>
 > Points at: `crates/lichen-compute/src/compute.lichen` (the wrapper),
 > `crates/lichen-compute/src/compute.rs` (`Parallel`/`ParLaunch`/`Range`/
 > `Read`/`Write`/`BufferCollect`, `compile_parallel_fragment`,
