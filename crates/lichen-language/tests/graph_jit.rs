@@ -191,26 +191,38 @@ fn fail(source: &str) -> Vec<String> {
 /// reached is visible in the numbers**: a chain that mis-wired itself would give
 /// the second kernel the first kernel's input instead of its output.
 const KERNELS: &str = r#"
-f1 = cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
+In1  = struct<.a Int>
+Out1 = struct<.z (compute.Buf _)>
+Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
+f1 = (k : Par1) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
 k1 = compute.parallel f1 "gpu"
-f2 = cfg => {
-  n = cfg(0)
-  i = compute.range n
-  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
-  compute.write ((compute.Write _)(.to n, .at i, .value a + a))
+In2  = struct<.b (compute.Buf _)>
+Out2 = struct<.w (compute.Buf _)>
+Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
+f2 = (k : Par2) => {
+  i = compute.range k.n
+  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
 }
 k2 = compute.parallel f2 "gpu"
 "#;
 
 /// A body that dispatches twice, the second over the first's output.
+///
+/// The recorded body's parameter is the named struct too, with both reserved
+/// names: a graph's inputs arrive through it (the extent at `.n`, the buffers
+/// under `.in`), and the dispatch's own result is the `.out` structure the run
+/// hands back.
 const CHAIN: &str = r#"
-step = ins => {
-  first = compute.plrun k1 (ins(0),)
-  compute.plrun k2 (ins(0), (first,))
+InS  = struct<.a Int>
+OutS = struct<.unused (compute.Buf _)>
+ParS = compute.P (compute.KT _)(.I InS, .O OutS)
+step = (s : ParS) => {
+  first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
+  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b first.z)))
 }
 built = compute.graph step
 "#;
@@ -224,9 +236,9 @@ fn a_recording_produces_the_same_numbers_as_running_the_dispatches() {
   compute = import "compute.lichen"
 ---
 {KERNELS}
-first = compute.plrun k1 (3,)
-out = compute.plrun k2 (3, (first,))
-compute.collect out
+first = (compute.plrun k1 ((compute.A In1)(.n 3, .I In1(.a 0))) : Out1)
+out = (compute.plrun k2 ((compute.A In2)(.n 3, .I In2(.b first.z))) : Out2)
+compute.collect out.w
 "#
     ));
     let (graph_module, through_a_graph, _) = run(&format!(
@@ -235,7 +247,7 @@ compute.collect out
 ---
 {KERNELS}
 {CHAIN}
-compute.collect (compute.graphrun built (3,))
+compute.collect (compute.graphrun built ((compute.A InS)(.n 3, .I InS(.a 0))))
 "#
     ));
     assert_eq!(
