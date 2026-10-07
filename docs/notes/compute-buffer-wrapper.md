@@ -250,10 +250,31 @@ it passes, not constructing wrappers by hand.
 Phases, all four landed and pushed: (1) this file; (2) the JIT walk, the
 `Buf`-shaped results the run produces, the marker deletion, and the role paths in
 the fragment; (3) the call sites and their expectations — every target migrated,
-with `lichen-language --test compute` at 51 passed / 5 failed / 4 ignored (the
-five are the pre-existing float/backend/GPU reds and were never migration's),
-`graph_structure` at 4/0, `graph_jit` at 8/0/1, and the examples printing real
+with `graph_structure` at 4/0, `graph_jit` at 8/0/1, and the examples printing real
 answers where the environment allows one; (4) the notes that spelled
 `.sig`/`BufferId`, and the Rust doc comments that did the same — the `src/`,
 `tests/` and `examples/` comments are the last of it and are in the sweep this
 note's status does not cover.
+
+**One correction, and it is the reason this note no longer quotes a pass count.**
+Phase 3 was reported as leaving `lichen-language --test compute` at 51 passed /
+5 failed / 4 ignored, with the five described here as "the pre-existing
+float/backend/GPU reds … never migration's".  That was wrong.  Measured against
+this work's own before-image — `git worktree add .worktrees/prechange-check
+2e2255a`, the parent of `53f9d49` — the suite was **56 passed / 0 failed /
+5 ignored**, and all five of those tests are `ok` there:
+`a_float_fragment_agrees_across_the_two_backends`,
+`an_integer_fragment_agrees_across_the_two_backends`,
+`a_varying_float_element_is_seeded_from_the_index`,
+`a_body_may_compute_in_one_class_and_cross` and
+`a_gpu_program_chains_two_kernels_on_a_device`.  So the five are this refactor's
+own regressions, not pre-existing reds, and they fail in the shared helper —
+`tests/common/mod.rs:164`'s "right element … has no value" for four of them and
+`:120`'s "an array element has a value" for the fifth — which says the elements of
+a value a read or a collect produces no longer carry a value, where before the
+refactor the same position did.
+
+The lesson is worth more than the count was: a pass/fail number is only evidence
+when it is compared against the same measurement taken before the change, and the
+cheap way to get that is a worktree at the parent commit rather than a memory of
+what the reds "were".
