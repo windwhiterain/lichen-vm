@@ -194,7 +194,7 @@ term's type cell is decided in the graph itself. Consequences, when that lands:
   consumers first;
 - the class question collapses to one channel; no `class_of` adapter is built.
 
-Open risk recorded: `parallel_sig`'s `Parameterized` blocker (see
+Open risk recorded: the (since-deleted) `parallel_sig`'s `Parameterized` blocker (see
 [compute-param-struct-handoff](compute-param-struct-handoff.md) §5) is an
 apply-with-symbolic-argument gap on exactly the path specialization needs —
 prototype the typed-placeholder apply before committing to the rest.
@@ -324,7 +324,8 @@ Three things the merge surfaced that were not part of the plan, all repaired:
   positional, which
   [checker-encoding-instability](checker-encoding-instability.md) records as an
   open defect, so the test was updated to pin the property it means — the cells
-  are *named* and shared between `.sig`'s domain and codomain.  That update
+  are *named* and shared between the wrapper's domain and codomain (`.sig`'s then;
+  `.I`/`.O` now).  That update
   re-pinned the **new** letters (`?e`..`?h`), so it broke again as soon as two more
   cells were claimed ahead of them; the assertion now reads the names out and
   compares the *relation* instead

@@ -61,8 +61,8 @@ y = (P _)(.I Int, .O Int)
 error: expected raw[raw[?a, ?b], raw[?c, ?d]], found TypeStruct
 ```
 
-The same branch is reached from a struct field — a kernel binding's `.native`
-artifact renders `struct<.native raw[?a, ?b], .sig Int -> Int>` — and from the
+The same branch is reached from a struct field — a kernel binding renders
+`struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>` — and from the
 value side: `compute.call` on a tuple-codomain kernel types its result as a
 fresh cell, so the result prints `raw[raw 6, raw 14]: ?a`. A bare `[in, out]`
 shape on the CLI output path is a third entry, since that path carries no

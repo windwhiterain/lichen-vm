@@ -539,15 +539,16 @@ load-bearing:
   make that sound rather than merely test-preserving, and both are load-bearing:
 
   - The compiled class must be **committed into the signature**, not just used
-    for lowering: `.sig` is `type_of f`, and `launch` gates the argument against
-    the signature's domain lazily. A signature left open would admit a `Float`
+    for lowering: the signature is the wrapper's own `.I`/`.O` (the wrapper
+    unifies `f: I -> O`, so `.I` is the function's domain), and `launch` gates
+    the argument against `.I` lazily. A signature left open would admit a `Float`
     argument to an `Int` kernel — the default would be a guess the launch could
     not defend. Committed, the launch refuses it, which is §5's `add 1 1.5`
     refusal arriving through the other door.
   - Therefore `compute.jit` must write the defaulted class into the parameter
-    cell (or build `.sig` from the classes it actually compiled), which is the
+    cell (or build `.I`/`.O` from the classes it actually compiled), which is the
     "kernel default" this phase owes — and it is why the existing expectations
-    (`.sig Int -> Int`) are the *correct* answer here rather than a spelling
+    (`.I Int, .O Int`) are the *correct* answer here rather than a spelling
     that happens to match.
 
   With the class concrete the `Index` selects one leaf and it lowers to
@@ -663,7 +664,7 @@ was always about.
    imported-field hover asserts that the two sides are the *same* open cell and
    that both are named rather than how the pair is spelled
    (`crates/lichen-language-server/src/analysis.rs`), and the wrapper hover
-   asserts that `.sig`'s domain and codomain are the wrapper's own two cells
+   asserts that the wrapper's `.I`/`.O` are its own two cells
    rather than the letters the checker numbered them
    ([checker-encoding-instability](checker-encoding-instability.md)).  The two
    `examples/import/*.lichen` `output =` declarations were re-pinned to the new

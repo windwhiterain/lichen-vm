@@ -9,8 +9,7 @@
 > Companions: [class-channel](class-channel.md) §1.1 (the decided rules and the
 > refutation), §2 (the measured mixture of values one class holds),
 > [eval-before-unify](eval-before-unify.md) §5.1 (`replicate_class_value`'s
-> origin), [compute-kernel-struct](compute-kernel-struct.md) (stale: it still
-> spells `.sig` and `$launch(native, sig, a)`).
+> origin).
 
 ## 1. What is being built
 
@@ -131,8 +130,6 @@ Docs synced with the landing: `class-channel.md` §1.1 (the four corrections,
 which are the part to read first), `code-audit.md` P4-2,
 `incremental-evaluation.md` rows 6 and the predicate list,
 `eval-before-unify.md` §5.1 (the walk's new name and rule).
-`compute-kernel-struct.md` is still stale on its own account (`.sig`,
-`$launch(native, sig, a)`).
 
 ## 6. Discipline that cost real time here
 

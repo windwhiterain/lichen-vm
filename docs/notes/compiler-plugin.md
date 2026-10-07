@@ -149,7 +149,7 @@ own it in the **block arena** rather than in a process registry, which is what
 
 ```rust
 impl ValueExt for ComputeValue {
-    fn is_handle(&self) -> bool { matches!(self, ComputeValue::Buffer(_)) }
+    fn is_handle(&self) -> bool { matches!(self, ComputeValue::Buffer(..)) }
     fn handle(&self) -> AnyHandle<[u8]> { /* the `[i64]` payload as bytes */ }
     fn set_handle(&mut self, payload: AnyHandle<[u8]>) { /* re-view it */ }
     fn alignment() -> usize { std::mem::align_of::<i64>() }
@@ -222,7 +222,7 @@ process-global `static`s) omits this.
 The whole plugin lives in the `lichen-compute` crate (`crates/lichen-compute/src/compute.rs`);
 it is program-generic, so it never names a concrete host `Program`.  Its pieces:
 
-- two `Copy` enums — `ComputeValue` (`Kernel`/`ParKernel`/`Buffer`/`TypeBuffer`),
+- two `Copy` enums — `ComputeValue` (`Kernel`/`ParKernel`/`Buffer`),
   `ComputeOperator` (`Jit`/`Launch`/`Call`/`Parallel`/`ParLaunch`/`BufferGet`/`BufferCollect`);
 - an `OperatorExt<P>` `run` impl (the wasm compile/execute, process-global kernel/buffer
   registries), bounded by the same associated-type constraints a host's `enum_ext!`

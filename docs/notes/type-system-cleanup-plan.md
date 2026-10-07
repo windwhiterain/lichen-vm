@@ -455,7 +455,7 @@ Either way, independent of D1:
   - **A failed approach worth recording**: pinning the container's type to a
     struct kind in `check_named_field` when it is not concrete (the move D3
     uses for an instantiation callee) *breaks* `lichen-compute`.  The generic
-    kernel wrapper's `.native`/`.sig` reads must stay lazy until an apply binds
+    kernel wrapper's `.native`/`.I`/`.O` reads must stay lazy until an apply binds
     a concrete kernel struct; the pin unifies earlier, exposes targets that are
     not arrays, and every compute test fails.  A check-time pin is not a
     general answer here — the deferral is the answer, and the lowlevel simply

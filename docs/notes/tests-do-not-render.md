@@ -44,8 +44,8 @@ and each was converted on its own terms
   open cell and both are named — and says nothing about how the operand group's
   placeholder pair is spelled.
 - the wrapper hover asserted the type variables' **letters**; it now reads the
-  names out and asserts the relation (`.sig`'s domain and codomain are the
-  wrapper's own two cells), which is insensitive to which cell the checker
+  names out and asserts the relation (the wrapper's `.I`/`.O` are its own two
+  cells), which is insensitive to which cell the checker
   numbered first.
 - the two `examples/import/*.lichen` `output =` declarations are in the second
   surface above, so they were **re-pinned**, not converted: an example's declared
