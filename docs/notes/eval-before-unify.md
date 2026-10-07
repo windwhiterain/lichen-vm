@@ -655,6 +655,17 @@ get, so it is worth its cost for the named reads as much as for `a(k)`; and the
 has (a target that is not a table is a user error about the read, not an
 invariant violation), independently of the wording fix.
 
+**Re-measured later: the checker side closed it instead, and that is the better
+half.**  The arm was never asked to record anything, because the refusal can be
+made before the read exists: `X::a`/`X<e>` now leave a read their kind guard
+refused **unbuilt** (`Checker::refused_pair`), so no `TableGet` against a
+non-table is ever built, and the lowlevel arm stays the invariant its message
+claims (`docs/notes/type-system-cleanup-plan.md`, the census row for that arm).
+The lower-level form would have had to invent a wording for a failure the checker
+can already state as `expected TypeStruct, found array<Int, 2>` — and it would
+have reported a *second* diagnostic for a program that already has the right
+one.
+
 One drift found while reading: the [spec](../language-spec.md) §Indexing says a
 concretely non-indexable `e[i]` "is an `IndexTarget` diagnostic at check
 time" — but `check_index` pins and fails through `DiagKind::Guard` ("expected

@@ -38,10 +38,17 @@ So it reads a component of a *type-as-value*: `<Int, string><0>` is the `Int` ty
 out-of-bounds subscript is still an evaluation error, recorded during the definition
 pass, so the build is refused.
 
-The result is the component's own pair — value slot element 0, type slot element 1 — both
-read lazily.  Every component of a type-as-value is such a pair, which is what the form
-is for; a runtime array's element is read with `e[i]`, and `X<e>` is not a second way to
-spell it.
+The result is the component's own pair — value slot element 0, type slot element 1.  The
+**value** slot is read lazily; the **type** slot is computed when the read is checked, and
+it is the component type value's *kind* (`Type` for `<Int, string><0>`, a `TypeStruct` kind
+for a component that is itself a struct type), which is what lets a later check compare the
+read's type instead of writing into it — the same rule, and the same measurement, as the
+named sibling ([raw-field.md](raw-field.md#check-time-not-raw)).  A read the kind
+requirement refused is **not built**: it carries the hole a refused definition carries,
+because over a container that is not a tuple type value the two slot reads land on whatever
+the container's type holds (measured: an array's length).  Every component of a
+type-as-value is such a pair, which is what the form is for; a runtime array's element is
+read with `e[i]`, and `X<e>` is not a second way to spell it.
 
 The pin is what makes it usable generically: `f = k => k<0>` reads the first component of
 whatever *tuple type* `k` is applied to, exactly the laziness the compute-wrapper field

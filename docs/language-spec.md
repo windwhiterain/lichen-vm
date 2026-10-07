@@ -614,10 +614,14 @@ maps every span back to the original file.
   `X::a`; `expected TypeTuple, found array<Int, 2>` for an array), and an
   undecided one is pinned, refused by the apply that binds it.  Nothing else is
   a container.
-  The read's result is **the component's own pair**, its value in the value slot
-  and its type in the type slot, both read lazily — which is what every component
-  of a type-as-value is, and what a plain runtime array or tuple is not.  The
-  read is *raw* only in that it does not pin an array type, guard an index target
+  The read's result is **the component's own pair**: its value from the pair's
+  value slot, and its type from the type slot — the component type value's *kind*
+  (`Type` for `<Int, string><0>`, and a `TypeStruct` kind for a component that is
+  itself a struct type).  The value slot is read lazily; the type slot is computed
+  when the read is checked, so a later check on the read's own type compares it
+  rather than binding it, and a read the kind requirement above refused is not
+  built at all.  The read is *raw* only in that it does not pin an array type,
+  guard an index target
   or assert bounds: an out-of-bounds subscript is still an evaluation error,
   recorded during the definition pass, so the build is refused.  `e[i]` is how a
   runtime array's element is read.  This is the syntax the
@@ -632,7 +636,13 @@ maps every span back to the original file.
   it stands, an undecided one is pinned and refused by the apply that binds it
   (this is what removed the `TableGet` panic a deferred non-struct used to hit).
   It yields the field's *type* as a value, so
-  `struct<.a Int, .b string>::a` is `Int : Type`; its sibling `.a` reads a
+  `struct<.a Int, .b string>::a` is `Int : Type` — the type being that field type
+  value's *kind*, `Type` for a scalar field and a `TypeStruct` kind for a
+  struct-typed one, computed when the read is checked exactly as `X<e>`'s is, so
+  a later check on the read's type compares it.  A container the requirement
+  refused leaves the read unbuilt: the name table it needs is a walk into that
+  container's own type, and the read is defined for a struct type value and
+  nothing else.  Its sibling `.a` reads a
   field *value* from a struct instance (whose *kind* must be TypeStruct, table
   at `container_ty[1][0][0][1]`).  Because `::` now means this read, the table
   literal's key/value separator is spelled `==>`.  `==` is generalized to

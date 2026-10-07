@@ -1526,11 +1526,7 @@ where
                 let Some(items) =
                     (unsafe { self.module.array_items(pair) }).filter(|items| items.len() == 2)
                 else {
-                    let cell = self.fresh_cell();
-                    let pair = self.pair_of(cell, cell);
-                    self.state[e].term = Some(pair);
-                    self.state[e].val = Some(cell);
-                    self.state[e].ty = Some(cell);
+                    let pair = self.refused_pair(e);
                     self.record_guard(pair, pair, self.loc(e, 0), DiagKind::ImportExport, None);
                     return pair;
                 };
@@ -1622,7 +1618,10 @@ where
     for_each_kind_marker!(define_ctx_marker_accessor_impls);
 
     fn check_unify(&mut self, a: NodeId, b: NodeId, loc: Loc, kind: DiagKind) {
-        Checker::check_unify(self, a, b, loc, kind)
+        // The seam's contract is the check itself; the answer the checker's own
+        // guards read — whether the requirement held — is not part of what an
+        // extension is handed.
+        Checker::check_unify(self, a, b, loc, kind);
     }
 
     fn check_unify_relaxed(

@@ -200,10 +200,14 @@ where
     /// table at `container_ty[1][0][0][1]`).
     ///
     /// The read is the element's own pair at the name table's resolved index
-    /// (`TableGet(names, name)`) — its slot 0 is the value and its slot 1 the
-    /// type — so `struct<.a Int, .b string>::a` is
+    /// (`TableGet(names, name)`): its slot 0 is the field's *type*, as a value,
+    /// and its slot 1 that value's kind, so `struct<.a Int, .b string>::a` is
     /// `Int : Type`, the field's *type* as a value (where `X<e>` reads a
-    /// positional component, `X::a` reads a named one).
+    /// positional component, `X::a` reads a named one).  The read is defined
+    /// for a **struct type value** and for nothing else: a struct *instance*
+    /// reads a field *value* with `.a`, a positional component of a type value
+    /// reads with `X<e>`, and any other container fails the kind requirement
+    /// above.
     pub(super) fn check_raw_named_field(
         &mut self,
         e: ExprId,
@@ -221,7 +225,19 @@ where
         // is the `TypeStruct` atom, so this is a check of the tag (a
         // `[?payload, TypeStruct]` marker pair), not of a payload shape.
         let kind = self.struct_kind_requirement();
-        self.check_unify(container_ty, kind, self.loc(container, 1), DiagKind::Guard);
+        // A **decided** container that is not a struct type value is refused
+        // here, and the read it refuted is not built.  The name table below is
+        // reached by walking this container's *type*, and for a type that is not
+        // a struct the walk lands on whatever happens to sit at that path
+        // instead — measured on `l::a` over an array, the walk's last step was
+        // the array's own universe and the lowlevel refused to read an array as
+        // a table (`unreachable!("TableGet target must be a table")`, reached
+        // from the checker's own forcing of the read's type).  The read is
+        // defined for a struct type value and for nothing else, so the refusal
+        // is the whole answer for this expression.
+        if !self.check_unify(container_ty, kind, self.loc(container, 1), DiagKind::Guard) {
+            return self.refused_pair(e);
+        }
         // names — the struct marker's name table, read directly from the
         // container's *type* (a TypeStruct kind: marker at [0], its payload at
         // [0], the names at [1] of the payload).

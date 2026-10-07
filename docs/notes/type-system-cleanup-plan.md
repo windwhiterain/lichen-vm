@@ -340,7 +340,7 @@ Either way, independent of D1:
   | `lowlevel/evaluation.rs:82`, `85` | **user-reachable — NOT FIXED** | see below |
   | `lowlevel/evaluation.rs:90`, `188`, `212`, `255`, `260`, `330` | frontend-only | the operand bundle is built by the checker's own `array_node` helpers; every operator is handed the arity its arm destructures |
   | `lowlevel/evaluation.rs:195` | frontend-only | `evaluate_node_deep` sets `evaluated_deep` before returning |
-  | `lowlevel/evaluation.rs:327` | frontend-only | a `TableGet` target is a table or a computed nothing; both are armed, and the third case needs the checker to have built the op against a non-table |
+  | `lowlevel/evaluation.rs:327` | frontend-only, **re-measured** | a `TableGet` target is a table or a computed nothing; both are armed.  The third case — an op built against a non-table — *was* reachable: the checker's forcing of a raw read's type walked the name table of a container the read's kind guard had just refused (an array's type, where the walk's last step is the array's own universe; `unreachable!("TableGet target must be a table")`).  The raw reads now leave the refused read **unbuilt** (`Checker::refused_pair`), so the checker never builds a `TableGet` against a non-table and the arm stays an invariant |
   | `lowlevel/evaluation.rs:399` | frontend-only | the `Static` arm above already returned |
   | `lowlevel/evaluation.rs:415` | **done** | the non-termination budget guard — no longer a panic: it records `Module::budget_exhausted` (the budget and its limit), returns the computed-nothing value, and the checker reads the field |
   | `lowlevel/evaluation.rs:520`, `gc.rs:170` | frontend-only | `garbage_collect` keeps the node it was given |

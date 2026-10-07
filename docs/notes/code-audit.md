@@ -2862,13 +2862,33 @@ identical shape — store it. The build therefore evaluates both slot reads, the
 recorded failure lands inside `ok`'s window, and `[1, 2]<0>`, `x = [1, 2]; x<0>`
 and `(1, 2)<0>` are reported instead of printed.
 
+**Later, and in the other direction — the type slot.** The read's *type* slot is no
+longer left lazy: `X<e>` and `X::a` **compute** it when they are checked, so a later
+check compares the read's type instead of binding it. Measured on
+`S = struct<.a Int, .b string>`: `S::a == 1` and `S::a : Int` were both *accepted*
+(printing `0` and `Int: Int`) and are now `BinOp` and annotation refusals, while
+`S::a == Int` is `1` before and after — it passed for the wrong reason before. The
+type is also per-field-kind, not a constant: `struct<.a struct<.b Int>>::a` is
+`struct<.b Int>: TypeStruct` and `(S::a : Type)` over it is refused exactly as
+`(S : Type)` is ([raw-field.md](raw-field.md#check-time-not-raw)). Two consequences
+for the paragraphs above: the two slot reads are evaluated because the read **is
+built**, and a read the kind requirement refuses is built **not at all** — it carries
+the hole a refused definition carries (`Checker::refused_pair`). That is also what
+keeps the refused container's name-table walk from reaching the lowlevel's
+`unreachable!("TableGet target must be a table")`: the walk is only built for a
+container that passed the kind check, so `DiagKind::RuntimeRawElement` sits behind
+that check as its comment always claimed, and no checker-built program reaches it
+today.
+
 **One shape was tried and reverted, and the measurement is why.** Making the
 read's *value* the element itself (rather than the element's value slot) also
 gives `[1, 2]<0>` a value, but it changes the documented reading:
 `<Int, string><0> == Int` answered `1` before it and `0` after, and
 `f = x => x<1>; f <Int, string> == string` went from `1: Int` to `0: Int`. The
-contract in [raw-index.md](raw-index.md) is the element's *pair*, both slots
-read lazily, and that is what now ships; the four such comparisons are pinned.
+contract in [raw-index.md](raw-index.md) is the element's *pair*, both slots in
+it, and that is what now ships; the four such comparisons are pinned. (The
+*type* slot's laziness was dropped later —
+[raw-field.md](raw-field.md#check-time-not-raw).)
 
 **The message had to name the right side of the read.** The generic
 `RuntimeIndexTarget` wording ("this value is not a container") blames the

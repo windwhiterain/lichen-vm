@@ -1380,8 +1380,6 @@ fn a_raw_read_of_a_non_tuple_container_is_refused_by_kind() {
 }
 
 #[test]
-#[ignore = "`S::a == 1` against `.a Int` (the raw named read) is accepted instead of \
-refused, so the read does not yet yield the field's type"]
 fn a_raw_named_read_yields_the_field_type() {
     // `S::a` reads field `a`'s *type* (as a value) from the struct type value
     // `S`; `s.a` reads field `a`'s *value* from the struct instance `s`.

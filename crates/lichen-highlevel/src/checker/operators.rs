@@ -73,7 +73,7 @@ where
             // a type value (`: Type`) can be compared with a type constant and
             // a cross-class comparison is the operand unify's refusal.
             BinOp::Eq | BinOp::Neq => {
-                self.check_unify(left_ty, right_ty, self.loc(left, 1), DiagKind::BinOp)
+                self.check_unify(left_ty, right_ty, self.loc(left, 1), DiagKind::BinOp);
             }
             // The `Int`-only operators: a float operand is refused here, by the
             // same unify that refuses every other non-`Int`.  Their domain is a

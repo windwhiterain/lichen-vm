@@ -98,9 +98,9 @@ where
     ///
     /// The result is **the element's own pair**: the element is
     /// `Index(container_value, index)`, the value is its slot 0 and the type its
-    /// slot 1, all three read lazily.  The *term* is therefore that
-    /// `[value, type]` pair, not the bare element: every expression's term is a
-    /// pair, and a raw read that stored the element instead left the build
+    /// slot 1 (computed, see [`Self::element_read`]).  The *term* is therefore
+    /// that `[value, type]` pair, not the bare element: every expression's term
+    /// is a pair, and a raw read that stored the element instead left the build
     /// evaluating only the element — so a failure in either slot read landed
     /// after the build had decided `ok`, and a container whose elements are not
     /// pairs printed a silent `none` where the value should be.  See the
@@ -111,8 +111,11 @@ where
     /// definition pass, so the build is rejected.  The element case keeps its
     /// own wording ([`DiagKind::RuntimeRawElement`]) because the generic one
     /// blames the container the user wrote rather than the element the read
-    /// produced; it now sits behind the kind check, since every component of a
-    /// tuple type value is a pair.
+    /// produced; it sits behind the kind check, since every component of a
+    /// tuple type value is a pair and the read is only built once that check
+    /// has passed — no container reaching the element read today can hold a
+    /// non-pair element, so the wording is kept for the contract, not for a
+    /// program.
     pub(super) fn check_raw_index(
         &mut self,
         e: ExprId,
@@ -127,7 +130,16 @@ where
         // defers and is reconciled by the apply that binds it, per call.
         let container_ty = self.state[container].ty.unwrap();
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        self.check_unify(container_ty, kind, self.loc(container, 1), DiagKind::Guard);
+        // A **decided** container of another kind is refused here, and the read
+        // it refuted is not built: the element pair below is the *component
+        // list* of a type value, and over anything else its slot reads land on
+        // whatever the container's own type happens to hold — the element's
+        // type slot on a runtime array is the array's length, which the lowlevel
+        // refuses to index as an element (`RuntimeRawElement`), a second
+        // diagnostic for a program the guard above already rejected.
+        if !self.check_unify(container_ty, kind, self.loc(container, 1), DiagKind::Guard) {
+            return self.refused_pair(e);
+        }
         let container_value = self.value_of(container);
         let index_value = self.value_of(index);
         self.node_edges.insert(index_value, self.loc(index, 0));
@@ -147,9 +159,29 @@ where
     /// The element read shared by the raw positional form `X<e>` and the raw
     /// named form `X::a`: `element = Index(container_value, subscript)`, then
     /// the element's own pair — `Index(element, 0)` for the value and
-    /// `Index(element, 1)` for the type — both read lazily, with no type
-    /// validation.  `subscript` is already the resolved slot: the caller's
-    /// index value, or a name table's read.
+    /// `Index(element, 1)` for the type.  `subscript` is already the resolved
+    /// slot: the caller's index value, or a name table's read.
+    ///
+    /// The element's type slot *is* the read's type, and that is not a
+    /// convenience: both callers require their container to be a **type
+    /// value** (the tuple kind for `X<e>`, the struct kind for `X::a`), whose
+    /// component list holds `[component type value, its kind]` pairs, so the
+    /// read yields a type value and its type is that value's *kind* — the
+    /// universe for a scalar (`S::a` on `.a Int` is `Int : Type`) and a
+    /// `TypeStruct` kind for a struct-typed field (`S::a` on
+    /// `.a struct<.b Int>` is `struct<.b Int>: TypeStruct`, measured).  There
+    /// is no other handle on it: the field's kind is nowhere in the container's
+    /// own type, only in this slot.
+    ///
+    /// **The slot read is computed here**, so the read's type is decided by the
+    /// time any check asks about it.  An operation node nothing has run holds
+    /// no class value, and an undecided operand is the one unification arm that
+    /// **writes** rather than compares: measured, `S::a : Int` and `S::a == 1`
+    /// were both accepted where `5 : Type` and `5 == Int` are refused, and
+    /// `S::a == Int` passed for the same reason rather than because it is
+    /// right (`docs/notes/raw-index.md`).  An **unbound** container's read
+    /// computes nothing and stays lazy, which is what the per-apply re-check
+    /// relies on.
     ///
     /// Returns the read's `(pair, element, type)`: the pair is the term, the
     /// element is what a failed slot read is attributed to, and the type slot
@@ -178,6 +210,7 @@ where
             P::Operator::from(LowOperator::Index),
             Some(ty_ops),
         );
+        self.module.evaluate_node_deep(ty_node, None);
         (self.pair_of(value_node, ty_node), element, ty_node)
     }
 

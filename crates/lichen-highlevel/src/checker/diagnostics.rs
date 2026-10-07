@@ -28,12 +28,34 @@ where
     ///
     /// Nothing is recorded on success: what lands in the diary is the check
     /// that failed, together with the exact [`unify_errors`] range it owns.
-    pub fn check_unify(&mut self, a: NodeId, b: NodeId, loc: Loc, kind: DiagKind) {
+    /// **It answers whether it passed**, for the callers whose check is also
+    /// the *precondition* of the expression they are about to build: a guard
+    /// that just refused a construct has judged it undefined, and the
+    /// construct's own graph must not be built behind the refusal
+    /// ([`Self::refused_pair`]).
+    pub fn check_unify(&mut self, a: NodeId, b: NodeId, loc: Loc, kind: DiagKind) -> bool {
         let (_, errors) = self.module.try_unify(a, b);
         if errors.is_empty() {
-            return;
+            return true;
         }
         self.record_unify(a, b, loc, kind, None, errors);
+        false
+    }
+
+    /// The `[value, type]` pair a **refused** expression carries on with: one
+    /// fresh unbound cell in each slot.  A reported definition is a rejected
+    /// build either way, so the consumer of a refused expression may read a
+    /// hole; what it must never read is the graph the refusal was about —
+    /// building that is how a refusal that has already been reported goes on
+    /// to panic ([`Self::fresh_cell`]: an empty cell is undecided's only in-VM
+    /// representation, and reading one yields nothing).
+    pub(super) fn refused_pair(&mut self, e: ExprId) -> NodeId {
+        let cell = self.fresh_cell();
+        let pair = self.pair_of(cell, cell);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(cell);
+        self.state[e].ty = Some(cell);
+        pair
     }
 
     /// A checker-issued unification that may be relaxed by an attribute's
