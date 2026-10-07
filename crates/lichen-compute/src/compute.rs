@@ -1019,14 +1019,14 @@ pub enum ComputeOperator {
     /// `[kernel, arg]` operand — a cross-kernel call: run kernel `k` (a
     /// `.native` extracted from a kernel struct) on `arg` → the result.
     Call,
-    /// Compile a `?cfg -> ?write` index function to a parallel kernel
-    /// (the kernel body is lowered over the loop index; a tuple codomain of
-    /// `Write`s is the multi-output form) → a `ParKernel` value.
+    /// Compile a `compute.P` index function (its parameter is the named struct
+    /// `struct<.n Int, .in …, .out …>`) to a parallel kernel — the kernel body
+    /// is lowered over the loop index; a tuple codomain of `Write`s is the
+    /// multi-output form → a `ParKernel` value.
     Parallel,
     /// `[parallel_kernel, cfg]` operand — run the parallel kernel over the
-    /// index range `[0, cfg(0))` (the count is fixed at cfg position 0) → one
-    /// output buffer per output the kernel declares, as a bare `Buffer` value
-    /// for a single output and the **tuple** of them for several.
+    /// index range `[0, cfg.n)` → the parameter's `.out` structure, one `Buf`
+    /// field per output the kernel declares.
     ParLaunch,
     /// `[n]` operand — the loop index of the current parallel invocation,
     /// `i ∈ [0, n)`.  Kernel-only; the VM sees an undecided operand.
@@ -1412,8 +1412,8 @@ where
                     else {
                         return None;
                     };
-                    // The cfg value `(n, (buffer…))`.  Element 0 is the count `n`;
-                    // element 1 is a tuple of input `Buffer` values.
+                    // The cfg value the kernel is handed: the named parameter
+                    // struct, or the retired tuple `(n, (buffer…))`.
                     let Ok(cfg_node) = dyn_node(operands[1].node) else {
                         return None;
                     };
@@ -2514,10 +2514,10 @@ where
     matches!(unsafe { module.array_items(value) }, Some(items) if !items.is_empty())
 }
 
-/// Lower a single-arg `?cfg -> ?write` index function into a **parallel
-/// kernel** — a [`KernelFragment`] whose wasm signature is `(n, index)` (the
-/// count scalar from `cfg(0)`, then the loop index) and whose body is the
-/// index function's body traced with `range`/`read`/`write` host calls.
+/// Lower a single-arg index function into a **parallel kernel** — a
+/// [`KernelFragment`] whose wasm signature is `(n, index)` (the parameter's
+/// scalar leaves, the launch extent first, then the loop index) and whose body
+/// is the index function's body traced with `range`/`read`/`write` host calls.
 ///
 /// The codomain is a `Write` or a **tuple of `Write`s** — one element per
 /// output buffer — and the fragment records the arity as its
@@ -2525,11 +2525,12 @@ where
 /// buffers.
 ///
 /// `parallel` is the data-parallel lift: running it over the index range
-/// `[0, cfg(0))` computes the index function once per index.  The `cfg` is
-/// `(n, (buffer…))` — `cfg(0)` is the count `n` (a wasm scalar param), and the
-/// buffer tuple at `cfg(1)` is host-side (each buffer read via a `read`
-/// import by its position inside the tuple).  The loop index comes from
-/// `compute.range n` (a kernel-only op yielding the index param).
+/// `[0, n)` computes the index function once per index.  The parameter is the
+/// **named** struct `struct<.n Int, .in …, .out …>` — `.n` is the count (a wasm
+/// scalar param), the buffers under `.in` are host-side (each read via a `read`
+/// import by its position in the walk's list), and `.out` declares the outputs.
+/// The loop index comes from `compute.range n` (a kernel-only op yielding the
+/// index param).
 ///
 /// **The every-ordinal-written invariant holds by construction.**  The lowered
 /// body is straight-line: the only conditional the kernel-safe subset has is
@@ -3249,8 +3250,8 @@ struct Positions {
     writes: usize,
     /// One past the highest input position any `compute.read` named, so `0` for
     /// a body that reads no buffer. The max rather than a count, because the
-    /// read positions are a sparse space: a body reading only `cfg(1)(1)` still
-    /// needs two buffers, or the one at position 1 was never bound.
+    /// read positions are a sparse space: a body that reads only the second
+    /// input still needs two buffers, or the one it read was never bound.
     reads: usize,
     /// The element class of each write ordinal emitted, in ordinal order — the
     /// class half of the same fact [`Self::writes`] counts, filled at the same
@@ -4258,18 +4259,18 @@ where
                 body.push(KernelInstr::LocalGet(index_local as u32));
                 return Ok(());
             }
-            // Read an input buffer element: `read [cfg(1)(k), idx]` → the host
-            // `read(cfg_pos=k, idx)` import.  The buffer node is a cfg buffer
-            // tuple slot; its position is the compile-time cfg_pos.
+            // Read an input buffer element: `read [k.in.b, idx]` → the host
+            // `read(cfg_pos=k, idx)` import.  The buffer node is the parameter
+            // field the walk found; its position is the compile-time cfg_pos.
             ComputeOperator::Read => {
                 let (buf, idx) = operand_pair(module, operation.operand)?;
                 // The buffer operand comes through the wrapper's slot-read
                 // destructuring: `read = x => $read(x(0), x(1))` applied to
-                // `[cfg(1)(k), idx]` leaves `Index(arg_array, 0)` where
+                // `[k.in.b, idx]` leaves `Index(arg_array, 0)` where
                 // `arg_array` is the materialized argument array.  Resolve
-                // that to the actual buffer node (the cfg buffer-tuple slot)
-                // so `parallel_buffer_pos` recognizes it, exactly like the
-                // `Index` emitter peels a constant array element.
+                // that to the actual buffer node (the parameter field the walk
+                // found) so `parallel_buffer_pos` recognizes it, exactly like
+                // the `Index` emitter peels a constant array element.
                 let buf = peeled_argument(module, buf)?;
                 let pos = parallel_buffer_pos(module, params, buf)?.ok_or_else(|| {
                     // The path is named in the refusal: a struct parameter's
@@ -4285,7 +4286,7 @@ where
                     )
                 })?;
                 // The input count is a **max**, not a tally: the read positions are
-                // a sparse space, and a body that reads only `cfg(1)(1)` still
+                // a sparse space, and a body that reads only the second input still
                 // needs two buffers bound or the one it read was never bound.
                 //
                 // **A read's element class is declared, not inferred.**  It is
@@ -4372,8 +4373,8 @@ where
 /// the node's own [`param_path`] is the answer: `.in`'s fields are the input
 /// positions in declaration order, and nothing about how the body spelled the
 /// read enters into it.  A `(n, (buffers…))` parameter declares nothing, so the
-/// position is the constant the body wrote — `cfg(1)(k)` — and it is read off
-/// the node.
+/// position is the constant the body wrote — the retired tuple form's
+/// `cfg(1)(k)` — and it is read off the node.
 ///
 /// `Ok(None)` is "this node does not name a buffer this walk can place" — the
 /// refusal the read arm words as "not an input buffer of the parallel
@@ -5276,7 +5277,7 @@ where
     {
         return Some(kid);
     }
-    // A kernel *struct value* `[native, sig]` reached by value (not through an
+    // A kernel *struct value* `[.native, .I, .O]` reached by value (not through an
     // `Index` op): its element 0 is the bare `.native` kernel artifact.
     // SAFETY: `node` is a live node of `module`; the note covers this
     // function's `items()` calls.
@@ -6989,7 +6990,8 @@ fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
 /// [`wasmi::Linker::func_new`] requires a `'static` host function — a
 /// per-worker base could not be captured, only reached through the store.
 struct ParallelState<'a> {
-    /// The input buffers (the cfg buffer tuple), indexed by cfg position.  They
+    /// The input buffers, indexed by the input position the role walk records.
+    /// They
     /// are never partitioned: a read is by a **global** index, so every worker
     /// reads the whole buffer.  A float input's words are its elements' `f32`
     /// bits, so the `read` import answers `F32` rather than `I64`.
@@ -7139,7 +7141,7 @@ fn assemble_parallel_fragment(id: KernelId) -> Result<Vec<u8>, String> {
 }
 
 /// The most elements one `plrun` may collect — the bound on the count the
-/// program controls (the `cfg(0)` the index function is run over).
+/// program controls (the parameter's `.n` the index function is run over).
 ///
 /// The count sizes the output buffer (`count` × 8 bytes = 8 MiB at the limit)
 /// and, because the kernel is called once per element, the interpreted work a
@@ -7204,8 +7206,8 @@ pub fn parallel_launch_workers() -> usize {
 }
 
 /// Run a **parallel** kernel over the index range `[0, count)`, computing the
-/// index function once per index with `cfg(0) = count` and the cfg input
-/// buffers fixed, and collecting the writes into the output buffers.
+/// index function once per index with the parameter's extent `count` and its
+/// input buffers fixed, and collecting the writes into the output buffers.
 ///
 /// The kernel is a wasm function with two host imports — `read(cfg_pos, idx)`
 /// reads an input buffer element, `write(out_pos, idx, val)` writes an output
@@ -8285,7 +8287,7 @@ macro_rules! compute_native_ops {
 /// `$jit(f)` — compile a function to a kernel.  The function-ness gate unifies
 /// the argument's type with an arrow shape (the *gate*); the bare artifact's
 /// type is a fresh cell, and the lichen wrapper builds the kernel struct around
-/// it (`.native` = the artifact, `.sig` = `type_of f`).
+/// it (`.native` = the artifact, `.I`/`.O` = its signature).
 ///
 /// The program marker is generic: a host composes this op into its own
 /// `NativeOps` registry (a `&'static [(&str, &dyn NativeOp<P>)]`), so the
@@ -8384,19 +8386,19 @@ where
     }
 }
 
-/// `$parallel(f, backend)` — compile a single-arg `?cfg -> ?write` index function
+/// `$parallel(f, backend)` — compile a single-arg `compute.P` index function
 /// into a parallel kernel, and record the backend its runs are dispatched to.
 /// The function-ness gate verifies `f` is a function; the body is lowered over the
-/// loop index (from `compute.range n`) and the cfg buffers (read via
+/// loop index (from `compute.range n`) and the parameter's `.in` buffers (read via
 /// `compute.read`).  A **tuple** codomain of `Write`s is the multi-output form;
 /// which position a write is becomes its output ordinal at emission time, and the
 /// codomain's arity becomes the launch's output count.
 pub struct ParallelOp;
 
-/// `$plrun(pk, cfg)` — run a parallel kernel over the index range `[0, cfg(0))`
-/// with the input buffers from `cfg(1)` fixed, collecting the writes into one
-/// `Buffer` per output (a bare `Buffer` for a single output, their tuple for
-/// several).  The count is `cfg(0)`.
+/// `$plrun(pk, cfg)` — run a parallel kernel over the index range `[0, cfg.n)`
+/// with the parameter's `.in` buffers fixed, collecting the writes into the
+/// parameter's `.out` structure, one `Buf` field per output.  The count is
+/// `cfg.n`.
 pub struct ParLaunchOp;
 
 /// `$range(n)` — the loop index `i ∈ [0, n)` of the current parallel
@@ -8473,13 +8475,13 @@ where
     /// emits the `ParLaunch` node over the two raw values.
     ///
     /// **The result type is the call's own fresh cell**, and that is a
-    /// deliberate limit, not an oversight.  The signature's *arity* is what
-    /// decides the result's shape — a bare `Buffer` for a one-write index
-    /// function, a tuple of buffers for a several-write one — and the arity
+    /// deliberate limit, not an oversight.  The parameter's `.out` group is what
+    /// decides the result's shape — one `Buf` field per declared output — and it
     /// cannot be read here: `build` runs once, on the frozen `plrun` template,
-    /// where `.sig` is an undecided cell that only resolves at run time.  A tuple
-    /// type is a value node with one element per position, so no check-time
-    /// node can name a tuple whose arity is not known until the run.
+    /// where the kernel's `.I`/`.O` are undecided cells that only resolve at run
+    /// time.  A struct type is a value node with one cell per field, so no
+    /// check-time node can name a structure whose fields are not known until the
+    /// run.
     ///
     /// What the fresh cell costs is **static precision, not safety**: the
     /// element type is no longer named by the signature, so `read` on a `plrun`
@@ -8487,9 +8489,9 @@ where
     /// run produces — the buffer's own class, `Int` or `Float`, which is what
     /// makes a float `plrun` readable as an array of `Float`.  An ordinal that
     /// does not exist is still **refused, at check time, with a span** — the
-    /// checker's evaluation pass reconciles the constant index against the tuple
-    /// the launch produced and records an out-of-bounds `Index` — so the two
-    /// shapes stay distinguishable exactly where it matters.
+    /// checker's evaluation pass reconciles the constant index against the
+    /// container the launch produced and records an out-of-bounds `Index` — so
+    /// the two shapes stay distinguishable exactly where it matters.
     fn build(
         &self,
         ctx: &mut dyn Ctx<P>,

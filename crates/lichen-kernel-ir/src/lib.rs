@@ -745,10 +745,11 @@ pub struct KernelFragment {
     /// buffers are bound as storage buffers and reached through a read's
     /// position rather than through a further parameter. So the two facts a
     /// caller needs are separate: how many it is *given* is the dispatch's, read
-    /// at apply time from the call site's buffer tuple, and how many is *needed*
-    /// is this, counted as the read positions are emitted. Neither one can stand
-    /// in for the other, and a caller that supplied the wrong number would
-    /// otherwise have its shader read a binding that was never bound.
+    /// at apply time from the buffer fields the call site's parameter declares,
+    /// and how many is *needed* is this, counted as the read positions are
+    /// emitted. Neither one can stand in for the other, and a caller that
+    /// supplied the wrong number would otherwise have its shader read a binding
+    /// that was never bound.
     pub inputs: usize,
     /// How many output buffers this fragment writes — `0` for a scalar
     /// fragment, and for a parallel fragment the index function's codomain

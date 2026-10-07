@@ -134,8 +134,9 @@ pub fn lookup(id: GraphId) -> Result<Graph, String> {
 /// the whole reason a recording does not build one as it goes. The graph's
 /// declared width is the number of argument slots its nodes read, and that number
 /// is not knowable until the last dispatch has been recorded: a function's read
-/// positions are invisible before it is applied, so the placeholder tuple is built
-/// at [`MAX_GRAPH_INPUTS`] and the real width only exists once the body is done.
+/// positions are invisible before it is applied, so the placeholder cells are built
+/// at the parameter's own paths — [`MAX_GRAPH_INPUTS`] cells when its type is not
+/// the named struct — and the real width only exists once the body is done.
 /// A `Graph` built during the walk would have to declare the ceiling, and then
 /// either lie about its arity or be renumbered afterwards — and renumbering a
 /// finished graph means moving every produced value, which is exactly the kind of
@@ -214,10 +215,11 @@ pub fn is_recording() -> bool {
     RECORDINGS.with(|recordings| !recordings.borrow().is_empty())
 }
 
-/// Start a recording whose argument tuple is built at [`MAX_GRAPH_INPUTS`].
+/// The ceiling a parameter that is not the named struct has its argument tuple
+/// built at.
 ///
-/// **A ceiling, and it is not a design preference — it is forced.** The width a
-/// function's argument tuple needs is not knowable before the function is
+/// **A ceiling, and it is not a design preference — it is forced.** The width
+/// such a function's argument tuple needs is not knowable before the function is
 /// applied: a read of `ins(i)` compiles to a bare cell with no operation and no
 /// subscript, so the unapplied body contains nothing that says which slot a read
 /// wants. The parameter's own value node cannot answer it either, because in a
@@ -401,10 +403,10 @@ pub fn describe(value: &ComputeValue) -> &'static str {
 
 /// Record one dispatch, and hand back what the body should see in its place.
 ///
-/// **One value per output the fragment declares**, and several are the tuple of
-/// them, which is the same shape a real launch produces — so the body downstream
-/// cannot tell a recording from a run, and the code that reads a result is the
-/// code that already worked.
+/// **One value per output the fragment declares.** The recorder assembles them
+/// into the result shape the parameter declares, which is the same shape a real
+/// launch produces — so the body downstream cannot tell a recording from a run,
+/// and the code that reads a result is the code that already worked.
 pub fn record_dispatch(
     fragment: KernelFragment,
     backend: Backend,
@@ -439,9 +441,9 @@ pub fn record_dispatch(
             .sum::<usize>();
         // An input slot is **allocated the first time a dispatch reads it**, so
         // the graph's width is the number of arguments the body actually read and
-        // not the ceiling the placeholder tuple had to be built at. A slot read
-        // twice keeps the number it was first given, which is what makes `ins(0)`
-        // in two dispatches the same argument.
+        // not the number of cells the placeholder structure was built with. A slot
+        // read twice keeps the number it was first given, which is what makes
+        // `ins(0)` in two dispatches the same argument.
         // An input slot is **allocated the first time anything reads it**, by a
         // dispatch's buffer list or by its count. The two go through the same
         // allocator because a body that takes its extent as its first argument has
