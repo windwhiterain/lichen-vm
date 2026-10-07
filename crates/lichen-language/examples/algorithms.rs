@@ -466,13 +466,13 @@ f2 = (k : Par2) => {
   compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
 }
 k2 = compute.parallel f2 "BACKEND"
-step = ins => {
-  first = (compute.plrun k1 ((compute.A In1)(.n ins(0), .I In1(.a 0))) : Out1)
-  compute.plrun k2 ((compute.A In2)(.n ins(0), .I In2(.b first.z)))
+GArg = struct<.n Int, .in In1>
+step = (s : GArg) => {
+  first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
+  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b first.z)))
 }
 built = compute.graph step
-out = compute.graphrun built (4,)
-compute.collect out.z
+compute.collect (compute.graphrun built 4)
 "#,
     ),
 ];
