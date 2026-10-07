@@ -30,7 +30,12 @@ a struct it *can* fill.
 
 Drop this in `examples/` as `zz-param-struct.lichen` (the harness runs every
 file in that directory; scratch files must not be committed). It compiles a
-tuple-shaped producer first, so the consumer has a real input buffer.
+producer kernel first, so the consumer has a real input buffer.
+
+**The `parallel_sig` wrapper this reproduction originally used has since been
+deleted** — the signature is the function's own `f: I -> O` annotation, read
+back through the kernel struct's `.I`/`.O` — so the reproduction is the
+wrapper-free form:
 
 ```lichen
 ---
@@ -38,25 +43,26 @@ tuple-shaped producer first, so the consumer has a real input buffer.
   compute = import "compute.lichen"
   output = "22"
 ---
-g = cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
+In  = struct<.a Int>
+Out = struct<.z (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+g = (k : Par) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
 kg = compute.parallel g "cpu"
-inbuf = compute.plrun kg (3,)
-In  = struct<.a _>
-Out = struct<.z _>
-Par = compute.P (compute.KT _)(.I In, .O Out)
-Sig = compute.S (compute.KT _)(.I In, .O Out)
-f = (k : Par) => {
+inbuf = (compute.plrun kg ((compute.A In)(.n 3, .I In(.a 0))) : Out)
+In2  = struct<.b (compute.Buf _)>
+Out2 = struct<.w (compute.Buf _)>
+Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
+f = (k : Par2) => {
   i = compute.range k.n
-  v = compute.read ((compute.Read _)(.from k.in.a, .at i))
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value v * 2))
+  v = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.w, .at i, .value v * 2))
 }
-k = compute.parallel_sig f "cpu" Sig
-out = compute.plrun k ((compute.A In)(.n 3, .I In(.a inbuf)))
-compute.read ((compute.Read _)(.from out, .at 1))
+k = compute.parallel f "cpu"
+out = (compute.plrun k ((compute.A In2)(.n 3, .I In2(.b inbuf.z))) : Out2)
+compute.read ((compute.Read _)(.from out.w, .at 1))
 ```
 
 `inbuf` is `[10, 11, 12]`, so the answer is `22`.
@@ -70,18 +76,9 @@ cargo test -q -p lichen-language --test examples
 **Both blockers are fixed**: this file now runs and prints `22: ?a` — the only
 unresolved cell is the element class of a value read back from a buffer, the
 documented limit of `plrun`'s result type (`compute-kernel-struct.md`
-§"Runtime / codegen"), not a defect. The plain-wrapper variant below exercises
-the same kernel without the `Sig` declaration:
-
-```lichen
-k = compute.parallel f "cpu"
-out = compute.plrun k ((compute.A In)(.n 3, .I In(.a inbuf)))
-```
-
-That variant now **runs** and prints `22: ?a`: the reads resolve, the kernel
-compiles, and the only unresolved cell is the element class of a value read back
-from a buffer — the documented limit of `plrun`'s result type
-(`compute-kernel-struct.md` §"Runtime / codegen"), not a defect.
+§"Runtime / codegen"), not a defect. The binding is annotated with its codomain
+type (`: Out`) once, which is `compute-buffer-wrapper.md`'s migration recipe,
+and its fields are then read by name (`inbuf.z`).
 
 ## 3. What already works, measured
 
@@ -90,8 +87,8 @@ from a buffer — the documented limit of `plrun`'s result type
   ```
   KT = _x => struct<.I _, .O _>                      # the input/output pair
   A  = I  => struct<.n Int, .I I>                    # the JIT'd input
-  P  = T: KT T => struct<.n Int, .in T.I, .out T.O>  # the author's parameter
-  S  = T: KT T => A T.I -> T.O                       # the JIT'd signature
+  P  = T: KT _ => struct<.n Int, .in T.I, .out T.O>  # the author's parameter
+  S  = T: KT _ => A T.I -> T.O                       # the JIT'd signature
   ```
 
   Two spelling facts, both load-bearing: the argument must be an *instantiated*
@@ -99,12 +96,13 @@ from a buffer — the documented limit of `plrun`'s result type
   container"), and applying a type lambda before instantiating needs parentheses
   (`(A In)(.n 3, …)`, not `A In(.n 3, …)`).
 
-- **The host's argument type is the signature's domain.** Measured:
-  `(f : Sig) => f ((A In)(.n 3, .I In(.a inbuf)))` checks, i.e. the `A In` the
-  host writes at the call site and the `A _` inside `S` — evaluated by the
-  checker once the role wiring resolves the cells — are *one* nominal type. This
-  is what `applied-struct-nominal-id`'s fix bought, and it is why the signature
-  can be declared in the kernel struct's `.sig` rather than built by a gate.
+- **The host's argument type is the kernel's own domain.** Measured (through the
+  then-shipped `Sig` lambda, since deleted): `(f : Sig) => f ((A In)(.n 3, .I
+  In(.a inbuf)))` checks, i.e. the `A In` the host writes at the call site and
+  the domain `S` builds — evaluated by the checker once the role wiring resolves
+  the cells — are *one* nominal type. That is what
+  `applied-struct-nominal-id`'s fix bought, and it is why the signature can ride
+  in the kernel struct's `.I`/`.O` rather than being built by a gate.
 
 - **The role table** (`parallel_roles`, `compute.rs:1856`) decodes the
   parameter's type: scalars, `.in` paths and `.out` paths, in declaration order.
@@ -112,13 +110,14 @@ from a buffer — the documented limit of `plrun`'s result type
   — which is exactly the path `k.in.a` should resolve to.
 
 - **The wasm signature and the host-side decode.** The signature is the scalar
-  leaves followed by the index, and `ParLaunch`'s walk reads the count at
-  `cfg_items[0]` and the buffers at `cfg_items[1]` — which for this parameter
-  shape are `.n` and `.I`, i.e. the same two positions the tuple shape uses.
+  leaves followed by the index, and the run reads its leaves and inputs at the
+  role paths the fragment carries: the extent is the `.n` leaf and the inputs live
+  under `.I` in the JIT'd input `compute.A` builds — positions 0 and 1 of the
+  host's argument struct.
 
-- **The `Parallel`/`ParLaunch` gates need no change.** Declaring the signature in
-  `.sig`'s *type* position is enough: `plrun`'s gate already unifies `sig.ty`
-  against `arrow(d0, c0)` and then the host's argument against `d0`.
+- **The `Parallel`/`ParLaunch` gates need no signature argument.** `f: I -> O`
+  states the signature, the kernel struct carries `.I`/`.O`, and `plrun`'s
+  `a: k.I` / `r: k.O` gate the argument and type the result.
 
 - **The temporary blanket refusal is gone.** `PARALLEL_PARAM_LAUNCH` no longer
   exists; a struct-shaped kernel reaches the lowering and is refused by the read
@@ -132,7 +131,7 @@ from a buffer — the documented limit of `plrun`'s result type
 
 ## 4. Blocker 1: `param_path` cannot resolve a named-field path — **FIXED**
 
-**Symptom (then).** With `compute.parallel f "cpu"` (§2's variant), the lowering
+**Symptom (then).** With `compute.parallel f "cpu"` (§2's reproduction), the lowering
 refused with
 
 ```
@@ -208,6 +207,14 @@ implemented, in the two-pass form described above.**
 
 ## 5. Blocker 2, resolved: nested static closures lost their captures' bindings
 
+**The wrapper this blocker was diagnosed through has since been deleted.**
+`parallel_sig` (and its `Sig` argument) is gone: the signature is the function's
+own `f: I -> O` annotation, read back through the kernel struct's `.I`/`.O`. The
+two static-module defects below are still what the shipped `compute.parallel f
+"cpu"` path needed, so the record stands; read `parallel_sig` as the
+then-shipped spelling, and `.sig s`/`.sig (type_of f)` as the single field that
+`.I`/`.O` later split into.
+
 **Symptom (as it was).** `compute.parallel_sig f "cpu" Sig` failed *before* the
 lowering, at the operand check in `ComputeOperator::Parallel`'s run: the
 `[f, backend]` array stayed `Parameterized`. `compute.parallel f "cpu"` with the
@@ -246,7 +253,9 @@ closures:
    fresh closure and every later apply re-instantiates it per call.
 
 **Verified.** §2's probe runs and prints `22: ?a`; the minimal tuple-shaped
-variant runs and prints `[1, 2, 3, 4]`. Both are committed as regression
+`parallel_sig` variant ran and printed `[1, 2, 3, 4]` (that wrapper is since
+deleted, and the shape it covered is now the tuple parameter the decision
+retires). Both are committed as regression
 tests: `a_tuple_kernel_runs_through_the_signature_carrying_wrapper` and
 `a_struct_parameter_kernel_runs_through_the_signature_carrying_wrapper`
 (`crates/lichen-language/tests/compute.rs`). `cargo test -p lichen-lowlevel`,
@@ -255,13 +264,19 @@ tests: `a_tuple_kernel_runs_through_the_signature_carrying_wrapper` and
 
 ## 6. What must not break
 
-- **The tuple shape keeps working.** `compute.parallel`/`compute.jit` (no
-  signature) are unchanged, and the existing tests exercise them heavily.
-- The suites that cover this work, all green after §5's fix:
+- **The tuple parameter shape still runs, but it is retired.**
+  `compute.parallel`/`compute.jit` (no signature) still accept a
+  `cfg = (n, (buffers…))` body and the existing tests exercise it; the shipped
+  shape is the named struct (`compute.P (compute.KT _)(.I In, .O Out)`), and the
+  tuple-form call sites are the migration's phase 3
+  (`compute-buffer-wrapper.md`).
+- The suites that covered this work, all green after §5's fix:
   `cargo test -p lichen-lowlevel`, `cargo test -p lichen-compute`,
   `cargo test -p lichen-kernel-ir`, `cargo test -p lichen-graph-ir`,
   `cargo test -p lichen-language --test compute`, `--test pipeline`,
-  `--test examples`.
+  `--test examples`. The later struct-parameter migration moved that measurement:
+  `lichen-language --test compute` is at 35 passed / 21 failed / 5 ignored, the 21
+  being the retired tuple-form call sites (`compute-buffer-wrapper.md`).
 - The one pre-existing warning is `WasmState.at` being never read
   (`compute.rs:3104`); it is not related.
 

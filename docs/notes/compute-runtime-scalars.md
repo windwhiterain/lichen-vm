@@ -8,8 +8,10 @@
 > wrongly-classed leaf refused by name.  Two things are **not** written, and both
 > are refused rather than mis-run: the device path pushes the extent alone
 > (`RunError::ScalarsNotPushed`), and a recorded body carries the extent alone.  §5's
-> blocker still applies to the *explicit* `parallel_sig … Sig` spelling; the
-> automatic `parallel` path needs no authored signature.
+> `parallel_sig … Sig` spelling has since been **deleted** — the signature is the
+> function's own `f: I -> O` annotation, read back through the kernel struct's
+> `.I`/`.O` — so what that section records is a blocker in a wrapper that no longer
+> exists; the `parallel` path needs no authored signature.
 > Companion: [compute-param-struct-handoff](compute-param-struct-handoff.md)
 > (the named-struct parameter this exists for),
 > [type-query-api-proposal](type-query-api-proposal.md) §7 (the accessors the
@@ -20,15 +22,16 @@
 ## 1. What a runtime scalar is, and why it is the point
 
 Moving a parallel kernel's parameter from the positional `cfg = (n, (buffers…))`
-to a named struct was for two things: a read that names its buffer, and **runtime
-scalars beside the count** — `k.alpha`, a number the host fixes at launch
-(`compute-param-struct-handoff` §1).  Everything before this note delivers the
-first; the second is what the leaf classes are for.
+to the named struct `struct<.n Int, .in …, .out …>` was for two things: a read
+that names its buffer, and **runtime scalars beside the count** — `k.alpha`, a
+number the host fixes at launch (`compute-param-struct-handoff` §1).  Everything
+before this note delivers the first; the second is what the leaf classes are for.
+The tuple form has since retired (`compute-buffer-wrapper.md`).
 
 The ABI's shape, from the launch side: the parameter's **scalar leaves in field
 order**, then the **index**, and the input buffers are bound rather than passed.
-The first scalar is the launch extent (`cfg(0)`'s role), which is why the host
-reads it as an ordinal.
+The first scalar is the launch extent (the retired tuple form's `cfg(0)`, now
+`k.n`), which is why the host reads it as an ordinal.
 
 ## 2. What landed: each scalar leaf's class is its parameter field's
 
@@ -47,16 +50,18 @@ class conflict with no span.
 
 Measured, on the probe of §6: the role table decodes
 `scalars: [[0], [1]], inputs: [[2, 0]], outputs: [[3, 0]]` and
-`scalar_leaf_classes` answers `[Int, Float]`.  The `(n, (buffers…))` parameter
-shape is untouched (one leaf, `Int`), which is why the existing suites stay green
-— `lichen-compute` 17, `lichen-language --test compute` 58, `--test pipeline`
-134, `--test examples` 1.
+`scalar_leaf_classes` answers `[Int, Float]`.  The measurement was taken while
+the `(n, (buffers…))` parameter shape was untouched (one leaf, `Int`), which is
+why the suites were green then — `lichen-compute` 17, `lichen-language --test
+compute` 58, `--test pipeline` 134, `--test examples` 1.  The named struct is the
+shipped shape now, and the tuple form has retired; the numbers above stand as
+what was measured then.
 
 ## 3. The host half, landed
 
 | Step | Where | State |
 |---|---|---|
-| Decode the leaf list out of `cfg`, then the input tuple | `ComputeOperator::ParLaunch`'s arm | **landed** — the leaves are the cfg's leading positions, the buffers follow them, and how many leaves there are is the fragment's (`parallel_leaf_classes`) |
+| Decode the leaf list out of the launch value, then the input group | `ComputeOperator::ParLaunch`'s arm | **landed** — the leaves are the value's leading positions, the buffers follow them under `.I`, and how many leaves there are is the fragment's (`parallel_leaf_classes`) |
 | Carry the leaf words and their classes on the state | `ParallelState` (`leaves`, `leaf_classes`) | **landed** |
 | Pass them beside the index as the `main` arguments | `run_parallel_range` | **landed** — the argument list is the leaves in field order with the index appended, and only the index moves per element |
 | Assemble the fragment's signature | `compile_parallel_fragment`'s `param_shape` | **landed with §2** — the assembler already derives `main`'s parameters from it, which is why the old host's two arguments were the wrong count |
@@ -222,6 +227,12 @@ structural change that removes the fresh cell the commit path exists for.
 
 ## 5. Blocker B: only the shipped lambdas can spell a JIT'd signature
 
+**The wrapper this section diagnoses has since been deleted.**  `parallel_sig`
+(and its authored `Sig`) is gone: `f: I -> O` is the signature now, and the kernel
+struct carries it in `.I`/`.O`.  Read the table and the `.sig` spellings below as
+the record of what was measured then — the field later split into `.I`/`.O`, and
+the runtime-scalar host input is now the author's own named struct (§6).
+
 `parallel_sig f "cpu" Sig` needs a `Sig` whose domain is the JIT'd input struct.
 The shipped `compute.A`/`compute.P`/`compute.S` build it for the one-scalar
 shape; a runtime scalar needs a second one, so the author must spell their own —
@@ -270,20 +281,23 @@ two ends pull apart in the checker's own vocabulary:
   value cannot be *stored* in a field declared to be the arrow it denotes.
 
 Either one alone explains the failure; a wrapper cannot fix both, and
-`compute.jit`'s own `.sig (type_of f)` sidesteps them by declaring the field's
+`compute.jit`'s own signature field (then `.sig (type_of f)`, now `.I`/`.O`)
+sidesteps them by declaring the field's
 type *and* passing `_` as the value — which is available only because the type is
 already a fact of the function there.  For an author-stated signature the type is
 not a fact of the function (that is why they state it), so **`parallel_sig` needs
 the checker question answered**, not a different spelling.
 
-**Narrowed by measurement**: this blocks the *explicit* `parallel_sig f backend
-Sig` spelling only.  `compute.parallel f backend` derives the signature from the
-function's own type (`type_of f`), so a `Par` with a runtime scalar launches end
-to end through it — that is what §6's probe does.  What the author cannot do today
-is *state* such a signature themselves; until (a) that path is fixed, or (b) the
-runtime-scalar shape is shipped as a lambda in `compute.lichen` beside `A`/`P`/`S`,
-`parallel_sig` is limited to the shapes the shipped lambdas build.  (b) is a
-convention with a hardcoded scalar name; (a) is the honest fix and is unfinished.
+**Narrowed by measurement**: this blocked the *explicit* `parallel_sig f backend
+Sig` spelling only.  `compute.parallel f backend` takes the signature from the
+function's own annotation (`f: I -> O`), so a `Par` with a runtime scalar launches
+end to end through it — that is what §6's probe does.  The wrapper has since been
+deleted outright, so the blocker is closed by removing the spelling rather than by
+answering the checker question.  What the author still spells by hand is the
+**host input** struct, because no shipped lambda builds the runtime-scalar shape
+(`Host = struct<.n Int, .alpha Float, .I In>` in §6); shipping one in
+`compute.lichen` beside `A`/`P`/`S` is the convention that remains open — a
+hardcoded scalar name, which is why it was never the honest fix.
 
 ## 6. The probe, and how to run it
 
@@ -294,24 +308,27 @@ Scratch file, not to be committed (the example harness runs every file in
 ---
   compute = import "compute.lichen"
 ---
-g = cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
+In0  = struct<.a Int>
+Out0 = struct<.z (compute.Buf _)>
+Par0 = compute.P (compute.KT _)(.I In0, .O Out0)
+g = (k : Par0) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
 kg = compute.parallel g "cpu"
-inbuf = compute.plrun kg (3,)
-In  = struct<.a _>
-Out = struct<.z _>
-Par = struct<.n Int, .alpha Float, .in In, .out Out>
+inbuf = (compute.plrun kg ((compute.A In0)(.n 3, .I In0(.a 0))) : Out0)
+In   = struct<.b (compute.Buf _)>
+Out  = struct<.w (compute.Buf _)>
+Par  = struct<.n Int, .alpha Float, .in In, .out Out>
+Host = struct<.n Int, .alpha Float, .I In>
 f = (k : Par) => {
   i = compute.range k.n
-  v = compute.read ((compute.Read _)(.from k.in.a, .at i))
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value v + float2int k.alpha))
+  v = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.w, .at i, .value v + float2int k.alpha))
 }
 k = compute.parallel f "cpu"
-out = compute.plrun k (3, 2.0, (inbuf,))
-(compute.read ((compute.Read _)(.from out, .at 0)), compute.read ((compute.Read _)(.from out, .at 1)), compute.read ((compute.Read _)(.from out, .at 2)))
+out = (compute.plrun k (Host(.n 3, .alpha 2.0, .I In(.b inbuf.z))) : Out)
+(compute.read ((compute.Read _)(.from out.w, .at 0)), compute.read ((compute.Read _)(.from out.w, .at 1)), compute.read ((compute.Read _)(.from out.w, .at 2)))
 ```
 
 ```bash
@@ -319,15 +336,18 @@ cargo run -q -p lichen-compiler -- <probe>.lichen
 ```
 
 **Measured, and this is the acceptance**: the launch's `cfg` is the parameter's
-scalars in field order and then the buffers — `(3, 2.0, (inbuf,))` — and the
-answer is `(12, 13, 14): <?a, ?b, ?c>`: three indices (the extent reached
-`k.n`), `inbuf = [10, 11, 12]` (the first kernel), and each element plus
-`float2int k.alpha = 2` (the runtime scalar).  Before the host half it refused
-with `compute.parallel: encountered an incorrect number of parameters` — the
-fragment's `main` is `(extent, alpha, index)` while the host passed two.
+scalars in field order and then the buffers — spelled `Host(.n 3, .alpha 2.0, .I
+In(.b inbuf.z))`, the named struct the author writes because no shipped lambda
+builds the runtime-scalar input — and the answer is `(12, 13, 14): <?a, ?b, ?c>`:
+three indices (the extent reached `k.n`), `inbuf = [10, 11, 12]` (the first
+kernel), and each element plus `float2int k.alpha = 2` (the runtime scalar).  The
+probe was first measured with the positional `(3, 2.0, (inbuf,))` tuple, before
+the tuple form retired.  Before the host half it refused with `compute.parallel:
+encountered an incorrect number of parameters` — the fragment's `main` is
+`(extent, alpha, index)` while the host passed two.
 
-The refusal path is measured too: `compute.plrun k (3, 2, (inbuf,))` — an `Int`
-where the parameter declares `Float` — reports
+The refusal path is measured too: `Host(.n 3, .alpha 2, .I In(.b inbuf.z))` — an
+`Int` where the parameter declares `Float` — reports
 
 ```text
 compute.parallel: a parallel parameter's scalar leaf is Float here and the launch
