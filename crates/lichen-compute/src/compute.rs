@@ -2062,23 +2062,19 @@ where
     let Some(type_slot) = items.get(PAIR_TYPE_SLOT).map(|item| item.node) else {
         return Err(PARALLEL_PARAMETER_UNDECIDED.into());
     };
-    // **Undecided is not a mistake.**  A parameter whose type cell still holds
-    // nothing is a kernel compiled before its annotation resolved, and the answer
-    // is "not yet" — the operator leaves the node undecided, with no diagnostic,
-    // and a later pass compiles it with its roles.  A type that *has* resolved and
-    // is not the named struct is the retired tuple form, and that is refused by
-    // name.
-    let not_named = if type_slot_is_decided(module, type_slot) {
-        PARALLEL_PARAMETER_NOT_NAMED
-    } else {
-        PARALLEL_PARAMETER_UNDECIDED
-    };
+    // **Undecided is not a mistake.**  A parameter whose type this walk cannot
+    // decode as the named struct is a kernel compiled before its annotation
+    // resolved — the cell may hold nothing, or a pin whose name table is not
+    // written yet — so the answer is "not yet": the operator leaves the node
+    // undecided, with no diagnostic, and a later pass compiles it with its roles.
+    // The refusal that *is* a mistake is a readable struct missing a reserved
+    // field, which the check below names.
     // The parameter's type slot holds either the type **term** (`[shape, kind]`)
     // or a node that holds one — which of the two is the annotation's business,
     // not this walk's, so both are asked and the decode decides
     // ([`shape::TypeRef`]).
     let Some((names, shape)) = struct_fields_of_slot(module, type_slot) else {
-        return Err(not_named.into());
+        return Err(PARALLEL_PARAMETER_UNDECIDED.into());
     };
     let named = |wanted: &str| names.iter().position(|name| *name == Some(wanted));
     let (Some(inputs_at), Some(outputs_at)) = (named("in"), named("out")) else {
@@ -2086,7 +2082,7 @@ where
     };
     // SAFETY: `shape` is a live node of `module`.
     let Some(fields) = (unsafe { array_items_any(module, shape) }) else {
-        return Err(not_named.into());
+        return Err(PARALLEL_PARAMETER_UNDECIDED.into());
     };
     let fields: Vec<AnyNodeId> = fields.iter().map(|item| item.node).collect();
     let mut roles = KernelRoles::default();
@@ -2099,30 +2095,6 @@ where
         walk_role(module, field_type, &[field], role, &mut roles)?;
     }
     Ok(roles)
-}
-
-/// Whether a parameter's **type slot** holds anything: the pair's type slot when
-/// the slot is a `[value, type]` pair, or the slot itself.  A slot that holds
-/// nothing is an annotation that has not resolved
-/// ([`PARALLEL_PARAMETER_UNDECIDED`]); one that holds a value has resolved, so a
-/// shape the walk cannot read is a mistake rather than a "not yet".
-fn type_slot_is_decided<P>(module: &Module<P>, slot: AnyNodeId) -> bool
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    let holds = |node: AnyNodeId| module.node_value(node).is_some();
-    if holds(slot) {
-        return true;
-    }
-    let Some(dynamic) = slot.dynamic() else {
-        return false;
-    };
-    // SAFETY: `dynamic` is a live node of `module`, and this only reads.
-    unsafe { module.array_items(dynamic) }
-        .and_then(|items| items.get(PAIR_TYPE_SLOT).map(|item| item.node))
-        .is_some_and(holds)
 }
 
 /// The role a field of a parallel kernel's parameter plays.
@@ -2259,13 +2231,6 @@ const PARALLEL_PARAM_FIELDS: &str = "a parallel kernel's parameter is \
 /// parameter's annotation resolves").
 const PARALLEL_PARAMETER_UNDECIDED: &str =
     "a parallel kernel's parameter type has not resolved yet";
-
-/// A parallel kernel whose parameter's type **has resolved** and is not the named
-/// struct — the retired `(n, (buffers…))` tuple form, which a fallback would read
-/// as a shape the ABI no longer has.
-const PARALLEL_PARAMETER_NOT_NAMED: &str = "a parallel kernel's parameter type does not read as \
-     the named struct `struct<.n Int, .in <inputs>, .out <outputs>>`: the `(n, (buffers…))` tuple \
-     form is retired";
 
 /// A parameter slot in a kernel's wasm signature.
 ///
@@ -6275,6 +6240,42 @@ where
     module.add_node(block, None, Some(value))
 }
 
+/// The placeholders a result node names, walked **through the structure** a named
+/// parameter's result is.
+///
+/// A kernel's result is the parameter's `.out` group — a `Buf`-wrapped
+/// placeholder per output, nested exactly as the author wrote it — so the leaves
+/// are the values the graph can hand back, in field order.  A body whose
+/// parameter has no `.out` fields returns the unit value, which names nothing: a
+/// graph's return is a list of value references, and the empty list is what "the
+/// body produced nothing" is recorded as.
+fn place_of_node<P>(module: &Module<P>, node: AnyNodeId) -> Option<Vec<Placed>>
+where
+    P: Program,
+    P::Value: AsEnum<ComputeValue> + AsEnum<LowValue>,
+{
+    let value = module.node_value(node)?;
+    if let Some(ComputeValue::GraphValue(id)) = AsEnum::<ComputeValue>::as_enum(&value) {
+        return Some(vec![Placed::Value(id)]);
+    }
+    if let Some(ComputeValue::GraphInput(slot)) = AsEnum::<ComputeValue>::as_enum(&value) {
+        return Some(vec![Placed::Input(slot)]);
+    }
+    if let Some(LowValue::None) = AsEnum::<LowValue>::as_enum(&value) {
+        return Some(Vec::new());
+    }
+    let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(&value) else {
+        return None;
+    };
+    // SAFETY: `array` is the value of a live node of `module`, alive for this walk.
+    let items = unsafe { array.items() };
+    let mut placed = Vec::new();
+    for item in items {
+        placed.extend(place_of_node::<P>(module, item.node)?);
+    }
+    Some(placed)
+}
+
 /// The value references a recorded body's result names, if it is a placeholder or
 /// a tuple of them.
 ///
@@ -6304,16 +6305,7 @@ where
     // through the module rather than matched in place. That is the same reason a
     // multi-output launch gives every buffer a node of its own before wrapping
     // them in a tuple.
-    let place_of = |node: AnyNodeId| {
-        module
-            .node_value(node)
-            .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
-            .and_then(|value| match value {
-                ComputeValue::GraphValue(id) => Some(Placed::Value(id)),
-                ComputeValue::GraphInput(slot) => Some(Placed::Input(slot)),
-                _ => None,
-            })
-    };
+    let place_of = |node: AnyNodeId| place_of_node::<P>(module, node);
     // One lichen value read as the references it names: a bare placeholder is
     // one, and a **materialized tuple** is one per element — the multi-value
     // form, a function that genuinely returns `(a, b)`. Anything else is not
@@ -6332,7 +6324,11 @@ where
         // SAFETY: `array` is a value of the apply's own result, so its home
         // block is alive for this walk.
         let items = unsafe { array.items() };
-        items.iter().map(|item| place_of(item.node)).collect()
+        let mut placed = Vec::new();
+        for item in items {
+            placed.extend(place_of(item.node)?);
+        }
+        Some(placed)
     };
     // A body that is **not** a block is already the returned value.
     let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(value) else {
