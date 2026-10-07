@@ -6070,43 +6070,78 @@ where
     // addresses its callee as a node. So this only has to answer "is this
     // operand a function at all" — and it answers it by reading the node's own
     // value, which is the same read the apply's callee extraction will do.
-    let is_function = matches!(
-        module
-            .evaluate_node(function_node, Some(block))
-            .and_then(|value| value.as_enum()),
-        Some(LowValue::Function(_))
-    );
-    if !is_function {
+    let is_function = module
+        .evaluate_node(function_node, Some(block))
+        .and_then(|value| value.as_enum());
+    let Some(LowValue::Function(function)) = is_function else {
         refuse(
             module,
             "a graph is recorded from a function, and this operand is not one".into(),
         );
         return None;
-    }
-    // **The arity is the parameter tuple's length, read without evaluating
-    // anything.** A read of `ins(i)` compiles to a bare cell with no operation
-    // and no subscript, so the body's read positions are not visible before the
-    // apply and cannot be used to size the placeholder tuple. The parameter *is*
-    // a tuple with one cell per read, though, and its length is the answer.
-    // **The arity is not knowable here, and that is the finding.** A read of
-    // `ins(i)` compiles to a bare cell with no operation and no subscript, so
-    // the unapplied body contains nothing that says which slot a read wants; and
-    // the parameter's own value node cannot answer it either, because in a
-    // template that value is an undecided cell rather than a tuple — so there is
-    // no length to read anywhere before the apply. The tuple is therefore built
-    // at a ceiling and the graph is trimmed to the slots the body actually read.
+    };
+    // **The parameter's shape is the placeholder's shape.**  When the parameter's
+    // type reads as the named struct, the walk over that type gives the cells'
+    // paths, and the slots are numbered **depth-first in field order** — which is
+    // lexicographic in the paths — so the run's own depth-first walk of the same
+    // structure lands on the same numbers, and the two ends agree by construction
+    // rather than through a stored table.
+    //
+    // A parameter that is *not* a named struct — an unannotated `ins => …` body,
+    // whose reads are positional (`ins(0)`) — keeps the flat ceiling below: a flat
+    // tuple is exactly the shape such a body reads.
+    let roles = match function {
+        AnyFunctionId::Dynamic(fid) => {
+            let parameter = module.functions[fid].parameter;
+            parallel_roles(module, parameter).ok()
+        }
+        AnyFunctionId::Static(_) => None,
+    };
+    // The ceiling a positional body's tuple is built at, and the number the
+    // undecided-apply refusal names.
     let arity = graph::MAX_GRAPH_INPUTS;
-    // One placeholder per slot, **and the slot is the number**, so the apply's
-    // tuple walk binds the `k`-th argument to the `k`-th cell and `ins(k)` is the
-    // `k`-th argument with no ordering to guess.
-    let cells: Vec<ArrayItem> = (0..arity)
-        .map(|slot| {
-            let value = <P::Value as From<ComputeValue>>::from(ComputeValue::GraphInput(slot));
-            let node = module.add_node(block, None, Some(value));
-            ArrayItem::new(AnyNodeId::Dynamic(node))
-        })
-        .collect();
-    let placeholders = array_node::<P>(module, block, &cells);
+    let placeholders = match roles {
+        Some(roles) => {
+            let mut paths: Vec<&Vec<usize>> = roles
+                .scalars
+                .iter()
+                .chain(roles.inputs.iter())
+                .chain(roles.outputs.iter())
+                .collect();
+            paths.sort();
+            let mut cells: Vec<(Vec<usize>, NodeId)> = Vec::with_capacity(paths.len());
+            for (slot, path) in paths.into_iter().enumerate() {
+                let value = <P::Value as From<ComputeValue>>::from(ComputeValue::GraphInput(slot));
+                let node = module.add_node(block, None, Some(value));
+                cells.push((path.clone(), node));
+            }
+            let root = assemble_result::<P>(module, block, &cells, &[], 0)?;
+            root
+        }
+        // **The arity is not knowable here, and that is the finding.** A read of
+        // `ins(i)` compiles to a bare cell with no operation and no subscript, so
+        // the unapplied body contains nothing that says which slot a read wants; and
+        // the parameter's own value node cannot answer it either, because in a
+        // template that value is an undecided cell rather than a tuple — so there is
+        // no length to read anywhere before the apply. The tuple is therefore built
+        // at a ceiling and the graph is trimmed to the slots the body actually read.
+        //
+        // One placeholder per slot, **and the slot is the number**, so the apply's
+        // tuple walk binds the `k`-th argument to the `k`-th cell and `ins(k)` is the
+        // `k`-th argument with no ordering to guess.
+        None => {
+            let cells: Vec<ArrayItem> = (0..arity)
+                .map(|slot| {
+                    let value =
+                        <P::Value as From<ComputeValue>>::from(ComputeValue::GraphInput(slot));
+                    let node = module.add_node(block, None, Some(value));
+                    ArrayItem::new(AnyNodeId::Dynamic(node))
+                })
+                .collect();
+            let root = array_node::<P>(module, block, &cells);
+            root
+        }
+    };
     // The argument is a **pair**, because a parameter is one: the value side is
     // the placeholder tuple and the type side is left undecided. The type side
     // has to stay undecided rather than be invented, because a parameter's type
@@ -6287,6 +6322,40 @@ where
     Some(placed)
 }
 
+/// The leaves of a graph run's argument, in the order the recording numbered its
+/// slots: **depth-first in field order**.
+///
+/// A nested array is a group — the parameter's shape — and its leaves follow in
+/// field order, which is the order the recording walked the same structure in
+/// (`build_graph` sorts the role paths, and a lexicographic path order *is*
+/// depth-first field order).  A **type slot** — the `Buf` wrapper's `.element` —
+/// is not a value and is skipped, the same rule the recording's return walk
+/// follows.
+fn flatten_leaves<P>(module: &mut Module<P>, node: AnyNodeId, out: &mut Vec<AnyNodeId>)
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + AsEnum<LowValue> + ValueType,
+{
+    let value = module.node_value(node);
+    if value.as_ref().is_some_and(ValueType::is_kind_marker) {
+        return;
+    }
+    if let Some(LowValue::Array(array)) = value
+        .as_ref()
+        .and_then(|value| AsEnum::<LowValue>::as_enum(value))
+    {
+        // SAFETY: the array is the value of a live node of `module`, and its
+        // items are live nodes of the same module.
+        let items = unsafe { array.items() };
+        let nodes: Vec<AnyNodeId> = items.iter().map(|item| item.node).collect();
+        for item in nodes {
+            flatten_leaves::<P>(module, item, out);
+        }
+        return;
+    }
+    out.push(node);
+}
+
 /// The value references a recorded body's result names, if it is a placeholder or
 /// a tuple of them.
 ///
@@ -6388,30 +6457,23 @@ where
             return None;
         }
     };
-    // SAFETY: a live node of `module`, read only.
-    let argument_items = match arguments.map(|node| dyn_node(node)).transpose() {
-        Ok(Some(node)) => match unsafe { module.array_items(node) } {
-            Some(items) => items.to_vec(),
-            None => {
-                refuse(
-                    module,
-                    "a graph's arguments have to be a tuple, because the function that recorded \
-                     the graph took one parameter"
-                        .into(),
-                );
-                return None;
-            }
-        },
-        Ok(None) => Vec::new(),
+    // **The argument is walked the way the recording numbered its slots**: leaves
+    // in depth-first field order, with a wrapper's type slot skipped.  The flat
+    // tuple a positional body reads is a structure too — one level, in order — so
+    // one walk serves both shapes.
+    let mut argument_leaves: Vec<AnyNodeId> = Vec::new();
+    match arguments.map(|node| dyn_node(node)).transpose() {
+        Ok(Some(node)) => flatten_leaves(module, AnyNodeId::Dynamic(node), &mut argument_leaves),
+        Ok(None) => {}
         Err(reason) => {
             refuse(module, reason);
             return None;
         }
-    };
+    }
     let mut run_arguments: Vec<RunArgument> = Vec::new();
-    for (position, item) in argument_items.iter().enumerate() {
+    for (position, node) in argument_leaves.iter().enumerate() {
         let Some(value) = module
-            .node_value(item.node)
+            .node_value(*node)
             .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
         else {
             // Not a compute value at all, so it is a number — the only other role
@@ -6419,7 +6481,7 @@ where
             // compute vocabulary, because a count is a lichen `Int` and not a
             // compute leaf.
             match module
-                .node_value(item.node)
+                .node_value(*node)
                 .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
             {
                 Some(LowValue::USize(count)) => {
