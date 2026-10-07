@@ -47,45 +47,51 @@ compute.read ((compute.Read _)(.from out.w, .at COUNT / 2))
 /// The same input, then sixteen dependent links recorded as one `compute.graph`.
 const CHAIN: &str = r#"
 --- compute = import "compute.lichen" ---
-mk = cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value i % 97))
+InX  = struct<.a Int>
+OutX = struct<.z (compute.Buf _)>
+ParX = compute.P (compute.KT _)(.I InX, .O OutX)
+mk = (k : ParX) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i % 97))
 }
 kx = compute.parallel mk "BACKEND"
-k1 = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
-  compute.write ((compute.Write _)(.to n, .at i, .value v + 1))
+InK  = struct<.b (compute.Buf _)>
+OutK = struct<.w (compute.Buf _)>
+ParK = compute.P (compute.KT _)(.I InK, .O OutK)
+k1 = compute.parallel ((h : ParK) => {
+  i = compute.range h.n
+  v = compute.read ((compute.Read _)(.from h.in.b, .at i))
+  compute.write ((compute.Write _)(.to h.out.w, .at i, .value v + 1))
 }) "BACKEND"
-k2 = compute.parallel (cfg => {
-  n = cfg(0)
-  i = compute.range n
-  v = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
-  compute.write ((compute.Write _)(.to n, .at i, .value v + v))
+k2 = compute.parallel ((h : ParK) => {
+  i = compute.range h.n
+  v = compute.read ((compute.Read _)(.from h.in.b, .at i))
+  compute.write ((compute.Write _)(.to h.out.w, .at i, .value v + v))
 }) "BACKEND"
-grow = ins => {
-  a = compute.plrun k1 (ins(0), (ins(1),))
-  b = compute.plrun k2 (ins(0), (a,))
-  c = compute.plrun k1 (ins(0), (b,))
-  d = compute.plrun k2 (ins(0), (c,))
-  e = compute.plrun k1 (ins(0), (d,))
-  f = compute.plrun k2 (ins(0), (e,))
-  g = compute.plrun k1 (ins(0), (f,))
-  h = compute.plrun k2 (ins(0), (g,))
-  i2 = compute.plrun k1 (ins(0), (h,))
-  j = compute.plrun k2 (ins(0), (i2,))
-  k = compute.plrun k1 (ins(0), (j,))
-  l = compute.plrun k2 (ins(0), (k,))
-  m = compute.plrun k1 (ins(0), (l,))
-  o = compute.plrun k2 (ins(0), (m,))
-  p = compute.plrun k1 (ins(0), (o,))
-  compute.plrun k2 (ins(0), (p,))
+InG  = struct<.b (compute.Buf _)>
+OutG = struct<.unused (compute.Buf _)>
+ParG = compute.P (compute.KT _)(.I InG, .O OutG)
+grow = (g : ParG) => {
+  a = (compute.plrun k1 ((compute.A InK)(.n g.n, .I InK(.b g.in.b))) : OutK)
+  b = (compute.plrun k2 ((compute.A InK)(.n g.n, .I InK(.b a.w))) : OutK)
+  c = (compute.plrun k1 ((compute.A InK)(.n g.n, .I InK(.b b.w))) : OutK)
+  d = (compute.plrun k2 ((compute.A InK)(.n g.n, .I InK(.b c.w))) : OutK)
+  e = (compute.plrun k1 ((compute.A InK)(.n g.n, .I InK(.b d.w))) : OutK)
+  f = (compute.plrun k2 ((compute.A InK)(.n g.n, .I InK(.b e.w))) : OutK)
+  g1 = (compute.plrun k1 ((compute.A InK)(.n g.n, .I InK(.b f.w))) : OutK)
+  h = (compute.plrun k2 ((compute.A InK)(.n g.n, .I InK(.b g1.w))) : OutK)
+  i2 = (compute.plrun k1 ((compute.A InK)(.n g.n, .I InK(.b h.w))) : OutK)
+  j = (compute.plrun k2 ((compute.A InK)(.n g.n, .I InK(.b i2.w))) : OutK)
+  k = (compute.plrun k1 ((compute.A InK)(.n g.n, .I InK(.b j.w))) : OutK)
+  l = (compute.plrun k2 ((compute.A InK)(.n g.n, .I InK(.b k.w))) : OutK)
+  m = (compute.plrun k1 ((compute.A InK)(.n g.n, .I InK(.b l.w))) : OutK)
+  o = (compute.plrun k2 ((compute.A InK)(.n g.n, .I InK(.b m.w))) : OutK)
+  p = (compute.plrun k1 ((compute.A InK)(.n g.n, .I InK(.b o.w))) : OutK)
+  compute.plrun k2 ((compute.A InK)(.n g.n, .I InK(.b p.w)))
 }
 built = compute.graph grow
-seed = compute.plrun kx (COUNT,)
-compute.read ((compute.Read _)(.from compute.graphrun built (COUNT, seed), .at COUNT / 2))
+seed = (compute.plrun kx ((compute.A InX)(.n COUNT, .I InX(.a 0))) : OutX)
+compute.read ((compute.Read _)(.from (compute.graphrun built ((compute.A InG)(.n COUNT, .I InG(.b seed.z))) : (compute.Buf _)), .at COUNT / 2))
 "#;
 
 fn timed(template: &str, backend: &str, count: usize, repeats: usize) -> Result<f64, String> {
