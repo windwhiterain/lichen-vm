@@ -247,14 +247,13 @@ crates: `algorithms.rs` 115, `recursion.rs` 44, `graph_jit.rs` 41, `bench.rs` 29
 `Buf` on** (the first one comes from `plrun`), so the migration is retyping what
 it passes, not constructing wrappers by hand.
 
-Phases: (1) this file; (2) the JIT walk, the `Buf`-shaped results the run
-produces, the marker deletion, and the role paths in the fragment — landed, with
-`lichen-language --test compute` still at 35 passed / 21 failed / 5 ignored, the
-21 being the tuple-form call sites; (3) the call sites and their expectations,
-under way: the language tests first (three migrated, the rest in flight), then
-the examples whose programs only dispatch (`algorithms`, `recursion`, `bench`,
-`crossbackend`), and **the graph tests last** — `graph_jit` is where the recorded
-body's placeholders meet the named parameter (26 graph call sites), so it waits
-on the recording path rather than on spelling; (4) the notes that spelled
-`.sig`/`BufferId` (`compute.rs`'s module docs — done — and the
-`lichen-compute*`/handoff/runtime-scalars/graph-jit notes).
+Phases, all four landed and pushed: (1) this file; (2) the JIT walk, the
+`Buf`-shaped results the run produces, the marker deletion, and the role paths in
+the fragment; (3) the call sites and their expectations — every target migrated,
+with `lichen-language --test compute` at 51 passed / 5 failed / 4 ignored (the
+five are the pre-existing float/backend/GPU reds and were never migration's),
+`graph_structure` at 4/0, `graph_jit` at 8/0/1, and the examples printing real
+answers where the environment allows one; (4) the notes that spelled
+`.sig`/`BufferId`, and the Rust doc comments that did the same — the `src/`,
+`tests/` and `examples/` comments are the last of it and are in the sweep this
+note's status does not cover.
