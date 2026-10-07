@@ -2051,46 +2051,149 @@ where
     // or a node that holds one — which of the two is the annotation's business,
     // not this walk's, so both are asked and the decode decides
     // ([`shape::TypeRef`]).
-    let fields = struct_fields_of_slot(module, type_slot);
-    let Some((names, shape)) = fields else {
+    let Some((names, shape)) = struct_fields_of_slot(module, type_slot) else {
         return Ok(None);
     };
     let named = |wanted: &str| names.iter().position(|name| *name == Some(wanted));
     let (Some(inputs_at), Some(outputs_at)) = (named("in"), named("out")) else {
         return Err(PARALLEL_PARAM_FIELDS.into());
     };
-    // A field under `.in`/`.out` is a buffer; its count is that field's own
-    // struct's field count, which is all the paths need — the checker has
-    // already resolved each buffer's *name* to its index.
     // SAFETY: `shape` is a live node of `module`.
-    let Some(field_types) = (unsafe { array_items_any(module, shape) }) else {
+    let Some(fields) = (unsafe { array_items_any(module, shape) }) else {
         return Err(PARALLEL_PARAM_FIELDS.into());
     };
-    let count_under = |module: &mut Module<P>, at: usize| -> Option<usize> {
-        let field = field_types.get(at)?.node;
-        struct_fields_of_slot(module, field).map(|(names, _)| names.len())
-    };
-    let Some(input_count) = count_under(module, inputs_at) else {
-        return Err(PARALLEL_PARAM_FIELDS.into());
-    };
-    let Some(output_count) = count_under(module, outputs_at) else {
-        return Err(PARALLEL_PARAM_FIELDS.into());
-    };
+    let fields: Vec<AnyNodeId> = fields.iter().map(|item| item.node).collect();
     let mut roles = ParallelRoles::default();
-    for field in 0..names.len() {
-        if field == inputs_at {
-            roles
-                .inputs
-                .extend((0..input_count).map(|j| vec![inputs_at, j]));
-        } else if field == outputs_at {
-            roles
-                .outputs
-                .extend((0..output_count).map(|j| vec![outputs_at, j]));
-        } else {
-            roles.scalars.push(vec![field]);
-        }
+    for (field, &field_type) in fields.iter().enumerate() {
+        let role = match field {
+            at if at == inputs_at => LeafRole::Input,
+            at if at == outputs_at => LeafRole::Output,
+            _ => LeafRole::Scalar,
+        };
+        walk_role(module, field_type, &[field], role, &mut roles)?;
     }
     Ok(Some(roles))
+}
+
+/// The role a field of a parallel kernel's parameter plays.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LeafRole {
+    /// A leaf outside `.in`/`.out`: a runtime scalar.
+    Scalar,
+    /// A leaf under `.in`: an input buffer.
+    Input,
+    /// A leaf under `.out`: an output buffer.
+    Output,
+}
+
+/// The `.native` field of the `Buf` wrapper (`compute.lichen`) — the payload a
+/// body's `$read`/`$write` names and the only part of a buffer an operator sees.
+const BUF_NATIVE_FIELD: &str = "native";
+
+/// Whether a struct's field names are the `Buf` wrapper's.
+fn is_buf_shape(names: &[Option<&'static str>]) -> bool {
+    names
+        .iter()
+        .filter_map(|name| *name)
+        .eq([BUF_NATIVE_FIELD, "element"])
+}
+
+/// Record the role of one field of a parameter type, descending into groups.
+///
+/// **A buffer is a `Buf`-shaped struct** — `struct<.native _, .element _>`, the
+/// wrapper the prelude builds — and the path recorded for it ends at its
+/// **`.native` slot**: that is the payload the prelude's `$read`/`$write` names,
+/// so the checker's own path for the same read resolves to the same place.  A
+/// struct of any other shape is a **group**, and the walk descends in field
+/// order, which is what lets a buffer sit at any depth under `I`/`O`.  Everything
+/// else is a **runtime scalar**, and a leaf the ABI has no local for is
+/// **refused by name with its path** rather than ignored
+/// (`docs/notes/compute-buffer-wrapper.md`).
+fn walk_role<P>(
+    module: &mut Module<P>,
+    field: AnyNodeId,
+    path: &[usize],
+    role: LeafRole,
+    roles: &mut ParallelRoles,
+) -> Result<(), String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    if let Some((names, shape)) = struct_fields_of_slot(module, field) {
+        if is_buf_shape(&names) {
+            let native = names
+                .iter()
+                .position(|name| *name == Some(BUF_NATIVE_FIELD))
+                .expect("a `Buf`-shaped struct has a `.native` field");
+            let mut path = path.to_vec();
+            path.push(native);
+            return match role {
+                LeafRole::Input => {
+                    roles.inputs.push(path);
+                    Ok(())
+                }
+                LeafRole::Output => {
+                    roles.outputs.push(path);
+                    Ok(())
+                }
+                LeafRole::Scalar => Err(role_refusal(&path, "a buffer outside `.in`/`.out`")),
+            };
+        }
+        // SAFETY: `shape` is a live node of `module`.
+        let Some(fields) = (unsafe { array_items_any(module, shape) }) else {
+            return Err(role_refusal(
+                path,
+                "a struct whose field list cannot be read",
+            ));
+        };
+        let fields: Vec<AnyNodeId> = fields.iter().map(|item| item.node).collect();
+        for (at, field) in fields.into_iter().enumerate() {
+            let mut path = path.to_vec();
+            path.push(at);
+            walk_role(module, field, &path, role, roles)?;
+        }
+        return Ok(());
+    }
+    let shape = low_type_of_slot(module, field);
+    match (role, &shape) {
+        // An output is produced by a write, and a write produces a buffer: an
+        // output of any other type has no mechanism, and naming it is what keeps
+        // the walk from reading it as a scalar the run never fills.
+        (LeafRole::Output, _) => Err(role_refusal(
+            path,
+            &format!("an output that is a {}", shape_name(&shape)),
+        )),
+        (_, LowShape::USize | LowShape::Float | LowShape::Unknown) => {
+            roles.scalars.push(path.to_vec());
+            Ok(())
+        }
+        (_, other) => Err(role_refusal(path, &format!("a {}", shape_name(other)))),
+    }
+}
+
+/// The name a shape goes by in a refusal, so the refusal says what it met.
+fn shape_name(shape: &LowShape) -> &'static str {
+    match shape {
+        LowShape::USize => "runtime scalar",
+        LowShape::Float => "runtime float",
+        LowShape::Array(..) => "array",
+        LowShape::Tuple(_) => "tuple",
+        LowShape::Function(..) => "function",
+        LowShape::Table(..) => "table",
+        LowShape::Unknown => "leaf with no stated type",
+    }
+}
+
+/// The refusal a role walk gives: the path it was walking, and what it found.
+fn role_refusal(path: &[usize], what: &str) -> String {
+    let path: Vec<String> = path.iter().map(usize::to_string).collect();
+    format!(
+        "a parallel kernel's parameter holds {what} at position {}, and the ABI has no place for \
+         it",
+        path.join(".")
+    )
 }
 
 /// The `[value, type]` parameter pair of a parallel kernel whose parameter is a
