@@ -229,6 +229,41 @@ A **leaf** annotation never showed this: its slot is a literal, decided when the
 checker builds it. That is why the defect only ever appeared on a compound, and
 why `f = x # 4 => x; f (5 # 2)` was refused correctly all along.
 
+**The same step is one shared rule, and the type gate takes it too.** It is
+`Checker::compute_operands` (`checker/diagnostics.rs`), and the checker's two
+gates both call it: this attribute gate, and the **type** annotation gate
+(`check_ann`). The type gate's operand is the annotated expression's *own type*,
+which for an applied struct constructor is that application's result — a node
+nothing had run — so annotating an instance of `S1` as `S2` was **accepted and
+rewritten** rather than compared: the annotation's type was written into the
+instance's type cell, and
+
+```lichen
+A  = I => struct<.n Int, .I I>
+S1 = A Int
+S2 = A Float
+x  = S1(.n 3, .I 5)
+y  = (x : S2)
+```
+
+printed `(3, 5): struct<.n Int, .I Float>` — the annotation's own type — instead
+of failing (measured on `dev` at `23f757b`). With the step in place the same
+program is refused, with the message
+`applied-struct-nominal-id.md` §2's first control recorded for it:
+`expected struct<.n Int, .I Float>#0, found struct<.n Int, .I Int>#0`. That
+control had been lost between that note's measurement and this change; the
+refusal is restored, not changed.
+`pipeline::an_applied_struct_constructor_keeps_the_occurrence_identity` is
+un-parked by it.
+
+The **single-node** run is the right strength for both gates: the operand is one
+node whose operator reads what it needs, and the deep pass would additionally
+descend its whole reachable subtree — for a type operand, the entire type value —
+and publish a concreteness verdict over it. `check_unify_relaxed` used the deep
+pass until this change; the three perspective rows above and every suite are
+unchanged by the downgrade (measured: 696 passed, 0 failed, 6 ignored over
+`lichen-lowlevel` + `highlevel` + `perspective` + `compute` + `language`).
+
 The three tests that pinned these rows were parked
 (`perspective.rs::a_compound_annotation_rejects_a_mismatched_perspective`,
 `..._rejects_a_narrower_declared_perspective`,

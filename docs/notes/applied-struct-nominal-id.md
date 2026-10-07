@@ -80,6 +80,21 @@ one-id-per-occurrence fix would merge `A Int` and `A Float`; that inference was
 wrong, and this is the measurement that refutes it — it is the reason the fix
 needs no field types folded into the id.
 
+**This control was lost, and is restored.** It read "correct before and after
+the fix" when it was written; on the tree this section was re-measured against
+(`dev` at `23f757b`) the same program was **accepted** and answered
+`(3, 5): struct<.n Int, .I Float>` — the annotation's own type, written into the
+instance's type cell instead of being compared. The cause is not this note's
+subject and not the id: the *type* annotation gate unified an operand nothing
+had computed (the applied constructor's result), and undecided-against-decided is
+the one unification arm that **writes**. Restoring it is one shared step,
+`Checker::compute_operands`, now taken by both checker gates —
+[attributes.md](attributes.md#the-gate-must-compute-its-operands) records that
+rule and this second measurement. The message below is what the program prints
+again, and
+`pipeline::an_applied_struct_constructor_keeps_the_occurrence_identity`
+(both halves of it) is un-parked.
+
 **Two written declarations stay two types.** Nominal typing is the point of the
 id, and two `struct<.n Int>` written apart are two declarations:
 

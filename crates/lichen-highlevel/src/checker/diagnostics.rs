@@ -5,7 +5,7 @@
 
 use std::ops::Range;
 
-use lichen_lowlevel::{LowOperator, NodeId};
+use lichen_lowlevel::{AnyNodeId, LowOperator, NodeId};
 
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{ExprId, Loc, LocStep};
@@ -58,6 +58,35 @@ where
         pair
     }
 
+    /// Compute both operands of a check before it compares them.
+    ///
+    /// A check that compares a **requirement** with the node it must judge is
+    /// only a check if both sides are *decided*: an operand no operator has run
+    /// holds no class value, and undecided-against-decided is the one
+    /// unification arm that **writes** — the requirement lands in the operand's
+    /// slot and the check reports nothing.  So a gate computes its operands
+    /// first; measured twice, from both sides:
+    ///
+    /// - the attribute gate (`check_unify_relaxed`) with a compound provider: a
+    ///   `Gcd`-meet node nothing had evaluated, which made every compound
+    ///   perspective annotation accepted whatever its numbers were
+    ///   (`docs/notes/attributes.md` §"the gate must compute its operands");
+    /// - the type annotation gate ([`Checker::check_ann`]) with an *applied*
+    ///   struct constructor: `x`'s type is the constructor application's result,
+    ///   so the mismatch between `S1` and `S2` was written over rather than
+    ///   compared (`pipeline::an_applied_struct_constructor_keeps_the_occurrence_identity`,
+    ///   `docs/notes/applied-struct-nominal-id.md`).
+    ///
+    /// The single-node run is the right strength: the operand is *one* node
+    /// whose own operator reads what it needs, and the deep pass would
+    /// additionally descend its whole reachable subtree — for a type operand,
+    /// the entire type value — and publish a concreteness verdict over it
+    /// ([`Module::evaluate_node_deep`](lichen_lowlevel::Module::evaluate_node_deep)).
+    pub(super) fn compute_operands(&mut self, a: NodeId, b: NodeId) {
+        self.module.evaluate_node(AnyNodeId::Dynamic(a), None);
+        self.module.evaluate_node(AnyNodeId::Dynamic(b), None);
+    }
+
     /// A checker-issued unification that may be relaxed by an attribute's
     /// optional subtype relation.  Attempts the ordinary unify; if it fails
     /// **and** `is_subtype` holds for the two operands, the errors this unify
@@ -100,8 +129,7 @@ where
         kind: DiagKind,
         is_subtype: &dyn Fn(&dyn Ctx<P>, NodeId, NodeId) -> bool,
     ) {
-        self.module.evaluate_node_deep(a, None);
-        self.module.evaluate_node_deep(b, None);
+        self.compute_operands(a, b);
         let (_, errors) = self.module.try_unify(a, b);
         if errors.is_empty() {
             return;

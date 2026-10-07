@@ -1145,8 +1145,6 @@ fn a_polymorphic_struct_constructor_shares_one_nominal_kind() {
 }
 
 #[test]
-#[ignore = "reports the field-type conflict twice, once per direction (`expected Int, \
-found Float` and `expected Float, found Int`) where the test pins one diagnostic"]
 fn an_applied_struct_constructor_keeps_the_occurrence_identity() {
     // `A = I => struct<.n Int, .I I>` — one written struct type with *named*
     // fields, inside a function body.  Its identity is decided when the

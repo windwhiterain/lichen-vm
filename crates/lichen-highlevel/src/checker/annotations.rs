@@ -327,12 +327,9 @@ where
                 // assert on the type value — so the outer annotation needs no
                 // slot of its own.
                 let denotation = self.type_denotation(type_expr, Some(value));
-                self.check_unify(
-                    self.state[value].ty.unwrap(),
-                    denotation,
-                    self.loc(value, 1),
-                    DiagKind::Annotation,
-                );
+                let found = self.state[value].ty.unwrap();
+                self.compute_operands(found, denotation);
+                self.check_unify(found, denotation, self.loc(value, 1), DiagKind::Annotation);
                 denotation
             }
             None => self.state[value].ty.unwrap(),
