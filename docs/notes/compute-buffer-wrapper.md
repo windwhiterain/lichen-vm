@@ -216,6 +216,17 @@ own return is what the graph hands back — a bare `Buf` when it returns one
 dispatch's result — and the host annotates the run's result accordingly
 (`(compute.graphrun built (…) : (compute.Buf _))`).
 
+**The unannotated parameter is still supported, and one test depends on it.**
+`build_graph` falls back to the flat ceiling when a recorded body's parameter is
+not a named struct, which is what an unannotated `step = ins => …` gets — so a
+body that reads `ins(0)` still records and runs.  That form is not leftover
+spelling to be cleaned up: migrating it to the named struct would *retire* the
+test that relies on it (`graph_jit::a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one`),
+because the named struct types the count (`.n Int`), so a closed-over buffer in
+the count position becomes a *type* error and the graph's own count filter never
+speaks.  Measured: migrating it left that test failing at its first assertion, and
+reverting it restored 8 passed / 0 failed / 1 ignored.
+
 ## The migration, measured
 
 `compute.read` 103, `compute.write` 127, `compute.collect` 48, `compute.plrun`
