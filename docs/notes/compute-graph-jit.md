@@ -566,15 +566,15 @@ Two facts that fall out and are now checked:
   kinds and only the dynamic kind is a dispatch.
 - the operator node's operand array is `[kernel, cfg]`, and both slots are
   `value_of` extractions — `Index(x, i)` — reached by the same walk
-  `kernel_id_of` already does. The `cfg` is an `Index` into the cfg tuple, and
-  the tuple's payload is readable with no evaluation at all.
+  `kernel_id_of` already does. The `cfg` is the parameter struct's value — an
+  `Index` into it — and its payload is readable with no evaluation at all.
 
 ### The body is decided by applying it, so a graph is *recorded*, not read
 
 **This is the correction, and it undoes the "pure structural walk" the design
 had settled on.** The probe's next fact:
 
-> The cfg tuple is readable. Its two elements — the count and the buffer — are
+> The parameter struct is readable. Its leaves — the count and the buffer — are
 > **`Parameterized`**. The `4` and the `data` in the body are undecided cells
 > until the function is applied, because nothing has applied it.
 
@@ -624,8 +624,8 @@ Two of them, and the pair is what the whole build is made of:
 | `GraphValue(id)` | a value number | a dispatch this recording already recorded |
 
 **Both are invisible to the checker, and that is what makes them usable here.**
-The type at a `cfg` position is fixed by `check_unify` at compile time
-(`compute.rs:4618-4627` builds `[?b, [TypeBuffer, Type]]` and unifies); nothing
+The type at a `cfg` position is fixed by `check_unify` at compile time — a buffer
+position is a `Buf`-shaped struct — and nothing
 re-derives a type from a runtime value, so a new variant is not a type error
 anywhere. Neither is a handle: `is_handle` is `false` for both, so the copy path
 copies them rather than relocating a pointer, exactly as `DeviceBuffer` does.
@@ -1022,7 +1022,7 @@ the loop index. **That reading is false, and the tree already said so.**
 `(config, index)` — two leaves — *however many inputs there are*, because a buffer is
 bound as a storage buffer and reached through a read's position rather than through a
 further parameter. `compute.rs`'s real launch agrees: it reads the buffer count from
-the call site's cfg tuple and never looks at the shape.
+the call site's parameter struct and never looks at the shape.
 
 The check was not merely useless, it was **rejecting correct graphs**. A kernel that
 reads no buffer declares a two-leaf shape, so a node with no inputs was told it was
@@ -1033,10 +1033,10 @@ The fix is `KernelFragment::inputs`, the missing twin of the `outputs` that was
 already there. Two counts, both facts of the *compiled* fragment, and the reason they
 cannot be one is that they answer different questions:
 
-- **How many was it given** is the dispatch's, read at apply time from the cfg tuple.
+- **How many was it given** is the dispatch's, read at apply time from the call-site parameter struct.
 - **How many does it need** is the fragment's, and it is a *max*, not a tally: the
-  read positions are a sparse space, so a body reading only `cfg(1)(1)` still needs
-  two buffers bound or the one it read was never bound.
+  read positions are a sparse space, so a body reading only the second input
+  (`k.in.b`) still needs two buffers bound or the one it read was never bound.
 
 `inputs` is counted by the emitter as it emits the `Const` positions, so it cannot
 disagree with the body, and it is hashed by `fragment_digest` for the same reason
