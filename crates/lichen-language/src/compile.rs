@@ -836,7 +836,7 @@ impl Compiler {
             }
             Expr::Assert { value, span } => {
                 // `! e` — the highlevel `Assert` form: a side constraint, not
-                // a unify.  The checker force-evaluates the condition and
+                // a unify.  The checker deep-evaluates the condition and
                 // requires `USize(1)`; the expression compiles to the
                 // condition itself (an assert checks its subject, it does not
                 // replace it), so its value and type are the condition's.

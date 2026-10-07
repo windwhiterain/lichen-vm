@@ -15,9 +15,9 @@ where
 {
     /// `assert(condition)` — an explicit constraint, not a unify: the
     /// condition's *value* node is registered as an assert.  The
-    /// lowlevel's [`Module::check_asserts`] then force-evaluates every
-    /// assert (ignoring laziness) after the definition pass and requires
-    /// `USize(1)` — an unbound condition is not bound to `1`, it stays
+    /// lowlevel's [`Module::check_asserts`] then deep-evaluates every
+    /// assert after the definition pass and requires
+    /// `USize(1)` — an undecided condition is not bound to `1`, it stays
     /// untriggered, and the apply clone re-checks the instantiated
     /// condition per call.  The expression compiles to the condition
     /// itself: an assert checks its subject, it does not replace it.

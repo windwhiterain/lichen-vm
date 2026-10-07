@@ -1,5 +1,5 @@
 //! Asserts: explicit constraints — an assert registers a condition node
-//! that `Module::check_asserts` force-evaluates (ignoring laziness) and
+//! that `Module::check_asserts` deep-evaluates and
 //! requires to be `USize(1)`.  Unlike a unification the constraint does not
 //! bind its node: an unbound condition is not triggered, and the apply
 //! clone re-checks the instantiated condition per call.  The registry is a
@@ -264,11 +264,15 @@ fn an_untriggered_assert_is_decided_by_a_later_drain() {
 }
 
 #[test]
-fn forced_evaluation_ignores_shallow_markers() {
-    // The condition's operand array marks `hidden` shallow: the deep pass
-    // inside the Eq's evaluation skips it, leaving the computation
-    // unevaluated — a lazy condition.  The assert's forced evaluation runs
-    // it anyway, resolving 0 + 1 == 1.
+fn a_shallow_marked_operand_leaves_the_condition_pending() {
+    // The condition's operand array marks `hidden` shallow.  The walk does not
+    // descend a masked position, and descending it would not help: the operator's
+    // own operand gate refuses a parameterized operand, and the mark alone makes
+    // the array's verdict parameterized (`value_is_parameterized`).  So the
+    // condition stays undecided and the entry is deferred to the apply clone
+    // rather than recorded as a failure.  This test used to claim the opposite
+    // ("the forced pass resolves it") and passed anyway: it only asserted that no
+    // error was recorded, which is also true of a condition that never resolves.
     let mut m = Module::new();
     let root = m.add_block(None);
     let zero = u128_node(&mut m, root, 0);
@@ -281,18 +285,26 @@ fn forced_evaluation_ignores_shallow_markers() {
 
     assert!(
         m.evaluate_node_deep(eq, Some(root)).is_none(),
-        "the lazy pass cannot resolve the masked operand"
+        "the pass cannot resolve the masked operand"
     );
 
     m.check_asserts();
 
-    assert!(m.assert_errors.is_empty(), "the forced pass resolves it");
+    assert!(
+        m.assert_errors.is_empty(),
+        "an unresolvable condition is no failure"
+    );
+    assert_eq!(
+        m.asserts.len(),
+        1,
+        "the masked condition stays pending, not consumed"
+    );
 }
 
 #[test]
-fn forced_evaluation_keeps_a_genuinely_unbound_condition_lazy() {
-    // Forcing past the markers does not invent values: a shallow-marked
-    // unbound cell still leaves the condition untriggered.
+fn a_shallow_marked_unbound_cell_keeps_the_condition_lazy() {
+    // A shallow-marked unbound cell leaves the condition untriggered: no walk
+    // invents values for a position nothing can decide.
     let mut m = Module::new();
     let root = m.add_block(None);
     let x = unbound_node(&mut m, root);
@@ -307,6 +319,7 @@ fn forced_evaluation_keeps_a_genuinely_unbound_condition_lazy() {
         m.assert_errors.is_empty(),
         "still untriggered — the cell is unbound"
     );
+    assert_eq!(m.asserts.len(), 1, "and still pending");
 }
 
 #[test]

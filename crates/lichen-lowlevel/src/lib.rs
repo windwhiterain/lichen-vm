@@ -1144,8 +1144,8 @@ pub struct StaticFunction {
     pub open_captures: bool,
 }
 
-/// The outcome of the deep pass ([`Module::evaluate_node_deep`],
-/// [`Module::evaluate_node_forced`]) on one node.  The deep pass records,
+/// The outcome of the deep pass ([`Module::evaluate_node_deep`]) on one node.
+/// The deep pass records,
 /// per node, whether it ran at all and, when it ran, whether the subtree it
 /// covers is parameterized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1260,8 +1260,8 @@ pub struct Node<P: Program> {
     /// [`Module::node_visiting`], which states what the mark does and does
     /// not mean.
     visiting: bool,
-    /// Whether the deep pass ([`Module::evaluate_node_deep`],
-    /// [`Module::evaluate_node_forced`]) has run on this node, and what it
+    /// Whether the deep pass ([`Module::evaluate_node_deep`]) has run on this
+    /// node, and what it
     /// proved.  [`Some`] means the deep pass ran and
     /// [`EvaluatedDeep::parameterized`] records whether any node in self's
     /// reachable subtree is undecided.  [`None`] means

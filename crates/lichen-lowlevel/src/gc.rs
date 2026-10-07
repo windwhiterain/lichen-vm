@@ -118,7 +118,7 @@ impl<P: Program> Module<P> {
                 // the vacated subtree it is re-pointed to the target and
                 // registered there, so release skips it and it stays
                 // callable.  The body's asserts are edges like the scope:
-                // a condition the check pass may still force-evaluate must
+                // a condition the check pass may still deep-evaluate must
                 // move with the function.
                 let ids = self.functions[function].nodes.clone();
                 for &id in &ids {

@@ -366,9 +366,9 @@ pub enum ExprKind<L> {
     Record { value: ExprId, names: ChildRange },
     /// `assert(condition)` — an explicit constraint, not a unify: the
     /// condition's value node is registered as an assert point.  The
-    /// checker force-evaluates every assert after the definition pass
-    /// (ignoring laziness) and requires `USize(1)`; a condition that stays
-    /// lazy (an unbound parameter) is not triggered, and the apply clone
+    /// checker deep-evaluates every assert after the definition pass
+    /// and requires `USize(1)`; a condition that stays
+    /// undecided (an unbound parameter, a lazy marker) is not triggered, and the apply clone
     /// re-checks the instantiated condition per call.  The expression
     /// compiles to the condition itself — the assert is a side constraint.
     Assert { condition: ExprId },

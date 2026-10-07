@@ -2439,9 +2439,8 @@ other targets, `lichen-compute` 19), green at every step:
 | C | the forced pass drops the follow-up's `unproven` re-force |
 | D | `force_operand` is deleted from `evaluate_node_deep_inner` |
 
-The two public walks now differ in exactly one knob, `skip_shallow`; the forced
-one is the assert check's, and its only remaining extra work is descending
-shallow-marked positions.
+Step D left two public walks differing in one knob, `skip_shallow`; the next
+paragraph deletes that one too, so only the lazy walk is left.
 
 **Why it is sound, beyond the tests.** A `LowValue` is a *computed answer*, not a
 thunk: a decided value cannot depend on an operand its operator did not read, so
@@ -2457,6 +2456,33 @@ for — values, verdicts and diagnostics compared over the corpus — does not e
 so this is measured support rather than proof. The note's §4.3 obligation about
 operand verdicts is void with the arm, which makes the cut it plans easier rather
 than riskier.
+
+**The second deep walk went with it, and the contract it could not keep.** One
+commit later, `Module::evaluate_node_forced` — the entry point that descended
+shallow-marked positions — and the `skip_shallow` knob behind it were deleted: it had
+one caller left, `Module::check_asserts`, and the corpus is green with that caller on
+the lazy walk (42 test binaries, `cargo check --workspace --all-targets`). The
+justification is not "nothing called it" but "it could not do what its doc claimed".
+The assert's contract was *"an asserted condition must be fully evaluated whatever its
+markers"*; a probe on `assert::forced_evaluation_ignores_shallow_markers` shows the
+masked condition is **deferred under both walks**. The gate is not in the walk but in
+the operator: `OperatorExt::run_deferred` (`lib.rs:685-715`) calls the *lazy* walk on
+its operand and refuses when the operand's verdict is parameterized, and a shallow
+position makes the array's verdict parameterized by itself
+(`value_is_parameterized`). So descending the masked subtree reached only nodes the
+condition never reads — a read ignores the mask — and gave them a verdict the gate
+discounts anyway. Making the old contract true would need the *marker's* semantics
+changed (a shallow region that drops its unproven flag once evaluated, which the
+apply-bake rule leans on; or a gate that stops reading the operand verdict), not a
+second walk.
+
+The lowlevel test that was supposed to pin that contract asserted only that no error
+was recorded — equally true of a condition that never resolves, which is why the
+defect survived. It now asserts the truth instead: the masked condition stays pending
+(`asserts.len() == 1`), which fails on the old behaviour. Every statement of the old
+contract ("force-evaluates the condition ignoring laziness") is corrected in the
+language spec, the operator-polymorphism note, and the checker/compiler docs that
+repeated it.
 
 ### P1-32 — A run of separators is refused inside every list form `verified`
 
@@ -4991,8 +5017,9 @@ counter was a temporary probe inside `Module::static_module`; it is removed.)
 exactly as `Module::static_module` does and releases it before the next, so the
 lock's scope is unchanged and no writer can be blocked by a walk. The deep pass
 threads one cache through the whole walk
-(`evaluate_node_deep`/`evaluate_node_forced` create it, `evaluation.rs:483-487`,
-`:502-506`; `evaluate_node_deep_inner` carries it, `:564-571`), so the descent
+(`evaluate_node_deep` creates it — `evaluate_node_forced`, which did too, has since
+been deleted, see the `P1-31` operand-arm follow-up; `evaluate_node_deep_inner`
+carries it), so the descent
 read and the parameterized check share it — the check moved into
 `value_is_parameterized` (`:716-771`), whose `.any()` closures now go through
 `cache.node_parameterized`. The equality walk threads one cache per

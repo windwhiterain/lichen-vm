@@ -184,8 +184,9 @@ to the expression's own value — `f value`, an ordinary lichen apply — and th
 insertion is [`register_assert`](../../crates/lichen-highlevel/src/checker/asserts.rs) as it stands, so the
 whole of the enforcement is already written and already has the right semantics:
 
-- `check_asserts` force-evaluates the condition *ignoring laziness* and requires
-  `USize(1)`; a condition that stays lazy is **pending**, not failed, so a
+- `check_asserts` deep-evaluates the condition and requires
+  `USize(1)`; a condition that stays undecided — an open parameter, or a
+  computation behind a lazy marker — is **pending**, not failed, so a
   refinement on an open parameter waits for a value.
 - The entry is registered on the enclosing function, so the **apply clone
   re-checks the instantiated condition per call** — the refinement follows the

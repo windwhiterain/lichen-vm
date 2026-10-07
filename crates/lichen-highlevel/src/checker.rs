@@ -817,9 +817,9 @@ where
         }
         // The assert pass: drain the module's constraint worklist — the
         // originals and the clones the definition pass's applies produced —
-        // force-evaluating each condition (ignoring laziness) and requiring
+        // deep-evaluating each condition and requiring
         // `USize(1)`.  Decided points are consumed; an assert whose condition
-        // stays lazy is *not triggered* and stays pending on the worklist:
+        // stays undecided is *not triggered* and stays pending on the worklist:
         // an in-body assert whose parameter was never bound (the function was
         // never applied) is deferred instead of failing, and the clone
         // re-checks it per call.  Skipped when the definition pass was (the

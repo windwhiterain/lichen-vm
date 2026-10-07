@@ -247,7 +247,7 @@ impl<P: Program> Module<P> {
     /// there.
     ///
     /// A reader may rely on [`Some`] meaning the deep pass
-    /// ([`Self::evaluate_node_deep`], [`Self::evaluate_node_forced`]) ran on
+    /// ([`Self::evaluate_node_deep`]) ran on
     /// this node and [`EvaluatedDeep::parameterized`] recording whether any
     /// node in its reachable subtree is undecided — i.e.
     /// whether the pass could **not** prove the subtree concrete.  [`None`]
@@ -392,7 +392,7 @@ impl<P: Program> Module<P> {
     /// Registers `condition` as an assert — an explicit constraint, not a
     /// unification, so an unbound condition is *not* bound to `1`, it stays
     /// untriggered until an apply binds it.  [`Self::check_asserts`]
-    /// force-evaluates every registered condition (ignoring laziness) and
+    /// deep-evaluates every registered condition and
     /// requires `USize(1)`, see there.  The registry is a worklist; a
     /// condition owned by a function body ([`Function::asserts`]) is cloned
     /// and re-registered per apply, so a body's assert re-checks against

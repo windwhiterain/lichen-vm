@@ -226,8 +226,8 @@ where
     /// a value is checked by *evaluating* it.  The checker registers the
     /// returned node through its ordinary assert channel (the same one
     /// [`lichen_language`'s `@assert`](Self::missing_value) uses), which is what
-    /// gives the condition its semantics for free: the checker force-evaluates
-    /// it ignoring laziness and requires `USize(1)`, a condition that stays lazy
+    /// gives the condition its semantics for free: the checker deep-evaluates
+    /// it and requires `USize(1)`, a condition that stays undecided
     /// is *pending* rather than failed, the apply clone re-checks the
     /// instantiated condition per call, and it freezes with the function.
     ///

@@ -1424,11 +1424,13 @@ knobs in `evaluate_node_deep_inner` make four walks, and all four were run:
 | off | on (`evaluate_node_forced`) | 3 | **empty** |
 | on | on | — | **empty** |
 
-*(The `force_operand` knob the third and fourth rows name has since been deleted —
-together with the operand-verdict arm that consumed its product — so those two rows
-are no longer buildable and `evaluate_node_forced` is now the second row. See the
-operand-arm follow-up in `code-audit.md`. The measurement below is the record that
-motivated the deletion: operand forcing was pure cost with no reader.)*
+*(Both knobs the third and fourth rows name have since been deleted — first
+`force_operand`, then the `evaluate_node_forced` entry point itself and the
+`skip_shallow` knob (see the operand-arm follow-up in `code-audit.md`) — so the
+lazy walk is the only deep walk and rows two to four are no longer buildable. The
+measurement below is the record that motivated the deletions: operand forcing was
+pure cost with no reader, and the shallow descent reached nothing the lazy walk did
+not.)*
 
 The first two rows are the finding: descending every position in order reaches nothing
 extra, because the unread statement is not behind a shallow mark — the deep pass already

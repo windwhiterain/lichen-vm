@@ -141,7 +141,7 @@ pub enum Expr {
         span: Span,
     },
     /// `!e` — a prefix assert: the highlevel `assert(e)` form.  A side
-    /// constraint, not a unify — the checker force-evaluates the condition
+    /// constraint, not a unify — the checker deep-evaluates the condition
     /// and requires `USize(1)`, while the expression's own value stays the
     /// condition's (an assert checks its subject, it does not replace it).
     /// `@assert 1 == 1` parses as `(@assert 1) == 1`; assert a comparison by parenthesizing
@@ -282,7 +282,7 @@ pub enum Expr {
     Array(Vec<Expr>, Span),
     /// `table { k1 ==> v1, k2 ==> v2, … }` — a constant table literal.  Each
     /// entry is a `key ==> value` pair (any expressions; the parser recognizes
-    /// the table arrow as the pair separator).  The keys are force-evaluated
+    /// the table arrow as the pair separator).  The keys are deep-evaluated
     /// and deep-content-hashed when the table is built; a key that is not
     /// concrete (it depends on an unbound value) is dropped with an error.
     Table(Vec<(Expr, Expr)>, Span),

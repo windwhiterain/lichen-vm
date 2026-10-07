@@ -534,6 +534,19 @@ impl<P: Program> Module<P> {
     }
 
     /// Run [`Self::evaluate_node`] for all nodes in the reachable subtree of `id`.
+    ///
+    /// **This is the only deep walk.** A shallow-marked array position is not
+    /// descended into: the mark means "this subtree is deliberately lazy", and a
+    /// read inside it is what forces a single element on demand through `Index`.
+    /// The walk does **not** force an operation's operand edge — a `LowValue` is a
+    /// computed answer rather than a thunk, so a decided value cannot depend on an
+    /// operand its operator did not read (see the operand-arm follow-up in
+    /// `docs/notes/code-audit.md`).  There used to be a second entry point that
+    /// descended the masked positions; it was deleted because its only caller —
+    /// the assert check — cannot tell the two walks apart (the operand gate that
+    /// refuses a masked operand lives in the operator, `OperatorExt::run_deferred`,
+    /// and reads the array's `evaluated_deep`, which the shallow flag alone makes
+    /// parameterized).
     #[stacksafe]
     pub fn evaluate_node_deep(
         &mut self,
@@ -541,34 +554,7 @@ impl<P: Program> Module<P> {
         current: Option<BlockId>,
     ) -> Option<P::Value> {
         let mut cache = StaticModuleCache::new();
-        self.evaluate_node_deep_inner(Dyn(node), current, true, &mut cache)
-    }
-
-    /// Deep-evaluate `id` *ignoring laziness*: unlike
-    /// [`Self::evaluate_node_deep`], every array position is descended into
-    /// (the shallow mask does not hold a subtree back), so the whole
-    /// value-reachable subtree is evaluated.  The assert check
-    /// ([`Module::check_asserts`]) uses this: an asserted condition must be
-    /// fully evaluated whatever its markers.
-    ///
-    /// It descends shallow-marked positions but does **not** force an
-    /// operation's operand edge — a `LowValue` is a computed answer rather than
-    /// a thunk, so a decided value cannot depend on an operand its operator did
-    /// not read (see the operand-arm follow-up in `docs/notes/code-audit.md`).
-    ///
-    /// Evaluating a shallow region caches its concrete values but does *not*
-    /// upgrade the region's concreteness proof: an array with a shallow mark
-    /// stays flagged unproven by [`Node::evaluated_deep`] and keeps cloning per
-    /// apply, which preserves the deep pass's laziness invariants at the cost of
-    /// redundant clones.
-    #[stacksafe]
-    pub fn evaluate_node_forced(
-        &mut self,
-        node: NodeId,
-        current: Option<BlockId>,
-    ) -> Option<P::Value> {
-        let mut cache = StaticModuleCache::new();
-        self.evaluate_node_deep_inner(Dyn(node), current, false, &mut cache)
+        self.evaluate_node_deep_inner(Dyn(node), current, &mut cache)
     }
 
     /// The tail of a [`LowOperator::TableGet`] once the entry is located: a
@@ -620,9 +606,8 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Shared core of the deep and forced passes.  `skip_shallow` keeps the
-    /// deep pass's laziness (a marked position's subtree is not descended
-    /// into).  `cache` is the walk's one-entry static-module resolution cache
+    /// The deep walk's core: [`Self::evaluate_node_deep`] is its only entry
+    /// point.  `cache` is the walk's one-entry static-module resolution cache
     /// (see [`StaticModuleCache`]) — one lookup per module per walk, not per
     /// ref.
     #[stacksafe]
@@ -630,13 +615,12 @@ impl<P: Program> Module<P> {
         &mut self,
         node: AnyNodeId,
         current: Option<BlockId>,
-        skip_shallow: bool,
         cache: &mut StaticModuleCache<P>,
     ) -> Option<P::Value> {
         // A static ref is a decided leaf: the module solved it, so there is
         // nothing to evaluate, descend, or mark — read its value.
-        // Even a forced pass gains nothing from a solved subtree (residuals
-        // never re-run), so the leaf rule is unconditional.
+        // A solved subtree gains nothing from a deeper walk (residuals never
+        // re-run), so the leaf rule is unconditional.
         if let AnyNodeId::Static(sref) = node {
             return cache.read(self, sref);
         }
@@ -710,13 +694,11 @@ impl<P: Program> Module<P> {
                 for item in unsafe { array.items() } {
                     // A shallow position is a lazy region: its whole subtree
                     // stays unevaluated (never proven concrete), and a read
-                    // forces the single element on demand through `Index` —
-                    // unless the forced pass is running, which descends into it
-                    // like any other position.
-                    if skip_shallow && item.shallow {
+                    // forces the single element on demand through `Index`.
+                    if item.shallow {
                         continue;
                     }
-                    module.evaluate_node_deep_inner(item.node, Some(block), skip_shallow, cache);
+                    module.evaluate_node_deep_inner(item.node, Some(block), cache);
                 }
             });
         }
@@ -732,8 +714,8 @@ impl<P: Program> Module<P> {
                 // a block — `drop_block` is called only from `garbage_collect` —
                 // so the payload's arena stays alive for the whole loop.
                 for item in unsafe { table.items() } {
-                    module.evaluate_node_deep_inner(item.key, Some(block), skip_shallow, cache);
-                    module.evaluate_node_deep_inner(item.value, Some(block), skip_shallow, cache);
+                    module.evaluate_node_deep_inner(item.key, Some(block), cache);
+                    module.evaluate_node_deep_inner(item.value, Some(block), cache);
                 }
             });
         }
@@ -818,9 +800,8 @@ impl<P: Program> Module<P> {
             Some(LowValue::Array(array))
                 // An array holding a shallow position can never be
                 // proven concrete — its marked subtree was deliberately
-                // not evaluated, and even an assert's forced pass that
-                // cached values in it leaves it unproven by this flag,
-                // so it is never referenced in place across applies.
+                // not evaluated (and no walk descends past the mark), so
+                // it is never referenced in place across applies.
                 // SAFETY: `array` is the payload of `value`, the value this
                 // module just evaluated for `node`, so its home block is
                 // alive.  The note covers the two `items()` calls in this

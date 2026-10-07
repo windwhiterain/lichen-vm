@@ -563,9 +563,10 @@ compute.graphrun built (3,)
 ///
 /// A graph is therefore not a transcript of the source; it is a transcript of the
 /// run. Requiring more of it would have meant forcing a walk that *adds* a dispatch
-/// the program never makes — and the forced walk tried for that (it forced operand
-/// edges in those days; that knob has since been deleted, `code-audit.md`, the
-/// operand-arm follow-up) emptied the function's return slot as well, refusing every
+/// the program never makes — and the second deep walk tried for that (it forced
+/// operand edges and descended past the shallow mask in those days; both knobs and
+/// the entry point itself have since been deleted, `code-audit.md`, the operand-arm
+/// follow-up) emptied the function's return slot as well, refusing every
 /// recording including bodies with no unread statement at all. **Laziness is the
 /// semantics here, not a compromise with it.** The two `plrun k2` lines below are
 /// both written and one is never reached, so the trace is the shorter one by

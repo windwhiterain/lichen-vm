@@ -218,9 +218,9 @@ with the marker, and each un-parks by deleting one `#[ignore]` once that note's
 open mechanism is found.
 
 The in-flight paths followed the operator seam: `evaluate_node` /
-`evaluate_node_body` / `evaluate_node_operation`, **`evaluate_node_deep` and
-`evaluate_node_forced`** (they answer the same question, so they had to become
-optional too), `with_apply_frame`, `wire_apply_result`, `function_apply`,
+`evaluate_node_body` / `evaluate_node_operation`, **`evaluate_node_deep`** (and
+the `evaluate_node_forced` entry point that stood beside it until it was deleted —
+`code-audit.md`, the operand-arm follow-up), `with_apply_frame`, `wire_apply_result`, `function_apply`,
 `apply_loop`, `StaticModule::read` / `static_read`, `static_function_apply`,
 and `AttrExt::missing_value` (now `Option<LowValue>`, with the curated
 `Ctx::fresh` supplying the empty cell when the absent form is an unbound one).

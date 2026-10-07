@@ -5774,7 +5774,9 @@ where
     // adding a dispatch the program never makes.
     //
     // **Forcing was tried anyway, and it broke more than it reached.**
-    // `Module::evaluate_node_forced` performed every statement, and it also left
+    // `Module::evaluate_node_forced` — an entry point since deleted, together
+    // with the operand forcing it was named for — performed every statement, and
+    // it also left
     // the function's return slot empty, so the reader that has to name the return
     // finds no value and *every* recording refuses — including bodies with no
     // unread statement at all. The empty slot was isolated to the operand forcing

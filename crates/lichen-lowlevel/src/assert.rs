@@ -1,8 +1,18 @@
 //! Asserts: explicit constraints — an assert registers a condition node
-//! that the checker force-evaluates (ignoring laziness) and requires to be
+//! that the checker deep-evaluates and requires to be
 //! `USize(1)`.  Unlike a unification, the constraint does not *bind* its
 //! node: an unbound condition stays untriggered rather than being forced to
 //! `1`, and the apply clone re-checks the instantiated condition per call.
+//!
+//! The walk is the ordinary deep pass, and a shallow-marked array position is
+//! **not** descended into.  A condition that sits behind such a mark does not
+//! resolve here: the operator's own operand gate
+//! ([`OperatorExt::run_deferred`](crate::OperatorExt::run_deferred)) reads the
+//! operand array's verdict, which the shallow flag alone makes parameterized, so
+//! it answers undecided and the entry stays pending.  The walk that descended the
+//! masked positions could not change that — it was deleted — and the lowlevel
+//! test that claimed otherwise only ever observed "no error recorded", which is
+//! also true of a condition that never resolves.
 
 use crate::{AnyNodeId, LowValue, Module, NodeId, Program};
 use lichen_utils::extend::AsEnum;
@@ -40,8 +50,10 @@ pub struct PendingAssert {
 
 impl<P: Program> Module<P> {
     /// The constraint worklist: pop every registered assert and
-    /// force-evaluate its condition — ignoring laziness, so a shallow-marked
-    /// subtree is fully evaluated — requiring `USize(1)`.
+    /// deep-evaluate its condition, requiring `USize(1)`.  The walk is
+    /// [`Self::evaluate_node_deep`], so a shallow-marked position is not
+    /// descended into and a condition behind one stays undecided (see the module
+    /// docs).
     ///
     /// Each entry is *consumed* once decided: a condition resolving to
     /// anything other than `USize(1)` records an [`AssertError`] in
@@ -51,7 +63,7 @@ impl<P: Program> Module<P> {
     /// recorded, and the entry is kept as pending — it is the template an
     /// apply clone instantiates against each call's argument.
     ///
-    /// Asserts spawned while the worklist drains (a forced condition may
+    /// Asserts spawned while the worklist drains (a decided condition may
     /// itself apply a function, cloning more asserts) join the same run via
     /// the live-length walk.  One run is a fixpoint: nothing the pass
     /// evaluates can activate an earlier pending entry (the unifications the
@@ -75,7 +87,7 @@ impl<P: Program> Module<P> {
                 continue; // the condition's block was garbage-collected
             };
             let block = node.block;
-            let Some(value) = self.evaluate_node_forced(condition, Some(block)) else {
+            let Some(value) = self.evaluate_node_deep(condition, Some(block)) else {
                 // Not triggered — deferred to the apply clone.  An undecided
                 // condition (an unbound parameter, or any computation whose
                 // operands cannot resolve) records no error.

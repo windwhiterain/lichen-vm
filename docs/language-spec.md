@@ -167,9 +167,10 @@ farg     := '.' name expr                         -- named instantiation argumen
   (`&` in `^` in `|`) but bind **tighter** than a comparison, so `a & b == c` is
   `(a & b) == c`.  `@assert`
   is a prefix assert: `@assert e` compiles to the highlevel `assert(e)` — a side
-  constraint, not a unify.  The checker force-evaluates `e` after the
-  definition pass (ignoring laziness) and requires `USize(1)`; a condition
-  that stays lazy (an unbound parameter) is not triggered, and the apply
+  constraint, not a unify.  The checker deep-evaluates `e` after the
+  definition pass and requires `USize(1)`; a condition
+  that stays undecided — an unbound parameter, or a computation sitting behind a
+  lazy marker — is not triggered, and the apply
   clone re-checks the instantiated condition per call.  The expression
   itself *is* the condition — an assert checks its subject, it does not
   replace it — so `@assert e`'s value and type are `e`'s.  It binds tighter than the binary
@@ -784,7 +785,7 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `x # n => e` | `Function { parameter, parameter_type: None, parameter_attribute: Some(compile(n)), return }` — the annotated parameter's perspective, also body-scope |
 | `e1 e2` | `Apply { function, argument }` |
 | `a op b` (`+`, `-`, `*`, `/`, `%`, `<`, `>`, `<=`, `>=`, `==`, `!=`, `&`, `\|`, `^`) | `BinOp { operator, left, right }` |
-| `@assert e` | `Assert { condition }` — a side constraint: the expression's pair is the condition's own; the condition's value node registers as an assert point the checker force-evaluates to `USize(1)` |
+| `@assert e` | `Assert { condition }` — a side constraint: the expression's pair is the condition's own; the condition's value node registers as an assert point the checker deep-evaluates to `USize(1)` |
 | `int2float e` / `float2int e` | `Convert { operator, value }` — the only form whose type is not its operand's: the operand checks against the direction's source class, the result's type is its target |
 | `if c then t else e` | `Index { array: [e, t], index: c }` — desugared to the lazy branch index; there is no `If` kind |
 | `e[i]` | `Index { array, index }` |
