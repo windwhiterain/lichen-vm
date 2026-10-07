@@ -1375,6 +1375,15 @@ where
                             ))
                         }
                         Err(err) => {
+                            // **"Not yet" is not an error.**  A parameter whose
+                            // annotation has not resolved leaves the operator
+                            // undecided with no diagnostic, so a later pass — after
+                            // the annotation states the struct — compiles the
+                            // kernel with its roles.  Every other refusal names
+                            // what is wrong where the author wrote it.
+                            if err == PARALLEL_PARAMETER_UNDECIDED {
+                                return None;
+                            }
                             module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
                             None
                         }
@@ -1990,16 +1999,13 @@ where
 fn scalar_leaf_classes<P>(
     module: &mut Module<P>,
     cfg_pair: NodeId,
-    roles: Option<&KernelRoles>,
+    roles: &KernelRoles,
 ) -> Result<Vec<ScalarClass>, String>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let Some(roles) = roles else {
-        return Ok(vec![ScalarClass::Int]);
-    };
     // SAFETY: `cfg_pair` is a live node of `module`.
     let ty = unsafe { module.array_items(cfg_pair) }
         .and_then(|items| items.get(PAIR_TYPE_SLOT).map(|item| item.node))
@@ -2043,10 +2049,7 @@ where
 /// may be the type value, or the pair's value slot may be.  `low_type_of` is
 /// *not* used to decide — it answers `Unknown` for every struct by design
 /// (`lichen_highlevel::shape`), because a nominal struct has no low shape.
-fn parallel_roles<P>(
-    module: &mut Module<P>,
-    cfg_pair: NodeId,
-) -> Result<Option<KernelRoles>, String>
+fn parallel_roles<P>(module: &mut Module<P>, cfg_pair: NodeId) -> Result<KernelRoles, String>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
@@ -2054,17 +2057,28 @@ where
 {
     // SAFETY: `cfg_pair` is a live node of `module`.
     let Some(items) = (unsafe { module.array_items(cfg_pair) }) else {
-        return Ok(None);
+        return Err(PARALLEL_PARAMETER_UNDECIDED.into());
     };
     let Some(type_slot) = items.get(PAIR_TYPE_SLOT).map(|item| item.node) else {
-        return Ok(None);
+        return Err(PARALLEL_PARAMETER_UNDECIDED.into());
+    };
+    // **Undecided is not a mistake.**  A parameter whose type cell still holds
+    // nothing is a kernel compiled before its annotation resolved, and the answer
+    // is "not yet" — the operator leaves the node undecided, with no diagnostic,
+    // and a later pass compiles it with its roles.  A type that *has* resolved and
+    // is not the named struct is the retired tuple form, and that is refused by
+    // name.
+    let not_named = if type_slot_is_decided(module, type_slot) {
+        PARALLEL_PARAMETER_NOT_NAMED
+    } else {
+        PARALLEL_PARAMETER_UNDECIDED
     };
     // The parameter's type slot holds either the type **term** (`[shape, kind]`)
     // or a node that holds one — which of the two is the annotation's business,
     // not this walk's, so both are asked and the decode decides
     // ([`shape::TypeRef`]).
     let Some((names, shape)) = struct_fields_of_slot(module, type_slot) else {
-        return Ok(None);
+        return Err(not_named.into());
     };
     let named = |wanted: &str| names.iter().position(|name| *name == Some(wanted));
     let (Some(inputs_at), Some(outputs_at)) = (named("in"), named("out")) else {
@@ -2072,7 +2086,7 @@ where
     };
     // SAFETY: `shape` is a live node of `module`.
     let Some(fields) = (unsafe { array_items_any(module, shape) }) else {
-        return Err(PARALLEL_PARAM_FIELDS.into());
+        return Err(not_named.into());
     };
     let fields: Vec<AnyNodeId> = fields.iter().map(|item| item.node).collect();
     let mut roles = KernelRoles::default();
@@ -2084,7 +2098,31 @@ where
         };
         walk_role(module, field_type, &[field], role, &mut roles)?;
     }
-    Ok(Some(roles))
+    Ok(roles)
+}
+
+/// Whether a parameter's **type slot** holds anything: the pair's type slot when
+/// the slot is a `[value, type]` pair, or the slot itself.  A slot that holds
+/// nothing is an annotation that has not resolved
+/// ([`PARALLEL_PARAMETER_UNDECIDED`]); one that holds a value has resolved, so a
+/// shape the walk cannot read is a mistake rather than a "not yet".
+fn type_slot_is_decided<P>(module: &Module<P>, slot: AnyNodeId) -> bool
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let holds = |node: AnyNodeId| module.node_value(node).is_some();
+    if holds(slot) {
+        return true;
+    }
+    let Some(dynamic) = slot.dynamic() else {
+        return false;
+    };
+    // SAFETY: `dynamic` is a live node of `module`, and this only reads.
+    unsafe { module.array_items(dynamic) }
+        .and_then(|items| items.get(PAIR_TYPE_SLOT).map(|item| item.node))
+        .is_some_and(holds)
 }
 
 /// The role a field of a parallel kernel's parameter plays.
@@ -2212,6 +2250,22 @@ fn role_refusal(path: &[usize], what: &str) -> String {
 const PARALLEL_PARAM_FIELDS: &str = "a parallel kernel's parameter is \
      `struct<.n Int, .in <inputs>, .out <outputs>>`, and this one is a struct \
      without both `.in` and `.out`";
+
+/// A parallel kernel whose parameter's type **has not resolved yet**: the
+/// annotation is still a cell with no value, so there is nothing to read and
+/// nothing to report.  The operator answers undecided and a later pass compiles
+/// the kernel once the annotation states the struct
+/// (`docs/notes/compute-buffer-wrapper.md`, "the kernel compiles before its
+/// parameter's annotation resolves").
+const PARALLEL_PARAMETER_UNDECIDED: &str =
+    "a parallel kernel's parameter type has not resolved yet";
+
+/// A parallel kernel whose parameter's type **has resolved** and is not the named
+/// struct — the retired `(n, (buffers…))` tuple form, which a fallback would read
+/// as a shape the ABI no longer has.
+const PARALLEL_PARAMETER_NOT_NAMED: &str = "a parallel kernel's parameter type does not read as \
+     the named struct `struct<.n Int, .in <inputs>, .out <outputs>>`: the `(n, (buffers…))` tuple \
+     form is retired";
 
 /// A parameter slot in a kernel's wasm signature.
 ///
@@ -2567,7 +2621,7 @@ where
     // **Each scalar leaf's class is the parameter's own**, read from the field it
     // names — not the all-`Int` seed this used to state.  See
     // [`scalar_leaf_classes`].
-    let scalar_classes = scalar_leaf_classes(module, cfg_pair, roles.as_ref())?;
+    let scalar_classes = scalar_leaf_classes(module, cfg_pair, &roles)?;
     module.seed_class_low_type(
         cfg_value,
         LowShape::Tuple(scalar_classes.iter().copied().map(low_shape_of).collect()),
@@ -2583,7 +2637,7 @@ where
         value: cfg_value,
         shape: cfg_shape,
         base: 0,
-        roles: roles.clone(),
+        roles: Some(roles.clone()),
     }];
     let mut body_instr: Vec<KernelInstr> = Vec::new();
     // **The class a buffer read is declared in** — see
@@ -2640,9 +2694,7 @@ where
             outputs.len()
         ));
     }
-    if let Some(roles) = &roles
-        && outputs.len() != roles.outputs.len()
-    {
+    if outputs.len() != roles.outputs.len() {
         return Err(format!(
             "this index function's codomain names {} output(s) but its parameter declares {} \
              `.out` field(s): the two are the same list, and a struct parameter states it in \
@@ -2660,12 +2712,9 @@ where
     // first write states, so the signature's result type follows that class.
     body_instr.push(KernelInstr::Const(class, const_bits(class, 0)));
     // **The declared input count.**  A struct parameter declares it as `.in`'s
-    // field count, and a `(n, (buffers…))` one as the highest position the body
-    // read (`tally.reads`) — the positions there are a sparse space, so the count
-    // is a max rather than a tally.
-    let declared_inputs = roles
-        .as_ref()
-        .map_or(tally.reads, |roles| roles.inputs.len());
+    // field count, which is the walk's own list — the run reads those paths, so
+    // the count and the paths cannot disagree.
+    let declared_inputs = roles.inputs.len();
     Ok(KernelFragment {
         // The parameter's scalar leaves followed by the index, however many
         // buffers the body reads: the buffers are bound rather than passed, so
@@ -2683,7 +2732,7 @@ where
         // The run reads the cfg by these paths, which is the same walk the
         // emitter's reads and this ABI came from — one enumeration, three
         // readers.
-        roles: roles.clone().unwrap_or_default(),
+        roles: roles.clone(),
         param_shape: KernelShape::Tuple(
             scalar_classes
                 .iter()
@@ -2693,9 +2742,7 @@ where
         ),
         body: body_instr.into(),
         inputs: declared_inputs,
-        outputs: roles
-            .as_ref()
-            .map_or(tally.writes, |roles| roles.outputs.len()),
+        outputs: roles.outputs.len(),
         input_classes: tally.input_classes(declared_inputs),
         output_classes: tally.output_classes(),
         // The dummy scalar the write-only body leaves on the stack, in the class
