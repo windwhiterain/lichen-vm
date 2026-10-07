@@ -90,25 +90,31 @@ collect = (b : (Buf _))   => $collect(b)
 - `Read`/`Write` keep their `_` instantiation spelling at the call sites
   (`(compute.Read _)(…)`): the element cell is what the buffer's `.element` binds.
 
-## What blocks it now, measured
+## The pipeline runs, measured
 
-`parallel` reading the result type from the parameter — `I.out`, where `I` is a
-**type** — is a *named read on a type value*, and that does not resolve today.
-The probe (`.probe/one.lichen`: one named-form kernel, then `collect inbuf.z`)
-never reaches its `BufferCollect`, and the VM logs the two lookups that stay
-undecided:
+A two-kernel probe (`.probe/named2.lichen`) — a producer whose body writes
+`i + 10`, a consumer that reads the first kernel's output field and writes
+`v * 2` — now runs the whole way and prints
 
-- `TableGet key="z"` — the author's `inbuf.z`, undecided because `inbuf`'s stated
-  type (`plrun`'s `r: k.O`) has no name table to look `z` up in;
-- `TableGet key="out"` — the same lookup written the model-faithful way
-  (`r: k.I.out`), undecided because the *table* it would read is the type value
-  `k.I`, whose runtime value is undecided.
+```
+raw[raw 20, raw 22, raw 24]
+```
 
-So the next piece is the checker's: a named read whose target is a struct **type**
-value folds to the field's type (and position) against the type's kind name table
-— the table `parallel_roles` and `field_names` already read — rather than
-emitting a runtime `TableGet`. Then `parallel` can say `.O I.out`, `plrun`'s
-`r: k.O` names the author's `Out`, and the host's `inbuf.z` resolves.
+which is the correct answer: the producer's `[10, 11, 12]` doubled. So the
+engine half is verified end to end: the recursive walk finds the roles, the
+fragment carries them, the run reads its cfg by those paths, builds the `Buf`
+wrapper for each output (`[payload, element type]`), places them into the
+parameter's `.out` structure, and the host's `collect` of a field reads the
+payload back.
+
+**One thing is still missing, and it is the type's, not the engine's**: the
+kernel's *result type* does not reach the host read's container cell. The same
+probe with the host read written `inbuf.z` fails (the read stays a lazy
+`TableGet` whose name table is never materialised, and `build_outputs`' answer
+never lands where the pair reads look); written `(inbuf : Out).z` — the
+annotation the author already has — it prints the values above. So the fix is
+the propagation of a call's returned type into the caller's container cell, and
+the annotation is the workaround that shows the rest of the chain is sound.
 
 ## What the JIT owes this (landed)
 
