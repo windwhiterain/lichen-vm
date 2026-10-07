@@ -247,7 +247,7 @@ compute.collect out.w
 ---
 {KERNELS}
 {CHAIN}
-compute.collect (compute.graphrun built ((compute.A InS)(.n 3, .I InS(.a 0))))
+compute.collect (compute.graphrun built 3)
 "#
     ));
     assert_eq!(
@@ -308,13 +308,16 @@ fn a_buffer_the_body_closed_over_is_refused_by_the_capture() {
   compute = import "compute.lichen"
 ---
 {KERNELS}
-held = compute.plrun k1 (3,)
-step = ins => {{
-  first = compute.plrun k1 (ins(0),)
-  compute.plrun k2 (ins(0), (held,))
+held = (compute.plrun k1 ((compute.A In1)(.n 3, .I In1(.a 0))) : Out1)
+InS  = struct<.a Int>
+OutS = struct<.unused (compute.Buf _)>
+ParS = compute.P (compute.KT _)(.I InS, .O OutS)
+step = (s : ParS) => {{
+  first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
+  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b held.z)))
 }}
 built = compute.graph step
-compute.collect (compute.graphrun built (3,))
+compute.collect (compute.graphrun built 3)
 "#
     ));
     let joined = messages.join(" | ");
@@ -528,25 +531,30 @@ fn one_backend_for_the_whole_graph_is_checked_while_it_is_built() {
         r#"---
   compute = import "compute.lichen"
 ---
-f1 = cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value i))
+In1  = struct<.a Int>
+Out1 = struct<.z (compute.Buf _)>
+Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
+f1 = (k : Par1) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i))
 }
 k1 = compute.parallel f1 "gpu"
-f2 = cfg => {
-  n = cfg(0)
-  i = compute.range n
-  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
-  compute.write ((compute.Write _)(.to n, .at i, .value a))
+In2  = struct<.b (compute.Buf _)>
+Out2 = struct<.w (compute.Buf _)>
+Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
+f2 = (k : Par2) => {
+  i = compute.range k.n
+  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.w, .at i, .value a))
 }
 k2 = compute.parallel f2 "cpu"
-step = ins => {
-  first = compute.plrun k1 (ins(0),)
-  compute.plrun k2 (ins(0), (first,))
+GArg = struct<.n Int, .in In1>
+step = (s : GArg) => {
+  first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
+  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b first.z)))
 }
 built = compute.graph step
-compute.graphrun built (3,)
+compute.graphrun built 3
 "#,
     );
     let joined = messages.join(" | ");
@@ -586,10 +594,12 @@ compute.graphrun built (3,)
 #[test]
 fn a_graph_dispatches_exactly_what_the_program_dispatches() {
     let (_guard, stub) = stub();
-    let body = r#"step = ins => {
-  first = compute.plrun k1 (ins(0),)
-  dead = compute.plrun k2 (ins(0), (first,))
-  compute.plrun k2 (ins(0), (first,))
+    let body = r#"InS  = struct<.a Int>
+GArg = struct<.n Int, .in InS>
+step = (s : GArg) => {
+  first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
+  dead = (compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b first.z))) : Out2)
+  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b first.z)))
 }"#;
     run(&format!(
         r#"---
@@ -597,7 +607,7 @@ fn a_graph_dispatches_exactly_what_the_program_dispatches() {
 ---
 {KERNELS}
 {body}
-out = step (3,)
+out = step ((GArg)(.n 3, .in InS(.a 0)))
 "#
     ));
     let plain = stub.saw();
@@ -612,7 +622,7 @@ out = step (3,)
 {KERNELS}
 {body}
 built = compute.graph step
-out = compute.collect (compute.graphrun built (3,))
+out = compute.collect (compute.graphrun built 3)
 "#
     ));
     let recorded = stub.saw();
@@ -656,25 +666,30 @@ fn a_graph_recorded_for_one_backend_runs_on_another() {
             r#"---
   compute = import "compute.lichen"
 ---
-f1 = cfg => {{
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
+In1  = struct<.a Int>
+Out1 = struct<.z (compute.Buf _)>
+Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
+f1 = (k : Par1) => {{
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }}
 k1 = compute.parallel f1 "{backend}"
-f2 = cfg => {{
-  n = cfg(0)
-  i = compute.range n
-  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
-  compute.write ((compute.Write _)(.to n, .at i, .value a + a))
+In2  = struct<.b (compute.Buf _)>
+Out2 = struct<.w (compute.Buf _)>
+Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
+f2 = (k : Par2) => {{
+  i = compute.range k.n
+  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
 }}
 k2 = compute.parallel f2 "{backend}"
-step = ins => {{
-  first = compute.plrun k1 (ins(0),)
-  compute.plrun k2 (ins(0), (first,))
+GArg = struct<.n Int, .in In1>
+step = (s : GArg) => {{
+  first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
+  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b first.z)))
 }}
 built = compute.graph step
-compute.collect (compute.graphrun built (3,))
+compute.collect (compute.graphrun built 3)
 "#
         )
     };
