@@ -714,12 +714,11 @@ compute.launch k 7
 fn jit_tuple_codomain_launches_through_the_cross_kernel_wrapper() {
     // The `compute.call k a` form reaches the same path (`run_kernel`) as
     // `launch`, so the multi-value result is a property of the *run*, not of the
-    // one operator that usually spells it.  It renders as an array rather than
-    // a tuple because `call` is the **untyped** form: `CallOp` types its result
-    // as a fresh codomain cell (the callee's signature is read at assembly time,
-    // not by the gate), so the type is undecided here — the same fact
-    // `jit_cross_kernel_call` pins for the single-value case.  With no type to
-    // read the value against, the result is a raw dump, marked `raw[…]`.
+    // one operator that usually spells it.  Both wrappers now **state** their
+    // argument and result (`a: k.I`, `r: k.O` in `compute.lichen`), so the
+    // result's type is the kernel's codomain rather than a fresh cell — the
+    // cells themselves come from the frozen signature, which is why the value
+    // prints under the raw mark.
     let (module, value, root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k = compute.jit (p : <Int, Int> => (p(0) - p(1), p(0) + p(1)))
@@ -731,8 +730,9 @@ compute.call k (10, 4)
         "compute.call on a tuple-codomain kernel produced the two leaves"
     );
     assert!(
-        common::type_is_undecided(&module, root_ty),
-        "the untyped `call` form leaves the result type undecided"
+        !common::type_is_undecided(&module, root_ty),
+        "the typed `call` form states the result, so the kernel's codomain is \
+         what the run is read against"
     );
 }
 
@@ -1307,49 +1307,53 @@ outs = compute.plrun k (4096,)
     );
 }
 
-/// The signature-carrying wrapper over the ordinary tuple-shaped parameter.
+/// The wrapper over the ordinary tuple-shaped parameter, with **no signature
+/// argument**: the kernel's own annotation is the signature.
 ///
-/// What this pins is the wrapper's **third currying layer**, not the struct
-/// parameter: `parallel_sig = f => b => s => …$parallel(f, b)` used to leave
-/// `$parallel`'s operand `Parameterized`, because the innermost closure of a
-/// frozen template was handed on without being re-instantiated per call — a
-/// nested static closure's captures were invisible to the re-home check, and
-/// its parent chain reached no dynamic ancestor, so the body kept reading a
-/// previous apply's generation of the backend cell (`docs/notes/`
+/// What this pins is the wrapper's **second currying layer**, not the struct
+/// parameter: `parallel = f => b => …$parallel(f, b)` used to leave
+/// `$parallel`'s operand undecided, because the innermost closure of a frozen
+/// template was handed on without being re-instantiated per call — a nested
+/// static closure's captures were invisible to the re-home check, and its parent
+/// chain reached no dynamic ancestor, so the body kept reading a previous
+/// apply's generation of the backend cell (`docs/notes/`
 /// `compute-param-struct-handoff.md` §5). The tuple shape keeps the failure
 /// surface on the wrapper mechanics alone.
+///
+/// The signature is no longer an argument to pass: `f: I -> O` states it, the
+/// kernel struct carries `I`/`O`, and `plrun`'s `a: k.I` / `r: k.O` are what the
+/// host reads it from (`compute.lichen`).
 #[test]
 fn a_tuple_kernel_runs_through_the_signature_carrying_wrapper() {
     let (module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-type_of = x => {t = _; x: t; t}
 f = cfg => {
   n = cfg(0)
   i = compute.range n
   compute.write ((compute.Write _)(.to n, .at i, .value i + 1))
 }
-k = compute.parallel_sig f "cpu" (type_of f)
+k = compute.parallel f "cpu"
 out = compute.plrun k (4,)
 compute.collect out
 "#);
     assert_eq!(
         common::usize_array(&module, &value),
         vec![1, 2, 3, 4],
-        "parallel_sig over a tuple-shaped kernel produced the buffer"
+        "the annotated kernel produced the buffer"
     );
 }
 
 /// The named struct parameter end to end: a producer kernel fills an input
 /// buffer, the consumer's parameter is `struct<.n Int, .in …, .out …>`, its
-/// reads name their buffers (`k.in.a`), and the launch goes through
-/// `parallel_sig` with the JIT'd signature.
+/// reads name their buffers (`k.in.a`), and the launch goes through the wrapper
+/// whose signature is the kernel's own annotation.
 ///
 /// This is the probe `docs/notes/compute-param-struct-handoff.md` §2 was
 /// written around — blocker 1 (a named read resolves to its position in the
 /// parameter **type's** field order) and blocker 2 (the wrapper above) meet in
-/// one program. The spelling of the signature argument is load-bearing: the
-/// type lambdas take an *instantiated* pair (`P (KT _)(.I In, .O Out)`), and
-/// `.out` moves from the parameter to the result — the host fills
+/// one program. The spelling of the **annotation** is load-bearing: the type
+/// lambdas take an *instantiated* pair (`P (KT _)(.I In, .O Out)`), and `.out`
+/// moves from the parameter to the result — the host fills
 /// `struct<.n Int, .I In>`, which is what `compute.A` builds.
 ///
 /// The `?a` in the answer is not a defect: it is the documented limit of
@@ -1370,13 +1374,12 @@ inbuf = compute.plrun kg (3,)
 In  = struct<.a _>
 Out = struct<.z _>
 Par = compute.P (compute.KT _)(.I In, .O Out)
-Sig = compute.S (compute.KT _)(.I In, .O Out)
 f = (k : Par) => {
   i = compute.range k.n
   v = compute.read ((compute.Read _)(.from k.in.a, .at i))
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value v * 2))
 }
-k = compute.parallel_sig f "cpu" Sig
+k = compute.parallel f "cpu"
 out = compute.plrun k ((compute.A In)(.n 3, .I In(.a inbuf)))
 compute.read ((compute.Read _)(.from out, .at 1))
 "#);

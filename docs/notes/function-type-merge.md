@@ -373,6 +373,42 @@ ruled out the function arm's own pair unify as the cause. So the next person on
 this has a two-line reproduction and a narrowed search space, and that is a
 better position than the one this note started from.
 
+**Narrowed further: it is materialization, not the annotation.** The suspicion
+above (a frozen template's cells being read without being bound) was never
+confirmed; it is now measured from the other side — *re-annotating the wrapper
+does not remove the collapse, and the same spelling does not collapse at all
+when the module is local*:
+
+| `b.lichen`'s `wrap` | module | `w.wrap` types as |
+|---|---|---|
+| `f => {I = _; f: I -> _; I}` | local (same file) | `Function: raw[?a, ?b] -> raw[?c, ?d] -> ?b` |
+| the same, imported | **frozen** | `Function: raw[Function, raw[?a, ?b] -> raw[?c, ?d]] -> ?b` |
+| `(f: _ -> _) => f`, imported | frozen | `Function: raw[Function, …] -> raw[Function, …]` — both sides |
+
+So the arrow itself is not the difference — the *copy* is: the printed form is
+exactly the pair's two items dumped (a function value, then the signature), where
+the module that built the node prints the bare arrow, and the only thing between
+them is `materialize_static_signature` copying the frozen signature pair into
+fresh dynamic leaves (`static_module.rs`). That also says what to try next: make
+the copy **reconstitute** the pair's second item as the pair (the `[func, ↺]`
+self-cycle) instead of carrying the frozen signature as its own item, so the
+materialized signature reads as a function type the way the original does.
+
+**And a tighter annotation leaks.** Annotating the wrapper's kernel function with
+the very cells the returned kernel struct carries (`f: I -> O`, then
+`(K _)(.native …, .I I, .O O)`) merges the arrow's cells with the *callee's*
+parameter cells, which decides a template's `cfg` before any apply: measured with
+the `compute.lichen` wrappers re-annotated, `graph_structure`'s
+`a_parameter_read_is_a_bare_cell_and_pins_an_open_tuple_type` and
+`a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied`
+both go red (they pin "undecided until the apply"), while the seven target reds
+below do **not** move. That is
+[the soundness question](#the-soundness-question-this-forces-and-how-it-is-settled)
+answered by measurement rather than by the argument it was left with: the merge's
+parameter-value-cell reach is observable from the caller's annotation, so a
+signature-carrying wrapper cannot state more than the fresh `_ -> _` it states
+today without also stating it for the body it wraps.
+
 ## What goes
 
 - `Program::unify_function_type`, `FunctionTypeUnify` and its three answers,
