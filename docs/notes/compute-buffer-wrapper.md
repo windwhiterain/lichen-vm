@@ -1,8 +1,19 @@
 # A buffer is a struct wrapper, like a kernel
 
-**Status: decided, first step landed (`compute.lichen`); the JIT and the call
-sites are the work `docs/notes/compute-param-struct-handoff.md` and this note
-hand over.**
+**Status: landed and pushed.**  `compute.lichen` defines the wrapper; the JIT walks
+the parameter's roles and carries them in the fragment (`KernelRoles`), a run
+reads the launch's leaves and inputs at those paths and builds the parameter's
+`.out` structure, the recorder reads its argument the same way and hands back the
+body's return, and every call site the migration touched is on the named
+parameter.  What is left is recorded in the body of this note and in the notes
+below, not in this status.
+
+> Companion notes: [compute-kernel-struct](compute-kernel-struct.md) (the kernel
+> this mirrors), [compute-param-struct-handoff](compute-param-struct-handoff.md)
+> (the parameter's fields, resolved), [compute-runtime-scalars](compute-runtime-scalars.md)
+> (the per-leaf ABI), [compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md)
+> (the primitive's design, whose parameter shape this note supersedes), and
+> [compute-graph-jit](compute-graph-jit.md) (the recorded path).
 
 ## The decision
 
