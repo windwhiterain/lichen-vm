@@ -22,22 +22,26 @@ fn run(source: &str) -> Result<String, Vec<String>> {
 /// read back, so a run pays an upload, a dispatch and a download.
 const ONE: &str = r#"
 --- compute = import "compute.lichen" ---
-mk = cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value i % 97))
+In1  = struct<.a Int>
+Out1 = struct<.z (compute.Buf _)>
+Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
+mk = (k : Par1) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i % 97))
 }
 kx = compute.parallel mk "BACKEND"
-x = compute.plrun kx (COUNT,)
-axpy = cfg => {
-  n = cfg(0)
-  i = compute.range n
-  xv = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
-  compute.write ((compute.Write _)(.to n, .at i, .value 3 * xv))
+x = (compute.plrun kx ((compute.A In1)(.n COUNT, .I In1(.a 0))) : Out1)
+In2  = struct<.b (compute.Buf _)>
+Out2 = struct<.w (compute.Buf _)>
+Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
+axpy = (k : Par2) => {
+  i = compute.range k.n
+  xv = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.w, .at i, .value 3 * xv))
 }
 ka = compute.parallel axpy "BACKEND"
-out = compute.plrun ka (COUNT, (x,))
-compute.read ((compute.Read _)(.from out, .at COUNT / 2))
+out = (compute.plrun ka ((compute.A In2)(.n COUNT, .I In2(.b x.z))) : Out2)
+compute.read ((compute.Read _)(.from out.w, .at COUNT / 2))
 "#;
 
 /// The same input, then sixteen dependent links recorded as one `compute.graph`.
