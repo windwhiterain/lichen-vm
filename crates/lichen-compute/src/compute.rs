@@ -537,9 +537,10 @@ fn float_bits(value: f32) -> i64 {
 ///
 /// **One level, and one level is enough.** Every operator that reads a dispatch's
 /// output takes it as a direct item of its operand array — `collect [b]`, `read
-/// [b, i]`, `call [k, a]` — so a graph's value is never buried inside a tuple the
-/// scan would have to walk to find. A `plrun`'s cfg *is* a tuple of placeholders,
-/// which is why this is asked about operators other than a parallel launch.
+/// [b, i]`, `call [k, a]` — so a graph's value is never buried inside a structure
+/// the scan would have to walk to find. A `plrun`'s argument *is* the
+/// placeholder structure (the parameter's own shape, a leaf per cell), which is
+/// why this is asked about operators other than a parallel launch.
 fn handed_a_placeholder<P>(module: &Module<P>, operand: &P::Value) -> bool
 where
     P: Program,
@@ -5792,13 +5793,14 @@ where
 
 /// Record one dispatch into the graph being built, in place of running it.
 ///
-/// **The cfg is read for its placeholders, not for its data.** `cfg(0)` is the
-/// extent and `cfg(1)` the buffer tuple, the same positions a real launch reads,
-/// so the body is walked by exactly the path a run would take and the only thing
-/// that differs is what comes back. A value that is neither a placeholder nor an
-/// input the parameter supplied is refused here by name rather than coerced: this
-/// is the filter, and it is where a jit'd function's arbitrary values are sorted
-/// into the two roles a graph's value table has.
+/// **The argument is read for its placeholders, not for its data.** The extent
+/// and each buffer sit at the paths the role walk found (`KernelRoles`), the same
+/// positions a real launch reads, so the body is walked by exactly the path a run
+/// would take and the only thing that differs is what comes back. A value that is
+/// neither a placeholder nor an input the parameter supplied is refused here by
+/// name rather than coerced: this is the filter, and it is where a jit'd
+/// function's arbitrary values are sorted into the two roles a graph's value
+/// table has.
 fn record_launch<P>(module: &mut Module<P>, block: BlockId, operand: P::Value) -> Option<P::Value>
 where
     P: Program,

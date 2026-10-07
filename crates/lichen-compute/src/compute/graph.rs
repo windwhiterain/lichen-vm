@@ -2,29 +2,31 @@
 //! # The recording *is* the walk
 //!
 //! A graph is not read out of a function's body and it is not compiled from it.
-//! `$graph(f)` **applies** `f` to a tuple of placeholders, through the VM's own
-//! `Apply` path, and every dispatch the body performs is intercepted on the way
-//! past. Nothing runs: an intercepted dispatch appends a node to the graph under
-//! construction and hands back a value number instead of a buffer. So the
-//! sequence of nodes **is** the sequence the body performed, and a chain is a
-//! chain because the second dispatch's operand already held the first dispatch's
-//! placeholder.
+//! `$graph(f)` **applies** `f` to a structure of placeholders — the parameter's
+//! own shape, one leaf per cell — through the VM's own `Apply` path, and every
+//! dispatch the body performs is intercepted on the way past. Nothing runs: an
+//! intercepted dispatch appends a node to the graph under construction and hands
+//! back a value number instead of a buffer. So the sequence of nodes **is** the
+//! sequence the body performed, and a chain is a chain because the second
+//! dispatch's operand already held the first dispatch's placeholder.
 //!
 //! That is why there is no `produced_by` side table anywhere in this file. The
-//! placeholder is sitting in the very node the next `cfg` reads, carrying the
+//! placeholder is sitting in the very node the next dispatch reads, carrying the
 //! value number with it, and a second copy of that fact is a second copy that can
 //! disagree with the first.
 //!
 //! # The inputs arrive through the parameter, and nowhere else
 //!
-//! The placeholder tuple is one [`ComputeValue::GraphInput`] per **parameter
-//! cell**, and the parameter cell is a tuple with one cell per read — so its
-//! length *is* the arity, and it is read with no evaluation at all. Every lichen
-//! function has exactly one parameter, so there is exactly one channel a value
-//! can arrive through that the graph does not have to capture. A buffer the body
-//! reads as a free variable is refused **by the capture**, not by a vague
-//! "unresolved value": a graph that captured a buffer would have to hold it, and
-//! holding a node is a block-lifetime obligation this design does not take on.
+//! The placeholder structure is one [`ComputeValue::GraphInput`] per **parameter
+//! cell** — a leaf of the parameter's type, which the role walk enumerates
+//! (`KernelRoles`: one path per scalar, one per input buffer, one per output) —
+//! so its shape *is* the parameter's and it is read with no evaluation at all.
+//! Every lichen function has exactly one parameter, so there is exactly one
+//! channel a value can arrive through that the graph does not have to capture. A
+//! buffer the body reads as a free variable is refused **by the capture**, not by
+//! a vague "unresolved value": a graph that captured a buffer would have to hold
+//! it, and holding a node is a block-lifetime obligation this design does not
+//! take on.
 //!
 //! # What the graph holds
 //!
