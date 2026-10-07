@@ -833,65 +833,70 @@ compute.launch
 #[test]
 fn parallel_range_write_is_map() {
     // `compute.range n` yields the loop index `i ∈ [0, n)`; the index function
-    // writes `i + i` into the output buffer at index `i`.  `plrun k cfg` runs
-    // over `[0, cfg(0))` (the count is fixed at cfg position 0) and returns the
-    // output buffer.  `out = [0, 2, 4, 6]`; `read [out, 2] = 4`.
+    // writes `i + i` into its parameter's output buffer at index `i`.  A
+    // parallel run's result is bound with the codomain type, so the host reads
+    // the field by name (`out.z`).  `out = [0, 2, 4, 6]`; `read [out.z, 2] = 4`.
     let (module, value, root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
-f = cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value i + i))
+In  = struct<.a Int>
+Out = struct<.z (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + i))
 }
 k = compute.parallel f "cpu"
-out = compute.plrun k (4,)
-compute.read ((compute.Read _)(.from out, .at 2))
+out = (compute.plrun k ((compute.A In)(.n 4, .I In(.a 0))) : Out)
+compute.read ((compute.Read _)(.from out.z, .at 2))
 "#);
     assert_eq!(
         common::usize_of(&value),
         4,
         "parallel range/write map produced 4"
     );
+    // The read's type is **decided** now, and that is the point of the wrapper:
+    // `compute.read` states its result as `x.from.element`, and the author's
+    // `Out = struct<.z (compute.Buf _)>` is where that element cell lives — so a
+    // buffer whose element type is written down reads back precisely, where the
+    // old bare-buffer form had nothing to state it with and left the cell open
+    // (`docs/notes/compute-buffer-wrapper.md`).
     assert!(
-        common::type_is_undecided(&module, root_ty),
-        "a buffer's element class is a fact of the value, so the read's type stays undecided"
+        !common::type_is_undecided(&module, root_ty),
+        "a `Buf`'s `.element` states what the read produces"
     );
-    // The element type renders as an undecided cell, and that is the honest
-    // answer now: a buffer's element class is a fact of the *value*, so
-    // `compute.read` no longer pins its result to `Int` — which is exactly the
-    // pin that made a `buffer<Float>` inexpressible
-    // (`docs/notes/floating-point.md` §3.7, §4.2).  The *value* is the map's,
-    // unchanged from the `i + i` the kernel computed; only the static class of
-    // a value that came back from a buffer is unresolved.
 }
 
 #[test]
 fn parallel_read_input_buffer() {
     // A first kernel writes a buffer `[10, 11, 12]`; a second kernel reads it
-    // (`cfg(1)(0)`, the input buffer tuple at cfg position 1) and doubles it.
+    // (through its parameter's `.in.b` field) and doubles it.
     //   f2: out[i] = f1.out[i] + f1.out[i] = (i + 10) + (i + 10).
     let (_module, value, _root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
-f1 = cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
+In1  = struct<.a Int>
+Out1 = struct<.z (compute.Buf _)>
+Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
+f1 = (k : Par1) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
 k1 = compute.parallel f1 "cpu"
-inbuf = compute.plrun k1 (3,)
-f2 = cfg => {
-  n = cfg(0)
-  i = compute.range n
-  a = compute.read ((compute.Read _)(.from cfg(1)(0), .at i))
-  compute.write ((compute.Write _)(.to n, .at i, .value a + a))
+inbuf = (compute.plrun k1 ((compute.A In1)(.n 3, .I In1(.a 0))) : Out1)
+In2  = struct<.b (compute.Buf _)>
+Out2 = struct<.w (compute.Buf _)>
+Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
+f2 = (k : Par2) => {
+  i = compute.range k.n
+  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + a))
 }
 k2 = compute.parallel f2 "cpu"
-out = compute.plrun k2 (3, (inbuf,))
-compute.read ((compute.Read _)(.from out, .at 1))
+out = (compute.plrun k2 ((compute.A In2)(.n 3, .I In2(.b inbuf.z))) : Out2)
+compute.read ((compute.Read _)(.from out.w, .at 1))
 "#);
     assert_eq!(
         common::usize_of(&value),
@@ -1343,10 +1348,10 @@ compute.collect out
     );
 }
 
-/// The named struct parameter end to end: a producer kernel fills an input
-/// buffer, the consumer's parameter is `struct<.n Int, .in …, .out …>`, its
-/// reads name their buffers (`k.in.a`), and the launch goes through the wrapper
-/// whose signature is the kernel's own annotation.
+/// The named struct parameter end to end: a producer kernel fills a `Buf`, the
+/// consumer's parameter is `struct<.n Int, .in …, .out …>`, its reads name their
+/// buffers (`k.in.b`), and the launch goes through the wrapper whose signature is
+/// the kernel's own annotation.
 ///
 /// This is the probe `docs/notes/compute-param-struct-handoff.md` §2 was
 /// written around — blocker 1 (a named read resolves to its position in the
@@ -1356,6 +1361,12 @@ compute.collect out
 /// moves from the parameter to the result — the host fills
 /// `struct<.n Int, .I In>`, which is what `compute.A` builds.
 ///
+/// A buffer field is `(compute.Buf _)` — the wrapper its payload rides in — and
+/// a parallel run's result is bound **with its codomain type**
+/// (`(compute.plrun … : Out)`), which is what lets the host read a field by name
+/// (`buf.z`).  Both are the model's own spelling
+/// (`docs/notes/compute-buffer-wrapper.md`, "the migration recipe").
+///
 /// The `?a` in the answer is not a defect: it is the documented limit of
 /// `plrun`'s result type — the element class of a value read back from a
 /// buffer stays undecided (`docs/notes/compute-kernel-struct.md` §"Runtime /
@@ -1364,24 +1375,26 @@ compute.collect out
 fn a_struct_parameter_kernel_runs_through_the_signature_carrying_wrapper() {
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-g = cfg => {
-  n = cfg(0)
-  i = compute.range n
-  compute.write ((compute.Write _)(.to n, .at i, .value i + 10))
+In  = struct<.a Int>
+Out = struct<.z (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+g = (k : Par) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
 }
 kg = compute.parallel g "cpu"
-inbuf = compute.plrun kg (3,)
-In  = struct<.a _>
-Out = struct<.z _>
-Par = compute.P (compute.KT _)(.I In, .O Out)
-f = (k : Par) => {
+inbuf = (compute.plrun kg ((compute.A In)(.n 3, .I In(.a 0))) : Out)
+In2  = struct<.b (compute.Buf _)>
+Out2 = struct<.w (compute.Buf _)>
+Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
+f = (k : Par2) => {
   i = compute.range k.n
-  v = compute.read ((compute.Read _)(.from k.in.a, .at i))
-  compute.write ((compute.Write _)(.to k.out.z, .at i, .value v * 2))
+  v = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.w, .at i, .value v * 2))
 }
 k = compute.parallel f "cpu"
-out = compute.plrun k ((compute.A In)(.n 3, .I In(.a inbuf)))
-compute.read ((compute.Read _)(.from out, .at 1))
+out = (compute.plrun k ((compute.A In2)(.n 3, .I In2(.b inbuf.z))) : Out2)
+compute.read ((compute.Read _)(.from out.w, .at 1))
 "#);
     assert_eq!(
         common::usize_of(&value),
