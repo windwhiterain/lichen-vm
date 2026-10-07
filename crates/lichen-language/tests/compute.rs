@@ -793,18 +793,11 @@ k
 }
 
 #[test]
-#[ignore = "the unapplied wrapper no longer stays generic: the parameter cell collapsed to \
-`raw[Function, <the wrapper's own signature>]`, so a *frozen* wrapper with a written arrow in \
-its signature renders `raw[Function, raw[?a, raw[?b, ?c]] -> raw[?d, raw[?e, ?f]]] -> \
-struct<...>` where the open `?a` used to be. A written arrow in a frozen module is necessary \
-and sufficient; `compute.jit` is that plus a struct and a `.native`. Do NOT re-pin this \
-expectation - the comment below states the intent this contradicts, so re-pinning would \
-record the defect as intended. See docs/notes/function-type-merge.md."]
 fn wrapper_functions_render_with_named_type_variables() {
     // `jit` is a generic wrapper from the frozen `compute` module — its
     // domain/codomain cells are undecided at the module level, so they render as
     // *named cells* (`?a`/`?b`), and a `jit` result is a kernel struct whose
-    // `.sig` field is that signature.  The wrapper itself stays generic; only
+    // `.I`/`.O` fields are that signature.  The wrapper itself stays generic; only
     // an *applied* result resolves to `Int -> Int`.
     assert_eq!(
         render(
