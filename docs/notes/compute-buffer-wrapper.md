@@ -145,6 +145,34 @@ builds the result structure by placing each output buffer where the walk found i
 The walk, the ABI's leaf order and the emitter's reads are then one enumeration
 rather than three.
 
+## The kernel compiles before its parameter's annotation resolves
+
+A parallel kernel is compiled by `$parallel`'s own run, and at that moment the
+parameter's annotated type may still be an unresolved cell.  The walk then
+declines and the fragment is interned **with no roles** — measured on a graph
+probe, where the same kernel compiles twice (`roles=None`, then
+`Some((1, 1, 1))`) and the recording resolves its dispatches by identity to the
+**role-less** fragment, so the recorder finds no extent and no input paths:
+
+```
+PROBE fragment roles: recording=false roles=None
+PROBE fragment roles: recording=false roles=Some((1, 1, 1))
+PROBE record roles: id=0 scalars=0 inputs=0 outputs=0
+```
+
+Making the decline an *error* instead (tried) fixes the wrong-fragment half but
+turns the ordering into a hard diagnostic on the first attempt, which is equally
+wrong.  What is needed is the distinction the walk cannot currently draw:
+
+- an **unresolved** parameter type (no value in the cell yet) must leave the
+  operator *undecided*, with no diagnostic, so a later pass compiles it with
+  roles;
+- a **decided** parameter type that is not the named struct is the retired tuple
+  form and is refused by name.
+
+The same distinction is what the checker's `type_is_concrete` draws for its own
+guards, so it is a shaping question rather than new machinery.
+
 ## The migration, measured
 
 `compute.read` 103, `compute.write` 127, `compute.collect` 48, `compute.plrun`
