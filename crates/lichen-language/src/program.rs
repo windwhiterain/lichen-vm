@@ -322,6 +322,12 @@ macro_rules! lang_compose_vocabulary {
                 }
             }
 
+            /// The composition decides whether any leaf carries a handle: with
+            /// none, the repetition below expands to nothing and the argument is
+            /// unused, and the `unreachable!` arm is the only body.  A composition
+            /// that adds one uses it, so the allowance is the honest spelling of
+            /// "the list may be empty".
+            #[allow(unused_variables)]
             fn set_handle(&mut self, payload: ::lichen_lowlevel::AnyHandle<[u8]>) {
                 match self {
                     $(

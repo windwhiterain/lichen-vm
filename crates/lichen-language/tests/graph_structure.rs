@@ -420,17 +420,6 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
     );
 }
 
-/// The index a `value_of` extraction reads at, if it is a decided number.
-fn index_position(module: &Module<LangProgram>, node: NodeId) -> Option<usize> {
-    let operation = module.node_operation(node)?;
-    let pair = items(module, operation.operand?);
-    let subscript = *pair.get(1)?;
-    match module.node_value(AnyNodeId::Dynamic(subscript))?.as_enum() {
-        Some(LowValue::USize(index)) => Some(index),
-        _ => None,
-    }
-}
-
 /// A graph function that reads its parameter **back to front**, and then runs,
 /// which is the only way to tell position from order.
 const BACK_TO_FRONT: &str = r#"---
