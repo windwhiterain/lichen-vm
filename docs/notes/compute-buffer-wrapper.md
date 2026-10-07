@@ -173,27 +173,30 @@ wrong.  What is needed is the distinction the walk cannot currently draw:
 The same distinction is what the checker's `type_is_concrete` draws for its own
 guards, so it is a shaping question rather than new machinery.
 
-## The graph path, and the two walks it still owes
+## The graph path
 
-Recording a body with a **named** parameter now gets all the way to its run, and
-the steps that were needed are landed (the recorder reads its argument by role
-path; the return walk descends the `.out` structure and skips the `Buf`
-wrapper's type slot, which names no value).  One pair of walks is left, and they
-must change **together** because they define one numbering:
+Recording a body with a **named** parameter now runs end to end, and the pieces
+it needed are landed:
 
-- `graph()` builds the placeholder structure the body is applied to, one
-  `GraphInput(slot)` per parameter cell, and it still builds a **flat tuple** of
-  `arity` cells;
-- `graphrun` reads its argument as that same flat tuple and refuses anything that
-  is not a buffer or a number (`argument 1 is neither a buffer nor a number` on a
-  `struct<.n Int, .in …>` argument).
+- the **recorder** (`record_launch`) reads its argument by role path rather than
+  by position: the extent at the first scalar leaf, each input at its buffer path
+  (the placeholder rides in the `Buf` wrapper's payload), and it builds the
+  result as the parameter's `.out` structure, one `Buf`-wrapped placeholder per
+  declared output;
+- the **return walk** descends that structure and skips the wrapper's type slot
+  (`.element`), which names no value;
+- `build_graph` and `graphrun` **share one numbering**: the placeholders are
+  built at the parameter's own paths with the slots numbered depth-first in field
+  order (lexicographic in the paths), and a run flattens its argument the same
+  way, skipping the type slot — so the two ends agree by construction rather than
+  through a stored table. A parameter that is not a named struct keeps the flat
+  ceiling, because a positional body's reads are exactly that shape.
 
-Both sides want the same enumeration the rest of this work uses: the role walk
-over the parameter's type (`parallel_roles` takes any function's parameter pair,
-not only a kernel's), with the slots numbered depth-first in field order — which
-is lexicographic in the paths — and the wrapper's type slot skipped on both
-sides.  Until they move together, a graph whose body takes a named parameter
-records and then refuses at its run.
+Measured on a named-form probe: the recording finds its roles, the return is read
+through the structure, and the run is reached — where the standalone compiler
+stops for the environment's reason ("this graph dispatches to a device, but no
+compute backend is installed"), so the test harness that installs one is where
+the graph tests exercise it once their programs are migrated.
 
 ## The migration, measured
 
