@@ -771,9 +771,14 @@ compute.launch k1 (5, 3)
 }
 
 #[test]
-#[ignore = "the tuple type value dumps raw (`raw[raw[raw Int, …]]`) instead of reading to \
-`Int, Int`: its class slot is not filled, so the raw-mark renderer falls back — the same \
-unstated-type gap the compute wrapper work in progress covers"]
+#[ignore = "pre-existing, and reviving it is a re-derivation rather than a fix: the expectation \
+predates two changes.  Its *type* half holds (`struct<.native raw[?a, ?b], .I raw[?c, ?d], .O \
+raw[?e, ?f]>`).  Its *value* half does not: the first element renders `raw Kernel` — which the \
+passing sibling `a_kernel_value_and_type_render_by_name` expects and explains, the struct's type naming \
+no class for either slot so each renders under the mark — and the domain and codomain cells dump \
+as `raw[raw[raw Int, …]]` instead of `raw[Int, Int]`, because they carry no filled class and the \
+raw-mark renderer falls back.  The wrapper work did not cover this: what is missing is a class \
+for a tuple of element types, not a spelling."]
 fn a_tuple_domain_kernel_type_renders_as_a_function() {
     // A tuple-domain kernel's signature is `[<Int, Int>, Int]`.  The kernel
     // struct carries the domain in its `.I` field, so the value's second
