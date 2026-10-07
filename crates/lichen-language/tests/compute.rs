@@ -529,7 +529,7 @@ fn jit_cross_kernel_tuple_argument() {
     //   launch k1 5 = k0(5, 1) = 5 + 1 = 6.
     // The caller's own `x` is annotated: a bare kernel apply states no
     // signature, so nothing in the body decides `x` (the wrapper `launch` of
-    // the test below does, through `.sig`).
+    // the test below does, through the kernel struct's `.I`).
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k0 = compute.jit (p : <Int, Int> => p(0) + p(1))
@@ -620,10 +620,10 @@ compute.launch k 5
 
 #[test]
 fn a_kernel_value_and_type_render_by_name() {
-    // A `jit` result's value is a kernel struct `[.native, .sig]`: the `.native`
-    // artifact renders by name (via the compute vocabulary hook), the `.sig`
-    // field carries the signature, so the type renders as the struct
-    // `struct<.native <_>, .sig Int -> Int>`.  Dropping `TypeKernel` means no
+    // A `jit` result's value is a kernel struct `[.native, .I, .O]`: the `.native`
+    // artifact renders by name (via the compute vocabulary hook), the `.I`/`.O`
+    // fields carry the signature, so the type renders as the struct
+    // `struct<.native <_>, .I Int, .O Int>`.  Dropping `TypeKernel` means no
     // renderer special-case — the struct's own fields carry the signature.
     // **The parameter states its class, and it has to**: a kernel is lowered for
     // one class and compiled before any apply, so an open body (`y => y + y`) is
