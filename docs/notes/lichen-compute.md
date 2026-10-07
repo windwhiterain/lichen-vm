@@ -18,15 +18,20 @@ k = compute.jit (x : Int => x + 1)  -- jit: compile the lambda to a kernel (via 
 compute.launch k 5               -- launch: run it -> 6 : Int (via `$launch`)
 ```
 
-A **kernel is now a plain struct** `struct<.native _, .sig sig>` — the `.native` field
-holds the opaque compiled wasm artifact (a `Kernel`/`ParKernel` value), and the `.sig`
-field carries the function signature. There is **no** `TypeKernel`/`TypeParKernel` kind
-marker in the vocabulary; a kernel's "type" is just the struct, and the checker transfers
-the whole function-apply machinery to it by reading `.native`/`.sig` through the struct's
-field accessors. Because the vocabulary no longer special-cases a kernel type, a `jit`
-result renders as the raw struct (`struct<.native <_>, .sig Int -> Int>`) rather than the
-old `Kernel : Int -> Int` — the concrete signature lives in the `.sig` field, where the
-language's shared struct printer spells it.
+A **kernel is a plain struct** `K = _x => struct<.native _, .I _, .O _>` — the
+`.native` field holds the opaque compiled wasm artifact (a `Kernel`/`ParKernel`
+value), and `.I` (the domain) and `.O` (the codomain) carry the function
+signature. There is **no** `TypeKernel`/`TypeParKernel` kind marker in the
+vocabulary; a kernel's "type" is just the struct, and the checker transfers
+the whole function-apply machinery to it by reading `.native`/`.I`/`.O` through
+the struct's field accessors. Because the vocabulary no longer special-cases a
+kernel type, a `jit` result renders as the raw struct
+(`struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>`) rather than the
+old `Kernel : Int -> Int` — the concrete signature lives in `.I`/`.O`, where the
+language's shared struct printer spells it. A **buffer** is the same kind of
+wrapper, `Buf = T => struct<.native _, .element T>` (no `TypeBuffer`/`TypeWrite`
+marker, and no `BufferId`): the packed payload rides in `.native` and the element
+type in `.element`.
 
 ## 1. The vocabulary injection
 
@@ -34,16 +39,21 @@ The native core provides two plain, `Copy` enums, composed as sibling leaves int
 language's value/operator vocabularies with `lichen_utils::enum_ext!`:
 
 - **`ComputeValue`** = `Kernel(KernelId)` (a compiled scalar kernel artifact) |
-  `ParKernel(KernelId)` (a compiled **parallel** kernel) | `Buffer(BufferId)` (a runtime
-  results buffer) | `TypeBuffer` (the kind marker of a buffer type). A `KernelId`/`BufferId`
-  is a small host-owned scalar (`usize`) into the process kernel/buffer registry — never an
-  arena payload, so GC / static-freeze / `ValueExt` are unchanged.
+  `ParKernel(KernelId, backend)` (a compiled **parallel** kernel, and where its runs are
+  dispatched) | `Buffer(payload, class)` (a runtime results buffer's packed payload, in the
+  block arena) | `DeviceBuffer(resident)` (a run's results still on the device) |
+  `Graph(GraphId, backend)` (a recorded graph) | the graph's `GraphInput`/`GraphValue`
+  placeholders. There is **no** `TypeBuffer`/`TypeWrite` kind marker and no `BufferId`: a
+  buffer's *type* is the `Buf` struct, and `Buffer` is only its payload. A `KernelId` is a
+  small host-owned scalar (`usize`) into the process kernel registry — never an arena payload
+  — so GC / static-freeze / `ValueExt` are unchanged.
 - **`ComputeOperator`** = `Jit` (function → kernel) | `Launch` (`[native, arg]` → result) |
-  `Call` (a cross-kernel call on a bare native kernel) | `Parallel` (a single-arg index
-  function `?cfg -> ?write` → parallel kernel) | `ParLaunch` (`[native, cfg]` → one output
-  buffer, or the tuple of them) | `Range` (the loop index) | `Read` (`[buffer, index]` →
-  element) | `Write` (`[n, index, value]`, a kernel-only side effect) | `BufferCollect`
-  (`[buffer]` → `[?b]`), whose `OperatorExt::run` does the compile/execute.
+  `Call` (a cross-kernel call on a bare native kernel) | `Parallel` (an index function
+  `I -> O` → parallel kernel) | `ParLaunch` (`[native, cfg]` → the parameter's `.out`
+  structure, one `Buf` field per output) | `Range` (the loop index) | `Read` (`[buffer,
+  index]` → element) | `Write` (`[to, index, value]`, a kernel-only side effect whose `.to`
+  is an output `Buf`) | `BufferCollect` (`[buffer]` → `[?b]`) | `Graph` | `GraphRun`, whose
+  `OperatorExt::run` does the compile/execute.
 
 ```
 LangValue    = LowValue + TypeValue + ComputeValue
@@ -64,65 +74,65 @@ not callee-type dispatch:
   `&'static` slice. Only the compilation of the plugin's own embedded `compute.lichen`
   is run against it (`register_compute`), so a `$jit`/`$launch` is **private** to that
   module — two plugins each registering `$jit` never collide.
-- `$jit(f)` / `$launch(native, sig, a)` parse to a `NativeCall`; the checker delegates to
+- `$jit(f)` / `$launch(native, a)` parse to a `NativeCall`; the checker delegates to
   the matching `NativeOp::build` and adopts whatever `[value, type]` pair it returns. The
   checker knows nothing about kernels — the lichen wrapper is the *only* thing that parses
   the kernel struct.
 
 ```
-{
-  let type_of = x => {t = _; x: t; t}
-  jit      = f => (struct<.native _, .sig (type_of f)>)(.native $jit(f), .sig _)
-  launch   = k => a => $launch(k.native, k.sig, a)
-  call     = k => a => $call(k.native, a)
-  parallel = f => (struct<.native _, .sig (type_of f)>)(.native $parallel(f, b), .sig _)
-  plrun    = k => a => $plrun(k.native, k.sig, a)
-  range    = x => $range(x)
-  read     = x => $read(x(0), x(1)) : Int
-  write    = x => $write(x(0), x(1), x(2))
-  collect  = b => $collect(b)
-}
+let type_of = x => {t = _; x: t; t}
+KT = _x => struct<.I _, .O _>
+K = _x => struct<.native _, .I _, .O _>
+A = I => struct<.n Int, .I I>
+P = T: KT _ => struct<.n Int, .in T.I, .out T.O>
+S = T: KT _ => A T.I -> T.O
+Buf = T => struct<.native _, .element T>
+jit = f => {I = _; O = _; f: I -> O; (K _)(.native $jit(f), .I I, .O O)}
+launch = k: (K _) => a: k.I => {r = $launch(k.native, a); r: k.O; r}
+call = k: (K _) => a: k.I => {r = $call(k.native, a); r: k.O; r}
+parallel = f => b: string => {I = _; O = _; f: I -> O; (K _)(.native $parallel(f, b), .I I, .O I::out)}
+plrun = k: (K _) => a: k.I => {r = $plrun(k.native, a); r: k.O; r}
+range = x: Int => $range(x): Int
+Read = T => struct<.from (Buf T), .at Int>
+Write = T => struct<.to (Buf T), .at Int, .value T>
+read = (x : (Read _)) => $read(x.from, x.at): x.from.element
+write = (x : (Write _)) => $write(x.to, x.at, x.value)
+collect = (b : (Buf _)) => $collect(b)
+graph = f => {f: _ -> _; $graph(f)}
+graphrun = g => a => $graphrun(g, a)
 ```
 
 (The listing is `crates/lichen-compute/src/compute.lichen` — its `type_of`
 helper is the standard library's definition
 ([lichen-std/_.lichen](../../lichen-std/_.lichen)), repeated here because an
 embedded native source cannot depend on a package; it is a `let` binding, so it
-adds no field to the exported struct.  The later `graph`/`graphrun` entries are
-elided.  `read`
-destructures its single array argument with positional slot reads, because the
-parser's `f [a, b]` is one array argument rather than a curried two-arg call.)
+adds no field to the exported struct.  `K`/`Buf` and the `Read`/`Write`
+arguments are ordinary structs now, so the wrapper names their fields rather
+than counting positions.)
 
 `NativeOp::build` receives the **already-compiled** arguments (`NativeArg { expr, value,
 ty }`) and shapes the type through the curated `Ctx` (never raw lowlevel nodes): it
 calls `ctx.fresh()`/`ctx.array_node()`/`ctx.value_node()`/`ctx.check_unify()`/`ctx.universe()`,
 emits the operator via `ctx.op_node(...)`, and returns the `[value, type]` pair.
 
-- **`JitOp::build`** / **`ParallelOp::build`** — function-ness (or curried-arrow) gate:
+- **`JitOp::build`** / **`ParallelOp::build`** — function-ness (or arrow) gate:
   unify the argument's type with the arrow shape; emit `Jit`/`Parallel` over the argument
   value; the result is an **opaque** native artifact typed by a *fresh* cell. The lichen
   wrapper then builds the kernel struct around it (`.native` = the artifact, typed `_`,
-  `.sig` = `type_of f`).
-- **`LaunchOp::build`** (`$launch(native, sig, a)`) / **`ParLaunchOp::build`**
-  (`$plrun(native, sig, a)`) — gate the signature value (a function type),
-  unify the argument against the domain, and emit the operator over
-  `[native, a]`.  `LaunchOp` pairs the result with the **lazy codomain**, so a
-  launch's result is the callee's own codomain (`Int` for a scalar kernel, and the
-  tuple type itself for a tuple-codomain one).  This needs **no change** for a
-  tuple codomain, and the asymmetry with `ParLaunchOp` is the point: the codomain
-  is *read* here as a type value the checker has already built, so its arity rides
-  along for free.  `ParLaunchOp` cannot read it: its result is a `Buffer` for a
-  one-output index function
-  and a *tuple* of buffers for a several-output one, and the arity that decides
-  which is not knowable here — `build` runs once on the frozen wrapper template,
-  where `.sig` is still an undecided cell, and a tuple type is a value node with
-  one element per position.  So the result type is a **fresh cell**: `read` and
-  `collect` accept each buffer by ordinal.  That costs static precision, not
-  safety — a non-existent ordinal is still refused at check time with a span
-  (*"index 5 out of bounds (array length 2)"*).  The *shape* of the
-  codomain is checked by the emitter instead, which is where the writes are —
-  see [multi-output](#multi-output) and
-  [compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md).
+  `.I`/`.O` = the function's domain and codomain).
+- **`LaunchOp::build`** (`$launch(k.native, a)`) / **`ParLaunchOp::build`**
+  (`$plrun(k.native, a)`) — emit the operator over `[native, a]`; the wrapper's
+  `a: k.I` gates the argument and `r: k.O` types the result.  `LaunchOp`'s
+  codomain is the callee's own `.O` — `Int` for a scalar kernel, and the
+  tuple type itself for a tuple-codomain one — so `LaunchOp` pairs the result
+  with the **lazy codomain** and its arity rides along for free.
+  `ParLaunchOp`'s result is the parameter's `.out` structure: one `Buf` field per
+  output, whose field names the result type carries because `parallel` sets `.O` to
+  the parameter type's `.out` group (`I::out`) rather than to the body's own
+  (unconstrained) codomain.  The host binds the result with its codomain type once
+  and then reads the fields by name — see
+  [compute-buffer-wrapper](compute-buffer-wrapper.md), [multi-output](#multi-output)
+  and [compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md).
 - **`CallOp::build`** (`$call(k.native, a)`) — only gates the argument against a fresh
   domain cell and types the result as a fresh codomain cell (the callee signature is read at
   launch-time assembly by `kernel_id_of`).
@@ -141,7 +151,7 @@ arm:
   lazy (`Parameterized`) — those are *reported* type errors, not panics. A `jit` kernel
   carries **no backend**: it is launched one invocation at a time, and a device is for the
   thousands a dispatch runs at once.
-- **`Parallel`** — like `Jit` for the curried index function, but it takes a **second
+- **`Parallel`** — like `Jit` for the index function, but it takes a **second
   argument, the backend** (`"cpu"` or `"gpu"`), and the kernel value records it
   (`ParKernel(id, backend)`). There is no default and no `auto`: a program says where its
   parallel runs go, and a named backend that cannot be used is a *named* refusal rather
@@ -164,14 +174,16 @@ arm:
   checked — `launch` unifies it against the kernel's signature domain, `call` against a
   fresh cell — so an argument a checker rejects reaches `call` but not `launch`, and the
   arity check is the only one a `call` ever gets.
-- **`Parallel`** — `compile_parallel_fragment` lowers a single-arg index function
-  (`cfg = (n, (buffer…))`, the loop index from `compute.range`) to a
-  `(n, index) -> i64` wasm function, one `BufferWriteCall` per output, and
-  records the output count on the fragment → `ParKernel(id)`.
+- **`Parallel`** — `compile_parallel_fragment` lowers the index function's body
+  over the named parameter `struct<.n Int, .in …, .out …>` (the loop index from
+  `compute.range`) to a wasm function whose leaves are the parameter's scalars
+  followed by the index, one `BufferWriteCall` per output, and records the output
+  count and the role paths on the fragment → `ParKernel(id, backend)`.
 - **`ParLaunch`** — reads `[parallel_kernel, cfg]`; runs the kernel over the
-  index range `[0, cfg(0))` and collects the results into one buffer **per
-  output** — a single output is a bare `Buffer(id)`, several are the tuple of
-  them (`Read`/`BufferCollect` then address each by ordinal).  The range is cut
+  index range `[0, k.n)` and collects the results into one `Buf` **per output
+  field**, placing them in the parameter's `.out` structure — several outputs are
+  fields of `.out`, not a tuple, and the host reads each by name (`Read`/
+  `BufferCollect` then name the field).  The range is cut
   into one contiguous chunk per **worker** (`available_parallelism`, capped by
   the index count), each owning a disjoint span of every output buffer and
   running the one cached module in its own store; below
@@ -183,9 +195,10 @@ A kernel body that calls another kernel is a **cross-kernel call**: `kernel_id_o
 kernel *value* (or a `.native` field read) to its `KernelId`, and the body emitter lowers
 the apply to a `CallKernel`, resolved at launch-time assembly.
 
-The kernel/buffer registries are **process-global** (`KERNELS`/`BUFFERS`/`NEXT_KERNEL_ID`/
-`NEXT_BUFFER_ID`), deliberately not a `GlobalExt` component: kernels are immutable,
-cross-module-shared artifacts.
+The kernel registry is **process-global** (`KERNELS`/`NEXT_KERNEL_ID`), deliberately
+not a `GlobalExt` component: kernels are immutable, cross-module-shared artifacts.
+A buffer needs no registry at all — its payload lives in the block arena and dies
+with its block — so there is no `BUFFERS`/`NEXT_BUFFER_ID` registry.
 
 ## 4. Codegen: bytecode fragments, not a module
 
@@ -198,7 +211,8 @@ out.
 
 `param_shape`'s leaf carries a `ScalarClass`, and `input_classes` /
 `output_classes` are one class per buffer position or write ordinal, because a
-parallel fragment's shape is `(config, index)` however many buffers it reads — so
+parallel fragment's shape is the parameter's scalar leaves followed by the index,
+however many buffers it reads — so
 the buffers' classes cannot live on the shape. All three are in
 `fragment_digest`, and a float fragment is permitted — the classes were a carrier
 landed ahead of the permission, and
@@ -210,10 +224,11 @@ crossing that does not name itself with `int2float` or `float2int`
 `inputs` and `outputs` are the two buffer spaces, and both are counted by the
 emitter as it emits the positions rather than declared by hand, so neither can
 disagree with the body. They are also **not** in `param_shape`: a parallel
-fragment's shape is `(config, index)` however many buffers it reads, because the
+fragment's shape is the parameter's scalar leaves followed by the index, however
+many buffers it reads, because the
 buffers are bound as storage buffers and reached through a read's position. How
 many buffers a *dispatch* supplies is a separate fact, read at apply time from the
-call site's cfg tuple — see
+call site's parameter struct — see
 [compute-graph-jit.md](compute-graph-jit.md#how-many-buffers-a-fragment-reads-is-not-in-its-shape-and-the-check-that-asked-was-wrong).
 
 That IR lives in **`lichen-kernel-ir`**, a dependency-free crate, not in this one.
@@ -295,7 +310,7 @@ diverges above it, silently. The choice is stated once, in `KernelBin`. See
 
 The design decision that keeps this safe: the JIT reads the lowlevel **value dataflow**
 (parameter reads + scalar operators), gets the I/O contract from the kernel signature
-(struct's `.sig`), and ignores the type halves and union-find classes. It compiles the
+(the struct's `.I`/`.O`), and ignores the type halves and union-find classes. It compiles the
 **template shape** — the parameter value (`Index(param_pair, 0)`) is a *symbolic* wasm
 local, constants are concrete `i64.const`, and every operator is concrete. There is no
 snapshotting of a bound argument and no class-rep routing, so the launch-argument
@@ -361,7 +376,7 @@ module where `ordered[i]` is function `i`, the root exported as `main`, and each
   bare `k x` form leaves the codomain unresolved (`?a`), so it's asserted, not typed.
 - **Style 3 — the wrapper launch** (`compute.launch k x`, the typed cross-module form): the
   `ComputeOperator::Launch` is lowered exactly like a kernel `Apply`, and its result is
-  typed `Int` (the codomain resolved by `LaunchOp` reading `.sig`).
+  typed `Int` (the codomain resolved by `LaunchOp` reading `.O`).
 
 For style 3, `launch` is a **native two-step** — assemble the module, then call it — so
 the argument arrives at codegen time as a bare `Parameterized` cell (expected; it's only
@@ -378,8 +393,8 @@ family — as `value: type` end-to-end runs. The cross-kernel group pins the mul
 mechanisms separately: a concrete tuple argument, a whole-parameter pass-through, a
 sub-tuple pass-through against a nested callee domain, and the same tuple argument through
 the wrapper `launch` (whose argument arrives as a `Parameterized` cell). The assertions pin
-the struct rendering (`struct<.native <_>, .sig Int -> Int>`) and the lazily-read codomain
-resolution (`6 : Int`, `12 : Int`).
+the struct rendering (`struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>`) and
+the lazily-read codomain resolution (`6 : Int`, `12 : Int`).
 
 The **multi-value** group pins a **tuple codomain** end to end — the mirror of the
 multi-arity domain: two leaves returning `(5, 3): <Int, Int>`, a per-leaf body
@@ -391,10 +406,10 @@ arity *pair*), and the same multi-value run reached through the untyped
 called from inside another body: it is refused, and the refusal names its cause
 ("more than one value") rather than silently truncating to the first result.
 
-The **multi-output** group pins the parallel tuple codomain: one `plrun` producing two buffers read
-by ordinal (`(2, 4): <Int, Int>`), three outputs with `collect` on a middle one, and the two
-refusals that keep the every-ordinal-written invariant — a `compute.write` inside a
-conditional, and a codomain position that is not a write (refused *by position*).
+The **multi-output** group pins the parallel `.out` structure: one `plrun` producing two `Buf`
+fields read by name (`(2, 4)`), three output fields with `collect` on a middle one, and the two
+refusals that keep the every-field-written invariant — a `compute.write` inside a
+conditional, and an `.out` position that is not a write (refused *by position*).
 
 The **parallel-run** group pins that the worker partition is invisible in the result: the
 same two-output kernel over a count below the sequential threshold and over one above it
@@ -429,27 +444,30 @@ read as one value). A cross-kernel callee may have **any** scalar-or-tuple domai
 its argument is flattened into one `i64` per leaf of that domain, either from a concrete
 tuple value or passed through from the caller's own parameter (see
 [below](#multi-arity-cross-kernel-calls)). Beyond that: higher-order kernels, recursion
-inside the compiled region, and a `GlobalExt`-based compute global (the registries are
+inside the compiled region, and a `GlobalExt`-based compute global (the kernel registry is
 currently process-global).
 
 ### Multi-output
 
-A parallel kernel's codomain may be a **tuple of `Write`s**, so one `plrun` yields several
-output buffers from a single pass: the `k`-th `compute.write` is emitted with the
-compile-time constant `out_pos = k` (the same treatment `read`'s `cfg_pos` gets), the
-output count is the codomain's arity read at compile time and carried on the fragment as
-`KernelFragment::outputs`, and the launch allocates exactly that many buffers and returns
-them as a tuple. The **every-ordinal-written invariant** — ordinal `k` is written on every
+A parallel kernel's parameter declares its outputs under `.out`, so one `plrun` yields
+several output buffers from a single pass: the `k`-th output field a `compute.write`
+targets is emitted with the compile-time constant `out_pos = k` (the same treatment
+`read`'s input position gets), the output count is `.out`'s field count read at compile
+time and carried on the fragment as
+`KernelFragment::outputs`, and the launch allocates exactly that many buffers and places
+them in the parameter's `.out` structure. The **every-field-written invariant** — output
+field `k` is written on every
 index — holds structurally: the lowered body is straight-line, and the subset's only
 conditional is a value `select`, which a write (a side effect with no value) cannot sit in.
 The emitter refuses the constructs that could break it, each naming its own cause: a write
-inside a conditional, and a codomain position that is not a write. See
+inside a conditional, and an `.out` position that is not a write. See
 [compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md).
 
-The one thing multi-output cannot have is a **check-time result type**: the arity is a
-run-time fact of the kernel, so `plrun`'s result is an unconstrained cell rather than an
-N-tuple of buffer types (see `ParLaunchOp::build` in §2). The cost is that a positional read
-of a `plrun` result is checked at run time rather than at check time.
+`plrun`'s result type is that `.out` structure (`k.O`), so a host binds it with its
+codomain type once — `out = (compute.plrun k (…) : Out)` — and then reads each `Buf`
+field by name (`out.z`). The annotation is the migration recipe
+[compute-buffer-wrapper](compute-buffer-wrapper.md) records: it states what the kernel's
+`.O` already means.
 
 ### The parallel run
 
