@@ -6,7 +6,8 @@
 > a function type stops being a node of its own, and the arrow stops being a
 > type. The `f : f` half of that note is untouched and still current.
 > The wrapper defect in
-> [compute-type-wrapper.md](compute-type-wrapper.md) **survives the merge
+> [compute-buffer-wrapper.md](compute-buffer-wrapper.md) (planned as
+> `compute-type-wrapper.md`) **survives the merge
 > unchanged**, so its cause is somewhere this change never reached — and it is
 > now reproduced in two lines of pure language, with no JIT and no operator
 > involved; see
@@ -116,7 +117,7 @@ in force. The mechanical parts all hold. What the measurement refused was the
 premise.
 
 **The wrapper defect is untouched.** The frozen-module reproduction
-(`docs/notes/compute-type-wrapper.md`) still prints
+below still prints
 
 ```
 struct<.I raw[?a, ?b], .O raw[?c, ?d]>
