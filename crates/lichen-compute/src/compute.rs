@@ -6102,17 +6102,28 @@ where
     let arity = graph::MAX_GRAPH_INPUTS;
     let placeholders = match roles {
         Some(roles) => {
-            let mut paths: Vec<&Vec<usize>> = roles
+            // A **buffer role's cell is a `Buf` wrapper** around the placeholder,
+            // because that is what the field's type is: the body hands `s.in.b` on
+            // as an argument, and the dispatch reads the wrapper's payload
+            // (`buf_payload`).  A scalar role stays bare, because the extent is a
+            // number the dispatch reads as one.
+            let mut paths: Vec<(&Vec<usize>, bool)> = roles
                 .scalars
                 .iter()
-                .chain(roles.inputs.iter())
-                .chain(roles.outputs.iter())
+                .map(|path| (path, false))
+                .chain(roles.inputs.iter().map(|path| (path, true)))
+                .chain(roles.outputs.iter().map(|path| (path, true)))
                 .collect();
-            paths.sort();
+            paths.sort_by(|left, right| left.0.cmp(right.0));
             let mut cells: Vec<(Vec<usize>, NodeId)> = Vec::with_capacity(paths.len());
-            for (slot, path) in paths.into_iter().enumerate() {
+            for (slot, (path, wrapped)) in paths.into_iter().enumerate() {
                 let value = <P::Value as From<ComputeValue>>::from(ComputeValue::GraphInput(slot));
                 let node = module.add_node(block, None, Some(value));
+                let node = if wrapped {
+                    buf_value::<P>(module, block, AnyNodeId::Dynamic(node), ScalarClass::Int)?
+                } else {
+                    node
+                };
                 cells.push((path.clone(), node));
             }
             let root = assemble_result::<P>(module, block, &cells, &[], 0)?;

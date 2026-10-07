@@ -198,6 +198,17 @@ stops for the environment's reason ("this graph dispatches to a device, but no
 compute backend is installed"), so the test harness that installs one is where
 the graph tests exercise it once their programs are migrated.
 
+**A recorded body's parameter is the named struct too**, with one wart the model
+owes an answer to: `parallel_roles` looks for both reserved names, and an empty
+struct is not expressible, so a body that produces a value rather than dispatching
+its own writes still declares one unused `Buf` field under `.out`.  The
+placeholders are wrapped **per role**: a buffer field's cell is a `Buf` around the
+`GraphInput` (a dispatch reads the wrapper's payload, `buf_payload`), while a
+scalar field's cell is the bare `GraphInput` (the extent is a number).  The body's
+own return is what the graph hands back — a bare `Buf` when it returns one
+dispatch's result — and the host annotates the run's result accordingly
+(`(compute.graphrun built (…) : (compute.Buf _))`).
+
 ## The migration, measured
 
 `compute.read` 103, `compute.write` 127, `compute.collect` 48, `compute.plrun`
