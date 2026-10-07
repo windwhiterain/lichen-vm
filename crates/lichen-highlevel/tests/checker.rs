@@ -338,12 +338,12 @@ fn an_error_block_is_skipped_and_never_cascades() {
         b.state[e].ty.is_some(),
         "the skip path records the type slot"
     );
-    // The two slots are fresh (unbound) cells — never unified by the
+    // The two slots are fresh (undecided) cells — never unified by the
     // surrounding context, so they have no value and no type conflict.
     let ty_cell = b.state[e].ty.unwrap();
     assert!(
         b.module.node_value(AnyNodeId::Dynamic(ty_cell)).is_none(),
-        "the type cell is a fresh, unbound cell"
+        "the type cell is a fresh, undecided cell"
     );
 }
 
@@ -972,7 +972,7 @@ fn annotating_a_lambda_with_a_mixed_tuple_type_reports_expected_found() {
 }
 
 #[test]
-fn an_unannotated_lambda_has_an_unbound_arrow_type() {
+fn an_unannotated_lambda_has_an_undecided_arrow_type() {
     // (\x. x) : Type — a function's type is not Type (nor any self-referential
     // non-function type), so the annotation conflicts.
     let mut ir = IR::new();
@@ -1017,7 +1017,7 @@ fn an_unannotated_call_syncs_its_root_type_to_the_return_type() {
 }
 
 #[test]
-fn a_tuples_unbound_element_types_sync_from_the_return_types() {
+fn a_tuples_undecided_element_types_sync_from_the_return_types() {
     // a = \x. (1, Int)[x]; (a 0, a 1) — the tuple's element types are the
     // calls' lazy result cells.  Each apply's evaluation syncs its cell with
     // its return pair: element 0's cell binds to int, element 1's to the
@@ -1960,7 +1960,7 @@ fn an_instantiation_requires_a_struct_type_callee() {
 
 #[test]
 fn an_instantiation_through_a_parameter_pins_the_callee_to_a_struct_kind() {
-    // `f = s => s(1, 2); f (Int)` — the callee's type is unbound in the body,
+    // `f = s => s(1, 2); f (Int)` — the callee's type is undecided in the body,
     // so the checker pins it to a struct kind; applying f to a non-struct
     // fails the apply's parameter check (attributed to the argument).
     let mut ir = IR::new();
@@ -2083,7 +2083,7 @@ fn an_underscore_annotation_binds_a_function_type() {
     // function's own type, `f : f`). The clone-on-unify never fires for a
     // placeholder (no signature on the placeholder side), so the placeholder's
     // cell binds to the whole function-type node, and the template's parameter
-    // type stays unbound.
+    // type stays undecided.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let l = lam(&mut ir, x, x);
@@ -2097,7 +2097,7 @@ fn an_underscore_annotation_binds_a_function_type() {
         b.module.equality_representative(b.state[l].ty.unwrap()),
         "the placeholder binds to the function-type node"
     );
-    // The template's parameter type cell stays unbound.
+    // The template's parameter type cell stays undecided.
     let fid = function_type_id(&b, b.state[l].ty.unwrap());
     assert!(
         b.module
@@ -2342,7 +2342,7 @@ fn top_level_assert_fails_when_the_condition_is_not_one() {
 #[test]
 fn in_function_assert_passes_for_a_satisfying_argument() {
     // f = n => assert(n == 1); f 1 — the body's assert cannot resolve at
-    // normalize (n is unbound), so the apply clones it and the clone
+    // normalize (n is undecided), so the apply clones it and the clone
     // re-checks against the argument.
     let mut ir = IR::new();
     let n = param(&mut ir);
@@ -2389,7 +2389,7 @@ fn in_function_assert_fails_for_a_violating_argument() {
 
 #[test]
 fn never_called_function_assert_is_not_triggered() {
-    // f = n => assert(n == 1) — never applied: the condition stays unbound,
+    // f = n => assert(n == 1) — never applied: the condition stays undecided,
     // so the assert stays pending instead of failing.
     let mut ir = IR::new();
     let n = param(&mut ir);
@@ -2470,7 +2470,7 @@ fn an_in_bounds_generated_constraint_is_drained() {
 fn a_body_index_on_a_literal_stays_pending_and_rechecks_per_call() {
     // f = i => [7, 8, 9][i] — the body's constraint `i < 3` is generated
     // (the literal's type is statically an array) but stays pending at
-    // normalize (the index is the unbound parameter).  Each apply clones it
+    // normalize (the index is the undecided parameter).  Each apply clones it
     // and decides it against the argument: f 2 passes, the template alone
     // remains on the worklist.
     let mut ir = IR::new();

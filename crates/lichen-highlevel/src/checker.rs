@@ -321,7 +321,7 @@ where
     ///
     /// The attribute decides whether its own missing value may be shared — see
     /// [`crate::attr::AttrExt::share_missing_slot`], which states the contract (the value
-    /// must be concrete, because reconciliation writes an unbound side and a
+    /// must be concrete, because reconciliation writes an undecided side and a
     /// shared node would be written by whichever occurrence reconciled first).
     /// The checker holds the node, not the rule: a `None` entry here is the
     /// attribute declining to share, and the extension builds it as before.
@@ -721,7 +721,7 @@ where
         // fire even when the function is never applied, and a body ending in
         // a call resolves its result cell before the root pass walks the
         // function's type spine (which would otherwise read the cell while
-        // it is still unbound).  The order against the root pass is
+        // it is still undecided).  The order against the root pass is
         // irrelevant: reads alias their target cells (see the lowlevel Index
         // arm), so bindings propagate class-wise however they happen.
         // Skipped when the checker-side unifies (annotations, guards) already
@@ -755,7 +755,7 @@ where
                 // Every body runs once: its apply-time checks fire even when
                 // the function is never applied, and the deep pass decides
                 // what the apply clone may reference in place — a body the
-                // pass never computed keeps every operation node unproven
+                // pass never computed keeps every operation node undecided
                 // and clones them all, silently re-running per-application
                 // computations like a body-local struct's nominal-id
                 // `Fresh`.
@@ -764,7 +764,7 @@ where
                 // return: each condition gets its own concreteness proof, so
                 // an apply references a per-call-invariant condition in
                 // place instead of cloning and re-registering it, while a
-                // condition reading the parameter stays unproven and clones.
+                // condition reading the parameter stays undecided and clones.
                 for &condition in &asserts {
                     checker.module.evaluate_node_deep(condition, None);
                 }
@@ -842,7 +842,7 @@ where
         // apply's runtime evaluation syncs its result cell with the return
         // pair, so an unannotated call's root type is the return type by the
         // time the pass finishes.  A polymorphic template's lazy result
-        // leaves the cell unbound — a generic function's ends stay
+        // leaves the cell undecided — a generic function's ends stay
         // underdetermined, which is not an error.
         Build {
             ir: checker.ir,
@@ -1005,7 +1005,7 @@ where
         node
     }
 
-    /// A fresh, unbound type cell — an **empty** node slot, which is
+    /// A fresh, undecided type cell — an **empty** node slot, which is
     /// undecided's only in-VM representation (evaluating it yields nothing,
     /// never a panic).
     pub fn fresh_cell(&mut self) -> NodeId {
@@ -1185,7 +1185,7 @@ where
     /// unify — a type constructor that is not a function.  Deep-evaluating the
     /// marker is what pins them: a node the deep pass proved concrete is
     /// referenced **in place** by every clone (and the same verdict freezes it
-    /// non-parameterized in a static module, so a solved artifact bakes the
+    /// non-undecided in a static module, so a solved artifact bakes the
     /// identity too).  The field types stay out of the identity — they ride in
     /// the shape — so `A Int` and `A Float` remain different types, and two
     /// `struct<…>` written apart remain two declarations.
@@ -1307,7 +1307,7 @@ where
     }
 
     /// The value currently held by `node`'s equality class — the
-    /// representative's value — or `None` when the class is unbound.
+    /// representative's value — or `None` when the class is undecided.
     /// Read-only (a parent-pointer walk, no path compression).  An attribute's
     /// [`crate::attr::AttrExt::is_subtype`] uses this to compare two slot values after a
     /// failed equality unify.
@@ -1355,7 +1355,7 @@ where
         // an inline compound term's subtree can never reference its own root,
         // so pre-registering a skeleton for one would only add spurious cells
         // that poison the apply-time unify (a placeholder reached through an
-        // index-typed apply would stay an unbound `?a` instead of binding to
+        // index-typed apply would stay an undecided `?a` instead of binding to
         // the actual type).  Gate the skeleton on `block_roots` membership
         // alone, never on the expression kind: the frontend transplants the
         // binding value's kind into the placeholder, so a block root may be
@@ -1477,7 +1477,7 @@ where
                 // found Y" from inside itself (the parser's own syntactic
                 // diagnostic still fires at the parse layer), and the region
                 // is distinct from a real `_` (`Placeholder`) so the frontend
-                // can mask it for a diff.  The fresh cells stay unbound, so
+                // can mask it for a diff.  The fresh cells stay undecided, so
                 // they never cause a cascade.
                 let val = self.fresh_cell();
                 let ty_cell = self.fresh_cell();
@@ -1489,7 +1489,7 @@ where
             }
             ExprKind::Placeholder => {
                 // `_` — an inference placeholder hole in any position (type or
-                // value): two fresh unbound cells, one for the value slot and
+                // value): two fresh undecided cells, one for the value slot and
                 // one for the kind slot, so whatever the context unifies them
                 // with binds them.  The kind slot must be a cell too, not the
                 // universe: a compound type's kind slot holds a kind

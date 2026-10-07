@@ -14,9 +14,7 @@ fn recursive_function_applies_itself_lazily() {
     m.evaluate_node_deep(f_node, None);
     assert_eq!(
         m.node_evaluated_deep(f_node),
-        Some(EvaluatedDeep {
-            parameterized: false
-        })
+        Some(EvaluatedDeep { undecided: false })
     );
 
     // f(5) = [5, f(5)]: each forced application produces exactly one new
@@ -160,9 +158,7 @@ fn fibonacci_recurses_through_index_branches() {
     m.evaluate_node_deep(fib_node, None);
     assert_eq!(
         m.node_evaluated_deep(fib_node),
-        Some(EvaluatedDeep {
-            parameterized: false
-        })
+        Some(EvaluatedDeep { undecided: false })
     );
 
     // The definition pass terminates: with a marker condition the Index
@@ -171,9 +167,7 @@ fn fibonacci_recurses_through_index_branches() {
     m.evaluate_node_deep(m.functions[fib_id].r#return, None);
     assert_eq!(
         m.node_evaluated_deep(m.functions[fib_id].r#return),
-        Some(EvaluatedDeep {
-            parameterized: true
-        })
+        Some(EvaluatedDeep { undecided: true })
     );
 
     for (n, expected) in [(0, 0), (1, 1), (2, 1), (3, 2), (5, 5), (10, 55)] {
@@ -229,9 +223,7 @@ fn countdown_definition_pass_terminates() {
     m.evaluate_node_deep(ret, None); // definition pass: completes, flagged
     assert_eq!(
         m.node_evaluated_deep(ret),
-        Some(EvaluatedDeep {
-            parameterized: true
-        })
+        Some(EvaluatedDeep { undecided: true })
     );
 
     let zero_arg = u128_node(&mut m, root, 0);
@@ -372,15 +364,11 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
     m.evaluate_node_deep(o_ret, None);
     assert_eq!(
         m.node_evaluated_deep(e_ret),
-        Some(EvaluatedDeep {
-            parameterized: true
-        })
+        Some(EvaluatedDeep { undecided: true })
     );
     assert_eq!(
         m.node_evaluated_deep(o_ret),
-        Some(EvaluatedDeep {
-            parameterized: true
-        })
+        Some(EvaluatedDeep { undecided: true })
     );
 
     let six = u128_node(&mut m, root, 6);

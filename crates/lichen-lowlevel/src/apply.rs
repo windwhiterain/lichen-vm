@@ -46,7 +46,7 @@ impl<P: Program> Module<P> {
             // it declined to run.  `LowValue::Error` would instead be cached
             // by the `evaluate_node` postlude as a decided value, letting
             // the deep pass certify this node concrete (its
-            // `evaluated_deep.parameterized` derives from the cached value)
+            // `evaluated_deep.undecided` derives from the cached value)
             // and every parent array along with it — a proven-concrete
             // claim about a computation that never happened.
             return None;
@@ -96,7 +96,7 @@ impl<P: Program> Module<P> {
     ) -> bool {
         // Evaluate the argument to the depth the parameter's pattern
         // references, so the unify sees the argument's element values
-        // instead of unbound slots; positions the pattern treats as opaque
+        // instead of undecided slots; positions the pattern treats as opaque
         // stay lazy.
         self.evaluate_pattern_argument(cloned_param, argument, block);
         let pre_unify_errors = self.unify_errors.len();
@@ -163,7 +163,7 @@ impl<P: Program> Module<P> {
                 // Resolve the return type before binding the cell: the deep
                 // pass resolves the node later but does not replicate to
                 // class members, so an unresolved bind would leave the cell
-                // unbound.  A lazy return type — a body ending in a call —
+                // undecided.  A lazy return type — a body ending in a call —
                 // is an Index read, which already aliased its target cell at
                 // evaluation time (see the Index arm), so this unify joins
                 // the cell into that class and the binding propagates

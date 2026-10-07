@@ -179,7 +179,7 @@ pub enum Expr {
     /// through the lowlevel `Index`, without an `IndexTarget` guard or a bounds
     /// assert.  The container's *type* must be the tuple kind: it reads a
     /// component of a *tuple* type-as-value (`<Int, string><0>`), a struct type
-    /// value's components read by name (`X::a`), and an unbound container
+    /// value's components read by name (`X::a`), and an undecided container
     /// (a parameter, a call result) is pinned to the kind, so the apply that
     /// binds it refuses a wrong-kind actual.
     RawIndex {
@@ -216,7 +216,7 @@ pub enum Expr {
     /// `container_ty[1][0][1]`).  Both are check-time requirements; the
     /// difference is where the requirement and the name table sit.  `X::a`
     /// reads the field's type as a value (`struct<.a Int, .b string>::a`
-    /// is `Int : Type`), and is lazy on an unbound container.
+    /// is `Int : Type`), and is lazy on an undecided container.
     RawNamedField {
         container: Box<Expr>,
         name: String,
@@ -284,7 +284,7 @@ pub enum Expr {
     /// entry is a `key ==> value` pair (any expressions; the parser recognizes
     /// the table arrow as the pair separator).  The keys are deep-evaluated
     /// and deep-content-hashed when the table is built; a key that is not
-    /// concrete (it depends on an unbound value) is dropped with an error.
+    /// concrete (it depends on an undecided value) is dropped with an error.
     Table(Vec<(Expr, Expr)>, Span),
     /// `set{a, b, …}` — a set of ordinary values.  The members are full
     /// expressions and share one element type (a set is homogeneous, exactly

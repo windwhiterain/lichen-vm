@@ -100,8 +100,8 @@ pub enum DiagKind {
     IndexOutOfBounds,
     /// A table read that missed (see [`Diag::TableMiss`]).
     TableMiss,
-    /// A table build dropped a non-concrete key (see [`Diag::TableKeyUnbound`]).
-    TableKeyUnbound,
+    /// A table build dropped a non-concrete key (see [`Diag::TableKeyUndecided`]).
+    TableKeyUndecided,
     /// A read whose **runtime** target turned out not to be a container — the
     /// lowlevel's [`EvalError::IndexTarget`](lichen_lowlevel::EvalError::IndexTarget)
     /// reached the diagnostics as a fact about a *value*, with no type to
@@ -277,7 +277,7 @@ pub struct Diag<P: Program> {
     pub loc: Option<Loc>,
     /// What kind of check failed — the mismatch sub-kind, or the specific
     /// non-mismatch kind ([`DiagKind::Assert`], [`DiagKind::IndexOutOfBounds`],
-    /// [`DiagKind::TableMiss`], [`DiagKind::TableKeyUnbound`]).
+    /// [`DiagKind::TableMiss`], [`DiagKind::TableKeyUndecided`]).
     pub kind: DiagKind,
     /// The source-meaningful conflicting sides — the checker's operands (the
     /// parameter's type and the argument's type for a runtime failure).
@@ -436,7 +436,7 @@ where
                     length,
                 } => (0, Some(*index), Some(*index_value), Some(*length)),
                 EvalError::TableMiss { key, .. } => (1, Some(*key), None, None),
-                EvalError::TableKeyUnbound { key } => (2, Some(*key), None, None),
+                EvalError::TableKeyUndecided { key } => (2, Some(*key), None, None),
                 EvalError::IndexTarget { target } => (3, Some(*target), None, None),
                 EvalError::IndexSubscript { subscript } => (4, Some(*subscript), None, None),
                 EvalError::ApplyTarget { function } => (5, Some(*function), None, None),
@@ -468,8 +468,8 @@ where
                 EvalError::TableMiss { key, .. } => {
                     out.push(Diag::factual(DiagKind::TableMiss, self.node_loc(*key)))
                 }
-                EvalError::TableKeyUnbound { key } => out.push(Diag::factual(
-                    DiagKind::TableKeyUnbound,
+                EvalError::TableKeyUndecided { key } => out.push(Diag::factual(
+                    DiagKind::TableKeyUndecided,
                     self.node_loc(*key),
                 )),
                 // A read applied to a non-container: the value itself is the
@@ -601,7 +601,7 @@ where
     /// `[type value, universe]`.  The *failing* condition is read rather than the
     /// registered template because a per-call clone's operand 0 is the actual
     /// argument's type cell — the fact a reader needs — while the template's own
-    /// cell is still unbound and would render as a bare `?a`.  `None` when the
+    /// cell is still undecided and would render as a bare `?a`.  `None` when the
     /// condition is not such an operation (or its operand is a static ref, which
     /// has no importer expression to point at), in which case the registered
     /// node answers.

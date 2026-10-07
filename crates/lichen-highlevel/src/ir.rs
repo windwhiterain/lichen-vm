@@ -245,7 +245,7 @@ pub struct IR<A = NoAttr, L = HighProgramLiteral> {
     /// pre-registers a cycle-cut skeleton only for these: an inline compound
     /// term can never cycle, and its skeleton's extra cells would otherwise
     /// poison the apply-time unify (a placeholder reached through an
-    /// index-typed apply would stay an unbound `?a`).
+    /// index-typed apply would stay an undecided `?a`).
     pub block_roots: HashSet<ExprId>,
     /// The top-level (outer-block) statement expression ids, in source order —
     /// bindings and bare-expression statements, NOT including the final
@@ -368,7 +368,7 @@ pub enum ExprKind<L> {
     /// condition's value node is registered as an assert point.  The
     /// checker deep-evaluates every assert after the definition pass
     /// and requires `USize(1)`; a condition that stays
-    /// undecided (an unbound parameter, a lazy marker) is not triggered, and the apply clone
+    /// undecided (an undecided parameter, a lazy marker) is not triggered, and the apply clone
     /// re-checks the instantiated condition per call.  The expression
     /// compiles to the condition itself — the assert is a side constraint.
     Assert { condition: ExprId },
@@ -393,7 +393,7 @@ pub enum ExprKind<L> {
     /// its type, so it reads a component of a type-as-value
     /// (`<Int, string><0>`, `struct<.f Int, .g string><1>`) or of any expression's
     /// value.  The result is the element's own pair: its value is element 0
-    /// of the read, its type element 1, both lazily (an unbound container
+    /// of the read, its type element 1, both lazily (an undecided container
     /// resolves at the apply).  This form is what the `T<e>` array-type
     /// postfix used to be; the array type is now [`Self::TypeArray`] spelled
     /// `array<T, n>`.
@@ -507,7 +507,7 @@ pub enum ExprKind<L> {
         depths: ChildRange,
     },
     /// `_` — an inference placeholder hole, usable in any position (type or
-    /// value).  Compiles to a fresh unbound cell that binds to whatever the
+    /// value).  Compiles to a fresh undecided cell that binds to whatever the
     /// context unifies it with: `x : _`, `x : Int -> _`, `x : array<Int, _>`,
     /// `x : <Int, _>`, `struct<.f Int, .g _>`, and the value holes `_ : Int`,
     /// `f _`, `(1, _)`.

@@ -257,7 +257,7 @@ impl<P: Program> Module<P> {
         // that no value references, so each one is instantiated through the
         // shared remap — a condition the deep pass proved concrete is
         // per-call invariant and is referenced in place (decided at
-        // normalize), while an unbound one rewrites to this call's clones,
+        // normalize), while an undecided one rewrites to this call's clones,
         // so the body's assert re-checks against the argument.  Only actual
         // clones register: a fresh entry is a constraint on this call.  The
         // entry keeps the body condition as its template, which is all the
@@ -279,7 +279,7 @@ impl<P: Program> Module<P> {
                 });
             }
         }
-        // The parameter is cloned like any parameterized node, and the clone
+        // The parameter is cloned like any undecided node, and the clone
         // is unified with the argument instead of being replaced by it: the
         // class binding propagates the argument's value to every reference
         // to the parameter in the body.
@@ -318,7 +318,7 @@ impl<P: Program> Module<P> {
 
     /// Evaluate `argument` to the structural depth `pattern` (the cloned
     /// parameter) references, so the apply's unify sees the argument's
-    /// element values instead of unbound slots.  Only array positions in
+    /// element values instead of undecided slots.  Only array positions in
     /// the pattern recurse; sub-values the pattern treats as opaque stay
     /// unevaluated.  `seen` holds the `(pattern, argument)` pairs on the
     /// current recursion, so a structural cycle (the `Type : Type` universe,
@@ -409,10 +409,10 @@ impl<P: Program> Module<P> {
         }
         // The body always exists, so only the parts whose value could
         // differ per call need fresh nodes: the parameter and nodes the deep
-        // pass could not prove concrete — flagged parameterized nodes, plus
+        // pass could not prove concrete — flagged undecided nodes, plus
         // nodes whose dependence was never resolved (the deep pass never ran
         // on them).  A node the deep pass proved concrete
-        // (`evaluated_deep == Some(EvaluatedDeep { parameterized: false })`)
+        // (`evaluated_deep == Some(EvaluatedDeep { undecided: false })`)
         // is baked — reference it in place.  The deep pass evaluates an operation node for real even
         // when it merely holds a value (a type annotation's pin is a
         // constraint, not a computation), so a concrete proof on an
@@ -436,12 +436,12 @@ impl<P: Program> Module<P> {
             (source.value, source.operation, source.evaluated_deep)
         };
         // A node the deep pass proved concrete can be baked (referenced in
-        // place); one it never ran on (`None`) or flagged parameterized is
+        // place); one it never ran on (`None`) or flagged undecided is
         // cloned, and so is one whose value holds a foreign closure — the
         // concreteness proof cannot see through a function's body, so that
         // attribution is made here, where the scope being instantiated is known
         // ([`Self::value_holds_foreign_function`]).
-        let proven_concrete = evaluated_deep.is_some_and(|e| !e.parameterized);
+        let proven_concrete = evaluated_deep.is_some_and(|e| !e.undecided);
         let depends_on_parameter = node == ctx.parameter
             || !proven_concrete
             || self.value_holds_foreign_function(value, ctx.applied);
@@ -485,7 +485,7 @@ impl<P: Program> Module<P> {
         // is this call's node, and it carries the answer's `runned` with it:
         // an answer the template's own operator produced is this call's answer
         // (the mapping has already substituted this call's nodes), so the
-        // operator owes nothing more.  A value whose cells are still unbound is
+        // operator owes nothing more.  A value whose cells are still undecided is
         // exactly that case — the remap substituted the cells, and whatever
         // binds them (the parameter unify, a field check) binds *these* cells.
         // A struct type expression's answer is one such answer, and carrying it
@@ -529,7 +529,7 @@ impl<P: Program> Module<P> {
                 // reach inside a function value, so carrying the answer would
                 // share one closure across every call.  One level is enough: a
                 // closure held any deeper sits inside a position the scope-local
-                // rule already made unproven, so the walk clones that position
+                // rule already made undecided, so the walk clones that position
                 // and re-maps its interior.
                 template_answer && !self.value_holds_foreign_function(value, ctx.applied)
             }
@@ -551,7 +551,7 @@ impl<P: Program> Module<P> {
         // answer: `runned` stays false, so a read runs it and the computed
         // answer is reconciled with the carried one instead of the open slots
         // being read as final.
-        let owes_answer = mapped.is_some_and(|value| self.answer_elements_are_unbound(value));
+        let owes_answer = mapped.is_some_and(|value| self.answer_elements_are_undecided(value));
         self.nodes[clone].runned = carried && !owes_answer;
         self.nodes[clone].operation = operation;
         // The clone is still a singleton class here, so the slot write *is* the
@@ -785,7 +785,7 @@ impl<P: Program> Module<P> {
         false
     }
 
-    /// Whether an answer's **own** slots are still unbound — an array whose
+    /// Whether an answer's **own** slots are still undecided — an array whose
     /// elements are cells no operator has filled.  Such an answer is the
     /// operator's own result structure (the pair a call answers with), and the
     /// only thing that settles it is that operator's own re-run and wiring, so
@@ -793,7 +793,7 @@ impl<P: Program> Module<P> {
     /// final.  One level deep by design: a structure whose *elements* are
     /// decided is a fact a clone may answer with, however open its interior is
     /// (a struct type's field cells are bound by the enclosing call's checks).
-    fn answer_elements_are_unbound(&self, value: P::Value) -> bool {
+    fn answer_elements_are_undecided(&self, value: P::Value) -> bool {
         let Some(LowValue::Array(array)) = value.as_enum() else {
             return false;
         };
@@ -811,7 +811,7 @@ impl<P: Program> Module<P> {
     /// those are the positions a carried answer names.
     ///
     /// The attribution belongs here, where the scope being instantiated is
-    /// known, and not on a node's `parameterized` verdict: whether a function
+    /// known, and not on a node's `undecided` verdict: whether a function
     /// counts as "inside the scope" depends on which scope the apply is
     /// cloning, and the verdict is computed without a caller.  The applied
     /// function's own self-reference is the recursion point and an enclosing

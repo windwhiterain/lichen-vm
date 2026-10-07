@@ -92,7 +92,7 @@ pub use lichen_preprocess::{SOURCES_DIR, lichendir, sources_root};
 //
 // A node:  value_flag u8, [value], op_flag u8, [op_tag u8, operand_flag u8,
 // operand u64], equality (parent/next/tail: flag+u64, size u32),
-// parameterized u8, low_shape u8 [shape].
+// undecided u8, low_shape u8 [shape].
 //
 // Refs (node items, function values, array handles) are written as their
 // module's device key plus the local index (or the arena-relative offset

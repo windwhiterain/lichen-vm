@@ -2,7 +2,7 @@
 //! keys, the `t{k}` lookup (compiled straight to the lowlevel `TableGet` —
 //! the container's type is pinned to a table, so the operator comes from
 //! the syntax, never a runtime kind dispatch), and the recorded failures
-//! (a miss, an unbound key dropped at build, key/value type mismatches).
+//! (a miss, an undecided key dropped at build, key/value type mismatches).
 
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_lowlevel::LowValue;
@@ -78,13 +78,13 @@ fn a_miss_is_a_recorded_error() {
 }
 
 #[test]
-fn an_unbound_key_is_dropped_with_an_error() {
+fn an_undecided_key_is_dropped_with_an_error() {
     // A table literal inside a function body whose key reads the parameter
     // cannot be forced concrete at build time — the entry is dropped and
     // the failure recorded.
     assert!(has_check_kind(
         "f = x => table{ x ==> 1 }; f 5",
-        DiagKind::TableKeyUnbound
+        DiagKind::TableKeyUndecided
     ));
 }
 
@@ -107,7 +107,7 @@ fn table_values_share_one_type() {
 #[test]
 fn a_find_on_a_concretely_non_table_container_is_a_guard_error() {
     // The lookup pins the container's type to a table, so `1{2}` fails the
-    // check (an unbound container, by contrast, resolves at the call).
+    // check (an undecided container, by contrast, resolves at the call).
     assert!(has_check_kind("1{2}", DiagKind::Guard));
 }
 
@@ -124,7 +124,7 @@ fn a_table_flows_through_a_function() {
 
 #[test]
 fn a_table_behind_a_parameter_reads_through_tableget() {
-    // `t`'s type is unbound at the read site — the lookup's pin fixes it
+    // `t`'s type is undecided at the read site — the lookup's pin fixes it
     // to a table type, and the argument unify binds the pinned key/value
     // cells when the call resolves.
     assert_eq!(
@@ -139,7 +139,7 @@ fn a_failed_read_key_never_phantom_matches() {
     // build drops its entry, and the lookup *misses* — two failed reads
     // must never collide into a phantom hit.
     let source = "t = table{[1,2][5] ==> 3}\nt{[9][7]}";
-    assert!(has_check_kind(source, DiagKind::TableKeyUnbound));
+    assert!(has_check_kind(source, DiagKind::TableKeyUndecided));
     assert!(has_check_kind(source, DiagKind::TableMiss));
 }
 

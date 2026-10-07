@@ -83,7 +83,7 @@ impl<P: Program> StaticModule<P> {
     /// are indexed with `[...]`, so a reference that escapes panics here rather
     /// than producing an artifact that names a node it does not contain.  The
     /// one edge that may leave the set is the equality class — the closure takes
-    /// a class whole only from a node whose own value is unbound ([`closure`]) —
+    /// a class whole only from a node whose own value is undecided ([`closure`]) —
     /// so a class the artifact does not hold whole is **spliced** to the members
     /// it does hold, exactly as the GC splices a class that lost members
     /// (`Module::flatten_class`).
@@ -165,9 +165,9 @@ impl<P: Program> StaticModule<P> {
                     equality.tail().map(|t| node_map[&t]),
                     equality.size(),
                 ),
-                // A node the deep pass never ran on is unproven — treated as
-                // parameterized (conservative: it materializes as a clone).
-                parameterized: node.evaluated_deep.is_none_or(|e| e.parameterized),
+                // A node the deep pass never ran on is undecided — treated as
+                // undecided (conservative: it materializes as a clone).
+                undecided: node.evaluated_deep.is_none_or(|e| e.undecided),
             });
         }
         let mut function_map: HashMap<FunctionId, StaticFunctionId> = HashMap::new();
@@ -469,7 +469,7 @@ fn rewrite_value<P: Program>(
 /// - `operation.operand` — a residual node must be able to re-run later, so
 ///   unlike the GC's walk, which deliberately does not follow a cached value's
 ///   operand, this one must;
-/// - the equality class of a node whose **own value is still unbound** — the
+/// - the equality class of a node whose **own value is still undecided** — the
 ///   class is what holds that node's answer (the shared inference cell, the
 ///   template's pattern), so the class is the structure a later read of it
 ///   depends on and is taken whole.  A node that already carries its own solved
@@ -501,7 +501,7 @@ fn closure<P: Program>(module: &Module<P>, roots: &[NodeId]) -> (Vec<NodeId>, Ve
     // so re-expanding it for each visited member was the whole cost of this walk
     // (measured: 363,627 visits for a 611-node closure, 7 ms).
     //
-    // Only a node whose **own value is unbound** takes its class, and that is what
+    // Only a node whose **own value is undecided** takes its class, and that is what
     // keeps a decided leaf from paying for a class it does not need.  Such a
     // node's answer *is* its class — a shared inference cell, a template's
     // pattern — so the class is the structure a later read of it depends on and is

@@ -92,7 +92,7 @@ where
 }
 
 /// [`ValueExt::value_eq`] over two nodes' values; `false` when either has none
-/// (an unbound cell, or a node that is not a value at all).
+/// (an undecided cell, or a node that is not a value at all).
 fn same_value<P: Program>(module: &Module<P>, left: AnyNodeId, right: AnyNodeId) -> bool
 where
     P::Value: ValueType,

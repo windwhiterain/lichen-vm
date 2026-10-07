@@ -1,14 +1,14 @@
 //! Asserts: explicit constraints — an assert registers a condition node
 //! that the checker deep-evaluates and requires to be
 //! `USize(1)`.  Unlike a unification, the constraint does not *bind* its
-//! node: an unbound condition stays untriggered rather than being forced to
+//! node: an undecided condition stays untriggered rather than being forced to
 //! `1`, and the apply clone re-checks the instantiated condition per call.
 //!
 //! The walk is the ordinary deep pass, and a shallow-marked array position is
 //! **not** descended into.  A condition that sits behind such a mark does not
 //! resolve here: the operator's own operand gate
 //! ([`OperatorExt::run_deferred`](crate::OperatorExt::run_deferred)) reads the
-//! operand array's verdict, which the shallow flag alone makes parameterized, so
+//! operand array's verdict, which the shallow flag alone makes undecided, so
 //! it answers undecided and the entry stays pending.  The walk that descended the
 //! masked positions could not change that — it was deleted — and the lowlevel
 //! test that claimed otherwise only ever observed "no error recorded", which is
@@ -58,7 +58,7 @@ impl<P: Program> Module<P> {
     /// Each entry is *consumed* once decided: a condition resolving to
     /// anything other than `USize(1)` records an [`AssertError`] in
     /// [`Self::assert_errors`] and the entry is dropped either way.  A
-    /// condition that stays lazy (an unbound parameter, or any computation
+    /// condition that stays lazy (an undecided parameter, or any computation
     /// whose operands cannot resolve) is *not triggered*: no error is
     /// recorded, and the entry is kept as pending — it is the template an
     /// apply clone instantiates against each call's argument.
@@ -89,7 +89,7 @@ impl<P: Program> Module<P> {
             let block = node.block;
             let Some(value) = self.evaluate_node_deep(condition, Some(block)) else {
                 // Not triggered — deferred to the apply clone.  An undecided
-                // condition (an unbound parameter, or any computation whose
+                // condition (an undecided parameter, or any computation whose
                 // operands cannot resolve) records no error.
                 self.asserts.swap(pending, i - 1);
                 pending += 1;

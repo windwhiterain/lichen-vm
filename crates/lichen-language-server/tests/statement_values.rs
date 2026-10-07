@@ -106,7 +106,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     // the compute vocabulary hook (`Kernel`) and the type renders as the struct
     // `struct<.native <_>, .sig Int -> Int>` — not the raw recursive-pair layout.
     // The struct's type names no class for either field, so each renders under
-    // the raw mark — `raw Kernel`, `raw parameterized` — which says the printer
+    // the raw mark — `raw Kernel`, `raw undecided` — which says the printer
     // dumped the field rather than spelling it like a form the chain explained.
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
@@ -117,7 +117,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     for sv in vals {
         assert_eq!(
             sv.value.as_deref(),
-            Some("(raw Kernel, raw parameterized)"),
+            Some("(raw Kernel, raw undecided)"),
             "value = {:?}",
             sv.value
         );
@@ -137,7 +137,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
         .expect("hover on k_double");
     assert_eq!(
         hover,
-        "`k_double` — `(raw Kernel, raw parameterized) : struct<.native raw[?a, ?b], .sig Int -> Int>`"
+        "`k_double` — `(raw Kernel, raw undecided) : struct<.native raw[?a, ?b], .sig Int -> Int>`"
     );
 }
 
@@ -176,7 +176,7 @@ fn type_variables(rendered: &str) -> Vec<String> {
 Parked, not caused by any work in this branch."]
 fn compute_wrapper_functions_hover_with_named_type_variables() {
     // `compute.jit` / `compute.launch` are generic wrappers from a frozen
-    // module.  Their type variables are unbound cells that must render as
+    // module.  Their type variables are undecided cells that must render as
     // *named* `?a`/`?b` (and stay shared across a kernel's signature), not as
     // an opaque bare `? -> ? -> ? -> ?` — the LSP-visible half of the same
     // "raw layout" bug for the wrapper functions themselves.  A `jit` result is

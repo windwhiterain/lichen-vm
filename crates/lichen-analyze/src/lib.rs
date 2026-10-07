@@ -44,7 +44,7 @@ pub struct NodeReport {
     /// The deep pass's verdict for this node: `None` when it never ran.
     pub evaluated_deep: Option<bool>,
     /// Whether this node's own value is the undecided marker.
-    pub unbound: bool,
+    pub undecided: bool,
 }
 
 /// A compiled program, kept whole so its graph can be walked.
@@ -141,7 +141,7 @@ impl Analysis {
         let width = unsafe { self.build.module.array_items(node) }.map(|items| items.len());
         NodeReport {
             node,
-            unbound: own.is_none(),
+            undecided: own.is_none(),
             own,
             class,
             width,
@@ -150,7 +150,7 @@ impl Analysis {
                 .build
                 .module
                 .node_evaluated_deep(node)
-                .map(|deep| deep.parameterized),
+                .map(|deep| deep.undecided),
         }
     }
 
@@ -222,13 +222,13 @@ impl Analysis {
         let own = short(report.own.as_ref());
         let class = short(report.class.as_ref());
         let deep = match report.evaluated_deep {
-            Some(true) => "parameterized",
+            Some(true) => "undecided",
             Some(false) => "concrete",
             None => "unevaluated",
         };
         format!(
-            "{node:?} width={:?} own={own} class={class} deep={deep} unbound={} origin={:?}",
-            report.width, report.unbound, report.origin
+            "{node:?} width={:?} own={own} class={class} deep={deep} undecided={} origin={:?}",
+            report.width, report.undecided, report.origin
         )
     }
 

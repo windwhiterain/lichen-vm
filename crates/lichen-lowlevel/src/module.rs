@@ -248,11 +248,11 @@ impl<P: Program> Module<P> {
     ///
     /// A reader may rely on [`Some`] meaning the deep pass
     /// ([`Self::evaluate_node_deep`]) ran on
-    /// this node and [`EvaluatedDeep::parameterized`] recording whether any
+    /// this node and [`EvaluatedDeep::undecided`] recording whether any
     /// node in its reachable subtree is undecided — i.e.
     /// whether the pass could **not** prove the subtree concrete.  [`None`]
     /// means concreteness is *unknown*, which a reader must treat as
-    /// parameterized, never as proven concrete: the apply clone walk and the
+    /// undecided, never as proven concrete: the apply clone walk and the
     /// operation postlude both do, and a budget refusal as well as a node
     /// reached only as an operand leave [`None`].  The verdict covers the
     /// node's graph at the time it was reached; it is cleared when a late
@@ -390,7 +390,7 @@ impl<P: Program> Module<P> {
     }
 
     /// Registers `condition` as an assert — an explicit constraint, not a
-    /// unification, so an unbound condition is *not* bound to `1`, it stays
+    /// unification, so an undecided condition is *not* bound to `1`, it stays
     /// untriggered until an apply binds it.  [`Self::check_asserts`]
     /// deep-evaluates every registered condition and
     /// requires `USize(1)`, see there.  The registry is a worklist; a

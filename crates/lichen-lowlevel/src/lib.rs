@@ -396,7 +396,7 @@ pub enum LowOperator {
     ///
     /// A table read: the key is deep-evaluated, deep-content-hashed, and
     /// matched against the table's sorted entries; a miss (no entry for
-    /// the key, or a target/key that is still unbound or a computed
+    /// the key, or a target/key that is still undecided or a computed
     /// nothing) records a [`EvalError`] and yields [`LowValue::Error`].
     TableGet,
 }
@@ -695,11 +695,11 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
                 // it refuses on budget exhaustion, so an absent node or an unset
                 // flag means "concreteness unknown" — undecided, never proven
                 // concrete.
-                let parameterized = module
+                let undecided = module
                     .nodes
                     .get(node)
-                    .is_none_or(|node| node.evaluated_deep.is_none_or(|deep| deep.parameterized));
-                if parameterized {
+                    .is_none_or(|node| node.evaluated_deep.is_none_or(|deep| deep.undecided));
+                if undecided {
                     return None;
                 }
                 // A deep pass that answered nothing means the same thing this
@@ -1136,7 +1136,7 @@ pub struct StaticFunction {
     /// with the fresh owner) from its captures (kept in the enclosing
     /// template).
     pub nodes: Vec<LocalNodeId>,
-    /// Whether the body graph reaches a `parameterized` node outside this
+    /// Whether the body graph reaches a `undecided` node outside this
     /// function's own template scope — an open capture.  Computed once when the
     /// artifact is built (freeze or load), so the materialize pass's re-home
     /// test is a field read instead of a body walk per function-valued
@@ -1147,13 +1147,13 @@ pub struct StaticFunction {
 /// The outcome of the deep pass ([`Module::evaluate_node_deep`]) on one node.
 /// The deep pass records,
 /// per node, whether it ran at all and, when it ran, whether the subtree it
-/// covers is parameterized.
+/// covers is undecided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EvaluatedDeep {
     /// `true` when any node in self's reachable subtree is undecided — an
     /// empty value slot the pass could not fill — i.e. the deep pass could not
     /// prove the subtree concrete.
-    pub parameterized: bool,
+    pub undecided: bool,
 }
 
 #[derive(Debug)]
@@ -1263,7 +1263,7 @@ pub struct Node<P: Program> {
     /// Whether the deep pass ([`Module::evaluate_node_deep`]) has run on this
     /// node, and what it
     /// proved.  [`Some`] means the deep pass ran and
-    /// [`EvaluatedDeep::parameterized`] records whether any node in self's
+    /// [`EvaluatedDeep::undecided`] records whether any node in self's
     /// reachable subtree is undecided.  [`None`] means
     /// it never ran, so the node's concreteness is unknown.  **Private**:
     /// read through [`Module::node_evaluated_deep`].
@@ -1303,9 +1303,9 @@ pub struct StaticNode<P: Program> {
     /// `evaluated_deep` by `StaticModule::from_module` (`true` when never
     /// deep-passed — conservative).  Not derivable from the root value: an
     /// array whose cached value is the array while an element is unresolved
-    /// is parameterized.  The importer's deep pass reads this instead of
+    /// is undecided.  The importer's deep pass reads this instead of
     /// descending — a static ref is a decided leaf.
-    pub parameterized: bool,
+    pub undecided: bool,
 }
 
 /// Which evaluation budget a [`Module`] exhausted, and what its limit was.
@@ -1396,7 +1396,7 @@ pub struct Module<P: Program> {
     /// module knowing anything about the host's per-assert metadata.
     pub asserts: Vec<PendingAssert>,
     /// Failed asserts: a condition that resolved to a concrete value other
-    /// than `USize(1)`.  An assert whose condition stays lazy (an unbound
+    /// than `USize(1)`.  An assert whose condition stays lazy (an undecided
     /// parameter) is not triggered and records nothing.  Same append-only,
     /// never-cleared contract as [`Self::unify_errors`].
     pub assert_errors: Vec<AssertError<P>>,

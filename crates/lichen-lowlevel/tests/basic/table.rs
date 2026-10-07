@@ -2,7 +2,7 @@
 //! coinductive structural equality plus the matching content hash), the
 //! hash-sorted payload, and the `TableGet` read (a miss records an
 //! [`EvalError::TableMiss`] and yields `Error`; an unforceable key is
-//! dropped with a [`EvalError::TableKeyUnbound`] at build).
+//! dropped with a [`EvalError::TableKeyUndecided`] at build).
 
 use super::*;
 use lichen_lowlevel::{Freeze, ModuleKey, StaticNodeId};
@@ -109,7 +109,7 @@ fn keys_are_deep_content_distinct_but_equal_structures_match() {
 }
 
 #[test]
-fn an_unbound_key_is_dropped_with_a_recorded_error() {
+fn an_undecided_key_is_dropped_with_a_recorded_error() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let key = m.add_node(root, None, None);
@@ -130,14 +130,14 @@ fn an_unbound_key_is_dropped_with_a_recorded_error() {
     assert_eq!(
         unsafe { payload.items() }.len(),
         0,
-        "the unbound entry is dropped"
+        "the undecided entry is dropped"
     );
-    let EvalError::TableKeyUnbound { key: dropped } = m.eval_errors[0] else {
-        panic!("the build records a TableKeyUnbound failure")
+    let EvalError::TableKeyUndecided { key: dropped } = m.eval_errors[0] else {
+        panic!("the build records a TableKeyUndecided failure")
     };
     assert_eq!(dropped, AnyNodeId::Dynamic(key));
 
-    // Reading with a still-unbound key does **not** miss: the key is undecided,
+    // Reading with a still-undecided key does **not** miss: the key is undecided,
     // not absent, so the lookup has not happened yet and the read stays lazy
     // for a later pass, when the key is bound.  (A key that is *decided* and
     // not key content — an `Error` — does miss; see the next test.)
@@ -192,7 +192,7 @@ fn an_empty_key_is_never_a_phantom_hit() {
     assert!(
         m.eval_errors
             .iter()
-            .any(|e| matches!(e, EvalError::TableKeyUnbound { .. })),
+            .any(|e| matches!(e, EvalError::TableKeyUndecided { .. })),
         "the build records the dropped key"
     );
 
@@ -226,7 +226,7 @@ fn an_undecided_read_leaves_no_cycle_for_the_next_pass() {
         root,
         &[(AnyNodeId::Dynamic(key), AnyNodeId::Dynamic(value))],
     );
-    // A key that stays undecided: an unbound cell.
+    // A key that stays undecided: an undecided cell.
     let other_key = m.add_node(root, None, None);
     let get = table_get(&mut m, root, t, other_key);
 

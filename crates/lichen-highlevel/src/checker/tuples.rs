@@ -48,7 +48,7 @@ where
     /// field, a tuple-type element, a function-type side.  There is no
     /// term/type distinction: the expression is used as-is, its pair being
     /// the type it denotes.  A genuine type (a value whose own type is a
-    /// kind, or an unbound cell) contributes its pair directly; a *term*
+    /// kind, or an undecided cell) contributes its pair directly; a *term*
     /// put in a type position contributes its own value pair too, and the
     /// subsequent unification fails (a term's value pair does not unify
     /// with its own type) — `struct<.f Int, .g b>` with `b : B` fails, while

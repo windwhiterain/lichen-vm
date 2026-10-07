@@ -193,7 +193,7 @@ pub trait Ctx<P: Program> {
     /// function-ness guard's `[[?d, ?c], [FunctionType, K]]` — must stay out;
     /// the caller that prints inserts it.
     fn arrow(&mut self, domain: NodeId, codomain: NodeId) -> NodeId;
-    /// A fresh unbound type cell.
+    /// A fresh undecided type cell.
     fn fresh(&mut self) -> NodeId;
     /// The canonical universe node `[Type, ↺]` (`Type : Type`).  Referenced,
     /// not rebuilt — the prebuilt composite that must be shared, because
@@ -619,9 +619,9 @@ pub enum TypeOperator {
     /// error (the checker unifies the operand types).
     ///
     /// The lowlevel deep-evaluates the operand and gates on its
-    /// parameterized subtree before calling `run`, so an unbound operand
+    /// undecided subtree before calling `run`, so an undecided operand
     /// (a template parameter during the definition pass) is already the
-    /// lazy marker, and `run` stays lazy on any unbound side.
+    /// lazy marker, and `run` stays lazy on any undecided side.
     Add,
     Sub,
     Mul,
@@ -702,7 +702,7 @@ pub enum TypeOperator {
 /// enum of *structural* value facts (an out-of-bounds index, a table miss) —
 /// a divisor that evaluated to zero is neither.  The operator's answer is the
 /// lazy marker, which is what every other refused computation in this language
-/// answers, so the program reports the unbound result and this says why.
+/// answers, so the program reports the undecided result and this says why.
 ///
 /// **`Int`-only**: a float `Div` has the IEEE answer — an infinity or a `NaN`,
 /// both ordinary float values here — so no float divisor is recorded (see
@@ -941,7 +941,7 @@ where
                 // for this operation node, so its home block is alive for the
                 // duration of the run.
                 let items = unsafe { operands.items() };
-                // An unbound operand keeps the operator lazy.
+                // An undecided operand keeps the operator lazy.
                 let Some(value) = module.node_value(items[0].node) else {
                     return None;
                 };
@@ -989,7 +989,7 @@ where
             | TypeOperator::InDomain
             | TypeOperator::IsStructType => {
                 // The VM already deep-evaluates the operand and gates on its
-                // parameterized subtree, so an undecided operand never reaches
+                // undecided subtree, so an undecided operand never reaches
                 // this operator (the definition pass flags the node instead).
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("binary operators expect an operand array of [left, right]")
@@ -998,7 +998,7 @@ where
                 // evaluated for this operation node, so its home block is
                 // alive for the duration of the run.
                 let operands = unsafe { operands.items() };
-                // An unbound side (an empty slot) keeps the operator lazy.
+                // An undecided side (an empty slot) keeps the operator lazy.
                 let left = module.node_value(operands[0].node);
                 let right = module.node_value(operands[1].node);
                 let (Some(left), Some(right)) = (left, right) else {

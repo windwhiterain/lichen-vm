@@ -63,7 +63,7 @@ T::I == Type
     );
 }
 
-/// Two reads of one unbound placeholder (the error half of the defect): both
+/// Two reads of one undecided placeholder (the error half of the defect): both
 /// used to fail the struct construction; both field types decide now.
 #[test]
 fn two_deferred_field_reads_both_bind() {

@@ -418,7 +418,7 @@ where
     /// unroll would have handled.
     fn value_decided(&self, node: NodeId) -> bool {
         let Some(value) = self.module.class_value(node) else {
-            // An unbound class is not a decided value: nothing was ever
+            // An undecided class is not a decided value: nothing was ever
             // computed here.
             return false;
         };

@@ -1243,7 +1243,7 @@ where
                             // The body is outside the kernel-safe subset, or the
                             // parameter's domain is undecided.  Either way the
                             // honest result is a lazy value plus a recorded reason:
-                            // the definition pass reports the unbound result, and
+                            // the definition pass reports the undecided result, and
                             // this says *why* — which is the difference between a
                             // user who can fix the program and one who cannot.
                             module.record_extension_diagnostic(JIT_DIAGNOSTIC, None, err);
@@ -1270,7 +1270,7 @@ where
                     // (possibly nested for a tuple-of-tuples domain) for a
                     // tuple-domain kernel.  Flatten it to the wasm argument vector.
                     // Anything else (a non-literal element, e.g. a computed scalar)
-                    // stays lazy — the definition pass reports the unbound result —
+                    // stays lazy — the definition pass reports the undecided result —
                     // and each way that can happen records the cause it is, because
                     // the lazy marker alone tells the user nothing about the
                     // argument they wrote.
@@ -1594,7 +1594,7 @@ where
                             // The refusal is the reason this launch produced no
                             // value, so it is recorded rather than discarded: the
                             // lazy marker alone would tell the user nothing about
-                            // why they got `parameterized`.  The general channel
+                            // why they got `undecided`.  The general channel
                             // owns it (see `P1-30`), because `BudgetExhausted` is
                             // the *non-termination* verdict and every one of its
                             // renderings says "never terminates" — false here, the
@@ -2229,7 +2229,7 @@ where
     let ret = module.functions[fid].r#return;
     // The function's `return` is the `[value, type]` pair node; the kernel's
     // result is the pair's *value* (element 0).  A body whose return is a bare
-    // value node (the checker leaves a direct kernel-apply's codomain unbound,
+    // value node (the checker leaves a direct kernel-apply's codomain undecided,
     // so it stores the body's value node directly instead of a pair) is used
     // as the value itself.
     // SAFETY: `ret` is a live node of `module`; nothing in this crate calls
@@ -3614,7 +3614,7 @@ where
         // A value collapsed to a bare empty cell resolves through its
         // equality class to the computation that defines it — a kernel call's
         // result, or a `launch` argument (whose cell is *expected* to be
-        // parameterized: `launch` is two-step, assemble then call, so the
+        // undecided: `launch` is two-step, assemble then call, so the
         // argument is only concrete at run time).  Emit the defining member.
         if let Some(definer) = class_computation_node(module, node) {
             return emit_node(module, params, definer, depth + 1, body, tally);
@@ -4861,7 +4861,7 @@ where
 /// same reader the type predicates in `lichen_highlevel::shape` use, so the walk
 /// cannot drift from the encoding authority.
 ///
-/// `None` when the term is not an array with that slot, or the slot is unbound.
+/// `None` when the term is not an array with that slot, or the slot is undecided.
 fn type_term_slot<P>(module: &Module<P>, term: AnyNodeId, at: usize) -> Option<AnyNodeId>
 where
     P: Program,
@@ -5152,7 +5152,7 @@ impl ScalarValue {
 /// nested `Array` of them, as a tuple-of-tuples domain needs) into the wasm
 /// argument vector, each leaf with its own class.  Returns `Err` naming the
 /// first element that is not a scalar leaf — the definition pass reports the
-/// unbound result, but only this says *which* element was unusable.
+/// undecided result, but only this says *which* element was unusable.
 ///
 /// `path` is the offending element's position in the argument: `""` at the
 /// root, then `"1"`, `"1.0"`, …  It is built as the walk descends, because for
@@ -5330,7 +5330,7 @@ where
 /// no-op.** The lazy cell is what makes a kernel's own read deferrable and what
 /// makes an undecided argument stay undecided — but a program array *is*
 /// decided, it is an ordinary lichen value with ordinary elements, and
-/// answering `parameterized` for it made `compute.read ((compute.Read _)(.from
+/// answering `undecided` for it made `compute.read ((compute.Read _)(.from
 /// data, .at i))` a plausible-looking program that produced an empty value while
 /// still
 /// printing `array<?a, ?b>`. There is no way to make a buffer out of a program
@@ -7977,7 +7977,7 @@ where
     /// decides the result's shape — a bare `Buffer` for a one-write index
     /// function, a tuple of buffers for a several-write one — and the arity
     /// cannot be read here: `build` runs once, on the frozen `plrun` template,
-    /// where `.sig` is an unbound cell that only resolves at run time.  A tuple
+    /// where `.sig` is an undecided cell that only resolves at run time.  A tuple
     /// type is a value node with one element per position, so no check-time
     /// node can name a tuple whose arity is not known until the run.
     ///

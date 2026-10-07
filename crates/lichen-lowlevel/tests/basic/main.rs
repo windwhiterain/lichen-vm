@@ -352,10 +352,10 @@ fn usize_node(m: &mut Module<TestProgram>, block: BlockId, n: usize) -> NodeId {
     m.add_node(block, None, Some(TestValue::LowValue(LowValue::USize(n))))
 }
 
-/// An unbound cell — an **empty node slot**, which is undecided's only in-VM
+/// An undecided cell — an **empty node slot**, which is undecided's only in-VM
 /// representation, so deep evaluation stays lazy instead of panicking on a
 /// missing operation.
-fn unbound_node(m: &mut Module<TestProgram>, block: BlockId) -> NodeId {
+fn undecided_node(m: &mut Module<TestProgram>, block: BlockId) -> NodeId {
     m.add_node(block, None, None)
 }
 

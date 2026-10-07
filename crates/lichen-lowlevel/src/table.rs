@@ -40,10 +40,10 @@
 //!   freeze copies the payload verbatim, so it is the same fold afterwards —
 //!   and a function to the shape of its template, whose content is what it
 //!   returns and asserts (its parameter is the function's bound variable, so
-//!   the body reads it as the unbound cell it is).
+//!   the body reads it as the undecided cell it is).
 //!
 //! A function's template is unfolded in a second mode ([`UnfoldMode`]),
-//! because a template is *expected* to hold unbound cells and is never
+//! because a template is *expected* to hold undecided cells and is never
 //! compared by `key_eq`: that walk is total, and it reads a node's operation
 //! edge in preference to its memoized value, so its answer does not depend on
 //! how far the definition pass has run.
@@ -63,9 +63,9 @@
 //! Keys are deep-evaluated when the table is built — hashing needs the
 //! decided content — so a stored key is fully concrete and its hash is
 //! stable for the table's whole life.  A key that cannot be decided
-//! (its subtree holds an unbound cell or a parameterized computation) or
+//! (its subtree holds an undecided cell or a undecided computation) or
 //! whose content is an empty value ([`LowValue::Error`], the residue of
-//! a failed read) records a [`EvalError::TableKeyUnbound`] and drops the
+//! a failed read) records a [`EvalError::TableKeyUndecided`] and drops the
 //! entry.  Values are stored as lazy refs and read on demand, like array
 //! items.
 
@@ -120,14 +120,14 @@ const UNFOLD_DEPTH: usize = 8;
 enum UnfoldMode {
     /// The key's own value graph — the part [`Module::key_eq`] compares, so
     /// the walk reads the fact the comparison reads: the node's decided
-    /// value.  A node that has none (a cell that is still unbound, a
+    /// value.  A node that has none (a cell that is still undecided, a
     /// computation the deep pass could not resolve) leaves the *whole key*
     /// undecided, which a read answers by staying lazy rather than by missing
     /// a key that may still become concrete.
     Key,
     /// A function template's shape — the part `key_eq` never compares, because
     /// a function keys by identity.  This walk is total (a template is
-    /// *expected* to hold unbound cells — its own parameter is one) and it
+    /// *expected* to hold undecided cells — its own parameter is one) and it
     /// unfolds a node's operation edge in preference to its memoized value,
     /// so its answer does not depend on how far the definition pass has run.
     Template,
@@ -150,7 +150,7 @@ struct Unfolding {
 pub(crate) enum KeyState {
     /// The key's content is decided and hashed.
     Hashed(u64),
-    /// The key is not decided yet — an unbound cell, a lazy computation whose
+    /// The key is not decided yet — an undecided cell, a lazy computation whose
     /// operands are not bound.  It may still become a real key, so a read
     /// must stay lazy rather than miss.
     Undecided,
@@ -164,8 +164,8 @@ impl<P: Program> Module<P> {
     /// Build a constant table value from raw `(key, value)` node pairs (see
     /// the module docs).  Every key is deep-evaluated first
     /// ([`Self::evaluate_node_deep`]; a static key reads its solved
-    /// value), an undecidable key records a
-    /// [`EvalError::TableKeyUnbound`] and drops the entry, and the
+    /// value), an undecided key records a
+    /// [`EvalError::TableKeyUndecided`] and drops the entry, and the
     /// survivors are deep-content-hashed and stored sorted by hash for the
     /// binary-search lookup.  The payload is a plain arena slice like an
     /// array's.
@@ -177,7 +177,7 @@ impl<P: Program> Module<P> {
         let mut items = Vec::with_capacity(entries.len());
         for &(key, value) in entries {
             let Some(hash) = self.key_hash(key) else {
-                self.eval_errors.push(EvalError::TableKeyUnbound { key });
+                self.eval_errors.push(EvalError::TableKeyUndecided { key });
                 continue;
             };
             items.push(TableItem { key, value, hash });
@@ -193,7 +193,7 @@ impl<P: Program> Module<P> {
     /// not fully concrete — its content is not yet decided, so nothing can
     /// be hashed or matched (a build drops the entry, a read misses) — or
     /// when the content holds a [`LowValue::Error`], the residue of an
-    /// already-recorded failed read: not hashable, same class as an unbound
+    /// already-recorded failed read: not hashable, same class as an undecided
     /// subtree.
     pub(crate) fn key_hash(&mut self, key: AnyNodeId) -> Option<u64> {
         match self.key_state(key) {
@@ -220,22 +220,19 @@ impl<P: Program> Module<P> {
                 // comes from its own value and that value's structure only, so
                 // nothing here needs a walk that descends past the shallow mask.
                 self.evaluate_node_deep(node, None);
-                // Deliberately only `Some(parameterized)`: a key with **no**
+                // Deliberately only `Some(undecided)`: a key with **no**
                 // verdict is not gated here, because the content unfolding is
                 // total — it cuts at `UNFOLD_DEPTH` and reports its own failure
-                // (`TableKeyUnbound`) — so a deep or never-walked key is still
+                // (`TableKeyUndecided`) — so a deep or never-walked key is still
                 // hashable, and the cyclic-key tests depend on exactly that.
                 // `P1-31` records why this read is not the same defect as the
                 // truthiness the verdict's own arms had.
-                if self.nodes[node]
-                    .evaluated_deep
-                    .is_some_and(|e| e.parameterized)
-                {
+                if self.nodes[node].evaluated_deep.is_some_and(|e| e.undecided) {
                     return KeyState::Undecided;
                 }
             }
             AnyNodeId::Static(sref) => {
-                if self.static_module(sref.module).nodes[sref.index.index].parameterized {
+                if self.static_module(sref.module).nodes[sref.index.index].undecided {
                     return KeyState::Undecided;
                 }
             }
@@ -313,7 +310,7 @@ impl<P: Program> Module<P> {
             Some(LowValue::None) => KeyState::Hashed(NONE_TOKEN),
             // An empty value is never key content: it is a failed read's
             // residue, so the key is not hashable — the same class as an
-            // unbound subtree (a build drops the entry, a read misses).  A
+            // undecided subtree (a build drops the entry, a read misses).  A
             // template is not key content at all, so there it is only a shape.
             Some(LowValue::Error) => match mode {
                 UnfoldMode::Key => KeyState::Unhashable,
@@ -390,7 +387,7 @@ impl<P: Program> Module<P> {
     ///
     /// The template's content is its *entry points*: what it returns and what
     /// it asserts, in order.  Its parameter is the function's bound variable,
-    /// not content, so it is not folded in — the body reads it as the unbound
+    /// not content, so it is not folded in — the body reads it as the undecided
     /// cell it is.
     fn hash_function(
         &self,
@@ -481,7 +478,7 @@ impl<P: Program> Module<P> {
     /// read-only counterpart of the unification comparison (same elementwise
     /// descent, same path guard; no binding, no error recording — a hash
     /// table's equality must be pure).  Stored keys are concrete by
-    /// construction, so the comparison never meets an unbound cell.  A
+    /// construction, so the comparison never meets an undecided cell.  A
     /// table value keys by identity, a function by its id.
     pub(crate) fn key_eq(
         &self,

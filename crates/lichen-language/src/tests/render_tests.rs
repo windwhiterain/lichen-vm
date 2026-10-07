@@ -71,9 +71,9 @@ fn a_checker_message_uses_the_cli_type_syntax() {
 }
 
 #[test]
-fn an_array_element_conflict_renders_unbound_arrow_cells() {
+fn an_array_element_conflict_renders_undecided_arrow_cells() {
     // [1, x => x] — the found side is the lambda's arrow shape with its
-    // two unbound cells sharing one name.  No `?a` journey line.
+    // two undecided cells sharing one name.  No `?a` journey line.
     let report = crate::compile("[1, x => x]");
     assert_eq!(
         report.diagnostics[0].message,

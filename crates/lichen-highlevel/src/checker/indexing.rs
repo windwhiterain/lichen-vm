@@ -21,7 +21,7 @@ where
     /// fresh array type — the same pin [`Self::check_binop`] applies to its
     /// operands and [`Self::check_table_find`] to its container — so a
     /// concretely non-array container (a tuple, a struct, a function, a
-    /// table) fails here with a diagnostic, and an unbound container (a
+    /// table) fails here with a diagnostic, and an undecided container (a
     /// parameter, a call result) resolves at the call site's argument
     /// unify: only an array can flow in.  Tuple and struct slots are read
     /// with the dedicated positional form `a(k)` ([`Self::check_field`]),
@@ -91,7 +91,7 @@ where
     /// by name (`X::a`, [`Self::check_raw_named_field`]), and an ordinary value
     /// (a tuple, an array, a scalar) is not readable this way at all.
     ///
-    /// Beyond the container-kind check the read validates nothing: an unbound
+    /// Beyond the container-kind check the read validates nothing: an undecided
     /// container (a parameter, a call result) stays lazy — the lowlevel `Index`
     /// defers — and resolves at the apply, exactly the laziness the wrapper
     /// field reads rely on.
@@ -179,7 +179,7 @@ where
     /// **writes** rather than compares: measured, `S::a : Int` and `S::a == 1`
     /// were both accepted where `5 : Type` and `5 == Int` are refused, and
     /// `S::a == Int` passed for the same reason rather than because it is
-    /// right (`docs/notes/raw-index.md`).  An **unbound** container's read
+    /// right (`docs/notes/raw-index.md`).  An **undecided** container's read
     /// computes nothing and stays lazy, which is what the per-apply re-check
     /// relies on.
     ///
@@ -229,7 +229,7 @@ where
     ///
     /// The container's type is *pinned* to a fresh table type — the same
     /// pin [`Self::check_binop`] applies to its operands — so a concretely
-    /// non-table container fails here with a diagnostic, and an unbound
+    /// non-table container fails here with a diagnostic, and an undecided
     /// container (a parameter, a call result) resolves at the call site's
     /// argument unify: only a table can flow in.  The value is the
     /// `TableGet` op node itself; the type is the pinned shape's value-type
@@ -352,7 +352,7 @@ where
     /// [`Module::build_table`](lichen_lowlevel::Module::build_table): every key
     /// is deep-evaluated and
     /// deep-content-hashed, an entry whose key is not concrete is dropped
-    /// with a recorded [`EvalError::TableKeyUnbound`], and the survivors are
+    /// with a recorded [`EvalError::TableKeyUndecided`], and the survivors are
     /// stored sorted by hash.  The type is the kinded pair
     /// `[[key type, value type], [TypeTable, Type]]`.
     pub(super) fn check_table_term(&mut self, e: ExprId) -> NodeId {
@@ -456,7 +456,7 @@ where
     /// mask: slot 0 (the value slot) is marked, slot 1 is the next level
     /// down the type spine (the pair's own type slot).  The descent follows
     /// position 1 while the spine is a concrete pair at check time; an
-    /// unbound slot ends the descent (the wraps above the stop still apply).
+    /// undecided slot ends the descent (the wraps above the stop still apply).
     /// The layers are fresh nodes, so a shared subexpression (a kind
     /// expression reused by every occurrence) is never itself marked.
     fn wrap_shallow(&mut self, e: ExprId, depth: usize) -> NodeId {

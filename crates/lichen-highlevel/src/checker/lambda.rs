@@ -143,13 +143,13 @@ where
         // compares each argument's attribute against this declared value node
         // (via [`Checker::function_param_attr`], then the attribute's
         // [`AttrExt::unify_slots`]).  The live attribute cell in the parameter
-        // pair is deliberately left **unbound** — binding it to the declared
+        // pair is deliberately left **undecided** — binding it to the declared
         // value here would let the deep pass *bake* it (it is a concrete
         // value), so the per-apply clone would reference the template's cell
         // instead of resetting it, and the lowlevel apply's positional unify
         // would then enforce the declared perspective (equality) against the
         // argument, defeating the attribute's subtype relaxation.  Kept
-        // unbound, it is a fresh per-apply clone that binds the argument's
+        // undecided, it is a fresh per-apply clone that binds the argument's
         // actual perspective, exactly like the value/type cells — so the
         // body's return reads the caller's perspective and `f (5 # 4)` yields
         // `5 # 4`.  The declared value itself stays only in
@@ -370,7 +370,7 @@ where
         // Function-ness guard: catch *concretely* non-function types
         // statically (applying a literal is an error, not a runtime panic).
         // A concrete function type is the self-referential `[Function(fid),
-        // ↺]` and is recognised by the two cells it has; unbound types
+        // ↺]` and is recognised by the two cells it has; undecided types
         // (parameters, lambdas, call results) are left to the runtime apply —
         // unifying the shared cell here would chain the type cells of every use
         // of a polymorphic value.  A failed unify never merges classes, so this
@@ -439,12 +439,12 @@ where
                 ext.unify_slots(self, found_attr, missing, loc2);
             }
         }
-        // The result's type cell: unbound unless the apply's evaluation
+        // The result's type cell: undecided unless the apply's evaluation
         // syncs it.  The cell rides in the apply's operand; the runtime
         // apply unifies the return pair with the apply node — the apply
         // node *is* the return pair — and binds the cell to the return
         // type: a concrete result syncs its type, a polymorphic template's
-        // lazy result leaves it unbound.
+        // lazy result leaves it undecided.
         let c = self.fresh_cell();
         let operands = self.array_node(self.current_block, &[function_value, argument_pair, c]);
         let node = self.op_node(

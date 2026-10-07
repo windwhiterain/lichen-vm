@@ -93,7 +93,7 @@ where
             }
         }
         w.u32(node.equality.size());
-        w.u8(node.parameterized as u8);
+        w.u8(node.undecided as u8);
         write_low_shape_opt(&mut w, &node.low_shape);
     }
     w.u64(module.functions.len() as u64);
@@ -372,14 +372,14 @@ where
             None
         };
         let size = r.u32()?;
-        let parameterized = r.u8()? != 0;
+        let undecided = r.u8()? != 0;
         let low_shape = read_low_shape_opt(&mut r)?;
         nodes.push(StaticNode {
             value,
             operation,
             low_shape,
             equality: lichen_utils::disjoint::Meta::new(parent, next, tail, size),
-            parameterized,
+            undecided,
         });
     }
 

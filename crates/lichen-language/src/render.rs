@@ -258,7 +258,7 @@ where
             // so the editor can suggest a fix and power field completion.  The
             // accessed field name rides in `d.field`; the candidate field names
             // come from the container's struct type.  No name / no concrete
-            // struct (an unbound container) → the plain message.
+            // struct (an undecided container) → the plain message.
             let Some(name) = d.field.as_deref() else {
                 return base;
             };
@@ -326,8 +326,8 @@ where
         DiagKind::UnattributedFailure => {
             "the build failed, but the failing check could not be attributed to an expression in this source".to_string()
         }
-        DiagKind::TableKeyUnbound => {
-            "table key is not concrete (it is unbound or a failed read) — the entry is dropped"
+        DiagKind::TableKeyUndecided => {
+            "table key is not concrete (it is undecided or a failed read) — the entry is dropped"
                 .to_string()
         }
         DiagKind::NativeOpUnresolved => match d.field.as_deref() {

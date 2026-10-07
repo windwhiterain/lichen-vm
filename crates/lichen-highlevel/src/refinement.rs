@@ -11,7 +11,7 @@
 //!
 //! # The four decisions, and why
 //!
-//! - **Nothing propagates.**  `combine` returns a fresh unbound cell rather than
+//! - **Nothing propagates.**  `combine` returns a fresh undecided cell rather than
 //!   deriving a refinement from the children's, which is what a *lattice*
 //!   attribute (`Perspective`) does.  It cannot: the frontend **folds**
 //!   computations — an `a == b` on known operands is folded away, a `let` is
@@ -19,13 +19,13 @@
 //!   built, the children that produced its value may no longer exist as
 //!   expressions.  Inferring which predicates a computed value satisfies is a
 //!   solver's job.  A refinement therefore exists only where it was written.
-//! - **An absent refinement is an unbound cell** (no value), not a
+//! - **An absent refinement is an undecided cell** (no value), not a
 //!   concrete "no refinement" value, and it is **not shared** across sites.
 //!   Both follow from the reconciliation being a *plain unify*:
 //!   [`AttrExt::share_missing_slot`]'s contract says a unify writes whichever
-//!   side is unbound, so a concrete absent value could be shared and an unbound
+//!   side is undecided, so a concrete absent value could be shared and an undecided
 //!   one must not be; and `unify(Error, predicate)` would conflict, so no
-//!   refinement could ever pass from one side to the other.  Being an unbound
+//!   refinement could ever pass from one side to the other.  Being an undecided
 //!   cell is what lets an annotation's predicate flow into an argument's slot —
 //!   the propagation the language already has for types.
 //! - **Reconciliation is a plain unify**, so requiring the *same* refinement
@@ -75,7 +75,7 @@ where
     P::Operator: From<LowOperator>,
 {
     /// *No refinement* — spelled as **no value at all**, because an absent
-    /// refinement is an **unbound cell** by intent: the plain unify that
+    /// refinement is an **undecided cell** by intent: the plain unify that
     /// reconciles two slots binds it, so a refinement passes from one side to
     /// the other.  See the module docs for why it cannot be a concrete value.
     fn missing_value(&self) -> Option<LowValue> {
@@ -83,7 +83,7 @@ where
     }
 
     /// A refinement never combines over its children: it is its own annotation,
-    /// not a meet of its children's.  Returns a fresh unbound cell — the
+    /// not a meet of its children's.  Returns a fresh undecided cell — the
     /// per-site no-refinement marker (per-site, because a unify may bind it).
     fn combine(&self, ctx: &mut dyn Ctx<P>, _children: &[NodeId]) -> NodeId {
         ctx.fresh()

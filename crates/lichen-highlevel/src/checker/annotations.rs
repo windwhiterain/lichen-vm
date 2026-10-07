@@ -38,7 +38,7 @@ where
 
     /// Records the [`DiagKind::NoAttributeExtension`] guard at `loc` — the
     /// site that read the attribute — and returns the well-formed hole the
-    /// slot falls back to: a fresh unbound `[value, type]` pair, the shape
+    /// slot falls back to: a fresh undecided `[value, type]` pair, the shape
     /// every attribute slot has (see [`crate::attr`]).  Nothing unifies
     /// against it — the guard has already failed the build, and
     /// `check_failed` skips the definition pass — so it binds nothing, while

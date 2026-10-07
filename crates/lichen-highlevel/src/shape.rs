@@ -270,7 +270,7 @@ pub const STRUCT_KIND_NAMES_ORDER_PATH: [usize; 3] = [
 
 /// The array items behind either a dynamic node or a static ref — the raw
 /// read every accessor and predicate in this module is built on.  `None`
-/// when `id` is unbound or not an array.
+/// when `id` is undecided or not an array.
 ///
 /// # Safety
 ///
@@ -296,7 +296,7 @@ where
 
 /// The shape slot of a kinded type expression `[shape, kind]`, for a dynamic
 /// node or a static ref alike.  `None` when `ty` is not a 2-element array
-/// (an unbound cell, a bare marker — anything that is not a type-expression
+/// (an undecided cell, a bare marker — anything that is not a type-expression
 /// pair).
 pub fn shape_of<P: Program>(module: &Module<P>, ty: AnyNodeId) -> Option<AnyNodeId>
 where
@@ -495,7 +495,7 @@ where
 /// (a two-element array) whose [`STRUCT_MARKER_TAG_SLOT`] holds the `TypeStruct`
 /// atom ([`ValueType::type_struct_marker`]).  A pair whose type slot is anything
 /// else — including a marker-shaped payload under another type — is not a
-/// struct marker.  The payload is not inspected: its cells may still be unbound
+/// struct marker.  The payload is not inspected: its cells may still be undecided
 /// while the marker is being built (a read's pin writes them as fresh cells).
 pub fn is_struct_marker_any<P: Program>(module: &Module<P>, marker: AnyNodeId) -> bool
 where
@@ -852,7 +852,7 @@ where
     if shape_value == P::Value::float_marker() {
         // A float is a **decided** member of the low type vocabulary, so a
         // declared `[float, K]` states it.  Answering `Unknown` here would make
-        // a declared float indistinguishable from an unbound cell, which is a
+        // a declared float indistinguishable from an undecided cell, which is a
         // different claim.  Whether a kernel can lower it is not this decoder's
         // question (`lichen_compute::kernel_domain`,
         // `docs/notes/floating-point.md` §3.8).
@@ -950,7 +950,7 @@ where
 /// So a pair never decodes directly, and a bare type value always decodes on
 /// the first try.
 ///
-/// An undecidable answer is [`LowShape::Unknown`], never a fallback: a
+/// An undecided answer is [`LowShape::Unknown`], never a fallback: a
 /// polymorphic parameter has no domain at this boundary, and a backend that
 /// invented one would compile a kernel for a type nobody wrote.
 pub fn low_type_of_slot<P: Program>(module: &Module<P>, slot: AnyNodeId) -> LowShape

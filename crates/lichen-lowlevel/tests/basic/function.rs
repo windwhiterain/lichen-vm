@@ -71,13 +71,11 @@ fn function_call_operator_clones_array_body() {
     let (func_node, _) = wrap_function(&mut m, f, ret, param);
 
     // The array embeds the parameter, so the definition pass (evaluating
-    // the body with the empty parameter) flags it parameterized.
+    // the body with the empty parameter) flags it undecided.
     m.evaluate_node_deep(ret, None);
     assert_eq!(
         m.node_evaluated_deep(ret),
-        Some(EvaluatedDeep {
-            parameterized: true
-        })
+        Some(EvaluatedDeep { undecided: true })
     );
 
     let arg = u128_node(&mut m, root, 10);
@@ -107,7 +105,7 @@ fn function_call_operator_clones_array_body() {
     ); // body unchanged
 }
 #[test]
-fn function_call_operator_preserves_parameterized_operand_chain() {
+fn function_call_operator_preserves_undecided_operand_chain() {
     let mut m = Module::new();
     let root = m.add_block(None);
     // f(x) = Id(Id(x))
@@ -129,12 +127,10 @@ fn function_call_operator_preserves_parameterized_operand_chain() {
     let arg = m.add_node(root, None, None);
     let call = call_node(&mut m, root, func_node, arg);
     let value = m.evaluate_node_deep(call, None);
-    assert!(value.is_none(), "an unbound argument stays lazy");
+    assert!(value.is_none(), "an undecided argument stays lazy");
     assert_eq!(
         m.node_evaluated_deep(call),
-        Some(EvaluatedDeep {
-            parameterized: true
-        })
+        Some(EvaluatedDeep { undecided: true })
     );
 
     // The body is untouched.
@@ -179,9 +175,7 @@ fn function_call_operator_recomputes_stale_definition_markers() {
     );
     assert_eq!(
         m.node_evaluated_deep(ret),
-        Some(EvaluatedDeep {
-            parameterized: true
-        })
+        Some(EvaluatedDeep { undecided: true })
     );
 
     // The call clones the undecided node unevaluated — the stale
@@ -215,9 +209,7 @@ fn function_call_operator_references_concrete_body_nodes_in_place() {
     m.evaluate_node_deep(ret, None);
     assert_eq!(
         m.node_evaluated_deep(ret),
-        Some(EvaluatedDeep {
-            parameterized: false
-        })
+        Some(EvaluatedDeep { undecided: false })
     );
 
     let arg = u128_node(&mut m, root, 42);
@@ -523,7 +515,7 @@ fn higher_order_function_calls_its_function_argument() {
     assert_eq!(u128_of(m.evaluate_node_deep(call, None).unwrap()), 42);
 }
 #[test]
-fn function_can_index_into_parameterized_array() {
+fn function_can_index_into_undecided_array() {
     let mut m = Module::new();
     let root = m.add_block(None);
     // f(x) = [x, 7][0]: the array embeds the parameter, so the Index arm
@@ -546,9 +538,7 @@ fn function_can_index_into_parameterized_array() {
     m.evaluate_node_deep(ret, None); // definition pass: index of a marker stays a marker
     assert_eq!(
         m.node_evaluated_deep(ret),
-        Some(EvaluatedDeep {
-            parameterized: true
-        })
+        Some(EvaluatedDeep { undecided: true })
     );
 
     let arg = u128_node(&mut m, root, 42);
@@ -591,15 +581,11 @@ fn manually_partially_evaluated_function_applies_correctly() {
     m.evaluate_node_deep(two, None);
     assert_eq!(
         m.node_evaluated_deep(one),
-        Some(EvaluatedDeep {
-            parameterized: false
-        })
+        Some(EvaluatedDeep { undecided: false })
     );
     assert_eq!(
         m.node_evaluated_deep(two),
-        Some(EvaluatedDeep {
-            parameterized: false
-        })
+        Some(EvaluatedDeep { undecided: false })
     );
     assert_eq!(m.node_evaluated_deep(ret), None);
     assert_eq!(m.node_evaluated_deep(inner), None);
@@ -733,9 +719,7 @@ fn call_return_is_shallow_for_container_bodies() {
     m.evaluate_node_deep(ret, None); // definition pass flags the array undecided
     assert_eq!(
         m.node_evaluated_deep(ret),
-        Some(EvaluatedDeep {
-            parameterized: true
-        })
+        Some(EvaluatedDeep { undecided: true })
     );
 
     let arg = u128_node(&mut m, root, 42);
@@ -763,7 +747,7 @@ fn apply_evaluates_argument_elements_to_match_the_parameter_pattern() {
     // f(x) = x with x = [x0, x1]: an array parameter pattern.  The
     // argument's elements are unevaluated operations — the apply must
     // evaluate them (to the pattern's depth) before the elementwise unify,
-    // or they would read as unbound and bind nothing.
+    // or they would read as undecided and bind nothing.
     let x0 = m.add_node(root, None, None);
     let x1 = m.add_node(root, None, None);
     let items = [item(x0), item(x1)];
@@ -808,9 +792,7 @@ fn apply_clone_preserves_the_shallow_mask() {
     m.evaluate_node_deep(ret, None); // definition pass
     assert_eq!(
         m.node_evaluated_deep(ret),
-        Some(EvaluatedDeep {
-            parameterized: true
-        })
+        Some(EvaluatedDeep { undecided: true })
     );
 
     let arg = u128_node(&mut m, root, 10);

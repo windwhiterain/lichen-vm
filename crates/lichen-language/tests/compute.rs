@@ -625,8 +625,8 @@ fn a_kernel_value_and_type_render_by_name() {
     // one class and compiled before any apply, so an open body (`y => y + y`) is
     // refused by name rather than lowered in a class the compiler picked.
     // Both fields are **dumps**, and say so: the struct's type names no class
-    // for either slot (`.native`'s is an unbound pair), so each renders as its
-    // own name under the mark — `raw Kernel`, `raw parameterized` — rather than
+    // for either slot (`.native`'s is an undecided pair), so each renders as its
+    // own name under the mark — `raw Kernel`, `raw undecided` — rather than
     // spelling itself like a field the chain explained.
     let out = render(
         r#"
@@ -798,7 +798,7 @@ expectation - the comment below states the intent this contradicts, so re-pinnin
 record the defect as intended. See docs/notes/function-type-merge.md."]
 fn wrapper_functions_render_with_named_type_variables() {
     // `jit` is a generic wrapper from the frozen `compute` module — its
-    // domain/codomain cells are unbound at the module level, so they render as
+    // domain/codomain cells are undecided at the module level, so they render as
     // *named cells* (`?a`/`?b`), and a `jit` result is a kernel struct whose
     // `.sig` field is that signature.  The wrapper itself stays generic; only
     // an *applied* result resolves to `Int -> Int`.
@@ -815,7 +815,7 @@ compute.jit
     // The wrapper constrains its argument with the kernel's own `.I` and types
     // its result with `.O`, so both cells are that field read's pair — a pair no
     // form explains at module level, hence the raw mark
-    // (raw-rendering-mark.md §2: an unbound pair still marks).  A resolved pair
+    // (raw-rendering-mark.md §2: an undecided pair still marks).  A resolved pair
     // reads as its head (`raw[Int, Type]` prints `Int`), which is why the same
     // wrapper's *applied* results print as plain `Int`.
     assert_eq!(
@@ -858,7 +858,7 @@ compute.read ((compute.Read _)(.from out, .at 2))
         common::type_is_undecided(&module, root_ty),
         "a buffer's element class is a fact of the value, so the read's type stays undecided"
     );
-    // The element type renders as an unbound cell, and that is the honest
+    // The element type renders as an undecided cell, and that is the honest
     // answer now: a buffer's element class is a fact of the *value*, so
     // `compute.read` no longer pins its result to `Int` — which is exactly the
     // pin that made a `buffer<Float>` inexpressible
@@ -1081,7 +1081,7 @@ compute.call k (1, (2, "three"))
 fn a_refused_call_argument_shape_says_why() {
     // The same arm's other refusal: the argument is not a parameter vector at
     // all.  A bare string type-checks (the domain is a fresh cell) and reached
-    // the run as `parameterized`, so the message has to say what a launch
+    // the run as `undecided`, so the message has to say what a launch
     // argument must be and what this one was.
     let messages = fail(
         r#"

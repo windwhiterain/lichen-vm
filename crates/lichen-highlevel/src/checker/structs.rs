@@ -62,7 +62,7 @@ where
         let shape_cell = self.fresh_cell();
         let tuple_ty = self.array_node(self.current_block, &[shape_cell, kind]);
         // `kind_of` answers only for a term the graph has already decided; a
-        // cell (an unbound parameter, a call result) has none, and that is
+        // cell (an undecided parameter, a call result) has none, and that is
         // exactly the case the pin exists for.
         let read_ty = match shape::kind_of(&self.module, AnyNodeId::Dynamic(container_ty)) {
             Some(container_kind) => {
@@ -194,7 +194,7 @@ where
     /// (`[[TypeId, names, names_in_order], TypeStruct]` — the name→index
     /// table lies directly in the marker payload at
     /// `container_ty[0][0][1]`), a check-time requirement (a concretely non-struct
-    /// container is a diagnostic; an unbound one stays lazy and resolves at the
+    /// container is a diagnostic; an undecided one stays lazy and resolves at the
     /// apply).  This is the sibling of [`Self::check_named_field`]'s `.a`,
     /// which instead requires the container's **kind** to be TypeStruct (its
     /// table at `container_ty[1][0][0][1]`).
@@ -272,7 +272,7 @@ where
     ///
     /// The index is derived **lazily** from the container type's names slot
     /// (`Index(Index(ty,1),2)` — the name table — then a `TableGet`), so an
-    /// unbound container (a parameter, a call result) resolves when the call
+    /// undecided container (a parameter, a call result) resolves when the call
     /// binds it, the same laziness as the positional form.  A *concretely*
     /// non-struct container, or a concrete struct whose name table has no such
     /// field, is the guard's error below — never a runtime panic.
@@ -365,7 +365,7 @@ where
             )
             && position.is_none()
             // ... and its **name table is readable**.  A table that is readable
-            // and lacks this name is a genuine miss; one that is still unbound is
+            // and lacks this name is a genuine miss; one that is still undecided is
             // only undecided, and the read stays lazy.  Without this distinction
             // a *second* `k.name` on the same undecided container is refused
             // falsely: the first read's pin is an array value, so the container
@@ -393,7 +393,7 @@ where
         // The field's **subscript**: a constant position when the container type
         // is concrete and states it, and otherwise the lazy
         // `TableGet(names, name)` a name table resolves through — which is what
-        // keeps an *unbound* container's named read resolvable at the apply.
+        // keeps an *undecided* container's named read resolvable at the apply.
         //
         // **A constant is not an optimisation here; it is the whole difference
         // for the lowering.**  A kernel body is walked by its operands, and a
@@ -464,7 +464,7 @@ where
     }
 
     /// Whether a type cell's value is statically inspectable — a concrete
-    /// type/kind expression (an array) or marker — as opposed to an unbound
+    /// type/kind expression (an array) or marker — as opposed to an undecided
     /// cell (a parameter, a deferred read), whose checks defer to the apply.
     /// The same predicate gates the field-read and function-ness guards.
     pub(super) fn type_is_concrete(&self, ty: NodeId) -> bool {
@@ -530,7 +530,7 @@ where
     /// type-directed: the callee's **type** must be a TypeStruct kind
     /// (structs are nominal — a tuple or function type cannot instantiate).
     /// A concretely non-struct callee is a diagnostic at the callee
-    /// ([`DiagKind::InstantiateCallee`]); an unbound callee (a parameter, a
+    /// ([`DiagKind::InstantiateCallee`]); an undecided callee (a parameter, a
     /// deferred read) is *pinned* to a struct kind so a non-struct actual
     /// callee fails the apply's argument unify per call — the same pinning
     /// [`Self::check_binop`] applies to its operands.
@@ -547,7 +547,7 @@ where
         // An unevaluated callee (a call result, `(mk (Int))(1, 2)`) has no
         // statically readable pair — it is an apply node, not an array.  Force
         // its evaluation so the nominality check and the field-list read see
-        // the concrete struct type.  A callee that depends on an unbound
+        // the concrete struct type.  A callee that depends on an undecided
         // parameter stays lazy (the checks below defer to the apply), and a
         // non-terminating one trips the VM's guard: leave it lazy — the
         // build's statement pass evaluates the statement again and reports
@@ -597,7 +597,7 @@ where
             // written here (rather than left to one cell) because the deferred
             // named reorder reads its slots lazily
             // ([`shape::STRUCT_KIND_NAMES_ORDER_PATH`]).  The pin
-            // binds an unbound cell now and is re-checked by the apply's
+            // binds an undecided cell now and is re-checked by the apply's
             // argument unify per call, so a tuple/function/atomic actual
             // callee is rejected there.
             let id = self.fresh_cell();
@@ -607,7 +607,7 @@ where
             let names_in_order = self.fresh_cell();
             // Kind only, so `Self::struct_type_type` does not apply: the pin
             // has no field-type shape to wrap, and its marker's payload fields
-            // are unbound cells rather than a `Fresh` id and the two name forms.
+            // are undecided cells rather than a `Fresh` id and the two name forms.
             let marker = self.struct_marker_node(id, names, names_in_order);
             let kind = self.kind_expr(self.current_block, marker);
             self.check_unify(
@@ -619,10 +619,10 @@ where
         }
         // The struct pair's shape *is* the positional field-type list (the
         // nominal id lives in the kind slot).  During a recursive struct's
-        // own descent the shape is still an unbound cell (the bindings are
+        // own descent the shape is still an undecided cell (the bindings are
         // mutually recursive), so defer the field-list check through a probe
         // cell; a callee whose pair stayed unreadable after the force (it
-        // depends on an unbound parameter) reads the shape through a lazy
+        // depends on an undecided parameter) reads the shape through a lazy
         // `Index` that resolves when the call binds it.
         // SAFETY: `type_pair` is a live node of this module; nothing in this
         // crate calls `Module::drop_block`.
@@ -769,7 +769,7 @@ where
             return (self.value_of(value), self.state[value].ty.unwrap(), false);
         }
         // The definition's field count (the shape's length) — `None` when the
-        // shape is still an unbound cell mid-recursion, in which case the
+        // shape is still an undecided cell mid-recursion, in which case the
         // missing/excess checks are deferred to the probe unify.
         // SAFETY: `type_pair` is a live node of this module; nothing in this
         // crate calls `Module::drop_block`.

@@ -86,7 +86,7 @@ fn an_annotated_program_without_an_attribute_extension_reports_a_guard() {
 fn the_attribute_slot_of_an_unlowerable_schema_is_a_well_formed_hole() {
     // The refused expression must still compile to a pair of the schema's
     // width, so the rest of the check reads a slot rather than an absent
-    // element.  The slot is a fresh unbound pair — the same hole shape the
+    // element.  The slot is a fresh undecided pair — the same hole shape the
     // other check-time guards leave.
     let (annotation, ir) = annotated_int();
     let build = Checker::<TaggedProgram>::build(ir);

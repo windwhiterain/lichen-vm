@@ -187,7 +187,7 @@ impl<P: Program> Module<P> {
     }
 
     /// A node's value read as a decided `USize` constant — the only shape of
-    /// index the `Index` transfer accepts.  An unbound or computed-later index
+    /// index the `Index` transfer accepts.  An undecided or computed-later index
     /// states nothing, which is what keeps a data-dependent read undecided
     /// rather than picking an element.
     fn constant_index(&self, node: NodeId) -> Option<usize> {

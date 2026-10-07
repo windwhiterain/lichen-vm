@@ -29,7 +29,7 @@ fn usize_node(m: &mut Module<ProgramImpl>, block: BlockId, n: usize) -> NodeId {
     )
 }
 
-fn unbound_node(m: &mut Module<ProgramImpl>, block: BlockId) -> NodeId {
+fn undecided_node(m: &mut Module<ProgramImpl>, block: BlockId) -> NodeId {
     m.add_node(block, None, None)
 }
 
@@ -101,7 +101,7 @@ fn dependent_type_resolves_per_argument_via_laziness() {
     // with the parameter as its condition.  The Index's operand array is
     // part of the template's scope, so each apply's clone rewrites the
     // condition to the fresh parameter clone.
-    let x = unbound_node(&mut m, root);
+    let x = undecided_node(&mut m, root);
     let float = usize_node(&mut m, root, 0);
     let int = usize_node(&mut m, root, 1);
     let branches = array_node(&mut m, root, &[float, int]);
@@ -152,7 +152,7 @@ fn a_concrete_type_is_never_bound_over_a_dependent_codomain() {
     let mut m = Module::new();
     let root = m.add_block(None);
     // Boundary: a dependent function's codomain (`[0, 1][x]`) meets a concrete
-    // `1` while the parameter is still unbound (the function is passed as a
+    // `1` while the parameter is still undecided (the function is passed as a
     // value, not applied).  **Unify does not evaluate**, so it merges and the
     // concrete value is what the class holds; the codomain's own computation is
     // what has to agree with it, and that comparison happens when the codomain
@@ -164,7 +164,7 @@ fn a_concrete_type_is_never_bound_over_a_dependent_codomain() {
     let branches = array_node(&mut m, root, &[float, int]);
 
     // x = 1: the codomain computes to `1`, which is what the class holds → clean.
-    let x1 = unbound_node(&mut m, root);
+    let x1 = undecided_node(&mut m, root);
     let codomain1 = index_node(&mut m, root, branches, x1);
     m.unify(int, codomain1);
     assert!(m.unify_errors.is_empty());
@@ -182,7 +182,7 @@ fn a_concrete_type_is_never_bound_over_a_dependent_codomain() {
 
     // x = 0: the same shape resolves to `0`, which conflicts with the `1` the
     // class holds — reported when the computation runs.
-    let x0 = unbound_node(&mut m, root);
+    let x0 = undecided_node(&mut m, root);
     let codomain0 = index_node(&mut m, root, branches, x0);
     m.unify(int, codomain0);
     assert!(m.unify_errors.is_empty());
@@ -243,7 +243,7 @@ fn a_resolvable_computation_is_forced_and_compared() {
 
 #[test]
 fn a_resolvable_index_read_pins_its_element() {
-    // A concrete expectation meets an `Index` read over an unbound element
+    // A concrete expectation meets an `Index` read over an undecided element
     // with a concrete index: the read resolves to a pure reference — the
     // operator node is aliased to the element — and the concrete value is
     // written onto it (pinning the element, the "monomorphized" trade).  The
@@ -252,7 +252,7 @@ fn a_resolvable_index_read_pins_its_element() {
     // expectation fails against the pinned value.
     let mut m = Module::new();
     let root = m.add_block(None);
-    let cell = unbound_node(&mut m, root);
+    let cell = undecided_node(&mut m, root);
     let container = array_node(&mut m, root, &[cell]);
     let zero = usize_node(&mut m, root, 0);
     let read = index_node(&mut m, root, container, zero);

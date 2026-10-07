@@ -35,7 +35,7 @@ where
     /// only one that pins nothing to a class.
     ///
     /// An operand's type is unified against the class the operation computes
-    /// over — a concretely wrong operand is a check error, and an unbound
+    /// over — a concretely wrong operand is a check error, and an undecided
     /// operand (a parameter) is *pinned* to that class, so a later apply at the
     /// other class is a runtime failure in the argument unify, not a panic
     /// inside the operator.

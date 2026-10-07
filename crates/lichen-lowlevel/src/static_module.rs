@@ -68,10 +68,10 @@ impl<P: Program> StaticModuleCache<P> {
             .1
     }
 
-    /// Whether the node behind `sref` is marked parameterized: the module's
+    /// Whether the node behind `sref` is marked undecided: the module's
     /// solved flag, read without a registry lookup per ref.
-    pub(crate) fn node_parameterized(&mut self, host: &Module<P>, sref: StaticNodeId) -> bool {
-        self.module(host, sref.module).nodes[sref.index.index].parameterized
+    pub(crate) fn node_undecided(&mut self, host: &Module<P>, sref: StaticNodeId) -> bool {
+        self.module(host, sref.module).nodes[sref.index.index].undecided
     }
 
     /// [`StaticModule::read`] through the cache.
@@ -111,7 +111,7 @@ impl<P: Program> Module<P> {
     ///
     /// A reader that *names* cells must use it, exactly as it uses the dynamic
     /// representative: the freeze keeps the equality class of a node whose own
-    /// value is still unbound **whole** (see `freeze::closure`'s contract — the
+    /// value is still undecided **whole** (see `freeze::closure`'s contract — the
     /// class is what holds that node's answer), so two refs in one class are one
     /// variable.  Keying a name table by the ref alone prints them as two:
     /// measured, an imported polymorphic `?a -> ?a` rendered `?a -> ?b`, while
@@ -427,7 +427,7 @@ fn collect_referenced_keys<P: Program>(value: P::Value, keys: &mut HashSet<Modul
 }
 
 /// Whether static function `index` has **open captures**: its body graph
-/// reaches a `parameterized` node outside its own template scope
+/// reaches a `undecided` node outside its own template scope
 /// ([`StaticFunction::nodes`], which covers the parameter, the return, and
 /// every body-owned node).  A scope's own open cells re-open per call through
 /// the residual clone rule, but a capture sits outside the scope: its binding
@@ -473,7 +473,7 @@ fn static_closure_has_open_captures<P: Program>(
             continue;
         }
         let sn = &nodes[node.index];
-        if sn.parameterized && !scope.contains(&node) {
+        if sn.undecided && !scope.contains(&node) {
             return true;
         }
         if let Some(operation) = sn.operation

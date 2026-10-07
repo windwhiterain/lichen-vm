@@ -58,7 +58,7 @@ impl<P: Program> Module<P> {
             // `&mut module` while the list lives on the ctx's module.
             for index in 0..assert_count {
                 let condition = ctx.module.functions[function.index.0].asserts[index];
-                let baked = !ctx.module.nodes[condition.index].parameterized;
+                let baked = !ctx.module.nodes[condition.index].undecided;
                 let instantiated = module.static_node_apply(condition, &mut ctx);
                 if !baked {
                     module.asserts.push(PendingAssert {
@@ -110,7 +110,7 @@ impl<P: Program> Module<P> {
             return clone;
         }
         let node = &ctx.module.nodes[local.index];
-        let (parameterized, template_operation) = (node.parameterized, node.operation);
+        let (undecided, template_operation) = (node.undecided, node.operation);
         // Reserve the clone id before recursing so diamonds resolve to one
         // clone and value cycles to the clone's own (still evaluating) id.
         let clone = self.add_node(ctx.target, None, None);
@@ -121,7 +121,7 @@ impl<P: Program> Module<P> {
         // template cannot be the origin; see [`Node::origin`].
         self.nodes[clone].origin = Some(ctx.origin);
         ctx.remap.insert(local, clone);
-        if parameterized {
+        if undecided {
             // The residual clone joins the template of the code that performed
             // the apply, exactly as a dynamic apply's clones do: a residual the
             // apply materialized may end up inside a *value* of the caller's
@@ -135,8 +135,8 @@ impl<P: Program> Module<P> {
             // Residual: the operation (if any) is kept with its operand
             // walked — the computation re-runs against the argument — and a
             // stale cached value on an operation node is dropped (it was
-            // computed against the unbound template parameter).  A
-            // parameterized *value* node (no operation — a structural array
+            // computed against the undecided template parameter).  A
+            // undecided *value* node (no operation — a structural array
             // containing the parameter, or the marker itself) keeps its
             // value, with items re-pointed at the walk's clones, mirroring
             // the dynamic clone rule.
@@ -170,14 +170,14 @@ impl<P: Program> Module<P> {
 
     /// Re-point the items of a value at per-call clones: an item is
     /// cloned (walked) when the walk already made one, or when its static
-    /// node is itself parameterized — a residual behind a value edge must
+    /// node is itself undecided — a residual behind a value edge must
     /// re-open against the argument (a condition or branch frozen as
-    /// undecided at solve time reads as unbound forever otherwise).
+    /// undecided at solve time reads as undecided forever otherwise).
     /// Concrete items stay inline absolute static refs.  An item naming
     /// *another* module (a frozen dependency the applied function's module
     /// itself imported) is not this template's to clone: local indices are
     /// per-module, so only a ref keyed by `ctx.module` may consult the
-    /// remap or the module's parameterized flags — a foreign ref is
+    /// remap or the module's undecided flags — a foreign ref is
     /// concrete by construction (the apply that kept it verbatim proved it)
     /// and stays in place, resolved through the registry.  The item slice is
     /// reallocated only when something changed — the common all-baked case
@@ -214,13 +214,13 @@ impl<P: Program> Module<P> {
                 AnyNodeId::Static(sref)
                     if sref.module == ctx.module.key
                         && (ctx.remap.contains_key(&sref.index)
-                            || ctx.module.nodes[sref.index.index].parameterized) =>
+                            || ctx.module.nodes[sref.index.index].undecided) =>
                 {
                     changed = true;
                     Dyn(self.static_node_apply(sref.index, ctx))
                 }
                 // A baked static closure value inside an array with open
-                // captures — not parameterized, so the arm above skips it (a
+                // captures — not undecided, so the arm above skips it (a
                 // concrete function ref is a decided leaf).  Re-home it
                 // explicitly so its captured cells re-open against this call.
                 AnyNodeId::Static(sref)
@@ -295,7 +295,7 @@ impl<P: Program> Module<P> {
         let return_type_clone = self.static_node_apply(return_type, ctx);
         let mut assert_clones = Vec::with_capacity(asserts.len());
         for &condition in &asserts {
-            let baked = !ctx.module.nodes[condition.index].parameterized;
+            let baked = !ctx.module.nodes[condition.index].undecided;
             let instantiated = self.static_node_apply(condition, ctx);
             if !baked {
                 self.asserts.push(PendingAssert {

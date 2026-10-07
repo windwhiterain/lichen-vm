@@ -1,7 +1,7 @@
 //! Asserts: explicit constraints — an assert registers a condition node
 //! that `Module::check_asserts` deep-evaluates and
 //! requires to be `USize(1)`.  Unlike a unification the constraint does not
-//! bind its node: an unbound condition is not triggered, and the apply
+//! bind its node: an undecided condition is not triggered, and the apply
 //! clone re-checks the instantiated condition per call.  The registry is a
 //! worklist: a drain consumes every decided entry (failures land in
 //! `assert_errors`) and keeps exactly the untriggered ones for the next
@@ -64,7 +64,7 @@ fn assert_resolves_through_a_computation() {
 #[test]
 fn assert_on_an_empty_value_fails() {
     // A condition whose evaluation fails (an out-of-bounds read) resolves to
-    // the concrete `Error` — a decided value, not an unbound cell — so the
+    // the concrete `Error` — a decided value, not an undecided cell — so the
     // assert FAILS rather than staying untriggered.
     let mut m = Module::new();
     let root = m.add_block(None);
@@ -95,13 +95,13 @@ fn assert_on_an_empty_value_fails() {
 }
 
 #[test]
-fn assert_on_an_unbound_condition_is_not_triggered() {
-    // The condition reads an unbound cell: the evaluation stays lazy, so
+fn assert_on_an_undecided_condition_is_not_triggered() {
+    // The condition reads an undecided cell: the evaluation stays lazy, so
     // the assert is deferred — not bound to `1` (that is what makes the
     // constraint explicit rather than a unification) and not failed.
     let mut m = Module::new();
     let root = m.add_block(None);
-    let x = unbound_node(&mut m, root);
+    let x = undecided_node(&mut m, root);
     let one = u128_node(&mut m, root, 1);
     let operands = array_node(&mut m, root, &[x, one], None);
     let eq = op_node(&mut m, root, TestOperator::Eq, Some(operands));
@@ -115,12 +115,12 @@ fn assert_on_an_unbound_condition_is_not_triggered() {
     );
     assert!(
         m.node_value(AnyNodeId::Dynamic(x)).is_none(),
-        "the unbound cell was not bound by the assert"
+        "the undecided cell was not bound by the assert"
     );
 }
 
 /// `f(x) = assert(x == 1)` — the template's assert cannot resolve at
-/// normalize (the parameter is unbound), so the apply clones it and the
+/// normalize (the parameter is undecided), so the apply clones it and the
 /// clone re-checks against the argument.  Returns the module with `f`
 /// applied to `arg`.
 fn applied_equality_assert(arg: usize) -> Module<TestProgram> {
@@ -171,7 +171,7 @@ fn apply_clone_fails_when_the_argument_violates_the_assert() {
 #[test]
 fn never_called_function_assert_stays_pending() {
     // The function is defined but never applied: its assert's condition
-    // stays unbound, so it is not triggered — and not failed.
+    // stays undecided, so it is not triggered — and not failed.
     let mut m = Module::new();
     let (func_node, _, _) = function(&mut m, |m, ret, param| {
         let block = m.node_block(ret);
@@ -232,12 +232,12 @@ fn a_failed_assert_is_consumed_but_its_error_stays() {
 
 #[test]
 fn an_untriggered_assert_is_decided_by_a_later_drain() {
-    // The condition reads an unbound cell: the entry stays pending across
+    // The condition reads an undecided cell: the entry stays pending across
     // calls.  Once the cell is bound by a later unification (outside the
     // drain), the very same entry is picked up and decided.
     let mut m = Module::new();
     let root = m.add_block(None);
-    let x = unbound_node(&mut m, root);
+    let x = undecided_node(&mut m, root);
     let one = u128_node(&mut m, root, 1);
     let operands = array_node(&mut m, root, &[x, one], None);
     let eq = op_node(&mut m, root, TestOperator::Eq, Some(operands));
@@ -267,8 +267,8 @@ fn an_untriggered_assert_is_decided_by_a_later_drain() {
 fn a_shallow_marked_operand_leaves_the_condition_pending() {
     // The condition's operand array marks `hidden` shallow.  The walk does not
     // descend a masked position, and descending it would not help: the operator's
-    // own operand gate refuses a parameterized operand, and the mark alone makes
-    // the array's verdict parameterized (`value_is_parameterized`).  So the
+    // own operand gate refuses a undecided operand, and the mark alone makes
+    // the array's verdict undecided (`value_is_undecided`).  So the
     // condition stays undecided and the entry is deferred to the apply clone
     // rather than recorded as a failure.  This test used to claim the opposite
     // ("the forced pass resolves it") and passed anyway: it only asserted that no
@@ -302,12 +302,12 @@ fn a_shallow_marked_operand_leaves_the_condition_pending() {
 }
 
 #[test]
-fn a_shallow_marked_unbound_cell_keeps_the_condition_lazy() {
-    // A shallow-marked unbound cell leaves the condition untriggered: no walk
+fn a_shallow_marked_undecided_cell_keeps_the_condition_lazy() {
+    // A shallow-marked undecided cell leaves the condition untriggered: no walk
     // invents values for a position nothing can decide.
     let mut m = Module::new();
     let root = m.add_block(None);
-    let x = unbound_node(&mut m, root);
+    let x = undecided_node(&mut m, root);
     let one = u128_node(&mut m, root, 1);
     let operands = array_node(&mut m, root, &[x, one], Some(&[true, false]));
     let eq = op_node(&mut m, root, TestOperator::Eq, Some(operands));
@@ -317,7 +317,7 @@ fn a_shallow_marked_unbound_cell_keeps_the_condition_lazy() {
 
     assert!(
         m.assert_errors.is_empty(),
-        "still untriggered — the cell is unbound"
+        "still untriggered — the cell is undecided"
     );
     assert_eq!(m.asserts.len(), 1, "and still pending");
 }
@@ -361,7 +361,7 @@ fn gc_moves_an_assert_condition_with_its_function() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let body = m.add_block(Some(root));
-    let param = unbound_node(&mut m, body);
+    let param = undecided_node(&mut m, body);
     let ret = m.add_node(body, None, None);
     let condition = usize_node(&mut m, body, 1);
     m.add_assert(condition);

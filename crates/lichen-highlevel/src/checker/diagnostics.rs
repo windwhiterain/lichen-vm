@@ -43,7 +43,7 @@ where
     }
 
     /// The `[value, type]` pair a **refused** expression carries on with: one
-    /// fresh unbound cell in each slot.  A reported definition is a rejected
+    /// fresh undecided cell in each slot.  A reported definition is a rejected
     /// build either way, so the consumer of a refused expression may read a
     /// hole; what it must never read is the graph the refusal was about —
     /// building that is how a refusal that has already been reported goes on
@@ -87,7 +87,7 @@ where
     /// Suppression truncates exactly the range this unify produced, which is
     /// what makes it safe without the "nothing was merged" argument: an
     /// attribute unify's operands are scalar once computed (a perspective is a
-    /// `USize` or an unbound cell, never a compound array), so a failed unify
+    /// `USize` or an undecided cell, never a compound array), so a failed unify
     /// merges nothing and the range names its own errors and no others.  The
     /// checker's attribute check is a *validation gate* — the value itself
     /// flows in through the lowlevel apply's separate clone-unify — so

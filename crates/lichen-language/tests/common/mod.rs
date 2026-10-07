@@ -171,7 +171,7 @@ pub fn values_eq(
 
 /// The head marker of an atomic type node — the marker an atomic `[head, K]`
 /// type pair renders as (`Int`, `Float`, …).  A node that is not an atomic
-/// type (an unbound cell, a compound type, or no value) answers `None`.
+/// type (an undecided cell, a compound type, or no value) answers `None`.
 pub fn type_head(module: &Module<LangProgram>, node: NodeId) -> Option<LangValue> {
     let value = module.node_value(AnyNodeId::Dynamic(node))?;
     match value.as_enum() {

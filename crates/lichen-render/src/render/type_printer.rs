@@ -56,14 +56,14 @@ where
         self.module
     }
 
-    /// Render a type node; an unbound cell renders as its class name.  A
+    /// Render a type node; an undecided cell renders as its class name.  A
     /// empty value ([`LowValue::Error`]) is a concrete value and renders
     /// as `none` — it is never a fresh class variable.
     pub fn node(&mut self, node: NodeId) -> String {
         if self.path.contains(node) {
             return "…".to_string();
         }
-        // A value-less node is an unbound cell: it renders as its class name.
+        // A value-less node is an undecided cell: it renders as its class name.
         let Some(value) = self.module.node_value(AnyNodeId::Dynamic(node)) else {
             return self.class_name(node);
         };
@@ -73,7 +73,7 @@ where
         out
     }
 
-    /// The stable name of an unbound cell's class: `?a`, `?b`, … — cells in
+    /// The stable name of an undecided cell's class: `?a`, `?b`, … — cells in
     /// the same class share a name.  A node the walk cannot place has no class
     /// to name, so it renders as the unknown `?`.
     pub fn class_name(&mut self, node: NodeId) -> String {
@@ -89,7 +89,7 @@ where
         name
     }
 
-    /// The stable name of an unbound **static** cell: `?a`, `?b`, … — a frozen
+    /// The stable name of an undecided **static** cell: `?a`, `?b`, … — a frozen
     /// module's type variable.  Keyed by the cell's **equality class**, exactly
     /// as [`Self::class_name`] is: the artifact keeps a class whole, so two refs
     /// in one class are one variable, and naming them by ref alone would print
@@ -349,7 +349,7 @@ where
     /// read from the function template's parameter and return *type* cells
     /// (`Function::parameter` and `Function::r#return` are the `[value, type]`
     /// pairs; slot 1 is the type). The template's cells are read directly —
-    /// they are unbound for a polymorphic function (so `?a -> ?a`) and bound
+    /// they are undecided for a polymorphic function (so `?a -> ?a`) and bound
     /// for a monomorphic one, which is exactly the signature to print. `None`
     /// for a static function-type (its template lives in a static module, not
     /// wired here yet) or a function whose entry points are not pairs.

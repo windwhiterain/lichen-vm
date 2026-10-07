@@ -35,7 +35,7 @@
 //!
 //! **And a read of the parameter is a bare cell, while the positional read pins
 //! an open tuple type on the parameter.** The parameter is the `[value, type]`
-//! pair: the value cell carries no operation and stays unbound until the apply,
+//! pair: the value cell carries no operation and stays undecided until the apply,
 //! and the type cell is `[?shape, [TypeTuple, K]]` — a tuple kind whose shape is
 //! still a cell, because the syntax that reads the parameter names no arity (the
 //! open tuple the printer renders `<?a, …>`). So the arity is **not** readable
@@ -280,7 +280,7 @@ fn through_index(module: &Module<LangProgram>, node: NodeId) -> NodeId {
 ///
 /// The cfg tuple is readable without any evaluation, and reading it is not
 /// enough: its two elements — the count and the buffer — are undecided.
-/// The `4` and the `data` in the body are unbound cells until the function is
+/// The `4` and the `data` in the body are undecided cells until the function is
 /// applied, because nothing has applied it.
 ///
 /// So a graph cannot be built by *reading* a template. It has to be built by
@@ -315,7 +315,7 @@ fn a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied(
             .and_then(|v| AsEnum::<LowValue>::as_enum(&v));
         assert_eq!(
             value, None,
-            "cfg[{position}] is {node:?}, and it is an unbound cell: the count and the buffer \
+            "cfg[{position}] is {node:?}, and it is an undecided cell: the count and the buffer \
              in the body are decided by applying the function, not before it"
         );
     }
@@ -389,14 +389,14 @@ step
 /// `ins(0)` and `ins(1)` do not compile to two extractions off the parameter.
 /// The compiler resolves each read into a cell of its own, so the cfg that
 /// reaches the dispatch has two elements that carry **no operation, no
-/// subscript, and an unbound value** — there is no `ins(i)` whose `i` a walk
+/// subscript, and an undecided value** — there is no `ins(i)` whose `i` a walk
 /// could read. The design had assumed there was, because the operand pair's
 /// subscript is a decided `USize(0)`; that subscript belongs to the extraction
 /// of the **cfg slot**, not to the body's read, and reading it as an input
 /// position would conclude the graph takes one input and silently drop the rest.
 ///
 /// **The parameter is the `[value, type]` pair, and the positional reads pin the
-/// type slot.** The value cell is a bare cell — no operation, unbound until the
+/// type slot.** The value cell is a bare cell — no operation, undecided until the
 /// apply. The type cell is `[?shape, [TypeTuple, K]]`: the reads pin the
 /// parameter to a *tuple type* whose shape is still a cell, because the syntax
 /// that reads it names no arity (the open tuple the printer renders `<?a, …>`).
@@ -423,7 +423,7 @@ fn a_parameter_read_is_a_bare_cell_and_pins_an_open_tuple_type() {
     let cfg = through_index(&module, operands[1]);
 
     // The cfg is a readable two-element array, and both of its elements are
-    // **bare cells**: no operation, and an unbound value. There is no `ins(i)`
+    // **bare cells**: no operation, and an undecided value. There is no `ins(i)`
     // subscript anywhere in them.
     let cfg_items = items(&module, cfg);
     assert_eq!(cfg_items.len(), 2, "(count, buffers)");
@@ -438,7 +438,7 @@ fn a_parameter_read_is_a_bare_cell_and_pins_an_open_tuple_type() {
                 .node_value(AnyNodeId::Dynamic(cell))
                 .and_then(|v| AsEnum::<LowValue>::as_enum(&v)),
             None,
-            "cfg[{position}] is unbound until the function is applied"
+            "cfg[{position}] is undecided until the function is applied"
         );
     }
 
@@ -453,7 +453,7 @@ fn a_parameter_read_is_a_bare_cell_and_pins_an_open_tuple_type() {
     );
 
     // The parameter is the `[value, type]` pair. The value cell is a **bare
-    // cell**: no operation, and unbound until the apply. The type cell is what
+    // cell**: no operation, and undecided until the apply. The type cell is what
     // the two positional reads pin — an open tuple type whose shape is a cell,
     // so the two reads state no arity here.
     let slots = items(&module, parameter);
@@ -469,7 +469,7 @@ fn a_parameter_read_is_a_bare_cell_and_pins_an_open_tuple_type() {
             .node_value(AnyNodeId::Dynamic(value_cell))
             .and_then(|v| AsEnum::<LowValue>::as_enum(&v)),
         None,
-        "and the value cell is unbound until the function is applied"
+        "and the value cell is undecided until the function is applied"
     );
     assert!(
         module.node_operation(slots[1]).is_none(),

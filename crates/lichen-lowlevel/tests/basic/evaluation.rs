@@ -262,36 +262,26 @@ fn evaluated_deep_marks_subtrees_with_parameters() {
     // plain constants are not.
     assert_eq!(
         m.node_evaluated_deep(p),
-        Some(EvaluatedDeep {
-            parameterized: true
-        })
+        Some(EvaluatedDeep { undecided: true })
     );
     assert_eq!(
         m.node_evaluated_deep(arr),
-        Some(EvaluatedDeep {
-            parameterized: true
-        })
+        Some(EvaluatedDeep { undecided: true })
     );
     assert_eq!(
         m.node_evaluated_deep(id_arr),
-        Some(EvaluatedDeep {
-            parameterized: true
-        })
+        Some(EvaluatedDeep { undecided: true })
     );
     assert_eq!(
         m.node_evaluated_deep(x),
-        Some(EvaluatedDeep {
-            parameterized: false
-        })
+        Some(EvaluatedDeep { undecided: false })
     );
     assert_eq!(m.node_evaluated_deep(id_p), None); // not yet evaluated
 
     m.evaluate_node_deep(id_p, None);
     assert_eq!(
         m.node_evaluated_deep(id_p),
-        Some(EvaluatedDeep {
-            parameterized: true
-        })
+        Some(EvaluatedDeep { undecided: true })
     );
 }
 #[test]
@@ -318,15 +308,11 @@ fn deep_eval_skips_shallow_positions_until_an_index_read() {
     assert_eq!(m.node_evaluated_deep(add), None, "never walked");
     assert_eq!(
         m.node_evaluated_deep(three),
-        Some(EvaluatedDeep {
-            parameterized: false
-        })
+        Some(EvaluatedDeep { undecided: false })
     );
     assert_eq!(
         m.node_evaluated_deep(arr),
-        Some(EvaluatedDeep {
-            parameterized: true
-        }),
+        Some(EvaluatedDeep { undecided: true }),
         "a shallow-marked array is never proven concrete"
     );
     // A read forces the single element on demand.
@@ -424,8 +410,8 @@ fn a_block_root_that_stays_lazy_is_not_an_internal_error() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let child = m.add_block(Some(root));
-    let unbound = unbound_node(&mut m, child);
-    let add = op_node(&mut m, child, TestOperator::Add, Some(unbound));
+    let undecided = undecided_node(&mut m, child);
+    let add = op_node(&mut m, child, TestOperator::Add, Some(undecided));
     let read = op_node(&mut m, root, TestOperator::Id, Some(add));
 
     let value = m.evaluate_node_deep(read, None);

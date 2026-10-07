@@ -105,19 +105,19 @@ fn cloned_function_nodes_start_in_their_own_equality_class() {
 
 // --- unify -------------------------------------------------------------
 //
-// Structural unification over values: unbound classes bind, concrete values
+// Structural unification over values: undecided classes bind, concrete values
 // merge by equality (arrays elementwise), conflicts collect in
 // `Module::unify_errors` without merging.
 
-fn is_unbound_value(value: Option<TestValue>) -> bool {
+fn is_undecided_value(value: Option<TestValue>) -> bool {
     value.is_none()
 }
 
 #[test]
-fn unbound_binds_to_the_other_side() {
+fn undecided_binds_to_the_other_side() {
     let mut m = Module::new();
     let block = m.add_block(None);
-    let x = unbound_node(&mut m, block);
+    let x = undecided_node(&mut m, block);
     let one = usize_node(&mut m, block, 1);
     let rep = m.unify(x, one);
     assert!(m.unify_errors.is_empty());
@@ -129,29 +129,29 @@ fn unbound_binds_to_the_other_side() {
 }
 
 #[test]
-fn two_unbound_nodes_unify_into_one_class() {
+fn two_undecided_nodes_unify_into_one_class() {
     let mut m = Module::new();
     let block = m.add_block(None);
-    let a = unbound_node(&mut m, block);
-    let b = unbound_node(&mut m, block);
-    let t = unbound_node(&mut m, block);
+    let a = undecided_node(&mut m, block);
+    let b = undecided_node(&mut m, block);
+    let t = undecided_node(&mut m, block);
     m.unify(a, t);
     m.unify(b, t);
     assert!(m.unify_errors.is_empty());
     let rep = m.equality_representative(a);
     assert_eq!(m.equality_representative(t), rep);
     assert_eq!(m.equality_representative(b), rep);
-    // still unbound: the class carries no value yet
-    assert!(is_unbound_value(m.node_value(AnyNodeId::Dynamic(rep))));
+    // still undecided: the class carries no value yet
+    assert!(is_undecided_value(m.node_value(AnyNodeId::Dynamic(rep))));
 }
 
 #[test]
 fn binding_one_member_binds_the_whole_class() {
     let mut m = Module::new();
     let block = m.add_block(None);
-    let a = unbound_node(&mut m, block);
-    let b = unbound_node(&mut m, block);
-    let t = unbound_node(&mut m, block);
+    let a = undecided_node(&mut m, block);
+    let b = undecided_node(&mut m, block);
+    let t = undecided_node(&mut m, block);
     m.unify(a, t);
     m.unify(b, t);
     // the `struct K<T>{a: T, b: T}; K<int, float>` shape: T binds to int...
@@ -291,8 +291,8 @@ fn extension_values_merge_by_value_equality() {
 fn arrays_unify_elementwise() {
     let mut m = Module::new();
     let block = m.add_block(None);
-    let x = unbound_node(&mut m, block);
-    let y = unbound_node(&mut m, block);
+    let x = undecided_node(&mut m, block);
+    let y = undecided_node(&mut m, block);
     let left = array_node(&mut m, block, &[x, y], None);
     let one = usize_node(&mut m, block, 1);
     let two = usize_node(&mut m, block, 2);
@@ -336,7 +336,7 @@ fn array_length_mismatch_records_an_error() {
 fn array_element_conflict_records_an_error_without_merging_the_arrays() {
     let mut m = Module::new();
     let block = m.add_block(None);
-    let x = unbound_node(&mut m, block);
+    let x = undecided_node(&mut m, block);
     let one = usize_node(&mut m, block, 1);
     let left = array_node(&mut m, block, &[x, one], None);
     let two = usize_node(&mut m, block, 2);
@@ -367,7 +367,7 @@ fn array_element_conflict_records_an_error_without_merging_the_arrays() {
 fn same_function_value_merges() {
     let mut m = Module::new();
     let block = m.add_block(None);
-    let param = unbound_node(&mut m, block);
+    let param = undecided_node(&mut m, block);
     let ret = usize_node(&mut m, block, 1);
     let f = m.add_function(block, ret, param, [ret, param], []);
     let fid = dyn_function(m.node_value(AnyNodeId::Dynamic(f)).unwrap());
@@ -391,10 +391,10 @@ fn different_function_values_record_an_error() {
     let mut m = Module::new();
     let block = m.add_block(None);
     let p1 = usize_node(&mut m, block, 1);
-    let r1 = unbound_node(&mut m, block);
+    let r1 = undecided_node(&mut m, block);
     let f1 = m.add_function(block, r1, p1, [r1, p1], []);
     let p2 = usize_node(&mut m, block, 2);
-    let r2 = unbound_node(&mut m, block);
+    let r2 = undecided_node(&mut m, block);
     let f2 = m.add_function(block, r2, p2, [r2, p2], []);
     m.unify(f1, f2);
     assert_eq!(m.unify_errors.len(), 1);
@@ -405,8 +405,8 @@ fn different_function_values_record_an_error() {
 fn mutually_self_referential_arrays_record_an_error_instead_of_looping() {
     let mut m = Module::new();
     let block = m.add_block(None);
-    let a = unbound_node(&mut m, block);
-    let b = unbound_node(&mut m, block);
+    let a = undecided_node(&mut m, block);
+    let b = undecided_node(&mut m, block);
     let arr_a = array_node(&mut m, block, &[a], None);
     let arr_b = array_node(&mut m, block, &[b], None);
     let val_a = m.node_value(AnyNodeId::Dynamic(arr_a));
@@ -435,7 +435,7 @@ fn multiple_conflicts_accumulate() {
     let a = usize_node(&mut m, block, 1);
     let s = str_node(&mut m, block, &['x']);
     m.unify(a, s);
-    let u = unbound_node(&mut m, block);
+    let u = undecided_node(&mut m, block);
     let arr = array_node(&mut m, block, &[u], None);
     m.unify(a, arr);
     let two = usize_node(&mut m, block, 2);
@@ -449,9 +449,9 @@ fn multiple_conflicts_accumulate() {
 fn binding_reaches_every_member_of_the_class() {
     let mut m = Module::new();
     let block = m.add_block(None);
-    let a = unbound_node(&mut m, block);
-    let b = unbound_node(&mut m, block);
-    let t = unbound_node(&mut m, block);
+    let a = undecided_node(&mut m, block);
+    let b = undecided_node(&mut m, block);
+    let t = undecided_node(&mut m, block);
     m.unify(a, t);
     m.unify(b, t);
     let int = usize_node(&mut m, block, 1);
@@ -480,12 +480,12 @@ fn binding_reaches_every_member_of_the_class() {
 fn a_newcomer_joining_a_bound_class_carries_the_value() {
     let mut m = Module::new();
     let block = m.add_block(None);
-    let a = unbound_node(&mut m, block);
+    let a = undecided_node(&mut m, block);
     let int = usize_node(&mut m, block, 1);
     m.unify(a, int);
     assert!(m.unify_errors.is_empty());
-    let b = unbound_node(&mut m, block);
-    m.unify(a, b); // an unbound node joins the bound class
+    let b = undecided_node(&mut m, block);
+    m.unify(a, b); // an undecided node joins the bound class
     assert!(m.unify_errors.is_empty());
     assert!(matches!(
         m.node_value(AnyNodeId::Dynamic(a)),
@@ -511,8 +511,8 @@ fn garbage_collecting_a_block_splices_its_members_out_of_the_class() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let child = m.add_block(Some(root));
-    let x = unbound_node(&mut m, root);
-    let y = unbound_node(&mut m, child); // not reachable from child_root
+    let x = undecided_node(&mut m, root);
+    let y = undecided_node(&mut m, child); // not reachable from child_root
     let child_root = usize_node(&mut m, child, 0);
     m.unify(x, y);
     let int = usize_node(&mut m, root, 7);
@@ -545,10 +545,10 @@ fn garbage_collect_re_elects_a_representative_when_the_old_one_dies() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let child = m.add_block(Some(root));
-    let y1 = unbound_node(&mut m, child);
-    let y2 = unbound_node(&mut m, child);
+    let y1 = undecided_node(&mut m, child);
+    let y2 = undecided_node(&mut m, child);
     let child_root = usize_node(&mut m, child, 0);
-    let x = unbound_node(&mut m, root);
+    let x = undecided_node(&mut m, root);
     // union by size keeps the representative in the child block
     m.unify(y1, y2);
     m.unify(y1, x);
@@ -581,7 +581,7 @@ fn garbage_collect_re_elects_a_representative_when_the_old_one_dies() {
 fn apply_unifies_the_cloned_parameter_with_the_argument() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    let param = unbound_node(&mut m, root);
+    let param = undecided_node(&mut m, root);
     let f = m.add_function(root, param, param, [param], []);
     let arg = u128_node(&mut m, root, 42);
     let call = call_node(&mut m, root, f, arg);
@@ -593,16 +593,16 @@ fn apply_unifies_the_cloned_parameter_with_the_argument() {
 }
 
 #[test]
-fn apply_with_an_unbound_argument_stays_lazy() {
+fn apply_with_an_undecided_argument_stays_lazy() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    let param = unbound_node(&mut m, root);
+    let param = undecided_node(&mut m, root);
     let f = m.add_function(root, param, param, [param], []);
-    let arg = unbound_node(&mut m, root);
+    let arg = undecided_node(&mut m, root);
     let call = call_node(&mut m, root, f, arg);
     assert!(m.evaluate_node_deep(call, None).is_none());
     assert!(m.unify_errors.is_empty());
-    // two unbound nodes unify into one class, still unbound
+    // two undecided nodes unify into one class, still undecided
     let rep = m.equality_representative(arg);
     assert_eq!(disjoint::members(&m.nodes, rep).count(), 2);
 }
@@ -613,8 +613,8 @@ fn apply_unifies_array_parameters_elementwise() {
     let root = m.add_block(None);
     // f(x) = x with x = [x0, x1]: the parameter's structure is an array,
     // so the apply unifies it elementwise against the argument.
-    let x0 = unbound_node(&mut m, root);
-    let x1 = unbound_node(&mut m, root);
+    let x0 = undecided_node(&mut m, root);
+    let x1 = undecided_node(&mut m, root);
     let param = array_node(&mut m, root, &[x0, x1], None);
     let f = m.add_function(root, param, param, [param, x0, x1], []);
     let one = usize_node(&mut m, root, 1);
@@ -643,7 +643,7 @@ fn apply_time_conflict_records_an_error() {
     // The parameter is already bound to a concrete value — a defined
     // signature like `x: int`.  Applying a conflicting argument is a
     // runtime type error at the application site.
-    let param = unbound_node(&mut m, root);
+    let param = undecided_node(&mut m, root);
     let f = m.add_function(root, param, param, [param], []);
     let one = usize_node(&mut m, root, 1);
     m.unify(param, one);
@@ -665,16 +665,16 @@ fn apply_time_conflict_records_an_error() {
 }
 
 #[test]
-fn apply_unify_binds_an_unbound_argument_into_the_param_class() {
+fn apply_unify_binds_an_undecided_argument_into_the_param_class() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    let param = unbound_node(&mut m, root);
+    let param = undecided_node(&mut m, root);
     let f = m.add_function(root, param, param, [param], []);
     let one = usize_node(&mut m, root, 1);
     m.unify(param, one);
     assert!(m.unify_errors.is_empty());
-    let unbound = unbound_node(&mut m, root);
-    let call = call_node(&mut m, root, f, unbound);
+    let undecided = undecided_node(&mut m, root);
+    let call = call_node(&mut m, root, f, undecided);
     assert!(matches!(
         m.evaluate_node_deep(call, None).unwrap(),
         TestValue::LowValue(LowValue::USize(1))
@@ -682,7 +682,7 @@ fn apply_unify_binds_an_unbound_argument_into_the_param_class() {
     assert!(m.unify_errors.is_empty());
     // the argument node itself now carries the parameter's value
     assert!(matches!(
-        m.node_value(AnyNodeId::Dynamic(unbound)),
+        m.node_value(AnyNodeId::Dynamic(undecided)),
         Some(TestValue::LowValue(LowValue::USize(1)))
     ));
 }
@@ -695,8 +695,8 @@ fn apply_reestablishes_the_parameter_patterns_internal_classes() {
     // template — a homogeneous pattern: both elements must unify to the
     // same value.  The apply re-establishes the class among the cloned
     // elements, so the argument is forced to satisfy it.
-    let x0 = unbound_node(&mut m, root);
-    let x1 = unbound_node(&mut m, root);
+    let x0 = undecided_node(&mut m, root);
+    let x1 = undecided_node(&mut m, root);
     let param = array_node(&mut m, root, &[x0, x1], None);
     let f = m.add_function(root, param, param, [param, x0, x1], []);
     m.unify(x0, x1);

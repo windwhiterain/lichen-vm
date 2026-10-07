@@ -9,7 +9,7 @@
 //! - [`AttrExt::combine`] returns *no doc* — a compound's doc is its own
 //!   annotation, never a meet of its children's docs.
 //! - [`AttrExt::unify_slots`] **propagates** the doc onto the other side and
-//!   never reports a failure: it attempts a real unify (so an unbound doc cell
+//!   never reports a failure: it attempts a real unify (so an undecided doc cell
 //!   binds to the concrete doc — the doc *passes from one to another*), and
 //!   when two already-concrete docs differ, [`AttrExt::is_subtype`] is `true`
 //!   so the mismatch is suppressed (the existing doc is kept — the override
@@ -62,20 +62,20 @@ where
     P::Value: ValueType + AsEnum<LowValue>,
 {
     /// The value read for an *absent* occurrence: *no doc* — spelled as **no
-    /// value at all**, because an absent doc is an *unbound cell* by intent:
+    /// value at all**, because an absent doc is an *undecided cell* by intent:
     /// a real unify binds it, so a doc passes from one side to the other.
     fn missing_value(&self) -> Option<LowValue> {
         None
     }
 
     /// A doc never combines over its children: a compound's doc is its own
-    /// annotation, not a meet of its children's.  Returns an unbound cell —
+    /// annotation, not a meet of its children's.  Returns an undecided cell —
     /// the per-site no-doc marker.
     fn combine(&self, ctx: &mut dyn Ctx<P>, _children: &[NodeId]) -> NodeId {
         ctx.fresh()
     }
 
-    /// Propagate the doc and never fail: a real unify (an unbound doc cell
+    /// Propagate the doc and never fail: a real unify (an undecided doc cell
     /// binds to the concrete doc — the doc *passes from one to another*), then
     /// `is_subtype` is `true` so two differing concrete docs never conflict
     /// (the existing doc is kept — the override case).

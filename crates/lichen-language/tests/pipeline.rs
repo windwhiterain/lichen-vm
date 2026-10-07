@@ -142,7 +142,7 @@ fn the_polymorphic_identity_checks() {
 fn a_nested_function_captures_the_applied_outer_parameter() {
     // f1 = x => { b = 2; f2 = y => [a, b, x, y]; f2 }; f1 3 4 — the returned
     // closure captures x's binding: the parameter must not leak through as
-    // the unbound marker.
+    // the undecided marker.
     let (mut module, root) = run("a = 1; f1 = x => { b = 2; f2 = y => [a, b, x, y]; f2 }; f1 3 4");
     let ids = array_ids(module.evaluate_node_deep(root, None).unwrap());
     let expected = [1usize, 2, 3, 4];
@@ -163,7 +163,7 @@ fn an_array_literal_checks_against_its_array_type() {
 
 #[test]
 fn a_homogeneous_array_of_lambdas_checks() {
-    // [x => x, x => x] — each lambda has its own fresh unbound arrow type;
+    // [x => x, x => x] — each lambda has its own fresh undecided arrow type;
     // the element check unifies the two shapes (`?a → ?a` with `?b → ?b`),
     // so the array is homogeneous.  Different binder names are the same
     // shape.  The root type is a determined array-of-arrow, so there is no
@@ -517,7 +517,7 @@ fn an_int_is_unsigned_where_the_two_readings_differ() {
 
 /// A division or remainder by zero has no value, and the operator says so —
 /// with the lazy marker, like every other refused computation, so the program
-/// reports an unbound result and the recorded reason explains it.
+/// reports an undecided result and the recorded reason explains it.
 ///
 /// **Only the interpreter refuses.** A jitted kernel has left this crate: wasm's
 /// integer division traps and SPIR-V's is undefined, and a guard would cost a
@@ -725,7 +725,7 @@ fn an_operator_operand_must_be_an_int() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::BinOp);
-    // An unbound operand is pinned to Int: applying the function at a
+    // An undecided operand is pinned to Int: applying the function at a
     // non-Int is a runtime failure, not a panic inside the operator.
     let d = diags("f = x => x + 1; f Type");
     assert_eq!(d.len(), 1);
@@ -793,7 +793,7 @@ fn an_assert_on_a_non_one_value_fails() {
 #[test]
 fn an_assert_on_a_failed_read_fails_with_none() {
     // `!([1, 2][5])` — the condition is a failed read: its residue is the
-    // concrete computed-nothing value, so the assert FAILS (an unbound
+    // concrete computed-nothing value, so the assert FAILS (an undecided
     // condition would stay untriggered) and the value spells `none`.
     let d = diags("@assert ([1, 2][5])");
     assert!(
@@ -807,7 +807,7 @@ fn an_assert_on_a_failed_read_fails_with_none() {
 
 #[test]
 fn an_assert_in_a_function_body_checks_per_call() {
-    // The body's assert cannot resolve at normalize (x is unbound), so the
+    // The body's assert cannot resolve at normalize (x is undecided), so the
     // apply clones it and re-checks against the argument — the failure is
     // rendered, not silently dropped, and the caret points at the body's `!`.
     let d = diags("f = x => @assert (x == 1); f 2");
@@ -1341,7 +1341,7 @@ fn a_raw_read_of_a_type_value_reads_the_components_pair() {
     // The element's own *value* slot, which is what a `Type`-valued element
     // carries: `<Int, string><0> == Int` is the comparison of markers.
     assert_eq!(usize_of(&evaluate("<Int, string><1> == string")), 1);
-    // An unbound container stays lazy and resolves at the apply.
+    // An undecided container stays lazy and resolves at the apply.
     assert_eq!(
         usize_of(&evaluate("f = k => k<0>; f <Int, string> == Int")),
         1
@@ -1455,7 +1455,7 @@ fn a_raw_read_whose_subscript_is_not_an_index_reports_a_runtime_subscript_error(
 #[test]
 fn an_apply_of_a_deferred_non_function_reports_a_runtime_apply_target_error() {
     // `f = g => g 1` applied to `5`: the callee is a parameter, so its type
-    // cell stays unbound and the checker's function-ness guard is skipped.
+    // cell stays undecided and the checker's function-ness guard is skipped.
     // The lowlevel records the runtime failure, and it reaches the
     // diagnostics as `RuntimeApplyTarget` — the value itself is the fact,
     // with no type to print.
@@ -1479,7 +1479,7 @@ fn an_apply_of_a_deferred_non_function_reports_a_runtime_apply_target_error() {
 #[test]
 fn an_apply_of_a_deferred_struct_value_reports_a_runtime_apply_target_error() {
     // `f = g => g 1` applied to a struct instance: the callee is a parameter,
-    // so its type cell stays unbound and the checker's function-ness guard is
+    // so its type cell stays undecided and the checker's function-ness guard is
     // skipped, and the instance's value is structurally a `LowValue::Array` —
     // the same shape a compute kernel's `[native, sig]` pair takes, which the
     // lowlevel cannot tell apart.  Only the program knows which of its values
@@ -2318,7 +2318,7 @@ fn indexing_a_function_is_an_index_target_error() {
 
 #[test]
 fn a_bare_lambda_checks() {
-    // The root type is the arrow `?a → ?a` — unbound components, but the
+    // The root type is the arrow `?a → ?a` — undecided components, but the
     // arrow shape is determined, so there is no ambiguity diagnostic.
     let report = compile("x => x");
     assert!(report.ok(), "bare lambdas check: {:?}", report.diagnostics);
@@ -2529,7 +2529,7 @@ fn a_tilde_n_wrap_marks_value_slots_shallow() {
 #[test]
 fn a_tilde_one_on_a_recursive_tail_terminates() {
     // ~1 on the recursive tail: the old depth-budget descent used to loop
-    // on this; the compile-time wrap cannot descend the unbound spine, so
+    // on this; the compile-time wrap cannot descend the undecided spine, so
     // the definition pass terminates and the reads stay underdetermined
     // (sound), never a guard panic.
     let (module, value, _) = common::evaluate(

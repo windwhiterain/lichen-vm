@@ -36,7 +36,7 @@ type RenderExt<'a, V> = &'a dyn Fn(&V) -> Option<String>;
 /// is a kind is a compound type (`struct<.f Int, .g Type>`, `Int -> Int`,
 /// `<Int, Type>`, `array<Int, 3>`), a value whose type is a tuple type reads as a
 /// tuple `(1, Int)`, an array type as an array `[1, 2, 3]`, and a struct
-/// type as its field tuple.  When the type chain is opaque (an unbound cell,
+/// type as its field tuple.  When the type chain is opaque (an undecided cell,
 /// an extension type), the value falls back to its raw layout, and **every**
 /// reading of that layout is marked: a list of cells `raw[…]`, an atomic
 /// `raw 6` / `raw Int`.  A dump never spells itself like a form the chain
@@ -50,7 +50,7 @@ where
 
 /// Render a type expression (the recursive-pair encoding again) in the
 /// language's own type syntax: `Int`, `Type`, `T1 -> T2`, `<T1, ..., Tn>`,
-/// `array<T, len>`, `struct<.a T1, ...>`.  Unbound cells get stable `?a`, `?b`, …
+/// `array<T, len>`, `struct<.a T1, ...>`.  Undecided cells get stable `?a`, `?b`, …
 /// names — cells in the same unification class share a name — so the type
 /// shows which parts are linked.  Cycles are cut at `…`; a node the walk
 /// cannot read as a form renders as its raw layout, marked `raw[…]`.
@@ -173,7 +173,7 @@ where
     /// Stable class names: representative → `?a`, `?b`, …, within one type
     /// (or one diagnostic report).
     names: HashMap<NodeId, String>,
-    /// Stable names for unbound *static* cells — a frozen module's type
+    /// Stable names for undecided *static* cells — a frozen module's type
     /// variables.  Keyed by the absolute static ref, so the same cell (e.g. a
     /// kernel's shared `d`/`c` signature cells) keeps one name across the
     /// whole type, exactly as a dynamic class shares one.  Distinct from
@@ -468,7 +468,7 @@ where
 /// The named-field list of a struct **type term** (`[shape, kind]`), read from
 /// the type's kind marker pair `[payload, TypeStruct]`.  `None`
 /// when `node` is not a concrete
-/// struct type (an unbound cell, a tuple, an array, a function).  A `None`
+/// struct type (an undecided cell, a tuple, an array, a function).  A `None`
 /// entry is a positional (unnamed) field; a `Some(name)` entry is a
 /// `.name Ty` field.
 ///

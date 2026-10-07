@@ -298,7 +298,7 @@ fn static_recursion_counts_down_through_a_lazy_branch() {
     );
     finish_function(&mut m, body, g_ret, param, g_func);
     // No solve pass: an unconditional self-apply never terminates, so every
-    // node stays unproven (parameterized) and materializes per call — the
+    // node stays undecided (undecided) and materializes per call — the
     // static depth guard bounds it.
     let mut imp = Module::new();
     let root = imp.add_block(None);
@@ -367,7 +367,7 @@ fn static_parameter_topology_is_reestablished_among_clones() {
 
 #[test]
 fn static_assert_rechecks_per_call() {
-    // Source: f(x) = x with the body assert `x == 1` — parameterized at
+    // Source: f(x) = x with the body assert `x == 1` — undecided at
     // solve, so it stays pending; the importer's materialize instantiates
     // it per call, and check_asserts sees the argument.
     let mut m = Module::new();

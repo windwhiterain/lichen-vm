@@ -1134,7 +1134,7 @@ impl DocIndex {
     /// Completion for a field access `container.…`: offer the container's struct
     /// fields — an imported module's exported fields ([`DocIndex::module_fields`]),
     /// or a local struct binding's fields ([`DocIndex::struct_fields_by_stmt`]).
-    /// Empty when the container is not a knowable struct (an unbound, non-
+    /// Empty when the container is not a knowable struct (an undecided, non-
     /// binding, or non-struct container), so nothing is offered after a `.` on
     /// e.g. a call result.
     fn field_completion(&self, offset: usize) -> Vec<CompletionItem> {

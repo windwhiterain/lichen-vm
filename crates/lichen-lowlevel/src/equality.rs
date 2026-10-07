@@ -350,7 +350,7 @@ impl<P: Program> Module<P> {
     ///
     /// **The write is unconditional, and it lands on every member**
     /// ([`docs/notes/class-channel.md`] §1.1).  It is not gated on the slot
-    /// being unbound, and it skips nobody — so **one class has one value**: a
+    /// being undecided, and it skips nobody — so **one class has one value**: a
     /// concrete write reaches every member *and* the class's representative,
     /// which is where [`Self::class_value`] and [`Self::class_committed_value`]
     /// read it from.  The representative is the class's single value slot, so
@@ -505,13 +505,13 @@ impl<P: Program> Module<P> {
     /// Structurally unify the classes of `a` and `b`.
     ///
     /// Unification is over values: a class holding no value and no pending
-    /// operation (a pure unbound cell) binds to the other side's value; an
+    /// operation (a pure undecided cell) binds to the other side's value; an
     /// unevaluated operation is a *pending computation*, and a concrete
     /// value must never be bound over one — that would silently erase it
     /// (e.g. a dependent type branch that selects a different type per
     /// argument).  Such a computation is forced before comparing; if its
-    /// operands are still unbound and it cannot resolve, the unify fails —
-    /// except against an all-unbound skeleton (cells and arrays of cells),
+    /// operands are still undecided and it cannot resolve, the unify fails —
+    /// except against an all-undecided skeleton (cells and arrays of cells),
     /// which merges with the computation: nothing is erased, and the
     /// computation's eventual value replicates onto the skeleton.  Two
     /// concrete values merge iff they are fully equal

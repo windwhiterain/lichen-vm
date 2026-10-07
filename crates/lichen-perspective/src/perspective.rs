@@ -107,7 +107,7 @@ where
 /// `GcdOp::run` — the VM dispatch for the injected `Gcd` operator.
 ///
 /// The operand is the array of the children's attribute slots, pre-padded with
-/// the missing value (`0`) by the checker.  A lazy operand (an unbound
+/// the missing value (`0`) by the checker.  A lazy operand (an undecided
 /// parameter) stays lazy.
 impl<P> OperatorExt<P> for GcdOp
 where
@@ -184,7 +184,7 @@ where
 
     /// The absent form is the constant `0` — concrete, so reconciliation only
     /// ever *reads* it and one node can serve every absent occurrence.  (A doc's
-    /// absent form is an unbound cell, which a unify binds, so it cannot say
+    /// absent form is an undecided cell, which a unify binds, so it cannot say
     /// this; see [`AttrExt::share_missing_slot`].)
     fn share_missing_slot(&self) -> bool {
         true
@@ -228,7 +228,7 @@ where
     /// satisfied only by `super = 0`, and `super = 0` satisfies any `sub`.
     /// Implementation reads the two slot values — each slot is a
     /// `[value, type]` term pair, so the lattice value is its element 0 (a
-    /// bare value — an un-annotated edge — is accepted too).  An unbound
+    /// bare value — an un-annotated edge — is accepted too).  An undecided
     /// value (a runtime-dependent perspective) is not a subtype.
     fn is_subtype(&self, ctx: &dyn Ctx<P>, sub: NodeId, sup: NodeId) -> bool {
         let value_of = |node: NodeId| -> Option<usize> {
@@ -256,7 +256,7 @@ where
         divides(sub, sup)
     }
 
-    /// A leaf perspective spells `# n`; a compound's gcd meet (or an unbound
+    /// A leaf perspective spells `# n`; a compound's gcd meet (or an undecided
     /// value) has no single spelling and is not shown.  The slot is a
     /// `[value, type]` term pair, so the lattice value is its element 0.
     fn render(

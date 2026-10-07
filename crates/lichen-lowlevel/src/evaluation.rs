@@ -48,16 +48,16 @@ pub enum EvalError {
         length: usize,
     },
     /// A [`LowOperator::TableGet`] that found no entry for the key, or
-    /// whose key is still unbound (a not-yet-concrete key can match nothing
+    /// whose key is still undecided (a not-yet-concrete key can match nothing
     /// — the table's stored keys are all concrete), or whose target or key
     /// is an empty value (a [`LowValue::Error`] never matches: it is the
     /// residue of an already-recorded failure, not a key).  `table` is the
     /// container operand node, `key` the key node.
     TableMiss { table: AnyNodeId, key: AnyNodeId },
     /// A table build dropped an entry whose key could not be forced to a
-    /// concrete value (its subtree holds an unbound cell or a parameterized
+    /// concrete value (its subtree holds an undecided cell or a undecided
     /// computation) — hashing needs the key's decided content.
-    TableKeyUnbound { key: AnyNodeId },
+    TableKeyUndecided { key: AnyNodeId },
     /// A [`LowOperator::Index`] whose target is not an array at all — a read
     /// of a scalar, a function, a table, or a type-level node.  Reachable from
     /// source (a field read applied to something that is not a container), so
@@ -75,7 +75,7 @@ pub enum EvalError {
     /// A [`LowOperator::Apply`] whose **target** is a structural value that
     /// cannot be applied — a scalar, a string, a table, or the unit value.
     /// Reachable from source (`g 1` with `g : int`), including through a
-    /// deferred callee whose unbound type the checker's function-ness guard
+    /// deferred callee whose undecided type the checker's function-ness guard
     /// cannot see, so it is a recorded failure and an empty value:
     /// `function` is the callee operand node, so the highlevel can attribute
     /// the diagnostic to the expression that was applied.
@@ -370,7 +370,7 @@ impl<P: Program> Module<P> {
                             // can never be a function — and never a callable
                             // program value — so applying one is a user error.
                             // The checker's function-ness guard cannot see a
-                            // deferred callee's unbound type, so this is where
+                            // deferred callee's undecided type, so this is where
                             // the apply is refused: recorded, with the callee
                             // operand node carrying the fact, and a computed
                             // nothing.
@@ -445,7 +445,7 @@ impl<P: Program> Module<P> {
                                 // decided-and-absent misses like any other
                                 // absent key.  A key that is not *decided
                                 // yet* (a lambda parameter mid-apply, a lazy
-                                // computation with unbound operands) is not a
+                                // computation with undecided operands) is not a
                                 // miss: the lookup has not happened yet, so
                                 // the read stays lazy and a later pass, with
                                 // the key bound, decides it.
@@ -498,7 +498,7 @@ impl<P: Program> Module<P> {
             }
         };
         // An undecided answer is not a final answer: an operation whose
-        // operands were unbound at evaluation time re-runs on the next read,
+        // operands were undecided at evaluation time re-runs on the next read,
         // so a later binding is observed regardless of evaluation order
         // (concrete results are memoized as usual).  Cells never reach this
         // postlude — they return their cached value from the top.
@@ -546,7 +546,7 @@ impl<P: Program> Module<P> {
     /// the assert check — cannot tell the two walks apart (the operand gate that
     /// refuses a masked operand lives in the operator, `OperatorExt::run_deferred`,
     /// and reads the array's `evaluated_deep`, which the shallow flag alone makes
-    /// parameterized).
+    /// undecided).
     #[stacksafe]
     pub fn evaluate_node_deep(
         &mut self,
@@ -719,12 +719,12 @@ impl<P: Program> Module<P> {
                 }
             });
         }
-        // An array is unproven while any position is itself undecided, or any
+        // An array is undecided while any position is itself undecided, or any
         // position at all sits behind a shallow mark.  A
         // static position's concreteness is the module's solved flag — it
         // was already decided by the deep pass that solved the module.
-        let parameterized = self.value_is_parameterized(cache, value);
-        self.nodes[node].evaluated_deep = Some(EvaluatedDeep { parameterized });
+        let undecided = self.value_is_undecided(cache, value);
+        self.nodes[node].evaluated_deep = Some(EvaluatedDeep { undecided });
         // The real verdict supersedes any cycle-cut assumption: the node is no
         // longer in progress, so the mark must not outlive the frame.
         self.nodes[node].assumed_concrete = false;
@@ -747,26 +747,26 @@ impl<P: Program> Module<P> {
     /// A node the pass **never ran on** is a different fact, and the contract on
     /// `node_evaluated_deep` fixes its reading: for a node no frame is
     /// computing, `None` must never mean "proven concrete", so it reads
-    /// parameterized.  Conflating the two was the defect `P1-31`.
+    /// undecided.  Conflating the two was the defect `P1-31`.
     ///
     /// The assumption **fills a missing verdict; it never overrides one** — a
     /// node that already wrote its answer keeps it, even if a later re-entrant
     /// pass cuts on it again.
-    fn ref_is_parameterized(&self, cache: &mut StaticModuleCache<P>, id: AnyNodeId) -> bool {
+    fn ref_is_undecided(&self, cache: &mut StaticModuleCache<P>, id: AnyNodeId) -> bool {
         match id {
             Dyn(node) => {
                 let entry = &self.nodes[node];
                 match entry.evaluated_deep {
-                    Some(deep) => deep.parameterized,
+                    Some(deep) => deep.undecided,
                     None => !entry.assumed_concrete,
                 }
             }
-            AnyNodeId::Static(sref) => cache.node_parameterized(self, sref),
+            AnyNodeId::Static(sref) => cache.node_undecided(self, sref),
         }
     }
 
     /// Whether `value` — the value this module just evaluated for `node` — is
-    /// unproven: an **undecided** answer (`None`, the empty slot), or an array
+    /// undecided: an **undecided** answer (`None`, the empty slot), or an array
     /// or table with a shallow position or an undecided element.  `cache` is the
     /// walk's static-module resolution cache, so a static element's solved flag
     /// costs one lookup per module for the whole walk rather than one per
@@ -781,10 +781,10 @@ impl<P: Program> Module<P> {
     /// `docs/notes/code-audit.md`.
     ///
     /// Every position's own verdict is read through
-    /// [`Self::ref_is_parameterized`], so an **in-progress** position is
+    /// [`Self::ref_is_undecided`], so an **in-progress** position is
     /// assumed concrete (the coinductive step) while one the pass never ran on
     /// is not.
-    fn value_is_parameterized(
+    fn value_is_undecided(
         &self,
         cache: &mut StaticModuleCache<P>,
         value: Option<P::Value>,
@@ -809,7 +809,7 @@ impl<P: Program> Module<P> {
                 if unsafe { array.items() }.iter().any(|item| item.shallow)
                     || unsafe { array.items() }
                         .iter()
-                        .any(|item| self.ref_is_parameterized(cache, item.node))
+                        .any(|item| self.ref_is_undecided(cache, item.node))
         ) || matches!(
             view,
             Some(LowValue::Table(table))
@@ -819,10 +819,10 @@ impl<P: Program> Module<P> {
                 // arm.
                 if unsafe { table.items() }
                     .iter()
-                    .any(|item| self.ref_is_parameterized(cache, item.key))
+                    .any(|item| self.ref_is_undecided(cache, item.key))
                     || unsafe { table.items() }
                         .iter()
-                        .any(|item| self.ref_is_parameterized(cache, item.value))
+                        .any(|item| self.ref_is_undecided(cache, item.value))
         )
     }
 

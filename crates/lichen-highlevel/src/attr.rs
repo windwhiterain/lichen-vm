@@ -116,7 +116,7 @@ where
 {
     /// The value read for an *absent* occurrence of this attribute.  A
     /// perspective reads `Some(USize(0))`: neutral in `gcd`, concrete in
-    /// equality unify.  `None` means the absent form is an **unbound cell** — a
+    /// equality unify.  `None` means the absent form is an **undecided cell** — a
     /// doc's or a refinement's — whose slot stays empty and which a unify binds
     /// on purpose, so the attribute passes from one side to the other.
     fn missing_value(&self) -> Option<LowValue>;
@@ -149,13 +149,13 @@ where
     /// **The contract a shareable missing value must satisfy: it is concrete.**
     /// Reconciling two slots is a real unification ([`Self::unify_slots`] goes
     /// through `check_unify_relaxed`), and a unify *writes* whichever side is
-    /// unbound.  A concrete node is only ever read, so one node can serve every
-    /// occurrence; an unbound one would be written by whichever occurrence
+    /// undecided.  A concrete node is only ever read, so one node can serve every
+    /// occurrence; an undecided one would be written by whichever occurrence
     /// unified first, and every later occurrence would read the bound value.
     ///
     /// That is the whole difference between the two attributes highlevel ships
     /// against: a perspective's absent form is the constant `0` (the lattice's
-    /// meet identity), so it shares; a doc's absent form is an **unbound cell**,
+    /// meet identity), so it shares; a doc's absent form is an **undecided cell**,
     /// which a unify binds on purpose so a doc passes from one side to the other
     /// ([`lichen_doc`]), so it must be fresh per site — sharing it would let the
     /// first bind poison every later read.
@@ -189,7 +189,7 @@ where
     /// Default `false` — no subtyping, exact equality is required.  A
     /// concrete attribute (e.g. `Perspective`) overrides it to relax its
     /// apply/`# p` check from equality to a partial order.  Implementations
-    /// read the two slot values with [`Ctx::class_value`]; an unbound
+    /// read the two slot values with [`Ctx::class_value`]; an undecided
     /// value (a runtime-dependent perspective) should return `false`, so the
     /// check stays conservative.
     fn is_subtype(&self, _ctx: &dyn Ctx<P>, _sub: NodeId, _super: NodeId) -> bool {
@@ -268,7 +268,7 @@ where
 
     /// Render this attribute's slot value in the language's own syntax
     /// (`# 4`, `? name = "five"`), or `None` when it cannot be spelled (an
-    /// unbound or runtime-dependent value, or an attribute with no display).
+    /// undecided or runtime-dependent value, or an attribute with no display).
     /// The output printers use it to show the attributes an expression actually
     /// carries: they iterate the expression's schema tail and render every
     /// *present* attribute, so an un-annotated expression spells nothing.
@@ -291,7 +291,7 @@ where
 
     /// The slot value of an attribute node, read from the module — a helper
     /// for [`Self::render`].  Returns the value as a `LowValue` enum.  An
-    /// empty slot (an unbound attribute) spells nothing and reads `None`;
+    /// empty slot (an undecided attribute) spells nothing and reads `None`;
     /// an empty value ([`LowValue::Error`]) is a concrete slot value and
     /// passes through.
     fn slot_value(&self, module: &Module<P>, slot: NodeId) -> Option<LowValue> {
