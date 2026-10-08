@@ -211,14 +211,20 @@ the graph tests exercise it once their programs are migrated.
 
 **An empty group is not expressible, and that is the one wart the shape has.**
 `struct<>` is not valid source, so a parameter that has no inputs still declares
-one field under `.in`, and the natural filler is a scalar — which the CPU path
-accepts as a runtime scalar and the device path refuses ("a fragment's parameter
-declares 3 leaf/leaves … and a dispatch pushes the extent alone"), so a *producer*
-kernel that reads nothing is expressible on the CPU path only.  A recorded body
-has the same wart on `.out`, where `parallel_roles` looks for both reserved names
-and the field is never read at all.  Both want the same answer: either an empty
-group becomes expressible, or a parameter that genuinely has none of a group may
-leave it out.
+one field under `.in`, and the natural filler is a scalar.  That filler is
+accepted on both paths: the device path refuses only a leaf a body **reads**, so a
+leaf nothing reads is not a missing one (`bce8d55`), and the CPU-only limitation
+an earlier version of this paragraph stated was that gate's over-broad reading of
+"declares a runtime scalar", not a property of the shape.  A recorded body — one
+that produces a value rather than dispatching its own writes — has the same gap on
+`.out`, and there the walk no longer requires the reserved names at all: it reads
+each name if it is present and treats its absence as "no leaves of that role"
+(`b95dc77`, `crates/lichen-compute/src/compute.rs`'s `parallel_roles`), so a
+hand-written parameter may already leave a group out.  What is left is the
+*spelling*: `compute.P` always inserts both fields (`compute.lichen`), so a group
+with no members has no source form.  The two answers named here from the start
+remain the two: an empty group becomes expressible, or a parameter that genuinely
+has none of a group may leave it out.
 
 The placeholders are wrapped **per role**: a buffer field's cell is a `Buf` around
 the `GraphInput` (a dispatch reads the wrapper's payload, `buf_payload`), while a
