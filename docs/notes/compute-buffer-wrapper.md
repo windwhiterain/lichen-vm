@@ -209,22 +209,48 @@ stops for the environment's reason ("this graph dispatches to a device, but no
 compute backend is installed"), so the test harness that installs one is where
 the graph tests exercise it once their programs are migrated.
 
-**An empty group is not expressible, and that is the one wart the shape has.**
-`struct<>` is not valid source, so a parameter that has no inputs still declares
-one field under `.in`, and the natural filler is a scalar.  That filler is
-accepted on both paths: the device path refuses only a leaf a body **reads**, so a
-leaf nothing reads is not a missing one (`bce8d55`), and the CPU-only limitation
-an earlier version of this paragraph stated was that gate's over-broad reading of
-"declares a runtime scalar", not a property of the shape.  A recorded body — one
-that produces a value rather than dispatching its own writes — has the same gap on
-`.out`, and there the walk no longer requires the reserved names at all: it reads
-each name if it is present and treats its absence as "no leaves of that role"
-(`b95dc77`, `crates/lichen-compute/src/compute.rs`'s `parallel_roles`), so a
-hand-written parameter may already leave a group out.  What is left is the
-*spelling*: `compute.P` always inserts both fields (`compute.lichen`), so a group
-with no members has no source form.  The two answers named here from the start
-remain the two: an empty group becomes expressible, or a parameter that genuinely
-has none of a group may leave it out.
+**An empty group is spellable now, and a group may also be absent.**  `struct<>`
+is valid source (`1c488bc`; its names slot is a present, empty table, `388e624`),
+so a shape with no members has a spelling — and `parallel_roles` already treats a
+*missing* reserved name as "no leaves of that role" (`b95dc77`), so both routes
+exist.  The filler leaf a producer kernel used to declare is not a lie on either
+path: the device refuses only a leaf a body **reads** (`bce8d55`), so a leaf
+nothing reads is not a missing one.
+
+Measured end to end, the filler and the empty group give **byte-identical**
+answers on **cpu and on the device** — a real device, no skip: `In1 = struct<>`
+with `(compute.A In1)(.n 3, .I In1())` runs, reads `10, 11, 12` and collects
+`[10, 11, 12]`, exactly as `In1 = struct<.a Int>` with `.I In1(.a 0)` does,
+including through `compute.graph`/`compute.graphrun`.  The minimal producer
+spelling is two edits — the group's type, and the launch leaf:
+
+```lichen
+In1  = struct<>                                    # was struct<.a Int>
+...
+p = (compute.plrun k1 ((compute.A In1)(.n 3, .I In1())) : Out1)   # was .I In1(.a 0)
+```
+
+Two things the author still writes, and one defect this exposed:
+
+- **The empty struct is nominal, so its occurrence cannot be inlined.**  One
+  occurrence has to be bound and reused: `Par1 = compute.P (compute.KT _)(.I In1,
+  .O Out1)` with `.I In1()` checks, while the same program inlined (`.I struct<>`
+  and `struct<>()`) is refused with `expected raw[Int, struct<>#0], found
+  raw[Int, struct<>#2]` — three occurrences, three nominal types.
+- **The empty instance is still an argument**, because `A = I => struct<.n Int,
+  .I I>` keeps the field.
+- **A graph step's parameter with an empty group before a later role path loses
+  the whole value, silently.**  With `GArg = struct<.n Int, .in In1, .out Out1>`
+  and `In1 = struct<>` the graph answers `raw none: ?a` with **no diagnostic**, on
+  cpu and on the device; the same program with a filler under `.in` answers
+  `[20, 22, 24, 26]`, and the same program with the fields **reordered**
+  (`struct<.n Int, .out Out1, .in In1>`) answers `[20, 22, 24, 26]` as well — so
+  the failure is positional, not the empty group as such.  `assemble_result`
+  (`compute.rs:3511-3528`) derives a group's arity from the paths that exist
+  (`max(index)+1`) and a prefix with no path under it makes the `?` return `None`,
+  which `build_graph` (`:6131`) propagates out of the `Graph` operator as `none`.
+  The fix belongs where the roles are known (`build_graph`) or where the paths are
+  built (`assemble_result`).
 
 The placeholders are wrapped **per role**: a buffer field's cell is a `Buf` around
 the `GraphInput` (a dispatch reads the wrapper's payload, `buf_payload`), while a
