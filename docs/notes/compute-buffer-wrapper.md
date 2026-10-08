@@ -270,9 +270,39 @@ this work's own before-image — `git worktree add .worktrees/prechange-check
 `a_gpu_program_chains_two_kernels_on_a_device`.  So the five are this refactor's
 own regressions, not pre-existing reds, and they fail in the shared helper —
 `tests/common/mod.rs:164`'s "right element … has no value" for four of them and
-`:120`'s "an array element has a value" for the fifth — which says the elements of
-a value a read or a collect produces no longer carry a value, where before the
-refactor the same position did.
+`:120`'s "an array element has a value" for the fifth.
+
+**What caused it — found after the first account of it was wrong twice.** It is
+one level above where it looks: **the read arm never ran at all**.
+`GpuContext::stage_run` refused *every* fragment whose parameter declared a second
+leaf (`param_shape.flat_arity() > 2`) — a condition written when "declares a
+runtime scalar" and "needs one" were the same thing.  The named parameter broke
+that reading: `struct<.n Int, .in T.I, .out T.O>` cannot express an *empty* group
+(`struct<>` is not source), so a **producer** kernel — one whose body only writes —
+declares a filler under `.in` (e.g. `In1 = struct<.a Int>`), which `walk_role`
+records as a leaf and `compile_parallel_fragment` puts into `param_shape`: three
+leaves where the retired tuple parameter had two.  Each refused `plrun` recorded
+`ScalarsNotPushed` and returned `None`, so its result stayed undecided and every
+later read of it found no value.  Fixed by refusing only what a dispatch cannot
+run — a fragment whose **body reads** a parameter beside the index (`bce8d55`).
+
+Two things hid it, and both are worth keeping:
+
+- the refusal **was** recorded, and swallowed: the test helper's gate panics on a
+  recorded diagnostic only when the root value is nothing or an error, and these
+  programs' root is an array literal;
+- **the symptom's location is not the cause's.**  Naming each silent exit in the
+  read arm found nothing, because none of them was reached; nor did the device
+  count gate, the inline ascription, or the `.native` operand spelling.  "An element
+  has no value" says *where* a value is missing, not *which* decision stopped it
+  arriving.
+
+The fix could have gone the other way: rewrite the five programs' producer kernels
+to omit `.in`, which is the shape this note's empty-group wart endorses and
+`examples/recursion.rs` already ships.  That edits five test programs to work
+around a gate refusing fragments nothing demands, so the gate was narrowed
+instead; if an empty group becomes expressible, the gate change stays correct and
+the source shape can follow.
 
 The lesson is worth more than the count was: a pass/fail number is only evidence
 when it is compared against the same measurement taken before the change, and the
