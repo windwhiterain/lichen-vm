@@ -252,6 +252,22 @@ Two things the author still writes, and one defect this exposed:
   The fix belongs where the roles are known (`build_graph`) or where the paths are
   built (`assemble_result`).
 
+  **The discriminator is the order, not the emptiness** — measured, and the first
+  attempt at the fix changed none of it.  An empty group **last**
+  (`struct<.n Int, .out Out1, .in In1>`) records and dispatches normally, and so
+  does a filler under `.in` in either order, while the empty group **before** `.out`
+  loses the whole recording: `compute.graph step` on its own answers `raw none: ?a`
+  with no diagnostic, so the loss is in the recording rather than the run, and the
+  same holds for a hand-written step parameter and for the `compute.P`-built one
+  every test and example uses.  Building the placeholder from the parameter's
+  declaration (`7643a37`, `assemble_parameter`) left all of those spellings
+  unchanged, so the placeholder's *shape* is not where the value is lost.  The open
+  hypothesis is the claim at `compute.rs:6144-6149` that the two ends agree by
+  construction: the placeholder numbers one slot per cell the role walk found, while
+  the run's own depth-first walk of the same declaration may still count a position
+  for a group no leaf was found under — a shift of exactly "how many empty groups
+  precede a live path", which is what the order dependence looks like.
+
 The placeholders are wrapped **per role**: a buffer field's cell is a `Buf` around
 the `GraphInput` (a dispatch reads the wrapper's payload, `buf_payload`), while a
 scalar field's cell is the bare `GraphInput` (the extent is a number).  The body's
