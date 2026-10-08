@@ -463,13 +463,13 @@ compute.launch k1 5
 }
 
 #[test]
-#[ignore = "the launch gate binds the argument expression's type cell, not the template's \
-            parameter type cell, so the JIT's parameter class stays undecided and it refuses. \
-            Measured since this was written: the cause is a written arrow in the *frozen* \
-            `compute` module, not the `f : f` change and not the clone - disabling the clone \
-            does not change it, and the same collapse reproduces in two lines of pure \
-            language. See docs/notes/function-type-merge.md. Un-park when a written arrow in a \
-            frozen module stops binding the parameter's value cell."]
+#[ignore = "both kernels' parameters are unannotated, so nothing states the class the lowering is \
+            for and the `jit` refuses by name: `the kernel parameter's class is not decided when \
+            the kernel is compiled`.  Measured: stating them (`(y : Int)`, `(x : Int)`) runs the \
+            program and produces 7, so the un-park is stating a class, not a decoder change.  An \
+            earlier version of this reason blamed a written arrow in the *frozen* `compute` \
+            module; that was refuted by measurement - the wrapper's own render is generic and \
+            byte-identical imported and local.  See docs/notes/kernel-parameter-class.md."]
 fn jit_cross_kernel_subexpr() {
     // A cross-kernel call result used as a sub-expression: `k0 (x) + 1`.  The
     // checker peels the call result via `Index(apply, 0)` (a `value_of`
@@ -1523,11 +1523,13 @@ compute.collect out.z
 /// (`docs/notes/floating-point.md` §4.2, §4.4).
 #[test]
 #[ignore = "the last sub-case's domain holds a function (`Int -> Float`), and a written arrow \
-inside the frozen `compute` module collapses the signature, so the walk refuses at the `jit` \
-with 'the kernel parameter's class is not decided' rather than at the launch argument the test \
-measures. That message also asks the author to annotate a parameter the test already annotated \
-(`p : <Int, Int -> Float>`), which is a second defect in its own right. Same cause as the \
-wrapper defect; see docs/notes/function-type-merge.md."]
+            compiles to the self-referential `[Function(fid), ↺]` node, which `low_type_of` has \
+            no arm for: it answers `Unknown`, so the refusal is at the `jit` ('the kernel \
+            parameter's class is not decided') rather than at the launch argument the test \
+            measures.  Not a frozen-module defect - the same arrow is `Unknown` in a local \
+            module.  That message also asks the author to annotate a parameter the test already \
+            annotated (`p : <Int, Int -> Float>`), which is a second defect in its own right: one \
+            text covers two conditions.  See docs/notes/kernel-parameter-class.md."]
 fn a_float_domain_is_permitted_at_every_position_the_walk_reaches() {
     // The parameter itself: a real float kernel, compiled, run and read back.
     let (module, value, root_ty) = run(r#"
