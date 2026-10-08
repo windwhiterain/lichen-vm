@@ -56,7 +56,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use ash::vk;
 use lichen_kernel_ir::{
-    BufferSlot, KernelFragment, ResidentId, ScalarClass, ScalarData, fragment_digest,
+    BufferSlot, KernelFragment, KernelInstr, ResidentId, ScalarClass, ScalarData, fragment_digest,
 };
 
 use crate::spirv::{self, Binding, LOCAL_SIZE_X, SpirvRefusal};
@@ -102,12 +102,12 @@ pub enum RunError {
     /// buffers. A wider shape is a real requirement and a real graph node, but
     /// it is not a linear chain.
     ChainNotLinear { inputs: usize, outputs: usize },
-    /// A fragment whose parameter declares a **runtime scalar** beside the
-    /// extent: the dispatch's push constant carries the extent alone, so a second
-    /// leaf has nowhere to go.  Refused by name rather than dispatched with the
-    /// argument missing, which would compute every lane from the wrong value —
-    /// the CPU path passes the whole leaf list
-    /// (`docs/notes/compute-runtime-scalars.md` §3).
+    /// A fragment whose body **reads** a parameter beside the extent: the
+    /// dispatch carries no leaf but the index, so a second read leaf has nowhere
+    /// to go.  Refused by name rather than dispatched with the argument missing,
+    /// which would compute every lane from the wrong value — the CPU path passes
+    /// the whole leaf list (`docs/notes/compute-runtime-scalars.md` §3).  A leaf
+    /// the body never reads is *not* this: nothing is missing from it.
     ScalarsNotPushed { leaves: usize },
     /// A resident id this context is not holding — never issued, or already
     /// released.  Refused rather than read as empty: an id is a handle, and using
@@ -726,13 +726,24 @@ impl GpuContext {
         // emitted module's element type and `ArrayStride` are, so the bytes staged
         // here are the bytes that module reads.
         //
-        // **The device path pushes the extent and nothing else**, so a parameter
-        // that declares a runtime scalar has no way to receive it here: refused
-        // by name rather than dispatched with a leaf missing, which would compute
-        // every lane from the wrong value
-        // (`docs/notes/compute-runtime-scalars.md` §3).
+        // **The device path pushes no leaf at all**, so a parameter a body
+        // *reads* has nowhere for its value to arrive: refused by name rather
+        // than dispatched with a leaf missing, which would compute every lane
+        // from the wrong value (`docs/notes/compute-runtime-scalars.md` §3).
+        //
+        // **A leaf the body never reads is not missing**, and that is the whole
+        // of the condition: a parameter declares its groups whether or not the
+        // body names a field of one, and a *producer* kernel's input group is
+        // not expressible as empty, so its filler is a leaf nothing demands
+        // (`docs/notes/compute-buffer-wrapper.md`).  The emitter draws the same
+        // line at [`spirv::SpirvRefusal::NonIndexParameter`].
         let leaves = fragment.param_shape.flat_arity();
-        if leaves > 2 {
+        let index = spirv::index_local(fragment);
+        let reads_a_parameter =
+            fragment.body.instrs().into_iter().any(
+                |instr| matches!(instr, KernelInstr::LocalGet(local) if Some(*local) != index),
+            );
+        if reads_a_parameter {
             return Err(RunError::ScalarsNotPushed { leaves });
         }
         let class = spirv::module_class(fragment).map_err(RunError::Emit)?;

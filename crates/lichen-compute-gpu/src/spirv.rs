@@ -678,7 +678,7 @@ fn spv_string(text: &[u8]) -> Vec<u32> {
 /// the index is the **last** leaf. It is recognised structurally rather than
 /// passed in, so a caller cannot disagree with a fragment about which parameter
 /// is the index.
-fn index_local(fragment: &KernelFragment) -> Option<u32> {
+pub(crate) fn index_local(fragment: &KernelFragment) -> Option<u32> {
     let arity = fragment.param_shape.flat_arity();
     (arity > 0).then(|| (arity - 1) as u32)
 }
