@@ -549,10 +549,14 @@ impl<P: Program> Module<P> {
     /// canonical node) is free to, and does so in `lichen-highlevel`'s
     /// `shape` module.  The lowlevel needs the shape alone to unify two such
     /// cycles successfully instead of tripping its cycle guard.
-    pub fn is_self_referential(&mut self, id: AnyNodeId) -> bool {
+    ///
+    /// A **read**: the class is walked without path compression
+    /// ([`Self::class_root`]), so asking the question never mutates the
+    /// union-find tree and a caller holding a shared borrow can ask it.
+    pub fn is_self_referential(&self, id: AnyNodeId) -> bool {
         match id {
             Dyn(node) => {
-                let rep = self.equality_representative(node);
+                let rep = self.class_root(node);
                 let Some(LowValue::Array(array)) =
                     self.nodes[node].value.and_then(|value| value.as_enum())
                 else {
@@ -567,7 +571,7 @@ impl<P: Program> Module<P> {
                 for item in unsafe { array.items() } {
                     match item.node {
                         Dyn(item) => {
-                            if self.equality_representative(item) == rep {
+                            if self.class_root(item) == rep {
                                 return true;
                             }
                         }
@@ -659,7 +663,7 @@ impl<P: Program> Module<P> {
     /// above asks — the checker's apply function-ness guard must recognise
     /// exactly what the unifier descends into, or the guard would refuse a
     /// function the unifier is happy to take.
-    pub fn is_function_type(&mut self, node: NodeId) -> bool {
+    pub fn is_function_type(&self, node: NodeId) -> bool {
         self.function_type_function(node).is_some()
     }
 
@@ -673,13 +677,13 @@ impl<P: Program> Module<P> {
     /// universe and a function's type stay tellable apart while both are
     /// self-referential arrays — and it is why the universe is *not* the thing
     /// a function's type is.
-    /// itself — and it is why the universe is *not* the thing a function's
-    /// type is.
     ///
     /// Asked of the class's **representative**, which carries the class's value
-    /// ([`Self::propagate_class_value`]).
-    fn function_type_function(&mut self, node: NodeId) -> Option<AnyFunctionId> {
-        let carrier = self.equality_representative(node);
+    /// ([`Self::propagate_class_value`]), and a **read** like
+    /// [`Self::is_self_referential`]: the class is walked without path
+    /// compression, so a caller holding a shared borrow can ask.
+    fn function_type_function(&self, node: NodeId) -> Option<AnyFunctionId> {
+        let carrier = self.class_root(node);
         if !self.is_self_referential(AnyNodeId::Dynamic(carrier)) {
             return None;
         }
@@ -731,6 +735,41 @@ impl<P: Program> Module<P> {
             AnyFunctionId::Static(sref) => return self.materialize_static_signature(sref),
         };
         Some((parameter, return_type))
+    }
+
+    /// The **domain and codomain type cells** of the function type `node`
+    /// names, or `None` when `node` is not one — the same two positions
+    /// [`Self::function_signature`] names, resolved to the *type* cells a
+    /// reader decodes rather than to the pair a unify descends into.
+    ///
+    /// The domain is the parameter pair's **type slot**, not the pair: a
+    /// template's parameter *value* cell is empty until an apply binds it, so
+    /// the pair itself says nothing about the domain and its type slot is the
+    /// decided half.  The codomain is [`Function::return_type`], for the reason
+    /// [`Self::function_signature`] gives.  A frozen function's cells are read
+    /// from its immutable template ([`Self::static_function_signature`]),
+    /// never materialized, because a read must not allocate.
+    ///
+    /// **A read**, so `&self`: this is the shape half of "is this a function
+    /// type", asked by a decoder that holds only a shared borrow
+    /// (`lichen-highlevel`'s `shape` module) and must not be forced into a
+    /// mutable one for a question it never mutates anything to answer.
+    pub fn function_type_signature(&self, node: NodeId) -> Option<(AnyNodeId, AnyNodeId)> {
+        match self.function_type_function(node)? {
+            AnyFunctionId::Dynamic(function) => {
+                let function = self.functions.get(function)?;
+                // A hand-built function (a lowlevel test) may leave
+                // `return_type` unset, so its signature is not readable.
+                if !self.nodes.contains_key(function.return_type) {
+                    return None;
+                }
+                Some((
+                    AnyNodeId::Dynamic(self.pair_type_half(function.parameter)?),
+                    AnyNodeId::Dynamic(function.return_type),
+                ))
+            }
+            AnyFunctionId::Static(sref) => self.static_function_signature(sref),
+        }
     }
 
     /// Unify two function types by descending into the two functions' own

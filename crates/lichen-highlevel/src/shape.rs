@@ -841,6 +841,18 @@ where
     if kinded.len() != 2 {
         return LowShape::Unknown;
     }
+    // A **function value's own type**: the self-referential `[Function(fid), ↺]`
+    // node that *is* the type of the function `fid` (`f : f`), which is what a
+    // written arrow annotation compiles to.  It is a function type by the
+    // lowlevel's own recogniser, and its two halves are the function's own
+    // signature cells — the same `domain, codomain` pair the
+    // `function_type_marker` arm below reads, carried by the function instead
+    // of by a shape slot; `function_shape` is the one spelling of that read.
+    if let AnyNodeId::Dynamic(node) = type_value
+        && let Some((domain, codomain)) = module.function_type_signature(node)
+    {
+        return function_shape(module, domain, codomain);
+    }
     let shape = kinded[TYPE_SHAPE_SLOT].node;
     // An atomic type: its shape slot holds the marker itself.
     let Some(shape_value) = module.node_value(shape) else {
@@ -918,16 +930,35 @@ where
         let Some(halves) = (unsafe { array_items(module, shape) }) else {
             return LowShape::Unknown;
         };
-        return LowShape::Function(
-            Box::new(low_type_of(module, halves[FUNCTION_TYPE_DOMAIN_SLOT].node)),
-            Box::new(low_type_of(
-                module,
-                halves[FUNCTION_TYPE_CODOMAIN_SLOT].node,
-            )),
+        return function_shape(
+            module,
+            halves[FUNCTION_TYPE_DOMAIN_SLOT].node,
+            halves[FUNCTION_TYPE_CODOMAIN_SLOT].node,
         );
     }
     // A struct, or a kind this decoder does not know.
     LowShape::Unknown
+}
+
+/// A **function shape** built from its two halves — the one spelling of "read
+/// the two positions", shared by the two nodes that carry one: a kinded function
+/// type's `[domain, codomain]` shape and a function value's own type, whose
+/// halves are the function's own signature cells.
+///
+/// Each half is read through [`low_type_of_slot`]: a half may be a type value or
+/// a term's type cell, and that reader is the authority for telling them apart.
+fn function_shape<P: Program>(
+    module: &Module<P>,
+    domain: AnyNodeId,
+    codomain: AnyNodeId,
+) -> LowShape
+where
+    P::Value: ValueType,
+{
+    LowShape::Function(
+        Box::new(low_type_of_slot(module, domain)),
+        Box::new(low_type_of_slot(module, codomain)),
+    )
 }
 
 /// The low type an expression's **type slot** names — the seed a backend
