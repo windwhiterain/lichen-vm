@@ -18,6 +18,17 @@
 > [isomorphism gap](#the-arm-and-the-array-arm-are-one-shape-and-two-codes) was
 > measured **after** landing, on `dev` at `eada614`, so it is a statement about
 > the code as merged rather than about a branch that no longer exists.
+>
+> **Corrected at `fb62d96`: the frozen reproduction below no longer diverges from
+> its local control.**  The imported `w.wrap` and the same wrapper in one file both
+> render `Function: raw[?a, ?b] -> raw[?c, ?d] -> ?b`, byte for byte, and
+> `crates/lichen-language/tests/frozen_function_type.rs` passes — so the collapse
+> this note's search was about is gone, and "a written arrow in a frozen module"
+> is not a live cause of anything.  The two parked compute tests fail for two
+> other, measured reasons, and the "What goes" list below is a **plan, not a
+> report**: five of its items are still in the tree.  Both corrections are
+> recorded, with their reproductions, in
+> [the kernel parameter's class](kernel-parameter-class.md).
 
 ## The two representations, and why they are the problem
 

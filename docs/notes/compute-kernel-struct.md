@@ -120,10 +120,14 @@ kernel by value lowers its call to a `CallKernel`, assembled at launch time.
 - `tests/compute.rs` renders a kernel as the raw struct
   `struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>` and `launch` results resolve
   their codomain lazily (`6 : Int`, `12 : Int`).
-- LSP renders a kernel binding as `(raw Kernel, raw parameterized) : struct<.native raw[?a, ?b], .I Int, .O Int>`
+- A kernel binding's render is pinned by `tests/compute.rs:644` as
+  `(raw Kernel, raw Int, raw Int) : struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>`
   (all three fields are raw readings, so each carries the mark — the `.native` artifact's own
   pair likewise — and the generic `compute.jit`/`compute.launch` wrappers as plain
-  `Function` types.
+  `Function` types.  An earlier version of this line claimed `.I Int, .O Int`, which contradicts
+  line 38 above (the fields are raw) and predates `LowValue::Parameterized`'s deletion; and where
+  a frozen boundary leaves a field cell empty rather than decided, the mark **nests** — see
+  [the kernel parameter's class](kernel-parameter-class.md).
 
 ## The parallel parameter struct
 
