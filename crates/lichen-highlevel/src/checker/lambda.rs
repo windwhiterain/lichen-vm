@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 
 use lichen_lowlevel::{AnyFunctionId, AnyNodeId, ArrayItem, LowOperator, LowValue, NodeId};
-use lichen_utils::extend::AsEnum;
 
 use crate::diagnostic::DiagKind;
 use crate::ir::ExprId;
@@ -378,27 +377,6 @@ where
         let function_ty = self.state[function].ty.unwrap();
         let concrete = self.type_is_concrete(function_ty);
         if concrete && !self.module.is_function_type(function_ty) {
-            let dbg = self
-                .module
-                .node_value(AnyNodeId::Dynamic(function_ty))
-                .and_then(|v| {
-                    AsEnum::<LowValue>::as_enum(&v).map(|e| match e {
-                        LowValue::Array(a) => format!("{:?}", unsafe { a.items() }),
-                        other => format!("{other:?}"),
-                    })
-                });
-            let slot1 = self
-                .module
-                .node_value(AnyNodeId::Dynamic(function_ty))
-                .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-                .and_then(|e| match e {
-                    LowValue::Array(a) => Some(unsafe { a.items() }[1].node),
-                    _ => None,
-                });
-            eprintln!(
-                "GUARD fn_ty={function_ty:?} items={dbg:?} slot1={slot1:?} slot1_self={:?}",
-                slot1.map(|n| self.module.is_self_referential(n))
-            );
             let d = self.fresh_cell();
             let c = self.fresh_cell();
             // The pattern is a **function**, like every other function type:
