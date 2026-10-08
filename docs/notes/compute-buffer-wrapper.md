@@ -252,21 +252,41 @@ Two things the author still writes, and one defect this exposed:
   The fix belongs where the roles are known (`build_graph`) or where the paths are
   built (`assemble_result`).
 
-  **The discriminator is the order, not the emptiness** — measured, and the first
-  attempt at the fix changed none of it.  An empty group **last**
+  **The discriminator is the order, not the emptiness; `7643a37` fixes it.**
+  Measured before the fix: an empty group **last**
   (`struct<.n Int, .out Out1, .in In1>`) records and dispatches normally, and so
   does a filler under `.in` in either order, while the empty group **before** `.out`
-  loses the whole recording: `compute.graph step` on its own answers `raw none: ?a`
-  with no diagnostic, so the loss is in the recording rather than the run, and the
-  same holds for a hand-written step parameter and for the `compute.P`-built one
-  every test and example uses.  Building the placeholder from the parameter's
-  declaration (`7643a37`, `assemble_parameter`) left all of those spellings
-  unchanged, so the placeholder's *shape* is not where the value is lost.  The open
-  hypothesis is the claim at `compute.rs:6144-6149` that the two ends agree by
-  construction: the placeholder numbers one slot per cell the role walk found, while
-  the run's own depth-first walk of the same declaration may still count a position
-  for a group no leaf was found under — a shift of exactly "how many empty groups
-  precede a live path", which is what the order dependence looks like.
+  loses the whole recording — `compute.graph step` on its own answers `raw none: ?a`
+  with no diagnostic, so the loss is in the recording rather than the run, and it
+  holds for a hand-written step parameter and for the `compute.P`-built one every
+  test and example uses.
+
+  The mechanism is the placeholder, measured by instrumenting the recording:
+  `parallel_roles` answers `Ok` with `scalars [[0]]`, `inputs []`, `outputs [[2, 0]]`
+  — the empty group contributes no leaf, as designed; the declaration walk builds
+  the **right** shape `[G0, [], [[G1, ·]]]`, the extent, an empty `.in`, and the
+  `.out` group with its `Buf` around `GraphInput(1)`; and the path-driven
+  `assemble_result` answers **`None`** at the empty group's prefix, because its
+  arity is `max(index)+1` over the paths that exist.  That `None` propagated out of
+  the `Graph` operator, the root stayed undecided, and the render printed
+  `raw none` with no diagnostic at all.  `assemble_parameter` (`7643a37`) builds the
+  placeholder from the declaration instead, and `build_graph` prefers it, falling
+  back to the path walk and refusing **by name** when neither yields a tuple.
+  Measured after: all four `graphrun` programs — empty-first, empty-last, filler and
+  a hand-written parameter — are refused by the missing-backend gate, so every
+  recording succeeds; `compute.graph step` alone answers `raw ?: ?a`; and with a
+  device installed all four answer `[20, 22, 24]`.
+
+  Two claims this replaces.  The slot-numbering hypothesis first recorded here —
+  that the placeholder numbers one slot per cell the role walk found while the run's
+  own depth-first walk counts a position for the group — is **refuted**: with the
+  placeholder's shape right, the applied argument is identical for the empty-group
+  and the filler programs, and the run-side walk is never reached with a shifted
+  count.  And a five-program table that read as "the fix changed none of it" was
+  measured against a tree in which the change had been reverted for a baseline run,
+  so the binary was the baseline's; a clean rebuild answers as above.  The window a
+  measurement is taken in is part of the measurement, and this note has now had to
+  say so three times.
 
 The placeholders are wrapped **per role**: a buffer field's cell is a `Buf` around
 the `GraphInput` (a dispatch reads the wrapper's payload, `buf_payload`), while a
