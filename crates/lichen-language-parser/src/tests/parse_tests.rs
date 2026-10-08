@@ -612,8 +612,12 @@ fn struct_type_errors_carry_spans() {
     assert_eq!(err.span, Some((1, 7)));
     let err = parse_err("struct<");
     assert_eq!(err.span, Some((1, 8)));
-    let err = parse_err("struct<>");
-    assert_eq!(err.span, Some((1, 8)));
+    // `struct<>` — an empty field list — is a struct type, not an error.
+    let Expr::StructType(fields, span) = parse_ok("struct<>") else {
+        panic!("expected a struct type")
+    };
+    assert!(fields.is_empty());
+    assert_eq!(span, (1, 1));
     let err = parse_err("struct<Int");
     assert_eq!(err.span, Some((1, 11)));
 }

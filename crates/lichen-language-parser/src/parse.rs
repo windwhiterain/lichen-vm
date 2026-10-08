@@ -1225,14 +1225,19 @@ fn struct_inst_field<'a>(
     ))
 }
 
-/// A comma-separated list, a trailing comma tolerated — plus *whether any
-/// comma appeared*, which the callers use to split the single-comma-free form
-/// from the instantiating one.  One combinator, so the comma discipline and
-/// the trailing-comma tolerance of the two callers below cannot differ.
+/// A comma-separated list of **zero or more** items, a leading, inner, or
+/// trailing comma-run tolerated — plus *whether any comma appeared*, which the
+/// paren callers ([`paren_fields`], [`struct_inst_fields`]) use to split the
+/// single-comma-free form from the instantiating one.  The other callers
+/// ([`table_literal`], [`set_literal`], [`struct_type`]) drop the flag: a
+/// table, a set, and a struct type's field list each have one form per item
+/// count.  One combinator, so the comma discipline and the comma-run tolerance
+/// of every list form cannot differ.
 ///
 /// The separators are *runs*, not single tokens: any quantity of them between
 /// two items and after the last, exactly as at the statement level — so
-/// `(1,\n2)` is the same list as `(1, 2)` and `(1,\n)` the same as `(1,)`.
+/// `(1,\n2)` is the same list as `(1, 2)` and `(1,\n)` the same as `(1,)`,
+/// while `(,)` is the empty list.
 fn comma_list<'a, T>(
     item: impl Parser<'a, In<'a>, T, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, (Vec<T>, bool), E<'a>> + Clone {
@@ -1484,9 +1489,12 @@ fn struct_field<'a>(
 }
 
 /// `struct<T1, …, Tn>` — a nominal struct type.  Each field may carry an
-/// optional name (`.name type`); a bare field is positional.  At least one
-/// field.  The separators are runs, so the fields may be one per line, and a
-/// trailing one is tolerated.
+/// optional name (`.name type`); a bare field is positional.  The field list
+/// is **optional**, the empty form being `struct<>` — the type-level mirror of
+/// the instantiation's `A()`/`A(,)` (see [`struct_inst_fields`]) — so the
+/// field list is exactly the [`comma_list`] discipline: zero or more fields,
+/// the separators are runs, and a leading, inner, or trailing run is
+/// tolerated (`struct<,>`, `struct<Int,>`, `struct<\n>`).
 fn struct_type<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1495,21 +1503,11 @@ fn struct_type<'a>(
     token(TokenKind::KwStruct)
         .ignore_then(token(TokenKind::Glue).ignored().or_not())
         .ignore_then(token(TokenKind::LAngle))
-        .ignore_then(field.clone())
-        .then(
-            separators_between()
-                .ignore_then(field)
-                .repeated()
-                .collect::<Vec<_>>(),
-        )
-        .then(separator_run())
+        // The separator flag is the instantiation split's business, not a
+        // struct type's: every field count is one struct type here.
+        .ignore_then(comma_list(field).map(|(fields, _saw_separator)| fields))
         .then_ignore(token(TokenKind::RAngle))
-        .map_with(|((first, rest), _trailing), me| {
-            Expr::StructType(
-                std::iter::once(first).chain(rest).collect(),
-                span_at(tokens, me.span().start),
-            )
-        })
+        .map_with(|fields, me| Expr::StructType(fields, span_at(tokens, me.span().start)))
 }
 
 /// `array<T, n>` — the array type: the element type `T` and the length `n`,

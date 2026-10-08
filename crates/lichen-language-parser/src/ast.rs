@@ -259,7 +259,9 @@ pub enum Expr {
     TypeTuple(Vec<Expr>, Span),
     /// `struct<T1, ..., Tn>` — a nominal struct type.  Each field may carry
     /// an optional name (`.name T`), so the syntax is `struct<.a Int, .b
-    /// string>` where the name is the syntactic prefix `.name`.
+    /// string>` where the name is the syntactic prefix `.name`.  The field
+    /// list is optional, the empty form being `struct<>` — the type-level
+    /// mirror of the instantiation's `C()` / `C(,)`.
     StructType(Vec<StructField>, Span),
     /// `C(e1, ..., en)` — struct instantiation: a callee (a struct type or a
     /// generic struct constructor) applied to a field list.  Each field may be
