@@ -3552,6 +3552,62 @@ where
     ))
 }
 
+/// The placeholder tuple a recorded body is applied to, built from the
+/// parameter **type** and the slot each role path was numbered with.
+///
+/// [`assemble_result`] cannot build this one.  It derives a group's arity from
+/// the paths that exist under it, so a prefix no path reaches answers `None` —
+/// and a parameter that declares a group with **no members** (`struct<.n Int,
+/// .in In1, .out Out1>` with `In1 = struct<>`) has exactly that prefix: the whole
+/// placeholder, and with it the recording, came back as no value at all, on cpu
+/// and on the device alike.  The declaration is what says a group is there, and
+/// here the declaration is readable — the same type slot [`parallel_roles`]
+/// walked — so the descent is driven by the field list and a position the role
+/// paths do not reach is an **empty group**, not a hole.  A group with a filler
+/// member is reached by its path and filled as before, so the empty group and
+/// the filler agree rather than each taking a branch.
+///
+/// `cells` is one node per role path, sorted by path; `item` is the type term
+/// being descended into and `path` is the path that names it.  A path with a
+/// cell is a leaf the body reads and gets that cell; a field that is a readable
+/// struct is a group and is descended into, **empty or not**; and a leaf the
+/// role walk did not number is a hole with no placeholder to fill it, which the
+/// caller turns into a refusal rather than a recording that answers nothing.
+fn assemble_parameter<P>(
+    module: &mut Module<P>,
+    block: BlockId,
+    type_slot: AnyNodeId,
+    item: Option<AnyNodeId>,
+    cells: &[(Vec<usize>, NodeId)],
+    path: &[usize],
+) -> Option<NodeId>
+where
+    P: Program,
+    P::Value: ValueType + From<LowValue> + From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    if let Ok(at) = cells.binary_search_by(|(candidate, _)| candidate.as_slice().cmp(path)) {
+        return Some(cells[at].1);
+    }
+    let (_, shape) = match item {
+        Some(item) => struct_fields_of_slot(module, item)?,
+        None => struct_fields_of_slot(module, type_slot)?,
+    };
+    // SAFETY: `shape` is the field list of the live type term just read.
+    let fields: Vec<AnyNodeId> = unsafe { array_items_any(module, shape) }?
+        .iter()
+        .map(|entry| entry.node)
+        .collect();
+    let mut items: Vec<ArrayItem> = Vec::with_capacity(fields.len());
+    for (at, field) in fields.into_iter().enumerate() {
+        let mut nested = path.to_vec();
+        nested.push(at);
+        let node = assemble_parameter(module, block, type_slot, Some(field), cells, &nested)?;
+        items.push(ArrayItem::new(AnyNodeId::Dynamic(node)));
+    }
+    Some(array_node::<P>(module, block, &items))
+}
+
 /// The `O` structure a run hands back: every output buffer placed where the role
 /// walk found it, wrapped as the `Buf` the type level reads.
 ///
@@ -6095,13 +6151,15 @@ where
     // A parameter that is *not* a named struct — an unannotated `ins => …` body,
     // whose reads are positional (`ins(0)`) — keeps the flat ceiling below: a flat
     // tuple is exactly the shape such a body reads.
-    let roles = match function {
-        AnyFunctionId::Dynamic(fid) => {
-            let parameter = module.functions[fid].parameter;
-            parallel_roles(module, parameter).ok()
-        }
-        AnyFunctionId::Static(_) => None,
-    };
+    let mut roles = None;
+    let mut parameter_slot = None;
+    if let AnyFunctionId::Dynamic(fid) = function {
+        let parameter = module.functions[fid].parameter;
+        roles = parallel_roles(module, parameter).ok();
+        // SAFETY: `parameter` is a live node of `module`.
+        parameter_slot = unsafe { module.array_items(parameter) }
+            .and_then(|items| items.get(PAIR_TYPE_SLOT).map(|item| item.node));
+    }
     // The ceiling a positional body's tuple is built at, and the number the
     // undecided-apply refusal names.
     let arity = graph::MAX_GRAPH_INPUTS;
@@ -6131,8 +6189,41 @@ where
                 };
                 cells.push((path.clone(), node));
             }
-            let root = assemble_result::<P>(module, block, &cells, &[], 0)?;
-            root
+            // **The declaration builds the tuple, not the paths.**  A group the
+            // role walk found no leaf under — `In1 = struct<>` under `.in` — has
+            // no path to reach it, so a walk driven by the paths has no arity for
+            // it and answers nothing at all; the type says the group is there.
+            //
+            // A parameter whose type slot is not readable is the one case the
+            // declaration cannot answer, and the paths are all there is: the
+            // roles were decoded, so the slot was readable a moment ago, and
+            // falling back to the path walk keeps a readable parameter from
+            // losing its placeholder without a word.
+            let built = match parameter_slot {
+                Some(type_slot) => {
+                    assemble_parameter::<P>(module, block, type_slot, None, &cells, &[])
+                }
+                None => assemble_result::<P>(module, block, &cells, &[], 0),
+            };
+            match built {
+                Some(root) => root,
+                None => {
+                    // **A recording that answers nothing is refused by name.**
+                    // The parameter declared a named struct — the roles were
+                    // decoded from it — so a placeholder the type walk could not
+                    // fill is a leaf the ABI has no local for, and a graph whose
+                    // placeholder is `none` answers `none` for a program that
+                    // asked for numbers.
+                    refuse(
+                        module,
+                        "this recording's parameter declares a named struct, and the placeholder \
+                         it is applied to could not be built from it: a field is neither a role \
+                         path nor a group, so no value can reach it"
+                            .into(),
+                    );
+                    return None;
+                }
+            }
         }
         // **The arity is not knowable here, and that is the finding.** A read of
         // `ins(i)` compiles to a bare cell with no operation and no subscript, so
