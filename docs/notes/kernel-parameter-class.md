@@ -124,21 +124,55 @@ already names the offending element — `compute.kernel_launch: argument element
 is a function, not a concrete Int or Float, so the kernel's parameters could not
 be filled` (`compute.rs:5539-5553`'s walk, `argument_kind` at `:5598`).
 
-**Candidate repair, and its status.**  One `LowShape::Function` arm for the
-self-cyclic node, reading each half through `low_type_of_slot`, appears to
-un-park that sub-case.  It is **a prediction, not a measurement**: the arm itself
-has not been built here.  It also changes what a bare `Int -> Float` kernel
-domain does, so it wants its own before/after.
+**Repair, landed and measured** (`7e795f9`).  `Module::function_type_signature`
+(`crates/lichen-lowlevel/src/equality.rs`) reads the function type's domain and
+codomain **type cells** — the parameter pair's type slot, not the pair, because a
+template's parameter value cell is empty until an apply binds it, and
+`Function::return_type` — and `low_type_of` gained the one arm that asks it
+(`shape.rs`), gated on the lowlevel's own recogniser.  Both spellings of a function
+type now build their shape through a single `function_shape`, and the recognisers
+became `&self` reads over the no-compression `class_root`, so the decoder never
+needs a mutable borrow.
+
+Measured, and it moves the refusal to where it can name a position:
+
+| program | before | after |
+|---|---|---|
+| `jit (p : <Int, Int -> Float> => p(0))` | `UNDECIDED_DOMAIN`, at the `jit` | `kernel_launch: argument element 1 is a function, not a concrete Int or Float` |
+| `jit (p : <Int -> Float, Int> => p(1))` | `UNDECIDED_DOMAIN` | the same, at **element 0** |
+| `jit (p : Int -> Float => p)` | `UNDECIDED_DOMAIN` | `kernel domain must be a scalar or a tuple of scalars` — the whole domain is a function, so there is no scalar lowering to refuse later |
+| a float-domain kernel, an unannotated parameter, the scalar control, the function-codomain program, the frozen two-file probe | — | **unchanged** |
+
+`a_float_domain_is_permitted_at_every_position_the_walk_reaches` therefore runs and
+passes, and its `#[ignore]` is deleted: `lichen-language --test compute` is
+**57 passed / 0 failed / 3 ignored**, from 56/0/4.
+
+Two gaps the arm does **not** close, both measured: a **static** function-type node
+passed directly as a `type_value` still answers `Unknown`, because the recogniser
+takes a `NodeId` and the arm is gated on `AnyNodeId::Dynamic` — the frozen two-file
+probe above is the case that shows it; and `pair_type_half` answers `None` for a
+static type half of a dynamic parameter pair, which makes the whole signature
+`None` (the same class of gap, not measured to matter anywhere).
 
 ### The message covers two conditions
 
 `UNDECIDED_DOMAIN` (`compute.rs:2947`) is one text for two facts.  At
-`compute.rs:2962` (a shape *was* read, and the arrow inside it could not be) the
-text is false: it asks the author to annotate a parameter that **is** annotated
+`compute.rs:2962` (a shape *was* read, and a position of it could not be) the text
+is false: it asks the author to annotate a parameter that **is** annotated
 (`p : <Int, Int -> Float>`), names no position, and the only action it suggests
-cannot change the outcome.  At `compute.rs:2392` (the parameter's type cell is
-genuinely empty — an *unannotated* parameter) the same text is accurate.  The
-split is a separate, approved-by-nobody change.
+cannot change the outcome.  At `compute.rs:2392` and its parallel twin
+`compute.rs:2598` (the parameter's type cell is genuinely empty — an *unannotated*
+parameter) the same text is accurate.
+
+The arm above removes the function-arrow instance of the false case, so that
+message is no longer reachable through it — but the conflation itself stands at
+`compute.rs:2962`, which also serves the empty case (a traced-but-undecided class
+reads back `Some(Unknown)` rather than `None`) and any other unreadable position.
+The discriminator is available where the refusal is decided: the parameter's type
+cell holds no value ⇒ the cell really is empty ⇒ the existing text; it holds a
+value while the seed or read domain has an undecided position ⇒ a second message
+that names the decoded shape and the position and does **not** ask for an
+annotation.  Splitting it is a separate change.
 
 ## What this refutes
 
@@ -187,7 +221,8 @@ split is a separate, approved-by-nobody change.
 3. **Where the fill is owed** — the struct instantiation's field-list unify or
    the static apply's carry — and whether a class write may cross the frozen
    boundary.  Not narrowed here.
-4. **Defect II's arm**, and whether the `UNDECIDED_DOMAIN` text is split.
+4. **The `UNDECIDED_DOMAIN` text** is still one message for two conditions; the
+   split above is a change nobody has approved.
 5. **Whether the applied kernel's *type* half**
    (`struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>`) is accepted as
    the applied kernel's type at all — the same decision as 1.
