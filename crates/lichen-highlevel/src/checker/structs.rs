@@ -1259,15 +1259,23 @@ where
     }
 
     /// The struct name→index table value for a field-name list: the
-    /// [`LowValue::Error`] marker when every field is unnamed (an anonymous
-    /// positional struct has no name table — an *empty value*, not the
-    /// unit value), otherwise a constant `Table` mapping each field name to
-    /// its positional index.  The table's keys are the field names (string
+    /// [`LowValue::Error`] marker when the list is **non-empty** and every field
+    /// is unnamed (an anonymous positional struct has no name table — an *empty
+    /// value*, not the unit value), otherwise a constant `Table` mapping each
+    /// field name to its positional index.
+    ///
+    /// An **empty** field list is not that case, and the distinction is the whole
+    /// of the marker's meaning: `[]` has no unnamed field, so `struct<>` builds
+    /// the table **with no entries** — a present, empty name→index table.  Letting
+    /// the vacuous `all` decide instead put the marker in a checked struct type's
+    /// names slot, which is what made an empty struct read as an *anonymous* one
+    /// (`DiagKind::StructAnonymousField` reachable from source) and falsified
+    /// `docs/notes/code-audit.md`'s claim that only hand-built IR reaches it.  The table's keys are the field names (string
     /// values), its values the field indices — the map an `a.name` read
     /// resolves through.  A named read over the marker misses with a
     /// recorded [`EvalError::TableMiss`], never a panic.
     pub(super) fn build_struct_names(&mut self, names: &[Option<&'static str>]) -> NodeId {
-        if names.iter().all(|n| n.is_none()) {
+        if !names.is_empty() && names.iter().all(|n| n.is_none()) {
             return self.alloc_node(
                 self.current_block,
                 None,
@@ -1296,9 +1304,11 @@ where
 
     /// The struct's field names **in definition order** for a field-name list:
     /// one array element per definition position, the [`LowValue::Error`] marker
-    /// when every field is unnamed (the anonymous positional struct, mirroring
-    /// [`Self::build_struct_names`]), a [`LowValue::Error`] element for an
-    /// unnamed field otherwise.
+    /// when the list is non-empty and every field is unnamed (the anonymous
+    /// positional struct, mirroring [`Self::build_struct_names`]), a
+    /// [`LowValue::Error`] element for an unnamed field otherwise.  An empty field
+    /// list builds the empty array, for the reason
+    /// [`Self::build_struct_names`] records: no field is an unnamed field.
     ///
     /// This is the marker's `names_in_order` slot — the *inverse* of the
     /// name→index table, which is the one thing a lazy read of that table cannot
@@ -1307,7 +1317,7 @@ where
     /// position `i` it needs the field's *name* to find the argument that
     /// supplies it ([`Self::lazy_named_instantiate`]).
     pub(super) fn build_struct_names_in_order(&mut self, names: &[Option<&'static str>]) -> NodeId {
-        if names.iter().all(|n| n.is_none()) {
+        if !names.is_empty() && names.iter().all(|n| n.is_none()) {
             return self.alloc_node(
                 self.current_block,
                 None,
