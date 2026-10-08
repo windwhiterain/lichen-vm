@@ -2077,14 +2077,17 @@ where
         return Err(PARALLEL_PARAMETER_UNDECIDED.into());
     };
     let named = |wanted: &str| names.iter().position(|name| *name == Some(wanted));
-    // **Either reserved group may be absent.**  A kernel that reads nothing has no
-    // `.in`, one that writes nothing has no `.out`, and a *recorded* body that
-    // produces a value rather than dispatching its own writes has no `.out`
-    // either.  The alternative was a dummy field per missing group, which the
-    // caller then had to fill with a `Buf` it does not have yet — and an empty
-    // struct is not expressible, so there was no way to write the shape without
-    // one.  Whether a body actually reads an input or writes an output is the
-    // emitter's and the run's question, and both refuse it there, by name.
+    // **Either reserved group may be absent, and an empty one may be written.**
+    // A kernel that reads nothing has no `.in`, one that writes nothing has no
+    // `.out`, and a *recorded* body that produces a value rather than dispatching
+    // its own writes has no `.out` either.  The alternative was a dummy field per
+    // missing group, which the caller then had to fill with a `Buf` it does not
+    // have yet; and with `struct<>` spellable, a group with no members can also be
+    // *written* empty.  The walk below treats absence and emptiness the same way —
+    // no leaves of that role — so neither spelling needs a filler.  Whether a body
+    // actually reads an input or writes an output is the emitter's and the run's
+    // question, and both refuse it there, by name
+    // (`docs/notes/compute-buffer-wrapper.md`).
     let inputs_at = named("in");
     let outputs_at = named("out");
     // SAFETY: `shape` is a live node of `module`.

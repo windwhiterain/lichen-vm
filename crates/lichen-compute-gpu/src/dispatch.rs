@@ -732,9 +732,9 @@ impl GpuContext {
         // from the wrong value (`docs/notes/compute-runtime-scalars.md` §3).
         //
         // **A leaf the body never reads is not missing**, and that is the whole
-        // of the condition: a parameter declares its groups whether or not the
-        // body names a field of one, and a *producer* kernel's input group is
-        // not expressible as empty, so its filler is a leaf nothing demands
+        // of the condition: a parameter declares its leaves whether or not the
+        // body names one, so an input group's filler — or any other declared leaf
+        // the body does not read — is a leaf nothing demands
         // (`docs/notes/compute-buffer-wrapper.md`).  The emitter draws the same
         // line at [`spirv::SpirvRefusal::NonIndexParameter`].
         let leaves = fragment.param_shape.flat_arity();
