@@ -2849,13 +2849,26 @@ Two consequences worth naming for the next pass. A *struct-returning block* is
 **not** affected by the name rule: its fields are its bindings, and a bare
 expression is an ordinary statement — checked, its value discarded — so
 `{ 1; x = 2 }` is a record with the single field `.x` rather than a record with a
-positional first field. And with an empty struct type (`struct<>`) and an empty
-block (`{}`)
-both unspellable, every reachable struct type now has at least one field and all
-of them named, so
-the name-table-less `Error` struct marker — and `DiagKind::StructAnonymousField`,
-the `.name`-argument-against-no-names-table error — is **unreachable from
-source**; it survives only for hand-built IR.
+positional first field. And the invariant this passage rests on is about fields
+being **named**, not about there being at least one: every struct type that
+*checks* has all of its fields named, so the name-table-less `Error` struct
+marker — and `DiagKind::StructAnonymousField`, the `.name`-argument-against-no-
+names-table error — is **unreachable from source**; it survives only for
+hand-built IR.
+
+`struct<>` is spellable now — the parser's `struct_type` takes an empty field
+list (`1c488bc`) — and the invariant survives that, but not by itself: an empty
+field list has no *unnamed* field, so `build_struct_names` and
+`build_struct_names_in_order` build the name→index table and the in-order array
+**empty** rather than reaching for the marker, and the guard that says so is
+`!names.is_empty()` on their `all(is_none)` predicate.  The vacuous `all` over
+`[]` *did* reach the marker, which made `S = struct<>` read as an anonymous
+struct: `S(.x 1)` reported "cannot name a field — the struct has no named
+fields".  Measured after the guard: `S = struct<>` then `S(.x 1)` is
+`no field named x in the struct type struct<>#0`, the refusal a *named* struct
+gives, and `crates/lichen-language/tests/compute.rs`'s kernel structs are
+unaffected.  An empty *block* (`{}`) is still unspellable, and nothing here rests
+on it.
 
 **The raw form is not an available substitute, and that is its own item.** The
 tempting answer — "spell it `s<0>`" — does not work on a runtime container: see

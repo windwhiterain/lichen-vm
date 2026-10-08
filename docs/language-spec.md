@@ -657,7 +657,11 @@ maps every span back to the original file.
   identifiers) can never be confused while the user is typing — and a field
   *without* one (`struct<Int, Type>`) is a `StructFieldName` check error: a
   struct instance reads by name, so an unnamed field would have no read at all
-  (the positional form `a(k)` is the *tuple* read, see *Indexing*).  The names
+  (the positional form `a(k)` is the *tuple* read, see *Indexing*).  The field
+  list may be **empty**: `struct<>` is a struct type with no fields, and its
+  name→index table is *present and empty* — an empty table, not the
+  name-table-less marker an anonymous positional struct gets — so a shape with no
+  members has a spelling, and a zero-field type is as nominal as any other.  The names
   are stored on the struct type as a name→index table, in the names slot of the
   struct marker's **payload** (`marker = [payload, TypeStruct]`,
   `payload = [TypeId, names, names_in_order]`, the kind's marker
