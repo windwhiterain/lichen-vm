@@ -1522,14 +1522,6 @@ compute.collect out.z
 /// **argument** is what is refused, by name
 /// (`docs/notes/floating-point.md` §4.2, §4.4).
 #[test]
-#[ignore = "the last sub-case's domain holds a function (`Int -> Float`), and a written arrow \
-            compiles to the self-referential `[Function(fid), ↺]` node, which `low_type_of` has \
-            no arm for: it answers `Unknown`, so the refusal is at the `jit` ('the kernel \
-            parameter's class is not decided') rather than at the launch argument the test \
-            measures.  Not a frozen-module defect - the same arrow is `Unknown` in a local \
-            module.  That message also asks the author to annotate a parameter the test already \
-            annotated (`p : <Int, Int -> Float>`), which is a second defect in its own right: one \
-            text covers two conditions.  See docs/notes/kernel-parameter-class.md."]
 fn a_float_domain_is_permitted_at_every_position_the_walk_reaches() {
     // The parameter itself: a real float kernel, compiled, run and read back.
     let (module, value, root_ty) = run(r#"
