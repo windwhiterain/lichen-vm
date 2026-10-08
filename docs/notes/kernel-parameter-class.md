@@ -60,13 +60,52 @@ decides the cell:
 | the `compute.jit` shape with `.native 1` instead of a kernel | the parked defect, no compute and no operator |
 | the same `jit` local | `(1, Int, Int): struct<.native Int, .I Type, .O Type>` |
 
-Not narrowed by this diagnosis: **which step** inside the static apply's
-materialization or clone drops the fill.  The candidates are the materialized
-copy (`checker/structs.rs:637-670`'s callee field list, `:702-709`'s unify) and
-the class write across the frozen boundary; that is the family
-[function-type-merge](function-type-merge.md) describes at its "materialization,
-not the annotation" passage, which is about the *signature* pair rather than a
-struct's field list.
+**Which step — measured, and the answer is not the one the first reading guessed.**
+The frozen template's field-type entries and the applied function's parameter
+type cell are **literally one class**: for the two-line repro, `mk`'s parameter
+type cell `n47` has class `{47, 68, 71}`, and `n68`/`n71` are `S`'s two
+field-type entries.  The apply's clone map holds exactly **one** member of it
+(`n47`); the others have no in-edge except the **cached value of the residual
+operation node** (`n58 = [n67, n74]`, with `op_operand = n57`), and
+`static_node_apply` drops a residual operation's cached answer — only the operand
+is walked (`static_module/apply.rs:149`).  So the class is never reconstructed:
+identity is re-established only through the items the walk happens to clone
+(`regroup_clones` is not at fault — a class whose members both got cloned is
+re-united, measured on `{60, 46}`).  The applied struct's type therefore holds
+clones of a **different generation** — the frozen `S` re-applied at run time —
+which are cells nothing binds.
+
+Neither candidate recorded here first holds: **no field-type item stays an inline
+static ref** (measured per item; every one is a `Dynamic` clone made by the
+`undecided` arm), and the frozen template's four cells are all `undecided`, not
+baked.  The loss is on the clone/class side.
+
+**The local path differs at exactly that step, and that is the repair's shape.**
+The dynamic walk **carries a residual operation's own answer** when the template's
+operator produced it and the deep pass ran (`function.rs:524`) and then **maps the
+answer's items onto this call's clones** (`value_apply`, `function.rs:577`); the
+static walk drops the answer and re-runs the frozen callee instead.  Mirroring
+that rule alone is **measured not to be enough**: with it, the missing class
+members are cloned and land in `n47`'s class, and the render is *unchanged*,
+because the same clone is the apply node of the re-run and
+`wire_apply_result`'s `write_node_value` (`apply.rs:161`) puts the re-run's
+product into it first — the reconciliation at `equality.rs:397` then compares the
+answer with itself.  So the repair joins **two** sites: the walk's reachability
+(carry the answer, or clone the class of an undecided clone) **and** the
+reconciliation (unify the re-run's product with what the class already holds,
+rather than overwriting the slot).  The first pays either the answer's subtree or,
+for a class-wide rule, the class's size — the freeze note measures a shared type
+class of 601 members.  Neither rule exists outside `static_module/apply.rs`, so
+neither touches the local path, and neither writes a frozen cell: only its clones
+are written, which is what keeps the frozen module from binding.
+
+**The static type-value gap is a different mechanism**, measured separately: a
+*reader* cannot name a static ref — `low_type_of`'s new arm is gated on
+`AnyNodeId::Dynamic` (`shape.rs:851`) and `pair_type_half` answers `None` for a
+static type half (`resolve.rs:324`) — so a frozen function type decodes as
+`Function(Unknown, Unknown)` while the same node local decodes fully.  It is not a
+clone walk dropping an edge, neither causes the other, and the program that shows
+it (`w.mk Int`'s neighbour, `w.wrap`) renders correctly.
 
 ### What it means for the parked test
 
