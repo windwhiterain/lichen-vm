@@ -2,10 +2,10 @@
 
 > Status: current — the arithmetic/select subset of a kernel runs on a real
 > device, a `jit`/`plrun` chain can be **recorded and submitted once**
-> (`run_chain`, and the `compute.graph`/`compute.graphrun` surface), and a
-> fragment may **cross-call another kernel** — the module holds one function per
-> fragment in the caller's launch set. What is *not* here is listed under
-> [Not yet](#not-yet) rather than left implied.
+> (`run_chain`, and the `compute.graph`/`compute.graphrun` surface), a
+> fragment may **cross-call another kernel**, and a fragment may **read a
+> runtime scalar its launch fixes** (a push constant). What is *not* here is
+> listed under [Not yet](#not-yet) rather than left implied.
 >
 > What this note is: the second consumer of the lowered-kernel IR. It exists
 > because that IR is target-neutral, so a backend other than the wasm one can
@@ -251,13 +251,14 @@ On top of that plan:
 
 - **One `OpPhi` per block parameter**, filled in as the edges that reach the block
   are emitted — a predecessor's terminator is emitted before the block it enters.
-- **The index parameter is the one entry-block parameter this target can place**:
-  it is the invocation id rather than a value of the fragment's domain, so it is a
-  *binding* rather than an instruction to interpret, and any other parameter is
-  refused where it is read (`SpirvRefusal::NonIndexParameter`) rather than
-  silently given some id. `index_local` finds it as the last leaf of the flattened
-  parameters, recognised structurally so a caller cannot disagree with a fragment
-  about which parameter it is.
+- **Every entry-block parameter is placed**, by the one mechanism each has: the
+  index is the invocation id rather than a value of the fragment's domain, so it is a
+  *binding* rather than an instruction to interpret; every other leaf is read out of
+  the push-constant block the dispatch fills. `index_local` finds the index as the
+  last leaf of the flattened parameters, recognised structurally so a caller cannot
+  disagree with a fragment about which parameter it is. A body declaring more
+  parameters than its domain flattens to is refused at that point rather than
+  emitted with one of them bound to nothing.
 - **An `OpPhi` has one type however its edges were written**, so `resolved` fixes a
   literal's kind to the module's class. A constant is emitted once per
   (class, value) — SPIR-V requires every id to be defined exactly once — and since
@@ -327,10 +328,10 @@ What the module then holds:
   (`CrossKernelArity`, naming both counts) rather than emitted.
 - **A callee takes its whole domain as `OpFunctionParameter`s and ends with
   `OpReturnValue`**, in the class its `result_classes` names. Only the entry point
-  reads the invocation id and ends with a bare `OpReturn`, because a compute
-  shader communicates through its bound buffers. So `NonIndexParameter` is about
-  the *entry point* alone: a callee's parameters are ordinary parameters, which is
-  the one place the two kinds of function genuinely differ.
+  reads the invocation id and the push-constant block and ends with a bare
+  `OpReturn`, because a compute shader communicates through its bound buffers and
+  takes no parameters. So a leaf handed to a callee is an ordinary argument — which
+  is why a pushed leaf reaches a cross-call unchanged.
 - **A call to a kernel the set does not hold is refused by name**
   (`CalleeNotInLaunchSet`), naming which kernel: the set is the caller's to
   assemble, so that is where the fix is.
@@ -505,18 +506,17 @@ that changes what the numbers mean.
 
 ## What a host-side run refuses, and what it assumes
 
-- **A parameter the body *reads* is refused by name** (`RunError::ScalarsNotPushed`):
-  the device path pushes no leaf at all — the extent and the index and nothing
-  else — so a read parameter would have no value to arrive, and every lane would
-  compute from the wrong value
-  ([compute-runtime-scalars](compute-runtime-scalars.md) §3). **A declared leaf the
-  body never reads is not missing**, and that is the whole of the condition: a
-  parameter declares its leaves whether or not the body names one, so an input
-  group's filler is a leaf nothing demands
-  ([compute-buffer-wrapper](compute-buffer-wrapper.md)). `spirv` draws the same
-  line at `SpirvRefusal::NonIndexParameter`; this side's test is "is this operand a
-  *different* entry-block parameter", since a parameter read is an operand naming a
-  block parameter.
+- **A launch whose runtime scalars are not the ones its parameter declares is
+  refused** (`RunError::ScalarLeavesMismatch`). A leaf is read at the position the
+  parameter declares, so a launch fixing a different number would place one leaf's
+  value under another — a wrong number, not a failure. A graph node declares none,
+  so a node carrying a runtime scalar lands here.
+- **A leaf block past the device's `maxPushConstantsSize` is refused** before the
+  dispatch, for the same reason in the other direction: a block read past its end
+  is a number nobody wrote.
+- **An extent leaf that is not an `Int` is refused** (`ExtentNotAnInteger`) rather
+  than pushed as a converted count. The ABI calls that leaf a count, and there is
+  no float one could be read as without inventing it.
 - **A host input shorter than the run's count is refused**, each against its own
   class's width rather than one module-wide answer. Only a host slot can be too
   short: a resident buffer already holds what an earlier run put there, and its
@@ -526,6 +526,40 @@ that changes what the numbers mean.
   binding layout is inputs-then-outputs in one set, so a run's outputs occupy the
   slots after its inputs rather than a second set. Each is allocated and recorded
   at its own class, the width a fetch reads it back at.
+
+## The runtime scalar, and why it is a push constant
+
+A parameter's leaves are **the extent, then the launch's runtime scalars, then the
+index**. The index was already the invocation, and the extent was already the
+dispatch's own `count` — which is what the old refusal meant by "a dispatch pushes
+the extent alone". What had nowhere to go was everything *beside* them.
+
+A compute entry point takes no parameters, so the values arrive as a **push
+constant block**: one `OpTypeStruct` member per leaf before the index, read in the
+entry block with an access chain and a load. It is a push constant rather than a
+specialization constant because the block is a function of the *fragment alone* —
+its leaf classes and the module's — so one cached pipeline serves every launch of
+a fragment and only `cmd_push_constants` changes. A value uniform across lanes is
+pushed once for the whole workgroup, which is the mapping the CPU's per-lane loop
+argument has here.
+
+Two rules make it correct rather than merely plausible:
+
+- **One layout, from one place.** The block's member offsets are computed by
+  `spirv::push_layout`, which both the `Offset` decorations and the bytes
+  `cmd_push_constants` writes read. A leaf at the wrong offset is a wrong number,
+  and two copies of the layout is how they would come to disagree.
+- **A leaf's width is the type the entry point loads it as**, not
+  `ScalarClass::byte_width`. An integer leaf is eight bytes in an integer module
+  and **four** in a float one — the same rule the invocation id already follows,
+  since a float module declares no 64-bit integer. A block written at the buffer
+  widths would put a `Float` scalar four bytes past where the shader reads it.
+
+The leaves travel on `LaunchSet` rather than as a new argument to
+`ParallelBackend::run`: a dispatch already holds the count, and a second place the
+same number could be stated is a way for the two to disagree. The extent is block
+member `0`, written from that count — which is the extent, by the ABI's own
+definition — so nothing states it twice.
 
 ## What the GPU actually costs, and where the crossover is
 
@@ -607,13 +641,16 @@ Named rather than implied, because each is a decision rather than a gap:
 - **More than one result.** A compute shader communicates through its storage
   buffers, so a fragment whose body leaves one value is required here
   (`ResultArity`). A callee is held to the same rule, by name.
-- **A non-index parameter read.** A buffer is *bound*, not passed, so there is no
-  value for it to hold (`NonIndexParameter`).
-- **A runtime scalar.** A dispatch pushes the extent alone, so a fragment with a
-  runtime scalar is **refused by name** (`RunError::ScalarsNotPushed`) rather
-  than dispatched with a leaf missing. The CPU path passes the leaf list; the
-  device half is not written. See
-  [compute-runtime-scalars](compute-runtime-scalars.md).
+- **A runtime scalar in a graph node.** A `KernelNode` carries its extent and its
+  buffers and nothing else, so a node whose fragment declares a runtime scalar is
+  refused by leaf count (`ScalarLeavesMismatch`). The block itself is written; the
+  graph IR has no value to put in it.
+- **A loop body that reads a kernel's own parameter pair.** Unrelated to this
+  target and unchanged by it: a `@loop` helper whose state a kernel body
+  destructures is refused at lowering ("a kernel body's index cannot be placed"),
+  so at the language level a loop body cannot yet reach a runtime scalar. The IR
+  can express it, and the emitter's own module for it is validated
+  (`a_pushed_leaf_reaches_a_loop_body_and_a_callee`).
 - **`Batch` as a submission policy.** A graph under `Batch` is refused by name,
   because a backend can only fuse if the contract can hand it several dispatches
   for one command buffer, and `submit` records one run. `run_chain` is that
