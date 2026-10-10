@@ -5941,8 +5941,7 @@ mod parallel_launch_tests {
         );
     }
 
-    /// A "cpu" run has no device, so an input a "gpu" run left there is brought home
-    /// before the run starts: a fetch, not a refusal.
+    /// A "cpu" run has no device, so an input a "gpu" run left there comes home.
     #[test]
     fn a_cpu_run_brings_home_an_input_a_gpu_run_left_on_the_device() {
         let _serialized = BACKEND_SLOT.lock().unwrap();
@@ -6038,9 +6037,7 @@ mod parallel_launch_tests {
         );
     }
 
-    /// The threshold is a **count** boundary and nothing else: a run below it
-    /// must not spawn, which is what keeps a handful of indices from getting
-    /// slower than the single-store run it replaced.
+    /// The threshold is a count boundary: a run below it must not spawn.
     #[test]
     fn a_run_below_the_threshold_uses_one_worker() {
         assert_eq!(parallel_worker_count(0), 1);
@@ -6048,9 +6045,7 @@ mod parallel_launch_tests {
         assert_eq!(parallel_worker_count(SEQUENTIAL_PARALLEL_ELEMENTS - 1), 1);
     }
 
-    /// ...and at or above it the fan-out is the machine's, never more: one
-    /// worker per index would be pure overhead, and `available_parallelism` is
-    /// what bounds it above.
+    /// ...and at or above it the fan-out is the machine's, never more.
     #[test]
     fn a_run_over_the_threshold_is_capped_by_the_machine() {
         let count = SEQUENTIAL_PARALLEL_ELEMENTS;
@@ -6063,10 +6058,8 @@ mod parallel_launch_tests {
         );
     }
 
-    /// The chunk bounds are the determinism argument in one assertion: they are
-    /// a function of the count and the worker count alone, they tile
-    /// `[0, count)` with no gap and no overlap, and no chunk is more than one
-    /// element longer than the shortest.
+    /// The chunk bounds tile `[0, count)` with no gap or overlap, and differ in
+    /// length by at most one.
     #[test]
     fn the_chunk_bounds_tile_every_index_exactly_once() {
         for count in [SEQUENTIAL_PARALLEL_ELEMENTS, 4097, MAX_PARALLEL_ELEMENTS] {
@@ -6104,8 +6097,8 @@ mod parallel_launch_tests {
         }
     }
 
-    /// The partition the workers actually get: every output buffer cut into
-    /// the same disjoint spans, so the union is each whole buffer exactly once.
+    /// The partition the workers get: every output buffer cut into the same
+    /// disjoint spans.
     #[test]
     fn the_partitions_are_a_disjoint_cover_of_every_output_buffer() {
         let count = 100;
@@ -6131,9 +6124,7 @@ mod parallel_launch_tests {
         }
     }
 
-    /// The host buffers of a `"cpu"` run.  A CPU run has no device to leave
-    /// anything on, so a resident outcome here would be a routing bug rather
-    /// than a shape to allow.
+    /// The host buffers of a "cpu" run: a resident outcome here is a routing bug.
     fn host_outputs(id: KernelId, count: usize) -> Vec<BufferWords> {
         match run_parallel_kernel(id, Backend::Cpu, vec![count as i64], vec![])
             .expect("the run must succeed")
@@ -6143,27 +6134,23 @@ mod parallel_launch_tests {
         }
     }
 
-    /// The fan-out itself.  A parallel result is bit-identical to a sequential
-    /// one, so no value can distinguish a working fan-out from a dead code
-    /// path — [`PARALLEL_LAUNCH_WORKERS`] is what a test can see, and this
-    /// checks the run actually took it.
+    /// The fan-out itself: the worker count is what a test can see.
     #[test]
     fn a_run_over_the_threshold_fans_out_and_covers_every_index() {
         let id = intern_kernel(two_outputs());
         let count = SEQUENTIAL_PARALLEL_ELEMENTS;
         let outputs = host_outputs(id, count);
         assert_eq!(outputs.len(), 2, "one buffer per declared output");
-        // The machine must have the processors to fan out at all; on a
-        // single-processor run the worker count is 1 and the run is the
-        // sequential one, which the values below still pin.
+        // The machine must have the processors to fan out at all; on one processor
+        // the run is the sequential one.
         if std::thread::available_parallelism().map_or(1, |n| n.get()) > 1 {
             assert!(
                 parallel_launch_workers() > 1,
                 "a run of {count} elements must not be the single-worker one"
             );
         }
-        // First, middle and last index of each buffer: the boundaries between
-        // two workers are where a wrong rebase or a skipped chunk would show.
+        // First, middle and last index of each buffer: where a wrong rebase or a
+        // skipped chunk would show.
         for index in [0, count / 2, count - 1] {
             assert_eq!(outputs[0].words[index], index as i64 + 1, "out0[{index}]");
             assert_eq!(outputs[1].words[index], index as i64 * 2, "out1[{index}]");
@@ -6187,48 +6174,30 @@ mod parallel_launch_tests {
 
 // --- Native-op registry: the plugin's native-operator registry ---
 
-/// The `lichen-compute` native plugin marker — the nominal declaration that
-/// this crate plays the native-plugin role
-/// ([`lichen_highlevel::plugin::NativePlugin`]).
+/// The `lichen-compute` native plugin marker.
 ///
-/// The trait carries no methods and nothing is generic-bound on it, so the
-/// `impl` is a declaration, not a check: the contract is carried by the
-/// macro-based composition, not by the trait.  A unit marker: the plugin
-/// contributes its [`ComputeValue`] / [`ComputeOperator`] leaves and its native
-/// op registry (via [`compute_native_ops!`]), and never names a concrete host
-/// program.
+/// # Invariant
+/// The trait carries no methods and nothing is generic-bound on it, so the `impl` is a
+/// declaration: the contract is carried by the macro-based composition. A unit marker —
+/// the plugin contributes its value and operator leaves and its native op registry, and
+/// never names a concrete host program.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ComputePlugin;
 
 impl lichen_highlevel::plugin::NativePlugin for ComputePlugin {}
 
-/// Assemble `lichen-compute`'s private native-operator registry for a host
-/// program `$program`, expanding to a `&'static` [`NativeOps`].
+/// Assemble `lichen-compute`'s private native-operator registry for a host program.
 ///
-/// Invoked by a host that composes the plugin (see `lichen-language`'s
-/// `package.rs`), so the `$jit`/`$launch` names stay private to the plugin's
-/// own embedded source.  The host names only the plugin crate and its program
-/// marker — never the plugin's op structs — so this is the composition point a
-/// package manager would generate.
-///
-/// The table is **leaked deliberately, and the leak is bounded**: the slice is
-/// nine entries of `(&'static str, &'static dyn NativeOp<$program>)`, 144 bytes
-/// on a 64-bit target, and exactly one is allocated per call.  The slice cannot
-/// be hoisted into a `static` initializer instead: a `static` may not name a
-/// type parameter, and two invocations of this macro are distinct items even
-/// when they name the same program, so no shape of `static` or `OnceLock` can be
-/// shared across them.  Caching it on the host would be no better: a table held
-/// per store serves a compilation that already happens per store, so the same
-/// single allocation is made either way.  The one call site
-/// (`PackageStore::register_compute`, reached from `PackageStore::new`) runs
-/// once per store — the store compiles its embedded wrapper source once and
-/// keeps the frozen module — so this is a fixed handful of bytes per store, not
-/// a per-compile or per-keystroke cost.
+/// # Invariant
+/// The table is leaked deliberately and the leak is bounded: nine entries, one
+/// allocation per call, and the one call site runs once per store. It cannot be a
+/// `static` — a `static` may not name a type parameter, and two invocations are
+/// distinct items even for one program — and caching it on the host would serve a
+/// compilation that already happens per store.
 #[macro_export]
 macro_rules! compute_native_ops {
     ($program:ty) => {{
-        // The self-supporting `static`s below are the operator structs, which
-        // are program-independent; the leaked slice is the table above.
+        // The `static`s below are the operator structs, which are program-independent.
         static JIT: $crate::JitOp = $crate::JitOp;
         static LAUNCH: $crate::LaunchOp = $crate::LaunchOp;
         static CALL: $crate::CallOp = $crate::CallOp;
@@ -6259,19 +6228,20 @@ macro_rules! compute_native_ops {
 
 // --- Native operators: the private contract with the plugin's source -------
 
-/// `$jit(f)` — compile a function to a kernel.  The function-ness gate unifies
-/// the argument's type with an arrow shape (the *gate*); the bare artifact's
-/// type is a fresh cell, and the lichen wrapper builds the kernel struct around
-/// it (`.native` = the artifact, `.I`/`.O` = its signature).
+/// `$jit(f)` — compile a function to a kernel.
 ///
-/// The program marker is generic: a host composes this op into its own
-/// `NativeOps` registry (a `&'static [(&str, &dyn NativeOp<P>)]`), so the
-/// `$jit`/`$launch` names stay private to the plugin's own embedded source.
+/// # Invariant
+/// The function-ness gate unifies the argument's type with an arrow shape; the bare
+/// artifact's type is a fresh cell, and the lichen wrapper builds the kernel struct
+/// around it. The program marker is generic, so the `$jit`/`$launch` names stay private
+/// to the plugin's embedded source.
 pub struct JitOp;
 
-/// `$launch(native, a, aty, kty)` — run kernel `native` on `a`.  The wrapper
-/// reads the kernel's `.I`/`.O` fields and passes the argument's type and the
-/// declared domain as values; this op unifies them and emits the `Launch` node.
+/// `$launch(native, a, aty, kty)` — run kernel `native` on `a`.
+///
+/// # Invariant
+/// The wrapper reads the kernel's `.I`/`.O` fields and passes the argument's type and
+/// the declared domain as values; this op unifies them and emits the `Launch` node.
 pub struct LaunchOp;
 
 impl<P> NativeOp<P> for JitOp
