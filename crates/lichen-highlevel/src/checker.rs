@@ -537,6 +537,11 @@ where
                     checker.module.evaluate_node_deep(condition, None);
                 }
             }
+            // A label's payload is read by its readers, so it is computed before the
+            // statements that compile kernels run.
+            for slot in checker.module.label_slots() {
+                checker.module.evaluate_node_deep(slot, None);
+            }
         }
         // A marked site's "not emitted" verdict is the reader's to report.
         // See docs/notes/loop-conversion.md.

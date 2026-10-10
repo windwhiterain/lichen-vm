@@ -4,6 +4,7 @@ members = [
     "crates/lichen-kernel-ir",
     "crates/lichen-graph-ir",
     "crates/lichen-fusion",
+    "crates/lichen-fusion-bridge",
     "crates/lichen-compute-gpu",
     "crates/lichen-span",
     "crates/lichen-utils",
@@ -53,6 +54,7 @@ edition = "2024"
 lichen-kernel-ir = { path = "crates/lichen-kernel-ir" }
 lichen-graph-ir = { path = "crates/lichen-graph-ir" }
 lichen-fusion = { path = "crates/lichen-fusion" }
+lichen-fusion-bridge = { path = "crates/lichen-fusion-bridge" }
 lichen-compute-gpu = { path = "crates/lichen-compute-gpu" }
 lichen-span = { path = "crates/lichen-span" }
 lichen-utils = { path = "crates/lichen-utils" }

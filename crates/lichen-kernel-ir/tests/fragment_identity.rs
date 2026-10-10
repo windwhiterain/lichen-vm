@@ -50,6 +50,7 @@ fn fragment() -> KernelFragment {
         output_classes: Vec::new(),
         result_classes: vec![ScalarClass::Int],
         int_width: IntWidth::I64,
+        marks: Vec::new(),
     }
 }
 

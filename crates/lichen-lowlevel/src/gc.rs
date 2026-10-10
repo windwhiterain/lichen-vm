@@ -210,6 +210,11 @@ impl<P: Program> Module<P> {
         // pass walks the registry by id, so a dangling entry panics.
         self.asserts
             .retain(|entry| self.nodes.contains_key(entry.condition));
+        // A label whose value or slot died with the block is dropped with it, for
+        // the same reason: a reader resolves both ids.
+        self.labels.retain(|value, slot| {
+            self.nodes.contains_key(*value) && self.nodes.contains_key(*slot)
+        });
         self.blocks.remove(block);
     }
 }

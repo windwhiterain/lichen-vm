@@ -40,6 +40,7 @@ fn main() {
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int],
         int_width: IntWidth::I64,
+        marks: Vec::new(),
     };
 
     let binding = lichen_compute_gpu::Binding {

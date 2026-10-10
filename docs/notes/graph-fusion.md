@@ -80,51 +80,107 @@ An **interface** is a named algebraic contract. The load-bearing one for
 reduction fusion:
 
 ```
-Reduction { combine, identity, laws }   -- combine: associative, identity: its unit
+Reduction { combine, identity, element }   -- combine: associative, identity: its unit
 ```
 
-A piece of logic declares an instance by **annotating the expression whose
-value it describes**, in the attribute syntax that already exists
-([attributes](attributes.md)):
+**The claim rides on the kernel, and the projections ride the kernel's own body.**
+Fusion operates on kernels, so the interface is declared at kernel granularity: the
+structural claim is a label on the kernel value, and every role the interface
+requires is a **mark** — the same `?` label slot — on the expression inside the
+kernel's body that *is* that projection. Spike spelling of the two:
 
 ```lichen
--- arbitrary logic — a hand-written loop, not a `reduce` call
-rowmax = loop step n init                 # Reduction(.combine max, .identity neg_inf)
-
--- custom element-wise logic between two reductions — read, not declared
-e = map-ish (x => exp (x + alibi i - rowmax)) scores
-
--- the second reduction
-rowsum = loop step n zero                 # Reduction(.combine add, .identity 0)
+-- the claim: which interface this kernel implements, and the roles it marks
+producer_raw = (k : Par) => {
+  i = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1)
+    else fold (s(0) - 1, (s(1) + compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1))) ? "combine")
+  compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (6, 0.0 ? "identity")))
+}
+producer_raw ? Claim(.name "Reduction", .roles ("combine", "identity"))
 ```
+
+The kernel carries **a list of interface instances** — each an interface name and the
+roles it requires — and a body mark names the role it is the projection of. The
+spelling is the spike's interim syntax, not a decision: what is load-bearing is that
+the projections are *inside the body the claim is about*, so **a claim cannot diverge
+from the code it describes** — nothing is restated, and a body edit that changes the
+algebra changes the projection the mark points at.
 
 Three facts make this minimal rather than merely small:
 
 - **Only the laws are declared; everything else is read.** The engine needs
-  `combine` and `identity` because no analysis recovers "this is `max`, and
-  `max` is associative" from a loop body reliably — that is the fact code
-  cannot carry. But the *element function* `g` between two reductions is
-  ordinary straight-line code, and a kernel body already lowers to a
-  `KernelFragment` — an expression tree the engine can read, invert and
-  distribute over. So `g` is never annotated: it is lifted out of the logic
-  at schema-derivation time. The interface surface is exactly the gap between
-  what code says and what fusion needs.
-- **The claim is attached to the value, not to a name.** `# Reduction(...)`
-  rides on the expression's schema tail ([attributes](attributes.md)), so it
-  survives inlining, renaming and reformatting, and it points at the
-  dataflow, not at a function somebody might rename. Renaming the function
-  cannot detach the claim; changing the algebra can (§4).
+  `combine` and `identity` because no analysis recovers "this loop is a sum" from a
+  loop body reliably — that is the fact code cannot carry. But the *element function*
+  `g` between two reductions is ordinary straight-line code, and a kernel body
+  already lowers to a `KernelFragment` — an expression tree the engine can read,
+  invert and distribute over. The interface surface is exactly the gap between what
+  code says and what fusion needs.
+- **The claim is attached to the value, not to a name.** The `?` label rides the
+  expression's schema tail and its runtime pair ([attributes](attributes.md)), so it
+  survives inlining, renaming and reformatting, and it points at the dataflow, not at
+  a function somebody might rename. Renaming the function cannot detach the claim;
+  changing the algebra can (§4).
 - **A claim is checked, and a claim that cannot be checked is refused, not
-  believed.** Where the body normalizes symbolically to the declared combine,
-  the checker proves the instance; where it cannot, fusion of that instance
-  is refused by name and the logic runs unfused. The refusal list (§6) is
-  the interface layer's teeth: a wrong `combine` is a wrong answer, so the
-  engine would rather fuse nothing.
+  believed.** Where the body normalizes symbolically to the declared combine, the
+  checker proves the instance; where it cannot, fusion of that instance is refused by
+  name and the logic runs unfused. The refusal list (§6) is the interface layer's
+  teeth: a wrong `combine` is a wrong answer, so the engine would rather fuse nothing.
 
 `matmul` needs no operator: its inner contraction is a loop annotated
-`# Reduction(.combine add, .identity 0)`. That is what makes attention's
-*third* reduction the same kind of citizen as softmax's two, without anyone
-having written the word `matmul` in an operator registry.
+`Claim(.name "Reduction", .roles ("combine", "identity"))`. That is what makes
+attention's *third* reduction the same kind of citizen as softmax's two, without
+anyone having written the word `matmul` in an operator registry.
+
+### What the mark channel cost, measured
+
+The spike built the channel and measured where it stops. The findings, in the order
+they bite:
+
+- **A label's pair is reachable from nothing.** `Checker::check_ann` makes an
+  annotated expression's *value node* the pair's own element 0, so no graph edge
+  points at the pair, and a reader holding the value cannot find the label. The
+  checker therefore **publishes** the label against the value node
+  (`Module::stamp_label` / `Module::label_of`, `crates/lichen-lowlevel`), and the
+  build computes each slot's payload so a reader can read it.
+- **The kernel emitter reads the marks.** `Lower::value` asks
+  `Module::label_of` for every value it lowers and publishes what it finds as
+  `KernelFragment::marks` — a mark names the *fragment's* value and carries the
+  payload as text. The field is additive metadata: no backend reads it (a mark says
+  what a value means, not what the kernel computes), and `fragment_digest` hashes it
+  so two fragments differing only in their marks never share an id.
+- **A per-call clone loses the mark.** `compute.parallel f "cpu"` compiles a
+  *clone* of the body: the apply walk (`Module::node_apply`) mints fresh nodes, and
+  the checker's stamps are keyed by template nodes. Carrying the label across the
+  clone walk was attempted and is not enough: the clones the dispatcher's compile
+  walks have origins that are *not* the stamped expressions, so `marks` comes out
+  empty for the dispatched path while the same body compiled from the value the host
+  holds publishes its marks. What this needs is the emitter to resolve a mark through
+  the **value it lowered** rather than through the node it walked — i.e. a
+  class-level or origin-level lookup shared by both paths — and that is the one
+  change this spike did not land.
+- **A body cannot carry three marks today.** Two `?` marks in a `@loop` recurrence
+  together with a third mark in the same lambda fail to *parse*: the annotation level
+  and the loop's `if`-sugar interact, and only the count of marks triggers it (a
+  payload that is a record instead of a string triggers it at two). The spike spells
+  marks as bare strings for that reason, and writes the consumer's element function as
+  its own small kernel — a spelling the design admits (a projection is a function of
+  the datum and the producer's value) but not the one it prefers.
+- **A scalar element kernel's class is its body's.** `(p : <Float, Float>) =>
+  p(0) * p(1)` lowers its leaves in `Int`, because the body states no concrete float
+  operand, so the bridge refuses the projection by name (see
+  [floating-point](floating-point.md) §5.1). An element function that must be `Float`
+  has to carry a float operand of its own.
+
+The chain the spike *does* demonstrate end to end: a kernel's claim and its roles are
+read off the label (`crates/lichen-language/src/fusion_claim`), the fragment is
+compiled from the body, and a marked subexpression is bridged to
+`lichen_fusion::Expr` over `Variable::DATUM`, `Variable::PRODUCER` and
+`Variable::CONSUMER_STATE` by `crates/lichen-fusion-bridge`
+(`cargo run -p lichen-language --example reduction_interface` prints each step and
+each refusal; the in-body attribute channel is the same one the `Perspective`
+attribute needs, so axis C of [gpu-algorithm-roadmap](gpu-algorithm-roadmap.md)
+inherits it).
 
 ## 4. The schema: derived from the interface graph, stable under everything else
 
@@ -425,11 +481,12 @@ about shrinks exactly where fusion fires.
 | recorded graph, value table, policies | **in** ([compute-graph-jit](compute-graph-jit.md)) | the rewrite substrate, unchanged |
 | attributes with a checked payload | **in** ([attributes](attributes.md)) | the interface claim's carrier — and fusion becomes the first real *consumer* of the schema tail |
 | dynamic loop in a kernel body | **in** ([loop-conversion](loop-conversion.md)) | the fused reduction's inner loop |
-| fragment IR with expression trees | **in** ([lichen-compute](lichen-compute.md)) | what `g`, `combine`, `h` are made of |
-| symbolic repair-function derivation | **in flight** (`crates/lichen-fusion`) | §6 steps 2–4 over expression trees of its own; the `KernelFragment` bridge is what it is missing |
+| fragment IR with expression trees | **in** ([lichen-compute](lichen-compute.md)) | what `g`, `combine`, `h` are made of, and where an in-body mark is published (`KernelFragment::marks`) |
+| symbolic repair-function derivation | **in flight** (`crates/lichen-fusion`) | §6 steps 2–4 over expression trees of its own; `crates/lichen-fusion-bridge` carries a *marked subexpression* of a `KernelFragment` to it, for the arithmetic subset and the three slots a projection reads |
 | content-addressed artifact store | **in** ([artifact-cache](artifact-cache.md)) | schema artifacts and pack bindings |
 | float | **in flight** (ten worktrees, [floating-point](floating-point.md)) | softmax/attention are float algorithms; the engine is class-agnostic but its acceptance case is not |
 | interface verification (symbolic combine check) | **missing** | §3's teeth; without it claims are trusted, which this design refuses to do |
+| in-body marks surviving the dispatcher's compile | **missing** | §3's measured finding: a mark reaches the fragment when the body is compiled from the value a host holds, and is lost when `compute.parallel` compiles a per-call clone of it |
 | shared memory + workgroup | **missing** (roadmap axis C) | one-dispatch split-K; until then split-K runs as two dispatches, correct and merely slower |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
 
@@ -454,6 +511,12 @@ Settled by the superior's review of the first draft:
   matching is rejected on correctness grounds.
 - **Logic never names or ships optimisations; packs are installed by the
   runner** (§2, §5) — the driver model, not the wheel.
+- **The claim is declared at kernel granularity, and its projections are marks in the
+  kernel's body** (§3). The rejected alternative was an *expression-level* claim: a
+  label on the reduction's value carrying the projections as lambdas in its payload.
+  It was rejected because the payload then restates the algebra beside the code that
+  performs it — a claim free to diverge from the body — and because fusion operates on
+  kernels, so a claim about a kernel should ride the kernel.
 
 Still open, cheapest to settle before the interface syntax is written:
 
@@ -466,7 +529,9 @@ Still open, cheapest to settle before the interface syntax is written:
 - **The attribute payload's exact shape** — how `combine`/`identity` lambdas
   are named inside `# Reduction(...)` so the schema tail stays
   canonical-order ([attributes](attributes.md) §canonical order) and the
-  projections lower to fragments.
+  projections lower to fragments. §3's kernel-unit model has narrowed this to the
+  *mark* spelling (`? "combine"` today; a record payload in a body with more than two
+  marks does not parse) and to whether a claim carries one instance or a list.
 - **Pack trust beyond correctness** — signing/provenance of installed packs
   is the package manager's roadmap item, deliberately not this design's.
 
