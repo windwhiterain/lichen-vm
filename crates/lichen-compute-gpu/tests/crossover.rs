@@ -83,7 +83,9 @@ fn reading_a_non_index_parameter_is_refused_by_name() {
         ],
     );
     let refusal = spirv::compile(&fragment, ONE_IN_ONE_OUT).expect_err("refused");
-    assert_eq!(refusal, SpirvRefusal::NonIndexParameter { local: 0, at: 2 });
+    // `at` is the instruction's position in the entry block, as it is for every
+    // other refusal, and not the operand's position in its argument list.
+    assert_eq!(refusal, SpirvRefusal::NonIndexParameter { local: 0, at: 1 });
     assert!(refusal.to_string().contains("storage buffer"));
 }
 

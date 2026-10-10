@@ -28,19 +28,15 @@
 //! section order. Emitting in one pass would mean either forward-referencing the
 //! entry point or emitting it twice.
 //!
-//! # An invariant the caller relies on: the body is straight-line
+//! # The invariant the caller relies on: a write is reached by every invocation
 //!
-//! The entry function carries exactly one `OpLabel` and the emitter emits **no
-//! branch and no phi** — a `Select` is compiled to a branchless choice, not to a
-//! jump. So every invocation of a dispatch reaches every instruction in the body,
-//! including its `BufferWriteCall`.
-//!
-//! `dispatch` depends on this: it allocates output buffers and **does not
-//! initialise them**, because a dispatch covers `[0, padded)` and every one of
-//! those elements is stored by the lane that owns it. A conditional write would
-//! leave the skipped elements as whatever a fresh allocation held, and the host
-//! would read them back believing they were results. **If a branch is ever
-//! introduced here, output buffers have to start being cleared again.**
+//! The body is emitted as basic blocks — `OpBranch`, `OpBranchConditional`,
+//! `OpLoopMerge`, `OpSelectionMerge`, and one `OpPhi` per block parameter — so
+//! `dispatch`, which allocates output buffers and **does not initialise them**,
+//! needs every lane to reach its `BufferWriteCall`. A selection arm does: it runs
+//! on exactly the lanes that took it. **A loop body does not**, because a zero
+//! trip count is a lane that never runs it, and a write there is refused by name
+//! ([`SpirvRefusal::WriteInsideLoop`]).
 //!
 //! # The one place this target disagrees with the wasm backend
 //!
@@ -126,7 +122,12 @@ mod op {
     pub const ACCESS_CHAIN: u16 = 65;
     pub const FUNCTION: u16 = 54;
     pub const FUNCTION_END: u16 = 56;
+    pub const PHI: u16 = 245;
+    pub const LOOP_MERGE: u16 = 246;
+    pub const SELECTION_MERGE: u16 = 247;
     pub const LABEL: u16 = 248;
+    pub const BRANCH: u16 = 249;
+    pub const BRANCH_CONDITIONAL: u16 = 250;
     pub const RETURN: u16 = 253;
     pub const U_CONVERT: u16 = 113;
     /// `OpConvertFToU` (109) — the `float2int` crossing: a 32-bit float to the
@@ -196,6 +197,8 @@ mod decoration {
 
 /// `SpvBuiltInGlobalInvocationId`.
 const BUILT_IN_GLOBAL_INVOCATION_ID: u32 = 28;
+/// The `None` a merge instruction's optional control mask carries.
+const CONTROL_NONE: u32 = 0;
 /// `SpvExecutionModelGLCompute`, `SpvExecutionModeLocalSize`.
 const EXECUTION_MODEL_GL_COMPUTE: u32 = 5;
 const EXECUTION_MODE_LOCAL_SIZE: u32 = 17;
@@ -278,12 +281,15 @@ pub enum SpirvRefusal {
     MixedClasses { at: usize },
     /// The body does not leave exactly the one value a compute shader needs.
     ResultArity { results: usize, left: usize },
-    /// A body whose structure the target has not been taught to emit.
+    /// A buffer write inside a loop body. The loop's trip count is per lane and
+    /// may be zero, so a lane can reach its write zero times.
+    WriteInsideLoop { at: usize },
+    /// A body the target has no way to structure.
     ///
-    /// **Refused rather than emitted straight-line**, because a dropped branch is
-    /// a fragment that computes a different program than it was lowered from —
-    /// and because the transfer is already in the IR, so this refusal is about the
-    /// *emitter*, not about what the language can say.
+    /// **Refused rather than emitted**, because a dropped branch is a fragment
+    /// that computes a different program than it was lowered from — and because
+    /// the transfer is already in the IR, so this refusal is about the *emitter*,
+    /// not about what the language can say.
     ControlFlow { detail: String },
 }
 
@@ -348,11 +354,18 @@ impl fmt::Display for SpirvRefusal {
                  A compute shader communicates through its storage buffers, so this backend \
                  requires a fragment whose body returns exactly one value."
             ),
+            SpirvRefusal::WriteInsideLoop { at } => write!(
+                f,
+                "instruction {at} writes a buffer inside a loop body. A loop's trip count comes from \
+                 a register and can be zero, so a lane that never runs the body would leave its \
+                 output element as whatever a fresh allocation held — `dispatch` allocates output \
+                 buffers without initialising them. Move the write out of the loop."
+            ),
             SpirvRefusal::ControlFlow { detail } => write!(
                 f,
-                "this emitter does not yet emit a body with control flow: {detail}. The transfer is \
-                 in the kernel IR, so this is the emitter's limit rather than something the program \
-                 could not say — see `docs/notes/loop-conversion.md` §8."
+                "this emitter cannot structure this body: {detail}. The transfer is in the kernel \
+                 IR, so this is the emitter's limit rather than something the program could not say \
+                 — see `docs/notes/loop-conversion.md` §8."
             ),
         }
     }
@@ -850,17 +863,6 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
     if let Err(broken) = fragment.body.validate() {
         return Err(SpirvRefusal::ControlFlow { detail: broken });
     }
-    // Until this emitter learns `OpLoopMerge` / `OpBranch` / `OpPhi`, a body with
-    // more than one block is refused rather than emitted straight-line.  See
-    // `SpirvRefusal::ControlFlow` for why that is the only safe answer.
-    if !fragment.body.is_straight_line() {
-        return Err(SpirvRefusal::ControlFlow {
-            detail: format!(
-                "this body has {} block(s) and a transfer",
-                fragment.body.blocks.len()
-            ),
-        });
-    }
     if fragment.int_width.bits() != 64 {
         return Err(SpirvRefusal::UnsupportedIntWidth {
             bits: fragment.int_width.bits(),
@@ -940,11 +942,9 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
     // `OpConstant` is a *module-scope* instruction, so the body's literals are
     // collected here and emitted with the types rather than inside the function.
     let mut literals = Literals::default();
-    let mut code: Vec<Inst> = Vec::new();
-    // **The map that replaces the operand stack.** Every value the body defines is
-    // here once it has been emitted, so an operand is a lookup rather than a pop —
-    // and a shared subexpression is emitted once rather than once per use.
-    let mut slots: HashMap<ValueId, Slot> = HashMap::new();
+    // The entry block's own code before the body's: the ids the body's first
+    // instruction reads are defined here.
+    let mut prologue: Vec<Inst> = Vec::new();
 
     // The index value: the invocation id's x component. It is an **integer**
     // whatever the fragment's parameter leaves say, because this target's index
@@ -962,8 +962,8 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
     next += 1;
     let component = next;
     next += 1;
-    code.push(Inst::new(op::LOAD, vec![ids.v3uint, loaded, ids.gid]));
-    code.push(Inst::new(
+    prologue.push(Inst::new(op::LOAD, vec![ids.v3uint, loaded, ids.gid]));
+    prologue.push(Inst::new(
         op::COMPOSITE_EXTRACT,
         vec![ids.uint, component, loaded, 0],
     ));
@@ -971,7 +971,7 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
         ScalarClass::Int => {
             let widened = next;
             next += 1;
-            code.push(Inst::new(
+            prologue.push(Inst::new(
                 op::U_CONVERT,
                 vec![ids.ulong, widened, component],
             ));
@@ -980,457 +980,495 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
         ScalarClass::Float => component,
     };
 
+    // The structure the emitter adds: which blocks are loop headers, and one merge
+    // block per `OpLoopMerge` / `OpSelectionMerge`. See [`plan_body`].
+    let plan = plan_body(fragment, ids.label, next)?;
+    next += plan.fresh_labels;
+    // One `OpPhi` list per block, filled in as the edges that reach it are emitted:
+    // a predecessor's terminator is emitted before the block it enters.
+    let mut blocks: Vec<Block> = plan.nodes.iter().map(|_| Block::default()).collect();
+
     // The index parameter is the one entry-block parameter this target can place:
     // it is the invocation id, not a value of the fragment's domain. **A parameter
     // is named by which value it is**, so this is a binding rather than an
     // instruction to interpret, and any other parameter is refused where it is
     // read rather than silently given some id.
+    let mut slots: HashMap<ValueId, Slot> = HashMap::new();
     if let Some(index_parameter) = fragment.body.parameters().get(index as usize).copied() {
         slots.insert(index_parameter, scalar(index_value, ScalarClass::Int));
     }
 
-    let entry = &fragment.body.blocks[fragment.body.entry];
-    for (at, &definition) in entry.instrs.iter().enumerate() {
-        let Some(ValueDef::Instr { op, args, .. }) =
-            fragment.body.values.get(definition.0 as usize)
-        else {
-            continue;
-        };
-        let op = *op;
-        // **Every operand is named by the definition that produced it.**
-        let operand = |at: usize| -> Result<Slot, SpirvRefusal> {
-            let value = args.get(at).ok_or(SpirvRefusal::ResultArity {
-                results: fragment.result_classes.len(),
-                left: 0,
-            })?;
-            if let Some(slot) = slots.get(value).copied() {
-                return Ok(slot);
-            }
-            // **A value that is missing because it is a *parameter* has its own
-            // refusal.** Only the index parameter is placed above, so reading
-            // another one lands here, and it is the one case the language says by
-            // name: on this target a buffer is bound as a storage buffer, so there
-            // is no value for a domain parameter to hold. Without this the reader
-            // refuses with an arity it did not mean, which is a refusal that names
-            // the wrong cause.
-            if let Some(local) = fragment
-                .body
-                .parameters()
-                .iter()
-                .position(|parameter| parameter == value)
-            {
-                return Err(SpirvRefusal::NonIndexParameter {
-                    local: local as u32,
-                    at,
-                });
-            }
-            Err(SpirvRefusal::ResultArity {
-                results: fragment.result_classes.len(),
-                left: 0,
-            })
-        };
-        let instruction = op;
-        match instruction {
-            KernelInstr::Const(class, value) => {
-                // A constant is emitted once per (class, value) no matter how
-                // often the body pushes it: SPIR-V requires every id to be
-                // defined exactly once. The push takes the class the
-                // *instruction* names, which is the reading a value position
-                // wants; a position that wants an integer asks the pool for that
-                // reading instead.
-                let id = literals.get(class, value, &ids, &mut next);
-                slots.insert(definition, literal(id, value));
-            }
-            KernelInstr::Bin(class, operator) => {
-                let rhs = operand(1)?;
-                let lhs = operand(0)?;
-                let operand_class = bin_class(lhs.kind, rhs.kind, class);
-                // A comparison is the one operator whose operands may not be
-                // scalars — `(a < b) == c` compares the *scalar* a comparison
-                // means — and the one whose result is not one. Every other
-                // operator takes and produces a scalar of the class its operands
-                // are, which is the integer class when an index and a literal
-                // meet and the value class otherwise.
-                let lhs = as_class(
-                    lhs,
-                    operand_class,
-                    &ids,
-                    &mut literals,
-                    &mut code,
-                    &mut next,
-                    at,
-                )?;
-                let rhs = as_class(
-                    rhs,
-                    operand_class,
-                    &ids,
-                    &mut literals,
-                    &mut code,
-                    &mut next,
-                    at,
-                )?;
-                let result = next;
-                next += 1;
-                // The last element of each row says the operands are compared as
-                // **bit patterns**: the language's `==`/`!=` over two values
-                // route through `ValueExt::value_eq`, which for a float compares
-                // `to_bits`, so `0.0 == -0.0` is `0` and `NaN == NaN` is `1`
-                // (`docs/notes/floating-point.md` §3.7). `OpFOrdEqual` is the
-                // trap here — right for IEEE and wrong for this language — so a
-                // float equality reinterprets both operands and compares the
-                // integers, which is `to_bits` exactly.
-                let (opcode, result_type, result_kind, as_bits) = match (operand_class, operator) {
-                    // An `Int` is unsigned: `OpSDiv`/`OpSRem` would agree below
-                    // 2^63 and differ above, silently.  `OpUMod` is the remainder
-                    // the language's `%` means (`OpSRem` rounds toward zero,
-                    // which is a different function altogether).
-                    (ScalarClass::Int, KernelBin::Add) => {
-                        (op::I_ADD, ids.integer(), INT_VALUE, false)
+    // Pass 2 — every block the plan lays out, in an order where a block's
+    // definitions precede its uses.
+    let mut returns = 0usize;
+    for position in 0..plan.order.len() {
+        let node = plan.order[position];
+        let label = plan.labels[node];
+        let mut code: Vec<Inst> = Vec::new();
+        if node == plan.entry {
+            code.append(&mut prologue);
+        }
+        match plan.nodes[node] {
+            Node::Real(block) => {
+                for (at, &definition) in fragment.body.blocks[block].instrs.iter().enumerate() {
+                    let Some(ValueDef::Instr { op, args, .. }) =
+                        fragment.body.values.get(definition.0 as usize)
+                    else {
+                        continue;
+                    };
+                    let op = *op;
+                    // **Every operand is named by the definition that produced it.**
+                    let operand = |offset: usize| -> Result<Slot, SpirvRefusal> {
+                        let value = args.get(offset).ok_or(SpirvRefusal::ResultArity {
+                            results: fragment.result_classes.len(),
+                            left: 0,
+                        })?;
+                        resolve_operand(fragment, &slots, *value, at)
+                    };
+                    let instruction = op;
+                    match instruction {
+                        KernelInstr::Const(class, value) => {
+                            // A constant is emitted once per (class, value) no matter how
+                            // often the body pushes it: SPIR-V requires every id to be
+                            // defined exactly once. The push takes the class the
+                            // *instruction* names, which is the reading a value position
+                            // wants; a position that wants an integer asks the pool for that
+                            // reading instead.
+                            let id = literals.get(class, value, &ids, &mut next);
+                            slots.insert(definition, literal(id, value));
+                        }
+                        KernelInstr::Bin(class, operator) => {
+                            let rhs = operand(1)?;
+                            let lhs = operand(0)?;
+                            let operand_class = bin_class(lhs.kind, rhs.kind, class);
+                            // A comparison is the one operator whose operands may not be
+                            // scalars — `(a < b) == c` compares the *scalar* a comparison
+                            // means — and the one whose result is not one. Every other
+                            // operator takes and produces a scalar of the class its operands
+                            // are, which is the integer class when an index and a literal
+                            // meet and the value class otherwise.
+                            let lhs = as_class(
+                                lhs,
+                                operand_class,
+                                &ids,
+                                &mut literals,
+                                &mut code,
+                                &mut next,
+                                at,
+                            )?;
+                            let rhs = as_class(
+                                rhs,
+                                operand_class,
+                                &ids,
+                                &mut literals,
+                                &mut code,
+                                &mut next,
+                                at,
+                            )?;
+                            let result = next;
+                            next += 1;
+                            // The last element of each row says the operands are compared as
+                            // **bit patterns**: the language's `==`/`!=` over two values
+                            // route through `ValueExt::value_eq`, which for a float compares
+                            // `to_bits`, so `0.0 == -0.0` is `0` and `NaN == NaN` is `1`
+                            // (`docs/notes/floating-point.md` §3.7). `OpFOrdEqual` is the
+                            // trap here — right for IEEE and wrong for this language — so a
+                            // float equality reinterprets both operands and compares the
+                            // integers, which is `to_bits` exactly.
+                            let (opcode, result_type, result_kind, as_bits) =
+                                match (operand_class, operator) {
+                                    // An `Int` is unsigned: `OpSDiv`/`OpSRem` would agree below
+                                    // 2^63 and differ above, silently.  `OpUMod` is the remainder
+                                    // the language's `%` means (`OpSRem` rounds toward zero,
+                                    // which is a different function altogether).
+                                    (ScalarClass::Int, KernelBin::Add) => {
+                                        (op::I_ADD, ids.integer(), INT_VALUE, false)
+                                    }
+                                    (ScalarClass::Int, KernelBin::Sub) => {
+                                        (op::I_SUB, ids.integer(), INT_VALUE, false)
+                                    }
+                                    (ScalarClass::Int, KernelBin::Mul) => {
+                                        (op::I_MUL, ids.integer(), INT_VALUE, false)
+                                    }
+                                    (ScalarClass::Int, KernelBin::Div) => {
+                                        (op::U_DIV, ids.integer(), INT_VALUE, false)
+                                    }
+                                    (ScalarClass::Int, KernelBin::Rem) => {
+                                        (op::U_MOD, ids.integer(), INT_VALUE, false)
+                                    }
+                                    // A comparison yields a bool on this target, which is exactly
+                                    // what `Select` consumes — the wasm backend's widening to a
+                                    // scalar has no counterpart here, and no cost.
+                                    (ScalarClass::Int, KernelBin::Lt) => {
+                                        (op::U_LESS_THAN, ids.boolean, Kind::Condition, false)
+                                    }
+                                    (ScalarClass::Int, KernelBin::Gt) => {
+                                        (op::U_GREATER_THAN, ids.boolean, Kind::Condition, false)
+                                    }
+                                    (ScalarClass::Int, KernelBin::Leq) => {
+                                        (op::U_LESS_THAN_EQUAL, ids.boolean, Kind::Condition, false)
+                                    }
+                                    (ScalarClass::Int, KernelBin::Geq) => (
+                                        op::U_GREATER_THAN_EQUAL,
+                                        ids.boolean,
+                                        Kind::Condition,
+                                        false,
+                                    ),
+                                    (ScalarClass::Int, KernelBin::Eq) => {
+                                        (op::I_EQUAL, ids.boolean, Kind::Condition, false)
+                                    }
+                                    (ScalarClass::Int, KernelBin::Neq) => {
+                                        (op::I_NOT_EQUAL, ids.boolean, Kind::Condition, false)
+                                    }
+                                    // The bitwise operators, which over two comparison results
+                                    // are the language's `and`/`xor`/`or` — the place a
+                                    // comparison's scalar materialisation is actually paid for.
+                                    (ScalarClass::Int, KernelBin::BitAnd) => {
+                                        (op::BITWISE_AND, ids.integer(), INT_VALUE, false)
+                                    }
+                                    (ScalarClass::Int, KernelBin::BitOr) => {
+                                        (op::BITWISE_OR, ids.integer(), INT_VALUE, false)
+                                    }
+                                    (ScalarClass::Int, KernelBin::BitXor) => {
+                                        (op::BITWISE_XOR, ids.integer(), INT_VALUE, false)
+                                    }
+                                    (ScalarClass::Float, KernelBin::Add) => {
+                                        (op::F_ADD, ids.float, FLOAT_VALUE, false)
+                                    }
+                                    (ScalarClass::Float, KernelBin::Sub) => {
+                                        (op::F_SUB, ids.float, FLOAT_VALUE, false)
+                                    }
+                                    (ScalarClass::Float, KernelBin::Mul) => {
+                                        (op::F_MUL, ids.float, FLOAT_VALUE, false)
+                                    }
+                                    // **`OpFDiv` plainly, and no guard.** A zero divisor is
+                                    // undefined here and IEEE on wasm, and that divergence is the
+                                    // recorded price of admitting floats at all: the language does
+                                    // not specify a kernel's float division and does not promise
+                                    // one (`docs/notes/floating-point.md` §4.4).
+                                    (ScalarClass::Float, KernelBin::Div) => {
+                                        (op::F_DIV, ids.float, FLOAT_VALUE, false)
+                                    }
+                                    (ScalarClass::Float, KernelBin::Lt) => {
+                                        (op::F_LESS_THAN, ids.boolean, Kind::Condition, false)
+                                    }
+                                    (ScalarClass::Float, KernelBin::Gt) => {
+                                        (op::F_GREATER_THAN, ids.boolean, Kind::Condition, false)
+                                    }
+                                    (ScalarClass::Float, KernelBin::Leq) => {
+                                        (op::F_LESS_THAN_EQUAL, ids.boolean, Kind::Condition, false)
+                                    }
+                                    (ScalarClass::Float, KernelBin::Geq) => (
+                                        op::F_GREATER_THAN_EQUAL,
+                                        ids.boolean,
+                                        Kind::Condition,
+                                        false,
+                                    ),
+                                    (ScalarClass::Float, KernelBin::Eq) => {
+                                        (op::I_EQUAL, ids.boolean, Kind::Condition, true)
+                                    }
+                                    (ScalarClass::Float, KernelBin::Neq) => {
+                                        (op::I_NOT_EQUAL, ids.boolean, Kind::Condition, true)
+                                    }
+                                    (ScalarClass::Float, KernelBin::Rem) => {
+                                        return Err(SpirvRefusal::UnsupportedFloatOperator {
+                                            operator: "% (remainder)",
+                                            at,
+                                        });
+                                    }
+                                    (ScalarClass::Float, KernelBin::BitAnd) => {
+                                        return Err(SpirvRefusal::UnsupportedFloatOperator {
+                                            operator: "& (bitwise and)",
+                                            at,
+                                        });
+                                    }
+                                    (ScalarClass::Float, KernelBin::BitOr) => {
+                                        return Err(SpirvRefusal::UnsupportedFloatOperator {
+                                            operator: "| (bitwise or)",
+                                            at,
+                                        });
+                                    }
+                                    (ScalarClass::Float, KernelBin::BitXor) => {
+                                        return Err(SpirvRefusal::UnsupportedFloatOperator {
+                                            operator: "^ (bitwise exclusive or)",
+                                            at,
+                                        });
+                                    }
+                                };
+                            if as_bits {
+                                let left_bits = next;
+                                next += 1;
+                                let right_bits = next;
+                                next += 1;
+                                code.push(Inst::new(
+                                    op::BITCAST,
+                                    vec![ids.uint, left_bits, lhs.id],
+                                ));
+                                code.push(Inst::new(
+                                    op::BITCAST,
+                                    vec![ids.uint, right_bits, rhs.id],
+                                ));
+                                code.push(Inst::new(
+                                    opcode,
+                                    vec![result_type, result, left_bits, right_bits],
+                                ));
+                            } else {
+                                code.push(Inst::new(
+                                    opcode,
+                                    vec![result_type, result, lhs.id, rhs.id],
+                                ));
+                            }
+                            slots.insert(
+                                definition,
+                                Slot {
+                                    id: result,
+                                    kind: result_kind,
+                                },
+                            );
+                        }
+                        // The condition a `select` needs.  **Not a no-op here**: wasm's
+                        // `i32.wrap_i64` narrows an `i64` condition to the `i32` its
+                        // `select` takes, and this target's `select` takes a *bool*, so the
+                        // same instruction is where a condition becomes one.  When the
+                        // condition is already a comparison's bool — which is what the
+                        // emitter in `lichen-compute` produces for an `if` — it is a no-op,
+                        // and that is the case the module docs describe.
+                        KernelInstr::I32WrapI64 => {
+                            let popped = operand(0)?;
+                            slots.insert(
+                                definition,
+                                as_condition(popped, &ids, &mut literals, &mut code, &mut next),
+                            );
+                        }
+                        KernelInstr::Select => {
+                            let selector = operand(2)?;
+                            let otherwise = operand(1)?;
+                            let then = operand(0)?;
+                            // The arms are the language's scalars (a `select`'s result type
+                            // is its arms' type, and a scalar is what a lichen value is),
+                            // and the selector is the bool `select` takes.
+                            let then = as_class(
+                                then,
+                                ids.class,
+                                &ids,
+                                &mut literals,
+                                &mut code,
+                                &mut next,
+                                at,
+                            )?;
+                            let otherwise = as_class(
+                                otherwise,
+                                ids.class,
+                                &ids,
+                                &mut literals,
+                                &mut code,
+                                &mut next,
+                                at,
+                            )?;
+                            let selector =
+                                as_condition(selector, &ids, &mut literals, &mut code, &mut next);
+                            let result = next;
+                            next += 1;
+                            code.push(Inst::new(
+                                op::SELECT,
+                                vec![ids.scalar(), result, selector.id, then.id, otherwise.id],
+                            ));
+                            slots.insert(definition, scalar(result, ids.class));
+                        }
+                        // The language's two class crossings.  **The direction is the
+                        // instruction's**, and that is the whole reason the IR carries the
+                        // pair: `Int → Float` and `Float → Int` have the same operand shape,
+                        // so a target that read the direction off the operand would be
+                        // guessing — and the two targets could guess differently.
+                        //
+                        // The operand is the class the conversion is *from*, and a literal or
+                        // a comparison's `0`/`1` is materialised into it here — the same two
+                        // positions the rest of this emitter decides a class at.
+                        KernelInstr::Conv { from, to } => {
+                            let (from, to) = (from, to);
+                            let seen = operand(0)?;
+                            let seen = as_class(
+                                seen,
+                                from,
+                                &ids,
+                                &mut literals,
+                                &mut code,
+                                &mut next,
+                                at,
+                            )?;
+                            // A crossing between one class and itself is a reclassification:
+                            // the value already holds the answer, and nothing is emitted.
+                            if from == to {
+                                slots.insert(definition, seen);
+                                continue;
+                            }
+                            // **Every crossing the language has is representable here, in
+                            // both module classes.**  The module declares both element types
+                            // (see the module docs), so the operand's type always has an id:
+                            // `Int → Float` is `OpConvertUToF` from the module's integer — the
+                            // 64-bit one in an integer module, the 32-bit element index in a
+                            // float one — and `Float → Int` is `OpConvertFToU` back to it.
+                            // Only the 64-bit integer and its `Int64` capability are
+                            // conditional, which is why a float module's `Int` data is 32-bit
+                            // and a value past 2³² diverges from the wasm target — the
+                            // recorded price (`docs/notes/floating-point.md`).
+                            let result = next;
+                            next += 1;
+                            let opcode = match (from, to) {
+                                // The unsigned conversions, because an `Int` is unsigned.
+                                (ScalarClass::Int, ScalarClass::Float) => op::CONVERT_U_TO_F,
+                                (ScalarClass::Float, ScalarClass::Int) => op::CONVERT_F_TO_U,
+                                _ => unreachable!("a same-class crossing returned above"),
+                            };
+                            code.push(Inst::new(opcode, vec![ids.type_of(to), result, seen.id]));
+                            slots.insert(definition, scalar(result, to));
+                        }
+                        KernelInstr::BufferReadCall(_) => {
+                            let element = operand(1)?;
+                            let position = operand(0)?;
+                            // An access chain's index is an **integer**, so a float in this
+                            // position is a fragment asking for a conversion the language
+                            // does not have, and `as_class` refuses it by name.
+                            let element = as_class(
+                                element,
+                                ScalarClass::Int,
+                                &ids,
+                                &mut literals,
+                                &mut code,
+                                &mut next,
+                                at,
+                            )?;
+                            let slot = buffer_slot(position, at, 0, binding.inputs, "input")?;
+                            // **A read yields that buffer's element class**, so the value's kind
+                            // and the type the access chain reaches through are both the
+                            // buffer's own — which is what lets one module read an `Int`
+                            // buffer and a `Float` one.
+                            let element_class = buffer_class_of(fragment, slot, ids.class);
+                            let chain = ids.chain_of(element_class);
+                            let pointer = next;
+                            next += 1;
+                            let loaded = next;
+                            next += 1;
+                            // Three indices: the buffer struct's only member, then the element
+                            // within that runtime array, then the element struct's only member.
+                            code.push(Inst::new(
+                                op::ACCESS_CHAIN,
+                                vec![
+                                    chain.ptr_elem,
+                                    pointer,
+                                    ids.buffers + slot as u32,
+                                    ids.zero,
+                                    element.id,
+                                    ids.zero,
+                                ],
+                            ));
+                            code.push(Inst::new(
+                                op::LOAD,
+                                vec![ids.type_of(element_class), loaded, pointer],
+                            ));
+                            slots.insert(definition, scalar(loaded, element_class));
+                        }
+                        KernelInstr::BufferWriteCall(_) => {
+                            // **The one place a loop changes what `dispatch` may assume.** It
+                            // allocates output buffers without initialising them because every
+                            // lane reaches its write, and a zero trip count is a lane that
+                            // reaches the body's zero times.
+                            if plan.inside[node] {
+                                return Err(SpirvRefusal::WriteInsideLoop { at });
+                            }
+                            let value = operand(2)?;
+                            let element = operand(1)?;
+                            let position = operand(0)?;
+                            let slot = buffer_slot(
+                                position,
+                                at,
+                                binding.inputs,
+                                binding.outputs,
+                                "output",
+                            )?;
+                            // **A write stores that buffer's element class**, whichever class
+                            // the body computed the value in — so a value crossing into a
+                            // `Float` buffer is materialised into `Float` here, and a value of
+                            // the *other* class is refused rather than converted.
+                            let element_class = buffer_class_of(fragment, slot, ids.class);
+                            let chain = ids.chain_of(element_class);
+                            let value = as_class(
+                                value,
+                                element_class,
+                                &ids,
+                                &mut literals,
+                                &mut code,
+                                &mut next,
+                                at,
+                            )?;
+                            let element = as_class(
+                                element,
+                                ScalarClass::Int,
+                                &ids,
+                                &mut literals,
+                                &mut code,
+                                &mut next,
+                                at,
+                            )?;
+                            let pointer = next;
+                            next += 1;
+                            code.push(Inst::new(
+                                op::ACCESS_CHAIN,
+                                vec![
+                                    chain.ptr_elem,
+                                    pointer,
+                                    ids.buffers + slot as u32,
+                                    ids.zero,
+                                    element.id,
+                                    ids.zero,
+                                ],
+                            ));
+                            code.push(Inst::new(op::STORE, vec![pointer, value.id]));
+                        }
+                        KernelInstr::CallKernel(kernel) => {
+                            return Err(SpirvRefusal::CrossKernelCall { kernel, at });
+                        }
                     }
-                    (ScalarClass::Int, KernelBin::Sub) => {
-                        (op::I_SUB, ids.integer(), INT_VALUE, false)
-                    }
-                    (ScalarClass::Int, KernelBin::Mul) => {
-                        (op::I_MUL, ids.integer(), INT_VALUE, false)
-                    }
-                    (ScalarClass::Int, KernelBin::Div) => {
-                        (op::U_DIV, ids.integer(), INT_VALUE, false)
-                    }
-                    (ScalarClass::Int, KernelBin::Rem) => {
-                        (op::U_MOD, ids.integer(), INT_VALUE, false)
-                    }
-                    // A comparison yields a bool on this target, which is exactly
-                    // what `Select` consumes — the wasm backend's widening to a
-                    // scalar has no counterpart here, and no cost.
-                    (ScalarClass::Int, KernelBin::Lt) => {
-                        (op::U_LESS_THAN, ids.boolean, Kind::Condition, false)
-                    }
-                    (ScalarClass::Int, KernelBin::Gt) => {
-                        (op::U_GREATER_THAN, ids.boolean, Kind::Condition, false)
-                    }
-                    (ScalarClass::Int, KernelBin::Leq) => {
-                        (op::U_LESS_THAN_EQUAL, ids.boolean, Kind::Condition, false)
-                    }
-                    (ScalarClass::Int, KernelBin::Geq) => (
-                        op::U_GREATER_THAN_EQUAL,
-                        ids.boolean,
-                        Kind::Condition,
-                        false,
-                    ),
-                    (ScalarClass::Int, KernelBin::Eq) => {
-                        (op::I_EQUAL, ids.boolean, Kind::Condition, false)
-                    }
-                    (ScalarClass::Int, KernelBin::Neq) => {
-                        (op::I_NOT_EQUAL, ids.boolean, Kind::Condition, false)
-                    }
-                    // The bitwise operators, which over two comparison results
-                    // are the language's `and`/`xor`/`or` — the place a
-                    // comparison's scalar materialisation is actually paid for.
-                    (ScalarClass::Int, KernelBin::BitAnd) => {
-                        (op::BITWISE_AND, ids.integer(), INT_VALUE, false)
-                    }
-                    (ScalarClass::Int, KernelBin::BitOr) => {
-                        (op::BITWISE_OR, ids.integer(), INT_VALUE, false)
-                    }
-                    (ScalarClass::Int, KernelBin::BitXor) => {
-                        (op::BITWISE_XOR, ids.integer(), INT_VALUE, false)
-                    }
-                    (ScalarClass::Float, KernelBin::Add) => {
-                        (op::F_ADD, ids.float, FLOAT_VALUE, false)
-                    }
-                    (ScalarClass::Float, KernelBin::Sub) => {
-                        (op::F_SUB, ids.float, FLOAT_VALUE, false)
-                    }
-                    (ScalarClass::Float, KernelBin::Mul) => {
-                        (op::F_MUL, ids.float, FLOAT_VALUE, false)
-                    }
-                    // **`OpFDiv` plainly, and no guard.** A zero divisor is
-                    // undefined here and IEEE on wasm, and that divergence is the
-                    // recorded price of admitting floats at all: the language does
-                    // not specify a kernel's float division and does not promise
-                    // one (`docs/notes/floating-point.md` §4.4).
-                    (ScalarClass::Float, KernelBin::Div) => {
-                        (op::F_DIV, ids.float, FLOAT_VALUE, false)
-                    }
-                    (ScalarClass::Float, KernelBin::Lt) => {
-                        (op::F_LESS_THAN, ids.boolean, Kind::Condition, false)
-                    }
-                    (ScalarClass::Float, KernelBin::Gt) => {
-                        (op::F_GREATER_THAN, ids.boolean, Kind::Condition, false)
-                    }
-                    (ScalarClass::Float, KernelBin::Leq) => {
-                        (op::F_LESS_THAN_EQUAL, ids.boolean, Kind::Condition, false)
-                    }
-                    (ScalarClass::Float, KernelBin::Geq) => (
-                        op::F_GREATER_THAN_EQUAL,
-                        ids.boolean,
-                        Kind::Condition,
-                        false,
-                    ),
-                    (ScalarClass::Float, KernelBin::Eq) => {
-                        (op::I_EQUAL, ids.boolean, Kind::Condition, true)
-                    }
-                    (ScalarClass::Float, KernelBin::Neq) => {
-                        (op::I_NOT_EQUAL, ids.boolean, Kind::Condition, true)
-                    }
-                    (ScalarClass::Float, KernelBin::Rem) => {
-                        return Err(SpirvRefusal::UnsupportedFloatOperator {
-                            operator: "% (remainder)",
-                            at,
-                        });
-                    }
-                    (ScalarClass::Float, KernelBin::BitAnd) => {
-                        return Err(SpirvRefusal::UnsupportedFloatOperator {
-                            operator: "& (bitwise and)",
-                            at,
-                        });
-                    }
-                    (ScalarClass::Float, KernelBin::BitOr) => {
-                        return Err(SpirvRefusal::UnsupportedFloatOperator {
-                            operator: "| (bitwise or)",
-                            at,
-                        });
-                    }
-                    (ScalarClass::Float, KernelBin::BitXor) => {
-                        return Err(SpirvRefusal::UnsupportedFloatOperator {
-                            operator: "^ (bitwise exclusive or)",
-                            at,
-                        });
-                    }
-                };
-                if as_bits {
-                    let left_bits = next;
-                    next += 1;
-                    let right_bits = next;
-                    next += 1;
-                    code.push(Inst::new(op::BITCAST, vec![ids.uint, left_bits, lhs.id]));
-                    code.push(Inst::new(op::BITCAST, vec![ids.uint, right_bits, rhs.id]));
-                    code.push(Inst::new(
-                        opcode,
-                        vec![result_type, result, left_bits, right_bits],
-                    ));
-                } else {
-                    code.push(Inst::new(opcode, vec![result_type, result, lhs.id, rhs.id]));
                 }
-                slots.insert(
-                    definition,
-                    Slot {
-                        id: result,
-                        kind: result_kind,
-                    },
-                );
-            }
-            // The condition a `select` needs.  **Not a no-op here**: wasm's
-            // `i32.wrap_i64` narrows an `i64` condition to the `i32` its
-            // `select` takes, and this target's `select` takes a *bool*, so the
-            // same instruction is where a condition becomes one.  When the
-            // condition is already a comparison's bool — which is what the
-            // emitter in `lichen-compute` produces for an `if` — it is a no-op,
-            // and that is the case the module docs describe.
-            KernelInstr::I32WrapI64 => {
-                let popped = operand(0)?;
-                slots.insert(
-                    definition,
-                    as_condition(popped, &ids, &mut literals, &mut code, &mut next),
-                );
-            }
-            KernelInstr::Select => {
-                let selector = operand(2)?;
-                let otherwise = operand(1)?;
-                let then = operand(0)?;
-                // The arms are the language's scalars (a `select`'s result type
-                // is its arms' type, and a scalar is what a lichen value is),
-                // and the selector is the bool `select` takes.
-                let then = as_class(
-                    then,
-                    ids.class,
-                    &ids,
-                    &mut literals,
-                    &mut code,
-                    &mut next,
-                    at,
-                )?;
-                let otherwise = as_class(
-                    otherwise,
-                    ids.class,
-                    &ids,
-                    &mut literals,
-                    &mut code,
-                    &mut next,
-                    at,
-                )?;
-                let selector = as_condition(selector, &ids, &mut literals, &mut code, &mut next);
-                let result = next;
-                next += 1;
-                code.push(Inst::new(
-                    op::SELECT,
-                    vec![ids.scalar(), result, selector.id, then.id, otherwise.id],
-                ));
-                slots.insert(definition, scalar(result, ids.class));
-            }
-            // The language's two class crossings.  **The direction is the
-            // instruction's**, and that is the whole reason the IR carries the
-            // pair: `Int → Float` and `Float → Int` have the same operand shape,
-            // so a target that read the direction off the operand would be
-            // guessing — and the two targets could guess differently.
-            //
-            // The operand is the class the conversion is *from*, and a literal or
-            // a comparison's `0`/`1` is materialised into it here — the same two
-            // positions the rest of this emitter decides a class at.
-            KernelInstr::Conv { from, to } => {
-                let (from, to) = (from, to);
-                let seen = operand(0)?;
-                let seen = as_class(seen, from, &ids, &mut literals, &mut code, &mut next, at)?;
-                // A crossing between one class and itself is a reclassification:
-                // the value already holds the answer, and nothing is emitted.
-                if from == to {
-                    slots.insert(definition, seen);
-                    continue;
+                Emitter {
+                    fragment,
+                    ids: &ids,
+                    plan: &plan,
+                    blocks: &mut blocks,
+                    slots: &mut slots,
+                    literals: &mut literals,
+                    next: &mut next,
+                    returns: &mut returns,
                 }
-                // **Every crossing the language has is representable here, in
-                // both module classes.**  The module declares both element types
-                // (see the module docs), so the operand's type always has an id:
-                // `Int → Float` is `OpConvertUToF` from the module's integer — the
-                // 64-bit one in an integer module, the 32-bit element index in a
-                // float one — and `Float → Int` is `OpConvertFToU` back to it.
-                // Only the 64-bit integer and its `Int64` capability are
-                // conditional, which is why a float module's `Int` data is 32-bit
-                // and a value past 2³² diverges from the wasm target — the
-                // recorded price (`docs/notes/floating-point.md`).
-                let result = next;
-                next += 1;
-                let opcode = match (from, to) {
-                    // The unsigned conversions, because an `Int` is unsigned.
-                    (ScalarClass::Int, ScalarClass::Float) => op::CONVERT_U_TO_F,
-                    (ScalarClass::Float, ScalarClass::Int) => op::CONVERT_F_TO_U,
-                    _ => unreachable!("a same-class crossing returned above"),
-                };
-                code.push(Inst::new(opcode, vec![ids.type_of(to), result, seen.id]));
-                slots.insert(definition, scalar(result, to));
+                .terminator(node, block, &mut code)?;
             }
-            KernelInstr::BufferReadCall(_) => {
-                let element = operand(1)?;
-                let position = operand(0)?;
-                // An access chain's index is an **integer**, so a float in this
-                // position is a fragment asking for a conversion the language
-                // does not have, and `as_class` refuses it by name.
-                let element = as_class(
-                    element,
-                    ScalarClass::Int,
-                    &ids,
-                    &mut literals,
-                    &mut code,
-                    &mut next,
-                    at,
-                )?;
-                let slot = buffer_slot(position, at, 0, binding.inputs, "input")?;
-                // **A read yields that buffer's element class**, so the value's kind
-                // and the type the access chain reaches through are both the
-                // buffer's own — which is what lets one module read an `Int`
-                // buffer and a `Float` one.
-                let element_class = buffer_class_of(fragment, slot, ids.class);
-                let chain = ids.chain_of(element_class);
-                let pointer = next;
-                next += 1;
-                let loaded = next;
-                next += 1;
-                // Three indices: the buffer struct's only member, then the element
-                // within that runtime array, then the element struct's only member.
-                code.push(Inst::new(
-                    op::ACCESS_CHAIN,
-                    vec![
-                        chain.ptr_elem,
-                        pointer,
-                        ids.buffers + slot as u32,
-                        ids.zero,
-                        element.id,
-                        ids.zero,
-                    ],
-                ));
-                code.push(Inst::new(
-                    op::LOAD,
-                    vec![ids.type_of(element_class), loaded, pointer],
-                ));
-                slots.insert(definition, scalar(loaded, element_class));
-            }
-            KernelInstr::BufferWriteCall(_) => {
-                let value = operand(2)?;
-                let element = operand(1)?;
-                let position = operand(0)?;
-                let slot = buffer_slot(position, at, binding.inputs, binding.outputs, "output")?;
-                // **A write stores that buffer's element class**, whichever class
-                // the body computed the value in — so a value crossing into a
-                // `Float` buffer is materialised into `Float` here, and a value of
-                // the *other* class is refused rather than converted.
-                let element_class = buffer_class_of(fragment, slot, ids.class);
-                let chain = ids.chain_of(element_class);
-                let value = as_class(
-                    value,
-                    element_class,
-                    &ids,
-                    &mut literals,
-                    &mut code,
-                    &mut next,
-                    at,
-                )?;
-                let element = as_class(
-                    element,
-                    ScalarClass::Int,
-                    &ids,
-                    &mut literals,
-                    &mut code,
-                    &mut next,
-                    at,
-                )?;
-                let pointer = next;
-                next += 1;
-                code.push(Inst::new(
-                    op::ACCESS_CHAIN,
-                    vec![
-                        chain.ptr_elem,
-                        pointer,
-                        ids.buffers + slot as u32,
-                        ids.zero,
-                        element.id,
-                        ids.zero,
-                    ],
-                ));
-                code.push(Inst::new(op::STORE, vec![pointer, value.id]));
-            }
-            KernelInstr::CallKernel(kernel) => {
-                return Err(SpirvRefusal::CrossKernelCall { kernel, at });
+            Node::LoopMerge { .. } | Node::PassThrough { .. } => {
+                let target = plan.targets[node][0];
+                let args = blocks[node].params.clone();
+                Emitter {
+                    fragment,
+                    ids: &ids,
+                    plan: &plan,
+                    blocks: &mut blocks,
+                    slots: &mut slots,
+                    literals: &mut literals,
+                    next: &mut next,
+                    returns: &mut returns,
+                }
+                .record(target, label, args, &mut code, 0)?;
+                code.push(Inst::new(op::BRANCH, vec![plan.labels[target]]));
             }
         }
+        blocks[node].code = code;
     }
 
-    // **The returned values are the terminator's list**, so a body's result arity is
-    // a fact of the body rather than of whatever happened to be left over.
-    let returned = match &entry.terminator {
-        Terminator::Return { values } => values.clone(),
-        _ => {
-            return Err(SpirvRefusal::ControlFlow {
-                detail: "a straight-line body ends in a return, and this one does not".to_string(),
-            });
-        }
-    };
-    if returned.len() != 1 {
-        return Err(SpirvRefusal::ResultArity {
-            results: fragment.result_classes.len(),
-            left: returned.len(),
+    // A function with no `OpReturn` has no way out, and SPIR-V requires one.
+    if returns == 0 {
+        return Err(SpirvRefusal::ControlFlow {
+            detail: "no path through the body returns; a shader's function has to end".to_string(),
         });
     }
-    // And the id that result names must have been emitted, which is the same
-    // check its arity is: a body whose return is not one of its own values has
-    // produced nothing to hand back.
-    if returned
-        .first()
-        .is_none_or(|value| !slots.contains_key(value))
-    {
-        return Err(SpirvRefusal::ResultArity {
-            results: fragment.result_classes.len(),
-            left: 0,
-        });
-    }
+    let function = function_body(&plan, &mut blocks, &ids);
 
     Ok(assemble(
         fragment,
@@ -1439,9 +1477,813 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
         &classes,
         needs_int64(fragment)?,
         &literals.declarations,
-        &code,
+        &function,
         next,
     ))
+}
+
+/// The one entry-block parameter this target places is the index; any other is
+/// refused by name.
+fn resolve_operand(
+    fragment: &KernelFragment,
+    slots: &HashMap<ValueId, Slot>,
+    value: ValueId,
+    at: usize,
+) -> Result<Slot, SpirvRefusal> {
+    if let Some(slot) = slots.get(&value).copied() {
+        return Ok(slot);
+    }
+    // **A value that is missing because it is a *parameter* has its own refusal**:
+    // on this target a buffer is bound as a storage buffer, so there is no value
+    // for a domain parameter to hold.
+    if let Some(local) = fragment
+        .body
+        .parameters()
+        .iter()
+        .position(|parameter| *parameter == value)
+    {
+        return Err(SpirvRefusal::NonIndexParameter {
+            local: local as u32,
+            at,
+        });
+    }
+    Err(SpirvRefusal::ResultArity {
+        results: fragment.result_classes.len(),
+        left: 0,
+    })
+}
+
+/// The type an id of `kind` has.
+fn type_of(ids: &Ids, kind: Kind) -> u32 {
+    match kind {
+        Kind::Scalar(class) => ids.type_of(class),
+        Kind::Condition => ids.boolean,
+        // A parameter's kind is resolved when its first edge arrives, so a literal
+        // never carries a phi.
+        Kind::Literal(_) => ids.scalar(),
+    }
+}
+
+/// The kind a block parameter has. A literal is fixed to the module's class,
+/// because an `OpPhi` has one type however its edges were written.
+fn resolved(kind: Kind, ids: &Ids) -> Kind {
+    match kind {
+        Kind::Literal(_) => Kind::Scalar(ids.class),
+        other => other,
+    }
+}
+
+/// One emitted block.
+///
+/// # Invariant
+/// `params` has one slot per declared parameter and `edges` one pair per
+/// predecessor, which is what an `OpPhi` needs; both are filled in as the
+/// predecessors' terminators are emitted, so a block entered from a block written
+/// later still receives its pair.
+#[derive(Default)]
+struct Block {
+    /// One `OpPhi` result per declared parameter.
+    params: Vec<Slot>,
+    /// `(predecessor label, the values that edge passes)`, one pair per edge.
+    edges: Vec<(u32, Vec<Slot>)>,
+    /// Everything after the phis, the terminator included.
+    code: Vec<Inst>,
+}
+
+impl Block {
+    fn phis(&self, ids: &Ids) -> Vec<Inst> {
+        let mut phis = Vec::with_capacity(self.params.len());
+        for (offset, param) in self.params.iter().enumerate() {
+            let mut operands = vec![type_of(ids, param.kind), param.id];
+            for (from, values) in &self.edges {
+                operands.push(values[offset].id);
+                operands.push(*from);
+            }
+            phis.push(Inst::new(op::PHI, operands));
+        }
+        phis
+    }
+}
+
+/// One block of the emitted control-flow graph.
+#[derive(Clone, Copy)]
+enum Node {
+    /// A block of the IR body, at this index.
+    Real(usize),
+    /// A loop's merge block: the header's exit edge, handing the loop's values to
+    /// the block the header named.
+    LoopMerge { header: usize, exit: usize },
+    /// A selection's pass-through, for a join the selection does not dominate.
+    PassThrough { header: usize, join: usize },
+}
+
+/// The structure the emitter adds to a body, and the order its blocks are written.
+struct Plan {
+    nodes: Vec<Node>,
+    labels: Vec<u32>,
+    arities: Vec<usize>,
+    /// Each node's successors, in the order its terminator names them.
+    targets: Vec<Vec<usize>>,
+    /// The merge block of each node whose terminator branches two ways.
+    merges: Vec<Option<usize>>,
+    /// The block each loop header returns from, where the node is a loop header.
+    loop_bodies: Vec<Option<usize>>,
+    /// The order the blocks are written in, entry first.
+    order: Vec<usize>,
+    /// Whether a loop's zero trip count can skip a node's instructions.
+    inside: Vec<bool>,
+    entry: usize,
+    /// How many label ids the plan took.
+    fresh_labels: u32,
+}
+
+/// Lay a body out as structured SPIR-V control flow.
+///
+/// **A loop is recognised structurally, because SSA has no `While`**: a block is a
+/// loop header when an edge on the active depth-first path returns to it, and that
+/// is the same rule that makes it the dominator of everything the loop holds. A
+/// `CondBr` that is not a loop header is a selection, whose merge block is the
+/// immediate post-dominator of its arms. See `docs/notes/loop-conversion.md` §8.4.
+fn plan_body(
+    fragment: &KernelFragment,
+    entry_label: u32,
+    first_label: u32,
+) -> Result<Plan, SpirvRefusal> {
+    let body = &fragment.body;
+    let count = body.blocks.len();
+    let entry = body.entry;
+    let successors: Vec<Vec<usize>> = body
+        .blocks
+        .iter()
+        .map(|block| match &block.terminator {
+            Terminator::Return { .. } => Vec::new(),
+            Terminator::Br(br) => vec![br.target],
+            Terminator::CondBr {
+                if_true, if_false, ..
+            } => vec![if_true.target, if_false.target],
+        })
+        .collect();
+
+    let reachable = reachable_from(count, &successors, entry);
+    if let Some(dead) = reachable.iter().position(|seen| !seen) {
+        return Err(SpirvRefusal::ControlFlow {
+            detail: format!(
+                "block {dead} is not reachable from the entry, so nothing arrives at it and it has \
+                 no phi"
+            ),
+        });
+    }
+    let dominates = dominators(count, &successors, entry);
+    let after = immediate_post_dominators(count, &successors);
+    let headers = loop_headers(count, &successors, entry);
+    if headers[entry] {
+        return Err(SpirvRefusal::ControlFlow {
+            detail: "the entry block is a loop header, and its parameters are the function's own \
+                     rather than a phi"
+                .to_string(),
+        });
+    }
+
+    let mut nodes: Vec<Node> = (0..count).map(Node::Real).collect();
+    let mut arities: Vec<usize> = body.blocks.iter().map(|block| block.params.len()).collect();
+    let mut merges: Vec<Option<usize>> = vec![None; count];
+    let mut loop_bodies: Vec<Option<usize>> = vec![None; count];
+    let mut loops: Vec<(usize, usize)> = Vec::new();
+    // `(header, join, pass-through)` for every selection that needs one.
+    let mut pass_throughs: Vec<(usize, usize, usize)> = Vec::new();
+
+    for header in 0..count {
+        if !headers[header] {
+            continue;
+        }
+        let Terminator::CondBr {
+            if_true, if_false, ..
+        } = &body.blocks[header].terminator
+        else {
+            return Err(SpirvRefusal::ControlFlow {
+                detail: format!(
+                    "block {header} is a loop header and tests nothing, so its loop has no exit block"
+                ),
+            });
+        };
+        let (one, zero) = (if_true.target, if_false.target);
+        // **Which branch stays in the loop is which one can reach the header
+        // again**, so the exit is decided by the same edge the header was.
+        let (body_entry, exit) = match (
+            reaches(&successors, one, header),
+            reaches(&successors, zero, header),
+        ) {
+            (true, false) => (one, zero),
+            (false, true) => (zero, one),
+            (true, true) => {
+                return Err(SpirvRefusal::ControlFlow {
+                    detail: format!(
+                        "both of block {header}'s branches lead back to it, so its loop never leaves"
+                    ),
+                });
+            }
+            (false, false) => {
+                return Err(SpirvRefusal::ControlFlow {
+                    detail: format!("block {header} is a loop header with no path back to it"),
+                });
+            }
+        };
+        // `OpLoopMerge`'s continue target has to differ from the header and be
+        // dominated by it, which is what makes the header's body branch the
+        // continue construct's entry.
+        if body_entry == header || !dominates[body_entry][header] {
+            return Err(SpirvRefusal::ControlFlow {
+                detail: format!(
+                    "block {header}'s loop body is entered without passing its header, so it has no \
+                     continue target"
+                ),
+            });
+        }
+        let merge = nodes.len();
+        nodes.push(Node::LoopMerge { header, exit });
+        arities.push(body.blocks[exit].params.len());
+        merges[header] = Some(merge);
+        loop_bodies[header] = Some(body_entry);
+        loops.push((header, merge));
+    }
+
+    for header in 0..count {
+        if headers[header] {
+            continue;
+        }
+        let Terminator::CondBr {
+            if_true, if_false, ..
+        } = &body.blocks[header].terminator
+        else {
+            continue;
+        };
+        if if_true.target == if_false.target {
+            continue;
+        }
+        // The join is where both arms meet again: the immediate post-dominator.
+        let Some(join) = after[header] else {
+            return Err(SpirvRefusal::ControlFlow {
+                detail: format!(
+                    "block {header} is a selection whose two arms never meet again, so it has no \
+                     merge block"
+                ),
+            });
+        };
+        if join == count {
+            return Err(SpirvRefusal::ControlFlow {
+                detail: format!(
+                    "block {header} is a selection whose two arms both leave the function, so it has \
+                     no merge block"
+                ),
+            });
+        }
+        // **A selection's merge block must be dominated by the selection.** A join
+        // the selection is inside — a loop header, an outer join — is not, so the
+        // selection gets a pass-through of its own and branches the join from it.
+        if dominates[join][header] {
+            merges[header] = Some(join);
+        } else {
+            let pass = nodes.len();
+            nodes.push(Node::PassThrough { header, join });
+            arities.push(body.blocks[join].params.len());
+            merges[header] = Some(pass);
+            pass_throughs.push((header, join, pass));
+        }
+    }
+
+    let mut targets: Vec<Vec<usize>> = Vec::with_capacity(nodes.len());
+    for node in 0..nodes.len() {
+        let resolved = match nodes[node] {
+            Node::Real(block) => match &body.blocks[block].terminator {
+                Terminator::Return { .. } => Vec::new(),
+                Terminator::Br(br) => {
+                    vec![redirect(
+                        &nodes,
+                        &successors,
+                        &dominates,
+                        &pass_throughs,
+                        node,
+                        br.target,
+                    )]
+                }
+                Terminator::CondBr {
+                    if_true, if_false, ..
+                } => match (loop_bodies[node], merges[node]) {
+                    (Some(body_entry), Some(merge)) => vec![
+                        redirect(
+                            &nodes,
+                            &successors,
+                            &dominates,
+                            &pass_throughs,
+                            node,
+                            body_entry,
+                        ),
+                        merge,
+                    ],
+                    (None, Some(_)) => vec![
+                        redirect(
+                            &nodes,
+                            &successors,
+                            &dominates,
+                            &pass_throughs,
+                            node,
+                            if_true.target,
+                        ),
+                        redirect(
+                            &nodes,
+                            &successors,
+                            &dominates,
+                            &pass_throughs,
+                            node,
+                            if_false.target,
+                        ),
+                    ],
+                    _ => vec![redirect(
+                        &nodes,
+                        &successors,
+                        &dominates,
+                        &pass_throughs,
+                        node,
+                        if_true.target,
+                    )],
+                },
+            },
+            Node::LoopMerge { exit, .. } => {
+                vec![redirect(
+                    &nodes,
+                    &successors,
+                    &dominates,
+                    &pass_throughs,
+                    node,
+                    exit,
+                )]
+            }
+            Node::PassThrough { join, .. } => {
+                vec![redirect(
+                    &nodes,
+                    &successors,
+                    &dominates,
+                    &pass_throughs,
+                    node,
+                    join,
+                )]
+            }
+        };
+        targets.push(resolved);
+    }
+
+    let order =
+        depth_first(nodes.len(), &targets, entry).ok_or_else(|| SpirvRefusal::ControlFlow {
+            detail: "a block of the emitted graph is unreachable, so it has no arrival".to_string(),
+        })?;
+    // A write inside a loop body is the one thing a zero trip count can skip.
+    let emitted = dominators(nodes.len(), &targets, entry);
+    let mut inside = vec![false; nodes.len()];
+    for &(header, merge) in &loops {
+        for node in 0..nodes.len() {
+            if emitted[node][header] && node != header && !emitted[node][merge] {
+                inside[node] = true;
+            }
+        }
+    }
+
+    let mut labels = vec![0u32; nodes.len()];
+    labels[entry] = entry_label;
+    let mut fresh_labels = 0u32;
+    for node in 0..nodes.len() {
+        if node == entry {
+            continue;
+        }
+        labels[node] = first_label + fresh_labels;
+        fresh_labels += 1;
+    }
+    Ok(Plan {
+        nodes,
+        labels,
+        arities,
+        targets,
+        merges,
+        loop_bodies,
+        order,
+        inside,
+        entry,
+        fresh_labels,
+    })
+}
+
+/// Resolve a declared branch target through the pass-throughs: an edge that leaves
+/// a selection by its join enters the pass-through first.
+fn redirect(
+    nodes: &[Node],
+    successors: &[Vec<usize>],
+    dominates: &[Vec<bool>],
+    pass_throughs: &[(usize, usize, usize)],
+    from: usize,
+    declared: usize,
+) -> usize {
+    // A block the emitter added sits where its header does, so the selections
+    // enclosing it are the header's.
+    let origin = match nodes[from] {
+        Node::Real(block) => block,
+        Node::LoopMerge { header, .. } | Node::PassThrough { header, .. } => header,
+    };
+    let mut best: Option<(usize, usize)> = None;
+    for &(header, join, pass) in pass_throughs {
+        if join != declared || pass == from {
+            continue;
+        }
+        if !inside_selection(successors, header, join, origin) {
+            continue;
+        }
+        // **The innermost enclosing selection**: a header that dominates the one
+        // already chosen is deeper, so it takes the edge first.
+        match best {
+            Some((seen, _)) if !dominates[seen][header] => {}
+            _ => best = Some((header, pass)),
+        }
+    }
+    best.map_or(declared, |(_, pass)| pass)
+}
+
+/// Whether `block` is inside the selection `header` → `join`: reached from the
+/// header without passing through the join.
+fn inside_selection(successors: &[Vec<usize>], header: usize, join: usize, block: usize) -> bool {
+    if block == join {
+        return false;
+    }
+    let mut seen = vec![false; successors.len()];
+    seen[header] = true;
+    let mut stack = vec![header];
+    while let Some(node) = stack.pop() {
+        if node == block {
+            return true;
+        }
+        // The join is the selection's exit, so nothing beyond it is inside.
+        if node == join {
+            continue;
+        }
+        for &next in &successors[node] {
+            if !seen[next] {
+                seen[next] = true;
+                stack.push(next);
+            }
+        }
+    }
+    false
+}
+
+/// Whether `to` is reachable from `from`.
+fn reaches(successors: &[Vec<usize>], from: usize, to: usize) -> bool {
+    reachable_from(successors.len(), successors, from)[to]
+}
+
+fn reachable_from(count: usize, successors: &[Vec<usize>], from: usize) -> Vec<bool> {
+    let mut seen = vec![false; count];
+    seen[from] = true;
+    let mut stack = vec![from];
+    while let Some(node) = stack.pop() {
+        for &next in &successors[node] {
+            if !seen[next] {
+                seen[next] = true;
+                stack.push(next);
+            }
+        }
+    }
+    seen
+}
+
+/// The dominator sets: `dominates[node][other]` says `other` dominates `node`.
+///
+/// # Invariant
+/// Every node but the root is reachable from it, so the intersection over its
+/// predecessors is never empty.
+fn dominators(count: usize, successors: &[Vec<usize>], entry: usize) -> Vec<Vec<bool>> {
+    let mut predecessors = vec![Vec::new(); count];
+    for (node, next) in successors.iter().enumerate() {
+        for &target in next {
+            predecessors[target].push(node);
+        }
+    }
+    let mut dom = vec![vec![true; count]; count];
+    dom[entry] = (0..count).map(|node| node == entry).collect();
+    loop {
+        let mut changed = false;
+        for node in 0..count {
+            if node == entry {
+                continue;
+            }
+            let mut next = vec![true; count];
+            for &previous in &predecessors[node] {
+                for other in 0..count {
+                    next[other] &= dom[previous][other];
+                }
+            }
+            next[node] = true;
+            if next != dom[node] {
+                dom[node] = next;
+                changed = true;
+            }
+        }
+        if !changed {
+            return dom;
+        }
+    }
+}
+
+/// The immediate post-dominator of each node, over the graph with one virtual exit
+/// every return reaches. The virtual exit is the node numbered `count`.
+fn immediate_post_dominators(count: usize, successors: &[Vec<usize>]) -> Vec<Option<usize>> {
+    let exit = count;
+    let mut reversed: Vec<Vec<usize>> = vec![Vec::new(); count + 1];
+    for (node, next) in successors.iter().enumerate() {
+        if next.is_empty() {
+            reversed[exit].push(node);
+        } else {
+            for &target in next {
+                reversed[target].push(node);
+            }
+        }
+    }
+    let post = dominators(count + 1, &reversed, exit);
+    (0..count)
+        .map(|node| {
+            // The virtual exit post-dominates everything that returns, so it is
+            // the answer only when no real block is a strict post-dominator.
+            (0..count)
+                .filter(|candidate| *candidate != node && post[node][*candidate])
+                // The immediate one is post-dominated by every other strict
+                // post-dominator, so it is the one with the most of them.
+                .max_by_key(|candidate| post[*candidate].iter().filter(|seen| **seen).count())
+                .or_else(|| post[node][exit].then_some(exit))
+        })
+        .collect()
+}
+
+/// Which blocks are loop headers: an edge that returns to a block on the active
+/// depth-first path.
+fn loop_headers(count: usize, successors: &[Vec<usize>], entry: usize) -> Vec<bool> {
+    let mut headers = vec![false; count];
+    let mut active = vec![false; count];
+    let mut visited = vec![false; count];
+    let mut path: Vec<(usize, usize)> = vec![(entry, 0)];
+    visited[entry] = true;
+    active[entry] = true;
+    while let Some(frame) = path.last_mut() {
+        let node = frame.0;
+        if frame.1 < successors[node].len() {
+            let target = successors[node][frame.1];
+            frame.1 += 1;
+            if active[target] {
+                headers[target] = true;
+            } else if !visited[target] {
+                visited[target] = true;
+                active[target] = true;
+                path.push((target, 0));
+            }
+        } else {
+            active[node] = false;
+            path.pop();
+        }
+    }
+    headers
+}
+
+/// The nodes in depth-first pre-order from `entry`, or `None` if some node is not
+/// reached. **Pre-order is what makes a definition precede its uses**: a dominator
+/// is an ancestor in the depth-first tree, so it is written first.
+fn depth_first(count: usize, successors: &[Vec<usize>], entry: usize) -> Option<Vec<usize>> {
+    let mut order = Vec::with_capacity(count);
+    let mut visited = vec![false; count];
+    let mut stack = vec![entry];
+    visited[entry] = true;
+    while let Some(node) = stack.pop() {
+        order.push(node);
+        for &target in successors[node].iter().rev() {
+            if !visited[target] {
+                visited[target] = true;
+                stack.push(target);
+            }
+        }
+    }
+    (order.len() == count).then_some(order)
+}
+
+/// The IR values a node receives, or none for a block the emitter added.
+fn received(fragment: &KernelFragment, node: usize) -> &[ValueId] {
+    match fragment.body.blocks.get(node) {
+        Some(block) => &block.params,
+        None => &[],
+    }
+}
+
+/// The block-level emission: recording edges, and each block's terminator.
+struct Emitter<'a> {
+    fragment: &'a KernelFragment,
+    ids: &'a Ids,
+    plan: &'a Plan,
+    blocks: &'a mut Vec<Block>,
+    slots: &'a mut HashMap<ValueId, Slot>,
+    literals: &'a mut Literals,
+    next: &'a mut u32,
+    returns: &'a mut usize,
+}
+
+impl Emitter<'_> {
+    fn operand(&self, value: ValueId, at: usize) -> Result<Slot, SpirvRefusal> {
+        resolve_operand(self.fragment, self.slots, value, at)
+    }
+
+    fn arguments(&self, values: &[ValueId], at: usize) -> Result<Vec<Slot>, SpirvRefusal> {
+        values
+            .iter()
+            .map(|&value| self.operand(value, at))
+            .collect()
+    }
+
+    fn condition(
+        &mut self,
+        value: ValueId,
+        code: &mut Vec<Inst>,
+        at: usize,
+    ) -> Result<Slot, SpirvRefusal> {
+        let slot = self.operand(value, at)?;
+        Ok(as_condition(slot, self.ids, self.literals, code, self.next))
+    }
+
+    /// Record the edge `from → to` and the values it passes.
+    ///
+    /// # Invariant
+    /// The first edge to arrive fixes one kind per parameter, because an `OpPhi`
+    /// has one type, and every later edge is coerced to it. A coercion belongs to
+    /// the predecessor's block, so it lands before that block's terminator.
+    fn record(
+        &mut self,
+        to: usize,
+        from: u32,
+        mut args: Vec<Slot>,
+        code: &mut Vec<Inst>,
+        at: usize,
+    ) -> Result<(), SpirvRefusal> {
+        let arity = self.plan.arities[to];
+        if args.len() != arity {
+            return Err(SpirvRefusal::ControlFlow {
+                detail: format!(
+                    "an edge into block {} passes {} value(s) and it takes {arity}",
+                    self.plan.labels[to],
+                    args.len()
+                ),
+            });
+        }
+        if arity > 0 && self.blocks[to].params.is_empty() {
+            let mut params = Vec::with_capacity(arity);
+            for arg in &args {
+                let id = *self.next;
+                *self.next += 1;
+                params.push(Slot {
+                    id,
+                    kind: resolved(arg.kind, self.ids),
+                });
+            }
+            for (offset, value) in received(self.fragment, to).iter().enumerate() {
+                self.slots.insert(*value, params[offset]);
+            }
+            self.blocks[to].params = params;
+        } else if arity > 0 {
+            for (offset, arg) in args.iter_mut().enumerate() {
+                let kind = self.blocks[to].params[offset].kind;
+                *arg = match kind {
+                    Kind::Condition => as_condition(*arg, self.ids, self.literals, code, self.next),
+                    Kind::Scalar(class) => {
+                        as_class(*arg, class, self.ids, self.literals, code, self.next, at)?
+                    }
+                    Kind::Literal(_) => *arg,
+                };
+            }
+        }
+        // **One `OpPhi` pair per predecessor**, so two edges out of one block are
+        // one pair and cannot say which values arrived.
+        if let Some(seen) = self.blocks[to].edges.iter().find(|(pred, _)| *pred == from) {
+            if seen.1.iter().zip(args.iter()).any(|(a, b)| a.id != b.id) {
+                return Err(SpirvRefusal::ControlFlow {
+                    detail: format!(
+                        "two edges out of block {from} into block {} pass different values, and one \
+                         phi pair per predecessor cannot say which",
+                        self.plan.labels[to]
+                    ),
+                });
+            }
+            return Ok(());
+        }
+        self.blocks[to].edges.push((from, args));
+        Ok(())
+    }
+
+    fn terminator(
+        &mut self,
+        node: usize,
+        block: usize,
+        code: &mut Vec<Inst>,
+    ) -> Result<(), SpirvRefusal> {
+        let at = self.fragment.body.blocks[block].instrs.len();
+        let label = self.plan.labels[node];
+        match self.fragment.body.blocks[block].terminator.clone() {
+            Terminator::Return { values } => {
+                // **The returned values are the terminator's list**, so a body's
+                // result arity is a fact of the body rather than of whatever
+                // happened to be left over.
+                if values.len() != 1 || !self.slots.contains_key(&values[0]) {
+                    return Err(SpirvRefusal::ResultArity {
+                        results: self.fragment.result_classes.len(),
+                        left: values.len(),
+                    });
+                }
+                *self.returns += 1;
+                code.push(Inst::new(op::RETURN, vec![]));
+            }
+            Terminator::Br(br) => {
+                let target = self.plan.targets[node][0];
+                let args = self.arguments(&br.args, at)?;
+                self.record(target, label, args, code, at)?;
+                code.push(Inst::new(op::BRANCH, vec![self.plan.labels[target]]));
+            }
+            Terminator::CondBr {
+                cond,
+                if_true,
+                if_false,
+            } => {
+                let condition = self.condition(cond, code, at)?;
+                let targets = self.plan.targets[node].clone();
+                if let Some(body_entry) = self.plan.loop_bodies[node] {
+                    let (body, exit) = if if_true.target == body_entry {
+                        (if_true, if_false)
+                    } else {
+                        (if_false, if_true)
+                    };
+                    let body_args = self.arguments(&body.args, at)?;
+                    let exit_args = self.arguments(&exit.args, at)?;
+                    // Both edges first: a coercion a phi needs belongs before the
+                    // merge instruction, which is second-to-last in the block.
+                    self.record(targets[0], label, body_args, code, at)?;
+                    self.record(targets[1], label, exit_args, code, at)?;
+                    code.push(Inst::new(
+                        op::LOOP_MERGE,
+                        vec![
+                            self.plan.labels[targets[1]],
+                            self.plan.labels[body_entry],
+                            CONTROL_NONE,
+                        ],
+                    ));
+                } else if if_true.target == if_false.target {
+                    // One arrival, so the branch is unconditional — and it says
+                    // nothing the condition could have chosen between.
+                    if if_true.args != if_false.args {
+                        return Err(SpirvRefusal::ControlFlow {
+                            detail: format!(
+                                "block {block} branches to one block with two different value \
+                                 lists, and an unconditional branch cannot say which"
+                            ),
+                        });
+                    }
+                    let args = self.arguments(&if_true.args, at)?;
+                    self.record(targets[0], label, args, code, at)?;
+                    code.push(Inst::new(op::BRANCH, vec![self.plan.labels[targets[0]]]));
+                    return Ok(());
+                } else {
+                    for (position, br) in [&if_true, &if_false].into_iter().enumerate() {
+                        let args = self.arguments(&br.args, at)?;
+                        self.record(targets[position], label, args, code, at)?;
+                    }
+                    let merge = self.plan.merges[node];
+                    let merge = merge.expect("a selection with two reachable arms has a merge");
+                    code.push(Inst::new(
+                        op::SELECTION_MERGE,
+                        vec![self.plan.labels[merge], CONTROL_NONE],
+                    ));
+                }
+                code.push(Inst::new(
+                    op::BRANCH_CONDITIONAL,
+                    vec![
+                        condition.id,
+                        self.plan.labels[targets[0]],
+                        self.plan.labels[targets[1]],
+                    ],
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Every block of the emitted function in the plan's order: an `OpLabel`, the
+/// block's `OpPhi`s, then its code.
+fn function_body(plan: &Plan, blocks: &mut [Block], ids: &Ids) -> Vec<Inst> {
+    let mut function = Vec::new();
+    for &node in &plan.order {
+        function.push(Inst::new(op::LABEL, vec![plan.labels[node]]));
+        function.extend(blocks[node].phis(ids));
+        function.append(&mut blocks[node].code);
+    }
+    function
 }
 
 /// Write the module in SPIR-V's required section order.
@@ -1680,22 +2522,18 @@ fn assemble(
     }
     emit_all(&mut out, &globals);
 
-    // 6. The function, its body, and its end.
+    // 6. The function, its body, and its end. The body is every block in the
+    // plan's order — an `OpLabel`, its `OpPhi`s, its code, its terminator — so the
+    // last block's terminator is the last instruction before `OpFunctionEnd`.
     emit_all(
         &mut out,
-        &[
-            Inst::new(op::FUNCTION, vec![ids.void, ids.main, 0, ids.fn_ty]),
-            Inst::new(op::LABEL, vec![ids.label]),
-        ],
+        &[Inst::new(
+            op::FUNCTION,
+            vec![ids.void, ids.main, 0, ids.fn_ty],
+        )],
     );
     emit_all(&mut out, code);
-    emit_all(
-        &mut out,
-        &[
-            Inst::new(op::RETURN, vec![]),
-            Inst::new(op::FUNCTION_END, vec![]),
-        ],
-    );
+    emit_all(&mut out, &[Inst::new(op::FUNCTION_END, vec![])]);
     out
 }
 

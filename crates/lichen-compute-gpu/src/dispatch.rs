@@ -15,15 +15,15 @@
 //!   cross the bus; the tail is cleared where it already lives rather than
 //!   uploaded as zeroes the host had copies of anyway. The surplus lanes'
 //!   *reads* are therefore in bounds and return `0`.
-//! - **Outputs** are not initialised at all. The emitter produces straight-line
-//!   code — one `OpLabel`, no branches — so every invocation reaches its write
-//!   and the dispatch covers `[0, padded)` in full. A zero-fill would be a second
-//!   pass over memory the shader is about to overwrite completely. The surplus
-//!   lanes' *writes* land in the padding rather than past the end of it.
+//! - **Outputs** are not initialised at all. The emitter emits a write only where
+//!   every invocation reaches it — a selection arm is reached by exactly the lanes
+//!   that take it, and a write in a loop body is refused by name — so every
+//!   invocation reaches its write and the dispatch covers `[0, padded)` in full.
+//!   A zero-fill would be a second pass over memory the shader is about to
+//!   overwrite completely. The surplus lanes' *writes* land in the padding rather
+//!   than past the end of it.
 //!
-//! Only the first `count` elements are ever read back. This keeps the shader
-//! branch-free and makes out-of-range access impossible by construction rather
-//! than by a runtime test.
+//! Only the first `count` elements are ever read back.
 //!
 //! # Where the data lives
 //!
@@ -286,8 +286,8 @@ pub struct GpuContext {
     /// Reuse is safe **without clearing**, and that is worth spelling out because
     /// it is what makes this a saving rather than a trade: every consumer of a
     /// buffer writes all of it. An output is written by the shader across
-    /// `[0, padded)` — see `spirv`'s straight-line invariant — and an input is
-    /// uploaded across `[0, count)` with the tail filled on the device, so no
+    /// `[0, padded)` — see `spirv`'s write-reachability invariant — and an input
+    /// is uploaded across `[0, count)` with the tail filled on the device, so no
     /// stale byte is ever read back.
     ///
     /// Keyed by exact element count **and class**, so a chain at a fixed size and
@@ -880,12 +880,12 @@ impl GpuContext {
         // layout is inputs-then-outputs in one set, so a run's outputs occupy the
         // slots after its inputs rather than a second set.
         //
-        // **Nothing is written into them here.**  The emitter produces
-        // straight-line code — one `OpLabel`, no branches — so every invocation
-        // reaches its `BufferWriteCall` and stores, and the dispatch covers
-        // `[0, padded)`.  A zero-fill would be a second pass over memory the
-        // shader is about to overwrite in full; `spirv`'s module docs carry this
-        // invariant, and a branch in the emitted body would break it.
+        // **Nothing is written into them here.**  The emitter emits a write only
+        // where every invocation reaches it — a loop body's write is refused by
+        // name — so every invocation reaches its `BufferWriteCall` and stores, and
+        // the dispatch covers `[0, padded)`.  A zero-fill would be a second pass
+        // over memory the shader is about to overwrite in full; `spirv`'s module
+        // docs carry this invariant.
         for _ in 0..binding.outputs {
             let buffer = self.allocate(padded, class)?;
             descriptors.push(buffer.descriptor());
@@ -1511,8 +1511,8 @@ impl GpuContext {
             // barrier above as a cost that was justified by measurement.
             //
             // Note what does *not* imply this barrier is needed: `spirv`'s
-            // single-`OpLabel` invariant says every invocation reaches its write.
-            // It says nothing about ordering between dispatches.
+            // write-reachability invariant says every invocation reaches its
+            // write. It says nothing about ordering between dispatches.
             device.cmd_pipeline_barrier(
                 command,
                 vk::PipelineStageFlags::COMPUTE_SHADER,

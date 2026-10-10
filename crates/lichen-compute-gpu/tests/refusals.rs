@@ -6,8 +6,8 @@
 
 use lichen_compute_gpu::spirv::{self, Binding, SpirvRefusal};
 use lichen_kernel_ir::{
-    FlatOp, IntWidth, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape,
-    ScalarClass,
+    Br, FlatOp, IntWidth, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape,
+    ScalarClass, Terminator,
 };
 
 /// A one-output fragment over `(input, index)`.
@@ -81,7 +81,9 @@ fn reading_a_non_index_parameter_is_refused_by_name() {
         ],
     );
     let refusal = spirv::compile(&fragment, ONE_IN_ONE_OUT).expect_err("refused");
-    assert_eq!(refusal, SpirvRefusal::NonIndexParameter { local: 0, at: 2 });
+    // `at` is the instruction's position in the entry block — not the operand's
+    // position in its argument list, which is what the refusal used to name.
+    assert_eq!(refusal, SpirvRefusal::NonIndexParameter { local: 0, at: 1 });
     assert!(refusal.to_string().contains("storage buffer"));
 }
 
@@ -206,4 +208,104 @@ fn an_operator_with_too_few_operands_is_refused_by_arity() {
         }
         other => panic!("an operator given too few operands is refused by arity, got {other:?}"),
     }
+}
+
+/// A loop body that writes: the write a zero trip count can skip.
+///
+/// `dispatch` allocates output buffers without initialising them, so this is the
+/// one refusal the no-zero-fill claim rests on and it is enforced here too, not
+/// only in the lowering. See `docs/notes/loop-conversion.md` §6.
+#[test]
+fn a_write_inside_a_loop_is_refused_by_name() {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let _config = body.add_param(entry);
+    let index = body.add_param(entry);
+    let header = body.add_block();
+    let latch = body.add_block();
+    let exit = body.add_block();
+
+    let enter = body.add_const(entry, ScalarClass::Int, 1);
+    body.set_terminator(
+        entry,
+        Terminator::CondBr {
+            cond: enter,
+            if_true: Br {
+                target: header,
+                args: Vec::new(),
+            },
+            if_false: Br {
+                target: exit,
+                args: Vec::new(),
+            },
+        },
+    );
+
+    let test = body.add_const(header, ScalarClass::Int, 1);
+    body.set_terminator(
+        header,
+        Terminator::CondBr {
+            cond: test,
+            if_true: Br {
+                target: latch,
+                args: Vec::new(),
+            },
+            if_false: Br {
+                target: exit,
+                args: Vec::new(),
+            },
+        },
+    );
+
+    let position = body.add_const(latch, ScalarClass::Int, 0);
+    let written = body.add_const(latch, ScalarClass::Int, 3);
+    body.add_op(
+        latch,
+        KernelInstr::BufferWriteCall(ScalarClass::Int),
+        vec![position, index, written],
+        Vec::new(),
+    );
+    body.set_terminator(
+        latch,
+        Terminator::Br(Br {
+            target: header,
+            args: Vec::new(),
+        }),
+    );
+
+    let returned = body.add_const(exit, ScalarClass::Int, 0);
+    body.set_terminator(
+        exit,
+        Terminator::Return {
+            values: vec![returned],
+        },
+    );
+
+    let fragment = KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body,
+        inputs: 0,
+        outputs: 1,
+        input_classes: Vec::new(),
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int; 1],
+        int_width: IntWidth::I64,
+    };
+    fragment
+        .body
+        .validate()
+        .expect("the body is well formed; it is the *write* that is refused");
+    let refusal = spirv::compile(&fragment, ONE_IN_ONE_OUT).expect_err("refused");
+    // `at` is the write's position in the loop body block.
+    assert_eq!(refusal, SpirvRefusal::WriteInsideLoop { at: 2 });
+    let message = refusal.to_string();
+    assert!(message.contains('2'), "names the write: {message}");
+    assert!(
+        message.contains("without initialising"),
+        "says why the buffer matters: {message}"
+    );
 }

@@ -18,8 +18,8 @@ use std::process::{Command, Stdio};
 
 use lichen_compute_gpu::spirv::{self, Binding};
 use lichen_kernel_ir::{
-    FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape,
-    ScalarClass,
+    Br, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
+    KernelShape, ScalarClass, Terminator,
 };
 
 /// The validator, spelled the way it is installed on `PATH`.
@@ -164,6 +164,272 @@ fn scales_a_float() -> KernelFragment {
         result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
     }
+}
+
+/// A fragment over `(config, index)` writing one integer output buffer.
+fn one_integer_output(body: KernelBody) -> KernelFragment {
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body,
+        inputs: 0,
+        outputs: 1,
+        input_classes: Vec::new(),
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int; 1],
+        int_width: IntWidth::I64,
+    }
+}
+
+/// A one-armed selection: an arm, and the join both edges arrive at.
+///
+/// The shapes are `docs/notes/loop-conversion.md` §8.4's table.
+fn branches_to_a_merge() -> KernelFragment {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let _config = body.add_param(entry);
+    let index = body.add_param(entry);
+    let arm = body.add_block();
+    let join = body.add_block();
+    let carried = body.add_param(join);
+    let cond = body.add_const(entry, ScalarClass::Int, 1);
+    body.set_terminator(
+        entry,
+        Terminator::CondBr {
+            cond,
+            if_true: Br {
+                target: arm,
+                args: Vec::new(),
+            },
+            if_false: Br {
+                target: join,
+                args: vec![index],
+            },
+        },
+    );
+    body.set_terminator(
+        arm,
+        Terminator::Br(Br {
+            target: join,
+            args: vec![index],
+        }),
+    );
+    let position = body.add_const(join, ScalarClass::Int, 0);
+    let written = body.add_const(join, ScalarClass::Int, 7);
+    body.add_op(
+        join,
+        KernelInstr::BufferWriteCall(ScalarClass::Int),
+        vec![position, index, written],
+        Vec::new(),
+    );
+    body.set_terminator(
+        join,
+        Terminator::Return {
+            values: vec![carried],
+        },
+    );
+    one_integer_output(body)
+}
+
+/// A loop with a carried value: `n = 0; while (i < 10) { n = n + 1 }`.
+fn counts_to_ten() -> KernelFragment {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let _config = body.add_param(entry);
+    let index = body.add_param(entry);
+    let header = body.add_block();
+    let carried = body.add_param(header);
+    let latch = body.add_block();
+    let next = body.add_param(latch);
+    let exit = body.add_block();
+    let result = body.add_param(exit);
+
+    let seed = body.add_const(entry, ScalarClass::Int, 0);
+    let enter = body.add_const(entry, ScalarClass::Int, 1);
+    body.set_terminator(
+        entry,
+        Terminator::CondBr {
+            cond: enter,
+            if_true: Br {
+                target: header,
+                args: vec![seed],
+            },
+            if_false: Br {
+                target: exit,
+                args: vec![seed],
+            },
+        },
+    );
+
+    let ten = body.add_const(header, ScalarClass::Int, 10);
+    let below = body.add_op(
+        header,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt),
+        vec![index, ten],
+        vec![ScalarClass::Int],
+    );
+    let test = body.add_op(
+        header,
+        KernelInstr::I32WrapI64,
+        vec![below],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        header,
+        Terminator::CondBr {
+            cond: test,
+            if_true: Br {
+                target: latch,
+                args: vec![carried],
+            },
+            if_false: Br {
+                target: exit,
+                args: vec![carried],
+            },
+        },
+    );
+
+    let one = body.add_const(latch, ScalarClass::Int, 1);
+    let step = body.add_op(
+        latch,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![next, one],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        latch,
+        Terminator::Br(Br {
+            target: header,
+            args: vec![step],
+        }),
+    );
+
+    let position = body.add_const(exit, ScalarClass::Int, 0);
+    let written = body.add_const(exit, ScalarClass::Int, 7);
+    body.add_op(
+        exit,
+        KernelInstr::BufferWriteCall(ScalarClass::Int),
+        vec![position, index, written],
+        Vec::new(),
+    );
+    body.set_terminator(
+        exit,
+        Terminator::Return {
+            values: vec![result],
+        },
+    );
+    one_integer_output(body)
+}
+
+/// A loop whose body leaves on a **conditional** backedge: the header is both
+/// the join of that selection and the block the selection is inside.
+fn conditional_backedge() -> KernelFragment {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let _config = body.add_param(entry);
+    let index = body.add_param(entry);
+    let header = body.add_block();
+    let carried = body.add_param(header);
+    let latch = body.add_block();
+    let next = body.add_param(latch);
+    let late = body.add_block();
+    let late_value = body.add_param(late);
+    let exit = body.add_block();
+    let result = body.add_param(exit);
+
+    let seed = body.add_const(entry, ScalarClass::Int, 0);
+    let enter = body.add_const(entry, ScalarClass::Int, 1);
+    body.set_terminator(
+        entry,
+        Terminator::CondBr {
+            cond: enter,
+            if_true: Br {
+                target: header,
+                args: vec![seed],
+            },
+            if_false: Br {
+                target: exit,
+                args: vec![seed],
+            },
+        },
+    );
+
+    let ten = body.add_const(header, ScalarClass::Int, 10);
+    let below = body.add_op(
+        header,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt),
+        vec![index, ten],
+        vec![ScalarClass::Int],
+    );
+    let test = body.add_op(
+        header,
+        KernelInstr::I32WrapI64,
+        vec![below],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        header,
+        Terminator::CondBr {
+            cond: test,
+            if_true: Br {
+                target: latch,
+                args: vec![carried],
+            },
+            if_false: Br {
+                target: exit,
+                args: vec![carried],
+            },
+        },
+    );
+
+    let one = body.add_const(latch, ScalarClass::Int, 1);
+    let step = body.add_op(
+        latch,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![next, one],
+        vec![ScalarClass::Int],
+    );
+    let again = body.add_const(latch, ScalarClass::Int, 1);
+    body.set_terminator(
+        latch,
+        Terminator::CondBr {
+            cond: again,
+            if_true: Br {
+                target: header,
+                args: vec![step],
+            },
+            if_false: Br {
+                target: late,
+                args: vec![step],
+            },
+        },
+    );
+    body.set_terminator(
+        late,
+        Terminator::Br(Br {
+            target: header,
+            args: vec![late_value],
+        }),
+    );
+
+    let position = body.add_const(exit, ScalarClass::Int, 0);
+    let written = body.add_const(exit, ScalarClass::Int, 7);
+    body.add_op(
+        exit,
+        KernelInstr::BufferWriteCall(ScalarClass::Int),
+        vec![position, index, written],
+        Vec::new(),
+    );
+    body.set_terminator(
+        exit,
+        Terminator::Return {
+            values: vec![result],
+        },
+    );
+    one_integer_output(body)
 }
 
 /// Hand one emitted module to `spirv-val`, or say it was not covered.
@@ -346,6 +612,39 @@ fn crosses_both_ways() -> KernelFragment {
         output_classes: vec![ScalarClass::Float],
         result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
+    }
+}
+
+#[test]
+fn a_body_with_control_flow_validates() {
+    // The two shapes a structured body has, and the instruction families only a
+    // body with transfers needs: an `OpSelectionMerge` with a merge block, and an
+    // `OpLoopMerge` with a backedge and an `OpPhi` per incoming edge.
+    let one_in_zero_out = Binding {
+        inputs: 0,
+        outputs: 1,
+    };
+    let mut covered = 0;
+    for (what, fragment) in [
+        ("a module with an `if`", branches_to_a_merge()),
+        ("a module with a `while`", counts_to_ten()),
+        (
+            "a module with a conditional backedge",
+            conditional_backedge(),
+        ),
+    ] {
+        fragment
+            .body
+            .validate()
+            .unwrap_or_else(|broken| panic!("{what} is well formed: {broken}"));
+        let words = spirv::compile(&fragment, one_in_zero_out)
+            .unwrap_or_else(|refusal| panic!("{what} is emitted: {refusal}"));
+        if validate(what, &words) {
+            covered += 1;
+        }
+    }
+    if covered < 3 {
+        eprintln!("only {covered} of 3 control-flow module(s) were validated");
     }
 }
 
