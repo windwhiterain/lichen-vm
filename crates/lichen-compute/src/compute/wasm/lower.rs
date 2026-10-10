@@ -167,8 +167,8 @@ pub(super) fn lower_body(
     }
     walk.blocks[body.entry].1 = entry_params;
 
-    // Pass 2: type every other block's parameters.
-    type_parameters(&mut walk)?;
+    // Pass 2: type every value the body defines.
+    type_values(&mut walk)?;
 
     // Pass 3: the instructions, then the terminators.
     for index in 0..body.blocks.len() {
@@ -185,16 +185,45 @@ pub(super) fn lower_body(
     Ok(())
 }
 
-/// Bind each non-entry block's `params` to waffle blockparams, typing them from
-/// the branches that arrive.
+/// Decide the wasm type of **every value the body defines**, then bind each
+/// non-entry block's `params` to waffle blockparams.
 ///
-/// **A fixed point, and it is small**: a block's parameter type comes from its
-/// predecessors' arguments, an argument is a value some block computes, and so a
-/// single sweep in walk order is not enough. What *is* enough is to stop when a
-/// sweep changes nothing — and two incoming edges that disagree are a refusal, not
-/// a merge, because the body would otherwise silently pick one.
-fn type_parameters(walk: &mut Walk<'_, '_>) -> Result<(), String> {
+/// **The type of a value is a fact about the whole body, and it has to be
+/// computed before anything is emitted.** waffle needs a block parameter's type
+/// at the moment the parameter is added, and a parameter's type is the type of
+/// what its predecessors hand it — which may be an *instruction the entry block
+/// computes*, not an entry parameter.  Every loop's carried state is exactly
+/// that (a buffer read, the argument's leaves), so deciding parameters from
+/// block to block over the already-known values can never decide them: the
+/// entry block's own instructions are not among what is known.
+///
+/// So the fixed point runs over **values**, in three rules that mirror
+/// [`lower_instr`]'s own:
+///
+/// 1. an instruction's type follows from its operator and its operands'
+///    types — a comparison widens to `i64`, `I32WrapI64` narrows, a conversion
+///    is its target class, a call is its callee's result class;
+/// 2. a block parameter's type is the type its incoming branches hand it, and
+///    two incoming edges that disagree are a refusal rather than a merge;
+/// 3. nothing is guessed: a rule whose operands are not typed yet waits for the
+///    next sweep, and a body where no sweep changes anything with values still
+///    untyped is refused by name.
+fn type_values(walk: &mut Walk<'_, '_>) -> Result<(), String> {
     let body = walk.body;
+    let count = body.values.len();
+    // What each value's type is, once a rule has decided it.  The entry block's
+    // parameters are decided by the ABI before anything runs.
+    let mut types: Vec<Option<Type>> = vec![None; count];
+    for (offset, &value) in body.blocks[body.entry].params.iter().enumerate() {
+        types[value.0 as usize] = Some(
+            walk.context
+                .leaves
+                .get(offset)
+                .copied()
+                .map(super::assemble::value_type)
+                .unwrap_or(Type::I64),
+        );
+    }
     // The incoming edges, found by reading every terminator.
     let mut incoming: Vec<Vec<Vec<ValueId>>> = vec![Vec::new(); body.blocks.len()];
     for block in &body.blocks {
@@ -204,66 +233,151 @@ fn type_parameters(walk: &mut Walk<'_, '_>) -> Result<(), String> {
             }
         }
     }
-    let mut typed = vec![false; body.blocks.len()];
-    typed[body.entry] = true;
 
-    for _ in 0..body.blocks.len() {
+    // **A value's definition is what decides it**, so the sweep reads the body's
+    // own value table rather than the walk order: an instruction in a later
+    // block may be what an earlier block's parameter receives.
+    loop {
         let mut changed = false;
-        for index in 0..body.blocks.len() {
-            if typed[index] || incoming[index].is_empty() {
+        for (index, definition) in body.values.iter().enumerate() {
+            // A decided **instruction** is done.  A decided **block parameter**
+            // is not: a later sweep may type an edge the earlier one could not
+            // name, and that edge still has to agree.
+            if types[index].is_some() && matches!(definition, ValueDef::Instr { .. }) {
                 continue;
             }
-            let arity = body.blocks[index].params.len();
-            let mut types: Vec<Option<Type>> = vec![None; arity];
-            for args in &incoming[index] {
-                for (offset, arg) in args.iter().enumerate() {
-                    let Some((_, ty)) = walk.values.get(arg) else {
+            match definition {
+                ValueDef::Instr { op, args, .. } => {
+                    let operands: Option<Vec<Type>> =
+                        args.iter().map(|arg| types[arg.0 as usize]).collect();
+                    let Some(operands) = operands else {
                         continue;
                     };
-                    match &types[offset] {
-                        None => types[offset] = Some(*ty),
-                        Some(seen) if seen == ty => {}
-                        Some(seen) => {
-                            return Err(format!(
-                                "compute.wasm: block {index}'s parameter {offset} arrives as \
-                                 {seen:?} from one branch and {ty:?} from another — a merge cannot \
-                                 pick one"
-                            ));
+                    let Some(ty) = instruction_type(walk.context, *op, &operands) else {
+                        continue;
+                    };
+                    types[index] = Some(ty);
+                    changed = true;
+                }
+                // **A block parameter is typed by the first edge that can name
+                // its argument's type, and every later edge is checked against
+                // it.** A loop header has two incoming edges and one of them is
+                // its own body's backedge, so "wait until every edge is typed"
+                // waits forever: the entry edge is the fact that seeds the
+                // cycle, and a disagreement between the two is what the
+                // refusal below is for.
+                ValueDef::BlockParam {
+                    block,
+                    index: position,
+                } => {
+                    let mut decided: Option<Type> = types[index];
+                    for args in &incoming[*block] {
+                        let Some(&arg) = args.get(*position as usize) else {
+                            continue;
+                        };
+                        let Some(ty) = types[arg.0 as usize] else {
+                            continue;
+                        };
+                        match decided {
+                            None => {
+                                decided = Some(ty);
+                                if types[index].is_none() {
+                                    changed = true;
+                                }
+                            }
+                            Some(seen) if seen == ty => {}
+                            Some(seen) => {
+                                return Err(format!(
+                                    "compute.wasm: block {block}'s parameter {position} arrives as \
+                                     {seen:?} from one branch and {ty:?} from another — a merge \
+                                     cannot pick one"
+                                ));
+                            }
                         }
                     }
+                    types[index] = decided;
                 }
             }
-            // **Every parameter needs a type before the block is entered**, so an
-            // argument whose own block is not typed yet is left for a later sweep
-            // rather than guessed at.
-            let Some(types): Option<Vec<Type>> = types.into_iter().collect() else {
-                continue;
-            };
-            let block = walk.blocks[index].0;
-            let params: Vec<Value> = types
-                .iter()
-                .map(|&ty| walk.builder.add_blockparam(block, ty))
-                .collect();
-            for (offset, &value) in body.blocks[index].params.iter().enumerate() {
-                walk.values.insert(value, (params[offset], types[offset]));
-            }
-            walk.blocks[index].1 = params;
-            typed[index] = true;
-            changed = true;
         }
         if !changed {
             break;
         }
     }
-    for index in 0..body.blocks.len() {
-        if !typed[index] {
-            return Err(format!(
-                "compute.wasm: block {index} has parameters but no branch reaches it with a value, \
-                 so its types cannot be decided"
-            ));
+
+    // Every value the body reads has to have a type before anything is emitted:
+    // an untyped one is a body whose definitions do not reach it, and waffle
+    // would be handed an operator over a value that has none.  A value that
+    // **produces nothing** — a write — is not read by anything and has no type
+    // to decide.
+    for (index, ty) in types.iter().enumerate() {
+        if ty.is_some() {
+            continue;
         }
+        let block = match &body.values[index] {
+            ValueDef::BlockParam { block, .. } => format!("block {block}'s parameter"),
+            ValueDef::Instr { op, .. } if op.produces() == 0 => continue,
+            ValueDef::Instr { op, .. } => format!("{op:?}"),
+        };
+        return Err(format!(
+            "compute.wasm: the body's {block} has no type: nothing in the body defines the value \
+             it is, so it is read where it is not available"
+        ));
+    }
+
+    // Bind each non-entry block's blockparams, in the order the body declares
+    // them.
+    for index in 0..body.blocks.len() {
+        if index == body.entry {
+            continue;
+        }
+        let block = walk.blocks[index].0;
+        let params: Vec<Value> = body.blocks[index]
+            .params
+            .iter()
+            .map(|value| {
+                walk.builder
+                    .add_blockparam(block, types[value.0 as usize].unwrap())
+            })
+            .collect();
+        for (offset, &value) in body.blocks[index].params.iter().enumerate() {
+            walk.values
+                .insert(value, (params[offset], types[value.0 as usize].unwrap()));
+        }
+        walk.blocks[index].1 = params;
     }
     Ok(())
+}
+
+/// The wasm type `op` leaves when its operands are `operands`, or [`None`] for
+/// an operation that produces nothing (a write) — and for an operation whose
+/// result this walk cannot name.
+///
+/// **This is the typing half of [`lower_instr`], and the two must agree**:
+/// every arm here states the type that arm there emits, from the same facts.
+fn instruction_type(context: &ModuleCtx<'_>, op: KernelInstr, operands: &[Type]) -> Option<Type> {
+    match op {
+        KernelInstr::Const(class, _) => Some(super::assemble::value_type(class)),
+        // A comparison is two operators: wasm's narrow one, then the widening to
+        // the language's `i64` `0`/`1` scalar.
+        KernelInstr::Bin(_, operator) if is_comparison(operator) => Some(Type::I64),
+        KernelInstr::Bin(class, _) => Some(super::assemble::value_type(class)),
+        KernelInstr::I32WrapI64 => Some(Type::I32),
+        // The arms are the value, so either one's type is the result's.
+        KernelInstr::Select => operands.first().copied(),
+        KernelInstr::Conv { to, .. } => Some(super::assemble::value_type(to)),
+        KernelInstr::CallKernel(callee) => {
+            let at = *context.index.get(&callee)?;
+            let target = context.callees.get(at as usize)?;
+            target
+                .result_classes
+                .first()
+                .copied()
+                .map(super::assemble::value_type)
+        }
+        KernelInstr::BufferReadCall(class) => Some(super::assemble::value_type(class)),
+        // A write leaves nothing, so it has no type to decide.
+        KernelInstr::BufferWriteCall(_) => None,
+    }
 }
 
 /// Lower one instruction. **No stack**: its operands are named by its definition,
