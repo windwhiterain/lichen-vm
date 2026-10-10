@@ -1004,7 +1004,7 @@ done** — the acceptance case at item 5 runs on both backends:
 
    | what | measured | why the case looks as it does |
    |---|---|---|
-   | **the launch extent cannot carry the count** | `sum_to (k.n, 0)` answers `10`/`28` on the **cpu** and is refused on the device twice: `a kernel body's index cannot be placed …`, and `the "gpu" backend declined this run: this fragment's parameter declares 2 leaf/leaves (the launch extent, any runtime scalar, and the index), and a dispatch pushes the extent alone` (`RunError::ScalarsNotPushed`) | the count is a **buffer read**, so it is a run-time value on both backends, and the last lane's count is the buffer's length |
+   | **the launch extent cannot carry the count** | `sum_to (k.n, 0)` answers `10`/`28` on the **cpu** and is refused on **both** backends by `a kernel body's index cannot be placed` — a loop body cannot carry a scalar into itself, which is the loop lowering's limit rather than the dispatch's (the dispatch's own limit, `ScalarsNotPushed`, is gone: a fragment's scalar leaves travel as push constants) | the count is a **buffer read**, so it is a run-time value on both backends, and the last lane's count is the buffer's length |
    | **the device branched the nest's test the wrong way round** | the same program written base-first — `if s(0) == 0 then s(1) else sum_to (…)`, the spelling this section sketches — answered `10` on the cpu and **`0`** on the device. `spirv-dis` on the emitted module read `OpIEqual %bool %35 %ulong_0_0`, `OpLoopMerge %31 %28 None`, `OpBranchConditional %37 %28 %31`: true went to the **step** (%28), false to the **exit** (%31) | `spirv.rs`'s `plan_body` decides which arm leaves the loop from the graph while `terminator` named the branch's two labels **positionally**, whichever arm `if_true` named — so the base-first spelling was silently mis-compiled on the device. **Fixed**: the labels follow the arms now, the reduction answers the hand-derived number in both spellings on both backends, and the case runs both as two legs (§8.6 item 6) |
    | **a `@loop` entered with a body-local argument is refused by the checker** | `sum_to (i, 0)` with `i = compute.range k.n` reports `a struct parameter field read names 'in', which is not a field of the type it is read from — that type's fields are None` for the loop's own `k.in.b` | the count is passed through a **buffer read**, which is what avoids a marked recursion losing its captured environment's types |
 
@@ -1281,13 +1281,15 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
      device down. Whether a runaway loop hangs or is silently erased is a property
      of the **driver's optimiser**. A user cannot predict it, and neither can a
      check written here.
-   - **The launch extent cannot carry a count into a device body.** `sum_to
-     (k.n, 0)` is refused on the device by `RunError::ScalarsNotPushed` — a
-     dispatch pushes the extent alone — and one layer earlier by `a kernel body's
-     index cannot be placed`. The count the acceptance case uses is therefore a
-     **buffer read**: the seed fills `data[i]` with `i + 1` and lane `i` reads its
-     count from `data[i]`, so the last lane's count is the buffer's length and no
-     lane depends on a scalar the device cannot carry.
+   - **The launch extent cannot carry a count into a loop body.** `sum_to
+     (k.n, 0)` is refused by `a kernel body's index cannot be placed`, on **both**
+     backends — the device's own limit is gone, since a fragment's runtime scalar
+     leaves now travel as **push constants** (`compute-runtime-scalars.md`), but a
+     `@loop` body still cannot *carry* a scalar into itself, so the refusal is the
+     loop lowering's and not the dispatch's. The count the acceptance case uses is
+     therefore a **buffer read**: the seed fills `data[i]` with `i + 1` and lane
+     `i` reads its count from `data[i]`, so the last lane's count is the buffer's
+     length and no lane depends on a scalar.
 
    - **The wasm side could *not* lower the body this item builds, and the claim
      that it could was wrong.** `lower.rs` created a waffle block per kernel-IR
@@ -1417,7 +1419,7 @@ and its trip count is **per-lane** (the performance model of §9, not a
 correctness one). **Measured**: `10`, `28` and `180_300` at four, seven and six
 hundred elements, both backends, against the hand-derived
 `length(length + 1)/2` — and the count is a **buffer read** rather than the launch
-extent because a device dispatch pushes the extent alone. The four- and
+extent because a loop body cannot carry a scalar into itself. The four- and
 seven-element lengths run in **both spellings** and the six-hundred-element one on
 the continue-first leg only: the arm order is not a function of the length. §8.5's
 item 5 has the source as it runs, the `2001`-element measurement, and the two

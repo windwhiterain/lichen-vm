@@ -2006,11 +2006,18 @@ compute.read ((compute.Read _)(.from out.z, .at {last}))
 }
 
 /// A body reading a **scalar leaf of its own `.in` struct** (`compute-buffer-wrapper.md`).
+///
+/// # Invariant
+/// **Both backends, and they must agree.** The leaf is uniform across lanes, so
+/// the device pushes it once and every lane reads the same value. Running at two
+/// widely separated values is what makes this more than a smoke test: a leaf
+/// read at the wrong offset, or one pinned to the launch extent, would answer
+/// the same both times.
 #[test]
 fn a_body_reads_a_scalar_leaf_of_its_input_struct() {
-    // The `"gpu"` dispatch refuses a runtime scalar, so this shape is cpu-only.
-    let (module, value, _root) = run(&format!(
-        r#"
+    let source = |leaf: usize| {
+        format!(
+            r#"
 --- compute = import "compute.lichen" ---
 In  = struct<.a Int>
 Out = struct<.z (compute.Buf _)>
@@ -2020,16 +2027,48 @@ f = (k : Par) => {{
   a = k.in.a
   compute.write ((compute.Write _)(.to k.out.z, .at i, .value a + i))
 }}
-k = compute.parallel f "cpu"
-out = (compute.plrun k ((compute.A In)(.n {ELEMENT_COUNT}, .I In(.a 7))) : Out)
+k = compute.parallel f "{BACKEND}"
+out = (compute.plrun k ((compute.A In)(.n {ELEMENT_COUNT}, .I In(.a {leaf}))) : Out)
 compute.collect out.z
 "#,
-    ));
-    assert_eq!(
-        common::usize_array(&module, &value),
+        )
+    };
+    let Some(((cpu_module, cpu), (gpu_module, gpu))) = answer_from_each_backend(&source(7)) else {
+        return;
+    };
+    let expected = |leaf: usize| {
         (0..ELEMENT_COUNT)
-            .map(|offset| 7 + offset)
-            .collect::<Vec<usize>>(),
+            .map(|offset| leaf + offset)
+            .collect::<Vec<usize>>()
+    };
+    assert_eq!(
+        common::usize_array(&cpu_module, &cpu),
+        expected(7),
         "every lane took the input's scalar leaf, not the index"
+    );
+    assert_eq!(
+        common::usize_array(&gpu_module, &gpu),
+        expected(7),
+        "the device pushed the leaf the program gave it"
+    );
+    assert!(
+        common::values_eq((&cpu_module, &cpu), (&gpu_module, &gpu)),
+        "the two backends answered one pushed scalar leaf differently"
+    );
+
+    // A second, widely separated value: a leaf read at the wrong offset, or one
+    // pinned to the launch extent, would answer the same both times.
+    let Some(((cpu_module, cpu), (gpu_module, gpu))) = answer_from_each_backend(&source(1000))
+    else {
+        return;
+    };
+    assert_eq!(
+        common::usize_array(&gpu_module, &gpu),
+        expected(1000),
+        "the device read the second leaf value, not a constant one"
+    );
+    assert!(
+        common::values_eq((&cpu_module, &cpu), (&gpu_module, &gpu)),
+        "the two backends answered the second leaf value differently"
     );
 }
