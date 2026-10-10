@@ -1,40 +1,11 @@
-//! The builder/checker: compiles an [`IR`] into a lowlevel [`Module`]
-//! where the runtime *is* the typechecker.
+//! The checker compiles an [`IR`] into a lowlevel [`Module`].
+//! See docs/language-spec.md.
 //!
-//! Every expression compiles to a **recursive pair** `[value, type]` — a
-//! 2-element array node whose elements are the value and its type, where the
-//! type slot is itself such a pair.  Every type spine bottoms out at the
-//! canonical universe `K = [Type, ↺]` — the self-referential `Type : Type`
-//! node — so a literal is `[5, [int, K]]`, a function value
-//! `[f, [[in, out], [FunctionType, K]]]`, a tuple
-//! `[[1, 2], [[int, int], [TupleType, K]]]`, and an array type
-//! `[[int, 3], [ArrayType, K]]` (instance element 0: the type shared by all
-//! elements, element 1: the length).  A function parameter is such
-//! a pair (`f(x: int)` maps to the parameter `[x, int-type]`), and a call
-//! passes the argument's pair, so the apply-time unification
-//! `unify(cloned_param, argument)` matches value-to-value and
-//! **type-to-type** — that is the function parameter type check, executed
-//! by the VM.
-//!
-//! The checker only *constructs* (pairs, type expressions, the universe)
-//! and issues the unifies that have no apply to express them: annotations,
-//! a binary operator's operand-`Int` checks, and the function-ness guard
-//! (so applying a non-function is a reported error, not a runtime panic).
-//! It then runs the definition pass so the
-//! apply-time checks fire; failures land in [`Module::unify_errors`], which
-//! is the checker's error channel.
-
-//!
-//! The checking rules are grouped into the sibling modules: `lambda` (a
-//! function and an application), `structs` (struct types, field reads,
-//! instantiation), `indexing` (arrays, tables, the reads over them), `tuples`
-//! (tuple terms, tuple types, the type-position helper), `operators` (the
-//! binary operators), `asserts` (the explicit constraint and its
-//! registration), `native_call` (a `$name(…)` plugin call), `annotations`
-//! (the attribute slots), and `diagnostics` (the attributed unify and the
-//! reported-error helpers).  This root holds the checker itself:
-//! its state, the node construction every check shares, the per-kind dispatch,
-//! and the passes that drive them.
+//! # Invariant
+//! Every expression compiles to the recursive pair `[value, type]` whose type
+//! slot is itself such a pair, and every type spine bottoms out at the
+//! self-referential universe `K = [Type, ↺]`. A parameter is such a pair, so
+//! the apply-time unify is the function-parameter check.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -62,21 +33,13 @@ mod operators;
 mod structs;
 mod tuples;
 
-// The registry-derived consumer macros below expand the one kind-marker
-// list ([`crate::shape::for_each_kind_marker`]) into the checker's marker
-// plumbing: the [`Markers`] struct, the `install_constants` allocation, the
-// `Ctx` accessor impls, and the `Ctx::value_node` dispatch.  Adding or
-// removing a marker touches the registry list alone.
+// These macros expand the kind-marker registry list into marker plumbing.
 
-/// The whole [`Markers`] struct, generated from the registry: the field set
-/// IS the kind-marker list.
+/// The [`Markers`] struct: the field set is the kind-marker list.
 macro_rules! define_markers {
     ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
-        /// The installed shared kind-marker nodes — one per marker, allocated
-        /// by [`Checker::install_constants`] in registry order and referenced
-        /// (never rebuilt) wherever the marker value appears.  Registry-derived:
-        /// adding or removing a kind marker touches only
-        /// [`crate::shape::for_each_kind_marker`]'s list.
+        /// The installed shared kind-marker nodes, one per marker, in registry
+        /// order and never rebuilt.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
         pub struct Markers {
             $(
@@ -88,9 +51,8 @@ macro_rules! define_markers {
 }
 for_each_kind_marker!(define_markers);
 
-/// The `install_constants` allocation: one shared node per marker, in
-/// registry order.  Call-site context (`self`, the root block) is passed in
-/// through the args group — hygiene keeps the macro from seeing it.
+/// The `install_constants` allocation: one shared marker node, in registry
+/// order.
 macro_rules! define_install_markers {
     ([ $this:ident, $root:ident ] $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
         $( $this.markers.$marker_fn =
@@ -98,8 +60,7 @@ macro_rules! define_install_markers {
     };
 }
 
-/// The `Ctx` marker-accessor impls: each returns the checker's installed
-/// shared node for its marker.
+/// The `Ctx` marker-accessor impls: each returns its marker's shared node.
 macro_rules! define_ctx_marker_accessor_impls {
     ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
         $(
@@ -110,10 +71,8 @@ macro_rules! define_ctx_marker_accessor_impls {
     };
 }
 
-/// The `Ctx::value_node` dispatch: a built-in type marker reuses the
-/// checker's installed shared marker node, so the canonical type
-/// expressions are reached in place; anything else falls through to a fresh
-/// allocation by the caller.
+/// The `Ctx::value_node` dispatch: a built-in type marker reuses the installed
+/// shared node; anything else allocates one.
 macro_rules! define_value_node_dispatch {
     ([ $this:ident, $value:ident ] $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
         $( if $value == ValueType::$marker_fn() {
@@ -122,11 +81,11 @@ macro_rules! define_value_node_dispatch {
     };
 }
 
-/// A parameter in scope: the parameter pair `[value, type]` plus its type
-/// cell.  Uses reference the pair (so the apply's clone always includes it —
-/// the lowlevel's `function_apply` only runs the argument unify when the
-/// parameter was cloned); a value use extracts element 0 via
-/// `Index(pair, 0)`.
+/// A parameter in scope: its `[value, type]` pair and its type cell.
+///
+/// # Invariant
+/// A use references the pair, so the apply's clone always includes it — the
+/// lowlevel runs the argument unify only when the parameter was cloned.
 #[derive(Clone, Copy)]
 struct Binding {
     term: NodeId,
@@ -137,208 +96,133 @@ pub struct Checker<P: HighProgram + 'static>
 where
     P::Value: ValueType,
 {
-    /// The frontend's IR, shared and **read-only**.  The checker produces its
-    /// own side tables for anything it derives (a merged attribute tail is
-    /// [`Self::schema_tail`], not an IR rewrite).
+    /// The frontend's IR, shared and read-only.
     ///
-    /// Holding it behind an `Arc` is what makes that a compiler-checked fact
-    /// rather than a convention: the rewrite this replaced did compile, and
-    /// `self.ir.set_kind(…)` no longer does — `E0596`, cannot borrow data in
-    /// an `Arc` as mutable.  One route remains, `Arc::get_mut`, and it is
-    /// deliberately not closed: it needs two steps and names itself in review,
-    /// whereas the accidental form was one call that type-checked.  Closing it
-    /// would mean either a second live handle for the whole check or an `&IR`
-    /// lifetime threaded onto every `Build` consumer in three crates — a much
-    /// larger change than the remaining gap is worth.
-    ///
-    /// [`Build`] hands the same `Arc` back out.
+    /// # Invariant
+    /// The `Arc` makes that compiler-checked: `self.ir.set_kind` is E0596.
+    /// `Arc::get_mut` is the one route left open, deliberately, because closing
+    /// it would thread an `&IR` lifetime through every consumer.
     ir: Arc<IR<P::Attr, P::Literal>>,
     module: Module<P>,
     pub current_block: BlockId,
-    /// The attribute extension registry: maps an attribute marker
-    /// (`P::Attr`) to its lowering behaviour, or `None` for a build with no
-    /// attribute extension at all.  The checker never names a concrete
-    /// attribute — it asks this registry for the `AttrExt` and calls through
-    /// it, and a marker it cannot resolve is
-    /// [`DiagKind::NoAttributeExtension`] rather than a panic (see
-    /// [`Checker::no_attr_ext_guard`]).
+    /// The attribute extension registry: an attribute marker to its lowering
+    /// behaviour, or `None` without one.
+    ///
+    /// # Invariant
+    /// The checker names no concrete attribute, and a marker it cannot resolve
+    /// is a reported guard failure, never a panic.
     attr_ext: Option<AttrExtRegistry<P, P::Attr>>,
-    /// Whether [`Checker::no_attr_ext_guard`] has already reported this
-    /// build's missing attribute extension.  "This build has no attribute
-    /// extension" is one fact about the build, however many expressions read
-    /// an attribute, so the guard is recorded once — at the first reader.
+    /// Whether [`Checker::no_attr_ext_guard`] already reported this build's
+    /// missing attribute extension.
     no_attr_ext_reported: bool,
-    /// The native-operator registry: a private, name→operator mapping for the
-    /// compiling module's plugin (see [`crate::native`]).  Nothing upstream of
-    /// the checker can see it — the frontend compiles a `$name` call blindly,
-    /// so the **checker** is what resolves the name against this slice, and an
-    /// unregistered `$name` is a [`DiagKind::NativeOpUnresolved`] guard
-    /// failure reported at the call's own span.  The empty default
-    /// `no_native_ops` therefore resolves nothing; a plugin whose source is
-    /// being compiled (e.g. `lichen-compute`'s `jit`/`launch`) supplies its own
-    /// slice.
+    /// The native-operator registry (see [`crate::native`]).
+    ///
+    /// # Invariant
+    /// Only the checker resolves a `$name` against this slice, so an
+    /// unregistered name is a reported guard failure at the call's span.
     native_ops: NativeOps<P>,
     scopes: Vec<HashMap<ExprId, Binding>>,
-    /// The lexical function stack: one entry per enclosing lambda whose body
-    /// is being compiled, innermost last — each entry carries the IR
-    /// expression id it was compiled from, so a nested closure's
-    /// [`ExprKind::Function::parent`] link resolves to a [`FunctionId`] via
-    /// [`Self::function_of`].  The innermost entry is the
-    /// current function ([`Checker::current_function`]): every node the
-    /// checker allocates is tagged with it (its template membership
-    /// back-pointer) and registered in its scope
-    /// ([`Function::nodes`](lichen_lowlevel::Function::nodes)), and
-    /// asserts registered in it join
-    /// [`Function::asserts`](lichen_lowlevel::Function::asserts).
-    /// [`Checker::check_lam`]
-    /// pushes its shell while the body compiles and pops on exit — the old
-    /// per-frame block bookkeeping is gone, and the lexical nesting lives in
-    /// [`Function::parent`](lichen_lowlevel::Function::parent).  Which
-    /// function *is* the parent is decided by the frontend when it compiled
-    /// the lambda's syntax (see the language crate's `fn_parents`), not
-    /// here: a lambda compiled while another lambda's body is being checked
-    /// may be a sibling of it (mutual recursion), which hangs under nothing,
-    /// never under the lambda being checked.
+    /// The lexical function stack: one entry per lambda body being compiled,
+    /// innermost last.
+    ///
+    /// # Invariant
+    /// The innermost entry is the current function, and every node the checker
+    /// allocates is tagged with it; which function is a lambda's parent is the
+    /// frontend's decision, never this stack's.
     function_stack: Vec<(FunctionId, Option<ExprId>)>,
-    /// Every lambda's allocated [`FunctionId`], keyed by its IR expression id
-    /// — the `ExprId` → `FunctionId` resolution behind a
-    /// [`ExprKind::Function::parent`] link, filled in by
-    /// [`Checker::check_lam`] as each function's shell is begun.
+    /// Every lambda's allocated [`FunctionId`], keyed by its IR expression.
     function_of: HashMap<ExprId, FunctionId>,
     /// The per-expression checker state — one entry per IR expression, see
     /// [`ExprState`].  Indexed by [`ExprId`].
     state: Vec<ExprState>,
     /// The parameter-attribute slot of each function whose parameter is
-    /// annotated `x # n` — keyed by the `Function` expression id, carrying the
-    /// attribute marker (the parameter's schema tail) and the fresh attribute
-    /// cell.  The apply uses it (or `missing` for an unannotated parameter) to
-    /// run the attribute equality check.
+    /// annotated `x # n`.
     function_param_attr: HashMap<ExprId, (P::Attr, NodeId)>,
-    /// The checker's own per-annotation **merged** attribute tails, keyed by
-    /// the annotation expression id.  The IR is the frontend's (its stamped
-    /// tail records only what the source spelled), while this tail merges the
-    /// value's with the annotation's — a product of checking, so the checker
-    /// owns it rather than writing it back into the IR.
+    /// The checker's own per-annotation merged attribute tails.
+    ///
+    /// # Invariant
+    /// The IR stays the frontend's: only this table carries the merged tail.
     merged_tails: HashMap<ExprId, Vec<P::Attr>>,
-    /// The checker's own check sequence, attributed for diagnostics: one entry
-    /// per check the checker issued, recording the `unify_errors` entries that
-    /// check owns (empty when it produced none) plus its span and check kind.
+    /// The checker's own check sequence, attributed for diagnostics.
     ///
-    /// Invariant: `diary` is in [`Self::check_seq`] order, which is why the
-    /// output order comes from `DiaryEntry::seq` rather than from the vec's
-    /// position — the same numbers would then agree.
+    /// # Invariant
+    /// `diary` is in [`Self::check_seq`] order, so the output order comes from
+    /// [`DiaryEntry::seq`] rather than from the vec's position.
     diary: Vec<DiaryEntry>,
-    /// The monotonic recording counter behind [`DiaryEntry::seq`]: the
-    /// checker assigns each recorded check the next value, so two checks are
-    /// always comparable in recording order and the diagnostics come out in
-    /// that order whatever each check contributed.
+    /// The monotonic counter behind [`DiaryEntry::seq`].
     check_seq: usize,
-    /// The arrow nodes built by [`Checker::check_lam`] — the type printer
-    /// renders these `[param, body]` shapes as `param → body`.
+    /// The arrow nodes built by [`Checker::check_lam`]; the type printer renders
+    /// them as `param → body`.
     arrows: HashSet<NodeId>,
-    /// The apply edges, keyed by apply op node — the argument structure the
-    /// diagnostics use to attribute a runtime parameter-check failure to the
-    /// argument's source span (see [`ApplyEdge`]).
+    /// The apply edges, keyed by apply op node.
     apply_edges: HashMap<NodeId, ApplyEdge>,
-    /// The runtime-attribution edges: a node a runtime failure will
-    /// reference (an `Index`/`TableGet` operand, an assert condition) mapped
-    /// to its source-blind location.  Recorded by the checker as it builds the
-    /// operation, so the diagnostic layer attributes a runtime error to the
-    /// *expression* that built it without storing any span *on* the node —
-    /// which is what lets the lowlevel graph be freely shared.
-    node_edges: HashMap<NodeId, Loc>,
-    /// The assert conditions that are *user-facing* — the explicit `assert`
-    /// expressions (not the generated array-bounds guard `check_index`
-    /// registers, which duplicates the index eval error).  The diagnostics
-    /// layer renders only these as `DiagKind::Assert`; a bounds guard fires
-    /// a separate `EvalError::Index`, so rendering both would double report.
-    user_asserts: HashSet<NodeId>,
-    /// How a failed assert of each registered condition should read — keyed by
-    /// the **template** condition, so a per-call failure (recorded against the
-    /// template) is spelled by the registration that created it.  Absent means
-    /// the channel's generic wording.
-    assert_spellings: HashMap<NodeId, AssertSpelling>,
-    /// The value node of **every** lambda in the program, collected by
-    /// [`Checker::check_lam`].  [`Checker::build`] deep-evaluates all of
-    /// them before the definition pass (proving them concrete), so a
-    /// recursive reference stays in place instead of cloning the function per
-    /// application.
+    /// A node a runtime failure references, mapped to its location.
     ///
-    /// The write is deliberately unconditional: a lambda that does not
-    /// reference itself contributes its value node too, and deep-evaluating
-    /// it is idempotent, so narrowing the field to the recursive ones would
-    /// change nothing about the pass.
+    /// # Invariant
+    /// No span is stored on a node, which is what lets the graph be shared.
+    node_edges: HashMap<NodeId, Loc>,
+    /// The user-facing assert condition nodes: the explicit `assert` expressions.
+    ///
+    /// # Invariant
+    /// Only these render as `DiagKind::Assert`; the bounds guard has its own
+    /// error.
+    user_asserts: HashSet<NodeId>,
+    /// How a failed assert of each registered condition should read.
+    assert_spellings: HashMap<NodeId, AssertSpelling>,
+    /// The value node of every lambda in the program.
+    ///
+    /// # Invariant
+    /// The write is unconditional: a non-recursive lambda contributes too.
     lambda_value_nodes: Vec<NodeId>,
-    /// The top-level statements the definition pass found **non-terminating**
-    /// (the VM's apply/depth guard refused the walk evaluating the statement's
-    /// value).  Each carries a source-blind [`Loc`] so the diagnostics layer
-    /// can point at the binding the user wrote, plus the budget the guard
-    /// recorded, so the message can name it.  Option B: the build evaluates
-    /// every user-written top-level statement and reports a non-terminating
-    /// one as an error instead of panicking.
+    /// The top-level statements the definition pass found non-terminating.
+    ///
+    /// # Invariant
+    /// Each carries a source-blind [`Loc`] and the budget the guard recorded:
+    /// the build reports such a statement as an error, never a panic.
     nonterminating: Vec<NonTerminating>,
-    /// A forced callee evaluation ([`Checker::check_instantiate`]) already hit
-    /// the VM's apply/depth guard once.  A refused walk leaves the module's
-    /// graph partly evaluated, so every later force could trip the guard
-    /// again — never force again; the build's statement pass reports the
-    /// non-termination.
+    /// A forced callee evaluation already hit the VM's apply/depth guard once.
+    ///
+    /// # Invariant
+    /// Never force again: a refused walk leaves the graph partly evaluated, so
+    /// the build's statement pass reports the non-termination.
     force_failed: bool,
-    // The installed shared marker nodes — one per kind marker, allocated by
-    // `install_constants`; registry-derived (see [`Markers`]).
+    // The installed shared kind-marker nodes, one per marker.
     markers: Markers,
     /// The shared `[int, Type]` type expression every literal's pair carries.
     int_type: NodeId,
-    /// The shared `[float, Type]` type expression every `Float` literal's pair
-    /// (and the `Float` type constant) carries.
+    /// The shared `[float, Type]` type expression, paired into every `Float`
+    /// literal.
     float_type: NodeId,
-    /// The shared `[string, Type]` type expression every `Str` literal's pair
-    /// (and the `string` type constant) carries.
+    /// The shared `[string, Type]` type expression, paired into every `Str`
+    /// literal.
     string_type: NodeId,
-    /// The canonical universe `[Type, ↺]` — the self-referential `Type : Type`.
+    /// The canonical universe `[Type, ↺]`.
     type_expr: NodeId,
-    // The two shared index constants, allocated once by
-    // `install_constants` and referenced wherever a pair is read by position.
+    // The two shared index constants.
     //
-    // Invariant: they are allocated **before any function exists**, so they
-    // carry no function tag and belong to no template.  That is what makes
-    // sharing them safe: the apply clone walk's membership test (see
-    // `Function::nodes` / `Node::function`) leaves an untagged node
-    // referenced in place rather than cloning it, which is exactly the old
-    // per-occurrence behaviour observed through one node instead of several.
-    // The kind markers already rely on the same property; see the Phase 1
-    // notes in `docs/notes/type-system-cleanup-plan.md`.
+    // Invariant: allocated before any function exists, so untagged.
     /// The shared `USize(0)` node — element 0 of an expression's pair.
     zero_value: NodeId,
     /// The shared `USize(1)` node — element 1 of an expression's pair.
     one_value: NodeId,
-    /// One shared absent-occurrence slot per attribute that opted in, indexed
-    /// by the attribute's position in [`AttrSet::ORDER`] and installed by
-    /// `install_constants`; `None` where the attribute builds a fresh one per
-    /// site.
+    /// One shared absent-occurrence slot per attribute that opted in, indexed by
+    /// its position in [`AttrSet::ORDER`].
     ///
-    /// The attribute decides whether its own missing value may be shared — see
-    /// [`crate::attr::AttrExt::share_missing_slot`], which states the contract (the value
-    /// must be concrete, because reconciliation writes an undecided side and a
-    /// shared node would be written by whichever occurrence reconciled first).
-    /// The checker holds the node, not the rule: a `None` entry here is the
-    /// attribute declining to share, and the extension builds it as before.
-    ///
-    /// Same invariant as the two index constants above: installed before any
-    /// function exists, so these belong to no template and the apply clone walk
-    /// references them in place rather than copying one per call.
+    /// # Invariant
+    /// The attribute decides whether its own missing value may be shared (see
+    /// [`crate::attr::AttrExt::share_missing_slot`]): `None` here is the
+    /// attribute declining.
     missing_slots: Vec<Option<NodeId>>,
     /// The interned field-name nodes — one per unique field name, so every
-    /// occurrence of `.a` reads the same key node (see
-    /// [`Self::name_node`]).
+    /// occurrence of `.a` reads the same key node.
     name_nodes: HashMap<&'static str, NodeId>,
 }
 
-/// The highlevel structure of one application's argument edge, recorded by
-/// [`Checker::check_app`] when it wires the apply.  A runtime parameter-check
-/// failure is attributed to the *edge* between the function's parameter and
-/// the argument — keyed by the apply op node in [`Build::apply_edges`] — not
-/// to a shared node, so the argument's own source span stays reachable even
-/// when the argument node is reused (`Int`'s term is the shared int type).
+/// One application's argument edge, recorded when the apply is wired.
+///
+/// # Invariant
+/// The edge carries the attribution, so a runtime parameter-check failure names
+/// the argument's own source span even when its node is reused.
 #[derive(Clone, Copy, Debug)]
 pub struct ApplyEdge {
     /// The argument's IR expression — the caret target.
@@ -353,37 +237,33 @@ pub struct ApplyEdge {
 pub struct NonTerminating {
     /// Where the abandoned binding is.
     pub loc: Loc,
-    /// The budget that ran out — recorded by the lowlevel instead of
-    /// panicking, so the diagnostic can name what was exceeded and by how
-    /// much it was bounded.  `None` only if the guard's own record is
-    /// somehow absent, which the reporting sites below never allow.
+    /// The budget that ran out, recorded by the lowlevel instead of panicking so
+    /// the diagnostic can name it.
     pub budget: Option<BudgetExhausted>,
 }
 
-/// One IR expression's checker state, held in a single entry so the four
-/// records cannot disagree about which expression they describe.
+/// One IR expression's checker state, in one entry.
 ///
-/// [`Build::state`] holds one entry per IR expression, indexed by [`ExprId`]:
-/// the compiled pair `[value, type]` (`term`), its two halves (`val` and
-/// `ty`), and the constraint attribute slot (`attr`).  The ordinal is the
-/// vector's, so no code can record one field at a different expression than
-/// the rest.
+/// # Invariant
+/// Every field is recorded at the vector's ordinal for [`ExprId`], so no field
+/// can name a different expression than the rest.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ExprState {
     /// The compiled pair node `[value, type]`.
     pub term: Option<NodeId>,
-    /// Element 0 of the pair (the value).  `None` for call results, whose
-    /// value is only known at runtime — built lazily as `Index(pair, 0)` when
-    /// the value is needed (the checker's `value_of`).
+    /// Element 0 of the pair (the value).
+    ///
+    /// # Invariant
+    /// It is stored for a static node and built lazily as `Index(pair, 0)` for a
+    /// call result.
     pub val: Option<NodeId>,
     /// Element 1 of the pair (the type).
     pub ty: Option<NodeId>,
-    /// The *constraint* attribute slot (element 2+ of the pair) — the slot the
-    /// apply-time attribute check reads.  `None` for an expression whose
-    /// schema carries only a label attribute (`? d`) or no attribute; the
-    /// constraint slot for one carrying a constraint (a `# p` annotation's
-    /// perspective).  A label slot (e.g. `Doc`) is metadata and lives only in
-    /// the pair, never here.
+    /// The constraint attribute slot, which the apply-time check reads.
+    ///
+    /// # Invariant
+    /// It is `None` without a `# p` constraint; a label slot (e.g. `Doc`) is
+    /// metadata and never appears here.
     pub attr: Option<NodeId>,
 }
 
@@ -400,39 +280,31 @@ impl std::ops::IndexMut<ExprId> for Vec<ExprState> {
     }
 }
 
-/// The result of one [`Checker::build`]: the module the lowlevel built, the
-/// per-expression nodes the checker attributed, and everything the layers
-/// above need to render, trace, or freeze it — plus the pass records that let
-/// [`Build::diagnostics`](crate::diagnostic::Build::diagnostics) attribute a
-/// lowlevel failure back to the expression that produced it.
+/// The result of one [`Checker::build`]: the module the lowlevel built and
+/// the attributed per-expression nodes.
 pub struct Build<P: HighProgram>
 where
     P::Value: ValueType,
 {
     /// The IR this build checked, shared with the [`Checker`] that read it.
-    /// Shared rather than moved so the checker could hold it read-only; treat
-    /// it as the frontend's, not the checker's — anything the checker derived
-    /// from it lives on this struct.
     pub ir: Arc<IR<P::Attr, P::Literal>>,
     pub module: Module<P>,
-    /// The per-expression checker state — one entry per IR expression, see
-    /// [`ExprState`].  Indexed by [`ExprId`].
+    /// The per-expression checker state, indexed by [`ExprId`].
     pub state: Vec<ExprState>,
     pub root_term: NodeId,
     pub root_val: NodeId,
     pub root_ty: NodeId,
-    /// The root expression's attribute tail — its own tail merged with every
-    /// annotation's, as the checker computed it ([`Checker::schema_tail`]).
-    /// Index-aligned with the *runtime* pair's attribute slots
-    /// (`build.root_term`), which the checker already built at the merged
-    /// width, so a renderer walks it rather than the IR's own stamp (which
-    /// holds only what the source spelled).
+    /// The root expression's attribute tail, as the checker computed it ([`Checker::schema_tail`]).
+    ///
+    /// # Invariant
+    /// It is index-aligned with the runtime pair's attribute slots
+    /// (`build.root_term`), which are built at the merged width — not with the
+    /// IR's own stamp, which holds only what the source spelled.
     pub root_schema_tail: Vec<P::Attr>,
-    /// The installed shared kind-marker nodes — the complete registry set
-    /// (see [`Markers`]).
+    /// The installed shared kind-marker nodes.
     pub markers: Markers,
-    // The pre-Phase-1 flat spelling of three of the markers, kept so existing
-    // readers keep working; `markers` carries the full set.
+    // Three markers in their pre-Phase-1 flat spelling, kept for existing
+    // readers; `markers` carries the full set.
     pub int_marker: NodeId,
     pub string_marker: NodeId,
     pub type_marker: NodeId,
@@ -444,78 +316,49 @@ where
     pub string_type: NodeId,
     /// The canonical universe `[Type, ↺]`.
     pub type_expr: NodeId,
-    /// The checker's attributed checks (see [`DiaryEntry`]) — one per check it
-    /// issued, each owning the `unify_errors` range it produced.
+    /// The checker's attributed checks, one per check it issued.
     pub diary: Vec<DiaryEntry>,
     /// Arrow nodes; read by the diagnostics.
     pub arrows: HashSet<NodeId>,
-    /// The apply edges keyed by apply op node (see [`ApplyEdge`]) — the
-    /// argument structure for attributing a runtime parameter-check failure.
+    /// The apply edges keyed by apply op node (see [`ApplyEdge`]).
     pub apply_edges: HashMap<NodeId, ApplyEdge>,
-    /// The runtime-attribution edges (see [`Checker::node_edges`]) — a runtime
-    /// failure's node mapped to the source-blind location that built it.  No
-    /// span is stored on a node, so the graph is freely shareable.
+    /// The runtime-attribution edges (see [`Checker::node_edges`]).
     pub node_edges: HashMap<NodeId, Loc>,
     /// The user-facing assert condition nodes (see [`Checker::user_asserts`]).
     pub user_asserts: HashSet<NodeId>,
-    /// How a failed assert of each registered condition should read — see
-    /// [AssertSpelling].  Keyed by the **template** condition, which is what a
-    /// per-call failure records.
+    /// How a failed assert of each registered condition should read (see
+    /// [`AssertSpelling`]).
     pub assert_spellings: HashMap<NodeId, AssertSpelling>,
-    /// The top-level statements the definition pass found non-terminating (see
-    /// [`Checker::nonterminating`]) — the source-blind locations of the
-    /// user-written bindings the build reports as non-termination errors.
+    /// The top-level statements the definition pass found non-terminating.
     pub nonterminating: Vec<NonTerminating>,
     pub ok: bool,
 }
 
-/// The compile work budget one [`Checker`] build runs under: the lowlevel
-/// application guards the checker installs before its definition pass.
+/// The compile work budget one [`Checker`] build runs under.
 ///
-/// It is the caller's to set because the two failures are otherwise
-/// indistinguishable to a user: a *terminating* program whose definition pass
-/// exceeds the budget is reported as [`DiagKind::NonTerminating`], exactly
-/// like an infinite loop, so a host compiling a large generated program must
-/// be able to raise it.
+/// # Invariant
+/// The budget is the caller's to set because a *terminating* program whose
+/// definition pass exceeds it is reported as [`DiagKind::NonTerminating`],
+/// exactly like an infinite loop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WorkBudget {
-    /// Nested applications permitted before the guard refuses — the
-    /// lowlevel's [`Module::apply_depth_limit`].
+    /// Nested applications permitted before the guard refuses.
     pub apply_depth_limit: usize,
-    /// Cumulative applications permitted before the guard refuses — the
-    /// lowlevel's [`Module::apply_total_limit`].
+    /// Cumulative applications permitted before the guard refuses.
     ///
-    /// **A converted `@loop` iteration is one application**, so this bound
-    /// covers loops and expansions alike and means the same thing for both.
-    /// What a loop does not spend is the nesting bound below — which is the
-    /// whole of what the conversion buys in the budget's terms, and why a host
-    /// that needs a large trip count raises *this* number (it is the work
-    /// bound) rather than expecting loops to be exempt from it.
+    /// # Invariant
+    /// A converted `@loop` iteration is one application, so this bound covers
+    /// loops and expansions alike: raising it is what a large trip count asks
+    /// for, since a loop never spends the nesting bound.
     pub apply_total_limit: usize,
 }
 
 impl Default for WorkBudget {
-    /// The checker's tuned pair.  The nesting limit sits below what a thread
-    /// stack survives once the checker's per-call machinery (clone, unify,
-    /// deep pass) is on the stack, so a non-terminating recursion is refused
-    /// cleanly instead of overflowing the stack first; legitimate recursion
-    /// (fib, countdown) nests far below it.  The lazy graph flattens most
-    /// recursion (an apply returns its result pair; the deep pass descends
-    /// into it), so nested depth alone does not bound a run — an infinite
-    /// loop behind a lazy branch stays at depth 1, and a wide recursion (fib)
-    /// is never deep.  The total-application budget is the work bound that
-    /// catches those; each application also grows the module's classes (every
-    /// recursion level's parameter unifies into one shared class), so a tight
-    /// budget stops a runaway recursion in seconds, while legitimate programs
-    /// (the examples, fib up to ~15, countdown) apply far fewer times.
+    /// The checker's tuned pair.
     ///
-    /// **The two numbers are matched to one another** (~four applications per
-    /// unwound level: the level's own apply plus the operations in its body), so
-    /// an unmarked recursion normally reaches the *total* bound around the same
-    /// count it would have reached the nesting one. A converted loop pays the
-    /// same per iteration minus nothing and plus nothing — but it never nests,
-    /// so raising [`Self::apply_total_limit`] is what a large trip count asks
-    /// for, and it is a bound the loop can actually use.
+    /// # Invariant
+    /// The two numbers are matched, so an unmarked recursion reaches the total
+    /// bound around the count it would have reached the nesting one.
     fn default() -> Self {
         WorkBudget {
             apply_depth_limit: 500,
@@ -529,35 +372,28 @@ where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
-    /// Compile an IR with a fresh private registry and no attribute
-    /// extension, under the default [`WorkBudget`] — [`Self::build_with_budget`]
-    /// with [`WorkBudget::default`].  A program whose schemas carry no
-    /// attribute is unaffected; one that does carry an attribute is refused
-    /// with [`DiagKind::NoAttributeExtension`] (use [`Self::build_in_attr`]).
+    /// Compile an IR with a fresh private registry and no attribute extension,
+    /// under the default [`WorkBudget`].
     pub fn build(ir: IR<P::Attr, P::Literal>) -> Build<P> {
         Self::build_with_budget(ir, WorkBudget::default())
     }
 
-    /// [`Self::build`] under a caller-supplied [`WorkBudget`] — the entry
-    /// point for a host compiling a program that is large but still
-    /// terminating, whose definition pass needs more work than the tuned
-    /// default allows.
+    /// [`Self::build`] under a caller-supplied [`WorkBudget`].
     pub fn build_with_budget(ir: IR<P::Attr, P::Literal>, work_budget: WorkBudget) -> Build<P> {
         Self::build_with(ir, Module::new(), None, no_native_ops(), work_budget)
     }
 
-    /// Compile an IR whose module is bound to a caller-provided shared
-    /// registry — the entry point for importers that resolve [`ExprKind::Static`]
-    /// leaves through a `PackageStore`.
+    /// Compile an IR whose module is bound to a caller-provided shared registry.
     pub fn build_in(ir: IR<P::Attr, P::Literal>, registry: Arc<RwLock<Registry<P>>>) -> Build<P> {
         let module = Registry::new_module(&registry);
         Self::build_with(ir, module, None, no_native_ops(), WorkBudget::default())
     }
 
-    /// Compile an IR with a caller-supplied attribute extension registry — the
-    /// entry point for a language that plugs in a concrete attribute (e.g.
-    /// `Perspective`).  `attr_ext` maps an attribute marker to its lowering
-    /// behaviour; the checker never names a concrete attribute.
+    /// Compile an IR with a caller-supplied attribute extension registry.
+    ///
+    /// # Invariant
+    /// `attr_ext` maps an attribute marker to its lowering behaviour; the
+    /// checker never names a concrete attribute.
     pub fn build_in_attr(
         ir: IR<P::Attr, P::Literal>,
         registry: Arc<RwLock<Registry<P>>>,
@@ -573,11 +409,11 @@ where
         )
     }
 
-    /// [`Self::build_in_attr`] with a native-operator registry — the entry
-    /// point for a plugin whose embedded source calls `$name(args…)`.  The
-    /// `native_ops` slice is that plugin's *private* registry: it is what a
-    /// `$name` in its source resolves against, and it is empty for every
-    /// ordinary file.
+    /// [`Self::build_in_attr`] with a native-operator registry.
+    ///
+    /// # Invariant
+    /// `native_ops` is that plugin's private registry, empty for an ordinary
+    /// file.
     pub fn build_in_attr_native(
         ir: IR<P::Attr, P::Literal>,
         registry: Arc<RwLock<Registry<P>>>,
@@ -595,10 +431,7 @@ where
     }
 
     /// The shared body of every entry point above: compile `ir` against
-    /// `module`, resolving an attribute marker through `attr_ext` and a
-    /// `$name` call through `native_ops`, under a caller-supplied
-    /// [`WorkBudget`].  Every public constructor delegates here, with either
-    /// the caller's budget or [`WorkBudget::default`].
+    /// `module`.
     fn build_with(
         ir: IR<P::Attr, P::Literal>,
         mut module: Module<P>,
@@ -606,16 +439,14 @@ where
         native_ops: NativeOps<P>,
         work_budget: WorkBudget,
     ) -> Build<P> {
-        // The attribute set's canonical order is the pair layout; a generated
-        // set proves it at build time, and a hand-written one is checked here
-        // (once per program) so no two attributes can claim the same slot.
+        // Invariant: an attribute's canonical index is its position in the set's
+        // order; checked once per program.
         debug_assert!(
             crate::attr::order_is_canonical::<P::Attr>(),
             "an attribute's canonical index must be its position in the set's order"
         );
-        // The definition pass runs the whole program, so the budget must be
-        // set here, before it starts; the rationale for the default values is
-        // on [`WorkBudget::default`].
+        // The definition pass runs the whole program, so the limits must be set
+        // before it starts.
         module.apply_depth_limit = work_budget.apply_depth_limit;
         module.apply_total_limit = work_budget.apply_total_limit;
 
@@ -655,21 +486,14 @@ where
             missing_slots: vec![None; P::Attr::ORDER.len()],
         };
         checker.install_constants();
-        // Prove the canonical structures concrete before the definition
-        // pass, so the apply clone machinery references them in place
-        // instead of cloning them: cloning the self-referential universe
-        // `[Type, ↺]` would create a fresh self-loop that unification cannot
-        // equate with the canonical one (the path guard would report a
-        // conflict).
+        // Prove the canonical structures concrete before the definition pass, so
+        // the clone walk references them in place.
         checker.module.evaluate_node_deep(checker.type_expr, None);
         checker.module.evaluate_node_deep(checker.int_type, None);
         checker.module.evaluate_node_deep(checker.float_type, None);
         checker.module.evaluate_node_deep(checker.string_type, None);
         let root = checker.ir.root;
-        // Option B: the top-level statements are the "stack of user-written
-        // expressions" — type-check each one (so its term/value/type are
-        // built), then the final root.  This replaces the tuple cascade; the
-        // build drives the checker over every statement the user wrote.
+        // Type-check every user-written top-level statement, then the final root.
         let stmt_roots = checker.ir.stmt_roots.clone();
         for &s in &stmt_roots {
             checker.check_expr(s);
@@ -678,37 +502,15 @@ where
         let root_ty = checker.state[root]
             .ty
             .expect("the root expression must have a type");
-        // Prove every lambda's function value concrete before the definition
-        // pass: a recursive reference (the apply in the body) then stays in
-        // place, so every recursion level re-applies the
-        // template — whose own parameter is never deep-evaluated and is
-        // cloned fresh per level.  Without this, the deep pass evaluates the
-        // parameter clone of the first application, a second application
-        // reuses the already-bound clone instead of cloning it fresh, and
-        // the argument unify conflicts (the recursion cannot descend).
+        // Deep-evaluate every lambda's value node before the definition pass, so a
+        // recursive reference stays in place.
         for &func_node in &checker.lambda_value_nodes {
             checker.module.evaluate_node_deep(func_node, None);
         }
-        // The definition pass: run the program so the apply-time type checks
-        // fire.  Each function body runs once first — its apply-time checks
-        // fire even when the function is never applied, and a body ending in
-        // a call resolves its result cell before the root pass walks the
-        // function's type spine (which would otherwise read the cell while
-        // it is still undecided).  The order against the root pass is
-        // irrelevant: reads alias their target cells (see the lowlevel Index
-        // arm), so bindings propagate class-wise however they happen.
-        // Skipped when the checker-side unifies (annotations, guards) already
-        // failed: the build is rejected either way.
+        // The definition pass: run the program so the apply-time checks fire.
         if !checker.check_failed() {
-            // The *order* of this pass is user-visible: an orphan unify error
-            // and a runtime `eval_error` are emitted in the order their
-            // function is walked, with no re-sort afterwards.  Each function is
-            // keyed by the IR expression it was compiled from — every function
-            // here was begun by [`Checker::check_lam`], which is what fills
-            // [`Checker::function_of`] — so sorting by that key states the
-            // order instead of inheriting `SlotMap::keys`'s
-            // documented-as-arbitrary key order.  The fallback orders a
-            // function with no expression after all the rest.
+            // Its order is user-visible, so functions are sorted by the IR
+            // expression they were compiled from.
             let expression_of: HashMap<FunctionId, ExprId> = checker
                 .function_of
                 .iter()
@@ -725,34 +527,22 @@ where
                     let function = &checker.module.functions[function];
                     (function.r#return, function.asserts.clone())
                 };
-                // Every body runs once: its apply-time checks fire even when
-                // the function is never applied, and the deep pass decides
-                // what the apply clone may reference in place — a body the
-                // pass never computed keeps every operation node undecided
-                // and clones them all, silently re-running per-application
-                // computations like a body-local struct's nominal-id
-                // `Fresh`.
+                // Every body runs once, so its checks fire even unapplied.
+                //
+                // Invariant: the deep pass pins what the clone copies.
                 checker.module.evaluate_node_deep(ret, None);
-                // The body's asserts are reachability entry points like the
-                // return: each condition gets its own concreteness proof, so
-                // an apply references a per-call-invariant condition in
-                // place instead of cloning and re-registering it, while a
-                // condition reading the parameter stays undecided and clones.
+                // The return's proof extends to the body's asserts, each its own
+                // reachability entry point.
                 for &condition in &asserts {
                     checker.module.evaluate_node_deep(condition, None);
                 }
             }
         }
-        // A marked site's "not emitted" verdict is **not this layer's**: whether
-        // a loop is emitted is a reader's fact, so the host loop and the kernel
-        // reader report the sites they decline
-        // (`docs/notes/loop-conversion.md` §8.6).  Asking here would mean
-        // answering "no reader handles this" from "the state is undecided",
-        // which stopped being true the moment a kernel reader existed.
-        // Option B: evaluate every user-written top-level statement, so each
-        // one's value is computed — and a non-terminating one, which the VM
-        // refused instead of panicking (see `Module::budget_exhausted`), is
-        // reported as a diagnostic rather than aborting the build.
+        // A marked site's "not emitted" verdict is the reader's to report.
+        // See docs/notes/loop-conversion.md.
+
+        // Evaluate every user-written top-level statement, so a
+        // non-terminating one is a diagnostic, not an aborted build.
         if !checker.check_failed() {
             let mut fatal = false;
             for &s in &stmt_roots {
@@ -788,35 +578,20 @@ where
                 }
             }
         }
-        // The assert pass: drain the module's constraint worklist — the
-        // originals and the clones the definition pass's applies produced —
-        // deep-evaluating each condition and requiring
-        // `USize(1)`.  Decided points are consumed; an assert whose condition
-        // stays undecided is *not triggered* and stays pending on the worklist:
-        // an in-body assert whose parameter was never bound (the function was
-        // never applied) is deferred instead of failing, and the clone
-        // re-checks it per call.  Skipped when the definition pass was (the
-        // graph may be broken enough to panic on the forced evaluation), or
-        // when a statement was already found non-terminating (the module state
-        // is inconsistent after the caught guard).
+        // The assert pass: drain the constraint worklist, requiring `USize(1)` of
+        // each deep-evaluated condition.
         if !checker.check_failed() && checker.nonterminating.is_empty() {
             checker.module.check_asserts();
         }
-        // A failed unification or a recorded guard failure is what makes a
-        // build not ok — a guard records a diagnostic without touching the
-        // lowlevel's error vec, so the vec alone no longer decides `ok`.
+        // A build is not ok when a unification failed or a guard was recorded.
         let ok = !checker.check_failed()
             && checker.module.eval_errors.is_empty()
             && checker.module.assert_errors.is_empty()
             && checker.nonterminating.is_empty();
         let root_val = checker.value_of(root);
         let root_schema_tail = checker.schema_tail(root).to_vec();
-        // The definition pass above evaluates the program's applies; each
-        // apply's runtime evaluation syncs its result cell with the return
-        // pair, so an unannotated call's root type is the return type by the
-        // time the pass finishes.  A polymorphic template's lazy result
-        // leaves the cell undecided — a generic function's ends stay
-        // underdetermined, which is not an error.
+        // The definition pass syncs an apply's result cell with the return
+        // pair, so an unannotated call takes the return type.
         Build {
             ir: checker.ir,
             module: checker.module,
@@ -844,43 +619,43 @@ where
         }
     }
 
-    /// Whether any check the checker issued already failed — a failed
-    /// unification **or** a recorded guard failure.  A guard failure is a
-    /// check-time refusal that never reached the lowlevel, so it leaves the
-    /// error vec empty and the vec alone would now miss it; this is why the
-    /// definition pass skips when it holds (the build is rejected either way).
-    /// A guard entry is
-    /// exactly one whose [`DiaryEntry::errors`] is `None` — the kind of check
-    /// it was is a recorded fact, never an inference from an empty range.
+    /// Whether any check already failed: a failed unification **or** a recorded
+    /// guard failure.
+    ///
+    /// # Invariant
+    /// A guard entry is exactly one whose [`DiaryEntry::errors`] is `None`: the
+    /// kind of check it was is a recorded fact, never an inference from an
+    /// empty range.
     fn check_failed(&self) -> bool {
         !self.module.unify_errors.is_empty()
             || self.diary.iter().any(|entry| entry.errors.is_none())
     }
 
-    /// The attribute tail a checked expression carries: an annotation's
-    /// **merged** tail (the value's tail merged with the annotation's spelled
-    /// slots) when the checker recorded one, else the frontend's own IR stamp.
-    /// The fallback is why readers need no knowledge of which expressions the
-    /// table covers: every other tail (a parameter's `x # n`, a transplanted
-    /// binding's, the frontend's own stamps) lives only in the IR.
+    /// An expression's attribute tail: the annotation's merged tail when
+    /// recorded, else the frontend's own IR stamp.
+    ///
+    /// # Invariant
+    /// Only this table holds merged tails; every other tail lives in the IR,
+    /// which the fallback reaches.
     fn schema_tail(&self, e: ExprId) -> &[P::Attr] {
         self.merged_tails
             .get(&e)
             .map_or_else(|| self.ir.schema(e).tail.as_slice(), |tail| tail.as_slice())
     }
 
-    /// The type constants as plain nodes in the root block (types are
-    /// first-class values — they live in the runtime graph), plus the two
-    /// canonical structures: the universe `K = [Type, ↺]` whose type slot is
-    /// itself (`Type : Type` closes every type spine) and the shared int
-    /// type expression `[int, K]` every literal's pair carries.
+    /// The type constants as plain nodes in the root block.
+    ///
+    /// # Invariant
+    /// The universe `K = [Type, ↺]`, whose type slot is itself, closes every
+    /// type spine, and `[int, K]` is the shared int type expression. Proving
+    /// these concrete before the definition pass pins them in place: a clone
+    /// of the universe would build a fresh self-loop no unify can equate with.
     fn install_constants(&mut self) {
         let root = self.current_block;
-        // The 9 kind markers, one shared node each, registry order.
+        // The kind markers, one shared node each, in registry order.
         for_each_kind_marker!(define_install_markers[self, root]);
-        // `K = [Type, K]`: allocate the node, then point its type slot at
-        // itself.  The self-loop is cut by the lowlevel deep-evaluation
-        // cycle guard whenever the definition pass reaches it.
+        // `K = [Type, K]`: point its type slot at itself; the lowlevel deep
+        // pass cuts the self-loop it reaches.
         let universe = self.alloc_node(root, None, None);
         let items = [
             ArrayItem::new(AnyNodeId::Dynamic(self.markers.type_marker)),
@@ -896,29 +671,26 @@ where
         self.int_type = self.array_node(root, &[self.markers.int_marker, self.type_expr]);
         self.float_type = self.array_node(root, &[self.markers.float_marker, self.type_expr]);
         self.string_type = self.array_node(root, &[self.markers.string_marker, self.type_expr]);
-        // The two positional-read constants, `Index(pair, 0)` and
-        // `Index(pair, 1)`'s subscripts.  Allocated here, before any
-        // function exists, so they belong to no template (see the fields'
-        // invariant) and are shared like the markers above.
+        // The positional-read constants, the subscripts of `Index(pair, 0)` and
+        // `Index(pair, 1)`, shared with the markers above.
         self.zero_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::USize(0))));
         self.one_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::USize(1))));
     }
 
-    /// The shared `USize(0)` node — the `Index(pair, 0)` subscript every
-    /// value read and every pair-slot descent uses.
+    /// The shared `USize(0)` node — the `Index(pair, 0)` subscript every value
+    /// read and pair-slot descent uses.
     pub(super) fn zero(&self) -> NodeId {
         self.zero_value
     }
 
-    /// The shared `USize(1)` node — the `Index(pair, 1)` subscript every
-    /// type read uses.
+    /// The shared `USize(1)` node — the `Index(pair, 1)` subscript every type
+    /// read uses.
     pub(super) fn one(&self) -> NodeId {
         self.one_value
     }
 
-    /// A constant `USize` node — a subscript or a table key a rule states
-    /// rather than computes.  `0` and `1` use the shared nodes ([`Self::zero`],
-    /// [`Self::one`]); anything else is allocated where it is asked for.
+    /// A constant `USize` node — a subscript or table key a rule states rather
+    /// than computes; `0` and `1` are shared.
     pub(super) fn usize_node(&mut self, n: usize) -> NodeId {
         match n {
             0 => self.zero(),
@@ -931,12 +703,12 @@ where
         }
     }
 
-    /// The interned `Str(name)` key node for a field name — one node per
-    /// unique name, shared across every read of it (a `TableGet(names, name)`
-    /// only compares content, and the frontend already interns the string
-    /// side, so one node per name is enough).  Allocated in the root block
-    /// the first time the name is asked for, hence outside every function's
-    /// template like the constants above.
+    /// The interned `Str(name)` key node for a field name, shared across every
+    /// read of it.
+    ///
+    /// # Invariant
+    /// One node per name is enough: a `TableGet` compares content only, and the
+    /// frontend already interns the string side.
     pub(super) fn name_node(&mut self, name: &'static str) -> NodeId {
         if let Some(&node) = self.name_nodes.get(name) {
             return node;
@@ -952,19 +724,18 @@ where
 
     // --- allocation ------------------------------------------------------
 
-    /// The innermost function whose body is being compiled — [`None`] at
-    /// top level.
+    /// The innermost function whose body is being compiled, or [`None`].
     fn current_function(&self) -> Option<FunctionId> {
         self.function_stack.last().map(|&(function, _)| function)
     }
 
-    /// A node owned by the current function — the checker's only node
-    /// creation point.  The node is tagged with [`Checker::current_function`]
-    /// and registered in its scope
-    /// ([`Function::nodes`](lichen_lowlevel::Function::nodes)), so the apply clone
-    /// walk's chain membership test recognizes it as part of the template.
-    /// Top-level nodes (no current function) are untagged and belong to no
-    /// template, exactly like the lowlevel's raw [`Module::add_node`].
+    /// A node owned by the current function — the checker's only node creation
+    /// point.
+    ///
+    /// # Invariant
+    /// The node is tagged with [`Checker::current_function`] and registered in
+    /// its scope, so the apply clone walk recognizes it as template; a top-level
+    /// node is untagged and belongs to no template.
     fn alloc_node(
         &mut self,
         block: BlockId,
@@ -978,16 +749,14 @@ where
         node
     }
 
-    /// A fresh, undecided type cell — an **empty** node slot, which is
-    /// undecided's only in-VM representation (evaluating it yields nothing,
-    /// never a panic).
+    /// A fresh, undecided type cell: an empty node slot, which is undecided's
+    /// only in-VM representation.
     pub fn fresh_cell(&mut self) -> NodeId {
         self.alloc_node(self.current_block, None, None)
     }
 
-    /// A plain value node in the current block — the way a native operator
-    /// extension builds a custom value (e.g. `Kernel`/`LaunchTarget`) without
-    /// an operation.
+    /// A plain value node in the current block — how a native operator builds a
+    /// custom value without an operation.
     pub fn value_node(&mut self, value: P::Value) -> NodeId {
         self.alloc_node(self.current_block, None, Some(value))
     }
@@ -1006,9 +775,8 @@ where
         )
     }
 
-    /// [`Self::array_node`] with per-position shallow flags — the `~`
-    /// markers of a shallow array.  An all-`false` flag set is the plain
-    /// unmarked form.
+    /// [`Self::array_node`] with the per-position `~` markers of a shallow
+    /// array; an all-`false` set is the unmarked form.
     fn array_node_masked(&mut self, block: BlockId, ids: &[NodeId], mask: &[bool]) -> NodeId {
         let items: Vec<ArrayItem> = ids
             .iter()
@@ -1041,29 +809,25 @@ where
         self.array_node(self.current_block, &[value, ty])
     }
 
-    /// The kind expression of a compound type: `[marker, Type]`, where
-    /// `marker` is one of the kind markers (`FunctionType`, `TupleType`,
-    /// `ArrayType`, `TypeStruct`).
+    /// The kind expression of a compound type: `[marker, Type]`, where `marker`
+    /// is a kind marker (see [`crate::shape`]).
     fn kind_expr(&mut self, block: BlockId, marker: NodeId) -> NodeId {
         self.array_node(block, &[marker, self.type_expr])
     }
 
-    /// The function type expression `[[domain, codomain], [FunctionType,
-    /// K]]` — the single construction point for the arrow encoding.  The
-    /// block is explicit because the two lambda-site arrows are built into
-    /// the shell's own block, not the current one.
+    /// The function type expression `[[domain, codomain], [FunctionType, K]]`
+    /// — the one construction point for arrows.
     ///
-    /// Deliberately **not** registered in [`Checker::arrows`]: that set feeds
-    /// the type printer (a member renders as `T -> U`), so it holds only
-    /// source-level arrows.  The caller decides membership — see
-    /// [`crate::program::Ctx::arrow`].
+    /// # Invariant
+    /// It is deliberately not registered in [`Checker::arrows`]: that set feeds
+    /// the type printer, whose members render as `T -> U`, so it holds only
+    /// source-level arrows. The caller decides membership.
     pub(super) fn arrow(&mut self, block: BlockId, domain: NodeId, codomain: NodeId) -> NodeId {
         self.arrow_parts(block, domain, codomain).2
     }
 
-    /// [`Self::arrow`] returning all three nodes — `(shape, kind, pair)` —
-    /// for a caller that also needs the halves (an arrow *is* a `[shape,
-    /// kind]` type expression, so its own value and type are those two).
+    /// [`Self::arrow`] returning all three nodes `(shape, kind, pair)` for a
+    /// caller that also needs the halves.
     fn arrow_parts(
         &mut self,
         block: BlockId,
@@ -1076,36 +840,26 @@ where
         (shape, kind, pair)
     }
 
-    /// The struct marker node `[payload, TypeStruct]` — the ordinary
-    /// `[value, type]` pair that is a struct's kind marker, whose payload is
-    /// `[TypeId, names, names_in_order]` (layout:
-    /// [`shape::STRUCT_MARKER_PAYLOAD_SLOT`](crate::shape::STRUCT_MARKER_PAYLOAD_SLOT) /
-    /// [`shape::STRUCT_MARKER_TAG_SLOT`](crate::shape::STRUCT_MARKER_TAG_SLOT),
-    /// and inside the payload
-    /// [`shape::STRUCT_MARKER_ID_SLOT`](crate::shape::STRUCT_MARKER_ID_SLOT) /
-    /// [`shape::STRUCT_MARKER_NAMES_SLOT`](crate::shape::STRUCT_MARKER_NAMES_SLOT) /
-    /// [`shape::STRUCT_MARKER_NAMES_ORDER_SLOT`](crate::shape::STRUCT_MARKER_NAMES_ORDER_SLOT)).
-    /// The pair's type slot is the installed `TypeStruct` atom
-    /// ([`Self::type_struct_marker_node`]), the same atom every other marker
-    /// node is built from — so "this is a struct marker" is a tag the graph
-    /// carries, not a shape a reader guesses.  The
-    /// single construction point both `struct<…>` types and struct-returning
-    /// blocks use — and the deferred instantiation's pin, whose payload cells
-    /// all stay open.
+    /// The struct marker node `[payload, TypeStruct]`, the type slot holding the
+    /// `TypeStruct` atom.
+    ///
+    /// # Invariant
+    /// The tag is a fact the graph carries, never a shape a reader guesses; this
+    /// is the one construction point, including the deferred instantiation's
+    /// pin, whose payload cells all stay open.
     fn struct_marker_node(&mut self, id: NodeId, names: NodeId, names_in_order: NodeId) -> NodeId {
         let payload = self.array_node(self.current_block, &[id, names, names_in_order]);
         let tag = self.type_struct_marker_node();
         self.array_node(self.current_block, &[payload, tag])
     }
 
-    /// The **struct-kind requirement** a decided-tier read states: the struct
-    /// kind `[[payload, TypeStruct], K]` whose marker is the ordinary
-    /// `[value, type]` pair with the `TypeStruct` atom in its *type* slot and
-    /// the payload left wholly open.  This is the struct analogue of the tuple
-    /// read's `[TypeTuple, K]` unify ([`Self::check_raw_index`]): the
-    /// requirement names the tag, never the payload's shape, so it is a check
-    /// of `TypeStruct` rather than a guess that any marker-shaped array is a
-    /// struct.
+    /// The struct-kind requirement a decided-tier read states: `[[payload,
+    /// TypeStruct], K]`, with the payload left open.
+    ///
+    /// # Invariant
+    /// It names the tag, never the payload's shape, so it checks `TypeStruct`
+    /// rather than guessing that any marker-shaped array is a struct; it is the
+    /// struct analogue of the tuple read's `[TypeTuple, K]` unify.
     fn struct_kind_requirement(&mut self) -> NodeId {
         let payload = self.fresh_cell();
         let marker = self.array_node(
@@ -1115,13 +869,12 @@ where
         self.kind_expr(self.current_block, marker)
     }
 
-    /// A struct type's nominal id node — the [`TypeOperator::Fresh`] call one
-    /// **written occurrence** of a struct type expression (or a
-    /// struct-returning block) allocates.  Where that node's value is decided
-    /// is [`Checker::struct_type_type`]'s business, not this one's: the id is
-    /// only meaningful inside the identity marker that construction builds.
+    /// A struct type's nominal id node: the [`TypeOperator::Fresh`] call one
+    /// written struct type occurrence makes.
     ///
-    /// See `docs/notes/applied-struct-nominal-id.md`.
+    /// # Invariant
+    /// The `Fresh` call per written occurrence is what makes one written
+    /// occurrence one nominal type. See docs/notes/function-type-merge.md.
     fn fresh_nominal_id(&mut self) -> NodeId {
         self.op_node(
             self.current_block,
@@ -1130,40 +883,15 @@ where
         )
     }
 
-    /// The struct type's full encoding — the field-type `shape`, the `kind`
-    /// `[marker, K]` whose marker is the pair `[payload, TypeStruct]` over a
-    /// `payload = [TypeId, names, names_in_order]`, and the `[shape, kind]`
-    /// wrapper pair — built from the caller's nominal `id` node, the field types
-    /// and the field names:
+    /// The struct type's encoding — the one construction point for the layout
+    /// [`crate::shape`] documents but never builds.
     ///
-    /// ```text
-    /// wrapper = [ shape, kind ]
-    /// shape   = [ field types… ]
-    /// payload = [ id, names, names_in_order ]
-    /// marker  = [ payload, TypeStruct ]
-    /// kind    = [ marker, K ]
-    /// ```
-    ///
-    /// The single construction point for the layout [`shape`](crate::shape)
-    /// documents but deliberately never builds.  The `id` stays the caller's
-    /// because which occurrence allocated it is a policy of the emitting rule,
-    /// not part of the encoding.
-    ///
-    /// The identity `payload = [id, names, names_in_order]` is decided
-    /// **here**, once per written occurrence.  Both name halves are computations
-    /// the apply clone walk would otherwise copy: the `Fresh` id would run again
-    /// per application, and the name table is an arena payload, so a copy is a
-    /// *different* table that does not unify with the original.  Either way one written struct type
-    /// applied to one argument twice yields two nominal types that do not
-    /// unify — a type constructor that is not a function.  Deep-evaluating the
-    /// marker is what pins them: a node the deep pass proved concrete is
-    /// referenced **in place** by every clone (and the same verdict freezes it
-    /// non-undecided in a static module, so a solved artifact bakes the
-    /// identity too).  The field types stay out of the identity — they ride in
-    /// the shape — so `A Int` and `A Float` remain different types, and two
-    /// `struct<…>` written apart remain two declarations.
-    ///
-    /// See `docs/notes/applied-struct-nominal-id.md`.
+    /// # Invariant
+    /// The identity is decided once per written occurrence, and deep-evaluating
+    /// the marker is what pins it: a clone would otherwise re-run `Fresh` or copy
+    /// the name arena into a different table, so one type applied twice would not
+    /// unify. The field types stay out of the identity.
+    /// See docs/notes/function-type-merge.md.
     fn struct_type_type(
         &mut self,
         id: NodeId,
@@ -1180,14 +908,8 @@ where
         (shape, kind, wrapper)
     }
 
-    /// A lazy structural read down a constant index `path` from `base`: the
-    /// nested `Index` op chain `Index(…Index(base, path[0])…, path[n])` that
-    /// resolves when `base` binds — the runtime form of a constant encoding
-    /// offset, walked for the struct name paths
-    /// ([`shape::STRUCT_TYPE_NAMES_PATH`](crate::shape::STRUCT_TYPE_NAMES_PATH),
-    /// [`shape::STRUCT_KIND_NAMES_PATH`](crate::shape::STRUCT_KIND_NAMES_PATH),
-    /// [`shape::STRUCT_KIND_NAMES_ORDER_PATH`](crate::shape::STRUCT_KIND_NAMES_ORDER_PATH)).
-    /// Each step's subscript is a constant node, shared for `0` and `1`.
+    /// A lazy structural read down a constant index `path`: the nested `Index`
+    /// chain that resolves when `base` binds.
     fn lazy_index_path(&mut self, base: NodeId, path: &[usize]) -> NodeId {
         let mut node = base;
         for &slot in path {
@@ -1206,13 +928,12 @@ where
         node
     }
 
-    /// The children of a variadic expression (`Tuple`, `TypeTuple`,
-    /// `Array`, `TypeStruct`, `ShallowArray`).
+    /// The children of a variadic expression kind.
     ///
-    /// The non-variadic kinds are named rather than caught by a wildcard: this
-    /// is the *open* end of the encoding — a new kind that stores its children
-    /// as a [`ChildRange`] must be added to the range arm, and a wildcard would
-    /// let it compile and then panic at run time.
+    /// # Invariant
+    /// The non-variadic kinds are named rather than caught by a wildcard: a new
+    /// kind storing children as a [`ChildRange`] must join the range arm, or it
+    /// would compile here and panic at run time.
     fn range_children(&self, e: ExprId) -> Vec<ExprId> {
         let range = match self.ir[e].kind {
             ExprKind::Tuple(range)
@@ -1260,10 +981,11 @@ where
         self.ir.depths[range.start as usize..range.end as usize].to_vec()
     }
 
-    /// The value of an expression: element 0 of its pair.  For expressions
-    /// whose pair is a static node (literals, variables, lambdas) this is
-    /// stored; for call results it is extracted at runtime with
-    /// `Index(pair, 0)` and memoized.
+    /// The value of an expression: element 0 of its pair.
+    ///
+    /// # Invariant
+    /// It is stored for a static node and built lazily as `Index(pair, 0)` for a
+    /// call result.
     fn value_of(&mut self, e: ExprId) -> NodeId {
         if let Some(value) = self.state[e].val {
             return value;
@@ -1279,11 +1001,8 @@ where
         index
     }
 
-    /// The value currently held by `node`'s equality class — the
-    /// representative's value — or `None` when the class is undecided.
-    /// Read-only (a parent-pointer walk, no path compression).  An attribute's
-    /// [`crate::attr::AttrExt::is_subtype`] uses this to compare two slot values after a
-    /// failed equality unify.
+    /// The value currently held by `node`'s equality class, or `None` when the
+    /// class is undecided. Read-only.
     pub fn class_value(&self, node: NodeId) -> Option<P::Value> {
         self.module.class_value(node)
     }
@@ -1291,53 +1010,32 @@ where
     // --- the check -------------------------------------------------------
 
     fn check_expr(&mut self, e: ExprId) -> NodeId {
-        // The variant decides the compilation (a `Tuple` is a value, a
-        // `TypeTuple` a type expression — the frontend picks per syntactic
-        // role).  There is no term/type distinction in the checker: every
-        // expression compiles to its pair, and correctness is decided by the
-        // unifications the surrounding construct issues.
+        // The variant decides the compilation: a `Tuple` is a value, a `TypeTuple` a
+        // type; the unifies decide correctness.
         self.check_term(e)
     }
 
-    // The encoding accessors and shape predicates this checker was built
-    // around (`shape_of`/`kind_of`, the universe check, the `is_*` family)
-    // live in [`crate::shape`] — the single authority for the pair/type
-    // encoding — and are called from here with `self.type_expr` as the
-    // canonical universe node.
+    // The encoding accessors and shape predicates live in [`crate::shape`], the
+    // single authority for the pair/type encoding.
 
-    /// The checker's recursion: one frame per nested expression (through the
-    /// per-kind rules and back through [`Self::check_expr`]), so a generated
-    /// or hostile program may nest past the native stack.  Nothing bounds the
-    /// expression grammar here — the budget guards bound the *runtime*, not
-    /// the check — so the recursion grows the stack instead, exactly as the
-    /// lowlevel's own recursive entry points do (`#[stacksafe]`: without it a
-    /// deeply nested program overflows the process instead of being checked).
+    /// The checker's recursion: one frame per nested expression, so a hostile
+    /// program may nest past the native stack.
+    ///
+    /// # Safety
+    /// Nothing bounds the expression grammar here — the budget guards bound the
+    /// runtime, not the check — so the recursion grows the stack instead:
+    /// `#[stacksafe]` is what keeps a deeply nested program from overflowing the
+    /// process, as the lowlevel's own recursive entry points do.
     #[stacksafe]
     fn check_term(&mut self, e: ExprId) -> NodeId {
-        // The IR is a graph: statement bindings pre-resolve every use of a
-        // name to the value's own `ExprId`, so one expression may be
-        // referenced from several parents (a DAG, not a tree).  Compile each
-        // expression once and reuse the compiled pair — recompiling would
-        // duplicate fresh state (a struct type's nominal id comes from a
-        // per-compilation `Fresh` call), silently breaking the sharing the
-        // frontend relies on.
+        // The IR is a graph, not a tree: one expression may have several parents.
+        // Compile each once, or fresh state duplicates.
         if let Some(pair) = self.state[e].term {
             return pair;
         }
-        // A cycle can only form through a block-wide binding placeholder —
-        // an inline compound term's subtree can never reference its own root,
-        // so pre-registering a skeleton for one would only add spurious cells
-        // that poison the apply-time unify (a placeholder reached through an
-        // index-typed apply would stay an undecided `?a` instead of binding to
-        // the actual type).  Gate the skeleton on `block_roots` membership
-        // alone, never on the expression kind: the frontend transplants the
-        // binding value's kind into the placeholder, so a block root may be
-        // *any* kind — a hand-maintained kind list silently misses a variant
-        // (a self-reference through an unlisted kind re-enters this check
-        // forever, a stack overflow).  For a childless kind the skeleton is
-        // inert — nothing re-enters during its descent — and the epilogue
-        // binds it away; a `Function` block root pre-registers its own pair
-        // in `check_lam` before its body compiles, overwriting the skeleton.
+        // A cycle forms only through a block-wide placeholder.
+        //
+        // Invariant: gate on `block_roots` alone, never on the kind.
         let skeleton = if self.ir.block_roots.contains(&e) {
             let vc = self.fresh_cell();
             let tc = self.fresh_cell();
@@ -1351,15 +1049,9 @@ where
         };
         let pair = match self.ir[e].kind {
             ExprKind::Literal(lit) => {
-                // A literal builds its `[value, type]` pair itself through
-                // its `LiteralExt::build` — the built-in int literal and
-                // type-constant literal each build their value and type
-                // nodes (referencing the prebuilt singleton exprs the
-                // context exposes); a custom literal builds any value and
-                // type pair, potentially referencing other exprs.  The
-                // checker records the pair and its two halves — `Type : Type`
-                // is built as the self-referential universe node, so it is
-                // not `[value, type]`.
+                // A literal builds its pair through `LiteralExt::build`.
+                //
+                // Invariant: a type-constant literal builds the universe.
                 let built = lit.build(self);
                 self.state[e].term = Some(built.pair);
                 self.state[e].val = Some(built.value);
@@ -1367,12 +1059,9 @@ where
                 built.pair
             }
             ExprKind::Parameter => {
-                // A use of the parameter: the function's return expression
-                // references the parameter's own `ExprId`.  The enclosing
-                // function compiled the parameter pair (and entered the
-                // scope) before compiling the return expression, so this
-                // resolves to it.  The value slot is left alone — `value_of`
-                // builds and memoizes the shared `Index(pair, 0)` lazily.
+                // The function compiled its parameter pair before the body.
+                //
+                // Invariant: this use resolves to that pair.
                 let binding = self.lookup(e);
                 self.state[e].term = Some(binding.term);
                 self.state[e].ty = Some(binding.ty);
@@ -1429,8 +1118,8 @@ where
                 parameter,
                 r#return,
             } => {
-                // The two sides are compiled first, in the enclosing scope —
-                // see [`Checker::check_signature`], whose shell they outlive.
+                // Compile both sides in the enclosing scope, ahead of the
+                // signature's shell.
                 let parameter_ty = self.check_type_element(parameter);
                 let return_ty = self.check_type_element(r#return);
                 self.check_signature(e, parameter_ty, return_ty)
@@ -1443,15 +1132,8 @@ where
             ExprKind::Table(_) => self.check_table_term(e),
             ExprKind::ShallowArray { .. } => self.check_shallow_array_term(e),
             ExprKind::ErrorBlock => {
-                // A recovered-error region, masked at the frontend: an
-                // opaque leaf.  Compile it to a pair of fresh, *never*
-                // unified cells — nothing inside the region is checked, so
-                // it cannot introduce a spurious *type*-level "expected X,
-                // found Y" from inside itself (the parser's own syntactic
-                // diagnostic still fires at the parse layer), and the region
-                // is distinct from a real `_` (`Placeholder`) so the frontend
-                // can mask it for a diff.  The fresh cells stay undecided, so
-                // they never cause a cascade.
+                // A recovered-error region: an opaque leaf whose cells are never
+                // unified, so nothing inside reports a type error.
                 let val = self.fresh_cell();
                 let ty_cell = self.fresh_cell();
                 let pair = self.pair_of(val, ty_cell);
@@ -1461,13 +1143,9 @@ where
                 pair
             }
             ExprKind::Placeholder => {
-                // `_` — an inference placeholder hole in any position (type or
-                // value): two fresh undecided cells, one for the value slot and
-                // one for the kind slot, so whatever the context unifies them
-                // with binds them.  The kind slot must be a cell too, not the
-                // universe: a compound type's kind slot holds a kind
-                // expression (`[FunctionType, Type]`), which would clash
-                // with `Type` itself.
+                // `_` is an inference hole in either position: two fresh cells.
+                //
+                // Invariant: the kind slot is a cell, not the universe.
                 let val = self.fresh_cell();
                 let ty_cell = self.fresh_cell();
                 let pair = self.pair_of(val, ty_cell);
@@ -1481,21 +1159,13 @@ where
                 length,
             } => self.check_array_type(e, element_type, length),
             ExprKind::Static { export } => {
-                // Imported package export: the static ref names the package's
-                // final `[value, type]` pair.  Materialize that pair leaf,
-                // then extract dynamic value/type leaves from its static
-                // items; the payloads stay in the package's static arena.
+                // Imported package export: the package's final `[value, type]` pair.
                 let pair = self.module.materialize_leaf(export, self.current_block);
-                // The contract the importer needs is a *checked* one — exactly
-                // the pair's two items — so a violated contract is an honest
-                // guard about the import rather than a panic inside the
-                // checker.  Every expression's term is that pair, a raw read
-                // (`X<e>`) included now that it builds one (it used to compile
-                // to the bare read operation); what can still arrive is an
-                // export whose evaluation never produced a pair, and the
-                // package's own build rejects that case first.
-                // SAFETY: `pair` was just materialized into the current
-                // block, whose arena is alive.
+                // The importer needs a *checked* contract: the pair's two items, so a
+                // violated one is an honest guard, not a panic.
+
+                // SAFETY: `pair` was materialized into the current block, so its
+                // arena is alive.
                 let Some(items) =
                     (unsafe { self.module.array_items(pair) }).filter(|items| items.len() == 2)
                 else {
@@ -1512,9 +1182,8 @@ where
             }
             ExprKind::NativeCall { op, args } => self.check_native_call(e, op, args),
         };
-        // Bind the skeleton's cells to the real value and type, so every
-        // reference that resolved to the skeleton during the descent now
-        // equals the finished expression.
+        // Bind the skeleton's cells to the real value and type, so a
+        // reference resolved to it equals the finished expression.
         if let Some((vc, tc)) = skeleton {
             let value = self.value_of(e);
             let ty = self.state[e].ty.expect("a compound kind sets a type");
@@ -1538,10 +1207,8 @@ where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
-    /// The value node for a raw value: a built-in type marker reuses the
-    /// checker's installed shared marker node (registry-derived dispatch), so
-    /// the canonical type expressions are reached in place; anything else
-    /// allocates a node.
+    /// A raw value's node: a built-in type marker reuses the installed shared
+    /// marker node; anything else allocates one.
     fn value_node(&mut self, value: P::Value) -> NodeId {
         for_each_kind_marker!(define_value_node_dispatch[self, value]);
         self.alloc_node(self.current_block, None, Some(value))
@@ -1591,9 +1258,7 @@ where
     for_each_kind_marker!(define_ctx_marker_accessor_impls);
 
     fn check_unify(&mut self, a: NodeId, b: NodeId, loc: Loc, kind: DiagKind) {
-        // The seam's contract is the check itself; the answer the checker's own
-        // guards read — whether the requirement held — is not part of what an
-        // extension is handed.
+        // The seam's contract is the check itself.
         Checker::check_unify(self, a, b, loc, kind);
     }
 

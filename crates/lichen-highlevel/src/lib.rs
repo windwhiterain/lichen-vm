@@ -1,14 +1,5 @@
-//! The highlevel layer: a typed builder that constructs [`lichen_lowlevel::Module`]s
-//! from highlevel expression trees.
-//!
-//! Layering (language → highlevel → lowlevel): the real language frontend
-//! (not built yet) compiles source into an [`ir::IR`]; the
-//! [`checker::Checker`] checks it and builds the lowlevel
-//! [`lichen_lowlevel::Module`] in one pass — unify is runtime behaviour, so
-//! checking happens while building.
-//!
-//! The IR is dense and id-referenced (no `Box`, no name strings): a use of a
-//! parameter is the parameter's own pre-resolved `ExprId`.
+//! The highlevel layer: its checker builds the lowlevel `Module` from an
+//! [`ir::IR`]. See docs/notes/overview.md.
 
 pub mod attr;
 pub mod checker;
@@ -21,10 +12,8 @@ pub mod refinement;
 pub mod set;
 pub mod shape;
 
-// The vocabularies are themselves extension points: a downstream composes
-// its own union with `lichen_utils::enum_ext!`, listing every layer's enum
-// directly — `+ LowValue as LowValue; + TypeValue as TypeValue;` plus its
-// own variants.  Each layer provides a plain enum; nothing nests.
+// Each layer's vocabulary is an extension point `enum_ext!` composes
+// downstream — see docs/notes/attributes.md.
 pub use attr::{AttrExt, AttrSet, AttrSpec, NoAttr};
 pub use native::{NativeApply, NativeArg, NativeOp, NativeOps, no_native_ops};
 pub use plugin::NativePlugin;
