@@ -848,9 +848,13 @@ where
     // signature cells — the same `domain, codomain` pair the
     // `function_type_marker` arm below reads, carried by the function instead
     // of by a shape slot; `function_shape` is the one spelling of that read.
-    if let AnyNodeId::Dynamic(node) = type_value
-        && let Some((domain, codomain)) = module.function_type_signature(node)
-    {
+    //
+    // **A dynamic node or a static ref**: a frozen module's function type is the
+    // same cycle inside the artifact, and the recogniser is asked with the node
+    // the decode was handed — gating this on `Dynamic` is what left a frozen
+    // function type decoding as `Function(Unknown, Unknown)` while the same node
+    // local decoded fully (`docs/notes/kernel-parameter-class.md`).
+    if let Some((domain, codomain)) = module.function_type_signature(type_value) {
         return function_shape(module, domain, codomain);
     }
     let shape = kinded[TYPE_SHAPE_SLOT].node;

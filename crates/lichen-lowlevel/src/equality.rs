@@ -754,8 +754,15 @@ impl<P: Program> Module<P> {
     /// type", asked by a decoder that holds only a shared borrow
     /// (`lichen-highlevel`'s `shape` module) and must not be forced into a
     /// mutable one for a question it never mutates anything to answer.
-    pub fn function_type_signature(&self, node: NodeId) -> Option<(AnyNodeId, AnyNodeId)> {
-        match self.function_type_function(node)? {
+    pub fn function_type_signature(&self, node: AnyNodeId) -> Option<(AnyNodeId, AnyNodeId)> {
+        let function = match node {
+            Dyn(node) => self.function_type_function(node)?,
+            // A **frozen** function's own type is the same self-cycle in the
+            // artifact, so the recogniser is the static mirror of the dynamic
+            // one rather than a second rule.
+            AnyNodeId::Static(sref) => self.static_function_type_function(sref)?,
+        };
+        match function {
             AnyFunctionId::Dynamic(function) => {
                 let function = self.functions.get(function)?;
                 // A hand-built function (a lowlevel test) may leave
@@ -770,6 +777,50 @@ impl<P: Program> Module<P> {
             }
             AnyFunctionId::Static(sref) => self.static_function_signature(sref),
         }
+    }
+
+    /// The function a **frozen** function-type node names — the static mirror of
+    /// [`Self::function_type_function`], recognised the same two ways: the
+    /// self-cycle the universe `[Type, ↺]` shares, distinguished from it by slot
+    /// 0 holding a [`LowValue::Function`] where the universe holds the `Type`
+    /// marker.
+    ///
+    /// A static ref reaches no class-root walk of the importing module — the
+    /// frozen nodes carry their own union-find — but
+    /// [`Self::is_self_referential`]'s static arm *is* the same question ("is
+    /// this node its own tail"), so this asks it there.
+    fn static_function_type_function(&self, sref: StaticNodeId) -> Option<AnyFunctionId> {
+        let value = self.static_read(sref)?;
+        let LowValue::Array(array) = value.as_enum()? else {
+            return None;
+        };
+        // SAFETY: `array` is a static payload read through `sref`, whose home
+        // module is registered — the registration pins its arena.
+        let items = unsafe { array.items() };
+        if items.len() != 2 {
+            return None;
+        }
+        // The self-cycle, asked **by class** exactly as the dynamic recogniser
+        // asks it (`class_root(item) == carrier`): a frozen class may keep the
+        // cycle on a member rather than on the node asked, and the identity test
+        // `is_static_universe_id` makes would miss it.
+        let static_module = self.static_module(sref.module);
+        let representative = crate::static_module::static_find(&static_module.nodes, sref.index);
+        let own_class = |node: AnyNodeId| match node {
+            AnyNodeId::Static(tail) if tail.module == sref.module => {
+                crate::static_module::static_find(&static_module.nodes, tail.index)
+                    == representative
+            }
+            _ => false,
+        };
+        if !items.iter().any(|item| own_class(item.node)) {
+            return None;
+        }
+        self.node_value(items[0].node)
+            .and_then(|value| match value.as_enum()? {
+                LowValue::Function(function) => Some(function),
+                _ => None,
+            })
     }
 
     /// Unify two function types by descending into the two functions' own

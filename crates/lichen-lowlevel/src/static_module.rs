@@ -294,8 +294,10 @@ impl<P: Program> Module<P> {
 
 /// The solved union-find representative of `key` in the static meta — the
 /// static side of `disjoint::find`, walked without path compression (the
-/// solved structure is immutable).
-fn static_find<P: Program>(nodes: &[StaticNode<P>], key: LocalNodeId) -> LocalNodeId {
+/// solved structure is immutable).  **`pub(crate)`** because a recogniser in
+/// `equality.rs` must ask a frozen node's *class* the way the dynamic
+/// recogniser asks a dynamic node's (`Module::class_root`), not its identity.
+pub(crate) fn static_find<P: Program>(nodes: &[StaticNode<P>], key: LocalNodeId) -> LocalNodeId {
     let mut current = key;
     while let Some(parent) = nodes[current.index].equality.parent() {
         current = parent;
