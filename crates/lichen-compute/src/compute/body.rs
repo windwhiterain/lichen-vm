@@ -107,6 +107,11 @@ struct ActiveLoop {
     merge: usize,
 }
 
+/// A `write` in a conditional's arm: the conditional is a `Select`, so both arms
+/// are emitted on every lane, and the arm's write runs `count` times rather than
+/// on the lanes that took it (`docs/notes/loop-conversion.md` §6).
+const CONDITIONAL_WRITE: &str = "a `compute.write` inside a conditional's arm is refused: a kernel body's conditional is a `Select`, which emits both arms on every lane, so the arm's write would run on every lane and overwrite the selected arm's own. A real branch is what makes it legal (`docs/notes/loop-conversion.md` §6)";
+
 /// Refusal: a cross-kernel callee returns exactly one value, in the caller's class.
 ///
 /// # Invariant
@@ -685,24 +690,40 @@ where
         callee: NodeId,
         operand: NodeId,
     ) -> Result<Option<ValueId>, String> {
-        let Some(LowValue::Function(AnyFunctionId::Static(function))) = self
+        let function = match self
             .module
             .node_value(AnyNodeId::Dynamic(callee))
             .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
-        else {
-            return Ok(None);
+        {
+            Some(LowValue::Function(AnyFunctionId::Static(function))) => function,
+            // The cell's value, or the projection into the frozen module's own
+            // export array.
+            _ => match self.module.static_function_of_callee(callee) {
+                Some(function) => function,
+                None => return Ok(None),
+            },
         };
         let Some((operator, _)) = self.module.static_function_compute_operator(function) else {
             return Ok(None);
         };
+        // The operator's operands are the call site's argument's value half.
+        let Some(argument) = self
+            .module
+            .operand_items(operand)
+            .ok()
+            .and_then(|items| items.get(1))
+            .map(|item| item.node)
+            .and_then(|item| item.dynamic())
+        else {
+            return Ok(None);
+        };
+        let value = self.module.pair_value_half(argument).unwrap_or(argument);
         if let Some(compute_op) = AsEnum::<ComputeOperator>::as_enum(&operator) {
-            return self.compute_operator(node, compute_op, operand).map(Some);
+            return self.compute_operator(node, compute_op, value).map(Some);
         }
         if let Some(ty_op) = AsEnum::<TypeOperator>::as_enum(&operator)
             && let Some(bin) = kernel_bin(ty_op)
         {
-            // **The operator's operands are the apply's argument elements**, not its
-            // `[callee, argument]` array.
             let Some(argument) = self
                 .module
                 .operand_items(operand)
@@ -754,7 +775,8 @@ where
                 .unwrap_or(operands[0].node),
         )?;
         // The routing case: emit the residual the clone wrote.
-        if is_static_function(self.module, callee) {
+        let frozen = is_static_function(self.module, callee);
+        if frozen {
             let residual = (unsafe { self.module.array_items(node) })
                 .and_then(|items| items.first())
                 .map(|item| item.node)
@@ -762,22 +784,25 @@ where
                     AnyNodeId::Dynamic(node) => Some(node),
                     AnyNodeId::Static(_) => None,
                 });
-            let Some(residual) = residual else {
-                // **The callee's frozen body still names the operator**, reachable by
-                // `FunctionId` whether or not anything evaluated.
-                if let Some(value) = self.routed_operator(node, callee, operand)? {
-                    return Ok(value);
-                }
-                return Err(
-                    "this kernel body applies a prelude operator where the kernel cannot reach the \
-                     body it lowered to, and its callee names no compute operator: the operator is \
-                     a call of the prelude's binding, the call sits in the function's own template \
-                     (which the compiler never evaluates), and an operator applied *inside a call's \
-                     argument* has no residual to read (`docs/notes/loop-conversion.md` §8.5)"
-                        .into(),
-                );
-            };
-            return self.value(residual);
+            if let Some(residual) = residual {
+                return self.value(residual);
+            }
+        }
+        // # Invariant
+        // The operator's identity is a static fact of its callee, residual or
+        // not, so the frozen body is read by `FunctionId`.
+        if let Some(value) = self.routed_operator(node, callee, operand)? {
+            return Ok(value);
+        }
+        if frozen {
+            return Err(
+                "this kernel body applies a prelude operator where the kernel cannot reach the \
+                 body it lowered to, and its callee names no compute operator: the operator is \
+                 a call of the prelude's binding, the call sits in the function's own template \
+                 (which the compiler never evaluates), and an operator applied *inside a call's \
+                 argument* has no residual to read (`docs/notes/loop-conversion.md` §8.5)"
+                    .into(),
+            );
         }
         // **A marked recursion** converts to a loop; the callee's own template decides
         // the shape.
@@ -1262,10 +1287,18 @@ where
             ));
         }
         // **`[else, then]`**, so element 0 is the arm that runs when the condition
-        // is false.
+        // is false. An arm that emits a `write` is refused: see [`CONDITIONAL_WRITE`].
         let (otherwise, then) = (arms[0].node, arms[1].node);
+        let emitted = self.tally.writes;
         let otherwise = self.value_item(otherwise)?;
+        if self.tally.writes != emitted {
+            return Err(CONDITIONAL_WRITE.into());
+        }
+        let emitted = self.tally.writes;
         let then = self.value_item(then)?;
+        if self.tally.writes != emitted {
+            return Err(CONDITIONAL_WRITE.into());
+        }
         let selector = self.value_item(*selector)?;
         // **`I32WrapI64` is the narrowing**, a target-width fact the consumer must not
         // re-derive.
