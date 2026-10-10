@@ -2388,6 +2388,9 @@ where
         Some(shape) if shape.is_known() => shape,
         _ => LowShape::Unknown,
     };
+    // **Whether the parameter states its domain at all** — read here, before the
+    // seed and the pass write anything, because it is a fact about the
+    // parameter's own type cell rather than about what the body later decides.
     module.seed_class_low_type(param_value, seed);
     // 2. Pass.
     module.infer_template_low_types(fid);
@@ -2395,7 +2398,17 @@ where
     let Some(domain) = module.low_type_of_node(param_value) else {
         return Err(UNDECIDED_DOMAIN.into());
     };
-    let param_shape = kernel_domain(domain)?;
+    // **What the parameter's type states** — the fact the domain check needs and
+    // the decoded shape cannot supply: an annotated struct and an unannotated
+    // template both decode to "no class" (measured; see [`DomainStatement`]).
+    let statement = match param_type {
+        Some(slot) if struct_fields_of_slot(module, slot).is_some() => DomainStatement::Struct,
+        Some(slot) if matches!(low_type_of_slot(module, slot), LowShape::Tuple(_)) => {
+            DomainStatement::Shape
+        }
+        _ => DomainStatement::Absent,
+    };
+    let param_shape = kernel_domain(domain, statement)?;
     let params = vec![ParamSlot {
         pair: param_pair,
         value: param_value,
@@ -2601,7 +2614,12 @@ where
     let Some(cfg_shape) = module.low_type_of_node(cfg_value) else {
         return Err(UNDECIDED_DOMAIN.into());
     };
-    let cfg_shape = kernel_domain(cfg_shape)?;
+    // The parameter **is** the declared named struct here — `parallel_roles`
+    // decoded its fields to reach this function — so its domain is the declared
+    // tuple of scalar leaves, and a leaf with no class is a field the author
+    // declared whose class the lowering could not read.  Naming the position is
+    // the honest refusal; "annotate the parameter" would be false.
+    let cfg_shape = kernel_domain(cfg_shape, DomainStatement::Shape)?;
     let params = vec![ParamSlot {
         pair: cfg_pair,
         value: cfg_value,
@@ -2951,6 +2969,41 @@ const UNDECIDED_DOMAIN: &str = "the kernel parameter's class is not decided when
 compiled: a kernel is lowered for one class, so the function must state it — annotate the \
 parameter (for example `p : <Int, Int>` for a tuple domain, or `y : Int` for a scalar one)";
 
+/// The **other** facts [`UNDECIDED_DOMAIN`] used to cover: the parameter states
+/// its domain and the lowering can read no class out of it.  The measured
+/// instance is a nominal struct domain (`p : In`, `In = struct<.a Int>`): a
+/// struct's low shape is `Unknown` **by design** ([`lichen_highlevel::shape`]),
+/// so the old single refusal told an author to annotate a parameter that is
+/// annotated, and the shape refusal below — the one that is actually true there —
+/// was unreachable because `Unknown` is not "known".
+const DOMAIN_IS_A_STRUCT: &str = "the kernel parameter's domain is a struct type, and a kernel \
+domain must be a scalar or a tuple of scalars (a nominal struct type has no low shape at all)";
+
+/// A stated domain whose **structure** has a position with no class, and no
+/// position to name (a non-tuple structure).
+const DOMAIN_STATED: &str = "the kernel parameter's domain has no class this lowering can read, \
+and a kernel domain must be a scalar or a tuple of scalars";
+
+/// What a parameter's own type **states** — the fact [`kernel_domain`] needs and
+/// the decoded shape cannot supply, because "no class" is what an annotated
+/// struct and an unannotated template *both* decode to.  Measured on three
+/// programs: `p : In` (a struct) decodes to `Array(Unknown, 2)`, an unannotated
+/// `y => y + y` to `Array(Array(Unknown, 2), 2)`, and `p : <Int, _>` to
+/// `Tuple([USize, Unknown])` — three shapes, and only the third says a position
+/// is missing while only the first says the domain is a struct.
+enum DomainStatement {
+    /// The parameter's type is a **nominal struct**, which has no low shape by
+    /// design, so no class can be read out of it.
+    Struct,
+    /// The parameter's domain is a **structure** and a position of it has no
+    /// class: the position is what to name.
+    Shape,
+    /// Nothing readable was stated for this parameter — the case
+    /// [`UNDECIDED_DOMAIN`] is the honest refusal for.
+    Absent,
+}
+
+/// All of [`UNDECIDED_DOMAIN`]'s facts, told apart by the caller's `statement`.
 /// A kernel domain must be a decided scalar or a tuple of decided positions —
 /// everything else is a refusal, and each refusal names its own cause rather
 /// than falling back to a shape that would compile into a wrong signature.
@@ -2960,14 +3013,50 @@ parameter (for example `p : <Int, Int>` for a tuple domain, or `y : Int` for a s
 /// in a tuple, and a function's codomain) that phase 0 closed deliberately
 /// (`docs/notes/floating-point.md` §4.4).  The class a position's local takes
 /// is [`kernel_shape`]'s answer, and the ABI is what lowers it.
-fn kernel_domain(domain: LowShape) -> Result<LowShape, String> {
+fn kernel_domain(domain: LowShape, statement: DomainStatement) -> Result<LowShape, String> {
     if !domain_is_known(&domain) {
-        return Err(UNDECIDED_DOMAIN.into());
+        return Err(match statement {
+            DomainStatement::Struct => DOMAIN_IS_A_STRUCT.into(),
+            DomainStatement::Shape => match first_unreadable_position(&domain) {
+                Some(position) => format!(
+                    "the kernel parameter's domain has a position with no class: position {} of \
+                     it is not a class this lowering can read, and a kernel domain must be a \
+                     scalar or a tuple of scalars",
+                    position
+                        .iter()
+                        .map(usize::to_string)
+                        .collect::<Vec<_>>()
+                        .join(".")
+                ),
+                None => DOMAIN_STATED.into(),
+            },
+            DomainStatement::Absent => UNDECIDED_DOMAIN.into(),
+        });
     }
     match &domain {
         LowShape::USize | LowShape::Float | LowShape::Tuple(_) => Ok(domain),
         _ => Err("kernel domain must be a scalar or a tuple of scalars".into()),
     }
+}
+
+/// The first position of a **tuple** domain the lowering cannot read, as a path
+/// of indices — `None` when there is no position to name, which is a domain that
+/// is `Unknown` outright (the struct case) or a non-tuple structure.  Nested only
+/// where the domain nests, so the path names the position in the same notation
+/// the domain's own arity uses.
+fn first_unreadable_position(domain: &LowShape) -> Option<Vec<usize>> {
+    let LowShape::Tuple(items) = domain else {
+        return None;
+    };
+    items.iter().enumerate().find_map(|(at, item)| {
+        if domain_is_known(item) {
+            return None;
+        }
+        Some(match first_unreadable_position(item) {
+            Some(deeper) => std::iter::once(at).chain(deeper).collect(),
+            None => vec![at],
+        })
+    })
 }
 
 /// The IR's own expression of a kernel domain — the same structure, in the two
