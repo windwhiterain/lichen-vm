@@ -4976,9 +4976,8 @@ fn cached_module(
 /// # Invariant
 /// The argument count and the output buffer are decided here, not by `wasmi`: all
 /// three numbers are facts compute holds, so a refusal can state them. The argument
-/// check and the class check are the *only* account of a wrong-arity or mis-classed
-/// call, because `compute.call`'s gate leaves the argument unconstrained. The module
-/// is fetched through [`cached_module`], so a repeat launch reuses it.
+/// and class checks are the only account of a wrong-arity or mis-classed call, since
+/// `compute.call`'s gate leaves the argument unconstrained.
 fn run_kernel(id: KernelId, args: &[ScalarValue]) -> Result<Vec<ScalarValue>, String> {
     // These are read under one lock, released before assembly locks the registry
     // again.
@@ -5103,68 +5102,53 @@ fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
     assemble_module(&ordered, &index)
 }
 
-/// The execution state a parallel kernel's host imports read/write against:
-/// the input buffers (indexed by cfg position) and **one worker's partition**
-/// of the output buffers (indexed by output ordinal, then by element).  Carried
-/// as the wasmi [`wasmi::Store`] data, so the `read`/`write` imports reach it
-/// through `Caller::data`/`data_mut`.
+/// The execution state a parallel kernel's host imports read and write against.
 ///
-/// **The partition invariant.**  A worker owns one contiguous element span of
-/// *every* output buffer, and no two workers own overlapping spans, so the
-/// `write` import is a plain store into a slice it exclusively borrows: there
-/// is no lock anywhere on the write path, and no slot is written by two
-/// workers.  A sequential run is the same state with `base = 0` and the whole
-/// buffer as the span.
-///
-/// The state *borrows* its output buffers rather than owning them, so the
-/// caller keeps the `Vec<Vec<i64>>` it hands back as the result and
-/// `std::thread::scope` can lend a partition that is not `'static`.  The base
-/// offset lives here rather than in the `write` closure because
-/// [`wasmi::Linker::func_new`] requires a `'static` host function — a
-/// per-worker base could not be captured, only reached through the store.
+/// # Invariant
+/// A worker owns one contiguous span of every output buffer and no two workers
+/// overlap, so the `write` import is a plain store into a slice it exclusively
+/// borrows — no lock on the write path. The state borrows its buffers, so the caller
+/// keeps them back; the base offset lives here because `Linker::func_new` needs a
+/// `'static` host function.
 struct ParallelState<'a> {
     /// The input buffers, indexed by the input position the role walk records.
-    /// They
-    /// are never partitioned: a read is by a **global** index, so every worker
-    /// reads the whole buffer.  A float input's words are its elements' `f32`
-    /// bits, so the `read` import answers `F32` rather than `I64`.
+    ///
+    /// # Invariant
+    /// Never partitioned: a read is by a global index, so every worker reads the
+    /// whole buffer. A float input's words are its `f32` bits.
     inputs: &'a [BufferWords],
-    /// This worker's span of each output buffer, indexed by the write's
-    /// `out_pos` ordinal.  There is one span per output the index function
-    /// declares — the count comes from the compiled fragment
-    /// ([`KernelFragment::outputs`]), never from which slots happened to be
-    /// written.  The words are the same for both classes, one per element.
+    /// This worker's span of each output buffer, indexed by the ordinal.
+    ///
+    /// # Invariant
+    /// One span per output the index function declares — the count is the fragment's
+    /// `outputs`, never which slots happened to be written — and the words are one per
+    /// element in both classes.
     outputs: Vec<&'a mut [i64]>,
     /// The global index of this partition's first element, which the `write`
     /// import adds to the index the kernel passes.
     base: usize,
-    /// The class the whole fragment is lowered in — the value type of the
-    /// `read`/`write` imports and of the kernel's own parameters and result.
+    /// The class the whole fragment is lowered in: the type of the imports and of
+    /// the kernel's own parameters and result.
     class: ScalarClass,
-    /// The launch's **scalar leaves**, one word per leaf in field order: the
-    /// parameter's scalars as the ABI passes them, the launch extent first
-    /// (`docs/notes/compute-runtime-scalars.md` §1).  The index is not here — it
-    /// is the worker's loop variable, appended per element.
+    /// The launch's scalar leaves, one word per leaf in field order.
+    ///
+    /// # Invariant
+    /// The parameter's scalars as the ABI passes them, the extent first; the index is
+    /// not here, since it is the worker's loop variable.
     leaves: &'a [i64],
-    /// Each leaf's own class, so a leaf reaches `main` as the value its parameter
-    /// field declared rather than as the fragment's element class: a runtime
-    /// `Float` scalar is an `f32` argument beside `i64` ordinals.
+    /// Each leaf's own class, so a runtime `Float` scalar is an `f32` argument
+    /// beside `i64` ordinals.
     leaf_classes: &'a [ScalarClass],
 }
 
 /// Hand a run to the installed [`lichen_kernel_ir::ParallelBackend`].
 ///
-/// **A missing backend is a refusal, not a fallback.** `parallel` names its
-/// backend explicitly and there is no "try either" value, so a program that said
-/// `"gpu"` and silently ran on the CPU would be a program whose timing means
-/// nothing. There is no third value to fall back *to* either: the choice is the
-/// author's, and overriding it here would be the one place the language's
-/// explicit dataflow quietly stopped being explicit.
-///
-/// The fragment is cloned out of the registry — as is every fragment it
-/// cross-calls, into one launch set — and the lock released before the call,
-/// because a backend that emits a cross-kernel call reads the set again, and the
-/// lock is not reentrant.
+/// # Invariant
+/// A missing backend is a refusal, not a fallback: `parallel` names its backend
+/// explicitly and there is no "try either" value, so a program that said `"gpu"` and
+/// silently ran on the CPU would be one whose timing means nothing. The fragments are
+/// cloned out of the registry and the lock released before the call, which is not
+/// reentrant.
 fn run_on_installed_backend(
     id: KernelId,
     count: usize,
@@ -5189,21 +5173,14 @@ fn run_on_installed_backend(
         ));
     }
     let launch = lichen_kernel_ir::LaunchSet::new(&ordered, &index);
-    // The class check runs before the dispatch: a host slot is a raw bit
-    // payload, so a buffer of the wrong class would reach the device as the
-    // right shape and the wrong numbers.
+    // The class check runs first: a host slot is raw bits, so a wrong class would
+    // reach the device as the wrong numbers.
     check_input_classes(&fragment.input_classes, inputs)?;
-    // The one place a run can be wired to leave its inputs where they are: an
-    // input a previous run left on the device is handed back as the id it already
-    // has, so a chain of kernels pays one upload for the whole chain rather than
-    // one per link.
-    //
-    // **The host slot is the buffer's packed elements, and its class is the
-    // fragment's.** `BufferSlot` carries a raw byte payload and no class of its
-    // own, so the bytes a backend reads a host slot as are the ones the class's
-    // width packs — which is exactly why [`check_input_classes`] runs first.
-    // The packed payloads are named first rather than built in the slot
-    // expression: a slot borrows its bytes, so they have to outlive it.
+    // The one place a run leaves an input where it is: a resident input is handed
+    // back as the id it has.
+
+    // The host slot is the buffer's packed elements: `BufferSlot` carries raw
+    // bytes and no class.
     let payloads: Vec<Vec<u8>> = inputs
         .iter()
         .filter_map(|input| match input {
@@ -5230,18 +5207,11 @@ fn run_on_installed_backend(
         )
     })?;
 
-    // Nothing is fetched and nothing is released.  Fetching here would put the
-    // download back on the path of every run, which is the cost the id exists to
-    // remove; releasing here would free buffers the caller is about to hand to the
-    // next kernel.  Both happen at the point the language actually wants host
-    // data — `collect` and `read` — and the ids live as long as the values do.
-    //
-    // Each id's class is the producing fragment's declared class for that output
-    // ordinal, read here because this is the one place that holds both the
-    // fragment and the id it produced.  A fragment that declared fewer classes
-    // than outputs would be a fragment whose class list disagrees with its own
-    // count, so the fallback is the ABI's integer default rather than a panic in
-    // a run's result path.
+    // Nothing is fetched and nothing is released: fetching would put the download
+    // back on every run.
+
+    // Each id's class is the fragment's declared class for that ordinal; a shorter
+    // list falls back to the ABI default.
     let classes = &fragment.output_classes;
     Ok(RunOutcome::Resident(
         resident
@@ -5256,41 +5226,31 @@ fn run_on_installed_backend(
     ))
 }
 
-/// The most elements one `plrun` may collect — the bound on the count the
-/// program controls (the parameter's `.n` the index function is run over).
+/// The most elements one `plrun` may collect: the bound on the count the program
+/// controls.
 ///
-/// The count sizes the output buffer (`count` × 8 bytes = 8 MiB at the limit)
-/// and, because the kernel is called once per element, the interpreted work a
-/// single launch can do.  Both are otherwise unbounded: `2^40` is a legal
-/// `Int`, and it asks for 8 TiB and 10^12 wasm calls.  A count past the limit
-/// is **refused**, never truncated: a short buffer would be a wrong answer,
-/// and there is no diagnostic channel for a runtime refusal in this plugin's
-/// vocabulary (see `run_parallel_kernel`).
+/// # Invariant
+/// The count sizes the output buffer and, the kernel being called once per element,
+/// the interpreted work one launch can do — both otherwise unbounded, since `2^40` is
+/// a legal `Int`. A count past the limit is refused, never truncated: a short buffer
+/// would be a wrong answer.
 const MAX_PARALLEL_ELEMENTS: usize = 1 << 20;
 
-/// The element count at or above which a parallel run spreads its indices over
-/// worker threads; below it the run stays on the calling thread.
+/// The element count at or above which a parallel run spreads over worker threads.
 ///
-/// Below this bound a run gives up the fan-out's wall-clock time to keep its
-/// own latency: every worker costs a thread spawn plus its own store, linker
-/// and instantiation, and that is only repaid once a worker owns enough indices
-/// for the interpreted calls to dominate it.  [`MAX_PARALLEL_ELEMENTS`] already
-/// separates the two regimes (the first few thousand indices are launch
-/// overhead, the rest is work), so this bound is read off the same trade — a few
-/// thousand indices cost milliseconds of interpretation against a spawn measured
-/// in tens of microseconds, which is where the fan-out stops being a
-/// pessimisation.
+/// # Invariant
+/// Below it the run keeps its own latency: every worker costs a spawn plus its own
+/// store, linker and instantiation, repaid only once a worker owns enough indices for
+/// the interpreted calls to dominate. A few thousand indices cost milliseconds of
+/// interpretation against a spawn measured in tens of microseconds.
 const SEQUENTIAL_PARALLEL_ELEMENTS: usize = 1 << 12;
 
-/// How many workers a parallel run of `count` indices uses, the calling thread
-/// among them (it runs the first chunk itself, so the count of 1 is the
-/// sequential run and spawns nothing).
+/// How many workers a parallel run of `count` indices uses, the caller included.
 ///
-/// Two rules: never below [`SEQUENTIAL_PARALLEL_ELEMENTS`] — the fan-out must
-/// pay for itself — and never above what the machine has available or what
-/// there are indices for, because a worker with no index to run is pure
-/// overhead.  An unavailable [`std::thread::available_parallelism`] reads as
-/// one, which is the sequential run.
+/// # Invariant
+/// Never below [`SEQUENTIAL_PARALLEL_ELEMENTS`] — the fan-out must pay for itself —
+/// and never above what the machine has or what there are indices for. An unavailable
+/// `available_parallelism` reads as one, the sequential run.
 fn parallel_worker_count(count: usize) -> usize {
     if count < SEQUENTIAL_PARALLEL_ELEMENTS {
         return 1;
@@ -5299,24 +5259,21 @@ fn parallel_worker_count(count: usize) -> usize {
     available.clamp(1, count)
 }
 
-// How many workers the calling thread's most recent parallel launch used.  It is
-// a **thread-local**, not a process counter like `MODULE_CACHE_MISSES`: the value
-// is about *one* launch and is written by the thread that launched it, so a
-// shared global would be overwritten by a concurrent launch before the observer
-// read it.  (A `thread_local!` is a macro invocation, so it takes a plain
-// comment; the contract is on the accessor.)
+// How many workers the calling thread's most recent parallel launch used.
+
+// Thread-local, not a process counter: the value is about one launch and is
+// written by the thread that launched it.
 thread_local! {
     static PARALLEL_LAUNCH_WORKERS: Cell<usize> = const { Cell::new(1) };
 }
 
-/// How many workers the calling thread's most recent parallel launch used; `1`
-/// is a sequential run (below [`SEQUENTIAL_PARALLEL_ELEMENTS`], or a machine
-/// with one available processor).
+/// How many workers the calling thread's most recent parallel launch used; `1` is a
+/// sequential run.
 ///
-/// Test- and measurement-visible on purpose, for the reason
-/// [`module_cache_misses`] gives: a parallel result is bit-identical to a
-/// sequential one by construction, so *no assertion on values* can tell a
-/// working fan-out from a dead code path.  This is what a test asserts on.
+/// # Invariant
+/// Test- and measurement-visible because a parallel result is bit-identical to a
+/// sequential one by construction, so no assertion on values can tell a working
+/// fan-out from a dead path; this is what a test asserts on.
 pub fn parallel_launch_workers() -> usize {
     PARALLEL_LAUNCH_WORKERS.get()
 }
