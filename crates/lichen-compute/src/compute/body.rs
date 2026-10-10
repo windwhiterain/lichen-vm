@@ -142,6 +142,11 @@ struct ActiveLoop {
     merge: usize,
 }
 
+/// A `write` in a conditional's arm: the conditional is a `Select`, so both arms
+/// are emitted on every lane, and the arm's write runs `count` times rather than
+/// on the lanes that took it (`docs/notes/loop-conversion.md` §6).
+const CONDITIONAL_WRITE: &str = "a `compute.write` inside a conditional's arm is refused: a kernel body's conditional is a `Select`, which emits both arms on every lane, so the arm's write would run on every lane and overwrite the selected arm's own. A real branch is what makes it legal (`docs/notes/loop-conversion.md` §6)";
+
 /// A cross-kernel callee must return exactly one value, and it must be the
 /// caller's own class: a cross-kernel call is an ordinary wasm `call`, so a float
 /// caller passing an `f32` to an integer callee — or reading an `i64` back into a
@@ -1399,10 +1404,18 @@ where
             ));
         }
         // **`[else, then]`**, so element 0 is the arm that runs when the condition
-        // is false.
+        // is false. An arm that emits a `write` is refused: see [`CONDITIONAL_WRITE`].
         let (otherwise, then) = (arms[0].node, arms[1].node);
+        let emitted = self.tally.writes;
         let otherwise = self.value_item(otherwise)?;
+        if self.tally.writes != emitted {
+            return Err(CONDITIONAL_WRITE.into());
+        }
+        let emitted = self.tally.writes;
         let then = self.value_item(then)?;
+        if self.tally.writes != emitted {
+            return Err(CONDITIONAL_WRITE.into());
+        }
         let selector = self.value_item(*selector)?;
         // The selector is the language's `0`/`1` scalar; a consumer whose own
         // condition is narrower narrows it here. **`I32WrapI64` is that

@@ -1392,12 +1392,13 @@ fn a_write_inside_a_conditional_is_refused() {
     // one path, so the index function is refused — never quietly reduced to the
     // outputs it happens to write unconditionally.
     //
-    // What refuses it here is the emitter's existing inline-call limit, one
-    // layer before the emitter's own conditional-write guard: a same-module
-    // call (`compute.write`) inside an `if` branch is not reduced, so the
-    // branch still holds an `Apply`.  The refusal therefore names *that* cause,
-    // and it is still a refusal — what this pins is that the program does not
-    // run and does not silently produce one output buffer.
+    // What refuses it here is the walk's own conditional-write guard, one layer
+    // after the arm is lowered: a same-module call (`compute.write`) inside an
+    // `if` branch now lowers, because an imported binding's callee names its
+    // frozen function whether or not anything evaluated — and then the arm's
+    // write is refused by name, because a `Select` emits both arms on every
+    // lane. The refusal is what this pins: the program does not run and does
+    // not silently produce one output buffer.
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
@@ -1420,7 +1421,7 @@ compute.read ((compute.Read _)(.from outs.x, .at 2))
     );
     let message = &messages[0];
     assert!(
-        message.contains("compute.parallel") && message.contains("not yet supported"),
+        message.contains("compute.parallel") && message.contains("inside a conditional's arm"),
         "the refusal must name its own cause: {message:?}"
     );
 }
