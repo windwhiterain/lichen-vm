@@ -371,6 +371,106 @@ values into locals, a primitive `KernelInstr` has no encoding for; so until it
 does, `cross_kernel_call` refuses naming the callee and its arity
 (`CROSS_KERNEL_RESULT_ARITY`) rather than truncating to the first result.
 
+### `KernelBody`: SSA over named values
+
+The IR crate's `KernelBody` is SSA: a value is a `ValueId` and an operand *is* one.
+It replaced a **stack machine**, where an instruction named no values — `Bin` said
+"pop the top two" — and every backend walked an operand stack and *derived* the form
+it wanted: the wasm backend derives a stack from SSA, `spirv.rs` derives SSA ids
+from a stack. Both paid to undo the omission, and the omission was not cosmetic:
+
+- **a loop-carried value had no representation at all.** `KernelInstr`'s `LocalGet`
+  named a *parameter leaf*, and nothing named element `k` of a loop's state, so a
+  body could arrive at a loop header but could not carry anything new; every loop
+  the IR could build ran zero trips or forever.
+- **a shared subexpression had to be emitted once per use**, because nothing could
+  name it after the first.
+
+**A block's `params` are the values it receives, and that is one rule for a
+function's parameters and for a loop's carried state.** "Read the loop's state"
+stops being an instruction that exists only inside a loop and becomes an ordinary
+read of a value the block has: `ValueDef::BlockParam` is where a parameter and a
+carried value both live. It is also the form both backends already want — a block
+parameter *is* wasm's loop-carried value, and SPIR-V's `OpPhi` is the same thing —
+so neither has to derive names the IR should have carried. A `Br`'s `args` are the
+whole of a block's incoming state, which is what makes a backedge's arguments the
+next iteration's carried tuple.
+
+A **lowering** builds this with `KernelBody::add_op` in dependency order and
+`KernelBody::set_terminator` at the end of each block. What defines a value is the
+lowering's question, not the IR crate's: the graph it walks resolves names through
+an equality class, and that rule belongs beside the cells
+(`lichen_lowlevel::resolve`).
+
+Two per-kind facts the declarations carry:
+
+- **`classes` is per result and may be empty.** A `BufferWriteCall` leaves nothing,
+  a call to another kernel leaves its callee's result class, and a comparison leaves
+  one scalar. The list is what the definition produces and a consumer reads; it is
+  never inferred backwards.
+- **`Terminator::Return` carries a list, because a codomain is.** A kernel returns
+  one leaf or a tuple of them, and a tuple codomain's values are one `Return` —
+  wasm's multi-value result and SPIR-V's `OpReturn` are each one instruction. A
+  `CondBr`'s `cond` is an `i64` `0`/`1` scalar like every other condition in this
+  IR, and a consumer that needs a narrower one narrows it there (wasm's `br_if`
+  takes an `i32`), which is a fact about the consumer.
+
+#### The hand-written body: `FlatOp` and `from_flat`
+
+`from_flat` writes a one-block body for something with **no graph to walk** — a
+fixture, an example, a probe — from a list of steps whose values consume and
+produce a running list. That stack discipline is deliberate and local: a lowering
+does not use it and cannot, because it walks the graph, resolves what each node
+names through `lichen_lowlevel::resolve`, and names every operand, which is what
+makes a shared subexpression emit once instead of once per use. `FlatOp::Read(k)`
+is what `KernelInstr::LocalGet(k)` was — a way to name a parameter — and it is a
+step of *writing* a body rather than an instruction *in* one; a body whose operands
+are named needs the name, not an instruction to fetch it.
+
+`domain` is the number of parameter leaves the entry block receives. The stack
+starts **empty**: seeding it with the parameters would leave every one of them on
+it, and the return would hand them back as results. The return hands out the top of
+the stack and nothing else — a body that computes several values in sequence
+returns the last, which is what the stack's own convention was, and handing back
+every intermediate would make the arity depend on how the body was written. **A
+body that produces nothing returns nothing**: a write-only fragment's results are
+its output buffers rather than its wasm results, and `compile_parallel_fragment`
+appends the constant that gives it one. An operation's declared class comes from
+the instruction itself where it states one (`KernelInstr::own_class`) and is the
+ABI's integer default otherwise, because a hand-written body says what it computes
+rather than deriving it from a node.
+
+#### `validate`'s four rules
+
+`KernelBody::validate` is the gate a consumer calls **before it reads a body**, and
+each rule is a fact about the structure rather than about a target:
+
+1. the entry block exists, and so does every block a transfer names;
+2. **every value a block reads is available there** — an operand is computed
+   earlier in the same block, is one of that block's parameters, or was computed in
+   a block that dominates it. The last clause is checked by walk order, which is
+   the cheap and sufficient condition for a body built by `add_op` in order;
+3. **a branch's `args` are exactly its target's `params`**, which is what makes a
+   target's phi complete without it inventing a default;
+4. an instruction's `classes` matches what it produces — zero for a write, one for
+   everything else.
+
+A body that fails any of these is **refused by name**, never partially emitted: a
+silently dropped branch or a mismatched phi is a fragment that computes a different
+program than it was lowered from. One instruction is exempt from the arity half of
+rule 4: a call's arity is the **callee's own domain**, which the IR crate does not
+know, so the check that could contradict it belongs to whoever holds the callee.
+
+The three read-side accessors answer different questions and are not
+interchangeable: `parameters` is the entry block's params, which is the ABI and the
+one place the body's shape and a call's argument list have to agree; `instrs` is
+every instruction the body defines, and **a block parameter is not an instruction**,
+so a consumer that needs the body's inputs reads `parameters` instead; `operands`
+is every value the body **reads**, each instruction's operands and every transfer's,
+so it is the whole of what a caller must supply — a body's inputs are among them,
+because an operand may be a block parameter. `is_a_parameter` is the entry-block
+test that separates the two.
+
 ### The body's lowering: a graph walk that emits SSA
 
 `crates/lichen-compute/src/compute/body.rs` holds `Lower`, the one walk that turns a
