@@ -1,12 +1,4 @@
-//! The shared tail of dynamic and static function application.
-//!
-//! Dynamic functions (`function.rs`) and static function materialization
-//! (`static_module.rs`) differ in how they clone the applied template, but
-//! they share the same apply bookkeeping: enter/leave the apply budget,
-//! unify the cloned parameter against the argument, record a failed
-//! parameter check, and wire the returned pair into the apply node/cell.
-//! Keeping those pieces here prevents the two apply paths from drifting
-//! apart.
+//! The apply tail `function.rs` and `static_module.rs` share, so the two paths cannot drift.
 
 use crate::{
     AnyFunctionId, AnyNodeId, ApplyError, BlockId, BudgetExhausted, LowValue, Module, NodeId,
@@ -15,18 +7,15 @@ use crate::{
 use lichen_utils::extend::AsEnum;
 
 impl<P: Program> Module<P> {
-    /// Run `body` inside one application frame: charge the work counter and
-    /// enforce its bound.
+    /// Run `body` inside one application frame: charge the work counter and enforce
+    /// its bound.
     ///
-    /// A budget that the frame exceeds is **recorded, not unwound**: the body
-    /// is refused, [`Module::budget_exhausted`] takes the budget and its
-    /// limit, and the frame returns the undecided marker.
-    ///
-    /// The frame charges the **work** counter only.  The nesting guard is not
-    /// here, because nesting is not a property of the walk: it is read off the
-    /// node being applied ([`Module::node_depth`]) before the instantiation
-    /// happens, so it holds the same whether the expansion is forced as it is
-    /// built or walked later — see [`Module::function_apply`].
+    /// # Invariant
+    /// An exceeded budget is **recorded, not unwound**: the body is refused,
+    /// [`Module::budget_exhausted`] keeps the budget and its limit, and the frame
+    /// returns the undecided marker.  Only the **work** counter is charged here;
+    /// the nesting guard reads the applied node's [`Self::node_depth`] instead,
+    /// so it holds however the expansion was forced.
     pub(super) fn with_apply_frame(
         &mut self,
         body: impl FnOnce(&mut Self) -> Option<P::Value>,
@@ -40,28 +29,18 @@ impl<P: Program> Module<P> {
             if self.budget_exhausted.is_none() {
                 self.budget_exhausted = Some(exhausted);
             }
-            // The body never ran, so nothing was computed — and the answer
-            // is *unknown*, not nothing: return `None`, the undecided
-            // answer, the
-            // same refusal `apply_parameter_check` already issues for a body
-            // it declined to run.  `LowValue::Error` would instead be cached
-            // by the `evaluate_node` postlude as a decided value, letting
-            // the deep pass certify this node concrete (its
-            // `evaluated_deep.undecided` derives from the cached value)
-            // and every parent array along with it — a proven-concrete
-            // claim about a computation that never happened.
+            // The body never ran, so the answer is unknown: `None`, not an `Error`
+            // the postlude caches as decided.
             return None;
         }
         body(self)
     }
 
-    /// Whether applying the function at `node` would instantiate a body deeper
-    /// than [`Self::apply_depth_limit`], recording the verdict when it would.
+    /// Whether applying `node` would instantiate a body deeper than [`Self::apply_depth_limit`].
     ///
-    /// **The depth is the node's** ([`Self::node_depth`]), so the answer does
-    /// not depend on how the graph was built: an expansion's level `k` is
-    /// stamped `k` and a converted loop's iterations are all stamped alike,
-    /// whatever forces their values and whenever.
+    /// # Invariant
+    /// The depth read is the node's own [`Self::node_depth`], not the walk's, so the
+    /// verdict does not depend on how or when the graph was forced.
     pub(super) fn depth_exhausted(&mut self, node: NodeId) -> bool {
         let depth = self.node_depth(node) as usize + 1;
         if depth <= self.apply_depth_limit {
@@ -75,17 +54,14 @@ impl<P: Program> Module<P> {
         true
     }
 
-    /// The post-clone parameter check shared by dynamic and static applies.
+    /// The post-clone parameter check shared by both apply paths; `true` when it failed.
     ///
-    /// `cloned_param` is the fresh parameter clone the apply walk produced;
-    /// `parameter_type_source` is the node whose type slot names the declared
-    /// parameter type — the original template parameter for dynamic applies,
-    /// the instantiated clone for static materialization (where the template
-    /// parameter is not a dynamic [`NodeId`]).
-    ///
-    /// Returns `true` when the argument failed the parameter check and an
-    /// [`ApplyError`] was recorded.  The caller should stop the apply without
-    /// evaluating the body.
+    /// # Invariant
+    /// On failure an [`ApplyError`] is recorded and the caller stops the apply without
+    /// evaluating the body.  `parameter_type_source` names the node whose type slot
+    /// holds the declared parameter type: the template parameter for a dynamic apply,
+    /// the instantiated clone for a static one, where the template parameter is not a
+    /// dynamic [`NodeId`].
     pub(super) fn apply_parameter_check(
         &mut self,
         cloned_param: NodeId,
@@ -95,10 +71,8 @@ impl<P: Program> Module<P> {
         function: AnyFunctionId,
         parameter_type_source: NodeId,
     ) -> bool {
-        // Evaluate the argument to the depth the parameter's pattern
-        // references, so the unify sees the argument's element values
-        // instead of undecided slots; positions the pattern treats as opaque
-        // stay lazy.
+        // Evaluate the argument only to the depth the pattern references, so an
+        // opaque position stays lazy.
         self.evaluate_pattern_argument(cloned_param, argument, block);
         let pre_unify_errors = self.unify_errors.len();
         self.unify(cloned_param, argument);
@@ -106,21 +80,15 @@ impl<P: Program> Module<P> {
             return false;
         }
 
-        // A failed parameter check: the argument does not fit the applied
-        // function's declared parameter type.  Record the apply context for
-        // attribution (the raw UnifyError leaves drop the two top-level
-        // sides), then stop — evaluating the body under a mismatched
-        // argument is meaningless and may well panic (e.g. an `Index` over a
-        // non-array value).  Deduplicated by apply node, so a later re-read
-        // of the same apply does not re-record it.
-        // SAFETY: `parameter_type_source` is a node of this module, reachable
-        // here — its home block is alive and has not been dropped.
+        // Record the apply context, then stop — the body under a mismatched argument
+        // may panic.  One error per apply node.
+
+        // SAFETY: `parameter_type_source` is a live node of this module.
         let parameter_type = unsafe { self.array_items(parameter_type_source) }
             .and_then(|items| items.get(1))
             .map(|item| self.as_dynamic(item.node, block))
             .unwrap_or(parameter_type_source);
-        // SAFETY: `argument` is a node of this module, reachable here — its
-        // home block is alive and has not been dropped.
+        // SAFETY: `argument` is a live node of this module.
         let argument_type = unsafe { self.array_items(argument) }
             .and_then(|items| items.get(1))
             .map(|item| self.as_dynamic(item.node, block))
@@ -138,13 +106,13 @@ impl<P: Program> Module<P> {
         true
     }
 
-    /// The post-evaluation apply result wiring shared by dynamic and static
-    /// applies.
+    /// Wire the apply result: cache the return pair, unify it with the cloned return
+    /// node.
     ///
-    /// The apply node caches the return pair and is unified with the cloned
-    /// return node, so the classes merge — the apply node *is* the return
-    /// pair — and the result cell (the checker's third operand element)
-    /// binds to the return type.
+    /// # Invariant
+    /// The result cell binds to the return type, resolved before the bind: the deep
+    /// pass resolves later and does not replicate to class members.  Element 1 is
+    /// the type slot of a 2-wide or a 3-wide pair.
     pub(super) fn wire_apply_result(
         &mut self,
         node: NodeId,
@@ -154,23 +122,13 @@ impl<P: Program> Module<P> {
         block: BlockId,
     ) -> Option<P::Value> {
         match (cell, result.and_then(|value| value.as_enum())) {
-            // SAFETY: `array` is the payload of `result`, a value this module
-            // just evaluated, so its home block is alive and not dropped; the
-            // note covers both `items()` calls in this arm.
+            // SAFETY: `array` is `result`'s live payload; this covers both `items()` calls.
             (Some(cell), Some(LowValue::Array(array))) if unsafe { array.items() }.len() >= 2 => {
                 let items = unsafe { array.items() };
                 self.write_node_value(node, result);
                 self.unify(node, applied);
-                // Resolve the return type before binding the cell: the deep
-                // pass resolves the node later but does not replicate to
-                // class members, so an unresolved bind would leave the cell
-                // undecided.  A lazy return type — a body ending in a call —
-                // is an Index read, which already aliased its target cell at
-                // evaluation time (see the Index arm), so this unify joins
-                // the cell into that class and the binding propagates
-                // regardless of when the nested apply runs.  Element 1 is
-                // the type slot for a 2-wide pair and for a 3-wide
-                // `[value, type, perspective]` pair alike.
+                // Resolve the return type first — the deep pass does not replicate
+                // to class members.
                 let item = self.as_dynamic(items[1].node, block);
                 self.evaluate_node(crate::AnyNodeId::Dynamic(item), Some(block));
                 self.unify(cell, item);
@@ -181,22 +139,12 @@ impl<P: Program> Module<P> {
     }
 }
 
-/// Whether a value's **own** item slots are still open — the policy behind the
-/// clone rule's `runned` claim, shared by the dynamic clone walk
-/// ([`Module::answer_elements_are_undecided`]) and the static materialize walk
-/// ([`Module::static_answer_elements_are_undecided`]).
+/// Whether a value's own item slots are open — the `runned` policy; see
+/// `docs/notes/apply-clone-ownership.md`.
 ///
-/// Such an answer is the operator's own result structure — the pair a call
-/// answers with — and the only thing that settles it is that operator's own
-/// re-run and wiring, so a clone that claimed the operator's answer would read
-/// open slots as final.  **One level deep by design**: a structure whose
-/// *elements* are decided is a fact a clone may answer with, however open its
-/// interior is (a struct type's field cells are bound by the enclosing call's
-/// checks).
-///
-/// `slot_is_empty` is the only thing the two walks answer differently — the
-/// dynamic template's node slots against the static template's — so the policy
-/// itself is stated here, once.
+/// # Invariant
+/// One level deep by design: a structure whose own elements are decided is a fact
+/// a clone may answer with, however open its interior is.
 pub(super) fn answer_elements_are_undecided<P: Program>(
     value: P::Value,
     mut slot_is_empty: impl FnMut(AnyNodeId) -> bool,
@@ -204,26 +152,17 @@ pub(super) fn answer_elements_are_undecided<P: Program>(
     let Some(LowValue::Array(array)) = value.as_enum() else {
         return false;
     };
-    // SAFETY: `array` is the payload of `value`, a value the caller holds
-    // reachable; this function only reads, so its home block is not released.
+    // SAFETY: `array` is `value`'s payload, which the caller keeps reachable.
     unsafe { array.items() }
         .iter()
         .any(|item| slot_is_empty(item.node))
 }
 
-/// Group the clones of one apply pass by their template representative, so a
-/// pass can re-establish the template's internal class topology among the
-/// fresh singleton classes.  The representative function differs for a
-/// dynamic template (`disjoint::find` on the live module) and a static
-/// template (`static_find` on the immutable solved module); caller supplies
-/// it.
+/// Group one apply pass's clones by template representative, sorted; the caller reads runs.
 ///
-/// The answer is one `Vec` sorted by representative, which the caller reads as
-/// runs.  A `HashMap` of groups costs a table allocation plus one `Vec` per
-/// group on **every apply**, and the order it hands the groups back in is
-/// arbitrary, so nothing depends on it; the sort is stable, so a group's
-/// clones keep the walk's insertion order — the order the unification pairs
-/// them in.
+/// # Invariant
+/// The sort is stable, so a group's clones keep the walk's insertion order — the
+/// order the unification pairs them in.
 pub(super) fn regroup_clones<K, I>(remap: I, mut find: impl FnMut(K) -> K) -> Vec<(K, NodeId)>
 where
     K: Copy + Ord,
@@ -237,14 +176,12 @@ where
     grouped
 }
 
-/// Re-establish one apply pass's template topology among its fresh clones:
-/// unify every run [`regroup_clones`] produced.  The grouping caller picks
-/// the representative; this half — the unification policy — is the same for
-/// the dynamic and the static apply path, so it is stated once.
+/// Unify every run [`regroup_clones`] produced, re-establishing the template
+/// topology among the fresh clones.
 ///
-/// The groups are disjoint sets of freshly minted nodes, so the order the
-/// runs are visited in cannot affect the result; only a run's own order can,
-/// and that is preserved.
+/// # Invariant
+/// The groups are disjoint sets of fresh nodes, so run order cannot affect the
+/// result; a run's own order is preserved.
 pub(super) fn unify_clone_groups<K>(groups: Vec<(K, NodeId)>, mut unify: impl FnMut(NodeId, NodeId))
 where
     K: Copy + Eq,

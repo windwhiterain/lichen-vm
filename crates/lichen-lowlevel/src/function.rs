@@ -9,22 +9,16 @@ use crate::{
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
 
-/// The context of a failed apply-time parameter check: the declaration the
-/// argument had to satisfy.  `parameter_type` is the applied function's
-/// declared (template) parameter-type node, `argument_type` the argument's
-/// own type node — the two top-level sides of the failing `unify`, which the
-/// raw [`UnifyError`] (deep conflict leaves) discards.  `argument` is the
-/// argument's pair node (fallback span source), `apply_node` the apply
-/// operation node — the identity of the *edge* whose highlevel structure the
-/// checker recorded (`Build::apply_edges`), keyed by it, so a diagnosis can
-/// reach the argument's source span even when the argument node is shared.
-/// `error_index` is the index into [`Module::unify_errors`] of the first
-/// error this parameter check produced — the key back to it for the
-/// diagnostics, mirroring the highlevel diary.
+/// A failed apply-time parameter check's context: the key back into [`Module::unify_errors`].
+///
+/// # Invariant
+/// `parameter_type` and `argument_type` are the two top-level sides of the failing
+/// `unify`, which the raw [`UnifyError`] (deep conflict leaves) discards, so this is
+/// the only record of them; `apply_node` is the edge the checker keyed its structure by.
 #[derive(Debug, Clone, Copy)]
 pub struct ApplyError {
-    /// The applied function — a static function ref when the apply
-    /// materialized a static dependency (no importer span behind it).
+    /// The applied function — a static ref when the apply materialized a static
+    /// dependency.
     pub function: AnyFunctionId,
     pub parameter_type: NodeId,
     pub argument_type: NodeId,
@@ -33,86 +27,54 @@ pub struct ApplyError {
     pub error_index: usize,
 }
 
-/// The fixed context of one clone pass: where the clones land, the
-/// membership anchor, the running node-id remap (template node to its
-/// clone), and the owner tag assigned to the clones this pass creates.
+/// The fixed context of one clone pass: where clones land, the anchor, the remap, and
+/// the owner tag.
 struct ApplyCtx<'a> {
     target: BlockId,
-    /// The template membership anchor: the applied function.  A node
-    /// belongs to the template iff its [`Node::function`] chain (through
-    /// [`Function::parent`]) reaches it — a nested closure's nodes are
-    /// members of the enclosing function's template, while a sibling's are
-    /// not (the mutual-recursion invariant).
+    /// The membership anchor: the applied function.  A node belongs to it iff its
+    /// [`Function::parent`] chain reaches it.
     anchor: FunctionId,
     /// The branch stack top: the id a freshly cloned closure hangs under
-    /// ([`Function::parent`]).  The applied function at the top of an
-    /// apply; each closure clone re-anchors it at its own fresh id, so
-    /// every fresh template's chain runs back through the enclosing
-    /// instances to the anchor.  Distinct from [`Self::tag`], which is the
-    /// apply node's owner at the top of a direct apply (so an apply's
-    /// results read as members of the *enclosing* template).
+    /// ([`Function::parent`]).
+    ///
+    /// # Invariant
+    /// Each closure clone re-anchors it at its own fresh id, so every fresh template's
+    /// chain runs back through the enclosing instances to [`Self::anchor`].
     branch_top: FunctionId,
-    /// The scope of the closure being cloned, when inside a closure
-    /// branch.  The chain test alone does not cover it: a closure whose
-    /// value flowed in through a unification (a parameter bound to a
-    /// function value) is walked under the *enclosing* anchor, and its own
-    /// nodes' chains — rooted at the original id, whose parent chain need
-    /// not reach that anchor (a top-level closure) — would read as outside
-    /// the template, leaving the fresh closure's scope shared across
-    /// calls.  The closure's own scope is always in its own template, so
-    /// membership is the chain test or a scope hit.
+    /// The scope of the closure being cloned, when inside a closure branch.
+    ///
+    /// # Invariant
+    /// Membership is the chain test **or** a scope hit: a closure whose value arrived
+    /// through a unification is walked under the enclosing anchor, and without the scope
+    /// hit its fresh scope would be shared across calls.
     closure_scope: Option<&'a [NodeId]>,
-    /// The function being applied: its own value node is the recursion
-    /// self-reference (referenced in place when proven concrete), while any
-    /// *other* function value in the scope is a nested closure and must be
-    /// cloned per call — its captures bind to this call's clones, which a
-    /// concreteness proof of the value node cannot see.
+    /// The function being applied — the recursion point, whose own value node stays in place.
     applied: FunctionId,
-    /// The applied function's parameter pair, always cloned: the parameter
-    /// check runs against the fresh clone, and every call must bind its own
-    /// cells (recursion re-applies the template per level).
+    /// The applied function's parameter pair, always cloned: the check runs per call.
     parameter: NodeId,
-    /// The owner tag stamped on the clones this pass creates: the apply
-    /// node's owning function (so an apply's results read as members of the
-    /// enclosing template and are re-instantiated per call), or the fresh
-    /// id of a closure being cloned (so its own template reads as members
-    /// of that id, not of the original).  Runtime-created nodes with no
-    /// template role carry [`None`].
+    /// The owner tag stamped on the clones this pass creates: the apply node's owner, or
+    /// a closure's fresh id.
     tag: Option<FunctionId>,
     remap: &'a mut HashMap<NodeId, NodeId>,
-    /// The fresh closure this walk has already minted for a template closure:
-    /// a source [`FunctionId`] → the fresh [`FunctionId`] minted for it.  The
-    /// `Function(fresh)` value is rebuilt on read, so this table needs no value
-    /// type of its own.
+    /// A source [`FunctionId`] → the fresh closure this walk minted for it.
     ///
-    /// A per-call closure is minted **once**.  The walk reaches a template
-    /// closure from more than one node (its own value node, and any answer
-    /// value that names it — a recursive call's result pair, a captured
-    /// binding), and each of those is a per-call fact about the *same*
-    /// closure.  Minting per reach would give this call two closures where its
-    /// body means one, and the two meet in a unification as two different
-    /// functions.  The node-level [`ApplyCtx::remap`] dedups *nodes*; this
-    /// dedups the closure those nodes carry.
+    /// # Invariant
+    /// One closure per call: the walk reaches a template closure from several nodes, and
+    /// minting per reach gives a single call two closures where its body means one.
     minted: &'a mut HashMap<FunctionId, FunctionId>,
 }
 
-/// One **instantiation** of a function's template for one argument: the clone
-/// of its return pair, and the map from each template node to the node of this
-/// instantiation that stands for it.
-///
-/// This is the half of an apply that its two consumers share.  The unroll
-/// evaluates the instantiated return and unwinds; a converted loop instantiates
-/// **once per iteration** and reads its test, its next state and its exit out of
-/// the same map, so a loop's iterations are ordinary applies with the nesting
-/// removed (see `loop_run.rs`).
+/// One **instantiation** of a function's template: the return pair's clone and the
+/// template→clone map.
 pub(super) struct Instantiation {
     /// The clone of the function's return pair — what an apply evaluates.
     pub applied: NodeId,
-    /// Template node → the node of this instantiation standing for it.
+    /// Template node → its node of this instantiation; read through
+    /// [`Instantiation::node_of`].
     ///
-    /// A template node the walk referenced in place — a concrete or per-call
-    /// invariant value — is absent, and *is* its own clone; read through
-    /// [`Instantiation::node_of`] rather than indexing the map.
+    /// # Invariant
+    /// A template node the walk referenced in place — a concrete or per-call invariant
+    /// value — is absent from the map and *is* its own clone.
     remap: HashMap<NodeId, NodeId>,
 }
 
@@ -125,10 +87,8 @@ impl Instantiation {
 }
 
 impl<P: Program> Module<P> {
-    /// `#[stacksafe]`: application recursion runs through here (and
-    /// [`Module::evaluate_node`]) at one frame per level, so the depth guard
-    /// must be able to grow the stack — otherwise a deep recursion overflows
-    /// the native stack before the guard panics.
+    /// `#[stacksafe]`: apply recursion is one frame per level, so the depth guard must be
+    /// able to grow the stack.
     #[stacksafe]
     pub(super) fn function_apply(
         &mut self,
@@ -138,23 +98,12 @@ impl<P: Program> Module<P> {
         node: NodeId,
         cell: Option<NodeId>,
     ) -> Option<P::Value> {
-        // **The nesting guard, before any work.** `node` is the apply node this
-        // instantiation is for, and the node's own depth is how many apply
-        // levels it already sits under — a fact of the graph, so an expansion
-        // meets this bound at its trip count whether it is forced as it is built
-        // or walked later by the deep pass. A converted loop instantiates the
-        // same entering apply node every iteration, so it stays at that node's
-        // depth however long it runs: it spends work, never nesting.
+        // The nesting guard, first: `node`'s depth bounds the expansion, so a loop never nests.
         if self.depth_exhausted(node) {
             return None;
         }
-        // **A marked recursion runs as a loop.** `@loop` is permission to
-        // convert, and a shape that converts ([`Module::loop_conversion`]) is
-        // driven by [`Module::apply_loop`] instead of expanded level by level:
-        // same values, one instantiation per iteration rather than one per
-        // nested level, so the trip count stops costing nesting.  A marked
-        // function whose shape does *not* convert, and every unmarked one, is
-        // untouched and takes the unroll below.
+        // A marked recursion whose shape converts runs as a loop — one instantiation per
+        // iteration, not one per nested level.
         if self.function_is_looping(function)
             && let Ok(conversion) = self.loop_conversion(function)
         {
@@ -171,22 +120,12 @@ impl<P: Program> Module<P> {
         })
     }
 
-    /// One **instantiation** of `function`'s template for `argument`: the clone
-    /// of its return pair, the template→clone map, and the parameter check that
-    /// makes the argument satisfy the declared parameter type.
+    /// Instantiate `function`'s template for `argument`: clone the return pair, then run
+    /// the parameter check.
     ///
-    /// This is the half of an apply that its two consumers share.  The unroll
-    /// evaluates the instantiated return and unwinds; a converted loop
-    /// instantiates **once per iteration** and reads its condition, its next
-    /// state and its exit out of the same map, so the loop's iterations are
-    /// ordinary applies with the nesting removed.
-    ///
-    /// **Every node it creates is stamped with the instantiation's depth** —
-    /// the apply node's own depth plus one ([`Module::stamp_depth`]) — which is
-    /// what makes a node's [`depth`](Module::node_depth) a fact about the graph
-    /// rather than about the walk that happened to build it. Nested
-    /// instantiation (an argument whose evaluation applies something) restores
-    /// the previous stamp on the way out.
+    /// # Invariant
+    /// Every node created is stamped with the apply node's depth plus one, so a node's
+    /// depth is a fact about the graph; a nested instantiation restores the previous stamp.
     #[stacksafe]
     pub(super) fn instantiate(
         &mut self,
@@ -230,9 +169,7 @@ impl<P: Program> Module<P> {
         let mut minted = HashMap::new();
         let mut ctx = ApplyCtx {
             target: block,
-            // Membership is the chain test, not a scope snapshot: the clones
-            // this pass creates are stamped with the apply node's owner, so
-            // the enclosing template re-instantiates them per call.
+            // Membership is the chain test, not a scope snapshot.
             anchor: function,
             branch_top: function,
             closure_scope: None,
@@ -243,32 +180,13 @@ impl<P: Program> Module<P> {
             minted: &mut minted,
         };
         let applied = self.node_apply(r#return, &mut ctx);
-        // The parameter is an entry point of the clone walk, not just a node
-        // the return subtree happens to reach: the argument must satisfy the
-        // parameter's type even when the body never references the parameter
-        // (an ignored parameter), and a parameter read whose value a type
-        // annotation pinned is referenced in place and so is invisible from
-        // the return.  Walking it regardless guarantees the parameter unify
-        // below fires.  Idempotent: if the return clone already remapped it,
-        // this returns the same clone.
+        // The parameter is a walk entry point, so the unify fires even when the body never
+        // references it.  Idempotent.
         self.node_apply(parameter, &mut ctx);
-        // The body's asserts are the function's own registry entries (see
-        // `Function::asserts`): the return clone cannot reach a condition
-        // that no value references, so each one is instantiated through the
-        // shared remap — a condition the deep pass proved concrete is
-        // per-call invariant and is referenced in place (decided at
-        // normalize), while an undecided one rewrites to this call's clones,
-        // so the body's assert re-checks against the argument.  Only actual
-        // clones register: a fresh entry is a constraint on this call.  The
-        // entry keeps the body condition as its template, which is all the
-        // host needs to attribute a per-call failure (a user-facing flag, a
-        // source position) through its own table.
-        // Walked by index rather than over a clone of the list: the loop
-        // body needs `&mut self` to instantiate each condition, and the
-        // registry lives on `self` itself, so no borrow of it can be
-        // held across the call.  The list is only read here — the entries
-        // this loop adds go to `self.asserts`, the per-call registry,
-        // not to the function's own.
+        // The body's asserts come from the function's own registry, instantiated through the
+        // remap; only a real clone registers.
+
+        // Walked by index: the loop body needs `&mut self`, and the registry lives on it.
         for index in 0..assert_count {
             let condition = self.functions[function].asserts[index];
             let instantiated = self.node_apply(condition, &mut ctx);
@@ -279,18 +197,9 @@ impl<P: Program> Module<P> {
                 });
             }
         }
-        // The parameter is cloned like any undecided node, and the clone
-        // is unified with the argument instead of being replaced by it: the
-        // class binding propagates the argument's value to every reference
-        // to the parameter in the body.
+        // The clone is unified with the argument, not replaced by it, so the binding propagates.
         if let Some(&cloned_param) = ctx.remap.get(&parameter) {
-            // The clones are fresh singleton classes; re-establish the
-            // template's internal class topology among them, so template
-            // nodes unified at definition time (e.g. the elements of a
-            // homogeneous array pattern) stay unified after cloning — the
-            // elementwise unify below then forces the argument to satisfy
-            // the pattern's internal constraints.  A single clone (just the
-            // parameter) has no topology to re-establish.
+            // Re-establish the template's class topology among the fresh singleton clones.
             if ctx.remap.len() > 1 {
                 let groups = crate::apply::regroup_clones(
                     ctx.remap
@@ -316,14 +225,12 @@ impl<P: Program> Module<P> {
         Some(Instantiation { applied, remap })
     }
 
-    /// Evaluate `argument` to the structural depth `pattern` (the cloned
-    /// parameter) references, so the apply's unify sees the argument's
-    /// element values instead of undecided slots.  Only array positions in
-    /// the pattern recurse; sub-values the pattern treats as opaque stay
-    /// unevaluated.  `seen` holds the `(pattern, argument)` pairs on the
-    /// current recursion, so a structural cycle (the `Type : Type` universe,
-    /// which a typed pattern's spine reaches twice) is walked once instead
-    /// of looping.
+    /// Evaluate `argument` as deep as `pattern` references it, so the unify sees element
+    /// values instead of undecided slots.
+    ///
+    /// # Invariant
+    /// Only array positions recurse; a sub-value the pattern treats as opaque stays
+    /// unevaluated.
     #[stacksafe]
     pub(crate) fn evaluate_pattern_argument(
         &mut self,
@@ -350,10 +257,8 @@ impl<P: Program> Module<P> {
         if !seen.insert((pattern, argument)) {
             return;
         }
-        // The argument side is evaluated through `evaluate_node` so a static
-        // ref resolves to its solved value (absolute refs — the recursion
-        // below can walk them); the pattern side is always a dynamic clone,
-        // read raw.
+        // The argument goes through `evaluate_node` (a static ref resolves); the pattern is a
+        // dynamic clone, read raw.
         self.evaluate_node(argument, Some(block));
         let pattern_value = match pattern {
             Dyn(pattern) => self.nodes[pattern].value.and_then(|value| value.as_enum()),
@@ -368,17 +273,12 @@ impl<P: Program> Module<P> {
         ) else {
             return;
         };
-        // SAFETY: `pattern` is a live node of this module (a static ref
-        // resolves through the registered module) and `argument` is the value
-        // just evaluated from a live node; neither home block is released by
-        // the descent below.
+        // SAFETY: both are live payloads of reachable nodes; the descent releases no block.
         for (pattern_item, argument_item) in unsafe { pattern.items() }
             .iter()
             .zip(unsafe { argument.items() }.iter())
         {
-            // A shallow position on either side is opaque — its subtree
-            // stays lazy, so the apply's argument evaluation does not force
-            // what the marker deliberately left unevaluated.
+            // A shallow position is opaque: the apply must not force what the marker left lazy.
             if pattern_item.shallow || argument_item.shallow {
                 continue;
             }
@@ -396,51 +296,23 @@ impl<P: Program> Module<P> {
         if let Some(&clone) = ctx.remap.get(&node) {
             return clone;
         }
-        // The chain membership test: a node belongs to the template iff its
-        // owner's chain of lexical parents reaches the anchor — or it is one
-        // of the closure's own scope nodes, when a closure is being cloned
-        // (see [`ApplyCtx::closure_scope`]).  A node whose owner is outside
-        // the applied function's nesting (a top-level value, a sibling's
-        // body) is referenced as-is.
+        // Membership is the anchor chain test or a closure-scope hit; otherwise the node is
+        // referenced in place.
         let member = self.function_descends_from(self.nodes[node].function, ctx.anchor)
             || ctx.closure_scope.is_some_and(|scope| scope.contains(&node));
         if !member {
             return node; // outside the template scope — reference as-is
         }
-        // The body always exists, so only the parts whose value could
-        // differ per call need fresh nodes: the parameter and nodes the deep
-        // pass could not prove concrete — flagged undecided nodes, plus
-        // nodes whose dependence was never resolved (the deep pass never ran
-        // on them).  A node the deep pass proved concrete
-        // (`evaluated_deep == Some(EvaluatedDeep { undecided: false })`)
-        // is baked — reference it in place.  The deep pass evaluates an operation node for real even
-        // when it merely holds a value (a type annotation's pin is a
-        // constraint, not a computation), so a concrete proof on an
-        // operation node covers what the operation actually produces — no
-        // operation node is special-cased here.  A *function value* is never
-        // baked by that proof: its body's dependence on this call is
-        // invisible to the deep pass, so any function value other than the
-        // applied function's own self-reference (the recursion point) is
-        // cloned per call — a nested closure's captures must rebind to this
-        // call's clones.  The same goes for a proven-concrete structure
-        // *containing* such a function value (a function's pair, a tuple of
-        // closures): the proof cannot see through the function's body
-        // either.
-        // The clone is a fresh class, but the same computation over the same
-        // values, so the source's *class* low type seeds it.  Read through the
-        // representative (see `class_low_type`), never from the source's own
-        // slot.
+        // Only the parts whose value could differ per call get fresh clones — see
+        // `docs/notes/apply-clone-ownership.md`.
+
+        // The clone computes the same thing, so the source's class low type seeds it.
         let low_shape = self.class_low_type(node).cloned();
         let (value, operation, evaluated_deep) = {
             let source = &self.nodes[node];
             (source.value, source.operation, source.evaluated_deep)
         };
-        // A node the deep pass proved concrete can be baked (referenced in
-        // place); one it never ran on (`None`) or flagged undecided is
-        // cloned, and so is one whose value holds a foreign closure — the
-        // concreteness proof cannot see through a function's body, so that
-        // attribution is made here, where the scope being instantiated is known
-        // ([`Self::value_holds_foreign_function`]).
+        // A value holding a foreign closure is cloned too: the proof cannot see through a body.
         let proven_concrete = evaluated_deep.is_some_and(|e| !e.undecided);
         let depends_on_parameter = node == ctx.parameter
             || !proven_concrete
@@ -448,73 +320,21 @@ impl<P: Program> Module<P> {
         if !depends_on_parameter {
             return node;
         }
-        // Reserve the clone id before recursing so diamonds resolve to one
-        // clone and value cycles to the clone's own (still evaluating) id.
+        // Reserve the clone id before recursing, so a diamond or a cycle resolves to it.
         let clone = self.add_node(ctx.target, None, None);
-        // The clone's template origin: the node it instantiates, so a reader
-        // that holds a *clone* — a runtime failure's own operand — can reach the
-        // source node the layer above attributes by ([`Module::node_origin`]).
+        // The clone's origin is the node it instantiates, so a reader holding the clone can
+        // reach the source node.
         self.nodes[clone].origin = Some(node);
-        // The owner tag.  A plain apply's clones are stamped with the **apply
-        // node's owner** ([`ApplyCtx::tag`]) — the template the call sits in —
-        // so that template re-instantiates them per call; inheriting the
-        // applied function's own id instead would leave them looking like
-        // another function's instance, and the enclosing template would
-        // reference them in place for every call (measured: `id = x => x`,
-        // `f = x => id x`, `f 1` read the first call's parameter cells).  The
-        // static path stamps the same way ([`Module::static_node_apply`]).
-        //
-        // A closure walk is the exception: a node of the closure's own scope
-        // joins the fresh id (its template reads as members of that id,
-        // re-instantiated per call), while a capture — a member of the
-        // *enclosing* template cloned through the closure's edges — keeps the
-        // source's own owner.  It is then a member of the enclosing template
-        // (the instance this closure references in place), not of the fresh
-        // closure: re-cloning it under the fresh id would re-instantiate the
-        // captured value on every nested apply, tearing it out of the
-        // enclosing instance the walk already built.
+        // The owner tag: an apply's clones take the apply node's owner; a closure's own scope
+        // takes the fresh id.
         self.nodes[clone].function = match ctx.closure_scope {
             Some(scope) if scope.contains(&node) => ctx.tag,
             Some(_) => self.nodes[node].function,
             None => ctx.tag,
         };
         ctx.remap.insert(node, clone);
-        // **Whether the operator runs is `runned`, and nothing else** — the
-        // operand's rewrite does not decide it.  The clone carries the
-        // template's answer, mapped recursively so every node the answer names
-        // is this call's node, and it claims that answer the way the template's
-        // operator did: an answer the template's own operator produced is this
-        // call's answer (the mapping has already substituted this call's
-        // nodes), so the operator owes nothing more.  The claim is conditional
-        // on there **being** an answer: a template that ran and could not decide
-        // leaves nothing to carry, and a clone claiming `runned` for it would
-        // hold an answer it does not have (see the assignment below).  A value whose cells are still undecided is
-        // exactly that case — the remap substituted the cells, and whatever
-        // binds them (the parameter unify, a field check) binds *these* cells.
-        // A struct type expression's answer is one such answer, and carrying it
-        // is what stops a re-run from minting a second generation of holes that
-        // the call-time constraints never reach.
-        //
-        // Which axis answers "the operator owes an answer still", and which
-        // answers "is the value a *template* fact":
-        //
-        // * `runned` — the source's **own** operator produced the value
-        //   (`false` with a value present means a unification wrote it, an
-        //   assertion, not a computation).  A clone that would owe an answer
-        //   carries **no value at all**, because a slot holding a value is a
-        //   slot a static reader (a backend compiling from this graph) reads
-        //   as decided — the two axes are not to be conflated here.
-        // * `evaluated_deep` — the **deep pass** evaluated this node, so its
-        //   answer is a fact about the *template* and every call shares it.
-        //   Without it the slot holds whatever the last runtime application
-        //   produced, which is this call's business, not the template's.
-        //
-        // A **function id** is never carried either: it is a per-call
-        // allocation, not a value the operator computed from its operand, and
-        // mapping it mints a *second* per-call closure beside the one the
-        // element walk already cloned, for the two to meet in a unification.
-        // A *constant* node (no operation) always carries its mapped value:
-        // there is no operator to owe an answer.
+        // `runned` is whether the operator runs; `evaluated_deep` is the other axis.
+        // See `docs/notes/apply-clone-ownership.md`.
         let operation = operation.map(|operation| Operation {
             operand: operation
                 .operand
@@ -525,48 +345,24 @@ impl<P: Program> Module<P> {
         let carried = match &operation {
             None => true,
             Some(_) => {
-                // An answer that *holds* a foreign closure at one of its own
-                // positions is no more carriable than a bare one: the id names
-                // a closure minted by an earlier application of this template
-                // (the checker's own, with marker captures), and mapping cannot
-                // reach inside a function value, so carrying the answer would
-                // share one closure across every call.  One level is enough: a
-                // closure held any deeper sits inside a position the scope-local
-                // rule already made undecided, so the walk clones that position
-                // and re-maps its interior.
+                // An answer holding a foreign closure is no more carriable than a bare one: mapping
+                // cannot reach inside a function body.
                 template_answer && !self.value_holds_foreign_function(value, ctx.applied)
             }
         };
-        // The mapping runs only for a value that is kept: an answer that is
-        // about to be dropped must not clone a closure into the target block.
+        // The mapping runs only for a kept value: a dropped answer must not clone a closure.
         let mapped = if carried {
             value.map(|value| self.value_apply(value, ctx))
         } else {
             None
         };
         self.write_node_value(clone, mapped);
-        // An answer whose **own slots are still open** is the operator's result
-        // structure — the pair a call answers with — and only that operator's
-        // re-run and wiring settle it (the parameter unify, `wire_apply_result`
-        // binding the call's cell and its type).  The value still carries (its
-        // structure is the template's fact, and mapping it is what puts this
-        // call's cells in it), but the clone does not claim the operator's
-        // answer: `runned` stays false, so a read runs it and the computed
-        // answer is reconciled with the carried one instead of the open slots
-        // being read as final.
-        //
-        // The claim follows `mapped`, not `carried`: `runned` says "this node's
-        // own answer is in the slot", so it may be set only for an answer that
-        // is really there.  A clone of a template that ran and could not decide
-        // maps to `None`, and `runned` stays false with the slot empty — the
-        // state of a node that has not run, which is what this clone is: the
-        // template's attempt was against the template's operand, and this
-        // clone's operator has not run against this call's.
+        // An answer with open slots is the operator's result structure: it carries, but
+        // `runned` stays false.
         self.nodes[clone].runned =
             mapped.is_some_and(|value| !self.answer_elements_are_undecided(value));
         self.nodes[clone].operation = operation;
-        // The clone is still a singleton class here, so the slot write *is* the
-        // class write; a later unify joins the two through `add_equality`.
+        // The clone is a singleton class here, so the slot write *is* the class write.
         if let Some(low_shape) = low_shape {
             self.nodes[clone].low_shape = Some(low_shape);
         }
@@ -577,14 +373,9 @@ impl<P: Program> Module<P> {
     fn value_apply(&mut self, value: P::Value, ctx: &mut ApplyCtx<'_>) -> P::Value {
         match value.as_enum() {
             Some(LowValue::Array(array)) => {
-                // Each element rides with its shallow flag: the flag travels
-                // with the remapped node, so each call's clone honors its
-                // own markers.  A baked static reference is absolute and
-                // per-call invariant — referenced in place.
-                // SAFETY: `array` is the payload of `value`, the value this
-                // pass is applying; the caller holds it reachable and
-                // `node_apply` never releases a block, so its arena stays
-                // alive across the map.
+                // Each element rides with its shallow flag; a baked static ref is referenced in place.
+
+                // SAFETY: `array` is `value`'s live payload and this pass releases no block.
                 let items: Vec<ArrayItem> = unsafe { array.items() }
                     .iter()
                     .map(|&item| ArrayItem {
@@ -598,13 +389,9 @@ impl<P: Program> Module<P> {
                 P::Value::from(LowValue::Array(self.alloc_array(&items, ctx.target)))
             }
             Some(LowValue::Table(table)) => {
-                // The entry nodes clone like array items; the stored hash
-                // travels verbatim — a cloned key holds the same forced
-                // value, so its hash stays valid for the fresh instance.
-                // SAFETY: `table` is the payload of `value`, the value this
-                // pass is applying; the caller holds it reachable and
-                // `node_apply` never releases a block, so its arena stays
-                // alive across the map.
+                // The entry nodes clone like array items; the stored hash travels verbatim.
+
+                // SAFETY: `table` is `value`'s live payload and this pass releases no block.
                 let items: Vec<TableItem> = unsafe { table.items() }
                     .iter()
                     .map(|&item| TableItem {
@@ -621,24 +408,15 @@ impl<P: Program> Module<P> {
                     .collect();
                 P::Value::from(LowValue::Table(self.alloc_table(&items, ctx.target)))
             }
-            // A static function value is a frozen template — its captures are
-            // static, so nothing needs rebinding per call; it is referenced
-            // in place (its apply materializes per call).
+            // A static function value is frozen: its captures are static, so it is referenced in
+            // place.
             Some(LowValue::Function(AnyFunctionId::Static(_))) => value,
             Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => {
-                // **One closure per call.**  The walk reaches a template closure
-                // from several nodes, and each reach is a fact about the same
-                // closure; minting per reach would give this call two closures
-                // where its body means one, and the two would meet in a
-                // unification as two different functions.  So the first reach
-                // mints and the rest read that one back.
+                // One closure per call: the first reach mints, the rest read that one back.
                 if let Some(minted) = ctx.minted.get(&function).copied() {
                     return P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(minted)));
                 }
-                // A cloned function's scope is mapped like an array: every
-                // member and both entry points are cloned into the target,
-                // and the result is a fresh function homed on the target
-                // block, so it is dropped with it.
+                // A cloned function's scope is mapped like an array and homed on the target block.
                 let (scope, r#return, parameter, return_type, static_origin, asserts) = {
                     let function = &self.functions[function];
                     (
@@ -650,13 +428,8 @@ impl<P: Program> Module<P> {
                         function.asserts.clone(),
                     )
                 };
-                // The fresh closure's id is reserved before the walk so the
-                // clones it creates are stamped with it — its own template
-                // must read as members of the fresh id (re-instantiated per
-                // call), never of the original.  It hangs under the branch
-                // stack top — the enclosing instance, or the applied
-                // function itself for the outermost closure of an apply —
-                // so its chain runs back to the membership anchor.
+                // The fresh closure's id is reserved before the walk, so its template reads as members
+                // of that id.
                 let fresh = self.functions.insert(Function {
                     nodes: Vec::new(),
                     r#return,
@@ -668,33 +441,14 @@ impl<P: Program> Module<P> {
                     asserts: Vec::new(),
                     parent: Some(ctx.branch_top),
                     block: ctx.target,
-                    // **A clone does not carry its template's `@loop` mark**, and
-                    // this is the mark's "permission, not a command" half rather
-                    // than an oversight: an instance is what an apply *made*, so
-                    // it is expanded like any other call, and a marked recursion
-                    // whose state the deep pass can decide is expanded exactly as
-                    // an unmarked one is. The mark lives on the template, which
-                    // is the only place the recursion is still a cycle — every
-                    // apply clones templates away, so the analysis that reads the
-                    // mark runs before any of this.
+                    // A clone does not carry its template's `@loop` mark: an instance is expanded like
+                    // any other call.
                     looping: false,
                 });
-                // The fresh id is recorded **before** its scope is walked.  A
-                // closure's scope can name it again — directly, or through a
-                // sibling that names it back — and the walk below re-enters
-                // here for each such reach; recording the entry afterwards
-                // would mint a fresh function per level, without bound.  Only
-                // the identity is needed to stop that, so the entry is written
-                // now and the rest of the record is filled in below.
+                // The fresh id is recorded before the scope walk; a scope can name it again.
                 ctx.minted.insert(function, fresh);
-                // The nested function's own scope joins the clone's
-                // template: its body may capture the applied function's
-                // members (an outer parameter), and those references must
-                // be rewritten to the fresh clones — the ones the apply's
-                // parameter unify binds.  The remap is shared, so a member
-                // reached from the outer body and from here is one clone.
-                // `applied` switches to the function being instantiated, so
-                // its own self-reference (if recursive) stays in place.
+                // The nested function's scope joins the clone's template, so its captures
+                // rewrite to the fresh clones.
                 let target = ctx.target;
                 let minted = &mut *ctx.minted;
                 let mut inner = ApplyCtx {
@@ -721,11 +475,8 @@ impl<P: Program> Module<P> {
                 } else {
                     return_type
                 };
-                // The fresh closure's asserts instantiate with its scope: a
-                // condition reading the closure's captures rewrites to this
-                // call's clones and re-registers, while one proven concrete
-                // at build is per-call invariant and stays referenced in
-                // place.
+                // The fresh closure's asserts instantiate with its scope: a concrete condition stays
+                // referenced in place.
                 let mut fresh_asserts = Vec::with_capacity(asserts.len());
                 for &condition in &asserts {
                     let instantiated = self.node_apply(condition, &mut inner);
@@ -737,22 +488,8 @@ impl<P: Program> Module<P> {
                     }
                     fresh_asserts.push(instantiated);
                 }
-                // The shared remap may have handed the branch nodes the
-                // enclosing walk already cloned — a self-reference: the
-                // function's own value node sits in its return subtree, so
-                // the outer walk reaches and clones it (with the outer tag)
-                // before the closure branch runs, and every other scope node
-                // follows through the shared remap.  The fresh template must
-                // read as members of the fresh id — re-instantiated per call
-                // — so re-stamp its nodes.  Runs after the entry-point walks
-                // so they resolve through the original tags.  Only nodes
-                // actually cloned into the target are re-stamped: a node the
-                // walk referenced in place (the self-reference, proven
-                // concrete) lives in its home block and keeps its original
-                // owner.  Nodes reached only through the template's edges
-                // (captures) keep the enclosing tag: they are already the
-                // instance and read as members of the enclosing template,
-                // referenced in place by this closure.
+                // Nodes cloned into the target are re-stamped to the fresh id, so the fresh template
+                // re-instantiates per call.
                 for &id in &nodes {
                     if self.nodes[id].block == ctx.target {
                         self.nodes[id].function = Some(fresh);
@@ -774,13 +511,12 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Whether `function`'s chain of lexical parents ([`Function::parent`])
-    /// reaches `anchor` — the template membership test.  A node whose owner
-    /// is the applied function, or a closure nested inside it, belongs to
-    /// the template; a node owned by an enclosing function (a capture that
-    /// was already instantiated by the enclosing apply) does not.  Walks
-    /// with [`SlotMap::get`] so a dangling parent — a function dropped with
-    /// its home block — reads as non-membership instead of panicking.
+    /// Whether `function`'s chain of lexical parents reaches `anchor` — the template
+    /// membership test.
+    ///
+    /// # Invariant
+    /// Walks with [`SlotMap::get`], so a dangling parent reads as non-membership rather
+    /// than panicking.
     pub(crate) fn function_descends_from(
         &self,
         function: Option<FunctionId>,
@@ -796,45 +532,25 @@ impl<P: Program> Module<P> {
         false
     }
 
-    /// Whether an answer's **own** slots are still undecided — an array whose
-    /// elements are cells no operator has filled.  Such an answer is the
-    /// operator's own result structure (the pair a call answers with), and the
-    /// only thing that settles it is that operator's own re-run and wiring, so
-    /// a clone that claimed the operator's answer would read open slots as
-    /// final.  One level deep by design: a structure whose *elements* are
-    /// decided is a fact a clone may answer with, however open its interior is
-    /// (a struct type's field cells are bound by the enclosing call's checks).
+    /// Whether an answer's own slots are undecided — the dynamic read of the shared
+    /// policy.
     ///
-    /// The dynamic read of the question; the shared policy is stated once in
-    /// [`crate::apply::answer_elements_are_undecided`], and the static
-    /// materialize walk asks it through
-    /// [`Self::static_answer_elements_are_undecided`].  A dynamic node's slot
-    /// is [`Self::node_value`], a frozen one's is [`Self::static_read`] — both
-    /// arms of that read are already `node_value`'s.
+    /// # Invariant
+    /// One level deep by design: a structure whose elements are decided is a fact a clone
+    /// may answer with, however open its interior is.
     fn answer_elements_are_undecided(&self, value: P::Value) -> bool {
         crate::apply::answer_elements_are_undecided::<P>(value, |node| {
             self.node_value(node).is_none()
         })
     }
 
-    /// Whether `value`'s tree holds a **foreign** closure: a dynamic function
-    /// that is neither the applied function itself nor an enclosing one.  The
-    /// walk follows value edges only — array items and table entries — because
-    /// those are the positions a carried answer names.
+    /// Whether `value`'s tree holds a **foreign** closure: a dynamic function that is
+    /// neither applied nor enclosing.
     ///
-    /// The attribution belongs here, where the scope being instantiated is
-    /// known, and not on a node's `undecided` verdict: whether a function
-    /// counts as "inside the scope" depends on which scope the apply is
-    /// cloning, and the verdict is computed without a caller.  The applied
-    /// function's own self-reference is the recursion point and an enclosing
-    /// function is shared by every call, so both stay in place; a closure the
-    /// body builds, and one an earlier application of this same template left
-    /// behind, are per-call allocations — the proof cannot see through their
-    /// bodies, and mapping stops at the id, so a carried answer would share one
-    /// closure across calls whose arguments differ.
-    ///
-    /// A *static* function value is frozen, with no dynamic captures, and is
-    /// never foreign.
+    /// # Invariant
+    /// Attribution belongs here, where the scope being instantiated is known: the applied
+    /// function's self-reference and an enclosing function stay in place, and a static
+    /// function is frozen and never foreign.
     fn value_holds_foreign_function(&self, value: Option<P::Value>, applied: FunctionId) -> bool {
         let foreign = |function: FunctionId| {
             function != applied && !self.function_descends_from(Some(applied), function)
@@ -847,9 +563,7 @@ impl<P: Program> Module<P> {
             Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => {
                 return foreign(function);
             }
-            // SAFETY: `array`/`table` are payloads of `value`, which the caller
-            // holds reachable; this method only reads, so neither home block is
-            // released.  The note covers both arms.
+            // SAFETY: `array`/`table` are payloads the caller holds reachable; this only reads.
             Some(LowValue::Array(array)) => unsafe { array.items() }
                 .iter()
                 .map(|item| item.node)
@@ -870,13 +584,11 @@ impl<P: Program> Module<P> {
                     return true;
                 }
                 Some(LowValue::Array(array)) => {
-                    // SAFETY: `array` is the payload of `node`, a live node of
-                    // this module; this method only reads.
+                    // SAFETY: `array` is a live node's payload; this only reads.
                     stack.extend(unsafe { array.items() }.iter().map(|item| item.node))
                 }
                 Some(LowValue::Table(table)) => {
-                    // SAFETY: `table` is the payload of `node`, a live node of
-                    // this module; this method only reads.
+                    // SAFETY: `table` is a live node's payload; this only reads.
                     for item in unsafe { table.items() } {
                         stack.push(item.key);
                         stack.push(item.value);
