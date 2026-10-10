@@ -559,50 +559,81 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
    unrepresentable, and the two changes.
 
 
-### 8.4 Unmerged branches, and exactly what each needs
+### 8.4 Unmerged branches, and what each still needs
 
-**Both are deliberately parked**, not dropped: this tree's clean-up pass does not
-merge work that needs a rebase and a measurement of its own, and nothing about
-them is lost — the commits are on the branches, and what each needs is below.
-A successor should treat this section as the handoff.
+> **One of the two is merged.** `sync/dev-and-ssa` — which is
+> `feature/eval-loop-recording` rebased and merged, plus two measurement
+> commits — landed on `dev` at **`af6f6f2`**, and the SSA IR half of this
+> feature is with it. The other is still parked, and the reason it is
+> parked is now sharper than it was: its blocker is *bigger*, not smaller.
 
-- **`feature/spirv-loop-emitter`** (`a0bfa2c`) — a complete SPIR-V emitter for
-  `If` and `While`, validated with a real `spirv-val` (which rejected four genuine
-  bugs during development), straight-line output byte-identical at 185 words, and
-  the `single-OpLabel` invariant **replaced** with a stated structural one that
-  `dispatch.rs` now cites. It also refuses a write inside a loop body by name.
-  **What it needs**: it was cut before `Flow::Seq` existed, so it must be rebased
-  onto `dev` and taught `Seq`; and its own report says the IR could not express a
-  loop that computes its carried value — which is *precisely* what `Seq` fixed, so
-  the pass-through-block workaround it used can likely be deleted in favour of a
-  straight `Seq`.
-- **`feature/eval-loop-recording`** (`ff0cbeb`, rebased onto `dev` and merged)
-  — the marker reaching the evaluator, cycle detection, and the *entering-call*
-  insight (the recursive call's own argument is the next state, undecided for
-  every trip count, so only an entering call's argument is the count — and the
-  curried chain has to be resolved to find it). All of that is **still right and
-  still needed**. The rebased branch now computes real **strongly connected
-  components** (§8.6's `B`, §3 step 1) rather than one cycle per marked binding.
-  **What it needs**: the `value_decided` gate drives the refusal, and it must be
-  **deleted and inverted** — a marked recursion becomes a loop, and the gate has
-  no remaining consumer, because for the unmarked path "is it decidable" is
-  already answered implicitly by whether the deep pass reduced the call.
-  **Its probe claim survives the rebase, and only after a fix that had nothing to
-  do with the marker.** Two constants were still on the pre-`dev`
-  `compute.write [n, i, v]` spelling, which the surface has since replaced with
-  the `.Write`/`.Read` struct form and which is refused as an unsupported index —
-  `RECURSIVE_LITERAL` had been updated and `RECURSIVE_LITERAL_MARKED` had not,
-  which reads exactly like the marker breaking a decided trip count. It does not:
-  with the spelling fixed, `RECURSIVE_LITERAL_MARKED` answers `4: ?a`, which is
-  what `a709c2d` said. **Stale probe programs, not a regression** — and the
-  lesson is the probe's, not the branch's: a probe is evidence only where it is
-  re-run, and two constants differing by one keyword is exactly the shape that
-  fools you.
-  `LOOP_RUNTIME_COUNT_MARKED_DECIDABLE` is still refused, by a **type** check —
-  `expected Int -> Int, found Int -> Int` — and so is its unmarked twin
-  `LOOP_IN_LICHEN`, which never had a marker. That is the curried
-  `f => n => x => …` combinator no longer type-checking, which is a program to
-  rewrite rather than a behaviour to explain.
+- **`feature/eval-loop-recording` — MERGED, as `sync/dev-and-ssa`
+  (`af6f6f2`).** The SSA rewrite is `dev`'s: `LocalGet`, `Flow`, `BlockId`
+  and the `Vec<KernelInstr>` stack machine are gone, and a body is
+  `ValueId`s, `BasicBlock`s with `params`, and `Br`/`CondBr`/`Return
+  { values }` (§8.6's item 1c, answered).
+
+  **The branch's role table was dropped and `dev`'s kept, and that is the
+  decision worth recording.** The branch had rewritten how a parallel
+  parameter's fields become roles, into a flat `[in, j]` table whose field
+  names are read through a `&mut Module` closure (`fc0a5dd`, `ec6e108`).
+  `dev` had since rebuilt the same thing **more generally** — `KernelRoles`
+  holds role *paths*, `walk_role` descends to any depth, either reserved
+  group may be absent, and `scalar_leaf_classes` reads a field's class
+  through `field_type(&Module, …)`, so that `&mut` is not needed.
+
+  **The branch's own blocker was exactly this mechanism**, which is why
+  keeping `dev`'s side was not a preference. `0cb4a6d` is titled *"the chain
+  walk cannot answer a struct field read, and here is the proof"*: walking
+  **down** from a field read stops at the field, the parameter is only
+  reachable through the **equality class**, and the search it built needed a
+  `&mut Module` where the lowering holds `&Module`. It was built and
+  reverted, leaving **58 of 62** kernel tests red after *"three guesses in a
+  row have each produced a different refusal."* With `dev`'s role model the
+  SSA walk is **60 of 60**.
+
+  Two consequences the merge had to settle, both measured rather than
+  argued:
+
+  - **Three `lichen-compute-gpu` refusal expectations went stale**, because
+    the SSA `validate()` now catches them before the emitter does. They fail
+    identically on the branch itself. `CrossKernelCall`'s `at` is an
+    instruction index rather than an operand-stack slot (5 → 3);
+    `BufferPositionOutOfRange`'s `at` is the position's `ValueId` (3 → 2),
+    and its fixture declared a one-leaf domain while reading parameter 1, so
+    validate refused it structurally before a position was ever read. The
+    third is no longer a stack question at all: an operator given too few
+    operands is an **arity** mismatch, refused by `validate()` naming the
+    operator and both counts.
+  - **`dispatch.rs`'s scalar gate was ported, not replaced.** The branch's
+    version is `leaves > 2`, which loses `bce8d55` — *a leaf the body never
+    reads is not a missing one*. `KernelBody::operands()` and
+    `is_a_parameter` answer the same question the `LocalGet` scan asked.
+
+- **`feature/spirv-loop-emitter`** (`a0bfa2c`) — a complete SPIR-V emitter
+  for `If` and `While`, validated with a real `spirv-val` (which rejected
+  four genuine bugs during development), straight-line output byte-identical
+  at 185 words, and the `single-OpLabel` invariant **replaced** with a
+  stated structural one that `dispatch.rs` now cites. It also refuses a write
+  inside a loop body by name.
+
+  **What it needs is now the whole port, and it is one piece of work.** The
+  branch was cut on the **pre-SSA** IR, so its `Walk` is a `Vec<Slot>`
+  operand stack over `Flow`/`Terminator` — the two mechanisms
+  [`af6f6f2`](../af6f6f2) deleted. Porting it means:
+
+  | branch          | `dev` since `af6f6f2`         |
+  |-----------------|-------------------------------|
+  | `Vec<Slot>`     | `HashMap<ValueId, Slot>`      |
+  | `Flow`/`Terminator` | `BasicBlock`s with `params` |
+  | `BlockId` labels  | `Vec<u32>` indexed by block  |
+  | derived arity/below/edges | the block's declared `params` |
+
+  Its `is_straight_line` refusal is the one thing that must **go**, and the
+  single-`OpLabel` invariant is what the port replaces. Verified available
+  for the port: `spirv-val` v2024.4 and the Vulkan SDK are on `PATH`, so the
+  emitted modules can be validated rather than eyeballed — which is what
+  makes this landable in one piece rather than in halves.
 
 ### 8.5 The critical path to the acceptance case
 
@@ -662,10 +693,11 @@ cleared the CPU side but nothing turns on it yet, because 1c is not:**
     *expressible* now without any loop that reaches the backend being able to
     terminate. That instruction is **item 1c**, and it is what this list turns on.
     See [wasm-backend-handoff](wasm-backend-handoff.md) §3.2.
-3. **Rebase and extend `feature/spirv-loop-emitter`** for `Seq` — and it also
-   inherits 1b: the refusal it wrote for a body that is "only a transfer" is the
-   SPIR-V emitter saying there is no block for `OpLoopMerge`'s continue target, which
-   `Terminator::Jump` now resolves.
+3. **Port `feature/spirv-loop-emitter` onto the SSA body** — this is §8.6's
+   item 5, which supersedes the `Seq` wording this list used to carry, and the
+   blocker this item inherits is now the port itself rather than 1b. Its
+   `Walk` is a `Vec<Slot>` over `Flow`/`Terminator`, both of which `af6f6f2`
+   deleted; §8.4 states the substitution table.
 4. **Make the JIT *emit* what the conversion returned.** The conversion half is
    no longer missing — it is `Module::loop_conversion` (§8.2) — and neither is
    its first consumer: the **host loop** (§8.2) runs a marked recursion in the
@@ -684,9 +716,12 @@ cleared the CPU side but nothing turns on it yet, because 1c is not:**
    level ceiling, at more than one length so the count is demonstrably not a
    compile-time constant.
 
-**Do not start 3 before 1.** Doing SPIR-V first against a contract that is already
-known to be wrong is how the `br_if` bug above came about, and it is the one
-mistake this section exists to prevent.
+**Do not start 3 before 1** — **and this is now satisfied.** Doing SPIR-V first
+against a contract that is already known to be wrong is how the `br_if` bug above
+came about, and it is the one mistake this section exists to prevent. Item 1c
+answered at `af6f6f2`: the carried tuple needed no new instruction, because a
+header's `params` *are* the state. Item 3 is therefore unblocked — what it needs
+now is the port in §8.4, and nothing else.
 
 ### 8.6 Where the conversion lives: lowlevel, and the JIT reads it
 
@@ -827,11 +862,13 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
    header that takes its state as block parameters, so "emit a nest" is no longer a
    new emitter feature but the same `BasicBlock` walk every straight-line body
    already does.
-5. **Rebase and extend `feature/spirv-loop-emitter`** onto the SSA body. Its
-   emitter walks an operand `Vec<Slot>` over `Flow`/`Terminator`, and both are
-   gone: `Vec<Slot>` becomes a `HashMap<ValueId, Slot>`, and the control flow
-   arrives as `BasicBlock`s with `params`. The single-`OpLabel` invariant is what
+5. **Port `feature/spirv-loop-emitter`** onto the SSA body, which is what
+   `dev` has carried since `af6f6f2`. Its emitter walks an operand
+   `Vec<Slot>` over `Flow`/`Terminator`, and both are gone: `Vec<Slot>`
+   becomes a `HashMap<ValueId, Slot>`, and the control flow arrives as
+   `BasicBlock`s with `params`. The single-`OpLabel` invariant is what
    actually has to be replaced here, which is why this is one item and not two.
+   §8.4 has the substitution table and the tooling that verifies the result.
 6. **Make the JIT *emit* what the conversion returned.** The conversion half is
    `Module::loop_conversion` and its first consumer is the **host loop**, so the
    conversion is observable today. What remains is the *kernel* reader: build the
