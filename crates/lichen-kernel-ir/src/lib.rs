@@ -107,11 +107,11 @@ impl ScalarClass {
 
     /// A dense index for this class, so a backend can key a per-class table on it.
     ///
-    /// **The two are in step with the two variants, which is the whole reason this
-    /// exists.** A module that needs one element type per class — an SPIR-V
-    /// storage buffer, whose `ArrayStride` is the class's `byte_width()` — is
-    /// holding a fixed-size table of them, and the table's length has to be the
-    /// number of classes rather than something restated beside it.
+    /// # Invariant
+    /// The two are in step with the two variants: a module holding one element type per
+    /// class — an SPIR-V storage buffer, whose `ArrayStride` is the class's
+    /// `byte_width()` — sizes its table by the number of classes, not by a number
+    /// restated beside it.
     pub const ALL: [ScalarClass; 2] = [ScalarClass::Int, ScalarClass::Float];
 
     pub fn index(self) -> usize {
@@ -580,70 +580,26 @@ pub enum KernelInstr {
     Const(ScalarClass, i64),
     /// A binary [`KernelBin`] operator over two values, **in the class it names**.
     ///
-    /// Per instruction for the same reason [`Self::Const`] is: the opcode a
-    /// backend emits for `Add` is `i64.add` in one class and `f32.add` in the
-    /// other, and a body that mixes the two needs both.
+    /// # Invariant
+    /// Per instruction for the same reason [`Self::Const`] is: the opcode a backend
+    /// emits for `Add` is `i64.add` in one class and `f32.add` in the other, and a body
+    /// that mixes the two needs both.
     Bin(ScalarClass, KernelBin),
     /// Convert a value to the condition width a `select` needs.
     I32WrapI64,
     /// A `if c then a else b`, which is `Select`.
     Select,
-    /// A cross-kernel call: its `args` are the argument, and a backend resolves
-    /// this to a call to the callee.  The arity is the callee's own domain, not
-    /// known here.
+    /// A cross-kernel call: its `args` are the argument, and a backend resolves this to
+    /// a call to the callee.
     CallKernel(KernelId),
-    /// The language's two class conversions — `int2float` and `float2int` — as
-    /// one instruction: it reads a value of one class and leaves a value of the
-    /// other.
+    /// The language's two class conversions as one instruction: it reads one class and
+    /// leaves the other.
     ///
-    /// # Why the pair, when only the two crossing directions are ever written
-    ///
-    /// Because *which* of the two it is cannot be read off the operand: `Int →
-    /// Float` and `Float → Int` are the same shape to an operand, and the
-    /// direction is the language's decision, not a target's.  A backend that had
-    /// to re-derive it would be guessing, and the two backends could guess
-    /// differently — the exact failure `docs/notes/floating-point.md` §5.1
-    /// records the wasm backend producing.  It is the same reason every other
-    /// instruction here names its own class rather than leaving one to be
-    /// inferred: a fact the language decided is stated, not reconstructed.
-    ///
-    /// # Why it is not redundant with the instruction's class
-    ///
-    /// Every other instruction runs *in* one class and names it.  A conversion
-    /// is the one instruction whose operand and result are **different**
-    /// classes, so naming "the class" would name one of them and leave the other
-    /// to be guessed — which is precisely the direction that cannot be recovered.
-    ///
-    /// # What the class pair does *not* say
-    ///
-    /// It says what the **language** asked for, not what the value's
-    /// representation *is*.  The two differ at the ABI: a float fragment's index
-    /// and count arrive in `f32` locals (the fragment's class is what the
-    /// parameter list is typed by), while the language's number is an `Int`, so
-    /// `int2float` of the index is a conversion whose operand already holds its
-    /// result's representation.  That is a fact about the target and the ABI
-    /// rather than about the program, so it is not in this instruction and no
-    /// backend may assume it: each one tracks the representation it is actually
-    /// building and lowers a crossing between a class and itself to nothing.
-    ///
-    /// # What each backend emits
-    ///
-    /// Neither opcode is named here, because the two targets hold the same number
-    /// in genuinely different places:
-    ///
-    /// - wasm's locals are typed per class, so the conversion is the opcode that
-    ///   crosses them (`f32.convert_i64_u`, `i64.trunc_f32_u`) — and **nothing at
-    ///   all** when the value on the stack already holds a `to`.
-    /// - SPIR-V's index is the invocation id — a 32-bit integer in every module,
-    ///   float included — so `Int → Float` there is always `OpConvertUToF`, and a
-    ///   module that has not declared the other class's type refuses the
-    ///   direction by name rather than declaring a type it did not need.
-    ///
-    /// **`Float → Int` truncates toward zero in neither backend's promise**: the
-    /// interpreter refuses what it cannot represent (see
-    /// `docs/notes/operators.md`), wasm traps, and SPIR-V is undefined. A kernel
-    /// is the intersection of what the backends compute *the same way*, and this
-    /// conversion is in it only for the values both answer identically.
+    /// # Invariant
+    /// *Which* of the two cannot be read off the operand — `Int → Float` and `Float →
+    /// Int` are the same shape — and the direction is the language's decision, not a
+    /// target's, so a backend that re-derived it would guess, and the two could guess
+    /// differently.
     Conv {
         /// The class the operand is, as the language names it.
         from: ScalarClass,
@@ -725,10 +681,10 @@ impl KernelRoles {
 impl KernelInstr {
     /// How many values this instruction leaves behind.
     ///
-    /// **One for everything except a write**, which is a side effect and leaves
-    /// nothing — and that is the whole of the arity question, so
-    /// [`KernelBody::validate`](crate::KernelBody::validate) can check a
-    /// definition against its declaration without a consumer having to know.
+    /// # Invariant
+    /// **One for everything except a write**, a side effect that leaves nothing — the
+    /// whole of the arity question, so [`KernelBody::validate`](crate::KernelBody::validate)
+    /// can check a definition against its declaration.
     pub fn produces(&self) -> usize {
         match self {
             KernelInstr::BufferWriteCall(_) => 0,
@@ -738,15 +694,12 @@ impl KernelInstr {
 
     /// How many values this instruction reads, when the instruction fixes it.
     ///
-    /// **Stated here because it is a fact about the language's operators, not
-    /// about any target**, and a lowering should not have to re-derive it to
-    /// wire an instruction's operands.
-    ///
-    /// `None` — spelled `None`, meaning *not fixed by the instruction* — is
-    /// [`Self::CallKernel`], whose arity is the **callee's own domain**. This
-    /// crate does not know that arity, and neither does anything that would want to
-    /// check it, so a body that calls another kernel states its arguments and the
-    /// check that could contradict it belongs to whoever holds the callee.
+    /// # Invariant
+    /// **Stated here because it is a fact about the language's operators, not about any
+    /// target.** `None` means *not fixed by the instruction*, and is
+    /// [`Self::CallKernel`], whose arity is the **callee's own domain**: this crate does
+    /// not know it, so a body states its arguments and the check that could contradict it
+    /// belongs to whoever holds the callee.
     pub fn arity(&self) -> Option<usize> {
         Some(match self {
             KernelInstr::Const(..) => 0,
@@ -760,10 +713,10 @@ impl KernelInstr {
 
     /// The class this instruction states in its own form, if it states one.
     ///
-    /// **Stated, not derived**: a constant's bits and an arithmetic operator's
-    /// operands are only readable against the class they were lowered in, so an
-    /// instruction that names its class names it because the fact cannot be
-    /// recovered from the value later.
+    /// # Invariant
+    /// **Stated, not derived**: a constant's bits and an arithmetic operator's operands are
+    /// only readable against the class they were lowered in, so an instruction names its
+    /// class because the fact cannot be recovered from the value later.
     pub fn own_class(&self) -> Option<ScalarClass> {
         match self {
             KernelInstr::Const(class, _) => Some(*class),

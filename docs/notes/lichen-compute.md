@@ -306,6 +306,22 @@ operator adding two floats computes in `Float` whatever its node's own class say
 Trusting the node was a real defect: it declared `Bin(Int, Add)` over two float
 values.
 
+A constant's bits and an operator's operands are only readable against the class
+they were lowered in, so an instruction **names** its class rather than leaving one
+to be inferred — which is the same reason the two crossing directions are a pair
+on `Conv` ([kernel-class-crossing-fixes](kernel-class-crossing-fixes.md)). A module
+that needs one element type per class is holding a fixed-size table of them, and
+that table's length is `ScalarClass::ALL`, so `ScalarClass::index` is a dense index
+into it: the array's length is the number of classes, not a number restated beside
+it.
+
+`KernelInstr::produces`, `arity` and `own_class` are stated on the instruction
+rather than left to a lowering: a **write** produces nothing (a side effect), a
+**call**'s arity is the callee's own domain and is `None` here because this crate
+does not know it, and an instruction's class is not recoverable from the value
+later. `KernelBody::validate` uses the first two to check a definition against its
+declaration.
+
 `Lower` walks the simple kernel-safe subset — integer constants, every
 `KernelBin` operator (the arithmetic, comparison and bitwise sets the language
 has: `kernel_bin` is the one conversion from `TypeOperator`, and `None` for the
