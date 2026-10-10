@@ -463,22 +463,20 @@ compute.launch k1 5
 }
 
 #[test]
-#[ignore = "both kernels' parameters are unannotated, so nothing states the class the lowering is \
-            for and the `jit` refuses by name: `the kernel parameter's class is not decided when \
-            the kernel is compiled`.  Measured: stating them (`(y : Int)`, `(x : Int)`) runs the \
-            program and produces 7, so the un-park is stating a class, not a decoder change.  An \
-            earlier version of this reason blamed a written arrow in the *frozen* `compute` \
-            module; that was refuted by measurement - the wrapper's own render is generic and \
-            byte-identical imported and local.  See docs/notes/kernel-parameter-class.md."]
 fn jit_cross_kernel_subexpr() {
     // A cross-kernel call result used as a sub-expression: `k0 (x) + 1`.  The
     // checker peels the call result via `Index(apply, 0)` (a `value_of`
     // extraction), which the JIT now looks through to emit the kernel call
     // directly:   launch k1 5 = k0(5) + 1 = 6 + 1 = 7.
+    //
+    // **Both parameters are annotated**, which is the whole un-park: an
+    // unannotated parameter leaves the kernel's class undecided at compile time
+    // and the `jit` refuses by name.  `docs/notes/kernel-parameter-class.md`
+    // measured that stating them runs this program and produces 7.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
-k0 = compute.jit (y => y + 1)
-k1 = compute.jit (x => k0 (x) + 1)
+k0 = compute.jit (y : Int => y + 1)
+k1 = compute.jit (x : Int => k0 (x) + 1)
 compute.launch k1 5
 "#);
     assert_eq!(common::usize_of(&value), 7, "subexpr produced 7");
@@ -582,18 +580,19 @@ compute.launch k1 (100, ((9, 4), 5))
 }
 
 #[test]
-#[ignore = "the wrapper's unannotated parameter leaves the kernel's class undecided at \
-compile time, so the launch is refused by name: `the kernel parameter's class is not \
-decided when the kernel is compiled`"]
 fn jit_cross_kernel_tuple_argument_through_the_wrapper() {
     // Style 3 with a tuple argument: the wrapper's `launch` argument is a bare
     // undecided cell — concrete only at run time — so the tuple is
     // reached through the cell's equality class rather than as an array value:
     //   launch k1 5 = k0(5, 1) = 6.
+    //
+    // **`k1`'s parameter is annotated**, which is the whole un-park: it is `k1`
+    // the wrapper launches, so an undecided class on `k1` is what the launch
+    // refused.  See `docs/notes/kernel-parameter-class.md`.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k0 = compute.jit (p : <Int, Int> => p(0) + p(1))
-k1 = compute.jit (x => compute.launch k0 (x, 1))
+k1 = compute.jit (x : Int => compute.launch k0 (x, 1))
 compute.launch k1 5
 "#);
     assert_eq!(
@@ -775,18 +774,22 @@ compute.launch k1 (5, 3)
 }
 
 #[test]
-#[ignore = "pre-existing, and reviving it is a re-derivation rather than a fix: the expectation \
-predates two changes.  Its *type* half holds (`struct<.native raw[?a, ?b], .I raw[?c, ?d], .O \
-raw[?e, ?f]>`).  Its *value* half does not: the first element renders `raw Kernel` — which the \
-passing sibling `a_kernel_value_and_type_render_by_name` expects and explains, the struct's type naming \
-no class for either slot so each renders under the mark — and the domain and codomain cells dump \
-as `raw[raw[raw Int, …]]` instead of `raw[Int, Int]`, because they carry no filled class and the \
-raw-mark renderer falls back.  The wrapper work did not cover this: what is missing is a class \
-for a tuple of element types, not a spelling."]
 fn a_tuple_domain_kernel_type_renders_as_a_function() {
     // A tuple-domain kernel's signature is `[<Int, Int>, Int]`.  The kernel
     // struct carries the domain in its `.I` field, so the value's second
     // element is the tuple type and the struct's type names `.I`/`.O`.
+    //
+    // **The `.I` field's type is `TypeTuple`, not `Type`**, and that is the
+    // whole point of the pair with its scalar sibling: a tuple of element types
+    // is itself a tuple, so its type is the tuple universe.  The parked
+    // expectation here said the dump was because "what is missing is a class for
+    // a tuple of element types" — the class exists and has a name
+    // (`docs/notes/kernel-parameter-class.md` §"What it means for the parked
+    // test", which also records that the old `#[ignore]` reason was wrong in
+    // three measured ways).  The other two halves follow the same rule as
+    // `a_kernel_value_and_type_render_by_name`: `.native` dumps `raw Kernel`,
+    // and the domain is **decided** rather than rendered under the raw mark.
+    // `.O` is a flat `Int`; only a *tuple* codomain dumps nested.
     let out = render(
         r#"
 --- compute = import "compute.lichen" ---
@@ -795,8 +798,7 @@ k
 "#,
     );
     assert_eq!(
-        out,
-        "(Kernel, raw[Int, Int], Int): struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>",
+        out, "(raw Kernel, <Int, Int>, Int): struct<.native raw[?a, ?b], .I TypeTuple, .O Type>",
         "tuple-domain kernel value/type: {out:?}"
     );
 }

@@ -398,17 +398,18 @@ compute.collect (compute.graphrun built (3,))
 /// [`a_graph_dispatches_exactly_what_the_program_dispatches`], which runs the same
 /// body with and without a graph and compares the two traces. There is no separate
 /// test here for a gap that measurement closed.
+///
+/// **The programs are spelled in the named-parameter form, and the spelling was
+/// part of the fix rather than a transcription.** A dispatch returns the
+/// parameter's `.out` group, so under `struct<.n Int, .in In1>` the offending
+/// operator has to name the **buffer inside** it (`first.z`) — handing it the
+/// dispatch's result says "this is an array", which is true and is the
+/// `compute.parallel` refusal, not this test's three. Reaching the rule also
+/// needed `handed_a_placeholder` to see through the `Buf` wrapper the recorder
+/// builds around an output path: the operator names the wrapper, so asking only
+/// whether an operand *is* a placeholder answered `false` for exactly the case
+/// the rule exists to catch.
 #[test]
-#[ignore = "pre-existing on dev (fails identically at 4be9180, before the OperatorExt::run \
-refactor and before the class-value experiment), and the wrapper migration moved which case \
-fails first: the original reason was the third case's refusal no longer carrying both 'a collect \
-is asked here' and 'after the graph has run', and now the first case stops earlier — its program \
-still spells the retired tuple form, so `compute.collect` is handed a structure and refuses with \
-'its buffer position holds an array'.  Reviving the test is a decision about what those three \
-refusal cases are about under the named parameter, not a re-spelling: the count and the buffer a \
-body reaches for are typed now, which is what retired the count-filter case in \
-`a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one`.  The eight \
-other tests in this file pass."]
 fn what_a_recorded_body_may_not_reach_for_is_refused_by_name() {
     let (_guard, _stub) = stub();
     // **Each case puts the offending operator where it cannot be skipped.** A
@@ -423,12 +424,14 @@ fn what_a_recorded_body_may_not_reach_for_is_refused_by_name() {
   compute = import "compute.lichen"
 ---
 {KERNELS}
-step = ins => {{
-  pulled = compute.collect (compute.plrun k1 (ins(0),))
-  compute.plrun k2 (ins(0), (pulled,))
+GArg = struct<.n Int, .in In1>
+step = (s : GArg) => {{
+  first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
+  pulled = compute.collect first.z
+  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b pulled)))
 }}
 built = compute.graph step
-compute.collect (compute.graphrun built (3,))
+compute.collect (compute.graphrun built 3)
 "#
     ));
     let joined = collect.join(" | ");
@@ -447,12 +450,14 @@ compute.collect (compute.graphrun built (3,))
   compute = import "compute.lichen"
 ---
 {KERNELS}
-step = ins => {{
-  at_zero = compute.read ((compute.Read _)(.from compute.plrun k1 (ins(0),), .at 0))
-  compute.plrun k2 (at_zero, (compute.plrun k1 (ins(0),),))
+GArg = struct<.n Int, .in In1>
+step = (s : GArg) => {{
+  first = (compute.plrun k1 ((compute.A In1)(.n s.n, .I In1(.a 0))) : Out1)
+  at_zero = compute.read ((compute.Read _)(.from first.z, .at 0))
+  compute.plrun k2 ((compute.A In2)(.n s.n, .I In2(.b at_zero)))
 }}
 built = compute.graph step
-compute.collect (compute.graphrun built (3,))
+compute.collect (compute.graphrun built 3)
 "#
     ));
     let joined = read.join(" | ");
@@ -470,9 +475,9 @@ compute.collect (compute.graphrun built (3,))
   compute = import "compute.lichen"
 ---
 {KERNELS}
-one = compute.jit (cfg => cfg(0) + 1)
+one = compute.jit (cfg : Int => cfg + 1)
 step = ins => {{
-  scalar = compute.call one (3,)
+  scalar = compute.call one 3
   compute.plrun k2 (ins(0), (scalar,))
 }}
 built = compute.graph step

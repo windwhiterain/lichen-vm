@@ -533,6 +533,55 @@ fn float_bits(value: f32) -> i64 {
 // the *wasm* half: this crate compiles a checked graph down to that IR and then
 // lowers the IR to a wasm module.  See `docs/notes/compute-jit-low-types.md`.
 
+/// Whether a value is a graph placeholder, **or a `Buf` wrapper around one**.
+///
+/// A dispatch's output reaches the body **wrapped**: the recorder builds the same
+/// result structure a real launch produces, so the value at a declared output path
+/// is `struct<.native _, .element _>` with the placeholder in `.native` — and an
+/// operator that reads a buffer names the **wrapper**, not the payload. So asking
+/// only whether an operand *is* a placeholder answers `false` for precisely the
+/// case the rule exists to catch, and the operator falls through to a backend
+/// refusal that describes a buffer as "its buffer position holds an array" —
+/// a diagnostic about the wrong operator, naming a shape the program never wrote.
+///
+/// The wrapper is recognised by [`buf_value`]'s own construction — two items, the
+/// second an element **type** — so this reads the wrapper's shape rather than
+/// guessing at arity.
+fn is_a_graph_placeholder<P>(module: &Module<P>, node: AnyNodeId) -> bool
+where
+    P: Program,
+    P::Value: ValueType + AsEnum<LowValue> + AsEnum<ComputeValue>,
+{
+    let Some(value) = module.node_value(node) else {
+        return false;
+    };
+    if matches!(
+        AsEnum::<ComputeValue>::as_enum(&value),
+        Some(ComputeValue::GraphInput(_) | ComputeValue::GraphValue(_))
+    ) {
+        return true;
+    }
+    let Some(LowValue::Array(wrapper)) = AsEnum::<LowValue>::as_enum(&value) else {
+        return false;
+    };
+    // SAFETY: `wrapper` is a live array of `module` on this borrow, and this reads
+    // only the two slots the `Buf` wrapper is built from.
+    let wrapper = unsafe { wrapper.items() };
+    let [payload, element] = wrapper else {
+        return false;
+    };
+    let is_element_type = module
+        .node_value(element.node)
+        .is_some_and(|value| value == P::Value::int_marker() || value == P::Value::float_marker());
+    is_element_type
+        && matches!(
+            module
+                .node_value(payload.node)
+                .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value)),
+            Some(ComputeValue::GraphInput(_) | ComputeValue::GraphValue(_))
+        )
+}
+
 /// Whether any operand of `operator` is one of a graph's placeholders.
 ///
 /// **One level, and one level is enough.** Every operator that reads a dispatch's
@@ -540,11 +589,13 @@ fn float_bits(value: f32) -> i64 {
 /// [b, i]`, `call [k, a]` — so a graph's value is never buried inside a structure
 /// the scan would have to walk to find. A `plrun`'s argument *is* the
 /// placeholder structure (the parameter's own shape, a leaf per cell), which is
-/// why this is asked about operators other than a parallel launch.
+/// why this is asked about operators other than a parallel launch. The one level
+/// of wrapping this does look through is the `Buf` wrapper, for the reason
+/// [`is_a_graph_placeholder`] gives.
 fn handed_a_placeholder<P>(module: &Module<P>, operand: &P::Value) -> bool
 where
     P: Program,
-    P::Value: AsEnum<LowValue> + AsEnum<ComputeValue>,
+    P::Value: ValueType + AsEnum<LowValue> + AsEnum<ComputeValue>,
 {
     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(operand) else {
         return false;
@@ -552,14 +603,9 @@ where
     // SAFETY: the operand array is the operator's own, and this reads only, for
     // the length of the call.
     let items = unsafe { operands.items() };
-    items.iter().any(|item| {
-        matches!(
-            module
-                .node_value(item.node)
-                .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value)),
-            Some(ComputeValue::GraphInput(_) | ComputeValue::GraphValue(_))
-        )
-    })
+    items
+        .iter()
+        .any(|item| is_a_graph_placeholder(module, item.node))
 }
 
 /// Why this operator cannot appear in a body that is being recorded, if it cannot.
@@ -590,7 +636,7 @@ fn unrecordable<P>(
 ) -> Option<String>
 where
     P: Program,
-    P::Value: AsEnum<LowValue> + AsEnum<ComputeValue>,
+    P::Value: ValueType + AsEnum<LowValue> + AsEnum<ComputeValue>,
 {
     match operator {
         ComputeOperator::Launch | ComputeOperator::Call => Some(
