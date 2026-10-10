@@ -1,11 +1,5 @@
 //! End-to-end smoke test: spawn the real `lichen-language-server` binary and
-//! drive it over stdio as an LSP client would. This exercises the full
-//! tower-lsp transport + the tooling library in one process (initialize ->
-//! didOpen diagnostics -> hover -> go-to-definition -> shutdown -> exit), so it
-//! would catch a wiring bug that a library unit test cannot.
-//!
-//! The `server` feature is required (it provides the binary target); `cargo
-//! test -p lichen-language-server` runs with default features, so this builds.
+//! drive it over stdio as an LSP client would.
 
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -58,10 +52,10 @@ fn send(stdin: &mut impl Write, json: &str) {
 
 /// Read the next **response**, skipping the server's notifications.
 ///
-/// A real client matches a response to its request by id and drops everything
-/// else; the server sends notifications of its own (`publishDiagnostics`, and
-/// the `lichen/analysis` telemetry a compile emits), so reading one frame and
-/// calling it the response is only correct while nothing else is in flight.
+/// # Invariant
+/// The server interleaves its own notifications (`publishDiagnostics`, the
+/// `lichen/analysis` telemetry a compile emits), so a frame that is not a
+/// response must be skipped rather than taken as the answer.
 fn read_response(reader: &mut impl BufRead) -> String {
     for _ in 0..64 {
         let msg = read_frame(reader);
@@ -125,8 +119,8 @@ fn handshake_and_features() {
     let diag = wait_for(&mut stdout, "publishDiagnostics");
     assert!(diag.contains("unresolved name"), "diagnostics = {diag}");
 
-    // hover on the `a` use in `b = a + 1` (line 1, character 4): the binding
-    // hover renders the bound expr's `value : type` (`a = 1` → `1 : Int`).
+    // hover on the `a` use (line 1, char 4): the binding hover shows
+    // the bound expr's `value : type` (`a = 1` → `1 : Int`).
     send(
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///test.lichen"},"position":{"line":1,"character":4}}}"#,
@@ -150,8 +144,8 @@ fn handshake_and_features() {
         "definition resp = {definition}"
     );
 
-    // completion on the `a` use in `b = a + unknown` (line 1, character 4):
-    // the in-scope name `a` is offered, filtered to the typed prefix.
+    // completion on the `a` use (line 1, char 4): the in-scope name `a` is
+    // offered, filtered to the typed prefix.
     send(
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":4,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///test.lichen"},"position":{"line":1,"character":4}}}"#,
@@ -198,9 +192,8 @@ fn handshake_and_features() {
 
 #[test]
 fn field_completion_after_a_dot() {
-    // The server must surface the field-access completion: typing `point.s` after
-    // a local struct binding offers its field `sub` (wired through the real
-    // `textDocument/completion` handler, not just the library).
+    // Typing `point.s` must offer the struct field `sub`, through the real
+    // `textDocument/completion` handler.
     let mut child: Child = Command::new(env!("CARGO_BIN_EXE_lichen-language-server"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -272,10 +265,8 @@ fn write(dir: &Path, name: &str, contents: &str) -> PathBuf {
 
 #[test]
 fn relative_imports_resolve_via_the_document_uri() {
-    // The LSP must resolve a relative `@import` against the document's own
-    // directory (derived from its `file://` URI).  Before this the server
-    // passed no base to the frontend, so `import "math.lichen"` resolved
-    // against the process CWD and failed with "cannot load package".
+    // A relative `@import` must resolve against the document's own directory
+    // (from its `file://` URI), not the process CWD.
     let dir = temp_dir("import");
     write(&dir, "math.lichen", "x => x + 1\n");
     let main_path = write(
@@ -333,11 +324,8 @@ fn relative_imports_resolve_via_the_document_uri() {
 
 #[test]
 fn the_repo_import_example_loads() {
-    // The living-spec program that first bit: `import/_.lichen` opens with
-    // `math = import "math.lichen"` / `geo = import "geometry.lichen"`, and
-    // `geometry.lichen` itself imports `math.lichen` (a transitive relative
-    // import).  Driving the real server against this file must resolve every
-    // import relative to the file's directory — no "cannot load package".
+    // `import/_.lichen` has a transitive relative import: every import
+    // must resolve from the file's directory, not the CWD.
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/import");
     let main_path = examples.join("_.lichen");
     let uri = Url::from_file_path(&main_path).unwrap();

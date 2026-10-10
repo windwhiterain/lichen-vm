@@ -1,48 +1,11 @@
 //! The stdio LSP server, generic over the compiled program `P`.
 //!
-//! This is the transport half of the editor tooling: a thin
-//! [`tower_lsp::LanguageServer`] over the shared frontend ([`Doc`] /
-//! [`DocIndex`](crate::analysis::DocIndex)).  It is generic over the program
-//! collector `P`, so the same server serves the shipping vocabulary and a
-//! plugin-composed one — the package manager builds a plugin-built
-//! `lichen-language-server` whose `main` calls [`main`] with its composed
-//! `LangProgram`, and the LSP then understands the plugin's leaves for
-//! diagnostics / hover / go-to-definition.
-//!
-//! `Doc` is deliberately **not** held here: it transitively owns raw pointers
-//! into the frontend arena (via the checker's diagnostic type), so it is
-//! `!Send`, which `tower-lsp` (whose `LanguageServer` is `Send + Sync`) cannot
-//! store.  The *extracted indexes* are `Send`, so what the server holds per
-//! document is a [`DocIndex`](crate::analysis::DocIndex): one full frontend run
-//! per source text, shared by every hover / definition / completion / semantic
-//! tokens request that text receives.
-//!
-//! # The compile worker
-//!
-//! The analysis is *incremental*: a document's compile is driven by a
-//! [`BufferSession`](lichen_language::session::BufferSession), which retains the
-//! `cache`d bindings' frozen artifacts across edits and re-lexes and re-parses
-//! only what an edit touched (`docs/notes/incremental-update.md`).  A session
-//! holds the checker's [`Build`](lichen_highlevel::checker::Build), so it is
-//! `!Send` for the same reason `Doc` is — and unlike `Doc`, it must **outlive**
-//! the request that used it.  It therefore cannot live in this struct, and it
-//! cannot live in a `spawn_blocking` closure either: the pool may run that on any
-//! thread.  So the `!Send` half of the server lives on one dedicated thread
-//! ([`Worker`]): the package store, one shared registry, and one session per open
-//! document.  Requests hand it a text and await a `Send` index back.
-//!
-//! Two mechanisms keep a burst of keystrokes from starting one full frontend
-//! run per keystroke (`docs/notes/code-audit.md`, `P1-17`):
-//!
-//! - a **debounce**: an edit is analyzed only after [`EDIT_DEBOUNCE`] without a
-//!   newer edit, so a burst collapses to its last text;
-//! - a **generation gate**: an analysis (however it was scheduled) runs and
-//!   publishes only while the text it was launched for is still the document's
-//!   current text, so a superseded analysis stops instead of completing.
-//!
-//! Neither can abort a compile that has already started: `tower-lsp` answers
-//! `$/cancelRequest` by dropping the request future, so the worker finishes the
-//! job and its answer is dropped.
+//! # Invariant
+//! `Doc` is `!Send` — it owns pointers into the frontend arena — so a document is
+//! held as its `Send` [`DocIndex`](crate::analysis::DocIndex), and the `!Send`
+//! session must outlive its request, which puts it on a dedicated compile
+//! worker thread (`docs/notes/incremental-update.md` §6.4,
+//! `docs/notes/liche-lsp-home.md` §3).
 
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
@@ -71,63 +34,52 @@ use crate::analysis::{Artifacts, DocIndex, index};
 use crate::home::LichenHome;
 use crate::lsp::semantic_token_legend;
 
-/// How long an edit waits for the next one before its document is analyzed.
-/// A burst of keystrokes collapses to its last edit — one frontend run — rather
-/// than one run per keystroke.
+/// How long an edit waits for the next one, so a burst collapses to one run.
 const EDIT_DEBOUNCE: Duration = Duration::from_millis(150);
 
 /// The server state: one open document per URI, and the index of the text that
 /// document currently holds.
 ///
-/// [`Doc`] is `!Send` (see the module docs), so it is built and dropped inside
-/// the analysis; the `Send` index it produced is what is kept.
+/// # Invariant
+/// [`Doc`] is `!Send`, so it is built and dropped inside the analysis; only the
+/// `Send` index it produced is kept.
 pub struct Backend<P: LangProgramShape> {
     inner: Arc<Inner<P>>,
 }
 
 struct Inner<P: LangProgramShape> {
     client: Client,
-    /// The open documents: their current text, that text's hash (the identity a
-    /// cache entry is keyed by) and its generation (which edits supersede).
+    /// The open documents: their text, that text's hash (a cache key) and
+    /// its generation (which edits supersede).
     documents: Mutex<HashMap<Url, Document>>,
-    /// The last analysis per open document.  One entry per document, so the
-    /// cache is bounded by the number of open documents: a keystroke replaces
-    /// the entry rather than adding one.
+    /// The last analysis per open document: the cache is bounded by them.
+    /// A keystroke replaces an entry, never adds one.
     indexes: Mutex<HashMap<Url, CachedIndex>>,
-    /// The **other files** each open document's last analysis published
-    /// diagnostics for — a built-in package's source, whose failures belong to
-    /// that file rather than the document (`docs/notes/core-prelude.md` §4).
-    /// Remembered so a later analysis that no longer reports one **clears** it:
-    /// a client keeps a file's diagnostics until an empty list replaces them, so
-    /// a fixed error would otherwise stay on the built-in's line for the rest of
-    /// the session.
+    /// The **other files** each document's last analysis published for
+    /// (`docs/notes/core-prelude.md` §4).
+    ///
+    /// # Invariant
+    /// A client keeps a file's diagnostics until an empty list replaces them, so
+    /// a file no longer reported must be published empty, or a fixed error stays
+    /// on the built-in's line for the rest of the session.
     published_files: Mutex<HashMap<Url, Vec<Url>>>,
-    /// The compile worker — the one thread that owns the `!Send` half of the
-    /// server: the package store, the shared registry, and one
-    /// [`BufferSession`](lichen_language::session::BufferSession) per open
-    /// document.  See the module docs.
+    /// The compile worker: the one thread owning the `!Send` half of the server.
     worker: Worker,
-    /// The only way a generation is minted: strictly increasing, never reused,
-    /// so an analysis of a closed-then-reopened document can never match the
-    /// generation of an older analysis of the same URI.
+    /// Generations are minted strictly increasing, never reused, so a
+    /// reopened document cannot match an older analysis.
     generations: AtomicU64,
-    // `fn() -> P` keeps the type parameter without requiring `P: Send + Sync`
-    // (the composed value/operator leaves carry raw arena pointers, so `P`
-    // itself is not `Send`); a function-pointer phantom is always `Send + Sync`.
+    // A function-pointer phantom is `Send + Sync`, so `P` itself need not be:
+    // the composed leaves carry raw arena pointers.
     _program: std::marker::PhantomData<fn() -> P>,
 }
 
 /// The compile worker: a dedicated thread owning every `!Send` compile artifact.
 ///
-/// The sessions have to outlive the request that built them (that is what makes
-/// a compile incremental) and they are `!Send` (they hold the checker's
-/// [`Build`](lichen_highlevel::checker::Build)), so neither this struct nor a
-/// `spawn_blocking` closure can hold them.  The thread is the boundary: a job
-/// goes in, a `Send` [`Analysis`] comes back.
-///
-/// One thread costs nothing here: the transport serializes requests
-/// (`concurrency_level(1)`), and a session is a single-threaded object by
-/// construction — its value is the state the last compile left behind.
+/// # Invariant
+/// A session must outlive the request that built it and is `!Send` (it holds the
+/// checker's `Build`), so neither this struct nor a `spawn_blocking` closure can
+/// hold it — the thread is the boundary. A job goes in, a `Send` [`Analysis`]
+/// comes back (`docs/notes/incremental-update.md` §6.4).
 struct Worker {
     jobs: tokio::sync::mpsc::UnboundedSender<Job>,
 }
@@ -148,21 +100,18 @@ enum Job {
 struct Analysis {
     index: Arc<DocIndex>,
     dependencies: Option<Vec<(PathBuf, Hash)>>,
-    /// What the compile did to the document's retained cells, and whether it
-    /// reused the established build instead of re-lowering and re-checking it.
-    /// Pushed to the client as [`AnalysisStats`].
+    /// What the compile did to the retained cells, and whether it reused the
+    /// established build. Pushed as [`AnalysisStats`].
     cells: CellEvents,
     reused_build: bool,
 }
 
-/// The analysis telemetry the server pushes to the client: what the last compile
-/// did to the document's retained cells (`docs/notes/incremental-update.md`).
+/// The `lichen/analysis` telemetry the server pushes to the client.
 ///
-/// A custom notification, because the session's own event surface exists exactly
-/// because a caller cannot otherwise tell a rebuild that reused nine cells from
-/// one that reused none — and this is that caller.  An editor that does not know
-/// the method ignores it (LSP has no registration step for notifications), and
-/// the integration test is what reads it.
+/// # Invariant
+/// A caller cannot otherwise tell a rebuild that reused nine cells from one
+/// that reused none, and this is that caller; an editor that does not know the
+/// method ignores it.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct AnalysisStats {
     uri: Url,
@@ -187,8 +136,8 @@ impl tower_lsp::lsp_types::notification::Notification for AnalysisNotification {
 }
 
 impl Worker {
-    /// Spawn the worker thread.  Everything it needs is built *on* it, so the
-    /// closure captures only `Send` values (a path and the receiver).
+    /// Spawn the worker thread; everything it needs is built *on* it, so the
+    /// closure captures only `Send` values.
     fn spawn<P>(cache_root: PathBuf) -> Worker
     where
         P: LangProgramShape,
@@ -230,32 +179,30 @@ where
     P::Value: ValueType,
 {
     cache_root: PathBuf,
-    /// The device handle, taken for one run and handed back.  A `PackageStore` is
-    /// built per run rather than kept, so its `packages` map is exactly *that*
-    /// document's import closure — which is what an analysis records as its
-    /// dependencies (a store kept across runs would accumulate every document's
-    /// imports and invalidate every analysis when any of them moved).
+    /// The device handle, taken for one run and handed back.
+    ///
+    /// # Invariant
+    /// A store kept across runs would accumulate every document's imports, so
+    /// its `packages` map must stay exactly one document's import closure —
+    /// that is what an analysis records as its dependencies.
     device: Option<DeviceRegistry>,
-    /// The registry every session's cells and every imported package are filed
-    /// in.  One registry, because a cell's frozen closure names the imports its
-    /// value read and must resolve them where it is filed
-    /// ([`BufferSession::with_registry`]), and because all the open documents
-    /// share it.
+    /// The registry every session's cells and imports are filed in.
+    ///
+    /// # Invariant
+    /// A cell's frozen closure names the imports its value read, so they must be
+    /// resolved where the cell is filed ([`BufferSession::with_registry`]).
     registry: Arc<RwLock<Registry<P>>>,
     /// One session per open document, kept across requests: this is what makes
-    /// an edit incremental rather than a fresh compile.
+    /// an edit incremental.
     sessions: HashMap<Url, BufferSession<P>>,
-    /// Per document: the imported files its session's retained cells were
-    /// computed from, as of its last analysis (`None` when a loaded file could
-    /// not be read back, so the record proves nothing).
+    /// Per document: the imported files its retained cells read from
+    /// (`None` when a loaded file could not be read back).
     ///
-    /// A cell is a *value*, not a program: it was computed from the bytes those
-    /// files held then, and nothing in the document's own text records that — its
-    /// content key is over its resolved structure.  So the worker keeps the
-    /// record, and drops the session when it cannot prove the files are
-    /// unchanged, which re-derives everything from the new bytes.  This is the
-    /// coarse cut: the fine one names the cells that read the changed file
-    /// (`docs/notes/incremental-update.md` §12.3).
+    /// # Invariant
+    /// A cell is a *value* computed from those bytes and nothing in the
+    /// document's text records them, so a session whose files cannot be proven
+    /// unchanged must be dropped. This is the coarse cut; the fine one would
+    /// name the cells that read the changed file.
     dependencies: HashMap<Url, Option<Vec<(PathBuf, Hash)>>>,
 }
 
@@ -266,8 +213,7 @@ where
     P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
 {
     fn new(cache_root: PathBuf) -> Self {
-        // A codec that cannot persist has no device at all; an in-memory store is
-        // the intended mode then, exactly as `open_store` decides it.
+        // A codec that cannot persist has no device; in-memory is the intended mode.
         let device = P::Codec::PERSISTENT.then(|| DeviceRegistry::open(cache_root.clone()));
         WorkerState {
             cache_root,
@@ -281,11 +227,8 @@ where
     fn run(&mut self, job: Job) {
         match job {
             Job::Analyze { uri, text, reply } => {
-                // A compile that panics must not take the worker — and with it
-                // every later request — down.  The session that did it is dropped
-                // (its state is not trusted again) and the request is answered by
-                // the one-shot frontend instead: the degradation this mechanism
-                // exists to avoid, not a failure.
+                // A panicking compile must not take the worker down: the session is
+                // dropped, and the request answered one-shot.
                 let answer =
                     std::panic::catch_unwind(AssertUnwindSafe(|| self.analyze(uri.clone(), &text)))
                         .unwrap_or_else(|_| {
@@ -300,13 +243,10 @@ where
 
     /// Drop `uri`'s session, releasing the artifacts it retained.
     ///
-    /// The session is the only holder of its reports — [`Self::analyze`] answers
-    /// with the `Send` index alone, which holds no static ref — so once it is
-    /// gone nothing outside the registry can still point into those artifacts,
-    /// which is `evict`'s caller-side precondition.  What [`evict_unreachable`]
-    /// still refuses (a live artifact in the registry that references the key,
-    /// including another document's cell) is dropped with the session: the debt
-    /// is the session's, and a forgotten session has none to pay.
+    /// # Invariant
+    /// The session is the only holder of its reports, so dropping it is
+    /// `evict_unreachable`'s caller-side precondition; what eviction still
+    /// refuses is the session's debt, and a forgotten session has none to pay.
     ///
     /// [`evict_unreachable`]: BufferSession::evict_unreachable
     fn forget(&mut self, uri: &Url) {
@@ -316,13 +256,12 @@ where
         }
     }
 
-    /// The incremental analysis: preprocess (the caller's stage — it owns the
-    /// store and the block's directive spans), hand the session the resulting
-    /// view, and build the editor index from what its compile produced.
+    /// The incremental analysis: preprocess, hand the session the view,
+    /// build the index from what its compile produced.
     fn analyze(&mut self, uri: Url, text: &str) -> Analysis {
-        // A session whose imported files moved is dropped first: its cells hold
-        // the old bytes' values.  An unprovable record (`None`) is dropped too —
-        // the honest answer when the files cannot be read back is to re-derive.
+        // A session whose imports moved is dropped first: its cells hold stale values.
+
+        // A record that cannot be proven is dropped too: re-derive beats guessing.
         let stale = self.dependencies.get(&uri).is_some_and(|recorded| {
             recorded
                 .as_ref()
@@ -370,9 +309,7 @@ where
         }
     }
 
-    /// The one-shot analysis — the whole frontend and a check, with no session
-    /// and nothing retained.  This is what the server did before the sessions
-    /// existed, kept as the answer to a compile the session could not do.
+    /// The one-shot analysis: the whole frontend and a check, nothing retained.
     fn one_shot(&mut self, uri: Url, text: &str) -> Analysis {
         let mut store = self.store();
         let base = uri.to_file_path().ok();
@@ -384,8 +321,8 @@ where
         Analysis {
             index: Arc::new(index),
             dependencies: cacheable.then_some(dependencies).flatten(),
-            // The one-shot path retains nothing and reuses nothing: there is no
-            // session for it to have read a cell from.
+            // The one-shot path retains nothing and reuses nothing: there is
+            // no session for it to have read a cell from.
             cells: CellEvents::default(),
             reused_build: false,
         }
@@ -393,9 +330,9 @@ where
 
     /// A store for one run, over the worker's device handle and its registry.
     ///
-    /// The registry is the shared one, not the store's own: the imports the store
-    /// resolves must be registered where the sessions' cells are filed, and where
-    /// every other open document's imports already are.
+    /// # Invariant
+    /// The registry is the shared one: the imports a store resolves must be
+    /// registered where the sessions' cells are filed.
     fn store(&mut self) -> PackageStore<P> {
         let mut store = open_store::<P>(self.device.take(), self.cache_root.clone());
         store.registry = Arc::clone(&self.registry);
@@ -407,10 +344,8 @@ where
 /// text.
 struct Document {
     text: String,
-    /// The sha256 of `text`.  The client's document version is not tracked (the
-    /// server neither receives it into the cache nor publishes it), and a
-    /// version is only as injective as the client; the text's own hash is
-    /// injective by construction, so it is what a cache entry is keyed by.
+    /// The sha256 of `text`: the cache key, since a client version is
+    /// only as injective as the client that sends it.
     hash: Hash,
     generation: u64,
 }
@@ -419,10 +354,8 @@ struct Document {
 struct CachedIndex {
     /// The hash of the text this index was built from.
     text: Hash,
-    /// Every imported package file the run loaded, with the sha256 of its bytes
-    /// at analysis time.  A hit requires all of them to be unchanged: the
-    /// index's answers depend on the imported modules, and caches on disk are
-    /// shared with other processes (`docs/notes/artifact-cache.md`).
+    /// Imported files with each one's sha256: the dependency half of
+    /// the cache key (`docs/notes/artifact-cache.md`).
     dependencies: Vec<(PathBuf, Hash)>,
     index: Arc<DocIndex>,
 }
@@ -467,11 +400,11 @@ where
             .is_some_and(|document| document.generation == generation)
     }
 
-    /// The analysis of `text` for `uri`: the cached index when the cache holds
-    /// this text with every dependency unchanged, else one compile on the worker.
+    /// The index for `text`: a hit when the text and every dependency
+    /// are unchanged, else one compile on the worker.
     ///
-    /// The second half is what that compile did, and it is `None` for a cache
-    /// hit — nothing was compiled, so there is nothing to report.
+    /// # Invariant
+    /// A cache hit compiles nothing, so the returned analysis is `None`.
     async fn index_for(
         &self,
         uri: &Url,
@@ -483,9 +416,8 @@ where
         }
         let analysis = self.worker.analyze(uri.clone(), text).await;
         if let Some(dependencies) = &analysis.dependencies {
-            // Only the document's own current text is kept: a run whose text
-            // an edit has already superseded would overwrite a newer entry
-            // and cost the next request a run it did not need.
+            // Only the document's current text is kept: a superseded run
+            // would overwrite a newer entry.
             let documents = self.documents.lock().unwrap();
             let current = documents.get(uri);
             let mut indexes = self.indexes.lock().unwrap();
@@ -506,12 +438,12 @@ where
         (index, Some(analysis))
     }
 
-    /// The cached index for `uri` when it holds `hash` and every dependency it
-    /// was built from still has the bytes it was built from.
+    /// The cached index for `uri` when it holds `hash` and every dependency
+    /// still has the bytes it was built from.
     ///
-    /// A miss is a miss whether the text moved or a dependency did — the compile
-    /// worker drops the *session* in the second case, which is state this cache
-    /// knows nothing about (see `WorkerState::dependencies`).
+    /// # Invariant
+    /// A miss is a miss whether the text moved or a dependency did — the worker
+    /// drops the *session* in the second case, which this cache never sees.
     fn cached_index(&self, uri: &Url, hash: &Hash) -> Option<Arc<DocIndex>> {
         let (index, dependencies) = {
             let indexes = self.indexes.lock().unwrap();
@@ -533,8 +465,12 @@ where
         None
     }
 
-    /// Analyze the document's current text and publish its diagnostics, unless
-    /// a newer edit superseded this analysis while the frontend ran.
+    /// Analyze the document's current text and publish its diagnostics,
+    /// unless a newer edit superseded this analysis.
+    ///
+    /// # Invariant
+    /// An analysis publishes only while the text it was launched for is still
+    /// current, so a superseded one stops instead of resurrecting a stale error.
     async fn analyze_and_publish(self: &Arc<Self>, uri: Url, generation: u64) {
         let Some((text, hash, current)) = self.current(&uri) else {
             return;
@@ -549,12 +485,8 @@ where
         self.client
             .publish_diagnostics(uri.clone(), index.lsp_diagnostics(), None)
             .await;
-        // A diagnostic inside a built-in package's source is a property of
-        // *that* file, not of the document (`docs/notes/core-prelude.md` §4):
-        // it is published against the built-in's own URI, whose file the store
-        // materialized on disk, so the client shows it on the line that wrote
-        // it and the document is never blamed for a position it does not
-        // contain.
+        // Published against the built-in's own file, not the document:
+        // the store's file (`docs/notes/core-prelude.md` §4).
         let mut files: Vec<Url> = Vec::new();
         for file in index.file_diagnostics() {
             let Ok(file_uri) = Url::from_file_path(&file.path) else {
@@ -567,9 +499,8 @@ where
                 .await;
             files.push(file_uri);
         }
-        // Clear the built-in files this document no longer reports: a client
-        // keeps a file's diagnostics until an empty list replaces them, so a
-        // fixed error would otherwise stay on the built-in's line.
+        // Clear the files no longer reported: a client keeps a file's
+        // diagnostics until an empty list replaces them.
         let stale = self
             .published_files
             .lock()
@@ -583,9 +514,8 @@ where
                     .await;
             }
         }
-        // The compile's own event surface, pushed alongside the diagnostics: a
-        // caller that cannot see it cannot tell an incremental analysis from a
-        // full one, and this is the caller (`AnalysisStats`).
+        // The compile's own event surface: a caller that cannot see it
+        // cannot tell an incremental analysis from a full one.
         if let Some(analysis) = analysis {
             let _ = self
                 .client
@@ -608,12 +538,8 @@ where
     P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
 {
     fn new(client: Client, cache_root: PathBuf) -> Self {
-        // `cache_root` is this vocabulary's `compilers/<plugin-set-key>` slot
-        // (the shipping server uses the empty plugin set's slot).  It is the
-        // root the device registry is opened at — once, on the compile worker —
-        // so the settled imported packages are cached on disk and shared
-        // cross-process with the `lichen` compiler.  See
-        // `docs/notes/liche-lsp-home.md`.
+        // This vocabulary's `compilers/<plugin-set-key>` slot, opened on
+        // the compile worker: `docs/notes/liche-lsp-home.md` §3.
         let home = LichenHome::at(cache_root);
         home.ensure();
         Backend {
@@ -632,10 +558,10 @@ where
     /// Record `text` as the document's current text and analyze it after
     /// `delay`, publishing its diagnostics.
     ///
-    /// The debounce is a **spawned** task, never a wait inside the handler:
-    /// under `concurrency_level(1)` a wait here would serialize the queued
-    /// edits and collapse nothing, while a spawned task lets the transport keep
-    /// consuming messages (and shutdown keep working) during the wait.
+    /// # Invariant
+    /// The debounce is a **spawned** task, never a wait inside the handler: under
+    /// `concurrency_level(1)` a wait would serialize the queued edits and
+    /// collapse nothing.
     fn schedule_analysis(&self, uri: Url, text: String, delay: Duration) {
         let inner = Arc::clone(&self.inner);
         let generation = inner.set_text(uri.clone(), text);
@@ -652,9 +578,11 @@ where
     }
 }
 
-/// The package store for one run on the worker: the device handle the worker
-/// keeps open, else a fresh open.  An in-memory store is used only when it is
-/// *intended* — the program's codec cannot persist (`NoPersist`), the same rule
+/// The package store for one run: the device handle the worker keeps open,
+/// else a fresh open.
+///
+/// # Invariant
+/// In-memory only when intended — the codec cannot persist — the same rule
 /// [`Doc::new_with_cache`] applies.
 fn open_store<P>(device: Option<DeviceRegistry>, cache_root: PathBuf) -> PackageStore<P>
 where
@@ -671,26 +599,26 @@ where
     }
 }
 
-/// Whether an analysis may be cached.  A run that failed to resolve or read a
-/// package is not cacheable: no set of *existing* files names the one whose
-/// appearance or repair would change the answer, so a hit could keep reporting
-/// a failure the editor has already fixed.
+/// Whether an analysis may be cached.
+///
+/// # Invariant
+/// A run that failed to resolve or read a package is not cacheable: no set of
+/// *existing* files names the one whose appearance or repair would change the
+/// answer, so a hit could keep reporting a failure the editor already fixed.
 fn cacheable<P: LangProgramShape>(diagnostics: &[Diag<P>]) -> bool {
     !diagnostics
         .iter()
         .any(|d| matches!(d.stage, Stage::Preprocess | Stage::Io))
 }
 
-/// The imported package files a run loaded, with the sha256 of each file's
-/// bytes — the dependency half of an analysis's cache key.  `None` when a
-/// loaded package's bytes cannot be read back, which makes the analysis
-/// uncacheable: the key would no longer cover that file.
+/// The imported package files a run loaded, with each file's sha256 — the
+/// dependency half of an analysis's cache key.
 ///
-/// The store loaded exactly the document's import closure (transitively), so
-/// these are the files whose contents can change an answer for it.  A native
-/// package (`compute.lichen`) is compiled from source embedded in this binary
-/// and is never on disk, so it is deliberately absent: it cannot change under a
-/// cache root.
+/// # Invariant
+/// `None` when a loaded package's bytes cannot be read back, which makes the
+/// analysis uncacheable: the key would no longer cover that file. A native
+/// package (`compute.lichen`) is embedded in this binary, never on disk, so it
+/// is deliberately absent — it cannot change under a cache root.
 fn imported_files<P>(store: &PackageStore<P>) -> Option<Vec<(PathBuf, Hash)>>
 where
     P: LangProgramShape,
@@ -704,9 +632,8 @@ where
     Some(dependencies)
 }
 
-/// Whether every recorded dependency still has the bytes the analysis was built
-/// from.  A missing or unreadable file is a miss like any other: it is a change
-/// in what the frontend would read.
+/// Whether every dependency still has the bytes it was built from.
+/// A missing or unreadable file is a miss.
 fn dependencies_unchanged(dependencies: &[(PathBuf, Hash)]) -> bool {
     dependencies
         .iter()
@@ -728,12 +655,11 @@ where
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
-                // Complete the names in scope at the cursor (the same scope set
-                // that powers an unresolved name's "did you mean" candidates).
+                // Complete the names in scope at the cursor, the same scope
+                // set an unresolved name's "did you mean" candidates use.
                 completion_provider: Some(CompletionOptions::default()),
-                // Lichen's own parser drives highlighting, so Zed can run with
-                // (or without) the tree-sitter grammar — the semantic tokens
-                // carry the color when the grammar is absent.
+                // The grammar-optional highlight path: semantic tokens carry
+                // the color when the tree-sitter grammar is absent.
                 semantic_tokens_provider: Some(
                     SemanticTokensOptions {
                         legend: semantic_token_legend(),
@@ -756,8 +682,8 @@ where
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
         let text = params.text_document.text;
-        // A fresh document: its previous text's diagnostics and analysis are
-        // not this document's.  The spawn is immediate (no edit delay).
+        // A fresh document: its previous text's analysis is not this
+        // document's. The spawn is immediate (no edit delay).
         self.inner.indexes.lock().unwrap().remove(&uri);
         self.schedule_analysis(uri, text, Duration::ZERO);
     }
@@ -777,13 +703,10 @@ where
         // superseded, so none of them publishes after the close.
         self.inner.documents.lock().unwrap().remove(&uri);
         self.inner.indexes.lock().unwrap().remove(&uri);
-        // The worker forgets the document too: its session — and the artifacts
-        // the retained cells hold — is the one piece of the server that outlives
-        // a request, and a closed document must not keep it.  This is also when
-        // those artifacts become evictable (see `WorkerState::forget`).
+        // A closed document must not keep its session — the one piece that
+        // outlives a request, and whose artifacts then free.
         self.inner.worker.close(uri.clone());
-        // Clear the now-stale diagnostics for the closed document, and for the
-        // built-in files its last analysis reported.
+        // Clear the closed document's stale diagnostics, and its last analysis's.
         let files = self
             .inner
             .published_files
@@ -827,10 +750,8 @@ where
             return Ok(None);
         };
         let (index, _) = self.inner.index_for(&uri, text, hash).await;
-        // The definition is in the document **unless** it is a built-in's: a
-        // prelude name is defined in the built-in package's own file, which the
-        // store materialized on disk, so the answer names that file's URI and
-        // the position in it (`docs/notes/core-prelude.md` §4).
+        // The document, unless the name is a built-in's file the store
+        // materialized (`docs/notes/core-prelude.md` §4).
         let response = index.definition_at(position).map(|def| {
             let target = def
                 .file
@@ -845,9 +766,8 @@ where
         Ok(response)
     }
 
-    /// Complete the names in scope at the cursor — the same scope knowledge
-    /// that names an unresolved name's "did you mean" candidates in a
-    /// diagnostic.
+    /// The names in scope at the cursor: the scope an unresolved name's
+    /// "did you mean" candidates are drawn from.
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
@@ -866,9 +786,8 @@ where
         let Some((text, hash, _generation)) = self.inner.current(&uri) else {
             return Ok(None);
         };
-        // The frontend classifies every token into a `SemanticTokens` payload
-        // (delta-encoded, with the legend indices), computed from the cached
-        // index — the frontend run and the `!Send` `Doc` are not repeated.
+        // Delta-encoded from the cached index: the frontend run and the
+        // `!Send` `Doc` are not repeated.
         let (index, _) = self.inner.index_for(&uri, text, hash).await;
         Ok(Some(SemanticTokensResult::Tokens(
             index.semantic_tokens_lsp(),
@@ -876,13 +795,13 @@ where
     }
 }
 
-/// Run the stdio LSP server for the composed program `P` (shipping or
-/// plugin-built), caching the settled imported packages under `cache_root`
-/// (the vocabulary's `compilers/<plugin-set-key>` slot).  This builds the
-/// runtime itself so the generated crate's `main` needs no `#[tokio::main]`;
-/// requests are serialized via `concurrency_level(1)`, and the analysis a
-/// request needs is either cached or run once per document text (see the module
-/// docs).
+/// Run the stdio LSP server for the composed program `P`, caching the settled
+/// imported packages under `cache_root`.
+///
+/// # Invariant
+/// This builds the runtime itself so the generated crate's `main` needs no
+/// `#[tokio::main]`; requests are serialized via `concurrency_level(1)`, so an
+/// analysis is either cached or run once per document text.
 pub fn main<P>(cache_root: &Path)
 where
     P: LangProgramShape,

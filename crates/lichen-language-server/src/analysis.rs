@@ -1,30 +1,5 @@
-//! [`Doc`]: one source parsed once, held as the shared frontend artifacts plus
-//! an editor-view index built on top of them.
-//!
-//! `Doc` reuses the *actual* frontend artifacts from `lichen-language` — the
-//! tokens (byte ranges), the AST (source spans) — and the *checker* through
-//! [`build_report`], the same shared tail the compiler calls, for the full
-//! diagnostic set. It then adds the one thing the raw frontend does not give
-//! you: name resolution for editing.
-//!
-//! The artifacts and the index are [`DocIndex`], a `Send` value; the [`Doc`]
-//! handle adds the checker diagnostics, whose structured facts carry raw arena
-//! pointers and make the handle `!Send`.  A long-lived host (the language
-//! server) caches a [`DocIndex`] per document and compiles again only for a
-//! source the cache does not hold — and the compile it runs there is the
-//! **incremental** one: a `BufferSession` per document, on the server's compile
-//! worker (`server.rs`, `docs/notes/incremental-update.md` §7.6), whose
-//! frontend artifacts this module's [`index`] is built from.  [`Doc`] itself is
-//! the one-shot path: the tests, the `new*` entry points, and the worker's
-//! fallback for a compile the session could not do.
-//!
-//! Why the resolution is re-derived here: `compile` resolves names at lowering
-//! but collapses a name *use* onto the binder's `ExprId`, so the IR never
-//! records the use's own span. The AST keeps the use's span but not its
-//! binding. So [`Doc`] walks the AST with its own scope stack (mirroring the
-//! compiler's scope rules) and records a use-span → definition map. This is
-//! exactly what the tooling layer is *for*: interpreting the shared syntax
-//! artifact for an editor, without forking the compiler.
+//! [`Doc`]: the frontend artifacts plus the editor-view index over them.
+//! Layering: `docs/notes/language-toolchain.md`.
 
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -62,30 +37,27 @@ use crate::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionTextEdit, InsertTextFormat, TextEdit,
 };
 
-/// A definition site: a binding name, a lambda parameter, or — for a name a
-/// **built-in** module exposes (`add` from the `core` prelude) — the binding's
-/// position in that module's own file.
+/// A definition site: a binding name, a parameter, or a built-in
+/// module's export, positioned in that module's own file.
 #[derive(Clone, Debug)]
 pub struct Definition {
     pub name: String,
     pub span: Span,
-    /// The other file `span` is a position in, when this definition is not this
-    /// document's: a built-in package's source record, whose file exists on disk
-    /// so an editor can open it (`docs/notes/core-prelude.md` §4).  `None` means
-    /// the document this analysis was built for.
+    /// The other file `span` is a position in; `None` means this document.
+    ///
+    /// # Invariant
+    /// The file exists on disk, so an editor can open it
+    /// (`docs/notes/core-prelude.md` §4).
     pub file: Option<Arc<PackageSource>>,
 }
 
-/// One name a **built-in** module exposes, as a definition *in that module*: the
-/// name, its position and text in the built-in's file, and the export it is bound
-/// to.  A document's own binding of the same name shadows it (the built-in frame
-/// sits below every frame of the document), which is the language's rule — the
-/// prelude is shadowable, not reserved.
+/// One name a **built-in** module exposes, as a definition *in that module*.
 ///
-/// These are seeded into the base scope so a *use* resolves; they are deliberately
-/// kept out of every document-keyed table ([`DocIndex::defs`], `def_index`), since
-/// their span is a position in the built-in's file and would collide with a
-/// position in the document (both start at line 1).
+/// # Invariant
+/// A document's own binding of the same name shadows it — the built-in frame
+/// sits below every document frame — so the prelude is shadowable, not reserved.
+/// Their spans are positions in another file, which is why they are kept out of
+/// [`DocIndex::defs`] and every document-keyed table.
 #[derive(Clone, Debug)]
 pub struct BuiltinName {
     pub name: String,
@@ -93,10 +65,11 @@ pub struct BuiltinName {
     pub def: Definition,
 }
 
-/// One *other* file's diagnostics, rendered for the protocol: the file they are a
-/// property of, and the LSP diagnostics on its own positions.  A failure inside a
-/// built-in module is one of these, never part of the document's own set
-/// (`docs/notes/core-prelude.md` §4).
+/// One *other* file's diagnostics, rendered for the protocol.
+///
+/// # Invariant
+/// A failure inside a built-in module is one of these, never part of the
+/// document's own set (`docs/notes/core-prelude.md` §4).
 #[derive(Clone, Debug)]
 pub struct FileDiagnostics {
     /// The file the diagnostics belong to — its path on disk, which the client
@@ -105,17 +78,16 @@ pub struct FileDiagnostics {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// An imported binding, indexed for the editor: the name it is bound to, the
-/// site of its `@import` directive (a definition in this file), the import
-/// path, and the imported module's rendered type (for hover).  A use of the
-/// name resolves to this, so hovering an imported module (or a field of it) is
-/// not "unresolved".
+/// An imported binding, indexed for the editor.
+///
+/// # Invariant
+/// A use of the name resolves to this, so hovering an imported module (or a
+/// field of it) is not "unresolved".
 #[derive(Clone, Debug)]
 struct ImportBinding {
     /// The binding name the import is available under (`math`).
     name: String,
-    /// The (start) span of the `@import` directive in the original file — the
-    /// definition site a use of the imported name resolves to.
+    /// The `@import` directive's start span: where a use resolves to.
     span: Span,
     /// The import path (`math.lichen`), for a descriptive hover.
     path: String,
@@ -124,26 +96,19 @@ struct ImportBinding {
     ty: Option<String>,
 }
 
-/// The checked type and — when the build produced a concrete one — the value
-/// of one top-level (outer-block) statement.  A **read-only snapshot** taken at
-/// [`Doc::new`] time: the build's cascade deep pass already type-checked every
-/// statement and computed (or deliberately left lazy) each one's value.  The
-/// snapshot is taken by *reading* `build.ty`/`build.val`/`module.node_value`;
-/// it never re-evaluates a node, never forces a lazy cell, and never calls
-/// `evaluate_node`/`evaluate_node_deep`.  A lazy or recursive binding whose
-/// value the program defers (an undecided cell, e.g. `paradox` in the
-/// `Type : Type` encoding) reports `value: None` and its type only — forcing
-/// it would run the compiler-generated recursion clones, which are not
-/// user-written and are irrelevant to editor needs.
+/// One top-level statement's checked type and, when concrete, its value.
+///
+/// # Invariant
+/// The snapshot only *reads* `build.ty`/`build.val`/`module.node_value`; it
+/// never evaluates a node or forces a lazy cell, so a deferred binding reports
+/// `value: None` rather than diverging on the compiler's recursion clones.
 #[derive(Clone, Debug)]
 pub struct StatementValue {
     /// The statement's source span (its start position, 1-based `(line, col)`).
     pub span: Span,
     /// The statement's checked type, rendered in lichen's type syntax.
     pub ty: String,
-    /// The statement's value, rendered when the cascade computed a concrete
-    /// one; `None` when the statement is lazy/recursive (its value is a
-    /// deferred undecided cell) or has no value node.
+    /// The value when the cascade computed one; `None` for a lazy statement.
     pub value: Option<String>,
 }
 
@@ -155,109 +120,85 @@ pub struct Reference {
     pub definition: Option<usize>,
 }
 
-/// A parsed + checked source, ready for editor lookups: the frontend artifacts,
-/// the name-resolution index built on them, and the pipeline diagnostics in
-/// their LSP form.
+/// A parsed + checked source, ready for editor lookups.
 ///
-/// This is the `Send` half of an analysis, so a long-lived host can hold it
-/// across requests.  A program-blind or embedding host that does not need the
-/// checker's structured diagnostics uses this type directly; the [`Doc`] handle
-/// wraps it with those diagnostics and re-exports it through [`Deref`], so the
-/// lookup methods read the same from either.
+/// # Invariant
+/// Artifacts, name-resolution index, and pipeline diagnostics. This is the
+/// `Send` half of an analysis: [`Doc`] wraps it with the checker's `!Send`
+/// structured diagnostics and re-exports it through [`Deref`], so every lookup
+/// reads the same from either.
 pub struct DocIndex {
     /// The full source text.
     pub source: String,
     /// Byte offset at which each line begins (line 1 = 0).
     pub line_starts: Vec<usize>,
-    /// Byte offset where the compiled code begins within `source` — past the
-    /// leading `---…---` preprocessor block (0 when there is no block).  Everything
-    /// before it is the preprocessor/metadata block.
+    /// Byte offset where the compiled code begins, past the leading `---…---`
+    /// preprocessor block (0 when there is none).
     pub code_base: u32,
-    /// The token stream (with byte ranges) — the frontend's lexer output,
-    /// shared with whatever produced it (the incremental session keeps the same
-    /// stream, so an analysis never re-lexes to hand it over).
+    /// The token stream with byte ranges, shared with its producer.
     pub tokens: Arc<Vec<Token>>,
     /// The parsed AST — the frontend's parser output, shared for the same reason.
     pub program: Arc<Program>,
-    /// Every definition site **in this document**, in declaration order.  A
-    /// built-in's definition is not one of these (see
-    /// [`DocIndex::builtin_names`]): its span is a position in another file.
+    /// Every definition site **in this document**, in declaration order.
     pub defs: Vec<Definition>,
-    /// The definitions a **built-in** module exposes that this document can use
-    /// without an import — the `core` prelude's bindings.  Each carries the
-    /// built-in's file and the binding's position in it, so a use resolves to a
-    /// jump into that file (`docs/notes/core-prelude.md` §4).  Kept apart from
-    /// [`DocIndex::defs`] because a definition *in this document* is what the
-    /// editor's own name tables (statement spans, document symbols) key on.
+    /// The **built-in** definitions this document can use without an import.
+    ///
+    /// # Invariant
+    /// Kept apart from [`DocIndex::defs`], whose entries are what the editor's
+    /// own name tables key on, because a built-in's span is a position in
+    /// another file (`docs/notes/core-prelude.md` §4).
     pub builtin_names: Vec<BuiltinName>,
-    /// The full diagnostic set (lex + parse + resolve + check), rendered for
-    /// the protocol.  Carries the same message and severity as the checker's
-    /// own diagnostics, minus their arena-bound structured facts.
+    /// The whole diagnostic set (lex, parse, resolve, check), minus the
+    /// checker's arena-bound facts.
     lsp_diagnostics: Vec<Diagnostic>,
-    /// The rendered diagnostics that belong to **another file** — a failure
-    /// inside a built-in package's source, which is a property of *that* file
-    /// and must not be published against the document.
+    /// Diagnostics belonging to **another file**, never to the document.
     file_diagnostics: Vec<FileDiagnostics>,
-    /// Span of a name *use* → the definition it resolves to.  A built-in's
-    /// definition is stored by index into [`DocIndex::builtin_names`], never as
-    /// an index into [`DocIndex::defs`] — the two lists have different
-    /// coordinates.
+    /// Span of a name *use* → the definition it resolves to.
+    ///
+    /// # Invariant
+    /// A built-in's target is an index into [`DocIndex::builtin_names`], never
+    /// into [`DocIndex::defs`] — the two lists have different coordinates.
     resolve: HashMap<Span, ScopeValue>,
     /// Span of a definition site → index into [`DocIndex::defs`].
     def_index: HashMap<Span, usize>,
-    /// Span of a binding name → index into [`DocIndex::statements`] for the
-    /// statement that defines it.  A name — the binding's own name or any use
-    /// of it — resolves to this statement's value/type for the hover.
+    /// Span of a binding name → the index of the statement that defines it.
     stmt_by_span: HashMap<Span, usize>,
-    /// Per top-level statement (source order): its checked type and, when
-    /// concrete, its value.  See [`StatementValue`] for the read-only contract.
+    /// Per top-level statement, in source order: see [`StatementValue`].
     statements: Vec<StatementValue>,
     /// The byte offset of each statement's start, source order (the span index
     /// backing [`DocIndex::statement_at`]).
     stmt_starts: Vec<u32>,
-    /// The imported bindings this file resolves, source order — so a use of an
-    /// imported module resolves to its `@import` directive and hovers as the
-    /// imported module (with its type).
+    /// The imported bindings this file resolves, in source order.
     imports: Vec<ImportBinding>,
     /// Import-directive span → index into [`DocIndex::imports`].
     import_by_span: HashMap<Span, usize>,
-    /// Per struct-block field (an exported struct's `succ`/`add`), keyed by
-    /// field name: the field value's checked `value : type` snapshot.  Field
-    /// names are not IR nodes, so to hover a field *definition* with its type
-    /// (`succ` → `Function : Int -> Int`) we read it from the `Record` node's
-    /// field-value tuple.
+    /// Per struct-block field, keyed by name: its checked `value : type`.
+    ///
+    /// # Invariant
+    /// Field names are not IR nodes, so a field's type is read from the `Record`
+    /// node's field-value tuple.
     field_types: HashMap<String, StatementValue>,
-    /// Per field access on an imported module (`math.succ`), keyed by
-    /// `(import binding name, field name)`: the accessed field checked
-    /// `value : type` snapshot.  Read from each `NamedField` IR node whose
-    /// container is the module's imported `Static`, so hovering a field
-    /// *access* renders the field's value:type too (not just "field of module").
+    /// Per field access on an imported module, keyed by (module, field).
+    ///
+    /// # Invariant
+    /// Read from each `NamedField` IR node whose container is the module's
+    /// imported `Static`, so hovering an access renders the field's value/type.
     module_field_types: HashMap<(String, String), StatementValue>,
-    /// Per imported-module binding: the module's exported field names (for the
-    /// field-access completion `math.…`).  Read from each import `Static` node's
-    /// struct type, so a module's *own* fields are offered (not just the ones
-    /// accessed in this file).
+    /// Per imported-module binding: the exported field names it offers.
     module_fields: HashMap<String, Vec<String>>,
-    /// Per top-level statement whose checked type is a concrete struct: its
-    /// named-field list (for the field-access completion `point.…`).  Keyed by
-    /// the statement index so a resolved container can reach its struct's
-    /// fields.
+    /// Per top-level statement with a concrete struct type: its field names.
     struct_fields_by_stmt: HashMap<usize, Vec<String>>,
 }
 
 /// A parsed + checked source plus the checker's structured diagnostics.
 ///
-/// Generic over the compiled program `P` (the associated-type collector), so
-/// the same editor view serves the shipping vocabulary and a plugin-composed
-/// one.  The handle is **not** `Send`: a checker diagnostic carries the
-/// program's arena-bound facts.  Everything an editor lookup reads lives in the
-/// `Send` [`DocIndex`] this dereferences to; a host that caches across threads
-/// keeps the index and lets the handle drop.
+/// # Invariant
+/// The handle is **not** `Send`: a checker diagnostic carries the program's
+/// arena-bound facts, so a host that caches across threads keeps the `Send`
+/// [`DocIndex`] and lets the handle drop.
 pub struct Doc<P: LangProgramShape> {
     index: Arc<DocIndex>,
-    /// The full diagnostic set (lex + parse + resolve + check), with the
-    /// checker's structured facts.  Rendered for the protocol as
-    /// [`DocIndex::lsp_diagnostics`].
+    /// The full diagnostic set, with the checker's structured facts.
     pub diagnostics: Vec<Diag<P>>,
 }
 
@@ -275,38 +216,30 @@ where
     P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
 {
     /// Parse, lower and check `source`, keeping the frontend artifacts and
-    /// indexing name resolution.  The leading `---…---` preprocessor block (with
-    /// its `import`/metadata directives) is cut out and resolved first, so a
-    /// real lichen file compiles on the code that follows the block, with spans
-    /// still absolute in the original file.
+    /// indexing name resolution.
     ///
-    /// Imports resolve against the current directory (`base = None`); use
-    /// [`Doc::new_with_base`] for a file whose `@import` lines should resolve
-    /// relative to the file (the LSP server's case).
+    /// # Invariant
+    /// The leading `---…---` block is cut out and resolved first, so a real
+    /// file compiles on the code after it with spans absolute in the original.
+    /// Imports resolve against the current directory; use [`Doc::new_with_base`]
+    /// for the LSP server's relative case.
     pub fn new(source: impl Into<String>) -> Doc<P> {
         Doc::new_with_base(source, None)
     }
 
-    /// [`Doc::new`] with an explicit base path for import resolution.  `base` is
-    /// the source file's path (or a directory): `@import` paths resolve relative
-    /// to it — a relative import `"math.lichen"` in `dir/main.lichen` loads
-    /// `dir/math.lichen`.  `None` keeps the pre-LSP behavior (relative to the
-    /// current directory).
+    /// [`Doc::new`] with an explicit base path: `@import` paths resolve
+    /// against it; `None` means the current directory.
     pub fn new_with_base(source: impl Into<String>, base: Option<&Path>) -> Doc<P> {
         Doc::new_with_cache(source, base, None)
     }
 
-    /// [`Doc::new_with_base`] with an explicit persistent cache root.  `cache_root`
-    /// is the vocabulary's `compilers/<plugin-set-key>` slot (see
-    /// [`home::LichenHome`]): when `Some` (and the program's artifact codec can
-    /// serialize) the imported packages are compiled once and cached on disk,
-    /// reused across documents / sessions / processes.  Below the LSP a
-    /// `Some(root)` is passed so the server actually uses the slot; a `None` root
-    /// keeps the in-memory (pre-cache) behavior.
+    /// [`Doc::new_with_base`] with a persistent cache root:
+    /// this vocabulary's `compilers/<plugin-set-key>` slot.
     ///
-    /// In-memory is used only when it is *intended*: no `cache_root` was given,
-    /// or the program's codec cannot persist (`NoPersist`).  A healthy home is
-    /// never silently dropped to in-memory.
+    /// # Invariant
+    /// A healthy home is never silently dropped to in-memory: that happens only
+    /// when no root was given or the codec cannot persist. See
+    /// `docs/notes/liche-lsp-home.md`.
     pub fn new_with_cache(
         source: impl Into<String>,
         base: Option<&Path>,
@@ -319,10 +252,7 @@ where
         Doc::new_with_store(source, base, &mut store)
     }
 
-    /// [`Doc::new_with_cache`] over a caller-owned package store: the store's
-    /// already-open device registry and resident modules are reused instead of
-    /// reopened per document (see `PackageStore::with_device`).  The caller
-    /// decides persistence from the codec, as [`Doc::new_with_cache`] does.
+    /// [`Doc::new_with_cache`] over a caller-owned store, reused per document.
     pub fn new_with_store(
         source: impl Into<String>,
         base: Option<&Path>,
@@ -335,22 +265,17 @@ where
         }
     }
 
-    /// The `Send` editor index this analysis produced.  A host that caches
-    /// across requests keeps this and drops the handle, which is `!Send`.
+    /// The `Send` editor index this analysis produced.
     pub fn index(&self) -> Arc<DocIndex> {
         Arc::clone(&self.index)
     }
 }
 
-/// The frontend artifacts an editor index is built from — the shared output of
-/// whichever frontend produced them.
+/// The frontend artifacts an editor index is built from.
 ///
-/// There are two producers and they must not fork the index: the one-shot
-/// frontend ([`frontend_at`] + [`build_report`], what [`Doc::new`] runs) and the
-/// incremental [`BufferSession`](lichen_language::session::BufferSession), which
-/// hands back the same artifacts from its own lex, parse, resolve, lower and
-/// check.  Both end in [`index`], so an editor sees one analysis whatever drove
-/// it.
+/// # Invariant
+/// Both producers — the one-shot frontend and the incremental `BufferSession` —
+/// end in [`index`], so an editor sees one analysis whatever drove it.
 pub struct Artifacts<P: LangProgramShape>
 where
     P::Value: ValueType,
@@ -363,18 +288,17 @@ where
     pub span_index: Option<Arc<Vec<Option<Span>>>>,
     /// The checked build, when the frontend resolved one.
     pub build: Option<Arc<lichen_highlevel::checker::Build<P>>>,
-    /// Every diagnostic the producing pipeline reported (preprocess ones are the
-    /// caller's to add: they come from the stage *before* the frontend).
+    /// Every diagnostic the producing pipeline reported; preprocess ones are
+    /// the caller's.
     pub diagnostics: Vec<Diag<P>>,
 }
 
-/// One full frontend run: preprocess → lex → parse → resolve → check, then the
-/// editor index extracted from it (see [`DocIndex`]) and the checker's own
-/// diagnostics (see [`Doc`]).
+/// One full frontend run: preprocess → lex → parse → resolve → check.
 ///
+/// # Invariant
 /// This is the **one-shot** path — [`Doc::new`] and the compile worker's
-/// fallback — as opposed to [`index`], which is the shared tail both it and the
-/// incremental session end in.
+/// fallback — as opposed to [`index`], the shared tail it and the incremental
+/// session both end in.
 pub(crate) fn analyze<P>(
     source: impl Into<String>,
     base: Option<&Path>,
@@ -388,27 +312,19 @@ where
     let source = source.into();
     let line_starts = lex::line_starts(&source);
 
-    // Cut the leading `---…---` block (metadata + imports) off the frontend
-    // input, resolving imports through the package store so the shared
-    // registry can serve any loaded imports.  `base` lets the store resolve
-    // relative `@import` paths against the file's directory.
+    // Cut the leading `---…---` block off the input; `base` resolves imports.
     let mut diagnostics = preprocess::stage_depends::<P>(store, &source);
     let (pre, preprocess_diagnostics) = preprocess::preprocess(&source, base, store);
     diagnostics.extend(preprocess_diagnostics);
 
-    // The frontend artifacts (for the editor index): tokens + AST in
-    // absolute file coordinates (the lexer maps through `code_base` and the
-    // full line starts).
+    // The frontend artifacts, in absolute file coordinates.
     let lexed = lex::lex_with(pre.code, &line_starts, pre.code_base);
     let tokens = lexed.tokens;
     let parsed = parse::parse(&tokens);
     let program = parsed.program;
 
-    // The full pipeline diagnostics (lex + parse + resolve + check):
-    // preprocess first, then the frontend over the preprocessed code, then
-    // the checker over the IR.  All spans are absolute.  The frontend
-    // diagnostics are program-blind (they carry no checker build), so
-    // re-type them onto the caller's program marker before the report.
+    // The full pipeline diagnostics, all spans absolute: preprocess, then the
+    // frontend, then the checker over the IR.
     let frontend = frontend_at(pre.code, pre.code_base, &line_starts, &pre.imports);
     diagnostics.extend(frontend.diagnostics.into_iter().map(|d| d.retype()));
     let mut report = build_report::<P>(
@@ -435,16 +351,10 @@ where
 
 /// The editor index over frontend artifacts, plus the pipeline diagnostics.
 ///
-/// This is the shared tail: [`analyze`] calls it after running the frontend, and
-/// the language server's compile worker calls it with the artifacts its
-/// [`BufferSession`](lichen_language::session::BufferSession) produced — the one
-/// place the editor's view of a program is derived, so the incremental path and
-/// the one-shot path cannot drift apart.
-///
-/// `store` is where the built-in packages' **source records** are read from
-/// ([`PackageStore::package_source`]): an import whose package is a built-in
-/// exposes names a use can jump to, and the record is the only thing that knows
-/// where in that file a name was written.
+/// # Invariant
+/// The one place the editor's view of a program is derived — [`analyze`] and
+/// the compile worker both end here, so the incremental and one-shot paths
+/// cannot drift apart. `store` is where built-in source records are read from.
 pub fn index<P>(
     source: &str,
     line_starts: Vec<usize>,
@@ -466,13 +376,9 @@ where
     } = artifacts;
 
     // The imported module's checked type, per `@import` directive span: the
-    // compiler allocates a `Static` node at the directive's span, so we
-    // find it in the IR and read its type for the hover.  Borrowed here so
-    // `report.build` is still owned by the match below.
+    // compiler allocates a `Static` node there.
     let mut import_ty: HashMap<Span, String> = HashMap::new();
-    // Per imported-module binding: its exported field names (for the
-    // `math.…` field completion).  Read from the import `Static` node's
-    // struct type, so a module's *own* fields are offered.
+    // Per imported-module binding: its exported field names.
     let mut module_fields: HashMap<String, Vec<String>> = HashMap::new();
     if let Some(build) = &build {
         for imp in &pre.imports {
@@ -503,16 +409,14 @@ where
     }
 
     // Directive span → import binding name, so a field access's container
-    // (an imported module's `Static` node) can be traced back to its module.
+    // traces back to its module.
     let import_name_by_span: HashMap<Span, &str> = pre
         .imports
         .iter()
         .map(|i| (i.span, i.name.as_str()))
         .collect();
 
-    // A read-only per-statement type/value snapshot.  It is computed here,
-    // once, by reading the built module's cached values — never by
-    // re-evaluating a node or forcing a lazy cell (see [`StatementValue`]).
+    // A read-only per-statement type/value snapshot; see [`StatementValue`].
     let (statements, stmt_starts, field_types, module_field_types, struct_fields_by_stmt) =
         match &build {
             Some(build) => {
@@ -523,10 +427,7 @@ where
                 let mut struct_fields_by_stmt: HashMap<usize, Vec<String>> = HashMap::new();
                 for (i, &id) in build.ir.stmt_roots.iter().enumerate() {
                     // The IR statement's own span points at its *value*
-                    // expression; for the span index use the AST statement's
-                    // start (the binding name / bare-expression start), which
-                    // is where the statement begins in the source.  Statements
-                    // align 1:1 with `program.statements` in source order.
+                    // expression, so the index uses the AST statement's start.
                     let (span, start) = match program.statements.get(i).map(|bs| &bs.stmt) {
                         Some(Stmt::Binding(b)) => {
                             (b.span, lsp::offset_of_span(&line_starts, b.span))
@@ -536,9 +437,7 @@ where
                             (s, lsp::offset_of_span(&line_starts, s))
                         }
                         // The tail expression (a statement the AST lists
-                        // nowhere): its own span is the AST's, so read it there
-                        // rather than from the build's index — which a reused
-                        // build carries from an earlier text.
+                        // nowhere): its own span is the AST's, not the build's.
                         None => {
                             let s = program
                                 .expr
@@ -582,12 +481,7 @@ where
                     starts.push(start as u32);
                 }
                 // A struct-block field's value:type snapshot, keyed by field
-                // name.  A `RecordBlock` emits a `Record` node whose value is a
-                // tuple of the field values (parallel to its `struct_names`),
-                // so we read each field's value/type from the checker.  Field
-                // names are not IR nodes, hence this name-keyed table — it is
-                // what lets hovering a field *definition* (`succ` in
-                // `{succ = x => x + 1}`) render `Function : Int -> Int`.
+                // name: field names are not IR nodes.
                 let mut field_types: HashMap<String, StatementValue> = HashMap::new();
                 for id in 0..build.ir.expr.len() {
                     let eid = ExprId(id as u32);
@@ -630,13 +524,8 @@ where
                         );
                     }
                 }
-                // A field *access* on an imported module (`math.succ`): the
-                // compiler lowers it to a `NamedField` IR node whose container
-                // is the module's imported `Static`.  The field's value node
-                // resolves (read below), but the field-access node's *type* slot
-                // stays a lazy cell (`?a`), so the field's type is read from the
-                // module's own rendered `struct<...>` type.  The table is keyed
-                // by `(import binding name, field name)`.
+                // A field *access* on an imported module: a `NamedField` over the
+                // module's `Static`, whose own type slot stays lazy.
                 let mut module_field_types: HashMap<(String, String), StatementValue> =
                     HashMap::new();
                 for id in 0..build.ir.expr.len() {
@@ -699,34 +588,25 @@ where
             ),
         };
 
-    // The names a **built-in** module exposes as bare names — the `core`
-    // prelude's bindings — with the definition site in the built-in's own file.
-    // Seeded into the base scope below, so a use resolves and can jump there.
+    // The names a **built-in** module exposes as bare names, with the
+    // definition site in the built-in's own file.
     let builtin_names = builtin_names(&pre.imports, store);
-    // The **prelude** import is not part of this document's own names: its
-    // bindings are the `builtin_names` above, defined in the built-in's file, and
-    // the import itself has no directive — its span is the synthetic `(1, 1)` a
-    // seeded import carries, which every document position would collide with.  It
-    // must not enter any table keyed by a *document* span, nor be entered as a
-    // definition of this document (`index_names` below is given only the imports
-    // the program wrote — an explicit `import "compute"` stays one of them, and
-    // its binding hovers as the imported module it is).
+    // The **prelude** import's bindings are `builtin_names`; its `(1, 1)`
+    // span collides with every document position.
     let written_imports: Vec<&ResolvedImport> = pre
         .imports
         .iter()
         .filter(|imp| !lichen_language::package::is_prelude_import(imp))
         .collect();
     let (defs, resolve, def_index) = index_names(&program, &written_imports, &builtin_names);
-    // Map each statement's span (a binding's name span, or an
-    // expression's start span) to its statement index, so a name
-    // (resolved to a binding) can reach the binding's value/type.
+    // Each statement's span → its statement index, so a name bound by
+    // one reaches that statement's value/type.
     let stmt_by_span: HashMap<Span, usize> = statements
         .iter()
         .enumerate()
         .map(|(i, s)| (s.span, i))
         .collect();
-    // The imported bindings and their type (for the hover).  `imp.path` is
-    // the canonical resolved path; display its file name (`math.lichen`).
+    // The imported bindings and their type (for the hover).
     let imports: Vec<ImportBinding> = written_imports
         .iter()
         .map(|imp| ImportBinding {
@@ -746,10 +626,8 @@ where
         .map(|(i, b)| (b.span, i))
         .collect();
     let lsp_diagnostics = render_diagnostics(&diagnostics, source, &line_starts);
-    // A failure inside a built-in module is a property of *its* file, not of the
-    // document (`Diag::file`): rendered on the built-in's own positions and
-    // published separately, so the document is never blamed for a line it does
-    // not contain.
+    // A built-in's failure is a property of *its* file (`Diag::file`), so it is
+    // published separately.
     let file_diagnostics = file_diagnostics(&diagnostics);
 
     (
@@ -779,15 +657,13 @@ where
     )
 }
 
-/// The names the built-in packages in `imports` expose as bare names, in import
-/// order: for each import whose package carries a **source record** (a built-in
-/// package, `docs/notes/core-prelude.md` §4), one entry per `(name, export)` of
-/// its `direct` list, positioned by the name's own binding in *that* file.
+/// The names the built-in packages in `imports` expose as bare names, in
+/// import order.
 ///
-/// A package with no source record — an ordinary imported module, whose names are
-/// reached through its binding, never bare — contributes nothing, and neither
-/// does a built-in the program imported explicitly: only the seeded **prelude**
-/// is in scope with no import.
+/// # Invariant
+/// Each name is positioned by its own binding in that built-in's file, and
+/// only the seeded **prelude** contributes: a built-in a program imported
+/// explicitly exposes its names through its binding, as any package does.
 fn builtin_names<P>(imports: &[ResolvedImport], store: &PackageStore<P>) -> Vec<BuiltinName>
 where
     P: LangProgramShape,
@@ -796,16 +672,12 @@ where
 {
     let mut names = Vec::new();
     for import in imports {
-        // The package source is keyed by the module the import's export lives in
-        // — a built-in is registered under its own key rather than loaded from
-        // the path cache, so this reads it wherever the store filed it.
+        // A built-in is filed under its own key, not the path cache.
         let Some(source) = store.package_source(import.export.module) else {
             continue;
         };
         // Only a **seeded** built-in contributes bare names: its module is the
-        // prelude, in scope with no import.  A built-in a program imported
-        // explicitly (`compute = import "compute"`) exposes its names through its
-        // binding, exactly as an ordinary package does.
+        // prelude, in scope with no import.
         if !source
             .path
             .file_name()
@@ -814,11 +686,8 @@ where
             continue;
         }
         let source = Arc::new(source);
-        // The built-in's own top-level bindings, by name: where each is written
-        // in its file.  The record's `spans` hold only the frozen nodes a
-        // *failure* can name, which is not every binding's export node (a
-        // lambda's export is a node no assert clones), so the text is what the
-        // definition site is read from — it is the same text the record keeps.
+        // The built-in's own top-level bindings: the record's `spans`
+        // hold only the frozen nodes a failure can name.
         let positions = definition_spans(&source.code);
         for (name, _export) in &import.direct {
             let Some(span) = positions.iter().find(|(n, _)| n == name).map(|(_, s)| *s) else {
@@ -838,13 +707,11 @@ where
 }
 
 /// The position of every top-level **binding** in a package's source text, in
-/// source order: the pairs `(name, position)` that make a built-in's exported
-/// names jumpable.
+/// source order.
 ///
-/// Read from the text rather than from the source record's frozen-node positions
-/// because those cover the nodes a *failure* can name, which is not every
-/// binding: a binding whose value is a lambda freezes as a node no assert clones,
-/// and its position is exactly what a jump needs.
+/// # Invariant
+/// Read from the text, not the record's frozen-node positions: those cover the
+/// nodes a *failure* can name, and a lambda binding freezes as none.
 fn definition_spans(code: &str) -> Vec<(String, Span)> {
     let tokens = lex::lex(code).tokens;
     let parsed = parse::parse(&tokens);
@@ -859,10 +726,12 @@ fn definition_spans(code: &str) -> Vec<(String, Span)> {
         .collect()
 }
 
-/// The pipeline diagnostics **of this document**, as LSP [`Diagnostic`]s.  A
-/// diagnostic that names another file (`Diag::file`) belongs to that file and is
-/// rendered for it by [`file_diagnostics`] instead — the document must never be
-/// blamed for a position it does not contain.
+/// The pipeline diagnostics **of this document**, as LSP [`Diagnostic`]s.
+///
+/// # Invariant
+/// A diagnostic naming another file (`Diag::file`) is left to
+/// [`file_diagnostics`], so the document is never blamed for a position it does
+/// not contain.
 fn render_diagnostics<P: LangProgramShape>(
     diagnostics: &[Diag<P>],
     source: &str,
@@ -900,15 +769,12 @@ fn render_diagnostics<P: LangProgramShape>(
         .collect()
 }
 
-/// The pipeline diagnostics that belong to **another file**, grouped by that
-/// file: the same message and span as the document's own rendering, but on the
-/// built-in's positions and text — so a client publishing them against
-/// `Url::from_file_path(path)` puts the error on the line that wrote it
-/// (`docs/notes/core-prelude.md` §4).
+/// The pipeline diagnostics that belong to **another file**, grouped
+/// by that file and rendered on its own positions.
 ///
-/// A diagnostic with a `file` but no `span` has no position to render; it is
-/// dropped here rather than given one, since the document's coordinates are
-/// exactly what it must not be given.
+/// # Invariant
+/// A diagnostic with a `file` but no `span` is dropped rather than given
+/// the document's coordinates, which are what it must not be given.
 fn file_diagnostics<P: LangProgramShape>(diagnostics: &[Diag<P>]) -> Vec<FileDiagnostics> {
     let mut out: Vec<FileDiagnostics> = Vec::new();
     for d in diagnostics {
@@ -940,15 +806,18 @@ fn file_diagnostics<P: LangProgramShape>(diagnostics: &[Diag<P>]) -> Vec<FileDia
 
 impl DocIndex {
     /// The pipeline diagnostics **of this document** as LSP [`Diagnostic`]s.
+    ///
+    /// # Invariant
     /// A diagnostic inside a built-in module is not one of these; it is
     /// [`DocIndex::file_diagnostics`].
     pub fn lsp_diagnostics(&self) -> Vec<Diagnostic> {
         self.lsp_diagnostics.clone()
     }
 
-    /// The diagnostics of every **other file** this analysis reported — a
-    /// failure inside a built-in package's source, to be published against that
-    /// file's own URI (`docs/notes/core-prelude.md` §4).
+    /// The diagnostics of every **other file** this analysis reported.
+    ///
+    /// # Invariant
+    /// Published against that file's own URI (`docs/notes/core-prelude.md` §4).
     pub fn file_diagnostics(&self) -> &[FileDiagnostics] {
         &self.file_diagnostics
     }
@@ -964,23 +833,16 @@ impl DocIndex {
         lsp::offset_from_position(&self.source, &self.line_starts, position)
     }
 
-    /// Every top-level statement's checked type and (when the build produced a
-    /// concrete value) its value, in source order.
+    /// Every top-level statement's checked type and value, in source order.
     ///
-    /// This is a **read-only** snapshot already taken at [`Doc::new`].  It
-    /// never re-evaluates an expression, never forces a lazy cell, and never
-    /// calls `evaluate_node` / `evaluate_node_deep`: a statement the cascade
-    /// left lazy/recursive (a deferred undecided cell) reports
-    /// [`StatementValue::value`] as `None` and its type only.  The statement's
-    /// *value* is only present when the build actually computed a concrete one
-    /// for that user-written statement (a terminal binding, a literal).
+    /// # Invariant
+    /// Read-only: a statement the cascade left lazy reports
+    /// [`StatementValue::value`] as `None` and its type only.
     pub fn statement_values(&self) -> &[StatementValue] {
         &self.statements
     }
 
-    /// The top-level statement whose source range contains byte `offset`, if
-    /// any.  Statements are disjoint and stored in source order, so the
-    /// containing statement is the last one whose start is not past `offset`.
+    /// The top-level statement whose source range contains byte `offset`.
     pub fn statement_at(&self, offset: usize) -> Option<&StatementValue> {
         let idx = self
             .stmt_starts
@@ -993,11 +855,11 @@ impl DocIndex {
     }
 
     /// Hover at a cursor position: the token under it, and — for a name — the
-    /// definition it resolves to (or that it *is*).  For a *top-level binding*
-    /// the hover renders the bound expression's `value : type` from the
-    /// checked snapshot (e.g. `` `a` — `1 : Int` `` for `a = 1`); a definition
-    /// that is not a binding (a lambda parameter) and an unresolved name report
-    /// the definition's line / the unresolved-name message.
+    /// definition it resolves to (or that it *is*).
+    ///
+    /// # Invariant
+    /// A built-in's definition has no position in this document, so it is
+    /// described by the file it is defined in, never by a document line.
     pub fn hover_at(&self, position: Position) -> Option<(String, Range)> {
         let offset = self.offset_of(position)?;
         let token = self.token_at(offset)?;
@@ -1005,9 +867,7 @@ impl DocIndex {
         let kind = &token.kind;
         if let TokenKind::Name(name) = kind {
             // Resolve the hovered name: a use to its binding, or the binding's
-            // own definition site.  A name that resolves to a *built-in*'s file
-            // has no position in this document at all, so it is described by the
-            // file it is defined in, never by a document line.
+            // own definition site.
             let builtin = self
                 .resolve
                 .get(&token.span)
@@ -1023,8 +883,7 @@ impl DocIndex {
                 (None, Some(i)) => {
                     let def = &self.defs[i];
                     // An imported module: the use resolves to its `@import`
-                    // directive, so render the imported module's type rather
-                    // than "defined at line".
+                    // directive, so render the module's type.
                     if let Some(import_i) = self.import_by_span.get(&def.span).copied() {
                         return Some((import_hover(name, &self.imports[import_i]), range));
                     }
@@ -1050,10 +909,8 @@ impl DocIndex {
                     }
                 }
                 (None, None) => {
-                    // A field access (`math.succ`, `point.x`): the field belongs
-                    // to its container — an imported module or a local struct —
-                    // so it is not unresolved.  The hover renders the field's
-                    // own `value : type`.
+                    // A field access: the field belongs to its container,
+                    // so it is not unresolved; hover it as `value : type`.
                     match self.field_access_hover(name, token.span) {
                         Some(msg) => return Some((msg, range)),
                         None => format!("`{name}` — unresolved name"),
@@ -1067,10 +924,7 @@ impl DocIndex {
         Some((msg, range))
     }
 
-    /// The LSP byte range a definition spans **in its own file**: the document's
-    /// coordinates for one of the document's definitions, and the built-in's own
-    /// text and coordinates for a built-in's — which is what a go-to answer must
-    /// return, since the definition is on the built-in's line, not this file's.
+    /// The LSP byte range a definition spans **in its own file**.
     pub fn definition_range(&self, def: &Definition) -> Range {
         match &def.file {
             Some(file) => lsp::range_from_span(&file.code, &lex::line_starts(&file.code), def.span),
@@ -1078,10 +932,11 @@ impl DocIndex {
         }
     }
 
-    /// Go to definition for a cursor position on a name *use*: the definition it
-    /// resolves to, if any.  Read [`Definition::file`] to tell a definition in
-    /// this document from one in a built-in's file — the caller turns it into the
-    /// file's URI with `Url::from_file_path`.
+    /// Go to definition for a cursor position on a name *use*, if any.
+    ///
+    /// # Invariant
+    /// Read [`Definition::file`] to tell a definition in this document from one
+    /// in a built-in's file.
     pub fn definition_at(&self, position: Position) -> Option<Definition> {
         let offset = self.offset_of(position)?;
         let token = self.token_at(offset)?;
@@ -1093,26 +948,17 @@ impl DocIndex {
         None
     }
 
-    /// Completion items for a cursor position: every name that is *in scope* at
-    /// that point of the document, filtered by the word being typed.  The names
-    /// are those visible under the compiler's scope rules (mirrored by [`index`]),
-    /// so a completion never proposes a name that is not actually usable there —
-    /// the same knowledge that powers the unresolved-name "did you mean" clause.
+    /// Completion items for a cursor position: every name *in scope* there,
+    /// filtered by the word being typed.
     ///
-    /// The item's `text_edit` replaces the typed word with the chosen name; the
-    /// `detail` shows the name's checked type (or the imported module) where the
-    /// build produced one.  After a `.` the container's *field* names are
-    /// offered instead (an imported module's exported fields, or a local struct
-    /// binding's fields).
+    /// # Invariant
+    /// The names are those visible under the compiler's scope rules (mirrored
+    /// by [`index`]), so a completion never proposes a name unusable there.
     pub fn completion_at(&self, position: Position) -> Vec<CompletionItem> {
         let Some(offset) = self.offset_of(position) else {
             return Vec::new();
         };
-        // Field access (`a.…`): offer the container's struct fields instead of
-        // bare names (which would be wrong right after a `.`).  Detected from
-        // the tokens around the cursor (a `.` immediately before the cursor or
-        // before the partial field name), so a partially-typed field is still a
-        // field access.
+        // Field access (`a.…`): the container's struct fields, not bare names.
         if self.in_field_access(offset) {
             return self.field_completion(offset);
         }
@@ -1131,12 +977,8 @@ impl DocIndex {
             .collect()
     }
 
-    /// Completion for a field access `container.…`: offer the container's struct
-    /// fields — an imported module's exported fields ([`DocIndex::module_fields`]),
-    /// or a local struct binding's fields ([`DocIndex::struct_fields_by_stmt`]).
-    /// Empty when the container is not a knowable struct (an undecided, non-
-    /// binding, or non-struct container), so nothing is offered after a `.` on
-    /// e.g. a call result.
+    /// Completion for a field access `container.…`: the container's fields,
+    /// else empty.
     fn field_completion(&self, offset: usize) -> Vec<CompletionItem> {
         let Some(dot_idx) = self
             .tokens
@@ -1153,9 +995,8 @@ impl DocIndex {
         let TokenKind::Name(container_name) = &container.kind else {
             return Vec::new();
         };
-        // The partial field name, if any: a Name token right after the dot that
-        // ends at/before the cursor.  Otherwise the cursor is right after the
-        // dot and nothing is typed yet (insert at the cursor).
+        // The partial field name, if any: a Name token after the dot
+        // ending at/before the cursor; else insert at the cursor.
         let (prefix, replace) = match self.tokens.get(dot_idx + 1) {
             Some(field)
                 if matches!(field.kind, TokenKind::Name(_))
@@ -1175,18 +1016,16 @@ impl DocIndex {
             .collect()
     }
 
-    /// The named fields of a `container.…` container: an imported module's
-    /// exported fields (keyed by import binding), or a local struct binding's
-    /// fields (keyed by statement index).  Empty when the container is not a
-    /// knowable struct.
+    /// The named fields of a `container.…` container: an imported
+    /// module's, or a local struct binding's.
     fn container_field_names(&self, container_span: Span) -> Vec<String> {
         let Some(def) = self
             .resolve
             .get(&container_span)
             .copied()
             .and_then(|def| match def {
-                // A built-in's container has no fields this document knows: its
-                // definition is in another file and no struct type was read for it.
+                // A built-in's container: its definition is in another file,
+                // and no struct type was read for it.
                 ScopeValue::Builtin(_) => None,
                 ScopeValue::Document(i) => Some(&self.defs[i]),
             })
@@ -1208,11 +1047,7 @@ impl DocIndex {
     }
 
     /// A completion item for one struct field of a `container.…` access: a
-    /// FIELD kind, with the field's `value : type` (where the build produced
-    /// one) as `detail`.  Field names are not bindings, so the detail comes from
-    /// the field tables, not [`DocIndex::doc_detail`].  An imported module's field
-    /// resolves through [`DocIndex::module_field_types`]; a local struct field
-    /// through [`DocIndex::field_types`].
+    /// FIELD kind with the field's `value : type`.
     fn field_completion_item(
         &self,
         container_name: &str,
@@ -1224,8 +1059,8 @@ impl DocIndex {
                 .get(&(container_name.to_string(), name.to_string()))
                 .map(|sv| sv.ty.clone())
         } else {
-            // A local struct field: the detail is the flat field table (a field
-            // name is not an IR node, so this file's struct-block snapshot).
+            // A local struct field: the flat field table (a field
+            // name is not an IR node).
             self.field_types.get(name).map(|sv| sv.ty.clone())
         };
         let range = lsp::range_from_byte_range(&self.source, &self.line_starts, replace);
@@ -1242,10 +1077,8 @@ impl DocIndex {
         }
     }
 
-    /// Whether the cursor at byte `offset` is in a field access: the token
-    /// immediately before the cursor is a `.` (nothing typed yet, `a.`), or it
-    /// is a partial field name whose immediate predecessor is a `.` (`a.x` with
-    /// the cursor on/after `x`).
+    /// Whether the cursor at byte `offset` is in a field access: a `.` before it,
+    /// or a partial field name after a `.`.
     fn in_field_access(&self, offset: usize) -> bool {
         let Some(prev_idx) = self
             .tokens
@@ -1261,11 +1094,8 @@ impl DocIndex {
         }
     }
 
-    /// The word being completed at `offset` and the byte range it spans, so a
-    /// completing edit replaces just that word.  On a `Name` token the word is
-    /// the whole token (an editor-typed partial identifier); anywhere else it is
-    /// empty and the edit inserts at the cursor.  For a field access (`a.…`) the
-    /// word is the partial field name typed after the dot.
+    /// The word being completed at `offset` and the byte range it spans:
+    /// a `Name` token, else empty.
     fn completion_word(&self, offset: usize) -> (String, (u32, u32)) {
         let is_name = |t: &Token| matches!(t.kind, TokenKind::Name(_));
         // Cursor strictly inside a token (the usual mid-typing case).
@@ -1279,10 +1109,7 @@ impl DocIndex {
             // On a non-name token: nothing to complete.
             return (String::new(), (offset as u32, offset as u32));
         }
-        // Cursor exactly at a token boundary: a Name that starts or ends here
-        // (so completing with the cursor just past the typed prefix still
-        // replaces that prefix).  Non-name boundary tokens (a separator, a
-        // delimiter) are skipped.
+        // Cursor exactly at a token boundary: a Name that starts or ends here.
         if let Some(t) = self
             .tokens
             .iter()
@@ -1296,12 +1123,8 @@ impl DocIndex {
         (String::new(), (offset as u32, offset as u32))
     }
 
-    /// A completion item for one in-scope name: a module for an imported
-    /// binding, a function when its checked type is an arrow, else a variable.
-    /// `detail` carries the name's checked type or module path.  A name a
-    /// **built-in** exposes (`add` from the `core` prelude) has no binding in
-    /// this document, so its `detail` names the built-in's file instead of a
-    /// checked type.
+    /// A completion item for one in-scope name: a module for an import,
+    /// a function for an arrow type, else a variable.
     fn completion_item(&self, scoped: &ScopedName, replace: (u32, u32)) -> CompletionItem {
         let name = &scoped.name;
         let detail = match scoped.document {
@@ -1333,8 +1156,7 @@ impl DocIndex {
     }
 
     /// The informational `detail` for a **built-in** name: the built-in's own
-    /// file (its text and spans are not this document's, so no checked type is
-    /// available here).
+    /// file, since no checked type is available here.
     fn builtin_detail(&self, name: &str) -> Option<String> {
         let def = &self.builtin_names.iter().find(|b| b.name == name)?.def;
         Some(match &def.file {
@@ -1343,10 +1165,7 @@ impl DocIndex {
         })
     }
 
-    /// The informational `detail` for a name the **document** binds, identified
-    /// by its definition `span`: an imported module's path/type, or a binding's
-    /// checked type from the read-only statement snapshot.  `None` when the build
-    /// computed neither (a lambda parameter, an unresolved import).
+    /// The informational `detail` for a name the **document** binds.
     fn doc_detail(&self, span: Span) -> Option<String> {
         if let Some(i) = self.import_by_span.get(&span) {
             let imp = &self.imports[*i];
@@ -1361,13 +1180,11 @@ impl DocIndex {
         (!sv.ty.is_empty()).then(|| sv.ty.clone())
     }
 
-    /// When the hovered name is a field access (`math.succ`, `point.x`), the
-    /// field belongs to its container — an imported module or a local struct
-    /// binding — so it is not "unresolved".  Detected by the name being preceded
-    /// by a `.` and the container resolving to a knowable struct.  The hover
-    /// renders the field's own `value : type` from the checker: an imported
-    /// module's field via [`DocIndex::module_field_types`], a local struct field via
-    /// [`DocIndex::field_types`].
+    /// When the hovered name is a field access, the field's own `value : type`.
+    ///
+    /// # Invariant
+    /// Detected by a preceding `.` whose container resolves to a knowable struct; a
+    /// field is then never reported as "unresolved".
     fn field_access_hover(&self, name: &str, field_span: Span) -> Option<String> {
         let idx = self.tokens.iter().position(|t| t.span == field_span)?;
         if idx < 2 || self.tokens[idx - 1].kind != TokenKind::Dot {
@@ -1379,9 +1196,8 @@ impl DocIndex {
         };
         let container_def = self.resolve.get(&container_span).copied();
 
-        // An imported-module container (`math.succ`): look the field up in the
-        // module's field table.  A built-in container has no directive to key on
-        // (its definition is in another file), so it never takes this branch.
+        // An imported-module container: the module's field table. A
+        // built-in container has no directive to key on.
         if let Some(d) = container_def
             && let Some(doc_index) = d.document()
             && let Some(import_i) = self.import_by_span.get(&self.defs[doc_index].span).copied()
@@ -1412,17 +1228,16 @@ impl DocIndex {
     }
 
     /// Classify each source token into an LSP semantic token, driven by Lichen's
-    /// own frontend (not a tree-sitter grammar): literals, keywords, operators,
-    /// and — via the AST — names as declarations / parameters / function calls /
-    /// struct fields.  The leading `---…---` preprocessor block (if any) is
-    /// highlighted as one comment span (it is the language's only prose-like
-    /// construct).  This is the `grammar-optional` highlighting path.
+    /// own frontend.
+    ///
+    /// # Invariant
+    /// The leading `---…---` preprocessor block is the language's only
+    /// prose-like construct, so it is the only span colored as a comment.
     pub fn semantic_tokens(&self) -> Vec<SemanticTokenData> {
         let mut out = Vec::new();
 
-        // The preprocessor/metadata block (bytes `0..code_base`) is the only
-        // "comment"-like construct; color it as a comment, split per line so no
-        // single token spans a newline (clients require single-line tokens).
+        // The preprocessor block, split per line: clients require single-line
+        // tokens, so no one token may span a newline.
         if self.code_base > 0 {
             let end = self.code_base as usize;
             for (i, &ls) in self.line_starts.iter().enumerate() {
@@ -1446,9 +1261,8 @@ impl DocIndex {
             }
         }
 
-        // Name classifications the AST is needed to infer (a bare name is
-        // VARIABLE by default): a lambda parameter, or a name used in function
-        // position.
+        // Name classifications the AST must infer: a lambda parameter,
+        // or a name used in function position.
         let name_class = classify_names(&self.program);
 
         // Walk the token stream; tokens are already in document order.
@@ -1505,9 +1319,8 @@ fn severity_for(stage: Stage) -> DiagnosticSeverity {
     }
 }
 
-/// Render a `value : type` hover snapshot for a resolved definition: a concrete
-/// value (`v : ty`), else just the type (a lazy / recursive binding), else the
-/// caller's `fallback` (no type was computed).
+/// Render a `value : type` hover snapshot: a concrete value, else just the
+/// type, else the caller's `fallback`.
 fn snapshot_hover(display: &str, sv: &StatementValue, fallback: String) -> String {
     match (&sv.value, sv.ty.is_empty()) {
         // A concrete value: `value : type`.
@@ -1519,9 +1332,8 @@ fn snapshot_hover(display: &str, sv: &StatementValue, fallback: String) -> Strin
     }
 }
 
-/// The hover text for a use of an imported module: the imported module's type
-/// (its export's checked type) when the build computed one, else a plain
-/// "imported module" description naming the imported file.
+/// The hover text for a use of an imported module: the module's checked
+/// type, else a description naming its file.
 fn import_hover(name: &str, imp: &ImportBinding) -> String {
     match &imp.ty {
         Some(ty) => format!("`{name}` — imported module : {ty}"),
@@ -1529,11 +1341,12 @@ fn import_hover(name: &str, imp: &ImportBinding) -> String {
     }
 }
 
-/// The hover text for a name that resolves to a **built-in** module's file: the
-/// name, and the line in that file it is defined at.  No `value : type` is
-/// rendered — the statement's checked snapshot is *that module's* build, which
-/// this analysis does not hold (the record keeps positions, not checker facts,
-/// `docs/notes/core-prelude.md` §5).
+/// The hover text for a name resolving to a **built-in** module's file: the
+/// name and the line in *that* file.
+///
+/// # Invariant
+/// No `value : type` is rendered: the statement snapshot is that module's build,
+/// which this analysis does not hold (`docs/notes/core-prelude.md` §5).
 fn builtin_hover(name: &str, def: &Definition) -> String {
     match &def.file {
         Some(file) => format!(
@@ -1546,7 +1359,7 @@ fn builtin_hover(name: &str, def: &Definition) -> String {
 }
 
 /// A file's display name for a hover or a completion `detail`: its file name
-/// (`core.lichen`), falling back to the whole path.
+/// (`core.lichen`), else the whole path.
 fn source_name(source: &PackageSource) -> String {
     source
         .path
@@ -1555,12 +1368,11 @@ fn source_name(source: &PackageSource) -> String {
         .unwrap_or_else(|| source.path.display().to_string())
 }
 
-/// The type of the named field `field` inside a rendered `struct<...>` type
-/// string, e.g. `field_type_in_struct("struct<.succ Int -> Int, .add Int -> Int
-/// -> Int>", "succ")` → `Some("Int -> Int")`.  The field-access IR node's own
-/// type slot is a lazy cell (it reads `?a` until a later resolve), so a field
-/// access on an imported module resolves its type from the module's rendered
-/// type instead.  Handles arrow types (`->`) and nested `struct<...>` values.
+/// The type of the named field `field` inside a rendered `struct<...>` type.
+///
+/// # Invariant
+/// A field-access IR node's own type slot is a lazy cell, so an access on an
+/// imported module resolves its type from the module's rendered type instead.
 fn field_type_in_struct(struct_ty: &str, field: &str) -> Option<String> {
     let inner = struct_ty.strip_prefix("struct<")?;
     // Find the matching `>` for the opening `<` (ignoring the `>` of `->`),
@@ -1582,8 +1394,8 @@ fn field_type_in_struct(struct_ty: &str, field: &str) -> Option<String> {
     None
 }
 
-/// The substring up to the `>` that closes a depth-1 `struct<...>` opening that
-/// was already stripped.  The `>` of an arrow `->` is not a close.
+/// The substring up to the `>` that closes an already-stripped `struct<...>`.
+/// The `>` of an arrow `->` is not a close.
 fn match_close(inner: &str) -> Option<&str> {
     let bytes = inner.as_bytes();
     let mut depth = 1;
@@ -1630,16 +1442,8 @@ fn split_top_level(s: &str, sep: char) -> Vec<&str> {
     out
 }
 
-// ---------------------------------------------------------------------------
-// Semantic-token classification.
-//
-// `classify_token_kind` maps the token-level kinds (literals / keywords /
-// operators) that need no AST context. `classify_names` records the *name* spans
-// the AST is required to disambiguate — a lambda parameter, or a name used in
-// function position — so `DocIndex::semantic_tokens` can color a `Name` as more than
-// the default `VARIABLE`, and so the same frontend drives highlighting with no
-// tree-sitter grammar in play.
-
+/// The token kinds needing no AST context; `classify_names` disambiguates the
+/// `Name`s.
 fn classify_token_kind(
     kind: &TokenKind,
 ) -> Option<(SemanticTokenType, Vec<SemanticTokenModifier>)> {
@@ -1664,14 +1468,11 @@ fn classify_token_kind(
         | TokenKind::KwCache
         | TokenKind::KwLoop
         // The class conversions and the assert are prefix operators the lexer
-        // reserves words for, so they read as keywords rather than as the symbol
-        // operators below.
+        // reserves words for.
         | TokenKind::KwInt2Float
         | TokenKind::KwFloat2Int
         | TokenKind::KwAssert
-        // `@in` is the one keyword that is an *infix* operator, but it is a
-        // reserved word all the same, so it reads as a keyword rather than as
-        // one of the symbol operators below.
+        // `@in` is the one keyword that is an *infix* operator.
         | TokenKind::KwIn
         // `_` — a placeholder is a reserved inference form, never a name.
         | TokenKind::Placeholder => Some((SemanticTokenType::KEYWORD, Vec::new())),
@@ -1763,9 +1564,8 @@ impl<'a> NameClass<'a> {
         }
     }
 
-    /// `#[stacksafe]`: this walk recurses one frame per nested expression
-    /// (through the block/record helpers and back here) on the caller's
-    /// thread, so it grows the stack instead of overflowing the process.
+    // SAFETY: `#[stacksafe]` grows the stack per nested expression instead of
+    // overflowing the process.
     #[stacksafe]
     fn expr(&mut self, e: &Expr) {
         match e {
@@ -1921,13 +1721,7 @@ impl<'a> NameClass<'a> {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Name resolution over the AST, mirroring the compiler's scope rules.
-//
-// A scope's block-wide (non-`let`) bindings are pre-entered before any value so
-// they may forward-/mutually-reference; a restrictive `let` enters after its
-// value (a fresh frame); a lambda enters its parameter for the body; a block
-// pushes/pops its own frame.
 
 fn index_names(
     program: &Program,
@@ -1944,17 +1738,11 @@ fn index_names(
         resolve: HashMap::new(),
         def_index: HashMap::new(),
     };
-    // Seed the base scope frames, mirroring the compiler's import frame below the
-    // block-wide binding frames: a use of an imported module resolves to its
-    // `@import` directive, a local binding may shadow either (the local frame
-    // sits above), and the **built-ins** — the `core` prelude's names, in scope
-    // with no import — sit below them all.
-    //
-    // The built-ins' definitions are positions in *their own* file, so they are
-    // kept out of `def_index` (which is keyed by a document span and read by
-    // every consumer of a definition *site*): a document binding at the same
-    // `(line, column)` must never have its span answer with a built-in's
-    // definition.  Only a *use* resolves to one, through the scope frame.
+    // Base scope frames: imports below the bindings, then the built-ins —
+    // the `core` prelude, needing no import.
+
+    // A built-in's definition is in another file, so it stays out of
+    // `def_index`: only a *use* resolves to one.
     walk.scopes.push(HashMap::new());
     for imp in imports {
         walk.enter(&imp.name, imp.span);
@@ -1966,8 +1754,7 @@ fn index_names(
             .expect("a scope frame is pushed")
             .insert(builtin.name.clone(), ScopeValue::Builtin(index));
     }
-    // The top level is a block; `pub` is irrelevant to name resolution, so the
-    // statements are walked as plain statements (their `.stmt`).
+    // The top level is a block; `pub` is irrelevant to name resolution.
     let top_stmts: Vec<Stmt> = program
         .statements
         .iter()
@@ -1977,11 +1764,12 @@ fn index_names(
     (walk.defs, walk.resolve, walk.def_index)
 }
 
-/// What a name in scope resolves to: a definition **in this document** (an index
-/// into [`DocIndex::defs`]) or one a **built-in** module exposes (an index into
-/// [`DocIndex::builtin_names`]).  The distinction is the whole point — the two
-/// have different coordinates, and a built-in definition must never be read as a
-/// document index.
+/// What a name in scope resolves to: an index into [`DocIndex::defs`],
+/// or into [`DocIndex::builtin_names`].
+///
+/// # Invariant
+/// The distinction is the whole point: the two have different coordinates, so a
+/// built-in definition must never be read as a document index.
 #[derive(Clone, Copy, Debug)]
 enum ScopeValue {
     Document(usize),
@@ -1989,8 +1777,7 @@ enum ScopeValue {
 }
 
 impl ScopeValue {
-    /// The index into [`DocIndex::defs`], when this is a definition **in this
-    /// document** — the only case a document-span-keyed table may be read with.
+    /// The index into [`DocIndex::defs`], when this is a document definition.
     fn document(self) -> Option<usize> {
         match self {
             ScopeValue::Document(i) => Some(i),
@@ -2024,9 +1811,8 @@ struct Walk {
 }
 
 impl Walk {
-    /// Enter a definition **of this document** at `span`: it is pushed onto
-    /// [`DocIndex::defs`], and its span — a position in this file — is what the
-    /// definition-site consumers read.
+    /// Enter a definition of this document at `span`: pushed onto
+    /// [`DocIndex::defs`].
     fn enter(&mut self, name: &str, span: Span) -> usize {
         let idx = self.defs.len();
         self.defs.push(Definition {
@@ -2079,9 +1865,8 @@ impl Walk {
         }
     }
 
-    /// `#[stacksafe]`: this walk recurses one frame per nested expression
-    /// (through the block/record helpers and back here) on the caller's
-    /// thread, so it grows the stack instead of overflowing the process.
+    // SAFETY: `#[stacksafe]` grows the stack per nested expression instead of
+    // overflowing the process.
     #[stacksafe]
     fn expr(&mut self, e: &Expr) {
         match e {
@@ -2223,11 +2008,8 @@ impl Walk {
                 statements, expr, ..
             } => self.scope(statements, Some(expr)),
             Expr::RecordBlock { fields, .. } => {
-                // A struct-returning block scopes its field statements exactly
-                // like a block: a named field is a binding (a `let` a
-                // restrictive one), so the field names resolve — both as the
-                // definition site (hovering `succ` in `{succ = ...}`) and as
-                // in-block uses.
+                // A struct-returning block scopes its field statements like a block:
+                // a named field is a binding, so its names resolve.
                 let stmts: Vec<Stmt> = fields
                     .iter()
                     .map(|f| match &f.name {
@@ -2249,24 +2031,11 @@ impl Walk {
     }
 }
 
-// ---------------------------------------------------------------------------
-// In-scope names at a position, for completion.
-//
-// The compiler reports an *unresolved name* and — with the same scope knowledge
-// — the "did you mean" candidates.  The editor wants the same set for completion:
-// the names visible at the cursor.  This walk mirrors [`index`]'s scope rules
-// (block-wide bindings pre-entered, restrictive `let` after its value, a lambda
-// parameter in body scope) and, by visiting statements/expressions in source
-// order, snapshots the scope stack at the point it crosses the cursor.  That is
-// exactly the name set both the diagnostic suggestion and the completion use.
+// In-scope names at a position, for completion: [`index`]'s scope
+// rules again, visited in source order.
 
-/// One name in scope at the cursor, as the completion needs it: the name and the
-/// definition **span** when this document binds it.  A name a built-in module
-/// exposes (`add` from the `core` prelude) has no document span at all — its
-/// definition is a position in another file — so `None` marks it as the
-/// built-in's, and a document binding of the same name shadows it (the walk
-/// enters the document's frames above the built-in's, and only the innermost
-/// entry of a name is captured).
+/// One name in scope at the cursor: the name and the definition **span** when
+/// this document binds it.
 #[derive(Clone, Debug)]
 struct ScopedName {
     name: String,
@@ -2274,9 +2043,7 @@ struct ScopedName {
     document: Option<Span>,
 }
 
-/// The names in scope at byte `offset`, innermost scope first, deduplicated (a
-/// name shadowing an outer one is listed once).  See [`ScopeCapture`] for the
-/// traversal contract.
+/// The names in scope at byte `offset`, innermost scope first, deduplicated.
 fn scope_names_at(
     program: &Program,
     imports: &[(String, Span)],
@@ -2290,9 +2057,8 @@ fn scope_names_at(
         offset,
         result: None,
     };
-    // Seed the base scope frames, mirroring [`index`]: the imported bindings,
-    // then the built-ins the imports expose as bare names.  The document's own
-    // bindings are entered above them by the walk, so they shadow both.
+    // Base scope frames, mirroring [`index`]: imports, then the built-ins
+    // they expose; document bindings shadow both.
     w.scopes.push(HashMap::new());
     for (name, span) in imports {
         w.scopes
@@ -2423,9 +2189,8 @@ impl<'a> ScopeCapture<'a> {
         }
     }
 
-    /// `#[stacksafe]`: this walk recurses one frame per nested expression
-    /// (through the block/record helpers and back here) on the caller's
-    /// thread, so it grows the stack instead of overflowing the process.
+    // SAFETY: `#[stacksafe]` grows the stack per nested expression instead of
+    // overflowing the process.
     #[stacksafe]
     fn expr(&mut self, e: &Expr) {
         if self.result.is_some() {
@@ -2639,8 +2404,7 @@ mod tests {
 
     #[test]
     fn unresolved_name_with_a_close_candidate_suggests_it() {
-        // The block-wide binding `unknown` is in scope at the `unkown` use, so
-        // the diagnostic names it via a did-you-mean clause.
+        // The block-wide binding `unknown` is in scope at the `unkown` use.
         let d = doc("unknown = 1\nunkown");
         let msgs: Vec<String> = d
             .lsp_diagnostics()
@@ -2656,7 +2420,7 @@ mod tests {
     #[test]
     fn unresolved_name_without_a_close_candidate_stays_plain() {
         // `y` shares no first character with the in-scope `x`, so the message
-        // is unchanged (the exact diagnostic the CLI/render tests rely on).
+        // stays plain.
         let d = doc("x => y");
         let msgs: Vec<String> = d
             .lsp_diagnostics()
@@ -2702,8 +2466,7 @@ mod tests {
             inside_labels.contains(&"inner".to_string()),
             "`inner` should complete inside its block, got {inside_labels:?}"
         );
-        // After the block closes, `inner` is out of scope — completing `inner`
-        // at the tail offers nothing (the block's bindings are gone).
+        // After the block closes, `inner` is out of scope.
         let outside = d.completion_at(Position {
             line: 2,
             character: 0,
@@ -2734,9 +2497,8 @@ mod tests {
 
     #[test]
     fn field_access_error_suggests_a_close_field() {
-        // `point.sux` reads a struct field the container has no such field for;
-        // the diagnostic appends the struct's actually-close field name as a
-        // did-you-mean clause (the LSP diagnostic surfaces it).
+        // `point.sux` reads a field the container lacks; the diagnostic
+        // appends the closest field name as a did-you-mean clause.
         let d = doc("point = { x = 1, y = 2, sub = 3 }\npoint.sux\n");
         let msgs: Vec<String> = d
             .lsp_diagnostics()
@@ -2752,8 +2514,7 @@ mod tests {
 
     #[test]
     fn completion_after_a_dot_offers_the_structs_fields() {
-        // Typing `point.s` offers the struct's own field `sub` — never the bare
-        // container name (`point`) or an unrelated in-scope name.
+        // Typing `point.s` offers the struct's own field `sub`, never a bare name.
         let d = doc("point = { x = 1, y = 2, sub = 3 }\npoint.s\n");
         let items = d.completion_at(Position {
             line: 1,
@@ -2791,9 +2552,7 @@ mod tests {
 
     #[test]
     fn completion_after_a_module_dot_offers_the_modules_fields() {
-        // `math.s` after the import: the module's *own* exported fields are
-        // offered (read from its struct type), filtered to the typed prefix —
-        // not the bare import binding, and not a field the file never accessed.
+        // `math.s` after the import: the module's *own* fields, prefix-filtered.
         let dir = temp_dir("modcomp");
         write(
             &dir,
@@ -2833,10 +2592,8 @@ mod tests {
         let d = doc("a = 1\n(a, a)");
         assert!(d.diagnostics.is_empty(), "got {:?}", d.diagnostics);
         assert_eq!(d.defs.len(), 1, "one binding");
-        // The prelude's names are in scope (a use resolves, below) but are **not**
-        // this document's bindings: they are defined in `core.lichen`'s file, so
-        // they live apart from `defs` — the one list a position in this document
-        // is read from.
+        // The prelude's names are in scope but are **not** this document's
+        // bindings: they live apart from `defs`.
         assert!(
             d.builtin_names.iter().any(|b| b.name == "add"),
             "the prelude's `add` should be seeded, got {:?}",
@@ -2849,10 +2606,8 @@ mod tests {
 
     #[test]
     fn a_prelude_name_use_jumps_into_the_builtins_own_file() {
-        // `add` has no binding in the document and no import: the prelude is
-        // seeded into every source.  A use of it resolves to the binding in the
-        // built-in's *own* file, which the store materializes on disk — so the
-        // jump names that file, not a position in this one.
+        // `add` has no binding and no import: the prelude is seeded, and a
+        // use resolves to the built-in's file.
         let d = doc("add [1, 2]\n");
         let def = d
             .definition_at(Position {
@@ -2876,16 +2631,12 @@ mod tests {
             "the built-in's text is the record's: got {:?}",
             file.code
         );
-        // The position is the built-in's own: `add` is defined on line 3 of
-        // `core.lichen`, and the range is rendered in the built-in's
-        // coordinates, not the document's.
+        // The position is the built-in's own, in the built-in's coordinates.
         let range = d.definition_range(&def);
         assert_eq!(range.start.line, 2, "`add` is on line 3 of core.lichen");
 
-        // A failure *inside* the built-in is a property of its file, not of the
-        // document: it is rendered on the built-in's own line and published
-        // apart, so the document is never blamed for a position it does not
-        // contain (`docs/notes/core-prelude.md` §4).
+        // A failure *inside* the built-in belongs to its file, not the document
+        // (`docs/notes/core-prelude.md` §4).
         let failing = doc("add [\"a\", \"b\"]\n");
         let files = failing.file_diagnostics();
         assert!(
@@ -2902,8 +2653,8 @@ mod tests {
 
     #[test]
     fn preprocessor_block_is_cut_out() {
-        // A real lichen file opens with an `---…---` metadata block; it must not
-        // leak into the lexer/parser as code, and the file after it compiles.
+        // A real lichen file opens with an `---…---` block; it must not leak into
+        // the lexer or parser as code.
         let d = doc("--- order = \"1\"\noutput = \"3: Int\"\n---\na = 1\nb = 2\na + b\n");
         assert!(d.diagnostics.is_empty(), "got {:?}", d.diagnostics);
         assert_eq!(d.defs.len(), 2, "two bindings (a, b)");
@@ -2926,8 +2677,7 @@ mod tests {
     #[test]
     fn hover_on_a_non_binding_definition_reports_its_line() {
         // A lambda parameter is a definition but not a top-level statement, so
-        // there is no `value : type` snapshot — the hover falls back to the
-        // definition-site line.
+        // there is no `value : type` snapshot.
         let d = doc("f = x => x\nf 1\n");
         let (msg, _) = d
             .hover_at(Position {
@@ -3086,10 +2836,8 @@ mod tests {
 
     #[test]
     fn relative_imports_resolve_against_the_files_directory() {
-        // The `import` example, as an editor would open it: the document's URI
-        // gives a base path, so `@import "math.lichen"` / `"geometry.lichen"`
-        // resolve in the file's own directory (not the process CWD).  This is
-        // the LSP path: `Doc` is built with the file path as `base`.
+        // The `import` example as an editor would open it: the document's URI
+        // is the base for `@import`.
         let dir = temp_dir("import");
         write(
             &dir,
@@ -3120,10 +2868,7 @@ mod tests {
 
     #[test]
     fn new_with_cache_writes_imports_to_the_lichen_home() {
-        // The settled imported packages are compiled into the device cache rooted
-        // at `cache_root`, so the LSP actually uses Lichen Home (persisting across
-        // documents/sessions and sharing with the `lichen` compiler).  `Doc`'s
-        // in-memory path (`new_with_base`) never writes a cache; this one does.
+        // The settled imports are compiled into the device cache at `cache_root`.
         let dir = temp_dir("cachewrite");
         write(&dir, "math.lichen", "{\n  succ = x => x + 1\n}\n");
         let main_path = write(
@@ -3161,9 +2906,7 @@ mod tests {
     #[test]
     fn hover_resolves_imports_and_their_fields() {
         // Hovering an imported module (or a field of it) must not say
-        // "unresolved name": the module resolves to its `@import` directive
-        // (and hovers with the module's type), and a field resolves to the
-        // imported module it belongs to.
+        // "unresolved name".
         let dir = temp_dir("hoverimport");
         write(
             &dir,
@@ -3201,8 +2944,7 @@ mod tests {
         assert!(msg.contains("Int -> Int"), "field hover msg = {msg}");
         assert!(!msg.contains("unresolved"), "field hover msg = {msg}");
 
-        // Go-to-definition on the module use jumps to the import directive
-        // (`math` in `---`...` math = import ...` at line 1, char 2).
+        // Go-to-definition on the module use jumps to the import directive.
         let def = d
             .definition_at(Position {
                 line: 3,
@@ -3221,10 +2963,8 @@ mod tests {
 
     #[test]
     fn imported_field_access_hovers_with_value_and_type() {
-        // The repo's living spec `import/_.lichen`: hovering an accessed field
-        // of an imported module (`math.succ`, `geo.double`, `geo.inc_twice`)
-        // renders the field's `value : type` (the module's field table), not
-        // "field of imported module `X`" and never "unresolved".
+        // The repo's living spec `import/_.lichen`: an accessed field
+        // of an imported module renders its `value : type`.
         let examples =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/import");
         let main_path = examples.join("_.lichen");
@@ -3239,8 +2979,6 @@ mod tests {
         );
 
         // Line 7 (0-based line 6): `(math.succ 41, geo.double 5, geo.inc_twice 5)`.
-        // `succ` and `inc_twice` are `Int -> Int` because their bodies compute
-        // over a stated class, so their signatures are asserted by name here.
         for (pos, expected) in [
             // `.succ` field access on `math`
             (
@@ -3270,16 +3008,9 @@ mod tests {
             );
         }
 
-        // `.double` is `x => math.add x x` over the refined `add`, whose class the
-        // body never pins — so its domain and codomain are the **same open cell**,
-        // and the cell is the operand group's placeholder pair.  The printer dumps
-        // that pair rather than spelling `?a -> ?a`
-        // (`docs/notes/operator-polymorphism.md` §7.1 cost 2); the open class
-        // behind it is the defect `docs/notes/type-of-in-std.md` records.  What
-        // this asserts is the property the expectation was ever about — the field
-        // renders a function, its two sides are the same reading, and the cells are
-        // named — rather than how the pair is spelled
-        // (`docs/notes/tests-do-not-render.md`).
+        // `.double` is `x => math.add x x` over a refined `add` whose class the body never pins.
+
+        // Both sides are one open cell (`docs/notes/tests-do-not-render.md`).
         let (msg, _) = d
             .hover_at(Position {
                 line: 6,
@@ -3311,9 +3042,8 @@ mod tests {
 
     #[test]
     fn local_struct_field_access_hovers_with_value_and_type() {
-        // A field access on a *local* struct binding (`point.x`) renders the
-        // field's value:type too — not "unresolved".  It reads the current
-        // file's struct-block field table.
+        // A field access on a *local* struct binding renders the field's
+        // value:type, from this file's struct-block field table.
         let d = doc("point = { x = 1, y = 2 }\npoint.x\n");
         let (msg, _) = d
             .hover_at(Position {
@@ -3329,10 +3059,8 @@ mod tests {
 
     #[test]
     fn module_field_definitions_resolve() {
-        // Inside a module file (math.lichen = `{succ = …, add = …}`), hovering
-        // a record *field* definition (`succ`, `add`) must not say
-        // "unresolved name" — a struct block scopes its field bindings just
-        // like a block, so the field name is a definition site.
+        // Inside a module file (`{succ = …, add = …}`), hovering a record field
+        // definition must not say "unresolved name".
         let dir = temp_dir("modulefields");
         let math_path = write(
             &dir,
@@ -3344,9 +3072,7 @@ mod tests {
             Some(math_path.as_path()),
         );
 
-        // `succ` at line 1, char 2; `add` at line 2, char 2.  Each hovers with
-        // its value:type (`Function : Int -> Int` / `... -> Int -> Int`), never
-        // "unresolved" and never merely "defined at line".
+        // `succ` at line 1, char 2; `add` at line 2, char 2.
         for (line, name) in [(1usize, "succ"), (2, "add")] {
             let (msg, _) = d
                 .hover_at(Position {
@@ -3367,9 +3093,7 @@ mod tests {
 
     #[test]
     fn relative_imports_with_no_base_resolve_nowhere() {
-        // The pre-fix behaviour: with `base = None` the same relative imports
-        // resolve against the process CWD, which is almost never the file's
-        // directory, so they fail — this documents why the LSP must pass a base.
+        // With `base = None` the imports resolve against the process CWD.
         let d = doc("---math = import \"math.lichen\"---math\n");
         assert!(
             d.diagnostics

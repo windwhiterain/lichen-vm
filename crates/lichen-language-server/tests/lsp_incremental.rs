@@ -1,13 +1,5 @@
-//! The incremental path: the frontend runs once per document *text*, not once
-//! per request (`docs/notes/code-audit.md`, `P1-17`).
-//!
-//! Each test drives the real binary over stdio and watches the only thing a
-//! client can see: which `publishDiagnostics` arrive, and with what.  The frame
-//! reader is a thread feeding a channel, because "nothing else arrives" is an
-//! assertion here and a blocking read cannot express one.  The JSON-RPC frame
-//! helpers are this crate's own rather than shared with `lsp_smoke.rs`:
-//! integration tests are separate crates, and this one needs the timed drain the
-//! smoke test has no use for.
+//! The incremental path: the frontend runs once per document *text*, not
+//! per request (`docs/notes/code-audit.md` P1-17).
 
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -19,9 +11,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lichen_language_server::lsp_types::Url;
 
-/// How long the server may be silent before a test decides nothing more is
-/// coming.  Comfortably past the 150 ms edit debounce, so a collapsed burst is
-/// observed as one publish rather than a race.
+/// Silence before a test concludes nothing more is coming.
+/// Past the 150 ms debounce, so a burst reads as one publish.
 const QUIET: Duration = Duration::from_millis(1200);
 
 fn frame(json: &str) -> Vec<u8> {
@@ -149,9 +140,8 @@ impl Server {
         }
     }
 
-    /// Every `publishDiagnostics` that arrives until the server has been quiet
-    /// for `quiet`.  The quiet period is what turns "no more" into an
-    /// assertion rather than a hope.
+    /// Every `publishDiagnostics` until the server is quiet for
+    /// `quiet`, so "no more" is asserted rather than hoped.
     fn publishes(&mut self, quiet: Duration) -> Vec<String> {
         let mut out = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -210,12 +200,12 @@ fn goto_definition(uri: &str, id: u32, line: u32, character: u32) -> String {
     )
 }
 
-/// A burst of keystrokes must collapse to one frontend run — and the diagnostics
-/// that arrive must be the *last* edit's.
+/// A burst of keystrokes must collapse to one frontend run, and the published
+/// diagnostics must be the *last* edit's.
 ///
-/// The six edits are sent back to back, so the debounce collapses them; the
-/// last one is the only edit with an error, which is what makes "which edit was
-/// analyzed" an observable thing rather than an assumption.
+/// # Invariant
+/// Only the last of the six edits has an error, so "which edit was analyzed" is
+/// observable rather than assumed.
 #[test]
 fn a_burst_of_edits_runs_the_frontend_once() {
     let mut server = Server::start();
@@ -245,11 +235,11 @@ fn a_burst_of_edits_runs_the_frontend_once() {
 }
 
 /// A dependency is half of the cache key: the index is keyed by the document's
-/// text *and* the bytes of every imported file, so editing an import must reach
-/// the answer even though the document's own text never changed.
+/// text *and* every imported file's bytes.
 ///
-/// The cursor sits immediately after the dot, so the module's exported fields
-/// are offered unfiltered and a newly exported one is visible.
+/// # Invariant
+/// The cursor sits right after the dot, so the module's exported fields are
+/// offered unfiltered and a newly exported one is visible.
 #[test]
 fn an_edit_to_an_imported_file_refreshes_the_answer() {
     let dir = temp_dir("dep");
@@ -296,15 +286,13 @@ fn an_edit_to_an_imported_file_refreshes_the_answer() {
     server.shutdown();
 }
 
-/// A jump to a **prelude** name lands in the built-in's own file, and a failure
-/// inside that file is published against *it* rather than blamed on the document
-/// (`docs/notes/core-prelude.md` §4).
+/// A jump to a **prelude** name lands in the built-in's own file.
 ///
-/// This is the on-disk half of the feature, and the reason it is an integration
-/// test: the server runs over a Lichen Home cache root, so the store materializes
-/// `core.lichen` under it — the file the jump names has to be a path
-/// `Url::from_file_path` can turn into a URI the client can open.  The in-memory
-/// store the unit tests use names the same file relatively.
+/// # Invariant
+/// A failure inside the built-in is published against it, never the document
+/// (`docs/notes/core-prelude.md` §4), and only the persistent store
+/// materializes `core.lichen` — so the jumped-to path must be one
+/// `Url::from_file_path` can open.
 #[test]
 fn a_prelude_name_jumps_into_the_materialized_builtin_file() {
     let dir = temp_dir("prelude");
@@ -327,9 +315,7 @@ fn a_prelude_name_jumps_into_the_materialized_builtin_file() {
         "the built-in's failure must not be published against the document: {document}"
     );
 
-    // The built-in's failure is published against the built-in's file, whose
-    // path is the one the store materialized under the cache root — the file a
-    // jump opens.
+    // The built-in's failure names the file the store materialized, not the document.
     let builtin = server.next_publish();
     assert!(
         builtin.contains("core.lichen"),
@@ -354,9 +340,8 @@ fn a_prelude_name_jumps_into_the_materialized_builtin_file() {
     server.shutdown();
 }
 
-/// Closing a document drops it, which supersedes every analysis of it: the close
-/// clears the diagnostics, and the edit it interrupted must publish nothing at
-/// all rather than resurrect a closed file's error.
+/// Closing a document supersedes its analyses.
+/// The close clears diagnostics; the interrupted edit publishes none.
 #[test]
 fn a_closed_document_publishes_nothing_further() {
     let mut server = Server::start();

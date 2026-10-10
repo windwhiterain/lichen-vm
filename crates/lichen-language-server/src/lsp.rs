@@ -1,18 +1,5 @@
 //! Source-position ↔ LSP-position conversion, and the canonical LSP types.
-//!
-//! The frontend reports positions as [`lichen_highlevel::ir::Span`] — a
-//! `(line, col)` pair, 1-based, where `col` counts **bytes** from the line's
-//! start (see [`lichen_language::lex::line_col`]). LSP wants `line` /
-//! `character`, both 0-based, with `character` in **UTF-16 code units**. This
-//! module owns that conversion, since it is the single caller-facing dialect of
-//! the shared span — a language server and a Zed extension must agree on it, so
-//! it lives once, here.
-//!
-//! The protocol *types* are the canonical ones from `lsp-types` (re-exported
-//! here and by the crate root), so the server and any extension speak the same
-//! types the editor does. The JSON-RPC framing, request dispatch, cancellation
-//! and error handling are provided by `tower-lsp` in the server binary; the
-//! library only needs the span math and the protocol type set.
+//! See `docs/notes/language-toolchain.md`.
 
 pub use lsp_types::{
     Diagnostic, DiagnosticSeverity, Position, Range, SemanticToken, SemanticTokenModifier,
@@ -22,21 +9,14 @@ pub use lsp_types::{
 
 use lichen_language::lex::Span;
 
-// ---------------------------------------------------------------------------
-// Span ↔ position conversion
-//
-// Lichen's own byte ↔ line/column conversion is `lichen_span`'s: a `Span` is a
-// 1-based `(line, column-in-bytes)`, and `line_col` / `offset_of_span` are the
-// only implementation of it.  What lives here is the **protocol dialect** LSP
-// requires — a 0-based line and a `character` in UTF-16 code units — and the
-// two clamps the protocol forces.  Everything takes the source text and its
-// precomputed line-start byte offsets (`lichen_language::lex::line_starts`), so
-// it is pure and reusable.
+// Span ↔ position conversion: the LSP dialect of `lichen_span`'s model.
+// 0-based line, `character` in UTF-16 units.
 
-/// The byte offset of a 1-based `(line, column-in-bytes)` span
-/// (`lichen_language::lex::offset_of_span`): the workspace's one conversion,
-/// whose contract also states the out-of-range answer (the line saturates to
-/// the first/last line, the column is kept).
+/// The byte offset of a 1-based `(line, column-in-bytes)` span.
+///
+/// # Invariant
+/// Out-of-range spans saturate to the first/last line; the contract is
+/// `lichen_language::lex::offset_of_span`, which this only renames.
 pub fn offset_of_span(line_starts: &[usize], span: Span) -> usize {
     lichen_language::lex::offset_of_span(line_starts, span)
 }
@@ -47,8 +27,10 @@ fn utf16_len(text: &str) -> usize {
 }
 
 /// The largest character boundary at or below `offset`, clamped to `source`.
+///
+/// # Invariant
 /// LSP's `character` can only address a character boundary, so a byte inside a
-/// multi-byte character has to be answered with the character's start.
+/// multi-byte character answers with that character's start.
 fn floor_char_boundary(source: &str, offset: usize) -> usize {
     let mut offset = offset.min(source.len());
     while !source.is_char_boundary(offset) {
@@ -59,18 +41,10 @@ fn floor_char_boundary(source: &str, offset: usize) -> usize {
 
 /// Convert a byte offset to a 0-based LSP `Position`.
 ///
-/// This is the protocol dialect of `lichen_language::lex::line_col`, and both
-/// differences are LSP's: the line is 0-based, and `character` counts UTF-16
-/// code units instead of bytes.  Two clamps come with that dialect:
-///
-/// - the offset is clamped to `source.len()`, and
-/// - a byte inside a multi-byte character is clamped **down** to that
-///   character's start, because `character` cannot name a mid-character
-///   position.
-///
-/// The byte model performs neither clamp (it is given no source), so the two
-/// agree about every byte that is on a character boundary and inside the
-/// source — which is every byte the frontend reports.
+/// # Invariant
+/// The offset is clamped to `source.len()`, and a byte inside a multi-byte
+/// character clamps **down** to that character's start, because `character`
+/// cannot name a mid-character position.
 pub fn position_at_offset(source: &str, line_starts: &[usize], offset: usize) -> Position {
     let offset = floor_char_boundary(source, offset);
     let (line, column) = lichen_language::lex::line_col(line_starts, offset as u32);
@@ -83,11 +57,11 @@ pub fn position_at_offset(source: &str, line_starts: &[usize], offset: usize) ->
     }
 }
 
-/// Convert an LSP `Position` to a byte offset, if it is within `source`.
+/// The UTF-16 reverse of [`position_at_offset`].
 ///
-/// The UTF-16 reverse of [`position_at_offset`], and the one place LSP's "no
-/// such position" is expressible: a `line` outside the source is `None` (a
-/// character past the line's end clamps to the line's end).
+/// # Invariant
+/// A `line` outside the source is `None`; a `character` past the line's end
+/// clamps to the line's end.
 pub fn offset_from_position(source: &str, line_starts: &[usize], pos: Position) -> Option<usize> {
     let line = pos.line as usize;
     let line_start = *line_starts.get(line)?;
@@ -107,9 +81,7 @@ pub fn offset_from_position(source: &str, line_starts: &[usize], pos: Position) 
     Some(line_start + byte)
 }
 
-/// A 1-based `(line, col-byte)` span for a byte offset —
-/// `lichen_language::lex::line_col`, under the name the server's own callers
-/// use.
+/// A 1-based `(line, col-byte)` span for a byte offset.
 pub fn span_of_offset(line_starts: &[usize], offset: usize) -> Span {
     lichen_language::lex::line_col(line_starts, offset as u32)
 }
@@ -140,19 +112,11 @@ pub fn range_from_byte_range(source: &str, line_starts: &[usize], range: (u32, u
     }
 }
 
-// ---------------------------------------------------------------------------
-// Semantic tokens
-//
-// Lichen's own parser drives highlighting (see `analysis::Doc::semantic_tokens`):
-// the frontend classifies each token (literal / keyword / operator / name), and
-// an editor consumes it via the LSP `textDocument/semanticTokens/full` request.
-// This module owns the protocol half — the legend and the delta encoding — so a
-// Zed extension requesting semantic tokens from the server and the server itself
-// agree on the same type set.  The grammar-optional path: when the tree-sitter
-// grammar is absent, semantic tokens carry the highlighting instead.
+// Semantic tokens: the legend and the delta encoding.
 
-/// One semantic token in *source* coordinates (a half-open byte range) with its
-/// LSP legend classification — the pre-encoding view the frontend produces.
+// The grammar-optional highlight path; see `docs/notes/language-toolchain.md`.
+
+/// One semantic token in *source* coordinates with its LSP legend classification.
 #[derive(Clone, Debug)]
 pub struct SemanticTokenData {
     pub start: u32,
@@ -161,9 +125,11 @@ pub struct SemanticTokenData {
     pub modifiers: Vec<SemanticTokenModifier>,
 }
 
-/// The token types / modifiers this server emits.  The list order defines the
-/// indices in the encoded `data` array, so it is the single source of truth for
-/// both the capability advertisement and the encoder.
+/// The token types / modifiers this server emits.
+///
+/// # Invariant
+/// List order defines the `data` array's indices, so this is the one source of
+/// truth for both the capability advertisement and the encoder.
 pub fn semantic_token_legend() -> SemanticTokensLegend {
     SemanticTokensLegend {
         token_types: vec![
@@ -187,9 +153,11 @@ fn index_of_type(legend: &SemanticTokensLegend, t: &SemanticTokenType) -> u32 {
 }
 
 /// Delta-encode `tokens` (already in document order) into LSP `SemanticTokens`.
-/// The first token's line/start are absolute; each later token's are deltas from
-/// the previous one (a `delta_start` only when on the same line).  Lengths and
-/// the inner `delta_start` are in UTF-16 code units (LSP's `character` unit).
+///
+/// # Invariant
+/// The first token's line/start are absolute and each later token's are deltas
+/// from the previous one; lengths and the inner `delta_start` are in UTF-16
+/// code units.
 pub fn encode_semantic_tokens(
     source: &str,
     line_starts: &[usize],

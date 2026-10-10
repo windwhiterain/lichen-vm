@@ -1,18 +1,12 @@
-//! The language server's LSP positions are the **protocol dialect** of the one
-//! byte ↔ line/column conversion in `lichen-span`: a 0-based line and a UTF-16
-//! `character`, computed from `lichen_span::line_col`'s 1-based byte column.
-//!
-//! These pin the boundary — including the two places LSP must clamp (a byte
-//! past the source, a byte inside a multi-byte character) and the byte model
-//! must not, and the out-of-range answer a span gets.
+//! LSP positions: the protocol dialect of `lichen-span`'s byte ↔ line/column —
+//! a 0-based line, a UTF-16 `character`.
 
 use lichen_language::lex::{line_col, line_starts};
 use lichen_language_server::lsp::{
     Position, offset_from_position, offset_of_span, position_at_offset, span_of_offset,
 };
 
-/// `(source, offsets to probe)` — the edges the conversions answered
-/// differently at before they shared one implementation.
+/// `(source, offsets to probe)` — the edges where the two conversions disagree.
 const CASES: &[(&str, &[usize])] = &[
     ("", &[0, 1]),
     ("ab\n", &[0, 2, 3]),
@@ -73,8 +67,7 @@ fn the_lsp_character_counts_utf16_units_from_the_line_start() {
 fn a_byte_inside_a_character_clamps_to_the_character_start() {
     let source = "é=1";
     let starts = line_starts(source);
-    // Byte 1 is the trailing byte of `é`; LSP's `character` cannot name a
-    // mid-character position, so the boundary clamps down to the start.
+    // Byte 1 is `é`'s trailing byte; `character` cannot name mid-character.
     assert_eq!(
         position_at_offset(source, &starts, 1),
         Position {
@@ -121,8 +114,7 @@ fn end_of_file_is_a_valid_position() {
 #[test]
 fn an_out_of_range_span_saturates_instead_of_naming_another_line() {
     // A line before the first, or past the last, saturates to the first/last
-    // line with its column kept — the answer no longer depends on the source's
-    // line count alone.
+    // line with its column kept.
     assert_eq!(offset_of_span(&[0], (99, 3)), 2);
     assert_eq!(offset_of_span(&[0, 3], (99, 3)), 5);
     assert_eq!(offset_of_span(&[0], (0, 3)), 2);
