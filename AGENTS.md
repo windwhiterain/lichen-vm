@@ -7,6 +7,12 @@ lichen code examples: examples/
 - keep relative docs synced.
 - always avoid replication, if exists, merge or reference.
 
+## Comments
+
+A comment states an invariant or a safety condition, and nothing else. The rule
+and its budgets are in `comments-test.toml`, enforced in CI by `comments-check`;
+[the note](docs/notes/comment-policy.md) is the prose form of the same thing.
+
 ## Verify
 
 - `cargo check` for compilation pass.

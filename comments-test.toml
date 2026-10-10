@@ -1,0 +1,66 @@
+# The comment policy this repository is held to, enforced by `comments-check`.
+#
+# A comment is measured per markdown section, in Unicode characters, and a
+# section's budget covers every subsection below it. Templates are bound to
+# comment kinds: a kind no template names is not checked at all.
+#
+# The rule behind the numbers: a comment earns its place by stating something the
+# code cannot — an invariant that must hold, or the condition that makes an
+# `unsafe` block sound. Anything longer belongs in `docs/notes`, where it can be
+# linked to instead of duplicated next to the code.
+
+[checker]
+# `exclude` matches a directory *name* at any depth, not a path, so it can only
+# name a leaf: `target` holds build output, the two dot entries hold git plumbing
+# and the parallel worktrees `AGENTS.md` asks for, and `.scratch-core` is scratch
+# space.
+exclude = ["target", ".git", ".worktrees", ".scratch-core"]
+
+# A path that is not this project's own source, and is reached with a pattern
+# because `exclude` cannot say one. `lichen-language-zed/grammars/lichen` is a
+# nested clone of this repository with its own `.git`; its comments are the source
+# tree's comments one directory down, and a violation reported from inside it
+# names a file this repository does not own.
+exempt = ["lichen-language-zed/grammars/lichen/**"]
+
+# Rustdoc carries the contract, so it is the part held to a structure. A reader
+# who reaches `# Safety` knows what kind of statement they are reading without
+# being told, and the only two statements admitted are the two that outrank prose.
+[[template]]
+applies_to = [
+    "outer-doc-line",
+    "inner-doc-line",
+    "outer-doc-block",
+    "inner-doc-block",
+    "attribute-doc",
+]
+root = "on"
+
+# The prose before the first heading, and the whole comment when it has no
+# heading at all. Sized for a summary line plus one pointer, which is what an
+# unheaded comment is allowed to be.
+[[template.section]]
+path = ""
+max_chars = 120
+
+# What must hold. The strongest statement a comment can make about code.
+[[template.section]]
+path = "Invariant"
+max_chars = 400
+
+# What makes calling into `unsafe` sound. Sized like `Invariant`, because the two
+# are the same kind of claim: a precondition the code relies on and does not check.
+[[template.section]]
+path = "Safety"
+max_chars = 400
+
+# An inline comment is a note to the next reader rather than a claim about the
+# code, so it is given no heading to carry. It is still bounded, at the root
+# budget: a bare note is exactly what drifts into noise.
+[[template]]
+applies_to = ["line"]
+root = "on"
+
+[[template.section]]
+path = ""
+max_chars = 120

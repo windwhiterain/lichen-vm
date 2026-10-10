@@ -107,6 +107,7 @@ Every note opens with a `> Status:` line:
 | [Zed extension: build & test workflow](notes/zed-extension-testing.md) | `lichen-language-zed`, `lichen-language-server`, `tree-sitter-lichen` | current |
 | [Tree-sitter generated-files testing](notes/tree-sitter-generated-files.md) | `tree-sitter-lichen`, `lichen-language-zed` | current |
 | [Code audit and remediation queue](notes/code-audit.md) | — (all crates) | current — the queue is the work list; each item's status is live |
+| [The comment policy](notes/comment-policy.md) | — (all crates) | current — the rule is enforced in CI by `comments-check`; the tree does not yet satisfy it, and the note carries the numbers |
 
 ## The language spec
 
