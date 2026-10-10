@@ -1,11 +1,12 @@
-//! Vendored dependency directories: an import path's first segment resolved to
-//! a directory the host registered, and that directory's entry package file.
+//! Vendored dependency directories and their entry package files.
 
 use super::*;
-/// Split a potential vendored alias from an import path: `"foo"` →
-/// `("foo", None)`, `"foo/rest"` → `("foo", Some("rest"))`.  A leading
-/// segment that ends in `.lichen` is a file name, not an alias (so a relative
-/// import like `"math.lichen"` never hits the vendored map).
+/// Split an import path into its vendored alias and the rest.
+///
+/// # Invariant
+///
+/// A first segment ending in `.lichen` is a file name, never an alias, so a
+/// relative import such as `"math.lichen"` never reaches the vendored map.
 pub(super) fn vendored_alias(import_path: &str) -> Option<(&str, Option<&str>)> {
     let (first, rest) = match import_path.find('/') {
         Some(i) => (&import_path[..i], Some(&import_path[i + 1..])),
@@ -17,9 +18,11 @@ pub(super) fn vendored_alias(import_path: &str) -> Option<(&str, Option<&str>)> 
     Some((first, rest))
 }
 
-/// The entry package file of a vendored dependency directory: a `_.lichen`,
-/// then `<alias>.lichen`, then the directory's sole `.lichen` file.  An
-/// ambiguous (many) or absent package is a diagnostic, not a guess.
+/// The entry package file of a vendored dependency directory.
+///
+/// # Invariant
+///
+/// An absent or ambiguous entry package is a diagnostic, never a guess.
 pub(super) fn vendored_entry_file<P: lichen_lowlevel::Program>(
     dir: &Path,
     alias: &str,
@@ -38,8 +41,8 @@ pub(super) fn vendored_entry_file<P: lichen_lowlevel::Program>(
             .map(|e| e.path())
             .filter(|p| p.extension().is_some_and(|e| e == "lichen"))
             .collect::<Vec<_>>(),
-        // A directory that cannot be read at all is a filesystem failure, not
-        // "this dependency has no entry package": keep the error.
+        // An unreadable directory is a filesystem failure, not a missing entry
+        // package: keep the error.
         Err(e) => {
             return Err(Diag::io(format!(
                 "cannot read vendored dependency '{alias}' at {}: {e}",

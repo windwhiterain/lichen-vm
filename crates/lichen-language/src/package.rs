@@ -1,23 +1,5 @@
-//! The package store: a shared registry plus a path cache, optionally
-//! backed by the persistent device store ([`crate::persist`]).
-//!
-//! Vendored path resolution lives in the sibling module `vendored`.
-//!
-//! A package is an ordinary lichen source file whose final expression is the
-//! exported value.  Loading one resolves its `@import` directives through
-//! this same store (transitive dependencies load first and freeze into the
-//! shared registry), compiles it against that shared registry, and freezes
-//! the built module — a package that itself imports packages freezes its
-//! dependency refs verbatim, absolute from birth, so every importer reads
-//! the dependencies' shared payloads in place.
-//!
-//! With a cache directory ([`PackageStore::with_cache_dir`], the CLI's
-//! `~/.lichen`), a load first runs the device's *incremental verification*
-//! over the recorded dependency graph: when the whole graph is up to date,
-//! the artifact is loaded from disk (deserialized, registered under its
-//! persistent device key) and the compile is skipped entirely.  Only the
-//! chain that actually changed is recompiled, and each compiled package is
-//! serialized back into the cache.
+//! The package store: a shared registry plus a path cache, device-backed.
+//! See docs/notes/packages.md.
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -40,33 +22,22 @@ use crate::program::GcdOp;
 mod vendored;
 use vendored::{vendored_alias, vendored_entry_file};
 
-/// The virtual path of the `lichen-compute` native package.  Imported as
-/// `compute.lichen`, it is served from a registered native module (see
-/// [`PackageStore::register_compute`]) rather than a source file on disk.
+/// The virtual path of the `lichen-compute` native package.
 pub(crate) const COMPUTE_PATH: &str = "compute.lichen";
 
-/// The virtual path of the built-in **`core`** module — the language's
-/// **prelude**: imported implicitly into every source a host compiles (see
-/// [`PackageStore::prelude_import`]), and explicitly as `core = import "core"`
-/// when a program wants the module *value* rather than its names.  Served from a
-/// registered built-in module (see [`PackageStore::register_core`]), never from a
-/// source file on disk.
+/// The virtual path of the built-in `core` module — the language's prelude.
 pub(crate) const CORE_PATH: &str = "core.lichen";
 
-/// The `core` module's source: the operator **contract**, written in lichen —
-/// the class domain `Num`, the predicate `in_num` that consults it, and one
-/// binding per polymorphic operator, each refining its operands' **classes**
-/// with `x : (_ ! in_num)` (`docs/notes/operator-polymorphism.md` §3, §9).
+/// The `core` module's source: the operator contract, written in lichen.
+///
+/// # Invariant
 ///
 /// It is the prelude because an operator's contract is a fact about the
-/// language, not about a program: every source sees these names without an
-/// import, and a program that wants different ones shadows them (a later binder
-/// wins over a seeded import, and the prelude is seeded first).
+/// language: every source sees these names, and a program that wants different
+/// ones shadows them (a later binder wins over the seeded import).
 const CORE_SOURCE: &str = include_str!("core.lichen");
 
-/// The names [`CORE_SOURCE`] binds at the top level, in source order — the
-/// record fields of its export struct.  A record's *value* carries its fields in
-/// definition order, which is what pairs a name with the field's frozen node.
+/// The names [`CORE_SOURCE`] binds at the top level, in source order.
 fn core_exports() -> Vec<String> {
     let tokens = crate::lex::lex(CORE_SOURCE).tokens;
     let parsed = crate::parse::parse(&tokens);
@@ -81,14 +52,13 @@ fn core_exports() -> Vec<String> {
         .collect()
 }
 
-/// Whether `import` is the built-in **prelude** ([`CORE_PATH`]) rather than an
-/// import a program wrote.
+/// Whether `import` is the built-in prelude ([`CORE_PATH`]) rather than a program's.
 ///
-/// The distinction matters to a reader that shows a program's *own* names: the
-/// prelude is seeded into every source (`crate::preprocess::preprocess`), and its
-/// entries carry a synthetic span because no directive produced them — so an
-/// editor's document symbols, completions, and hover skip them, while a written
-/// `import` stays a document definition (its span is the directive's).
+/// # Invariant
+///
+/// A prelude entry carries a synthetic span because no directive produced it, so
+/// a reader that shows a program's own names skips it; a written `import` keeps
+/// its directive's span.
 pub fn is_prelude_import(import: &ResolvedImport) -> bool {
     import
         .path
@@ -96,11 +66,12 @@ pub fn is_prelude_import(import: &ResolvedImport) -> bool {
         .is_some_and(|name| name == CORE_PATH)
 }
 
-/// Every node of a checked built-in that has a source position, paired with that
-/// position.  The build is the only thing that knows a node's source — a frozen
-/// module carries values, not spans — so this is read before the module freezes
-/// and the refs are mapped through the freeze afterwards
-/// ([`PackageStore::builtin_source`]).
+/// Every node of a checked built-in that has a source position, paired with it.
+///
+/// # Invariant
+///
+/// Read before the module freezes — a frozen module carries values, not spans —
+/// and the refs are mapped through the freeze afterwards.
 fn located_nodes<P>(
     build: &Build<P>,
     span_index: Option<&crate::compile::SpanIndex>,
@@ -122,17 +93,13 @@ where
         .collect()
 }
 
-/// The `(name, term)` pairs [`CORE_SOURCE`] exposes **directly**: one per
-/// top-level binding, each the binding's own `[value, type]` pair.
+/// The `(name, term)` pairs [`CORE_SOURCE`] exposes directly.
 ///
-/// A record's *value* holds its fields' **values** — their types live in the
-/// struct's kind — so the pair a name must resolve to is not recoverable from
-/// the frozen struct: it is the checked build's term for that binding.  The names
-/// come from the source in the same order, so a mismatch is a bug in this pairing
-/// rather than a quietly missing name — it is reported, not truncated.
+/// # Invariant
 ///
-/// Read **before** the module is moved into the freeze, and mapped to static refs
-/// afterwards (see [`core_direct`]).
+/// The names come from the source in the same order as the build's statements,
+/// so a mismatch is reported rather than quietly truncated; the pairs are read
+/// before the module moves into the freeze, and mapped to static refs after.
 fn core_terms<P>(build: &Build<P>) -> Result<Vec<(String, NodeId)>, String>
 where
     P: LangProgramShape,
@@ -180,11 +147,13 @@ fn core_direct(
         .collect()
 }
 
-/// The `lichen-compute` plugin's private native registry, built by the
-/// plugin over a host's concrete program marker.  Attached only to the
-/// compilation of `compute.lichen`, so `$jit`/`$launch` resolve privately — a
-/// second plugin registering its own `$jit` never collides.  The plugin itself
-/// is program-generic; only this composition site names the program marker.
+/// The `lichen-compute` plugin's private native registry.
+///
+/// # Invariant
+///
+/// Attached only to the compilation of `compute.lichen`, so `$jit`/`$launch`
+/// resolve privately and a second plugin registering its own `$jit` never
+/// collides.
 fn compute_native_ops<P>() -> NativeOps<P>
 where
     P: LangProgramShape,
@@ -194,50 +163,36 @@ where
     lichen_compute::compute_native_ops!(P)
 }
 
-/// A loaded package: the path, its registry key, and the static ref to the
-/// exported final `[value, type]` pair (the package's final expression).
+/// A loaded package: the path, its registry key, and the export's static ref.
 #[derive(Clone, Debug)]
 pub struct PackageHandle {
     pub path: PathBuf,
     pub key: ModuleKey,
     pub export: StaticNodeId,
-    /// Extra `(name, export)` bindings a package exposes directly, so `import`
-    /// can bind them as names (the compute package's `jit`/`launch`/`Kernel`).
-    /// Empty for an ordinary package.
+    /// Extra `(name, export)` bindings a package exposes; empty for an ordinary one.
     pub direct: Vec<(String, StaticNodeId)>,
 }
 
-/// The process-local package store: a shared registry plus a path cache,
-/// optionally backed by the device's persistent store.
+/// The process-local package store: a shared registry plus a path cache.
 ///
-/// The registry is shared with every package and importer, so a package
-/// loaded once is used in place by all of them (`packages` is public so a
-/// host or test can observe that sharing).  Generic over a single program
-/// type `P` (the associated-type collector; its `P::Codec` is the artifact
-/// codec — [`persist::NoPersist`] for an in-memory store).
+/// # Invariant
+///
+/// The registry is shared with every package and importer, so a package loaded
+/// once is used in place by all of them. Generic over the program type `P`.
 pub struct PackageStore<P: ProgramCodecOf> {
     pub registry: Arc<RwLock<Registry<P>>>,
     pub packages: HashMap<PathBuf, PackageHandle>,
-    /// The in-flight load stack (canonical paths) — a package re-entered
-    /// while still loading closes an import cycle.
+    /// The in-flight load stack; a re-entry closes an import cycle.
     loading: Vec<PathBuf>,
-    /// Native virtual packages — a package name served from a registered
-    /// native module instead of a disk file, keyed by the import path
-    /// (`compute.lichen`, `std.lichen`, …).  See
-    /// [`Self::register_compute`] and [`Self::register_native`].
+    /// Native virtual packages, keyed by the import path they are served at.
     native: HashMap<PathBuf, PackageHandle>,
-    /// Vendored dependencies, keyed by the import alias the package manager
-    /// resolves `import "alias"` / `import "alias/rest"` through.  A vendored
-    /// alias maps to a directory of `.lichen` package files (a git-fetched
-    /// dependency); the bare alias resolves to the directory's entry package,
-    /// and a suffixed path resolves relative to it.  See
-    /// [`Self::register_vendored`] and [`Self::resolve_import`].
+    /// Vendored dependency directories, keyed by the import alias they resolve
+    /// through (see [`Self::register_vendored`]).
     vendored: HashMap<String, PathBuf>,
     /// The device's cache directory (`None` = in-memory only).
     cache_dir: Option<PathBuf>,
     device: Option<DeviceRegistry>,
-    /// The in-memory key allocator — the device registry's counter when no
-    /// cache directory is configured (a process-local device).
+    /// The in-memory key allocator, used when no cache directory is configured.
     next_key: u64,
     /// The artifact codec `P::Codec` is a type-level marker (the codec value is
     /// `P::Codec::default()` at use).
@@ -248,13 +203,9 @@ pub struct PackageStore<P: ProgramCodecOf> {
     pub loaded_from_cache: usize,
 }
 
-// The minimal impl: construction, cache-dir plumbing, and the vendored
-// registry — none of which touch a compute value/operator or the artifact
-// codec.  These need only that `P` is a program carrying its codec.
+// The minimal impl: construction, cache-dir plumbing, and the vendored registry.
 impl<P: ProgramCodecOf> PackageStore<P> {
-    /// A purely in-memory store — the pre-cache behavior (tests, the readme
-    /// sync, in-process embeddings).  Device keys are allocated from a
-    /// process-local counter and nothing is persisted.
+    /// A purely in-memory store: keys come from a process-local counter.
     pub fn new() -> Self {
         let registry = Arc::new(RwLock::new(Registry::new()));
         PackageStore {
@@ -272,10 +223,7 @@ impl<P: ProgramCodecOf> PackageStore<P> {
         }
     }
 
-    /// A store backed by the device's persistent cache rooted at
-    /// `cache_dir` (see [`crate::persist::lichendir`]): compiled packages
-    /// are serialized into it, and up-to-date packages load from it without
-    /// recompiling.
+    /// A store backed by the device's persistent cache rooted at `cache_dir`.
     pub fn with_cache_dir(cache_dir: PathBuf) -> Self {
         let device = DeviceRegistry::open(cache_dir.clone());
         let mut store = PackageStore::new();
@@ -284,14 +232,12 @@ impl<P: ProgramCodecOf> PackageStore<P> {
         store
     }
 
-    /// A store backed by an already-open device registry at `cache_dir`.  For a
-    /// host that keeps one registry handle across requests (the language
-    /// server) instead of reopening — and reparsing — the registry file each
-    /// time: the handle carries the same cache directory
-    /// [`Self::with_cache_dir`] would have opened.  Every mutation re-reads the
-    /// registry under the cross-process lock and every verification reads it
-    /// back, so a long-lived handle observes another process's writes exactly
-    /// as a freshly opened one would.
+    /// A store backed by an already-open device registry at `cache_dir`.
+    ///
+    /// # Invariant
+    ///
+    /// Every mutation re-reads the registry under the cross-process lock, so a
+    /// long-lived handle observes another process's writes as a fresh open would.
     pub fn with_device(cache_dir: PathBuf, device: DeviceRegistry) -> Self {
         let mut store = PackageStore::new();
         store.cache_dir = Some(cache_dir);
@@ -299,21 +245,17 @@ impl<P: ProgramCodecOf> PackageStore<P> {
         store
     }
 
-    /// Take the open device registry back out, so a host can hold it across
-    /// requests (see [`Self::with_device`]).  `None` for an in-memory store.
+    /// Take the open device registry back out; `None` for an in-memory store.
     pub fn into_device(self) -> Option<DeviceRegistry> {
         self.device
     }
 
-    /// Explicitly garbage-collect the device cache: reclaim every artifact
-    /// not reachable from a path alias whose source file still exists.
-    /// Returns the number of reclaimed artifacts.
+    /// Garbage-collect the device cache, returning the number of reclaimed artifacts.
     pub fn gc(&mut self) -> usize {
         self.device.as_mut().map_or(0, |device| device.gc())
     }
 
-    /// Explicitly remove one package (by its source path) from the device
-    /// cache.  Returns whether anything was removed.
+    /// Remove one package (by its source path) from the device cache.
     pub fn remove(&mut self, path: &Path) -> bool {
         match std::fs::canonicalize(path) {
             Ok(canonical) => self
@@ -329,9 +271,7 @@ impl<P: ProgramCodecOf> PackageStore<P> {
         self.cache_dir.as_deref()
     }
 
-    /// Register a vendored dependency directory under an import alias, so
-    /// `import "alias"` / `import "alias/rest"` resolve into it.  The package
-    /// manager registers one alias per git-fetched dependency before compiling.
+    /// Register a vendored dependency directory under an import alias.
     pub fn register_vendored(&mut self, alias: impl Into<String>, dir: PathBuf) {
         self.vendored.insert(alias.into(), dir);
     }
@@ -346,9 +286,7 @@ impl<P: ProgramCodecOf> PackageStore<P> {
         self.registry.clone()
     }
 
-    /// Allocate the device key for a file ID: the existing key when the file
-    /// is already registered (recompiles reuse it, overwriting the slot),
-    /// otherwise a fresh one (reclaimed first, then the next index).
+    /// Allocate the device key for a file ID: the existing one, or a fresh one.
     fn alloc_key(&mut self, file_id: &str) -> (ModuleKey, bool) {
         match &mut self.device {
             Some(device) => device.alloc(file_id),
@@ -360,12 +298,13 @@ impl<P: ProgramCodecOf> PackageStore<P> {
         }
     }
 
-    /// The device file ID of an import path this store resolved: an on-disk
-    /// package's canonical path is its file ID, while a registered embedded
-    /// source is filed under `virtual:<name>` (see [`Self::register_native`]
-    /// and [`Self::register_compute`]) — the import path is that source's
-    /// display path, not its identity, so the device cannot verify the
-    /// dependency by it.
+    /// The device file ID of an import path this store resolved.
+    ///
+    /// # Invariant
+    ///
+    /// An on-disk package's canonical path is its file ID; a registered embedded
+    /// source is filed under `virtual:<name>`, because its import path is a
+    /// display path, not its identity.
     fn dependency_file_id(&self, path: &Path) -> String {
         let registered = path
             .file_name()
@@ -378,53 +317,41 @@ impl<P: ProgramCodecOf> PackageStore<P> {
     }
 }
 
-// The compute-bounds impl: load/compile/freeze/serialize, which compile the
-// `compute.lichen` native package and run the program's imports through the
-// shared store.  These need the compute value/operator coercions (and the
-// `GcdOp`/`TypeOperator`/`'static`/codec bundle) because they call
-// `compile_with_imports_at`, `compute_native_ops`, and the artifact codec.
+// The compute-bounds impl: load, compile, freeze and serialize.
 impl<P> PackageStore<P>
 where
     P: LangProgramShape,
     P::Value: ValueType + From<lichen_compute::ComputeValue> + 'static,
     P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
-    /// Load (or fetch from cache) the package at `path`, resolving its own
-    /// `@import` directives first: each dependency loads (recursively)
-    /// before this package compiles, so its refs are absolute from birth
-    /// and the freeze below sees their keys already registered.
+    /// Load (or cache-fetch) the package at `path`, resolving its imports first.
+    ///
+    /// # Invariant
+    ///
+    /// Each dependency loads recursively before this package compiles, so its
+    /// refs are absolute from birth and the freeze sees their keys registered.
     pub fn load_package(&mut self, path: &Path) -> Result<PackageHandle, Vec<Diag<P>>> {
-        // A registered native virtual package (`compute.lichen`, `std.lichen`,
-        // …): served from the in-memory registry, never a disk file.  A host
-        // that registered one (the package-manager plug: a plugin's embedded
-        // source compiled against its private native registry) is served here
-        // by its file name.
+        // A registered native virtual package: served by its file name, no disk file.
         if let Some(file_name) = path.file_name()
             && let Some(handle) = self.native.get(Path::new(file_name))
         {
             return Ok(handle.clone());
         }
-        // The `lichen-compute` native package: served from a registered
-        // module, not a disk file.  It self-registers on first import.
+        // The `lichen-compute` native package self-registers on first import.
         if path.file_name().is_some_and(|n| n == "compute.lichen") {
             let handle = self
                 .register_compute()
                 .map_err(|e| vec![Diag::unattributed(Stage::Preprocess, e)])?;
             return Ok(handle);
         }
-        // The built-in `core` module — the prelude.  Served from a registered
-        // module too, and self-registering the same way, so the implicit prelude
-        // import and an explicit `import "core"` are one code path.
+        // The built-in `core` module, self-registering the same way.
         if path.file_name().is_some_and(|n| n == CORE_PATH) {
             let handle = self
                 .register_core()
                 .map_err(|e| vec![Diag::unattributed(Stage::Preprocess, e)])?;
             return Ok(handle);
         }
-        // Only `.lichen` files are packages.  Reject any other extension up
-        // front so the cache invariant holds by construction — an artifact's
-        // file ID is always a `.lichen` path (or a `virtual:` path for an
-        // embedded source), which is exactly what the `gc` "clean" rule keeps.
+        // Only `.lichen` files are packages; any other extension is rejected.
         if path.extension().is_none_or(|ext| ext != "lichen") {
             return Err(vec![Diag::unattributed(
                 Stage::Preprocess,
@@ -463,19 +390,15 @@ where
         Ok(handle)
     }
 
-    /// Register the `lichen-compute` native package: compile its embedded
-    /// wrapper source into a frozen module, file it in the shared registry,
-    /// and remember the handle so `compute.lichen` imports are served from
-    /// here (no disk file).  The wrapper is compiled against the plugin's
-    /// *private* native registry — the only compilation that resolves its
-    /// `$jit`/`$launch` calls.  Its frozen module carries runtime-only
-    /// `Kernel` values (see `plugin-taxonomy.md`), which the artifact format
-    /// deliberately cannot serialize, so it is always compiled fresh in
-    /// memory rather than cached on the device.
+    /// Register the `lichen-compute` native package from its embedded wrapper.
+    ///
+    /// # Invariant
+    ///
+    /// It is compiled against the plugin's private native registry and always
+    /// fresh in memory: its `Kernel` values are runtime-only, so the artifact
+    /// format cannot serialize it.
     fn register_compute(&mut self) -> Result<PackageHandle, String> {
-        // Reuse an already-registered module, like [`Self::register_core`]: a
-        // host that builds a store per run over one registry must not freeze the
-        // same content twice.
+        // Reuse an already-registered module, so one registry holds it once.
         if let Some(handle) = self.registered_builtin(COMPUTE_PATH) {
             self.native
                 .insert(PathBuf::from(COMPUTE_PATH), handle.clone());
@@ -553,10 +476,7 @@ where
         Ok(handle)
     }
 
-    /// The path a built-in module's source is exposed at: a materialized copy
-    /// under the cache root, so the file a message names and an editor opens
-    /// actually exists.  An in-memory store has no root to write under, so the
-    /// built-in's own name is the path.
+    /// The path a built-in module's source is exposed at.
     fn builtin_path(&self, name: &str) -> PathBuf {
         match &self.cache_dir {
             Some(root) => root.join("builtin").join(name),
@@ -564,10 +484,12 @@ where
         }
     }
 
-    /// Materialize a built-in module's source under the cache root, returning the
-    /// path it is exposed at.  Rewritten only when the bytes differ, and a no-op
-    /// without a cache root (the store's writes never fail a compile — see
-    /// `home.rs`).
+    /// Materialize a built-in's source under the cache root, returning its path.
+    ///
+    /// # Invariant
+    ///
+    /// Rewritten only when the bytes differ, and a no-op without a cache root:
+    /// the store's writes never fail a compile.
     fn materialize_builtin(&self, name: &str, source: &str) -> PathBuf {
         let path = self.builtin_path(name);
         if self.cache_dir.is_none() {
@@ -582,10 +504,7 @@ where
         path
     }
 
-    /// The **source record** of a built-in the store just froze: its file, and
-    /// the position of every frozen node — what turns a [`StaticNodeId`] a
-    /// failure names into a line the user can open
-    /// (`docs/notes/core-prelude.md`).
+    /// The source record of a built-in the store just froze: its file and node spans.
     fn builtin_source(
         &self,
         name: &str,
@@ -609,11 +528,7 @@ where
         }
     }
 
-    /// A built-in module's **source record**, if this registry holds one — the
-    /// file the module's source is exposed at and the position of each frozen
-    /// node.  A failure cloned out of the module is attributed through it
-    /// (`docs/notes/core-prelude.md`); a module with no kept source (an ordinary
-    /// imported package) has none.
+    /// A built-in module's source record, if this registry holds one.
     pub fn package_source(&self, key: ModuleKey) -> Option<PackageSource> {
         let registry = self
             .registry
@@ -624,10 +539,12 @@ where
             .and_then(|package| package.meta.source.clone())
     }
 
-    /// A built-in module this registry already holds, as a handle — the reuse
-    /// path for a host that builds a store per run over one shared registry (see
-    /// [`Self::register_core`]).  The recorded meta carries what a handle needs:
-    /// the exported pair and the directly-exposed names.
+    /// A built-in module this registry already holds, as a handle.
+    ///
+    /// # Invariant
+    ///
+    /// The recorded meta carries what a handle needs: the exported pair and the
+    /// directly-exposed names.
     fn registered_builtin(&mut self, path: &str) -> Option<PackageHandle> {
         let (key, _is_new) = self.alloc_key(&persist::virtual_file_id(path));
         let registry = self
@@ -644,26 +561,16 @@ where
         })
     }
 
-    /// Register the built-in **`core`** module: compile its embedded source into
-    /// a frozen module, file it in the shared registry, and remember the handle
-    /// so `core.lichen` is served from here (no disk file).  Unlike
-    /// [`Self::register_compute`], `core` calls no native operator: it is
-    /// ordinary lichen, so it compiles against the **empty** native registry.
+    /// Register the built-in `core` module from its embedded source.
     ///
-    /// Its `direct` list is what makes it a *prelude* rather than a package:
-    /// every name it binds at the top level is bound as a base-scope **name**
-    /// ([`crate::preprocess::ResolvedImport`]'s `direct`), the mechanism the
-    /// import path already carries for a package that exposes names alongside its
-    /// module value.  A record's *value* holds its fields in definition order, so
-    /// the names (read from the source) pair with the frozen field nodes
-    /// positionally.
+    /// # Invariant
+    ///
+    /// Its `direct` list is what makes it a prelude rather than a package: every
+    /// top-level name it binds becomes a base-scope name, and the record value
+    /// holds its fields in definition order, so the source-order names pair with
+    /// the frozen field nodes positionally.
     fn register_core(&mut self) -> Result<PackageHandle, String> {
-        // **Reuse** when this registry already holds the module.  A host may build
-        // a store per run over one shared registry — the editor's worker does
-        // exactly that — and recompiling would freeze the same content under the
-        // same key, which the registry refuses, one key naming one artifact.  The
-        // recorded meta carries what a handle needs, so the later store adopts the
-        // earlier one's module.
+        // Reuse when the registry already holds the module: one key, one artifact.
         if let Some(handle) = self.registered_builtin(CORE_PATH) {
             self.native.insert(PathBuf::from(CORE_PATH), handle.clone());
             return Ok(handle);
@@ -695,16 +602,13 @@ where
                 .join("\n"));
         }
         let build = report.build.unwrap();
-        // The names' pairs and the nodes' positions are read from the checked
-        // build, before the module moves into the freeze (`core_terms`,
-        // `located_nodes`).
+        // Read the names' pairs and the nodes' positions before the freeze.
         let terms = core_terms(&build)?;
         let located = located_nodes(&build, report.span_index.as_ref());
         let mut module = build.module;
         module.evaluate_node_deep(build.root_val, None);
         module.evaluate_node_deep(build.root_ty, None);
-        // The module imports nothing of its own, so its identity is its source
-        // hash alone.  The prelude it *is* is not a dependency of the artifact.
+        // Its identity is its source hash alone; it imports nothing of its own.
         let hash = persist::artifact_hash(persist::sha256(source.as_bytes()), &[]);
         let (key, _is_new) = self.alloc_key(&persist::virtual_file_id(CORE_PATH));
         let freeze = self
@@ -736,28 +640,22 @@ where
             direct,
         };
         self.native.insert(PathBuf::from(CORE_PATH), handle.clone());
-        // **Not counted** in [`Self::compiled`].  That counter observes the
-        // packages a *program* asked for (an explicit `import`, a `depend`), which
-        // is what the cache and identity tests measure; the prelude is the
-        // language compiling itself, and every store pays it exactly once.
+        // Not counted in `compiled`: the prelude is the language compiling itself.
         Ok(handle)
     }
 
-    /// The **prelude import**: the built-in `core` module, bound as the bare
-    /// names it exports.  Every source a host compiles is seeded with it (see
-    /// [`crate::preprocess::preprocess`]), so the operator contract — `Num`,
-    /// `in_num`, `add`, … — is in scope without an import.  A later binder of the
-    /// same name wins, which is what makes the prelude *shadowable* rather than
-    /// reserved.
+    /// The prelude import: the built-in `core` module, bound as its bare names.
+    ///
+    /// # Invariant
+    ///
+    /// A later binder of the same name wins, which is what makes the prelude
+    /// shadowable rather than reserved.
     pub fn prelude_import(&mut self) -> Result<ResolvedImport, Vec<Diag<P>>> {
         let handle = self.load_package(Path::new(CORE_PATH))?;
         Ok(ResolvedImport {
-            // The module is also reachable as `core` — the same handle serves an
-            // explicit `import "core"` — seeded first, so a program's own binder
-            // of that name shadows it.
+            // The module is also reachable as `core`, seeded first so it can be shadowed.
             name: "core".to_string(),
-            // A seeded import has no source position — the resolver records the
-            // span of the directive it came from, and this one came from none.
+            // A seeded import has no source position: no directive produced it.
             span: (1, 1),
             export: handle.export,
             path: handle.path,
@@ -765,9 +663,7 @@ where
         })
     }
 
-    /// The load path behind the cache: incremental verification first, then
-    /// compile.  Only reached through [`Self::load_package`], which owns the
-    /// cache and the loading stack.
+    /// The load path behind the cache: incremental verification first, then compile.
     fn load_package_inner(&mut self, canonical: &Path) -> Result<PackageHandle, Vec<Diag<P>>> {
         let file_id = canonical.to_string_lossy().into_owned();
         let source = std::fs::read_to_string(canonical).map_err(|e| {
@@ -793,11 +689,12 @@ where
         self.build_package(canonical, source)
     }
 
-    /// Reuse an already-registered artifact: ensure its dependencies are
-    /// loaded, then serve the resident module, or load the artifact from
-    /// the device store when this process has not loaded it yet.  Returns
-    /// `Ok(None)` when the artifact cannot be loaded from disk (missing or
-    /// corrupt) — the caller recompiles.
+    /// Reuse an already-registered artifact, or load it from the device store.
+    ///
+    /// # Invariant
+    ///
+    /// `Ok(None)` means the artifact cannot be loaded from disk (missing or
+    /// corrupt), and the caller recompiles.
     fn try_reuse(
         &mut self,
         canonical: &Path,
@@ -807,9 +704,7 @@ where
         deps: &[(String, ModuleKey)],
     ) -> Result<Option<PackageHandle>, Vec<Diag<P>>> {
         for (dep_file_id, _) in deps {
-            // A recorded embedded dependency is filed as a `virtual:<name>`
-            // file ID; the store serves it by the name it registered (see
-            // [`Self::dependency_file_id`]).
+            // A recorded embedded dependency is filed as a `virtual:<name>` id.
             let name = persist::virtual_name(dep_file_id).unwrap_or(dep_file_id.as_str());
             self.load_package(Path::new(name))?;
         }
@@ -881,9 +776,7 @@ where
         }))
     }
 
-    /// Read, resolve, compile, and freeze one package, serializing it into
-    /// the device cache.  Only reached through [`Self::load_package`], which
-    /// owns the cache and the loading stack; the source is already read.
+    /// Read, resolve, compile and freeze one package, serializing it to the cache.
     fn build_package(
         &mut self,
         canonical: &Path,
@@ -898,14 +791,7 @@ where
             return Err(std::mem::take(&mut diags));
         }
 
-        // The artifact identity: the raw source hash, then each dependency's
-        // own identity.  Transitive by construction — a dependency's identity
-        // is the identity it was built as, so a change anywhere in the import
-        // closure changes this one, and the frozen artifact this key writes
-        // into its header stops matching the one a later verification computes.
-        //
-        // The recorded dependency identity is the file ID, not the import's
-        // display path (they differ for an embedded source).
+        // The artifact identity: the source hash, then each dependency's own.
         let deps: Vec<(String, ModuleKey)> = preprocessed
             .imports
             .iter()
@@ -913,13 +799,10 @@ where
             .collect();
         let source_hash = persist::sha256(source.as_bytes());
         let hash = self.artifact_identity(source_hash, &deps);
-        // A file ID is compiled once and overwritten: the key is stable per
-        // file, so recompiling a changed file reuses the same slot.
+        // A file ID is compiled once and overwritten: its key is stable.
         let (key, _is_new) = self.alloc_key(&file_id);
 
-        // Compile against the shared registry so the import leaves resolve
-        // in place; the module then carries the dependencies' absolute refs
-        // into its freeze below.
+        // Compile against the shared registry so the import refs resolve in place.
         let line_starts = crate::lex::line_starts(&source);
         let report = crate::compile_with_imports_at::<P>(
             preprocessed.code,
@@ -939,11 +822,7 @@ where
         module.evaluate_node_deep(build.root_val, None);
         module.evaluate_node_deep(build.root_ty, None);
 
-        // The freeze **replaces** the slot: a file ID is compiled once and
-        // overwritten, so recompiling a changed file reuses the same key — and
-        // the store's registry is the caller's (a session's cells are filed in it,
-        // because their imports must resolve there), so the previous compile's
-        // artifact for this file is still resident when this one runs.
+        // The freeze replaces the slot: the registry may still hold the old artifact.
         let freeze = self
             .registry
             .write()
@@ -964,8 +843,7 @@ where
                 },
             );
 
-        // Serialize into the device cache under the file ID slot (overwritten
-        // on recompile), and record the source hash + dependency graph.
+        // Serialize into the device cache and record the source hash and deps.
         if let Some(device) = &mut self.device {
             let modules = {
                 let registry = self
@@ -978,17 +856,7 @@ where
                 }
                 modules
             };
-            // A codec refusal means this package has no artifact form, not that
-            // the package is wrong.  The shape is ordinary code: a package whose
-            // top level `$jit`s holds a live kernel, and a kernel is a
-            // process-local registry handle.  The program runs either way, so
-            // the answer is to leave the package **uncached** — the same
-            // degradation every other failure in this store takes — rather than
-            // to fail a compile that would have succeeded.
-            //
-            // The pending device entry `alloc_key` wrote stays unpublished, and
-            // an unpublished entry can never verify, so the refusal is
-            // permanent for this file rather than a one-off miss.
+            // A codec refusal leaves the package uncached rather than failing the build.
             if let Ok(bytes) = persist::serialize_artifact_with::<P, P::Codec>(
                 modules[&freeze.key].as_ref(),
                 &modules,
@@ -1009,14 +877,13 @@ where
         })
     }
 
-    /// The artifact identity this unit's source and recorded dependencies will
-    /// produce — the fold every side must agree on, or the cache misses on
-    /// every run instead of once (see [`persist::artifact_hash`]).
+    /// The artifact identity this unit's source and recorded dependencies produce.
     ///
-    /// A cache-backed store asks the device, because the device's record is
-    /// what a later verification recomputes from; an in-memory store has no
-    /// artifact to key and nothing to be consistent with across loads, so its
-    /// own registry answers.
+    /// # Invariant
+    ///
+    /// Every side must agree on the fold, or the cache misses on every run rather
+    /// than once; a cache-backed store asks the device, an in-memory store its own
+    /// registry.
     fn artifact_identity(&self, source_hash: Hash, deps: &[(String, ModuleKey)]) -> Hash {
         match &self.device {
             Some(device) => device.artifact_identity(source_hash, deps),
@@ -1027,9 +894,12 @@ where
         }
     }
 
-    /// The recorded identity of each dependency in an **in-memory** store: what
-    /// its module was frozen as.  A dependency this store has no record of
-    /// contributes the all-zero sentinel, which no real identity equals.
+    /// The recorded identity of each dependency in an in-memory store.
+    ///
+    /// # Invariant
+    ///
+    /// A dependency this store has no record of contributes the all-zero
+    /// sentinel, which no real identity equals.
     fn dependency_identities(&self, deps: &[(String, ModuleKey)]) -> Vec<(ModuleKey, Hash)> {
         let registry = self
             .registry
@@ -1053,12 +923,7 @@ where
         base: Option<&Path>,
         import_path: &str,
     ) -> Result<PackageHandle, Diag<P>> {
-        // A vendored dependency alias: `import "alias"` or `import "alias/rest"`
-        // resolves against the vendored directory registered under `alias`
-        // (see [`Self::register_vendored`]).  A bare `alias` names the
-        // dependency's entry package; `alias/rest` resolves `rest` relative to
-        // the vendored directory.  Only tried when the alias is registered and
-        // is not a file-like path (a leading segment ending in `.lichen`).
+        // A vendored alias resolves against its registered directory.
         if let Some((alias, rest)) = vendored_alias(import_path)
             && let Some(dir) = self.vendored.get(alias)
         {
@@ -1089,8 +954,11 @@ where
     }
 }
 
-/// The diagnostic a failed package load reports: the load's own first.  A
-/// failed build always carries at least one (see [`crate::build_report`]), so
+/// The diagnostic a failed package load reports: the load's own first.
+///
+/// # Invariant
+///
+/// A failed build always carries at least one (see [`crate::build_report`]), so
 /// this seam needs no fallback message of its own.
 fn first_diagnostic<P: lichen_lowlevel::Program>(mut diags: Vec<Diag<P>>) -> Diag<P> {
     diags
@@ -1099,34 +967,20 @@ fn first_diagnostic<P: lichen_lowlevel::Program>(mut diags: Vec<Diag<P>>) -> Dia
         .expect("a failed package load reports a diagnostic")
 }
 
-// The native-package registration impl: compile a plugin's embedded lichen
-// source against its private native-op registry and serve it as a virtual
-// package.  It needs only the bounds `compile_with_imports_at` requires — the
-// store's compute/`ComputeValue` leaves are NOT needed — so the package-manager
-// plug (register any native plugin source) stays plugin-agnostic.
+// The native-package registration impl: compile a plugin's embedded source.
 impl<P> PackageStore<P>
 where
     P: LangProgramShape,
     P::Value: ValueType + 'static,
     P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
-    /// Register a native virtual package: compile `source` (a plugin's
-    /// embedded lichen wrapper) against that plugin's *private* native-op
-    /// registry and serve it at `virtual_path` (its file name), so
-    /// `import "virtual_path"` resolves to it without a disk file.
+    /// Register a native virtual package: compile `source` against its own ops.
     ///
-    /// This is the package-manager plug: a host that pulls a native plugin
-    /// compiles the plugin's `WRAPPER_SOURCE` here and files it in the store's
-    /// native-package registry, exactly as `register_compute` does for
-    /// `lichen-compute` — but over a *caller-supplied* registry, so the plugin
-    /// stays program-generic and the caller names only the crate and its
-    /// program marker.
+    /// # Invariant
     ///
-    /// The embedded source is a complete package (no `---…---` block, no
-    /// imports), so it compiles directly against the registry rather than
-    /// through [`preprocess`](crate::preprocess::preprocess) — which is
-    /// compute-bounded and would force a non-compute host to carry
-    /// [`lichen_compute::ComputeValue`]/[`lichen_compute::ComputeOperator`].
+    /// The embedded source is a complete package (no block, no imports), so it
+    /// compiles directly against the registry rather than through the
+    /// compute-bounded preprocessor.
     pub fn register_native(
         &mut self,
         virtual_path: &str,
@@ -1157,9 +1011,7 @@ where
         module.evaluate_node_deep(build.root_val, None);
         module.evaluate_node_deep(build.root_ty, None);
 
-        // A registered native package is compiled from the source embedded in
-        // this binary and has no imports, so its identity is its own source
-        // hash alone.
+        // Embedded source with no imports: its identity is its own source hash.
         let hash = persist::artifact_hash(persist::sha256(source.as_bytes()), &[]);
         let (key, _is_new) = self.alloc_key(&persist::virtual_file_id(virtual_path));
         let freeze = self
@@ -1181,8 +1033,7 @@ where
                     ..Default::default()
                 },
             );
-        // File it under its file name so `load_package` serves it by the name
-        // an `import "name"` resolves to (the path's own file name).
+        // File it under its file name, so `import "name"` resolves to it.
         let name = Path::new(virtual_path)
             .file_name()
             .map(PathBuf::from)
@@ -1198,11 +1049,7 @@ where
         Ok(handle)
     }
 }
-/// The import-resolution seam for the preprocessor, implemented by the package
-/// store.  [`ImportResolver`] only knows the vocabulary-agnostic
-/// [`ResolvedPackage`] (export/path/direct); the store adapts its own
-/// `PackageHandle`/`Diag` to it, so the isolated preprocessor never names a
-/// program marker.
+/// The import-resolution seam the preprocessor consumes.
 impl<P> ImportResolver<StaticNodeId> for PackageStore<P>
 where
     P: LangProgramShape,

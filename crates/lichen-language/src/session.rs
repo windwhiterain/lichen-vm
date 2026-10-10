@@ -1,44 +1,10 @@
-//! The incremental [`BufferSession`]: an editable source buffer whose compile
-//! reuses the established AST→IR→check when only a frontend *error* changed,
-//! and whose `cache`d bindings are **retained cells** across a rebuild.
+//! The incremental [`BufferSession`]: an editable buffer with retained cells.
 //!
-//! The frontend absorbs every error at its own layer — a recovered parse error
-//! and an *unresolved name* both lower to the **same** inert [`ExprKind::ErrorBlock`]
-//! (see [`crate::compile`]), so the lowering is total and the checker sees
-//! stable, name-free effective content.  The session runs the resolver
-//! ([`crate::resolve`]) on every compile and tracks the **resolved content key**:
-//! a name-free serialization over the resolver's `BinderId`s (names encoded by
-//! the binding they resolve to, error blocks opaque, spans dropped).  An edit
-//! that only extends an unresolved name (the editor's typing case), rewrites an
-//! error block, or consistently renames a binding leaves the key unchanged and
-//! reuses the established [`IR`] + [`Build`] — only the fresh frontend/resolve
-//! diagnostics are re-derived.  This is the `T1` tier's user-facing behaviour:
-//! typing a new unfinished piece never re-derives the established program.
+//! # Invariant
 //!
-//! The reuse is key-addressed (a `content-key → build` cache), so it is sound
-//! for an arbitrary edit that leaves the resolved structure alone — not just an
-//! append.  A general edit that changes the resolved structure falls back to a
-//! full re-lower + re-check; the cells are the **finer cut** under that
-//! fallback: a marked binding the edit did not reach is lowered to a read of its
-//! frozen artifact instead of being compiled, and only the cells dirty
-//! propagation reaches are dropped (`crate::dirty`).
-//!
-//! # A caller's view
-//!
-//! A session over a **file** is not necessarily over a whole buffer: a real
-//! source begins with a `---…---` block whose `@import`s resolve through the
-//! package store, so a caller that runs the preprocessor itself (the language
-//! server — it owns the store, and the block's directive spans) compiles the
-//! text *after* the block.  [`BufferSession::set_view`] is how that caller hands
-//! the session the region, where it begins in the original file, the file's line
-//! starts, and the imports resolved for it, so every span the session produces
-//! is absolute in the file the user is editing.
-//!
-//! The session's buffer is the **code**, and the imports are seeded into the
-//! resolution ([`crate::resolve`]) — so a cell whose value reads an import
-//! freezes a closure that resolves through the same registry the import lives in
-//! ([`BufferSession::with_registry`], and the cell key space that keeps the two
-//! allocators apart).
+//! Reuse is key-addressed on the resolved content key, so it is sound for any
+//! edit that leaves the resolved structure alone; the cells are the finer cut
+//! under that gate. See `docs/notes/incremental-update.md` §6.
 
 use std::collections::HashSet;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -62,62 +28,43 @@ use lichen_highlevel::checker::Build;
 use lichen_highlevel::native::no_native_ops;
 use lichen_highlevel::program::{HighProgram, TypeOperator, ValueType};
 
-/// The result of a [`BufferSession::compile`]: the checked build (shared, so it
-/// is cheap to hold) plus every diagnostic, and the resolved content key the
-/// compile ran under.
+/// The result of a [`BufferSession::compile`]: the build, diagnostics, tokens and key.
 #[derive(Clone)]
 pub struct SessionReport<P: HighProgram>
 where
     P::Value: ValueType,
 {
-    /// The checked build — `Some` whenever the frontend resolved the program
-    /// (including a partially recovered parse) and the checker ran on it.
-    /// Shared, so reusing the session never requires rebuilding it.
+    /// The checked build, shared, so a reuse never rebuilds it.
+    ///
+    /// # Invariant
+    ///
+    /// `Some` whenever the frontend resolved the program — including a partially
+    /// recovered parse — and the checker ran on it.
     pub build: Option<Arc<Build<P>>>,
-    /// Lex + parse (always fresh) and the checker's rendered failures (from the
-    /// reused or freshly built [`Build`]).
+    /// Lex and parse diagnostics (always fresh) plus the checker's failures.
     pub diagnostics: Vec<Diag<P>>,
-    /// The token stream this report was derived from — every compile lexes (only
-    /// the region an edit touched is re-lexed), and a caller that reads tokens
-    /// (an editor's semantic tokens and offsets) reads them here rather than
-    /// lexing the same text again.  Positions are absolute in the original file.
+    /// The token stream this report derives from, absolute in the original file.
     pub tokens: Arc<Vec<lex::Token>>,
-    /// The **resolved** AST this report was derived from: binder ids written,
-    /// spans absolute in the original file.  Fresh on every compile — the parse
-    /// runs even when the build is reused — so it is the current text's AST, not
-    /// the cached build's.
+    /// The resolved AST this report derives from; fresh on every compile.
     pub program: Arc<Program>,
-    /// `ExprId → span` for [`Self::build`], in the original file's coordinates.
-    /// `None` only when no build was produced.  On a reuse this is the retained
-    /// index **moved** through the edit, so it describes the current text.
+    /// `ExprId` → span for [`Self::build`], in the original file's coordinates.
     pub span_index: Option<Arc<SpanIndex>>,
-    /// The resolved content key (a name-free serialization over the resolver's
-    /// `BinderId`s) this report was compiled under — equal across edits that
-    /// only change an error block, extend an unresolved name, or consistently
-    /// rename a binding.
+    /// The resolved content key this report was compiled under.
     pub key: Vec<u64>,
-    /// Whether the established build was reused because the resolved content key
-    /// was unchanged (`true`) rather than freshly re-lowered and re-checked.
+    /// Whether the established build was reused rather than re-lowered.
     pub reused: bool,
-    /// What this compile did to the retained cells.  Zero on the reuse path:
-    /// nothing was lowered at all, so no cell was read or frozen.
+    /// What this compile did to the retained cells; zero on the reuse path.
     pub cells: CellEvents,
 }
 
 /// What one compile did to the retained cells — the session's event surface.
-///
-/// Without it a caller cannot tell a rebuild that reused nine cells from one
-/// that reused none, and the mechanism would be silent.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CellEvents {
     /// Marked bindings read from a retained artifact instead of being compiled.
     pub reused: usize,
-    /// Cells this compile froze into the registry — a marked binding it compiled
-    /// and could solve.  A failed build freezes none, so this is read from the
-    /// store after the build rather than from what the lowering compiled.
+    /// Cells this compile froze into the registry, read back from the store.
     pub frozen: usize,
-    /// Cells dropped before the lowering: the edit reached them, or the program
-    /// no longer marks their position.
+    /// Cells dropped before the lowering: the edit reached them, or the mark is gone.
     pub dropped: usize,
 }
 
@@ -136,48 +83,35 @@ pub struct BufferSession<P: ProgramCodecOf>
 where
     P::Value: ValueType,
 {
-    /// The code compiled — the whole buffer, or the text after a stripped
-    /// `---…---` block ([`Self::set_view`]).  This is what an edit changes and what
-    /// the diff, the re-lex and the window splice are all over.
+    /// The code compiled: the whole buffer, or the text after a stripped block.
     source: String,
-    /// Where [`Self::source`] begins in the original file: `0` for a whole-file
-    /// buffer, the block's end for a view.
+    /// Where `source` begins in the original file: `0` for a whole-file buffer.
     base: u32,
-    /// The **original file's** line starts, for a view with a base offset (a
-    /// suffix's own line starts are not the file's).  Unused when `base` is zero,
-    /// where they are derived from the buffer.
+    /// The original file's line starts, for a view with a base offset.
     line_starts: Vec<usize>,
     /// The imports resolved for the view, seeded into every resolution.
     imports: Vec<ResolvedImport>,
-    /// The identity of this buffer **as a source** — what a cell recorded from it
-    /// belongs to.  Caller-named, never derived from content
-    /// ([`crate::cells::SourceId`]).
+    /// This buffer's identity as a source: caller-named, never derived from content.
     source_id: SourceId,
-    /// The retained cells of this buffer, and the registry their artifacts live
-    /// in.  The registry is the session's because a cell's artifact must outlive
-    /// the build that made it, exactly as a package's does for an import.
+    /// This buffer's retained cells, and the registry their artifacts live in.
+    ///
+    /// # Invariant
+    ///
+    /// The session owns the registry, because a cell's artifact must outlive the
+    /// build that made it.
     cells: CellStore,
     registry: Arc<RwLock<Registry<P>>>,
-    /// The artifacts of the cells this session dropped — its debt to the
-    /// registry, taken by [`BufferSession::take_unreachable`].  The session does
-    /// not evict them itself; see that method for why.
+    /// The artifacts of the dropped cells; [`Self::evict_unreachable`] pays the debt.
     unreachable: Vec<ModuleKey>,
     cache: Option<Cache<P>>,
-    /// The state the last compile ran under — the baseline the *next* edit is
-    /// diffed against and, for lexing, the token stream it resumes from.
+    /// The state the last compile ran under: the baseline the next edit is diffed against.
     last: Option<LastState>,
 }
 
-/// The snapshot of the buffer a compile ran under.  Diffing
-/// [`LastState::source`] against the current [`BufferSession::source`] yields
-/// the edit span, `lex::lex_resume` reuses [`LastState::tokens`] to re-lex only
-/// that span, and [`LastState::program`] is the AST the window splice re-parses
-/// into.
+/// The snapshot of the buffer a compile ran under.
 struct LastState {
     source: String,
-    /// The view this snapshot was taken under.  A view that moved makes every
-    /// token range and span in the snapshot stale, so neither the incremental lex
-    /// nor a reuse may read it.
+    /// The view this snapshot was taken under; a moved view makes it stale.
     base: u32,
     line_starts: Vec<usize>,
     tokens: Arc<Vec<lex::Token>>,
@@ -192,17 +126,15 @@ where
     key: Vec<u64>,
     /// The cached build, shared with any report that reused it.
     build: Option<Arc<Build<P>>>,
-    /// The checker's rendered diagnostics for that build — static across edits
-    /// that keep the resolved content (the fresh frontend diagnostics are
-    /// re-derived per call).
+    /// The checker's rendered diagnostics for the cached build.
     check_diagnostics: Vec<Diag<P>>,
-    /// The build's `ExprId → span` index, and the same positions as **byte
-    /// offsets** in the original file.
+    /// The build's `ExprId` → span index, and the same positions as byte offsets.
     ///
-    /// Both are kept because an edit moves bytes, not `(line, col)` pairs: the
-    /// offsets are what a reuse shifts, and the pair is what it returns.  They are
-    /// always the *latest* mapping, so a reuse that moves them writes both back —
-    /// otherwise the next reuse would shift an already-shifted position.
+    /// # Invariant
+    ///
+    /// Both are always the latest mapping: an edit moves bytes, not `(line, col)`
+    /// pairs, so a reuse that moves them writes both back, or the next reuse
+    /// would shift an already-shifted position.
     span_index: Option<Arc<SpanIndex>>,
     span_bytes: Vec<Option<u32>>,
 }
@@ -212,16 +144,14 @@ where
     P: HighProgram,
     P::Value: ValueType,
 {
-    /// The moved positions of a reuse: whether every retained position survives
-    /// the edit, and if so what it moves to.
+    /// The moved positions of a reuse: whether every retained position survives.
     ///
-    /// A position **inside** the replaced text `[a, b_old)` has no counterpart in
-    /// the new source — its bytes are gone — so a check diagnostic that points
-    /// there cannot be moved, and the caller must rebuild rather than point it
-    /// somewhere it does not mean.  A *span-index* entry inside the region is a
-    /// different matter: it can only be an error block's (a check diagnostic never
-    /// points into one, the lowering masks it), and such an entry becomes `None`
-    /// — "no position" is exactly what an inert node has.
+    /// # Invariant
+    ///
+    /// A position inside the replaced text has no counterpart in the new source,
+    /// so a check diagnostic that points there cannot be moved and the caller
+    /// rebuilds; a span-index entry inside the region becomes `None` (it can only
+    /// be an error block's, for which "no position" is already right).
     fn moved(
         &self,
         a: u32,
@@ -274,29 +204,28 @@ where
     P::Value: ValueType + 'static,
     P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
-    /// A new session over `source`, whose cells belong to the **empty** source
-    /// name — an unnamed buffer, which is the single-buffer case.
+    /// A new session over `source`, whose cells belong to the empty source name.
     pub fn new(source: impl Into<String>) -> Self {
         Self::with_source_id(source, "")
     }
 
-    /// A new session over `source`, whose cells belong to `source_id`: the
-    /// caller's name for the file (a path, a URI).  A cell's identity is its
-    /// occurrence path *plus* this name, so one store can hold several buffers
-    /// without confusing them, and nothing about it is derived from content.
+    /// A new session over `source`, whose cells belong to `source_id`.
+    ///
+    /// # Invariant
+    ///
+    /// A cell's identity is its occurrence path plus this name, and nothing about
+    /// it is derived from content, so one store can hold several buffers.
     pub fn with_source_id(source: impl Into<String>, source_id: impl Into<String>) -> Self {
         Self::with_registry(source, source_id, Arc::new(RwLock::new(Registry::new())))
     }
 
-    /// [`Self::with_source_id`] over a **caller-owned registry** — the one a
-    /// package store registered the imported packages in.
+    /// [`Self::with_source_id`] over a caller-owned registry, shared with imports.
+    ///
+    /// # Invariant
     ///
     /// A cell's artifact is frozen as a closure, and a closure that reads an
-    /// import names that import's module key; the registry it is filed in must
-    /// already hold the import, or the artifact would not resolve for the
-    /// importer that reads it ([`Registry::freeze_closure_mapped`] asserts
-    /// exactly that).  So a session that compiles a file with imports shares the
-    /// store's registry, and the cell keys live in their own space
+    /// import names that import's module key, so the registry it is filed in must
+    /// already hold the import; the cell keys live in their own space
     /// ([`crate::cells`]) so the two allocators cannot meet.
     pub fn with_registry(
         source: impl Into<String>,
@@ -317,8 +246,7 @@ where
         }
     }
 
-    /// The registry this session's cells are filed in — the handle a caller that
-    /// shares it (a package store, another session) holds.
+    /// The registry this session's cells are filed in.
     pub fn registry(&self) -> Arc<RwLock<Registry<P>>> {
         Arc::clone(&self.registry)
     }
@@ -333,29 +261,24 @@ where
         self.cells.len()
     }
 
-    /// How many artifacts the session dropped and has not managed to evict — its
-    /// outstanding debt to the registry ([`Self::evict_unreachable`]).
+    /// How many artifacts the session dropped and has not managed to evict.
     ///
-    /// A number that only grows is the leak §8 warns about: the caller is not
-    /// evicting, or is still holding a report that keeps a refusal in place.
+    /// # Invariant
+    ///
+    /// A number that only grows is the leak: the caller is not evicting, or is
+    /// still holding a report that keeps a refusal in place.
     pub fn pending_evictions(&self) -> usize {
         self.unreachable.len()
     }
 
-    /// Evict the artifacts of the cells this session dropped, and report how many
-    /// were freed.
+    /// Evict the artifacts of the dropped cells, reporting how many were freed.
     ///
-    /// **The caller's precondition, and it cannot be checked here:** a static ref is
-    /// a raw handle into an artifact's arena, and one survives in every
-    /// [`SessionReport`] the caller still holds — a `build` is an `Arc`, so the
-    /// session never sees the last clone die.  Call this only once those are
-    /// dropped.  What *is* checked is the other half: an artifact that a surviving
-    /// cell's artifact still references is refused ([`Eviction::StillReferenced`])
-    /// and kept for a later call, so a cell that read another cell is not a dangle.
+    /// # Invariant
     ///
-    /// Safe to call at any time and repeatedly; a refusal is retried on the next
-    /// call, once the artifact that referenced it is gone too.  Two artifacts that
-    /// reference each other are never freed — the honest answer for a cycle.
+    /// A static ref survives in every [`SessionReport`] the caller still holds, so
+    /// this is sound only once those are dropped; an artifact that a surviving
+    /// artifact still references is refused ([`Eviction::StillReferenced`]) and
+    /// retried later, so a cell that read another cell is not a dangle.
     pub fn evict_unreachable(&mut self) -> usize {
         let mut pending = std::mem::take(&mut self.unreachable);
         let mut registry = self
@@ -363,18 +286,14 @@ where
             .write()
             .unwrap_or_else(PoisonError::into_inner);
         let mut freed = 0;
-        // Repeated passes, because a key that is still referenced may be free once
-        // the artifact referencing it is gone — and that artifact may be in this
-        // same list, later in it.  A pass that frees nothing has reached the fixed
-        // point: what is left is referenced by something still filed.
+        // Repeated passes: a key still referenced may free once its referrer is gone.
         loop {
             let before = pending.len();
             let mut refused = Vec::new();
             for key in pending.drain(..) {
                 match registry.evict(key) {
                     Eviction::Freed => freed += 1,
-                    // Nothing filed under it: an earlier pass freed it, or it never
-                    // reached the registry.  Not a debt any more.
+                    // Nothing filed under it: an earlier pass freed it, so not a debt.
                     Eviction::NotRegistered => {}
                     Eviction::StillReferenced => refused.push(key),
                 }
@@ -424,21 +343,13 @@ where
         self.source.replace_range(range, text);
     }
 
-    /// Replace the whole buffer with `source` — what a caller that re-reads a
-    /// **file** has, rather than an edit range.
+    /// Replace the whole buffer with `source`, the file-diff entry point.
     ///
-    /// This is the file-diff entry point, and it is deliberately the same thing
-    /// the byte-level edits do: it only sets the buffer.  The edit itself is still
-    /// the session's to derive — the next [`Self::compile`] diffs this against the
-    /// last state — so a caller that re-reads a file gets the incremental lex, the
-    /// statement-window splice and the cell reuse without describing the change,
-    /// and a caller that has a range uses [`Self::replace`].  Both are the same
-    /// path from there on.
+    /// # Invariant
     ///
-    /// It sets the **whole-file** view: base `0` and no imports, because a whole
-    /// file's imports are the ones its own `---…---` block resolves — which is the
-    /// caller's stage, not the session's.  A caller that runs the preprocessor
-    /// itself uses [`Self::set_view`] instead.
+    /// It only sets the buffer: the edit is still derived by the next compile
+    /// diffing against the last state, and the cells are untouched, since
+    /// identity is a path rather than a position.
     pub fn set_source(&mut self, source: impl Into<String>) {
         self.source = source.into();
         self.base = 0;
@@ -446,28 +357,14 @@ where
         self.imports.clear();
     }
 
-    /// Point the session at a **caller's frontend view**: the code to compile,
-    /// where it begins in the original file, that file's line starts, and the
-    /// imports resolved for it.
+    /// Point the session at a caller's view: code, base, line starts, imports.
     ///
-    /// A real source begins with a `---…---` block whose `@import`s resolve through
-    /// the package store, so the caller that owns the store (the language server)
-    /// runs the preprocessor and compiles what follows it.  `code` is that text,
-    /// `base` is its byte offset in the original file, `line_starts` is the
-    /// **original file's** (a suffix's own are not the file's), and `imports` are
-    /// the block's resolved bindings — seeded into every resolution, so a name
-    /// that resolves to an import is not reported unresolved.
+    /// # Invariant
     ///
-    /// The session's buffer *is* the code, so an edit anywhere in it — including
-    /// the block's own text, which moves `base` — is diffed like any other.  A
-    /// view whose mapping moved drops the incremental snapshot (its token ranges
-    /// and spans are in the old coordinates) and re-parses whole; the cells are
-    /// untouched, since their identity is a path, not a position.
-    ///
-    /// This is the whole-buffer entry point for a caller with a view: the
-    /// byte-edit methods ([`Self::insert`], [`Self::replace`], …) keep the view
-    /// they were given and re-derive nothing, so a caller with a base offset feeds
-    /// the next buffer through `set_view` too.
+    /// A view whose mapping moved drops the incremental snapshot, because every
+    /// token range and span in it is in the old coordinates; the cells are
+    /// untouched, since identity is a path, not a position. See
+    /// `docs/notes/incremental-update.md` §6.2.
     pub fn set_view(
         &mut self,
         code: impl Into<String>,
@@ -489,60 +386,38 @@ where
             .unwrap_or_default()
     }
 
-    /// Compile and check the current buffer.
+    /// Compile and check the current buffer, reusing the cached build when the key holds.
     ///
-    /// Lexes and parses the source (to re-derive the frontend diagnostics and
-    /// the current resolved structure), runs the resolver (assigning `BinderId`s
-    /// and emitting the resolve diagnostics), computes the **resolved content
-    /// key**, and **reuses the cached build when it is unchanged** — so an edit
-    /// that only extends an unresolved name (or an error block, or a consistent
-    /// rename) never re-lowers or re-checks the established program.  A changed
-    /// key re-lowers and re-checks, then refreshes the cache.
+    /// # Invariant
     ///
-    /// When the previous compile left a [`LastState`] snapshot, lexing is
-    /// **incremental** (`lex::lex_resume` over the edit span) rather than a
-    /// whole-buffer re-lex, so a keystroke in a long buffer is `O(edit)` in the
-    /// regex work.  The result is identical to a full re-lex (`lex_resume` is
-    /// proven equal to [`lex::lex_with`] — see the lex tests); only the cost
-    /// changes.
+    /// Lexing resumes from the last snapshot over the edit span, so a keystroke is
+    /// `O(edit)` in the regex work; the result is identical to a full re-lex.
     pub fn compile(&mut self) -> SessionReport<P> {
-        // The line starts every span this compile produces is measured against:
-        // the **original file's**.  A whole-file buffer derives them from the
-        // buffer (the byte-edit methods mutate it directly); a view with a base
-        // offset carries them, because a suffix's line starts are not the file's.
+        // The line starts every span is measured against: the original file's.
         let line_starts = view_line_starts(&self.source, self.base, &self.line_starts);
 
-        // Whether the previous snapshot is in the same coordinate space.  A view
-        // that moved (an edited `---…---` block) leaves every token range and span in
-        // the snapshot describing the old file, so neither the incremental lex nor
-        // a reuse may read it — the cells are untouched either way, since a cell's
-        // identity is a path, not a position.
+        // Whether the previous snapshot is in the same coordinate space.
         let view_same = self.last.as_ref().is_some_and(|prev| {
             prev.base == self.base && (self.base == 0 || prev.line_starts == self.line_starts)
         });
 
-        // Whether a prior snapshot plus a changed source lets us re-derive only
-        // the touched region (both lex and parse become incremental); otherwise
-        // the whole buffer is re-lexed and re-parsed.
+        // The edit span, when a prior snapshot and a changed source allow it.
         let edit = self
             .last
             .as_ref()
             .filter(|prev| view_same && prev.source != self.source)
             .map(|prev| edit_span(&prev.source, &self.source));
-        // The same edit in the original file's coordinates: token ranges and spans
-        // are absolute, so the diff's code-relative span is what has to move.
+        // The same edit in the original file's absolute coordinates.
         let absolute_edit =
             edit.map(|(a, b, delta)| (a + self.base as usize, b + self.base as usize, delta));
-        // The line starts the snapshot's spans are in — needed to locate a
-        // retained position's byte before the edit moves it.
+        // The line starts the snapshot's spans are in.
         let previous_starts = self
             .last
             .as_ref()
             .filter(|_| view_same)
             .map(|prev| view_line_starts(&prev.source, prev.base, &prev.line_starts));
 
-        // Lex: resume from the snapshot's token stream over the edit span; on the
-        // first compile (or a reset without an edit) lex the whole buffer.
+        // Lex: resume from the snapshot over the edit span, else lex it all.
         let (tokens, lex_errors) = match (&self.last, absolute_edit) {
             (Some(prev), Some((a, b, _delta))) => {
                 let lexed = lex::lex_resume(
@@ -563,12 +438,7 @@ where
         };
         let mut diagnostics: Vec<Diag<P>> = lex_errors.into_iter().map(Diag::from_lex).collect();
 
-        // Parse: re-parse only the statement window the edit touched and splice
-        // it into the snapshot's program when that is safe; otherwise parse the
-        // whole buffer (the result is identical either way).  The window comes
-        // back in **both** index spaces — the statements the edit replaced in the
-        // snapshot's program and the statements it re-parsed in the fresh one —
-        // because dirty propagation runs over both (see `crate::dirty`).
+        // Parse the statement window the edit touched, else the whole buffer.
         let (mut program, errors, windows) = match (&self.last, absolute_edit) {
             (Some(prev), Some((a, b, delta))) => {
                 let previous_starts = previous_starts.as_deref().unwrap_or(&line_starts);
@@ -605,32 +475,14 @@ where
         };
         diagnostics.extend(errors.into_iter().map(Diag::from_parse));
 
-        // Resolve: the single resolution authority — assigns a `BinderId` to
-        // each binder, writes it into the AST's resolve fields, and emits the
-        // resolve diagnostics.  Then the resolved content key: a name-free,
-        // digest-free serialization over those `BinderId`s, which is what the
-        // lowering actually consumes.  The view's imports are the base scope, so a
-        // name that resolves to an import is not an unresolved name.
+        // Resolve, then compute the resolved content key.
         let resolved = crate::resolve::resolve(&mut program, &self.imports);
         let key = crate::resolve::content_key(&program);
         diagnostics.extend(resolved.diagnostics.iter().cloned().map(|d| d.retype()));
         let tokens = Arc::new(tokens);
         let program = Arc::new(program);
 
-        // Reuse: the resolved content is unchanged, so the established build is
-        // exactly right.  Only the (fresh, above) frontend/resolve diagnostics
-        // moved; the lowering and check are skipped entirely.  The store is left
-        // alone too: no cell is consulted when no lowering happens, and the
-        // build being reused *is* the one that was correct for this content — the
-        // reconciliation belongs to the next lowering, against the program it
-        // will lower.
-        //
-        // The retained positions must also *survive* the edit: a rendered
-        // diagnostic is a `(line, col)` pair, and the content key is span-free, so
-        // an edit that moves text without changing the resolved structure leaves
-        // the cached spans describing the old file.  They are moved through the
-        // edit here, and a position the edit replaced outright — which no honest
-        // mapping exists for — falls through to the rebuild below instead.
+        // Reuse: the resolved content is unchanged and the build is still right.
         if view_same
             && let Some(cache) = &self.cache
             && cache.key == key
@@ -691,12 +543,7 @@ where
             }
         }
 
-        // Rebuild: the cells first, because the lowering reads them.  The store
-        // is reconciled with the program about to be lowered — a cell the edit
-        // reached, or a position the program no longer marks, must not be read —
-        // and what that drops is the session's debt to the registry.  A full
-        // re-parse (or the first compile) has no window: the whole program is
-        // the dirty region, which is the honest answer.
+        // Rebuild: reconcile the cells with the program about to be lowered.
         let marked: HashSet<Path> = crate::compile::cached_bindings(&program)
             .into_values()
             .collect();
@@ -727,12 +574,7 @@ where
             .iter()
             .filter(|path| self.cells.reference(path).is_some())
             .count();
-        // Lower the already-resolved program (total) and check.  The session ran
-        // the resolver itself, so it lowers via `compile_resolved_with_cells`
-        // rather than `compile_with_imports` (which would resolve again) — with
-        // the cells, so a clean one becomes a static read of its frozen artifact
-        // and the marked bindings that *were* compiled come back to be frozen
-        // once the build is solved.
+        // Lower the already-resolved program with the cells, then check.
         let (ir, span_index, compiled_cells) = crate::compile::compile_resolved_with_cells(
             &program,
             &resolved.import_binders,
@@ -755,8 +597,7 @@ where
             .filter(|d| d.stage == Stage::Check)
             .cloned()
             .collect();
-        // The build's span index, and the same positions as byte offsets: an edit
-        // moves bytes, so the offsets are what a later reuse shifts (see `Cache`).
+        // The build's span index, and the same positions as byte offsets.
         let span_index = report.span_index.take();
         let span_bytes: Vec<Option<u32>> = span_index
             .as_ref()
@@ -793,8 +634,7 @@ where
             reused: false,
             cells: CellEvents {
                 reused: reused_cells,
-                // The store now holds exactly the cells that were reused plus the
-                // ones this build froze, and both are subsets of `marked`.
+                // Frozen: the store's cells minus the ones that were reused.
                 frozen: self.cells.len().saturating_sub(reused_cells),
                 dropped,
             },
@@ -802,19 +642,18 @@ where
     }
 }
 
-/// The logical statement count of a program: its statements plus its tail
-/// expression when it has one (the index space [`Program::stmt_ranges`] uses).
+/// The logical statement count of a program: its statements plus its tail.
 fn logical_statements(program: &Program) -> usize {
     program.statements.len() + usize::from(program.expr.is_some())
 }
 
 /// The line starts a view's spans are measured against: the original file's.
 ///
-/// A whole-file view (`base == 0`) *is* the file, so its line starts are the
-/// buffer's and are derived here — that is also what keeps the byte-edit methods
-/// (`insert`/`replace`/…), which mutate the buffer directly, in step with the
-/// model.  A view with a base offset carries the file's, because a suffix's own
-/// line starts are not the file's.
+/// # Invariant
+///
+/// A whole-file view (`base == 0`) derives them from the buffer, so the byte-edit
+/// methods stay in step; a view with a base offset carries the file's, because a
+/// suffix's own line starts are not the file's.
 fn view_line_starts(code: &str, base: u32, line_starts: &[usize]) -> Vec<usize> {
     if base == 0 {
         lex::line_starts(code)
@@ -823,15 +662,13 @@ fn view_line_starts(code: &str, base: u32, line_starts: &[usize]) -> Vec<usize> 
     }
 }
 
-/// The minimal byte span `[a, b)` of `new` that differs from `old`, plus the
-/// length delta (`new.len() - old.len()`).
+/// The minimal byte span `[a, b)` of `new` that differs from `old`, plus the delta.
 ///
-/// `a` is the common-prefix length — a byte position valid in *both* sources,
-/// because every byte before it is identical.  `b` is `new.len()` minus the
-/// common-suffix length, i.e. the byte position in `new` where the unchanged
-/// tail begins.  Together they describe the smallest region an edit changed, in
-/// the coordinates `lex::lex_resume` expects (`a` against the old token stream,
-/// `b` against the new source, with the delta converting between them).
+/// # Invariant
+///
+/// `a` is a byte position valid in both sources (every byte before it is
+/// identical) and `b` is the position in `new` where the unchanged tail begins,
+/// which is the coordinate pair `lex::lex_resume` expects.
 fn edit_span(old: &str, new: &str) -> (usize, usize, isize) {
     let delta = new.len() as isize - old.len() as isize;
     let ob = old.as_bytes();
@@ -848,29 +685,20 @@ fn edit_span(old: &str, new: &str) -> (usize, usize, isize) {
     (a, nb.len() - suf, delta)
 }
 
-/// The full frontend for `tokens`: `parse` the whole stream (the fallback used
-/// when a window cannot be spliced incrementally).
+/// Parse the whole stream: the fallback when no window can be spliced.
 fn full_parse(tokens: &[lex::Token]) -> (Program, Vec<ParseDiag>) {
     let parsed = parse::parse(tokens);
     (parsed.program, parsed.errors)
 }
 
-/// Re-parse the statement window an edit touched and splice it into the previous
-/// program, returning the fresh frontend `(program, parse_errors)`, or `None`
-/// when the edit cannot be handled incrementally (the caller re-parses the whole
-/// buffer instead).
+/// Re-parse the statement window an edit touched and splice it into `old_program`.
 ///
-/// `old_program` is the program the previous compile ran under, `old_tokens` its
-/// token stream, and `new_tokens` the (already incrementally re-lexed) stream
-/// for the current source; `a`,`b` are the edit span in the new source and
-/// `delta = new.len() - old.len()`.
+/// # Invariant
 ///
-/// The window is chosen conservatively and the result must be exactly what a
-/// whole-buffer parse of `new_tokens` produces.  If any invariant cannot be
-/// confirmed — a degenerate program, an error block lying outside the window
-/// (whose diagnostic would be dropped), a trailing binding, a token shift that
-/// goes negative — `None` is returned and the caller falls back, so correctness
-/// never depends on the borderline cases.
+/// The result is exactly what a whole-buffer parse of `new_tokens` produces. Any
+/// case that cannot be confirmed — a degenerate program, an error block outside
+/// the window, a trailing binding, a negative token shift — returns `None` and
+/// the caller re-parses the whole buffer.
 fn splice_program(
     old_tokens: &[lex::Token],
     old_program: &Program,
@@ -881,8 +709,7 @@ fn splice_program(
     b: usize,
     delta: isize,
 ) -> Option<SpliceOut> {
-    // Number of logical statements = `statements`, plus the tail expression
-    // when there is one (a record program has no tail).
+    // The logical statement count: statements plus the tail when there is one.
     let old_n = old_program.statements.len() + usize::from(old_program.expr.is_some());
     if old_program.stmt_ranges.len() != old_n || old_n == 0 {
         return None;
@@ -906,9 +733,7 @@ fn splice_program(
         Some((sb, eb))
     };
 
-    // First/last logical statements whose body overlaps the edit; when none do
-    // (a separator-only edit or an append at/after the last statement), the
-    // window is the tail from the last statement before the edit to the end.
+    // First/last logical statements whose body overlaps the edit.
     let mut lo = old_n;
     let mut hi = 0usize;
     for i in 0..old_n {
@@ -921,18 +746,7 @@ fn splice_program(
         }
     }
     if lo > hi {
-        // No statement body overlaps: the edit sits in a separator, or appends
-        // at/after the last statement.  What the edit produced lands between the
-        // statement ending at/before it and the one after, so the window is those
-        // **two** — not, as it once was, everything from there to the end of the
-        // buffer (measured: an append to a line re-parsed and re-dirtied the whole
-        // tail, 82-90% of a rebuild).
-        //
-        // It must be two rather than one: an insertion at the boundary is inside
-        // the byte range spanning them, and the region parse is byte-bounded, so
-        // every statement the edit inserted there is re-parsed as well.  An
-        // insertion at the very end of the buffer has no statement after it, so
-        // `hi` clamps to the end — which is also the `prev == None` case's floor.
+        // No body overlaps: the window is the two statements around the edit.
         let prev = (0..old_n)
             .rev()
             .find(|&i| byte_range(i).is_some_and(|(_, eb)| eb <= e_start));
@@ -948,9 +762,7 @@ fn splice_program(
     let win_ob = old_tokens[old_tl].range.0 as isize;
     let win_eb = old_tokens[old_th - 1].range.1 as isize;
 
-    // An error block outside the window means a parse diagnostic for an
-    // untouched statement would be dropped by the splice — fall back so no
-    // diagnostic is lost.
+    // An error block outside the window would lose its diagnostic: fall back.
     for block in &old_program.error_blocks {
         let (b0, b1) = (block.range.0 as isize, block.range.1 as isize);
         if b1 > win_ob && b0 < win_eb {
@@ -959,26 +771,11 @@ fn splice_program(
         return None;
     }
 
-    // The window's byte range in the new source.  Its **start** is at or before
-    // the edit start (the window's first statement is one the edit reached, and a
-    // statement starting *inside* the replaced region was replaced, so it clamps
-    // to the edit start); its **end** is where the untouched suffix begins, which
-    // is at or after the edit end, because a statement overlapping the edit is in
-    // the window and the first one after it therefore cannot be.
-    //
-    // Projecting the end from the *suffix* rather than from the window's own last
-    // token is what keeps an edit that deletes whole statements from cutting the
-    // window through the statement that follows: the deleted text includes the
-    // separator between them, so the window's last token ends *inside* the
-    // replaced region and projecting it would leave half a statement in the
-    // window — and a window that reaches past the edit would drop the new
-    // statements entirely.
+    // The window's byte range in the new source: clamp the start, project the end.
     let suffix_ob = if hi < old_n {
         old_tokens[old_program.stmt_ranges[hi].0].range.0 as isize
     } else {
-        // The window reaches the end, so the "suffix" is the end of the old
-        // source and the window's new end is the end of the new one — which is
-        // what puts an append inside the window.
+        // The window reaches the end, so its new end is the new source's end.
         old_tokens
             .last()
             .map_or(win_eb, |token| token.range.1 as isize)
@@ -986,11 +783,7 @@ fn splice_program(
     let new_ob = win_ob.min(e_start);
     let new_eb = suffix_ob + delta;
 
-    // New token index range [ns, ne) covering the window: from the first token
-    // the edit reaches to the suffix's first **statement** token.  A separator at
-    // the boundary is not a statement, so it is skipped — and the index `ne`
-    // lands on is exactly the token the suffix shift below is measured against,
-    // in both the old and the new stream.
+    // New token range covering the window, from the first token the edit reaches.
     let ns = new_tokens
         .iter()
         .position(|t| t.range.1 as isize > new_ob)
@@ -1007,32 +800,20 @@ fn splice_program(
         return None;
     }
     let ns = ns.min(eof);
-    // An **empty** window is a legal splice: the edit deleted statements outright,
-    // so the prefix and the suffix meet with nothing between them.  (`ns > ne`
-    // cannot arise from the two scans above; the clamp only makes the empty case
-    // explicit.)
+    // An empty window is legal: the prefix and suffix meet with nothing between.
     let ne = ne.clamp(ns, eof);
     if ns > ne {
         return None;
     }
 
-    // An empty window is a legal splice — the edit deleted statements outright, so
-    // the prefix and the suffix meet with nothing between them — but it is not a
-    // *parse*: the region parser requires at least one statement, so asking it for
-    // an empty region reports "found the end of the program".
+    // ... but it is not a parse: the region parser needs one statement at least.
     let (win_stmts, win_ranges, win_errors) = if ns == ne {
         (Vec::new(), Vec::new(), Vec::new())
     } else {
         crate::parse::parse_statement_region_traced(new_tokens, ns, ne)
     };
 
-    // Spliced logical statements: the unchanged prefix, the freshly re-parsed
-    // window, then the unchanged suffix.  The suffix's *content* is untouched
-    // but its token indices shift by `dk`, since the window's token count may
-    // have changed (an insertion/removal before it).  `dk` is measured from the
-    // suffix's **own** first token in each stream, which is the same token on
-    // both sides — not from the window's end, which the edit may have deleted
-    // along with the separator that used to sit there.
+    // Spliced statements: unchanged prefix, re-parsed window, shifted suffix.
     let dk = if hi < old_n {
         ne as isize - old_program.stmt_ranges[hi].0 as isize
     } else {
@@ -1048,20 +829,14 @@ fn splice_program(
         let mut statement = if i < old_program.statements.len() {
             old_program.statements[i].clone()
         } else {
-            // The tail expression (only in a tail program) — represented here
-            // as a bare-expression block statement so the pop below can pick
-            // it out like the whole-program parser does.
+            // The tail expression, as a bare-expression block statement.
             debug_assert!(old_program.expr.is_some());
             BlockStmt {
                 stmt: Stmt::Expr(old_program.expr.clone().unwrap()),
                 public: false,
             }
         };
-        // A clone's bytes are unchanged but its *position* is not: an edit that
-        // adds or removes a line moves every statement after it, and a span is a
-        // `(line, col)` pair rather than a byte offset.  Without this shift a
-        // diagnostic inside a cloned statement renders on the wrong line
-        // (`crate::spans`).
+        // A clone's position moved: shift its spans by the edit's delta.
         crate::spans::shift_stmt(&mut statement.stmt, old_starts, new_starts, delta);
         stmts.push(statement);
         let (r0, r1) = old_program.stmt_ranges[i];
@@ -1073,10 +848,7 @@ fn splice_program(
         ranges.push((s0 as usize, s1 as usize));
     }
 
-    // Pop the final logical statement as the program's value, mirroring the
-    // whole-program parser: a trailing bare expression is the tail (the
-    // program's value); a trailing binding leaves no tail — the program is a
-    // record program (a module), so every statement is a field.
+    // Pop the final logical statement as the program's value or tail.
     let last_stmt = stmts.pop()?;
     let last_range = ranges.pop()?;
     let (statements, expr) = match last_stmt.stmt {
@@ -1103,11 +875,13 @@ fn splice_program(
     })
 }
 
-/// The outcome of a window splice: the fresh frontend plus the window extent in
-/// **both** index spaces — the statements the edit replaced in the snapshot's
-/// program (`lo..old_hi`) and the statements it re-parsed in the new one
-/// (`lo..hi`).  The two differ whenever the edit added or removed statements,
-/// which is exactly what dirty propagation has to see.
+/// The outcome of a window splice: the fresh frontend plus the window extent.
+///
+/// # Invariant
+///
+/// The extent is reported in both index spaces (`lo..old_hi` in the snapshot's
+/// program, `lo..hi` in the new one), which differ whenever the edit added or
+/// removed statements.
 struct SpliceOut {
     program: Program,
     errors: Vec<ParseDiag>,

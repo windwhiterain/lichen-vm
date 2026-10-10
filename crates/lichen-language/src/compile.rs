@@ -1,44 +1,11 @@
-//! AST → IR compilation with name resolution.
+//! AST → IR compilation with name resolution; node allocators in `alloc`.
 //!
-//! The node allocators live in the sibling module `alloc`.
+//! # Invariant
 //!
-//! A use of a name *is* the binder's own `ExprId`: compiling `x => e`
-//! allocates the `Parameter` expression first (span = the name's), pushes `x`
-//! on a scope stack, compiles `e`, then wraps `Function { parameter, return }`.
-//! A statement binding `a = e` is the same resolution without a lambda: a
-//! block-wide binding reserves a `Placeholder` id, enters the name, compiles
-//! the value, then fills the placeholder with the value's kind — so a value
-//! may reference its own name (and any other binding of the block, in either
-//! direction), and the IR becomes a cycle where it does.  A use of the name
-//! is the value's own id; the IR is a graph and the binding is pure sharing
-//! (no `let`-as-application desugaring).  A restrictive binding `let a = e`
-//! compiles the value *before* entering the name, so the name is visible only
-//! to later statements — the sequential, non-recursive case.  The IR
-//! therefore carries no name strings, and the checker's scope stack is keyed
-//! by the same ids.
-//! A block `{ …; e }` is a program-shaped expression: its statements share
-//! the same way, its scope frames are popped at the `}`, and it compiles to
-//! its final expression's own node.
-//!
-//! Every statement — a binding or a bare expression — is compiled, and the
-//! statement list is wrapped in the root as `Index(Tuple([stmt₁, …, stmtₙ,
-//! final]), n)`: the checker compiles and runs every statement (the runtime
-//! *is* the typechecker), while the program's value stays the final
-//! expression.  The wrap is dropped when it would select the final
-//! expression's own node (`a = 1; a` stays the `1` node), preserving the
-//! sharing.
-//!
-//! An annotated parameter `x : T => e` desugars to `(x => e) : (T -> _)` —
-//! the annotation and arrow are ordinary expressions, so no new IR form is
-//! needed.  A conditional `if c then t else e` desugars to the lazy branch
-//! `[e, t][c]` — the existing `Index` form, so no new IR form either.  A
-//! binary operation `a op b` compiles to `ExprKind::BinOp`.  A prefix assert
-//! `!e` compiles straight to the highlevel `ExprKind::Assert` — a side
-//! constraint (the condition must evaluate to `USize(1)`), not a new IR form.
-//! Shadowing is allowed (the inner binding wins); an unknown name is a
-//! resolve diagnostic — the checker's `lookup` panics on unresolved ids, so
-//! resolution completes here.  Every emitted expression carries its source
-//! span.
+//! A use of a name is the binder's own `ExprId`, so the IR is a graph: a
+//! block-wide binding reserves its id before its value compiles, and the
+//! checker's scope stack is keyed by the same ids. See `docs/language-spec.md`,
+//! "Name resolution".
 
 use std::collections::HashMap;
 
@@ -63,10 +30,7 @@ use lichen_lowlevel::StaticNodeId;
 
 mod alloc;
 
-/// `ExprId` → the source span the expr lowers from.  Built here, exactly where
-/// each highlevel node is created via the IR alloc API; parallel to `IR.expr`.
-/// Highlevel is span-free, so this secondary map — owned by this crate — is the
-/// only record of source positions for IR nodes.
+/// `ExprId` → the source span the expression lowers from; parallel to `IR.expr`.
 pub type SpanIndex = Vec<Option<Span>>;
 
 pub fn compile(program: &mut Program) -> (IR<LangAttr>, SpanIndex, Vec<Diag<LangProgram>>) {
@@ -75,12 +39,11 @@ pub fn compile(program: &mut Program) -> (IR<LangAttr>, SpanIndex, Vec<Diag<Lang
 
 /// Lower an already-resolved program (its AST fields carry the `BinderId`s).
 ///
-/// The lowering is **total**: it does not stop at the first problem.  A
-/// recovered parse error and an *unresolved name* both lower to the **same**
-/// inert [`ExprKind::ErrorBlock`] (masked, checked-skipped); the resolver
-/// reports the `Resolve` diagnostic for the unresolved name, and the lower
-/// layers proceed on the effective content.  So the pipeline always produces an
-/// `IR`; the resolve diagnostics ride out alongside it.
+/// # Invariant
+///
+/// Lowering is total: a recovered parse error and an unresolved name both lower
+/// to an inert `ExprKind::ErrorBlock` the checker skips, so an `IR` is always
+/// produced and the resolve diagnostics ride out alongside it.
 pub fn compile_with_imports(
     program: &mut Program,
     imports: &[ResolvedImport],
@@ -89,9 +52,7 @@ pub fn compile_with_imports(
     (ir, spans, diagnostics)
 }
 
-/// [`compile_with_imports`] with a **cell store**, also returning the marked
-/// bindings it compiled (with their paths) so the caller can freeze them once the
-/// build is solved.
+/// [`compile_with_imports`] with a cell store, returning the marked bindings it compiled.
 pub fn compile_with_imports_with_cells(
     program: &mut Program,
     imports: &[ResolvedImport],
@@ -102,26 +63,18 @@ pub fn compile_with_imports_with_cells(
     Vec<Diag<LangProgram>>,
     Vec<(Path, ExprId)>,
 ) {
-    // Resolution is its own stage: it assigns each binder a `BinderId` (writing
-    // it into the AST's resolve fields) and yields the resolve diagnostics.  The
-    // lowering below reads those fields instead of re-resolving.
     let resolved = crate::resolve::resolve(program, imports);
     let (ir, spans, compiled_cells) =
         compile_resolved_with_cells(program, &resolved.import_binders, &resolved.prelude, cells);
     (ir, spans, resolved.diagnostics, compiled_cells)
 }
 
-/// Lower a *resolved* program.  `program` must already carry its `BinderId`
-/// annotations (from [`crate::resolve`]); `import_binders` are the base-scope
-/// import binders the resolver assigned, each lowering to a `Static` node.  The
-/// incremental session calls this directly (it already ran the resolver for its
-/// reuse decision), so resolution is not repeated.
+/// Lower a resolved program, reusing the resolver's `BinderId` annotations.
 ///
-/// With a **cell store**: a marked binding whose cell is clean is lowered to a
-/// static read of its frozen pair — its body is never lowered, checked or
-/// evaluated — and the marked bindings that *were* compiled come back with their
-/// paths so the caller can freeze them once the build is solved
-/// (`docs/notes/incremental-update.md`).
+/// # Invariant
+///
+/// A clean cell is lowered to a static read of its frozen pair, so its body is
+/// never lowered, checked or evaluated. See `docs/notes/incremental-update.md`.
 pub(crate) fn compile_resolved_with_cells(
     program: &Program,
     import_binders: &[crate::resolve::ImportBinder],
@@ -131,8 +84,6 @@ pub(crate) fn compile_resolved_with_cells(
     let mut compiler = Compiler::new();
     compiler.seed_imports(import_binders);
     compiler.seed_prelude(prelude);
-    // One `for_each` pass over the resolved AST is what gives every marked binding
-    // its occurrence path; the lowering walk below never carries one.
     compiler.cached_paths = cached_bindings(program);
     if let Some(cells) = cells {
         for (binder, path) in &compiler.cached_paths {
@@ -141,16 +92,8 @@ pub(crate) fn compile_resolved_with_cells(
             }
         }
     }
-    // The whole program is one scope (established by the resolver): block-wide
-    // bindings are entered before any value compiles, restrictive `let` bindings
-    // are entered as they're seen; the scope is never popped, so later
-    // statements (and the final expression) see every earlier binding.
     let (statements, final_id) = match &program.expr {
         Some(final_expr) => {
-            // An ordinary program: the top-level statements followed by the
-            // tail expression.  `pub` marks on the statements are irrelevant
-            // here (a tail program's value is its tail, not a module), so they
-            // are folded away, exactly as a `{ …; e }` tail block ignores them.
             let stmts: Vec<Stmt> = program
                 .statements
                 .iter()
@@ -161,10 +104,6 @@ pub(crate) fn compile_resolved_with_cells(
             (statements, final_id)
         }
         None => {
-            // A record program (a module): the top level has no tail
-            // expression, so its value is an anonymous struct built from the
-            // statements — the module's exported bindings.  `pub` marks which
-            // fields are exported (when any is `pub`, only the `pub` ones).
             let fields: Vec<RecordField> = program
                 .statements
                 .iter()
@@ -201,30 +140,20 @@ pub(crate) fn compile_resolved_with_cells(
             (statements, root)
         }
     };
-    // Option B: no tuple cascade at the top level.  The statement ids are the
-    // "stack of user-written expressions" — recorded as `stmt_roots`, which the
-    // checker's `build_with` type-checks and evaluates one by one.  The build
-    // root is the final expression directly; a non-terminating statement is
-    // reported as a diagnostic instead of being silently deferred by a tuple
-    // cascade.  (Nested blocks still use the tuple wrap.)
+    // No tuple cascade at the top level: the statement ids go to `stmt_roots`.
     compiler.ir.set_stmt_roots(statements);
     compiler.ir.set_root(final_id);
     (compiler.ir, compiler.spans, compiler.compiled_cells)
 }
 
-/// The marked bindings of a resolved program, by binder, with their occurrence
-/// paths.
+/// The marked bindings of a resolved program, by binder, with their paths.
 ///
-/// A binding whose value spells an **annotation** is not eligible: a static read
-/// materializes the pair the artifact froze, and the artifact's pair is two wide,
-/// while an annotation's schema tail makes the source's pair wider — so an
-/// annotated cell would be read back at the wrong arity.  It is left to be
-/// compiled and re-frozen as an ordinary (unretained) binding, which is honest
-/// rather than silently wrong.
+/// # Invariant
 ///
-/// This is also the set the cell store reconciles against (a position the
-/// program no longer marks is dropped) and the path lookup dirty propagation
-/// needs — see `crate::dirty`.
+/// A binding whose value spells an annotation is never returned: a static read
+/// materializes the artifact's two-wide pair, while an annotation's schema tail
+/// widens the source's pair, so the cell would be read back at the wrong arity.
+/// See `docs/notes/incremental-update.md` §3.3.
 pub(crate) fn cached_bindings(program: &Program) -> HashMap<BinderId, Path> {
     let mut out = HashMap::new();
     crate::path::for_each(program, &mut |path, node| {
@@ -253,55 +182,36 @@ pub(crate) fn cached_bindings(program: &Program) -> HashMap<BinderId, Path> {
 
 struct Compiler {
     ir: IR<LangAttr>,
-    /// The marked bindings' occurrence paths, by binder (see
-    /// [`cached_bindings`]).
+    /// The marked bindings' occurrence paths, by binder (see [`cached_bindings`]).
     cached_paths: HashMap<BinderId, Path>,
-    /// The marked bindings whose cell is clean: the frozen reference their node
-    /// is lowered to, instead of compiling their body.
+    /// Clean cells: the frozen reference a marked binding's node lowers to.
     reusable: HashMap<BinderId, StaticNodeId>,
-    /// The marked bindings this build compiled, with their paths — what the
-    /// caller freezes and records once the build is solved.
+    /// The marked bindings this build compiled, with their paths, to be frozen.
     compiled_cells: Vec<(Path, ExprId)>,
-    /// `BinderId` → the IR `ExprId` of that binding's node.  Every binder (a
-    /// block-wide or `let` binding, a lambda parameter, a record field, an
-    /// import) gets exactly one node, and a use of the name *is* that node —
-    /// the IR's graph-sharing invariant.  Filled as binders are emitted, read
-    /// by name uses.  Keyed by the resolver's dense `BinderId`.
+    /// `BinderId` → the IR node of that binding; every binder gets exactly one.
     binder_to_expr: Vec<Option<ExprId>>,
-    /// The `Function` nodes enclosing the current compilation point, each one
-    /// a **reserved id** pushed before its own parameter and body compile —
-    /// hence stacking ids, not tabs: a nested closure's parent link is filled
-    /// in as the closure's own kind *after* its body compiles, so the enclosing
-    /// node's id must already exist and be reachable from here.  The reserved
-    /// node carries `Placeholder` until the real kind overwrites it, exactly
-    /// as a block-wide binding does.
+    /// The enclosing `Function` nodes, each a reserved id pushed for its body.
     ///
-    /// The invariant this encodes (the mutual-recursion sibling rule): the
-    /// parent is pushed only for the span of the **body**, never for the
-    /// parameter's type or attribute — a lambda sitting in this lambda's own
-    /// annotation is a same-level sibling of it, not a nested child.  A
-    /// same-depth sibling binding compiled here only because this lambda's
-    /// body references it therefore finds nothing to hang under, so its
-    /// closure stays outside this template, referenced in place: the
-    /// recursion re-applies the sibling's never-bound template instead of a
-    /// bound instance.
+    /// # Invariant
+    ///
+    /// A parent is pushed for the body's span only, never for the parameter's
+    /// type or attribute: a lambda in this lambda's own annotation is a
+    /// same-level sibling, so a sibling compiled only because this body
+    /// references it finds nothing to hang under and stays outside this
+    /// template.
     fn_parents: Vec<ExprId>,
-    /// The interned native-operator names — a `$name`'s name is interned to a
-    /// `&'static str` (leaked once per unique name), because an
-    /// `ExprKind::NativeCall`'s op field is a `&'static str` (the `ExprKind`
-    /// must stay `Copy`).
+    /// Interned native-operator names: `&'static str`, because `ExprKind` stays `Copy`.
     op_names: HashMap<String, &'static str>,
-    /// The interned struct field names / named-field-read names — leaked once
-    /// per unique string, so [`ExprKind::NamedField`] and the IR struct-name
-    /// arena can hold `&'static str` (the `ExprKind` must stay `Copy`).
+    /// Interned struct field and named-read names, `&'static str` for the same reason.
     str_names: HashMap<String, &'static str>,
-    /// The source span of each IR node, keyed by [ExprId] — the crate's own
-    /// position index; highlevel itself is span-free.
+    /// The source span of each IR node, keyed by [`ExprId`].
     spans: Vec<Option<Span>>,
-    /// The **prelude**'s binders by name ([`crate::resolve::Resolved::prelude`]):
-    /// what the surface operators route onto.  Empty when the source has no
-    /// prelude, which is the built-in module's own compilation — so the module's
-    /// body keeps the machine operators and the routing terminates.
+    /// The prelude's binders by name: what surface operators route onto.
+    ///
+    /// # Invariant
+    ///
+    /// Empty for the built-in module's own compilation, so its body keeps the
+    /// machine operators and the routing terminates.
     prelude: HashMap<String, BinderId>,
 }
 
@@ -321,23 +231,20 @@ impl Compiler {
         }
     }
 
-    /// Record the prelude's binders, so [`Self::routed_operator`] can resolve a
-    /// surface operator to its binding.
+    /// Record the prelude's binders for [`Self::routed_operator`].
     fn seed_prelude(&mut self, prelude: &[(String, BinderId)]) {
         for (name, binder) in prelude {
             self.prelude.insert(name.clone(), *binder);
         }
     }
 
-    /// The prelude binding a **surface operator** routes onto, if this source has
-    /// a prelude and the prelude exports that operator
-    /// ([core-prelude](../docs/notes/core-prelude.md),
-    /// [operator-polymorphism](../docs/notes/operator-polymorphism.md) §7).
+    /// The prelude binding a surface operator routes onto, if the prelude exports it.
     ///
-    /// Only the operators the prelude carries are routed: `==`/`!=` are
-    /// unconstrained, and `%` and the bitwise trio are `Int`-only, so their
-    /// contract is a single class the checker already pins — a library binding
-    /// would add an indirection with nothing to say.
+    /// # Invariant
+    ///
+    /// Only the operators the prelude carries are routed; `==`, `!=`, `%` and
+    /// the bitwise trio are never routed, their contract being a class the
+    /// checker already pins. See `docs/notes/operator-polymorphism.md` §7.
     fn routed_operator(&self, operator: &crate::ast::BinOp) -> Option<BinderId> {
         let name = match operator {
             crate::ast::BinOp::Add => "add",
@@ -369,21 +276,20 @@ impl Compiler {
         self.binder_to_expr[binder] = Some(expr);
     }
 
-    /// The IR node a resolved name use points to — a binder is always emitted
-    /// before a use of it (block-wide bindings pre-reserve a placeholder).
+    /// The IR node a resolved name use points to; the binder is always emitted first.
     fn binder(&self, binder: BinderId) -> ExprId {
         self.binder_to_expr[binder].expect("a resolved binder is emitted before use")
     }
-    /// Compile a statement list, entering every block-wide binding's name
-    /// *before* any value compiles so a value may forward- or mutually-
-    /// reference the block's bindings.  Restrictive `let` bindings are
-    /// entered during the pass (their value compiles first, so the name is
-    /// visible only to later statements).
+    /// Compile a statement list, returning one id per statement in order.
+    ///
+    /// # Invariant
+    ///
+    /// Every block-wide binding's name is entered before any value compiles, so
+    /// a value may forward- or mutually reference the block's bindings; a
+    /// restrictive `let` is entered during the pass, so its name is visible only
+    /// to later statements.
     fn compile_scope_statements(&mut self, statements: &[Stmt]) -> Vec<ExprId> {
-        // Pre-pass: reserve a `Placeholder` per block-wide binding and record
-        // it under the binding's id.  A scope's block-wide bindings are
-        // mutually visible in both directions, so a value may reference itself
-        // or a later binding (which resolves to the placeholder).
+        // Pre-pass: reserve a `Placeholder` per block-wide binding, under its id.
         for stmt in statements {
             if let Stmt::Binding(binding) = stmt
                 && !binding.restrictive
@@ -399,10 +305,7 @@ impl Compiler {
         let mut out = Vec::new();
         for stmt in statements {
             let id = match stmt {
-                // A **clean cell**: the frozen pair, read in place.  The body is
-                // not lowered at all — that is what makes a retained cell a
-                // saving rather than a cache — so the node is the static read
-                // wherever the binding would have been the value's own node.
+                // Clean cell: the frozen pair, read in place; no body is lowered.
                 Stmt::Binding(binding)
                     if binding
                         .binder
@@ -411,18 +314,12 @@ impl Compiler {
                     let binder = binding.binder.expect("a resolved cached binding");
                     let export = self.reusable[&binder];
                     if binding.restrictive {
-                        // A `let`: the name enters scope after the value, exactly
-                        // as the compiled path does, and there is no placeholder to
-                        // reuse — so this is the one node.
+                        // A `let`: no placeholder was reserved, so this node is the only one.
                         let id = self.alloc(ExprKind::Static { export }, &binding.span);
                         self.set_binder(binder, id);
                         id
                     } else {
-                        // A block-wide binding's placeholder was reserved in the
-                        // pre-pass and forward references captured it, so the
-                        // placeholder *is* the static read — made one here rather
-                        // than transplanted from a second node, which would leave
-                        // that node behind in the IR.
+                        // A block-wide binding's reserved placeholder *is* the static read.
                         let p = self.binder(binder);
                         self.ir.set_kind(p, ExprKind::Static { export });
                         self.set_binder(binder, p);
@@ -430,74 +327,42 @@ impl Compiler {
                     }
                 }
                 Stmt::Binding(binding) if binding.restrictive => {
-                    // `let a = e` — the value compiles before the name is
-                    // recorded, so it is visible only to later statements and
-                    // never to itself.  `let a = a` resolves `a` to the outer
-                    // (or block-wise) binding, exactly the sequential case.
+                    // `let a = e`: the value compiles before the name is recorded.
                     let id = self.compile_expr(&binding.value);
                     let binder = binding.binder.expect("a resolved let binding");
                     self.set_binder(binder, id);
                     id
                 }
                 Stmt::Binding(binding) => {
-                    // Block-wide binding: its placeholder `p` was reserved in
-                    // the pre-pass.  Compile the value; if the value *is* a
-                    // bare name reference (`b = a`, `a = a`), alias this
-                    // binding to it — otherwise transplant the value's kind
-                    // into `p` so the placeholder becomes the value node and
-                    // any self/mutual reference (which resolves to `p`) points
-                    // at the value.
+                    // Block-wide binding: compile the value, then fill its reserved placeholder.
                     let binder = binding.binder.expect("a resolved block-wide binding");
                     let p = self.binder(binder);
                     let value = self.compile_expr(&binding.value);
                     if matches!(&binding.value, Expr::Name(..)) {
-                        // A bare name reference (`b = a`, `y = x`, and the
-                        // degenerate `a = a`): share the resolved id rather
-                        // than copying the kind, so the binding aliases it —
-                        // one compilation (a transplanted struct type would
-                        // recompile under a second nominal id).  Uses compiled
-                        // *before* this statement captured the reserved
-                        // placeholder `p` (a forward reference); re-point them
-                        // to the aliased id, or they would keep the stale
-                        // `Placeholder` kind and lose the value's type.
+                        // A bare name reference aliases the resolved id; re-point the placeholder.
                         self.ir.repoint(p, value);
                         self.set_binder(binder, value);
                         value
                     } else {
                         let mut kind = self.ir.expr[value.0 as usize].kind;
-                        // The `@loop` mark: the binding's node **is** its
-                        // value's node (the transplant below makes one node of
-                        // both), so the mark lands on the transplanted
-                        // `Function` kind here — this is the stamp
-                        // `ExprKind::Function::looping`'s doc refers to.  A
-                        // marked binding whose value is not a lambda has no
-                        // recursion to permit, so there is nothing to stamp.
+                        // `@loop`: stamp the transplanted `Function` kind the binding shares.
                         if binding.looping
                             && let ExprKind::Function { looping, .. } = &mut kind
                         {
                             *looping = true;
                         }
                         self.ir.set_kind(p, kind);
-                        // The transplanted kind is identity-sensitive, unlike
-                        // the depth it replaced: anything inside it naming the
-                        // now-dead `value` id (a nested closure's parent link)
-                        // must be re-pointed at `p`, since only `p` is ever
-                        // compiled — `value` never receives a node of its own.
+                        // The transplanted kind may name the now-dead `value` id: re-point it.
                         self.ir.repoint(value, p);
                         self.spans[p.0 as usize] = self.spans[value.0 as usize];
-                        // The schema (an attribute tail, e.g. `# p` or `? e`)
-                        // rides the *expression*, not the kind, so the
-                        // transplant must carry it too — otherwise a bound
-                        // annotated value (`a = 5 ? doc`) drops its tail and
-                        // the checker panics reading `schema(p).tail[0]`.
+                        // The schema rides the expression, not the kind, so it is carried too.
                         self.ir.set_schema(p, self.ir.schema(value).clone());
                         p
                     }
                 }
                 Stmt::Expr(e) => self.compile_expr(e),
             };
-            // A marked binding that was *compiled* is what the caller freezes
-            // once the build is solved; a clean cell read in place is not.
+            // Only a marked binding that was compiled is frozen; a clean cell is not.
             if let Stmt::Binding(binding) = stmt
                 && binding.cached
                 && let Some(binder) = binding.binder
@@ -511,15 +376,13 @@ impl Compiler {
         out
     }
 
-    /// Wire the statements into the root so the checker compiles and runs
-    /// every one of them: `Index(Tuple([stmt₁, …, stmtₙ, final]), n)`
-    /// selects the final expression as the program's value.  The tuple is
-    /// heterogeneous (no element-type unification), so a statement's
-    /// polymorphic type is not monomorphized by being wrapped.  A trailing
-    /// statement that already *is* the final expression's node (`a = 1; a`)
-    /// is dropped — the wrap would only select it again — so a program whose
-    /// last statement is its final expression stays that expression's own
-    /// node.
+    /// Wire the statements into the root so the checker checks and runs every one.
+    ///
+    /// # Invariant
+    ///
+    /// A trailing statement that already is the final expression's own node is
+    /// dropped, so a block whose last statement is its final expression stays
+    /// that expression's node.
     fn wrap(&mut self, statements: Vec<ExprId>, final_id: ExprId, span: &Span) -> ExprId {
         let mut statements = statements;
         if statements.last() == Some(&final_id) {
@@ -529,10 +392,7 @@ impl Compiler {
             return final_id;
         }
         statements.push(final_id);
-        // The statements ride in a *tuple* (per-element type slots — the
-        // statements may be heterogeneous), and the wrapper reads the final
-        // one with the positional slot form, whose type extraction indexes
-        // the shape list at the key.
+        // The statements ride in a tuple (per-element type slots), read positionally.
         let tuple = self.alloc_tuple(&statements, span);
         let index = self.alloc(
             ExprKind::Literal(HighProgramLiteral::from(IntLit(statements.len() - 1))),
@@ -547,19 +407,8 @@ impl Compiler {
         )
     }
 
-    /// Intern a native-operator name to a `&'static str` (leaked once per
-    /// unique name), so an [`ExprKind::NativeCall`]'s `op` stays `Copy`.
-    ///
-    /// **The leak is deliberate and measured** (`D14` in
-    /// `docs/notes/code-audit.md`): this map lives for one compile, so the
-    /// dedup it provides is *within* a compile, and the bytes never come back.
-    /// Measured at 5 bytes per distinct name per compile and 31 bytes/compile
-    /// on an editor-like stream of changing sources — about 3 MB per 100k
-    /// keystrokes.  It is kept because the `&'static str` is load-bearing
-    /// (`ExprKind` must stay `Copy`) and reclaiming it means owning the strings
-    /// in the IR, which is a lifetime parameter rippling through `IR`, the
-    /// checker and `persist`.  Re-measure before reconsidering: if the rate
-    /// ever justifies that, `D14` is the decision to revisit, not this comment.
+    /// Intern a native-operator name to a `&'static str`; the leak is `D14` in
+    /// `docs/notes/code-audit.md`.
     fn intern_op(&mut self, name: &str) -> &'static str {
         if let Some(&s) = self.op_names.get(name) {
             return s;
@@ -569,11 +418,7 @@ impl Compiler {
         s
     }
 
-    /// Intern an arbitrary source string to a `&'static str` (leaked once per
-    /// unique string), so an [`ExprKind::NamedField`]'s field name stays
-    /// `Copy`, and struct field names can be stored in the IR's name arena.
-    /// Leaks the same way [`Self::intern_op`] does; see it for the measured
-    /// rate and the decision (`D14`).
+    /// Intern a source string to a `&'static str`, once per unique string (`D14`).
     fn intern_str(&mut self, s: &str) -> &'static str {
         if let Some(&leaked) = self.str_names.get(s) {
             return leaked;
@@ -583,12 +428,7 @@ impl Compiler {
         leaked
     }
 
-    /// The lowering's recursion: one frame per nested expression (through the
-    /// per-kind arms, [`Self::compile_scope_statements`] and
-    /// [`Self::compile_record_fields`] for a block, and back here), so a deep
-    /// program overflows the caller's stack — the parser runs on a worker
-    /// thread with a large stack, but nothing after it does.  `#[stacksafe]`:
-    /// the recursion grows the stack instead of overflowing the process.
+    /// Lower one expression; `#[stacksafe]` grows the stack instead of overflowing.
     #[stacksafe]
     fn compile_expr(&mut self, e: &Expr) -> ExprId {
         match e {
@@ -600,13 +440,7 @@ impl Compiler {
                 ExprKind::Literal(HighProgramLiteral::from(FloatLit(*n))),
                 span,
             ),
-            // A string literal: the content is leaked once to a `&'static str`
-            // (the value node holds a `Copy` `LowValue::Str`), exactly as the
-            // native-operator names are interned — and, unlike those, with no
-            // dedup at all, so every occurrence leaks again.  Measured and
-            // deliberate: 1–11 bytes per literal per compile, `D14` in
-            // `docs/notes/code-audit.md`.  The type is the shared
-            // `[string, Type]` expression the literal builds.
+            // A string literal leaks its content to a `&'static str`, with no dedup (`D14`).
             Expr::Str(s, span) => self.alloc(
                 ExprKind::Literal(HighProgramLiteral::from(StrLit(Box::leak(
                     s.clone().into_boxed_str(),
@@ -632,21 +466,13 @@ impl Compiler {
             Expr::Name(name, span, binder) => match binder {
                 Some(id) => self.binder(*id),
                 None => {
-                    // An unresolved name was already reported by the resolver
-                    // (a `Resolve` diagnostic, possibly with a did-you-mean
-                    // clause); it lowers to the same inert `ErrorBlock` a parse
-                    // error uses, so the region is masked and the checker skips
-                    // it.
+                    // An unresolved name lowers to the same inert `ErrorBlock` a parse error uses.
                     let _ = name;
                     self.alloc(ExprKind::ErrorBlock, span)
                 }
             },
             Expr::Placeholder(span) => self.alloc(ExprKind::Placeholder, span),
-            // A recovered parse error: a masked error block — an opaque leaf
-            // ([`ExprKind::ErrorBlock`]) the checker skips, never a real
-            // placeholder.  The partial program still compiles and checks
-            // (the parse diagnostic is reported alongside; the region is
-            // distinct from a genuine `_` so a diff can exclude it).
+            // A recovered parse error: an opaque [`ExprKind::ErrorBlock`], not a `_`.
             Expr::Err { start, .. } => self.alloc(ExprKind::ErrorBlock, start),
             Expr::Lambda {
                 parameter: _,
@@ -658,14 +484,10 @@ impl Compiler {
                 span,
             } => {
                 let parent = self.fn_parents.last().copied();
-                // Reserved before the parameter and body compile — see
-                // `Self::fn_parents`: a nested closure names this node as its
-                // parent while this node is still a bare `Placeholder`.
+                // Reserved before the parameter and body compile (see `Self::fn_parents`).
                 let function_id = self.alloc(ExprKind::Placeholder, span);
                 let parameter_id = self.alloc(ExprKind::Parameter, parameter_span);
-                // A `x # n` parameter carries the perspective tail in its
-                // static schema — the checker reads `schema(parameter).tail[0]`
-                // to dispatch the apply's attribute equality check.
+                // A `x # n` parameter carries the perspective tail in its static schema.
                 if parameter_perspective.is_some() {
                     self.ir.set_schema(
                         parameter_id,
@@ -674,20 +496,14 @@ impl Compiler {
                         },
                     );
                 }
-                // The parameter is the binder the body (and its own annotation)
-                // resolves to — no scope frame is pushed; the resolver already
-                // assigned the id, and the body's uses read it via the map.
+                // The parameter is the binder the body and its own annotation resolve to.
                 let binder = parameter_binder.expect("a resolved lambda parameter");
                 self.set_binder(binder, parameter_id);
-                // The annotated parameter's type and attribute are compiled in
-                // scope too — either may reference the parameter
-                // (`x : x -> Int`).
+                // The type and attribute compile in scope too: either may name the parameter.
                 let parameter_type = parameter_type.as_ref().map(|t| self.compile_expr(t));
                 let parameter_attribute =
                     parameter_perspective.as_ref().map(|p| self.compile_expr(p));
-                // Pushed for the **body** only, never for the parameter's type
-                // or attribute: a lambda sitting in this lambda's own
-                // annotation is a sibling of it, not a nested child.
+                // Pushed for the body only (see `Self::fn_parents`).
                 let body = {
                     self.fn_parents.push(function_id);
                     let body = self.compile_expr(r#return);
@@ -702,11 +518,7 @@ impl Compiler {
                         parameter_attribute,
                         r#return: body,
                         parent,
-                        // Stamped by the *binding* that owns this lambda, at
-                        // the transplant in `compile_scope_statements` — the
-                        // lambda compiles before its binding's mark is known
-                        // here, so the kind leaves with `false` and the
-                        // binding rewrites it.
+                        // Stamped by the binding that owns this lambda, at its transplant.
                         looping: false,
                     },
                 );
@@ -721,15 +533,7 @@ impl Compiler {
                 let argument = self.compile_expr(argument);
                 self.alloc(ExprKind::Apply { function, argument }, span)
             }
-            // Struct instantiation is a *syntactic* form now — `C(f1, …, fn)`
-            // with the `(` adjacent to the callee (no space).  It always wraps
-            // the field values in one positional tuple and lowers to
-            // [`ExprKind::Instantiate`]; a spaced `C (…)` is a plain apply
-            // and reaches the Apply arm above.  There is no compile-time
-            // callee-kind dispatch — the checker decides whether the callee
-            // is a struct type, and a callee that is not one fails there.  A
-            // `.x 1` argument carries its name through to the checker, which
-            // reorders the values to the definition's positional order.
+            // `C(f1, …, fn)` with the `(` adjacent: one positional tuple, a struct instantiation.
             Expr::StructInst {
                 callee,
                 fields,
@@ -753,16 +557,8 @@ impl Compiler {
             } => {
                 let left = self.compile_expr(left);
                 let right = self.compile_expr(right);
-                // **The routing**: with a prelude in scope, `a + b` lowers to the
-                // prelude's binding applied to the operand group — one
-                // `array<_, 2>` — so the contract a program meets is the built-in
-                // module's rather than a built-in's, and the *tie*, the *arity*
-                // and the *class* all come from that one module
-                // ([core-prelude](../docs/notes/core-prelude.md),
-                // [operator-polymorphism](../docs/notes/operator-polymorphism.md)
-                // §7).  The built-in module itself has no prelude, so its own body
-                // lowers to the machine operator — which is the implementation the
-                // routing is a surface for.
+                // The routing: a prelude in scope sends `a + b` to its binding.
+                // See `docs/notes/operator-polymorphism.md` §7.
                 if let Some(binder) = self.routed_operator(operator) {
                     let operands = self.alloc_array(&[left, right], span);
                     let function = self.binder(binder);
@@ -806,22 +602,8 @@ impl Compiler {
                 else_branch,
                 span,
             } => {
-                // `if c then t else e` ≡ `[e, t][c]` — the condition (0/1)
-                // selects the branch through the existing lazy `Index`, so
-                // the untaken branch is never evaluated.  The branch array
-                // is **homogeneous, and deliberately so**: the element cell is
-                // the two branches' unified type, which is what the type system
-                // depends on — a class question asked of the conditional reads
-                // that cell, and a kernel lowers it.
-                //
-                // The *dependent* reading is available to whoever writes it:
-                // `(e, t)(c)` — a positional slot read over a tuple — types as
-                // `Index(Index(type_of branches, 0), c)`, the taken branch's own
-                // type.  It is not what `if` desugars to, and the reason is
-                // measured: with a *dynamic* condition the dependent type is
-                // never decided, so `x => if x <= 3 then 10 else 20` inside a
-                // kernel rendered `10: ?a` instead of `10: Int`
-                // (`docs/notes/operator-polymorphism.md` §4).
+                // `if c then t else e` is the lazy branch index `[e, t][c]`.
+                // See `docs/notes/operator-polymorphism.md` §4.
                 let condition = self.compile_expr(condition);
                 let then_branch = self.compile_expr(then_branch);
                 let else_branch = self.compile_expr(else_branch);
@@ -835,13 +617,7 @@ impl Compiler {
                 )
             }
             Expr::Assert { value, span } => {
-                // `! e` — the highlevel `Assert` form: a side constraint, not
-                // a unify.  The checker deep-evaluates the condition and
-                // requires `USize(1)`; the expression compiles to the
-                // condition itself (an assert checks its subject, it does not
-                // replace it), so its value and type are the condition's.
-                // The compiled span is the construct's own, so a failed
-                // assert points its caret at the `!`.
+                // `@assert e`: the condition itself; the span is the construct's own.
                 let condition = self.compile_expr(value);
                 self.alloc(ExprKind::Assert { condition }, span)
             }
@@ -850,9 +626,7 @@ impl Compiler {
                 value,
                 span,
             } => {
-                // `int2float e` / `float2int e` — the direction rides along and
-                // the checker does the class work: it pins the operand to the
-                // source class and gives the expression the target one.
+                // `int2float e` / `float2int e`: the direction rides along for the checker.
                 let operator = match operator {
                     crate::ast::ConvOp::Int2Float => ConvOp::Int2Float,
                     crate::ast::ConvOp::Float2Int => ConvOp::Float2Int,
@@ -861,10 +635,7 @@ impl Compiler {
                 self.alloc(ExprKind::Convert { operator, value }, span)
             }
             Expr::NativeCall { op, args, span } => {
-                // `$name(args…)` — compile each arg into the children arena,
-                // intern the op name, and alloc the NativeCall IR.  The name
-                // is validated against the compiling module's *private* native
-                // registry at check time (the frontend cannot see it).
+                // `$name(args…)`: args go into the children arena, the op name is interned.
                 let arg_ids: Vec<ExprId> = args.iter().map(|a| self.compile_expr(a)).collect();
                 let start = self.ir.children.len() as u32;
                 self.ir.children.extend_from_slice(&arg_ids);
@@ -885,14 +656,7 @@ impl Compiler {
             } => {
                 let value = self.compile_expr(value);
                 let r#type = r#type.as_ref().map(|t| self.compile_expr(t));
-                // Attribute value expressions, laid out in the **canonical
-                // attribute order** (the composed set's order — the single
-                // authority the checker's slot merge sorts into as well), so
-                // the schema tail and the `attributes` range are aligned with
-                // each other and with the merged tail by construction rather
-                // than by a hand-spelled sequence.  The mechanism is generic:
-                // each annotation kind contributes one (marker, value
-                // expression) pair.
+                // Values are laid out in the canonical attribute order, aligned with the tail.
                 let mut spelled: Vec<(LangAttr, ExprId)> = Vec::new();
                 if let Some(p) = &perspective {
                     spelled.push((LangAttr::Perspective(Perspective), self.compile_expr(p)));
@@ -907,9 +671,7 @@ impl Compiler {
                 let tail: Vec<LangAttr> = spelled.iter().map(|(marker, _)| *marker).collect();
                 let attrs: Vec<ExprId> = spelled.into_iter().map(|(_, value)| value).collect();
                 let id = self.alloc_annotation(value, r#type, &attrs, span);
-                // The attribute tail stamps the annotated node's static
-                // schema — the one asymmetry with `:` (the slots come into
-                // existence by being annotated).
+                // The attribute tail stamps the annotated node's static schema.
                 if !tail.is_empty() {
                     self.ir.set_schema(id, Schema { tail });
                 }
@@ -1000,10 +762,7 @@ impl Compiler {
                 self.alloc_type_struct(&field_ids, span)
             }
             Expr::Array(elements, span) => {
-                // A `~`-marked element (the parser accepts `~` only inside
-                // array literals) contributes its inner expression plus a
-                // depth; a plain element contributes depth 0.  Any non-zero
-                // depth makes the array a shallow array.
+                // A `~`-marked element contributes its inner expression plus a depth.
                 let mut ids = Vec::with_capacity(elements.len());
                 let mut depths = Vec::with_capacity(elements.len());
                 for element in elements {
@@ -1012,10 +771,7 @@ impl Compiler {
                             ids.push(self.compile_expr(inner));
                             depths.push(*depth);
                         }
-                        // Every other kind is a plain element — compile it
-                        // with depth 0.  Named exhaustively, so a new kind has
-                        // to be classified here instead of silently taking the
-                        // `~`-free path.
+                        // Every other kind is a plain element; exhaustive, to force classification.
                         Expr::Int(..)
                         | Expr::Float(..)
                         | Expr::Str(..)
@@ -1061,9 +817,7 @@ impl Compiler {
                 }
             }
             Expr::Table(entries, span) => {
-                // Each entry compiles to its key's and value's own nodes
-                // (graph-shared like every expression); the pair list feeds
-                // the dedicated `ExprKind::Table`.
+                // Each entry's key and value are their own nodes; the pairs feed the Table kind.
                 let mut pairs = Vec::with_capacity(entries.len());
                 for (key, value) in entries {
                     pairs.push((self.compile_expr(key), self.compile_expr(value)));
@@ -1071,16 +825,12 @@ impl Compiler {
                 self.alloc_table(&pairs, span)
             }
             Expr::Set(members, span) => {
-                // The members compile like an array's elements; the kind is
-                // what makes the checker type the instance as a set rather
-                // than as an `array<T, n>`.
+                // The members compile like array elements; the kind makes it a set.
                 let ids = self.compile_all(members);
                 self.alloc_set(&ids, span)
             }
             Expr::Shallow(inner, _, _) => {
-                // Unreachable through the parser (`~` is accepted only as an
-                // array element, which the `Array` arm unwraps); compile the
-                // inner expression defensively so the match stays total.
+                // Unreachable through the parser; compiles the inner expression to stay total.
                 self.compile_expr(inner)
             }
             Expr::TypeArray {
@@ -1103,38 +853,25 @@ impl Compiler {
                 expr,
                 span,
             } => {
-                // The same graph sharing as a program's statements — each
-                // value compiles once and a use of a name is its binding's own
-                // id — but the block's bindings are block-scoped (the resolver
-                // gave them distinct ids), so a block compiles to its final
-                // expression's own node (wired through the statement wrapper
-                // like a program's).
+                // Block-scoped, but otherwise like a program's statements (see `Self::wrap`).
                 let stmts = self.compile_scope_statements(statements);
                 let body = self.compile_expr(expr);
                 self.wrap(stmts, body, span)
             }
             Expr::RecordBlock { fields, span } => {
-                // A struct-returning block: the statements are scoped exactly
-                // like a block's, but the block's value is an anonymous struct
-                // instance built from the field statements.  A `let` field is a
-                // block-local (restrictive) and is never emitted; only the
-                // `pub` subset is emitted when any field is `pub`.
+                // A struct-returning block: an anonymous struct of its field statements.
                 let (_, root) = self.compile_record_fields(fields, span);
                 root
             }
         }
     }
 
-    /// Compile a record (struct-returning) block's fields — shared by a
-    /// `{ … }` block with no tail (`Expr::RecordBlock`) and a record *program*.
+    /// Compile a record block's fields, shared by `RecordBlock` and a record program.
     ///
-    /// The field statements are entered in a fresh block scope (block-wide
-    /// bindings mutually visible), compiled, then the block's value is built:
-    /// an anonymous struct instance over the emitted field ids.  A `let` field
-    /// is a block-local (restrictive) and is never emitted; when any field is
-    /// `pub`, only the `pub` fields are emitted.  Returns the compiled
-    /// statement ids (the field values, in source order, including the
-    /// non-emitted `let` locals) and the record node itself.
+    /// # Invariant
+    ///
+    /// The returned ids are the field values in source order, including the
+    /// non-emitted `let` locals; only `pub` fields are emitted when any is `pub`.
     fn compile_record_fields(
         &mut self,
         fields: &[RecordField],
@@ -1159,8 +896,7 @@ impl Compiler {
         let any_pub = fields.iter().any(|f| f.public);
         let mut emitted = Vec::with_capacity(fields.len());
         for (f, id) in fields.iter().zip(ids.iter()) {
-            // A `let` local is never a struct field; when any field is
-            // `pub`, only the `pub` fields are emitted.
+            // A `let` local is never a field; only `pub` fields when any is `pub`.
             if !f.field || (any_pub && !f.public) {
                 continue;
             }

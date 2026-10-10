@@ -1,6 +1,9 @@
-//! The compiler's node allocators: each IR allocation also records the
-//! expression's span in the compiler's own index, at the point the node is
-//! created.
+//! Compiler node allocators: every allocation records the node's span.
+//!
+//! # Invariant
+//!
+//! Each allocator pushes exactly one span, so the span index stays aligned with
+//! the IR arena's node ids.
 
 use super::*;
 impl Compiler {
@@ -10,9 +13,7 @@ impl Compiler {
         id
     }
 
-    // The variadic/struct allocs don't go through `Self::alloc` (they are
-    // distinct `IR` methods), so wrap each here to record the span in our index
-    // at exactly the point the node is created.
+    // Wrappers for the distinct `IR` allocators, so every node records its span.
     pub(super) fn alloc_tuple(&mut self, elements: &[ExprId], span: &Span) -> ExprId {
         let id = self.ir.alloc_tuple(elements);
         self.spans.push(Some(*span));
