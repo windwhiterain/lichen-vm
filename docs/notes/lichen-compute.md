@@ -306,12 +306,11 @@ operator adding two floats computes in `Float` whatever its node's own class say
 Trusting the node was a real defect: it declared `Bin(Int, Add)` over two float
 values.
 
-`emit_node` walks the simple kernel-safe subset — integer constants, every
+`Lower` walks the simple kernel-safe subset — integer constants, every
 `KernelBin` operator (the arithmetic, comparison and bitwise sets the language
 has: `kernel_bin` is the one conversion from `TypeOperator`, and `None` for the
-one operator no body can contain), the parameter read (`Index(param_pair, 0)` →
-a `local.get`), a `value_of`
-extraction (`Index(pair, 0)`), and a 2-element conditional (a wasm `select`), plus a
+one operator no body can contain), the parameter read (`Index(param_pair, 0)`), a
+`value_of` extraction (`Index(pair, 0)`), and a 2-element conditional, plus a
 cross-kernel `Launch`/`Call` (lowered to `CallKernel`).
 
 The arithmetic is **unsigned** in both backends — `I64DivU`/`I64RemU` and the
@@ -346,7 +345,7 @@ A **tuple codomain** is the mirror: `compute.jit (p : <Int, Int> => (p(0), p(1))
 compiles to wasm `(i64, i64) -> (i64, i64)`. `codomain_leaves` resolves the body's
 return value into the leaves to emit — a bare value is the one-leaf form, a
 materialized tuple value one leaf per element, in source order — and each leaf is
-emitted by `emit_node`, so each is its own stack slot. The walk is the same shape
+emitted by `Lower`, so each is its own SSA value. The walk is the same shape
 as `emit_tuple_leaves`'s (the cross-kernel **argument** walk), reached through the
 same peel chain: a `value_of` extraction, a `Parameterized` cell, then the node
 itself. A *nested* tuple is refused by name rather than flattened, because each
@@ -369,8 +368,183 @@ an `N`-result callee would leave `N` values in a one-value position — the sile
 miscompilation this crate never allows (the same reason a conditional write is
 refused rather than emitted). Re-materialising a tuple would mean spilling those
 values into locals, a primitive `KernelInstr` has no encoding for; so until it
-does, `emit_cross_kernel_call` refuses naming the callee and its arity
+does, `cross_kernel_call` refuses naming the callee and its arity
 (`CROSS_KERNEL_RESULT_ARITY`) rather than truncating to the first result.
+
+### The body's lowering: a graph walk that emits SSA
+
+`crates/lichen-compute/src/compute/body.rs` holds `Lower`, the one walk that turns a
+checked graph into a `KernelBody`. It replaced `emit_node`, a recursive walk that
+pushed `KernelInstr`s onto a `Vec`. Instructions named no values there, so the
+walk's *recursion* was its ordering, and three things followed that were properties
+of the IR rather than of any kernel:
+
+- **a shared subexpression was emitted once per use**, because nothing could name
+  it after the first;
+- **every consumer reconstructed the operand stack**, each deriving the form it
+  wanted — the wasm backend derives a stack from SSA, `spirv.rs` derives SSA ids
+  from a stack;
+- **the walk recursed over the graph**, so it needed a depth budget
+  (`MAX_KERNEL_BODY_DEPTH`, a refusal rather than a panic) and `#[stacksafe]` to
+  survive a deeply *expanded* body.
+
+Here the walk emits into a `KernelBody` — SSA values, blocks with parameters — and
+the memo `Lower::values` is what makes a node emit **once**. `Lower::value` is the
+one placement mechanism: a literal, a parameter read at an index path, or a
+`define_in` that names the definition. Inside a `@loop` nest the roles are the
+binding instead: a node of the marked function's template is a read of its carried
+state — the conversion's paths say which slot — or a computation over such reads,
+the same role the host loop resolves through `Instantiation::node_of`
+(`loop_run.rs`). A nest's own role is emitted in the nest's current block, and a
+value the nest reaches but does not own at the nest's entry, the one block that
+dominates all of it.
+
+**Which value a node names is the lowlevel's answer, not this file's.** That is
+`define_in` and `selection_of` in `lichen_lowlevel::resolve`, because it is a fact
+about cells and equality classes. The lowering used to re-derive it on every bare
+cell it reached, through `equality_rep` and `class_computation_node`; both moved
+down and neither exists here.
+
+**The one thing that is still a count is `Positions`** — the buffer ordinals a
+parallel body reads and writes. It is filled by the walk rather than by a consumer
+because it is a *shared* fact: the fragment's `input_classes` and `output_classes`
+and the refusal wording a backend uses have to agree, and two counters that
+disagreed is the defect `mixed_classes`'s contract exists to prevent.
+
+#### The parameter count is the declared shape's
+
+A kernel's parameter is a struct carrying a native wrapper and a signature, so the
+node a caller hands over is the wrapper's cell rather than the tuple the domain
+declares. `domain_arity` counts the parameter slots' `flat_arity` summed — the
+ABI's count — where reading the count off the domain node gave one leaf for a
+two-leaf domain, and every tuple read then failed to place. `leaf_classes` is the
+same list in the same order, because a leaf's class is the parameter's and not the
+body's.
+
+A read of the domain at a path is matched **from the chain of `Index` nodes, not
+from the class of its base**: the deep pass may have unified the parameter with the
+argument it was passed, so the node the read names is a computation and only the
+chain says where it came from. `Index(param_pair, k)` is the pair's value half
+rather than a step of the domain's path — it is how a read reaches the parameter at
+all, and counting it would descend the parameter's *wrapper* struct as though it
+were the domain's shape — and the cursor still stops **on** the pair, because the
+pair is the base the slot check has to see. The base is matched against the
+parameter slots themselves (each slot's pair and its value) *or* one of the
+domain's leaves: a read of `p` reaches the wrapper's field first, so the chain ends
+at a leaf rather than at the domain, and matching the slots alone placed six
+tuple-domain reads nowhere.
+
+The slot is the path **flattened**, not summed. A flat tuple's positions sum,
+because every element before the one named holds exactly one leaf. A nested tuple's
+do not: in `<<Int, Int>, Int>`, `p(1)` names the outer element at position 1, which
+starts after the inner tuple's **two** leaves — offset **2**, not 1. Summing read
+the wrong parameter and the fragment answered `2 + 3 + 3`. The steps come out
+innermost-first — the walk descends from the read — so they are reversed before
+flattening.
+
+`Lower::arguments` is the other half of `Module::operands_of`: that answers which
+nodes a *definition* depends on, so for a program operator the whole operand array
+is one dependency (it is built before the operator that indexes it), while
+`arguments` answers what the operator *reads* — whatever the array holds. Which is
+which is the lowlevel's to answer, because `LowOperator`'s enum documents the
+structural shapes and says nothing about a program's own.
+
+A **static operand** is a constant the apply clone carried across, not a value this
+graph computes: a routed operator's arguments include the frozen residual of the
+call it was lowered from, and the only part of a static module a kernel can carry
+is a scalar, so it becomes a `Const` and anything else is refused by name.
+
+#### A call's argument is one of three shapes
+
+`callee_args` reads a cross-kernel call's argument as the callee domain's scalar
+leaves, trying three shapes in the order the graph can rule them out:
+
+1. a read of the domain at a path — `k x` and `k x(0)` are the caller's own
+   parameters, contiguous in the flattened layout, so they pass through, matched by
+   `parameter_path_of`;
+2. the `[value, type]` pair's value half — a bare kernel apply carries the pair and
+   the argument is its element 0;
+3. a concrete tuple value, element by element, recursing for a nested domain.
+
+A wrapper's `launch` argument is a bare `Parameterized` cell, concrete only at run
+time, so the tuple it stands for is not an array value here and never will be: the
+argument's class is where it is. Measured on
+`jit_cross_kernel_tuple_argument_through_the_wrapper`, the pair's value half is its
+own singleton class and holds no array, while `class_root(arg)` holds one — the peel
+loses the link, not the cell. The old walk tried four encodings in a loop and kept
+the first that worked; that is a guess that happens to be checked, where the three
+above are shapes, each ruled out by a fact rather than by a later one failing.
+
+#### The four cases an `Apply` is
+
+1. **A routed operator.** The routing lowers `x + 1` to a call of the prelude's
+   binding, so the frozen callee is a body this module cannot walk and the
+   **residual** the lowlevel's clone wrote for the call is emitted. The residual is
+   written only when the argument is decidable, and a loop's step argument never is
+   — but the callee is a frozen function whose body is reachable by `FunctionId`
+   whether or not anything evaluated, so `routed_operator` reads the operator out of
+   the artifact's structure. That is why it answers where the class channel cannot:
+   the argument is a read the kernel emits and the host never decides.
+2. **A cross-kernel call** — a callee that is a kernel value.
+3. **A marked recursion whose shape converts** — the loop nest, over the roles
+   `Module::loop_conversion` names, emitted instead of interpreted. Every block of
+   the nest receives the whole carried state as its `params`, so a read of the
+   marked function's parameter means one thing in all of them; the outermost test is
+   the header, because a merge block is joined from the header and a backend's
+   structured control flow requires the header to be the block that chooses. The
+   caller's remaining instructions land in the merge block, which is where the nest
+   leaves its result. See [loop-conversion §8.6](loop-conversion.md#86-where-the-conversion-lives-lowlevel-and-the-jit-reads-it).
+4. **An ordinary lichen-function call** — Style 1 — which is refused by name rather
+   than inlined, because a cycle cannot be inlined.
+
+#### The class is recorded against the node being defined
+
+`Lower::defining` is set at the top of `Lower::value` rather than in
+`Lower::definition`, because a literal is emitted straight from `value` and both
+routes have to record their class. Recording it against the wrong node is how a
+float constant ended up unrecorded and its operator fell back to the node's own
+class. `Lower::emitted_class` is the read side of the same map.
+
+#### The pieces a class crossing needs
+
+- **A literal converts in the language's own classes.** The conversion is the one
+  instruction whose operand and result differ, so a literal the checker already
+  decided folds rather than being emitted as a constant of the operand's class and
+  converted at run time. The direction is the operator's, so a literal of the class
+  it does not name means the graph and the word disagree.
+- **An out-of-range conversion is refused by name.** The interpreter answers with
+  `operator.out_of_range`; a kernel has no channel to record a diagnostic — wasm
+  traps and SPIR-V is undefined — so a literal this layer can see is refused where
+  the answer is the same for both backends.
+- **A parameter's class is the ABI's**, recorded so an operator that reads one
+  learns what class it is without the fragment.
+- **A read's and a write's element class is declared, not inferred**: the buffer is
+  bound by the host, and a write's element is the class of the value written. A
+  write's ordinal is taken **before** its operands are emitted, so a write nested
+  inside another write's value still consumes an ordinal of its own, which the
+  codomain count check refuses.
+
+#### Refusals that name what they saw
+
+`Lower::index`'s refusal reports the target's kind, the index's kind, the number of
+chain steps, the base the chain reached, and the parameter slots with their class
+roots, because a refusal that says only "cannot place" leaves the reader guessing
+between a target that is not an array, an index that is not a constant, and an arm
+count that is not two — three different defects. `Lower::opaque` likewise describes
+the node rather than numbering it: a kernel is compiled from a template before any
+apply, so a binding the body would fill in at run time is still empty — a `let`
+alias fed by a buffer read, a helper defined in the body rather than at module
+level, and a `compute.call`'s wrapper all have that shape.
+
+A **parallel index function** is the same walk with the writes as its outputs: the
+outputs are emitted in position order, so write `k` takes the ordinal `k`. The
+writes produce nothing (`KernelInstr::produces` is `0` for a write), so the
+terminator returns a `Const` of the fragment's class as a dummy to match the
+declared result — stated rather than left implicit, because a body whose returned
+value was supposed to mean something would be indistinguishable from one where it
+does not. The fragment's domain is the config's leaves *plus* the invocation index,
+which is not part of the config parameter's own shape and is therefore added rather
+than counted from a shape that does not contain it.
 
 ## 5. Launch-time assembly (the deferred linker)
 
@@ -395,8 +569,8 @@ module where `ordered[i]` is function `i`, the root exported as `main`, and each
 For style 3, `launch` is a **native two-step** — assemble the module, then call it — so
 the argument arrives at codegen time as a bare `Parameterized` cell (expected; it's only
 concrete at run time). That cell is **unified** with the defining computation (e.g. the
-`x + 1` `Add`) in its equality class, and `emit_node` resolves collapsed cells through
-the class (`class_computation_node`) to emit the real expression.
+`x + 1` `Add`) in its equality class, and `define_in` resolves collapsed cells through
+the class to emit the real expression.
 
 ## 7. Tests
 
@@ -485,7 +659,7 @@ assembler's per-arity type section already matches. Two argument shapes cover it
   shorter read would push the *next* parameter's local as the callee's last argument, so a
   mismatch is refused by arity rather than trusted.
 - **A concrete tuple value** is emitted element by element, recursively for a nested domain.
-  A scalar element goes through `emit_node`, so a constant, a parameter read, or a
+  A scalar element goes through `Lower::value`, so a constant, a parameter read, or a
   cross-kernel call result all keep working inside a tuple argument.
 
 The two **encodings** of the argument are not told apart by shape: a bare kernel apply
