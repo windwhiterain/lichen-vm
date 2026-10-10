@@ -55,20 +55,15 @@ mod op {
     /// the entry point ends.
     pub const RETURN_VALUE: u16 = 254;
     pub const U_CONVERT: u16 = 113;
-    /// `OpConvertFToU` (109) — the `float2int` crossing: a 32-bit float to the
-    /// unsigned integer type, truncating toward zero (and undefined outside what
-    /// that type holds, which is why the language refuses what the interpreter
-    /// can see is out of range).
+    /// `OpConvertFToU` (109) — the `float2int` crossing, truncating toward zero.
     pub const CONVERT_F_TO_U: u16 = 109;
-    /// `OpConvertUToF` (112) — the `int2float` crossing.  The **unsigned** source
-    /// is the language's `Int`, so this is the conversion and not
-    /// `OpConvertSToF` (111): the two read the same bits and answer different
-    /// numbers past the signed range, so the wrong one is a wrong *answer* rather
-    /// than a failed shape.  The wasm backend's `F32ConvertI64U` is the same
-    /// unsigned reading, and `tests/spirv_validation.rs` pins this opcode.
+    /// `OpConvertUToF` (112) — the `int2float` crossing.
+    ///
+    /// # Invariant
+    /// The unsigned source is the language's `Int`, so this is the conversion and not `OpConvertSToF`:
+    /// the two read the same bits and answer different numbers past the signed range.
     pub const CONVERT_U_TO_F: u16 = 112;
-    /// The reinterpretation an integer constant and a float operand meet
-    /// through: same width, same bits, no conversion of the value.
+    /// The reinterpretation an integer constant and a float operand meet through.
     pub const BITCAST: u16 = 124;
     pub const I_ADD: u16 = 128;
     pub const F_ADD: u16 = 129;
@@ -86,9 +81,7 @@ mod op {
     pub const U_GREATER_THAN_EQUAL: u16 = 174;
     pub const U_LESS_THAN: u16 = 176;
     pub const U_LESS_THAN_EQUAL: u16 = 178;
-    /// The **ordered** float comparisons: false when either operand is `NaN`,
-    /// which is what Rust's operators and wasm's `f32.lt` and friends do, so the
-    /// two backends agree about a `NaN` operand.
+    /// The ordered float comparisons: false when either operand is `NaN`.
     pub const F_LESS_THAN: u16 = 184;
     pub const F_GREATER_THAN: u16 = 186;
     pub const F_LESS_THAN_EQUAL: u16 = 188;
@@ -132,39 +125,31 @@ const ADDRESSING_MODEL_LOGICAL: u32 = 0;
 const MEMORY_MODEL_GLSL450: u32 = 1;
 /// A non-zero generator magic, as SPIR-V requires.
 const GENERATOR: u32 = 0x0030_0000;
-/// 1.3 is the first version with the `StorageBuffer` storage class, which is what
-/// lets a buffer be a plain runtime array with an `ArrayStride` and no `Block`
-/// wrapper.  The device is Vulkan 1.4, so 1.3 is in range.
+/// 1.3 is the first version with the `StorageBuffer` storage class, which lets a
+/// buffer be a plain runtime array.
 const SPIRV_VERSION: u32 = 0x0001_0300;
 const SPIRV_MAGIC: u32 = 0x0723_0203;
 
-/// The bytes one buffer element occupies, per class: the array stride of the
-/// module's runtime array.
+/// The bytes one buffer element occupies, per class: the array stride.
 ///
-/// **Derived, not decided here.**  What an element occupies is a fact about the
-/// class ([`ScalarClass::byte_width`]) and this is the target's spelling of it,
-/// so a module's `ArrayStride` and the host that hands the buffer over cannot
-/// disagree: the wasm backend packs at the same width, and the host's byte
-/// arithmetic is that width too (`docs/notes/floating-point.md` §4.1).  A literal
-/// here would be a second copy of the rule, and it is exactly the drift that one
-/// produced: this target read a float buffer at four bytes while the host wrote
-/// it at eight, and a float fragment was undispatchable until the width moved
-/// onto the class.
+/// # Invariant
+/// Derived, not decided here: what an element occupies is a fact about the class, so a module's
+/// `ArrayStride` and the host that hands the buffer over cannot disagree. A literal here would be a
+/// second copy of the rule — the drift that made this target read a float buffer at four bytes while
+/// the host wrote eight.
 fn element_stride(class: ScalarClass) -> u32 {
     class.byte_width() as u32
 }
 
-/// The local workgroup size.  A run of `count` indices is
-/// `ceil(count / LOCAL_SIZE_X)` workgroups; a workgroup that runs past the end
-/// computes an index whose slot the bound buffers do not cover, so the surplus
-/// lanes of the last workgroup are a **caller** obligation, not the shader's.
-/// See [`crate::dispatch`].
+/// The local workgroup size.
+///
+/// # Invariant
+/// A run of `count` indices is `ceil(count / LOCAL_SIZE_X)` workgroups, and the surplus lanes of the
+/// last one are a caller obligation, not the shader's.
 pub const LOCAL_SIZE_X: u32 = 64;
 
-/// Why a fragment cannot be emitted for this target.
-///
-/// Every variant names its own cause and nothing is approximated: a kernel that
-/// runs but computes the wrong thing is worse than one that does not run.
+/// Why a fragment cannot be emitted for this target: every variant names its own
+/// cause and nothing is approximated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpirvRefusal {
     /// A call to a kernel the supplied launch set does not hold; the message
@@ -183,13 +168,9 @@ pub enum SpirvRefusal {
         results: usize,
         at: usize,
     },
-    /// A parameter read that is not the index.  A buffer is *bound* to this
-    /// shader as a storage buffer, never passed as a value, so there is no value
-    /// a non-index parameter could produce.
+    /// A parameter read that is not the index.
     NonIndexParameter { local: u32, at: usize },
-    /// A buffer position that is not a compile-time constant.  The IR guarantees
-    /// this by construction — a position is an emitted ordinal — so this means a
-    /// malformed fragment rather than a limitation of the target.
+    /// A buffer position that is not a compile-time constant.
     NonConstantBufferPosition { at: usize },
     /// A buffer position outside the space it addresses.
     BufferPositionOutOfRange {
@@ -200,17 +181,14 @@ pub enum SpirvRefusal {
     },
     /// The fragment declares an integer width this target cannot represent.
     UnsupportedIntWidth { bits: u32 },
-    /// An operation over `Float` the language has no form for. A `Float` takes
-    /// `+ - * /` and the four order comparisons and nothing else
-    /// (`docs/notes/floating-point.md` §3.7), so `%` and the bitwise trio have
-    /// no opcode to reach here: the alternatives would be a different function
-    /// or a reinterpretation of a float's bits, and a kernel that runs but
-    /// computes something nobody wrote is worse than one that does not run.
+    /// An operation over `Float` the language has no form for.
+    ///
+    /// # Invariant
+    /// A `Float` takes `+ - * /` and the four order comparisons and nothing else, so `%` and the
+    /// bitwise trio have no opcode: a kernel that runs but computes something nobody wrote is worse
+    /// than one that does not run.
     UnsupportedFloatOperator { operator: &'static str, at: usize },
     /// A value and a buffer index of different classes met in one operation.
-    /// `Int` and `Float` do not convert in either direction
-    /// (`docs/notes/floating-point.md` §4.2), so this is a malformed fragment
-    /// rather than a shape a conversion could serve.
     MixedClasses { at: usize },
     /// The body does not leave exactly the one value a compute shader needs.
     ResultArity { results: usize, left: usize },
@@ -318,9 +296,7 @@ impl fmt::Display for SpirvRefusal {
     }
 }
 
-/// How many buffers a module binds.  A property of the *caller's* buffers, not of
-/// the fragment: a fragment names buffers by position but does not say how many
-/// exist.
+/// How many buffers a module binds: a property of the caller's buffers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Binding {
     /// Buffers reachable through `BufferReadCall`.
@@ -362,34 +338,23 @@ struct Slot {
     kind: Kind,
 }
 
-/// The type a slot's id has — and, for the one instruction whose class the IR
-/// does not fix, the value it holds.
+/// The type a slot's id has, and the value it holds where the IR does not fix it.
 ///
-/// # Why the type has to ride on the slot
-///
-/// **The IR is untyped and this target is not.** A comparison here yields
-/// `OpTypeBool` — the shape `OpSelect` wants, and the one place this backend
-/// differs from wasm's, whose comparisons yield a narrow integer instead. But
-/// the *language* says a comparison yields the `0`/`1` scalar, and a kernel may
-/// use it as one: a bitwise operand (`(a < b) & c`), a comparison's own operand
-/// (`(a < b) == c`), a stored element, a `Select` arm. In every one of those
-/// positions a bool is the wrong type, and a module that mixed them would be
-/// rejected by the driver rather than compute something else. So each slot
-/// records what it holds, and the two coercions ([`as_class`]/[`as_condition`])
-/// are emitted exactly where a position demands the other — which for the common
-/// case (`if` over a comparison) is nowhere.
+/// # Invariant
+/// The IR is untyped and this target is not: a comparison here yields `OpTypeBool`, while the
+/// language says it yields the `0`/`1` scalar, so a bool is the wrong type in a bitwise operand, a
+/// comparison's operand, a stored element or a `Select` arm. Each slot records what it holds, and the
+/// two coercions are emitted where a position demands the other.
 #[derive(Debug, Clone, Copy)]
 enum Kind {
-    /// A value of the named class: the module's scalar, or the integer an access
-    /// chain's index takes, which is the same type as the scalar in an integer
-    /// module and a 32-bit one in a float module.
+    /// A value of the named class.
     Scalar(ScalarClass),
-    /// A constant, and the `i64` the body pushed for it. **The class is not
-    /// fixed by the IR**: the same `Const(0)` is a buffer position in one place
-    /// (the integer `0`) and a float's bit pattern in another (the `f32` whose
-    /// bits are zero), and only the position it is consumed in decides. So the
-    /// payload rides here until a position reads it, and the constant is
-    /// materialised per class on demand — see [`Literals`].
+    /// A constant, and the `i64` the body pushed for it.
+    ///
+    /// # Invariant
+    /// The class is not fixed by the IR: the same `Const(0)` is a buffer position in one place and a
+    /// float's bit pattern in another, and only the position it is consumed in decides, so the
+    /// payload rides here until a position reads it.
     Literal(i64),
     /// The `OpTypeBool` a comparison yields.
     Condition,
@@ -439,18 +404,15 @@ impl Slot {
     }
 }
 
-/// The module-scope constants the body's literals need, one pool per class a
-/// literal can be read as.
+/// The module-scope constants the body's literals need, one pool per class.
 ///
-/// Keyed by class *and* value because the two readings of one `i64` are two
-/// different SPIR-V constants: a float value is its 32 bits, an integer is the
-/// number. The id in [`Slot`] is the reading the push assumed (the module's
-/// scalar); a position that wants the other class asks here again, and the
-/// constant is emitted once however many positions use it.
+/// # Invariant
+/// Keyed by class and value, because the two readings of one `i64` are two constants: a float value
+/// is its 32 bits, an integer is the number. A position that wants the other class asks again, and
+/// the constant is emitted once however many positions use it.
 #[derive(Default)]
 struct Literals {
-    /// The `OpConstant` declarations, emitted in the types-and-constants
-    /// section: a constant is module-scope, so nothing may put it in the body.
+    /// The `OpConstant` declarations, emitted in the types-and-constants section.
     declarations: Vec<Inst>,
     emitted: HashMap<(ScalarClass, i64), u32>,
 }
@@ -465,11 +427,8 @@ impl Literals {
         let id = *next;
         *next += 1;
         let mut operands = vec![ids.type_of(class), id];
-        // The literal words are the **type's** width, which for the integer class
-        // is the module's integer width and not the language's: 64 bits in an
-        // integer module, 32 in a float one, where an integer is only ever an
-        // element index. `OpTypeInt 32` with two literal words is an invalid
-        // instruction, not merely a wide constant.
+        // The literal words are the type's width: 64 bits in an integer module, 32 in
+        // a float one.
         let wide = class == ScalarClass::Int && ids.class == ScalarClass::Int;
         if wide {
             // Low word, then high word.
@@ -477,9 +436,7 @@ impl Literals {
             operands.push((value >> 32) as u32);
         } else {
             // A 32-bit type's literal is one word: the integer's low half, or the
-            // float's bits. Which way a producer widened a `u32` into the IR's
-            // `i64` — zero- or sign-extended — is not something the IR says, and
-            // `as u32` reads either the same way.
+            // float's bits.
             operands.push(value as u32);
         }
         self.declarations.push(Inst::new(op::CONSTANT, operands));
@@ -518,27 +475,18 @@ struct Ids {
     class: ScalarClass,
     void: u32,
     boolean: u32,
-    /// The fragment's own integer type, and the type every *integer* value in
-    /// the body has: **unsigned** 64-bit in an integer module, because the
-    /// language's `Int` is a machine-sized unsigned integer, so it is what a
-    /// buffer element holds and what the unsigned opcodes (`OpUDiv`, `OpUMod`,
-    /// `OpULessThan`, …) require — SPIR-V checks that operand, so declaring this
-    /// signed would make a kernel that divides, takes a remainder or compares
-    /// *invalid* rather than wrong.  `spirv-val` rules on that offline; see the
-    /// module docs.
+    /// The fragment's own integer type: unsigned 64-bit in an integer module.
     ///
-    /// **A float module does not declare it.** Its integer values are 32-bit
-    /// element indices, and declaring a 64-bit integer would cost the `Int64`
-    /// capability — and, with it, a device feature a float kernel has no use for
-    /// (`docs/notes/floating-point.md` §4.4).
+    /// # Invariant
+    /// Unsigned, because the language's `Int` is a machine-sized unsigned integer and the unsigned
+    /// opcodes require it — SPIR-V checks that operand, so declaring it signed would make a dividing
+    /// kernel invalid rather than wrong. A float module declares no 64-bit integer: its integers are
+    /// 32-bit indices, and one would cost the `Int64` capability.
     ulong: u32,
     /// The 32-bit float: the scalar in a float module, and declared only there.
-    /// SPIR-V's `Float32` is core, so it carries no capability.
     float: u32,
-    /// The 32-bit unsigned type. It is the type of an invocation id's component
-    /// and of an access chain's member indices in every module, and — in a float
-    /// module, where nothing is 64-bit — the type an element index and a callee's
-    /// integer parameter have.
+    /// The 32-bit unsigned type: an invocation id's component, a member index, and a
+    /// float module's element index.
     uint: u32,
     v3uint: u32,
     /// The per-class storage-buffer type chain, keyed by [`ScalarClass::index`].
@@ -559,22 +507,12 @@ struct Ids {
     /// Position `0` is the entry point, and every function is named before any
     /// body is walked, so a call may name a function emitted later.
     functions: Vec<u32>,
-    /// The 32-bit `0` an access chain's member indices are built from, and the
-    /// zero a float's *bit pattern* is compared against ([`as_condition`]) — 32
-    /// bits in every module, which is what makes it the right zero there even
-    /// where the integer class is 64-bit.
+    /// The 32-bit `0` an access chain's indices are built from.
     zero: u32,
-    /// The scalar `1` and `0` a comparison is materialised into — the operands
-    /// of the `OpSelect` [`as_class`] emits — where the position wants the
-    /// **integer** class.  In an integer module that class is the module's
-    /// scalar and these are its pair; in a float module the integer is the
-    /// 32-bit element index, whose `0` is [`Self::zero`].
+    /// The scalar `1` and `0` a comparison is materialised into, in the integer class.
     one_integer: u32,
     zero_integer: u32,
-    /// The same materialisation where the position wants the **float** class:
-    /// the `f32` pair, declared in every module.  In a float module these are
-    /// the module's scalar pair; in an integer module they are the only floats
-    /// it holds, which is what lets a comparison be materialised there at all.
+    /// The same materialisation where the position wants the float class.
     one_float: u32,
     zero_float: u32,
     gid: u32,
@@ -636,8 +574,7 @@ impl Ids {
     }
 }
 
-/// A NUL-terminated, word-padded literal string, as SPIR-V packs them: four
-/// bytes per word, little-endian, zero-padded to a word boundary.
+/// A NUL-terminated, word-padded literal string, as SPIR-V packs them.
 fn spv_string(text: &[u8]) -> Vec<u32> {
     let mut bytes = text.to_vec();
     bytes.push(0);
@@ -651,12 +588,7 @@ fn spv_string(text: &[u8]) -> Vec<u32> {
         .collect()
 }
 
-/// The flattened parameter offset the index occupies.
-///
-/// A parallel fragment's parameters are its input slots followed by the index, so
-/// the index is the **last** leaf. It is recognised structurally rather than
-/// passed in, so a caller cannot disagree with a fragment about which parameter
-/// is the index.
+/// The flattened parameter offset the index occupies: the last leaf.
 pub(crate) fn index_local(fragment: &KernelFragment) -> Option<u32> {
     let arity = fragment.param_shape.flat_arity();
     (arity > 0).then(|| (arity - 1) as u32)
@@ -767,10 +699,7 @@ pub fn needs_int64(launch: &LaunchSet<'_>) -> Result<bool, SpirvRefusal> {
 pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, SpirvRefusal> {
     let ordered = launch.ordered();
     let root = launch.root();
-    // The module's one numeric class, read off the root before anything is
-    // emitted: it decides the scalar type, the element type and stride, the
-    // arithmetic opcodes and the capability list, and [`needs_int64`] reads the
-    // same derivation, so a caller and this module cannot disagree about it.
+    // The module's numeric class, read off the root before anything is emitted.
     let class = module_class(root)?;
     let index = index_local(root).ok_or(SpirvRefusal::ResultArity {
         results: root.result_classes.len(),
@@ -846,8 +775,7 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
         buffers,
     };
 
-    // `OpConstant` is a *module-scope* instruction, so the bodies' literals are
-    // collected here and emitted with the types rather than inside a function.
+    // `OpConstant` is module-scope, so the literals are emitted with the types.
     let mut literals = Literals::default();
     // The first function-local id: everything above is module-scope.
     let mut next = taken;
@@ -934,18 +862,14 @@ fn emit_function(
     let mut slots: HashMap<ValueId, Slot> = HashMap::new();
 
     if entry {
-        // The index value: the invocation id's x component. It is an **integer**
-        // whatever the fragment's parameter leaves say, because this target's index
-        // is the invocation id rather than a value of the fragment's domain — a
-        // parallel fragment's leaves are `(config, index)` and both are integers
-        // however its buffers are classed.
-        //
-        // An integer module widens it to the fragment's 64-bit `Int`, which is the
-        // scalar a body may then use it as (`out[i] = i + i`); an index is never
-        // negative, so the widening is exact and the CPU path's index parameter is
-        // the same value. A float module leaves it 32-bit: that is all an access
-        // chain's index takes, and it keeps a 64-bit integer — and its capability —
-        // out of a module that has no other use for one.
+        // The index value: the invocation id's x component, an integer whatever the
+        // fragment's leaves say.
+
+        // An integer module widens it to the fragment's 64-bit `Int`, which the body may
+        // then use as a scalar.
+
+        // A float module leaves it 32-bit, keeping a 64-bit integer and its capability
+        // out.
         let loaded = next;
         next += 1;
         let component = next;
@@ -2315,15 +2239,10 @@ fn function_body(plan: &Plan, blocks: &mut [Block], ids: &Ids) -> Vec<Inst> {
 
 /// Write the module in SPIR-V's required section order.
 ///
-/// The order is not a style choice: the entry point must precede the function it
-/// names, annotations must precede the types and variables they decorate, and
-/// types must precede their use. All of that is legal only because every id was
-/// reserved up front.
-///
 /// # Invariant
-/// One `OpFunction` per fragment in the set, in the set's order, and position `0`
-/// is the entry point: a call names a function id, so the set's order *is* the
-/// module's function order and the two cannot come apart.
+/// The order is not a style choice: an entry point must precede the function it names, annotations
+/// the types they decorate, types their use — all legal only because every id was reserved up front.
+/// One `OpFunction` per fragment in the set's order, position `0` being the entry point.
 fn assemble(
     launch: &LaunchSet<'_>,
     ids: &Ids,
@@ -2343,11 +2262,8 @@ fn assemble(
         }
     };
 
-    // 1. Capabilities. `Int64` only where the module has a 64-bit integer: a
-    // float module's integers are 32-bit element indices and its scalar is
-    // `Float32`, which is core, so declaring the capability there would demand a
-    // device feature for a type the module never uses — and `needs_int64` says
-    // exactly what is declared here.
+    // 1. Capabilities. `Int64` only where the module has a 64-bit integer: a float
+    // module's integers are 32-bit indices.
     let mut capabilities = vec![Inst::new(op::CAPABILITY, vec![capability::SHADER])];
     if ids.class == ScalarClass::Int {
         capabilities.push(Inst::new(op::CAPABILITY, vec![capability::INT64]));
@@ -2363,12 +2279,10 @@ fn assemble(
         )],
     );
 
-    // 3. Entry point, and its execution mode. The interface lists the globals
-    // the shader reads from the invocation: SPIR-V 1.4 narrowed this list to
-    // Input/Output variables, which is what the validator enforces. Storage
-    // buffers are reached through the descriptor set instead and are named by
-    // their `Binding` decorations — **and a called function reaches the same ones
-    //**, which is why they are not listed per function.
+    // 3. Entry point and its execution mode. The interface lists only Input/Output
+    // globals, which is all SPIR-V 1.4 allows.
+
+    // Storage buffers are named by their `Binding` decorations, not listed here.
     let mut interface = vec![EXECUTION_MODEL_GL_COMPUTE, ids.entry()];
     interface.extend(spv_string(b"main"));
     interface.push(ids.gid);
@@ -2491,16 +2405,13 @@ fn assemble(
     emit_all(&mut out, &types);
 
     let mut constants = vec![Inst::new(op::CONSTANT, vec![ids.uint, ids.zero, 0])];
-    // The scalar `1` and `0` a comparison is materialised into — `1.0`/`0.0`
-    // over two floats, the integer pair over the module's integer (`i64` in an
-    // integer module, `u32` in a float one). Declared unconditionally with the
-    // other constants — `OpConstant` is module-scope, and an unused constant is
-    // legal — because which body needs them is known only after the walk above.
-    //
-    // **Both pairs, because both element types are declared in every module**
-    // (see the module docs): a comparison materialised into a float position is
-    // reachable in an integer module too. The integer `0` a float module needs is
-    // `ids.zero` above, so only its `1` is declared here.
+    // The scalar `1` and `0` a comparison is materialised into, over two floats and
+    // over the module's integer.
+
+    // Declared unconditionally: `OpConstant` is module-scope and an unused constant
+    // is legal.
+
+    // Both pairs, because both element types are declared in every module.
     match ids.class {
         ScalarClass::Int => {
             constants.push(Inst::new(
@@ -2589,14 +2500,11 @@ fn assemble(
 
 /// The class a binary operator runs over, from its two operands.
 ///
-/// A literal follows the other operand: `Const(1)` beside the index is the
-/// integer `1` and beside a float is the `f32` whose bits are `1`. With **both**
-/// operands literals nothing else can decide, so the module's own class does —
-/// which is what makes `2.0 * 3.0` float arithmetic in a float module. The price
-/// is that a *pure constant* expression used as an index (`1 + 2`, say) reads as
-/// arithmetic over two bit patterns and is refused at the position that wanted
-/// an index. Refusing beats the alternative: emitting integer arithmetic over
-/// the same payloads would silently be a different number in the other case.
+/// # Invariant
+/// A literal follows the other operand — `Const(1)` beside the index is the integer `1`, beside a
+/// float the `f32` whose bits are `1` — and with both operands literals the module's own class
+/// decides, which is what makes `2.0 * 3.0` float arithmetic. The price is that a pure constant
+/// expression used as an index reads as arithmetic over two bit patterns and is refused there.
 fn bin_class(lhs: Kind, rhs: Kind, module: ScalarClass) -> ScalarClass {
     match (lhs, rhs) {
         (Kind::Scalar(class), _) => class,
@@ -2607,19 +2515,11 @@ fn bin_class(lhs: Kind, rhs: Kind, module: ScalarClass) -> ScalarClass {
 
 /// `slot` as a value of `class`, emitting what the change needs.
 ///
-/// Three cases, each a fact about the module rather than a preference:
-///
-/// * a [`Kind::Literal`] becomes a constant of `class` — `Const` is the one IR
-///   instruction whose class the position decides, and [`Literals`] emits each
-///   reading of it once;
-/// * a [`Kind::Condition`] becomes that class's `1`/`0`, through `OpSelect` over
-///   the two constants: there is no `OpConvertBoolToInt` (a bool's stored form
-///   is not defined), and over two floats the scalar the language means is
-///   `1.0`/`0.0` rather than an integer select;
-/// * a [`Kind::Scalar`] of the *other* class has no conversion at all. `Int` and
-///   `Float` do not convert in either direction
-///   (`docs/notes/floating-point.md` §4.2), so a fragment that asks for one is
-///   refused by name rather than turned into a different number.
+/// # Invariant
+/// Three cases, each a fact about the module: a literal becomes a constant of `class`, the one IR
+/// instruction whose class the position decides; a condition becomes that class's `1`/`0` through
+/// `OpSelect`, since there is no `OpConvertBoolToInt`; and a scalar of the other class is refused by
+/// name rather than converted.
 fn as_class(
     slot: Slot,
     class: ScalarClass,
@@ -2653,21 +2553,10 @@ fn as_class(
 
 /// The `bool` a `select` takes for `slot`, converting a scalar.
 ///
-/// **Non-zero is true**, which is what wasm's `select` means by its `i32`
-/// condition — the instruction this one stands in for (`I32WrapI64`) narrows
-/// there and converts here, so the two targets agree on what a condition is.
-///
-/// # For a float, the bit pattern is what is tested
-///
-/// "The bit pattern is non-zero" is **not** the same question as "the value is
-/// not zero": `-0.0` has a non-zero bit pattern, and a `NaN` — whose bit pattern
-/// is non-zero by definition — compares unequal to everything, so
-/// `OpFOrdNotEqual x, 0.0` answers *false* for it and would send a `NaN` selector
-/// down the else arm. So a float is **reinterpreted** as its 32 bits
-/// (`OpBitcast`: same width, the same bits, no conversion of the value) and
-/// compared as an integer, which is the bit pattern exactly. A literal's payload
-/// is already the pattern — it is the `f32`'s bits — so it is compared in its
-/// integer reading, with no instruction spent reinterpreting it.
+/// # Invariant
+/// Non-zero is true, which is what wasm's `select` means by its condition. For a float the bit
+/// pattern is what is tested, not the value: `-0.0` has a non-zero pattern and a `NaN` compares
+/// unequal to everything, so the float is bitcast and compared as an integer.
 fn as_condition(
     slot: Slot,
     ids: &Ids,
@@ -2691,11 +2580,8 @@ fn as_condition(
             *next += 1;
             let result = *next;
             *next += 1;
-            // The bit pattern is compared in its **32-bit** reading, so the zero
-            // is `ids.zero` and not the integer class's: in an integer module that
-            // class is 64-bit, and `OpINotEqual` over a `uint` and a `ulong` is an
-            // invalid instruction rather than a wide comparison. `ids.zero` is the
-            // 32-bit `0` every module declares.
+            // The pattern is compared in its 32-bit reading, so the zero is
+            // `ids.zero`.
             code.push(Inst::new(op::BITCAST, vec![ids.uint, bits, slot.id]));
             code.push(Inst::new(
                 op::I_NOT_EQUAL,
@@ -2718,12 +2604,10 @@ fn as_condition(
 
 /// Resolve a buffer position into a slot in the module's buffer list.
 ///
-/// **Reads and writes address different position spaces.** A read names a
-/// *config* position, counting from `base` over the inputs; a write names its
-/// *emission ordinal*, counting from `base` over the outputs. The two spaces are
-/// distinct facts of the IR — `out_pos` is the index function's codomain
-/// position, not an index into one combined list — so a write's position `0` is
-/// the first **output**, never the first input.
+/// # Invariant
+/// Reads and writes address different position spaces: a read names a config position counting from
+/// `base` over the inputs, a write its emission ordinal counting from `base` over the outputs. So a
+/// write's position `0` is the first output, never the first input.
 fn buffer_slot(
     position: Slot,
     at: usize,
