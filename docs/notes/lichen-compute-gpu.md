@@ -185,6 +185,155 @@ device, are the module contract in list form:
   element is itself a struct. This one the validator could not see; the device
   caught it.
 
+## Two passes, because a module's sections are ordered
+
+SPIR-V requires instructions in a fixed section order, and the entry point —
+which must name the function and list the globals that function reaches — comes
+*before* the types, variables and body it names. Ids are therefore **all
+pre-allocated** before anything is emitted, the body is walked first to learn
+which buffers it touches, and only then is the module written in section order.
+Emitting in one pass would mean either forward-referencing the entry point or
+emitting it twice. `assemble`'s numbered sections are that order made explicit:
+capabilities, memory model and entry point, annotations, types and constants,
+variables, then the function.
+
+The emitter keeps **one id per `ValueId`** — SPIR-V is SSA and this emitter does
+not pretend otherwise.
+
+## The SSA emitter: how a body becomes structured SPIR-V
+
+`plan_body` lays the body's blocks out as structured control flow, and everything
+it decides is a structural fact rather than a target preference:
+
+- **A loop header is recognised, not marked.** SSA has no `While`: a block is a
+  loop header when an edge on the active depth-first path returns to it, and that
+  is the same rule that makes it the dominator of everything the loop holds. A
+  `CondBr` that is not a loop header is a selection, whose merge block is the
+  immediate post-dominator of its arms.
+- **Which arm stays in the loop is the one that can reach the header again**, so
+  the exit is decided by the same edge the header was. `OpLoopMerge`'s continue
+  target must differ from the header and be dominated by it, and a header with no
+  exit or with both arms reaching back is a `ControlFlow` refusal naming which.
+- **A selection's merge block must be dominated by the selection.** A join the
+  selection is inside — a loop header, an outer join — is not, so the selection
+  gets a pass-through block of its own and branches the join from there.
+  `redirect` resolves a declared target through those pass-throughs, taking the
+  **innermost** enclosing selection (a header that dominates the one already
+  chosen is deeper).
+- **Depth-first pre-order is what makes a definition precede its uses**: a
+  dominator is an ancestor in the depth-first tree, so it is written first. The
+  immediate post-dominators are computed over the graph with one virtual exit
+  every return reaches; that exit is the fallback answer only when no real block
+  is a strict post-dominator.
+
+On top of that plan:
+
+- **One `OpPhi` per block parameter**, filled in as the edges that reach the block
+  are emitted — a predecessor's terminator is emitted before the block it enters.
+- **The index parameter is the one entry-block parameter this target can place**:
+  it is the invocation id rather than a value of the fragment's domain, so it is a
+  *binding* rather than an instruction to interpret, and any other parameter is
+  refused where it is read (`SpirvRefusal::NonIndexParameter`) rather than
+  silently given some id. `index_local` finds it as the last leaf of the flattened
+  parameters, recognised structurally so a caller cannot disagree with a fragment
+  about which parameter it is.
+- **An `OpPhi` has one type however its edges were written**, so `resolved` fixes a
+  literal's kind to the module's class. A constant is emitted once per
+  (class, value) — SPIR-V requires every id to be defined exactly once — and since
+  `OpConstant` is module-scope the body's literals are collected in pass 1. The
+  same `Const(0)` is a buffer position in one place and a float's bit pattern in
+  another, so the payload rides in a `Literals` pool until a position reads it and
+  is materialised per class on demand.
+- **The returned values are the terminator's list**, so the result arity is a fact
+  of the body rather than of whatever happened to be left over.
+
+Three class facts the walk carries:
+
+- **A comparison's operands and result need not be scalars** — `(a < b) == c`
+  compares the scalar a comparison means — so both are materialised where the
+  position demands it. A comparison itself yields a `bool`, which is what `Select`
+  consumes and needs no widening.
+- **Float `==`/`!=` compares bit patterns.** The language routes both through
+  `ValueExt::value_eq`, which for a float compares `to_bits`, so `0.0 == -0.0` is
+  `0` and `NaN == NaN` is `1`. `OpFOrdEqual` is the trap here — right for IEEE and
+  wrong for this language — so a float equality reinterprets both operands in their
+  32-bit reading and compares the integers, which is `to_bits` exactly.
+- **A crossing is representable in both module classes**, because both element
+  types are declared (below). The operand is the class the conversion is *from*,
+  and a crossing of one class to itself is a reclassification that emits nothing:
+  `Int → Float` is `OpConvertUToF` and `Float → Int` is `OpConvertFToU`. An access
+  chain's index is an integer, so a float in that position is refused by name
+  rather than converted.
+
+`OpFDiv` is emitted plainly with no zero-divisor guard: a zero divisor is
+undefined here and IEEE on wasm, the recorded price of admitting floats
+([floating-point](floating-point.md) §4.4).
+
+One position rule: a buffer operation's *position* selects **which**
+storage-buffer variable to reach, so it is read as a number rather than as an id.
+A position is a `Const` computed immediately before the call — a value that was
+*computed* is not an ordinal however constant its value happens to be, and
+reading one as a position would address a buffer the caller never named.
+
+## Per-buffer element classes
+
+A module's *arithmetic* class and a buffer's *element* class are two different
+facts, and a mixed fragment is the case that separates them.
+
+- **`module_class` is the arithmetic class.** Buffer element classes are read
+  first — they are what the body reads and writes, and the positions data crosses
+  the ABI at — then the parameter leaves **except the index**, since a parallel
+  fragment's `param_shape` is `(config, index)` and both leaves are integers
+  whatever its buffers hold. A fragment with neither is an integer module. It no
+  longer refuses a fragment whose buffers disagree: it is one module's arithmetic
+  class, and the first buffer class wins.
+- **`buffer_classes` is the set of classes the module declares a chain for.** A
+  class no buffer holds is not declared: an unused `OpTypeStruct` is legal but it
+  would be a second copy of a rule nobody asked for, and a fragment that declared
+  it would have no way to say which of its chains a given binding means.
+- **The chain itself** (`BufferTypes`) is the element struct, the runtime array
+  over it, the block struct that wraps the array, and the two pointers the body
+  reaches through. Two of the module-contract errors above are why it has that
+  shape: a `StorageBuffer` variable must be typed as a struct (or an array of
+  one), and a runtime array may only be a struct's final member, so the buffer
+  takes two struct levels. `ptr_elem` points at one element *in the
+  storage-buffer storage class*, and its pointee is the class's own scalar.
+- **One chain per class in use**, keyed by `ScalarClass::index`, five ids each in
+  `ScalarClass::ALL` order, allocated in pass 1; `chain_of` is only ever read for a
+  class `buffer_classes` reported. An id nothing defines is legal — the id bound is
+  an upper limit, not a count — so a float module reserves `ulong` and leaves it
+  undefined. The function-local ids come from `next`, which starts after the last
+  module-scope id and ends as the module's id bound.
+- **`buffer_class_of(slot)`** reads slots inputs-first-then-outputs, the order a
+  `Binding` and every `Buffer{Read,Write}Call` position use. It falls back to
+  `module_class` for a slot the fragment's lists do not reach, and it is
+  `pub(crate)` because the **dispatch path asks the same question**: the bytes
+  staged for a buffer are that buffer's class's `byte_width()`, so a caller and the
+  module it binds cannot disagree about how wide a buffer is.
+- **A buffer's variable is typed with its own class's block struct**, which is what
+  makes a mixed module bindable: a dispatch binds a descriptor against the type the
+  shader declares for that binding, so the `Int` variable must be the `Int` chain
+  and the `Float` variable the `Float` one.
+- **Both scalar types are declared in every module**, because a body may hold
+  values of either class and cross between them through `Conv`. `Float32` is core
+  SPIR-V and carries no capability, so it is unconditional; the 64-bit integer is
+  what costs `Int64`, declared whenever **anything** in the fragment is 64-bit —
+  an integer buffer counts, which is the difference a mixed fragment makes
+  (`needs_int64` asks the same question). A float fragment therefore needs no
+  device capability at all: its index is 32-bit and no value in it is a 64-bit
+  integer.
+- **The element struct's only member is that buffer's own scalar**, which is where
+  "does this buffer hold floats" is decided — per buffer, not per module. The
+  `ArrayStride` decoration is that same width — eight bytes for the integer ABI's
+  `i64`, four for an `f32` — and it is the *only* place the module states it: the
+  runtime array it decorates is the buffer a dispatch binds, and a dispatch reads
+  the stride off the buffer it is binding rather than off the module, so one
+  stride per class in use is enough.
+- **A storage-buffer access chain needs three indices**, not two: the block
+  struct's member, the element within the runtime array, and the element struct's
+  member. A read yields that buffer's element class; a write stores that buffer's
+  element class, whichever class the body computed the value in.
+
 ## Two position spaces, and the silent bug they caused
 
 A read's position (`cfg_pos`) counts over the **inputs**. A write's position

@@ -1,89 +1,11 @@
 //! The SPIR-V emitter: a [`KernelFragment`] to a SPIR-V compute module.
 //!
-//! # Why this is hand-written
-//!
-//! The IR has a handful of value-producing operations and two buffer
-//! operations, so the whole emitter is a small walk over [`KernelInstr`] that
-//! keeps **one id per [`ValueId`]** — SPIR-V is SSA and this emitter does not
-//! pretend otherwise. A builder crate would not remove the part that actually goes
-//! wrong: the **module contract** — the section order, which capabilities are
-//! declared, which variables carry which decorations, and what the entry point's
-//! interface lists. A builder spells opcodes for you and validates nothing about
-//! a module's shape.
-//!
-//! What removes that risk instead is offline validation: the emitted words can be
-//! run through `spirv-val` and disassembled with `spirv-dis` before they reach a
-//! driver, so a wrong module is a readable diagnostic rather than a
-//! `VK_ERROR_*` at pipeline creation — or, worse, a silently miscompiled kernel.
-//! Those tools are a *development* aid; this crate depends on nothing but `ash`
-//! and the IR.
-//!
-//! # Structure: two passes, because a module's sections are ordered
-//!
-//! SPIR-V requires instructions in a fixed section order, and the entry point —
-//! which must name the function and list the globals that function reaches —
-//! comes *before* the types, variables and body it names. Ids are therefore
-//! **all pre-allocated** before anything is emitted, the body is walked first to
-//! learn which buffers it touches, and only then is the module written in
-//! section order. Emitting in one pass would mean either forward-referencing the
-//! entry point or emitting it twice.
-//!
-//! # The invariant the caller relies on: a write is reached by every invocation
-//!
-//! The body is emitted as basic blocks — `OpBranch`, `OpBranchConditional`,
-//! `OpLoopMerge`, `OpSelectionMerge`, and one `OpPhi` per block parameter — so
-//! `dispatch`, which allocates output buffers and **does not initialise them**,
-//! needs every lane to reach its `BufferWriteCall`. A selection arm does: it runs
-//! on exactly the lanes that took it. **A loop body does not**, because a zero
-//! trip count is a lane that never runs it, and a write there is refused by name
-//! ([`SpirvRefusal::WriteInsideLoop`]).
-//!
-//! # The one place this target disagrees with the wasm backend
-//!
-//! The IR says a comparison yields the `0`/`1` scalar, because lichen has no
-//! `Bool` value. `KernelInstr::I32WrapI64` exists because the wasm MVP's `select`
-//! takes an `i32` *condition*, so a comparison has to be narrowed to drive one;
-//! SPIR-V's comparison operations (`OpULessThanEqual`, `OpIEqual`) already yield
-//! `OpTypeBool`, which is what `OpSelect` takes. So for the shape the compiler
-//! actually emits for an `if` — a comparison, the narrowing, then a select — the
-//! narrowing has nowhere to go here, and **it is a no-op**: the same instruction
-//! stream, one target needing it (there, to build the condition) and the other
-//! not. That is the clearest evidence the IR is target-neutral.
-//!
-//! What neither backend can escape is the other direction: a comparison *used as
-//! a value* — a bitwise operand, a buffer element, a select arm, another
-//! comparison's operand — has to become the scalar the language says it is, and
-//! a scalar *condition* has to become a bool. Wasm gets both from the two
-//! integer instructions that surround a comparison; this target emits the same
-//! two conversions where the position demands them instead (see
-//! [`as_class`]/[`as_condition`]). Same IR, same semantics, two spellings.
-//!
-//! # A module's arithmetic has one class; each buffer its own
-//!
-//! A buffer's element type, array stride, block struct and variable type are read
-//! **per buffer** through [`buffer_class_of`]. [`module_class`] is the fragment's
-//! *arithmetic* class — the scalar type, the opcodes a `Bin` reaches, and the
-//! fallback for a slot its class lists do not reach — and it is baked in rather
-//! than chosen per dispatch because those are module-scope instructions.
-//!
-//! **A crossing always has the type it needs.** `Int` and `Float` do not convert
-//! in either direction on their own (`docs/notes/floating-point.md` §4.2), but a
-//! body may compute in one class and cross to the other through the explicit
-//! `Conv`, so each class's scalar needs an id to name. `OpTypeFloat 32` is core
-//! SPIR-V and costs no capability, so only the **64-bit integer** is conditional:
-//! an integer fragment's scalar is that 64-bit unsigned integer and it declares
-//! `Int64`; a float fragment's scalar is a 32-bit float and its **index** is
-//! 32-bit, so it needs no device with `shaderInt64` — [`needs_int64`] is what a
-//! caller checks before it builds a pipeline.
-//!
-//! The price of the missing 64-bit integer is that a float module's `Int` data
-//! is 32-bit where the wasm target's is 64-bit, so the two diverge past 2³²; it
-//! is the same kind of recorded price as kernels computing `f32` while the
-//! interpreter computes `f64` (`docs/notes/floating-point.md`).
-//!
-//! A comparison still yields `OpTypeBool` here and is still materialised only
-//! where a position wants the scalar, but *which* scalar is the class's: the
-//! language's `1`/`0` is `1.0`/`0.0` over two floats, not an integer select.
+//! # Invariant
+//! A `BufferWriteCall` is reached by every invocation, and a body that would break
+//! that — a write inside a loop — is refused by name. Why this is hand-written,
+//! the two passes a module's section order forces, the one place this target
+//! disagrees with the wasm backend, and the per-buffer element class:
+//! `docs/notes/lichen-compute-gpu.md`.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -272,15 +194,14 @@ pub enum SpirvRefusal {
     MixedClasses { at: usize },
     /// The body does not leave exactly the one value a compute shader needs.
     ResultArity { results: usize, left: usize },
-    /// A buffer write inside a loop body. The loop's trip count is per lane and
-    /// may be zero, so a lane can reach its write zero times.
+    /// A buffer write inside a loop body: the trip count is per lane and may be zero.
     WriteInsideLoop { at: usize },
     /// A body the target has no way to structure.
     ///
-    /// **Refused rather than emitted**, because a dropped branch is a fragment
-    /// that computes a different program than it was lowered from — and because
-    /// the transfer is already in the IR, so this refusal is about the *emitter*,
-    /// not about what the language can say.
+    /// # Invariant
+    /// Refused rather than emitted: a dropped branch is a fragment that computes a
+    /// different program than it was lowered from, and the transfer is already in the
+    /// IR, so this is about the emitter rather than about what the language can say.
     ControlFlow { detail: String },
 }
 
@@ -464,12 +385,10 @@ const FLOAT_VALUE: Kind = Kind::Scalar(ScalarClass::Float);
 impl Slot {
     /// The compile-time constant this slot is, or `None` for a computed value.
     ///
-    /// A buffer operation's *position* selects **which** storage-buffer variable
-    /// to reach — a compile-time choice — so it is read as a number rather than
-    /// as an id. A position is a `Const` computed immediately before the call: a
-    /// value that was *computed* is not an ordinal however constant its value
-    /// happens to be, and reading one as a position would address a buffer the
-    /// caller never named.
+    /// # Invariant
+    /// A buffer operation's *position* selects which storage-buffer variable to reach, so
+    /// it is read as a number rather than as an id: a value that was *computed* is not an
+    /// ordinal however constant its value is.
     fn constant(self) -> Option<i64> {
         match self.kind {
             Kind::Literal(value) => Some(value),
@@ -527,20 +446,14 @@ impl Literals {
     }
 }
 
-/// The storage-buffer type chain for **one** class: the element struct, the
-/// runtime array over it, the block struct that wraps the array, and the two
-/// pointers the body reaches through.
+/// The storage-buffer type chain for one class: element struct, runtime array, block
+/// struct, two pointers.
 ///
-/// Vulkan requires a `StorageBuffer` variable to be typed as a struct, or an
-/// array of one — a bare runtime array is the older `Uniform` + `BufferBlock`
-/// style and is rejected (`VUID-StandaloneSpirv-Uniform-06807`) — and a runtime
-/// array may only be the final member of one, so the buffer takes two struct
-/// levels: the element struct, and this one holding the array.
-///
-/// `ptr_elem` is a pointer to one element *in the storage buffer storage class* —
-/// what an access chain produces, and what `OpLoad` reads and `OpStore` writes
-/// through. Its pointee is the class's own scalar, which is what makes a buffer's
-/// element type a fact of the buffer rather than of the module.
+/// # Invariant
+/// Vulkan requires a `StorageBuffer` variable to be typed as a struct, or an array of
+/// one, and a runtime array may only be the final member of one — so the chain is two
+/// struct levels. `ptr_elem` points at one element in the storage-buffer storage
+/// class, and its pointee is that class's own scalar.
 #[derive(Clone, Copy)]
 struct BufferTypes {
     elem: u32,
@@ -552,10 +465,8 @@ struct BufferTypes {
 
 /// Every module-scope id, allocated before anything is emitted.
 struct Ids {
-    /// The class the module's *arithmetic* is built for, [`module_class`]'s
-    /// answer. It decides the default scalar type and which arithmetic opcodes a
-    /// `Bin` reaches — but **not** a buffer's element type, which is that
-    /// buffer's own class: see [`Self::chain_of`].
+    /// The class the module's *arithmetic* is built for, [`module_class`]'s answer;
+    /// not a buffer's element type.
     class: ScalarClass,
     main: u32,
     label: u32,
@@ -585,15 +496,11 @@ struct Ids {
     v3uint: u32,
     /// The per-class storage-buffer type chain, keyed by [`ScalarClass::index`].
     ///
-    /// **One per class a fragment actually uses**, because the element type, the
-    /// array stride and the block struct are all a property of the *buffer's*
-    /// class rather than of the module: Vulkan binds a storage buffer against the
-    /// stride its own `ArrayStride` declares, so a module that read one `Int`
-    /// buffer and wrote one `Float` buffer needs both chains and a variable
-    /// typed with the chain of the buffer it names.
-    ///
-    /// An id nothing defines is legal — the id bound is an upper limit, not a
-    /// count — so only the classes a fragment uses are emitted.
+    /// # Invariant
+    /// One chain per class a fragment actually uses: the element type, the array
+    /// stride and the block struct are all a property of the *buffer's* class, so a
+    /// module that reads one `Int` buffer and writes one `Float` buffer needs both.
+    /// An id nothing defines is legal — the id bound is an upper limit, not a count.
     buffer_types: [BufferTypes; ScalarClass::ALL.len()],
     ptr_in: u32,
     fn_ty: u32,
@@ -692,8 +599,7 @@ pub(crate) fn index_local(fragment: &KernelFragment) -> Option<u32> {
     (arity > 0).then(|| (arity - 1) as u32)
 }
 
-/// Every parameter leaf's class, in flattening order — the order
-/// [`KernelShape::flat_arity`] counts and the entry block's parameters are in.
+/// Every parameter leaf's class, in flattening order — the order [`flat_arity`] counts.
 fn leaf_classes(shape: &KernelShape) -> Vec<ScalarClass> {
     match shape {
         KernelShape::Scalar(class) => vec![*class],
@@ -701,19 +607,14 @@ fn leaf_classes(shape: &KernelShape) -> Vec<ScalarClass> {
     }
 }
 
-/// The class of **buffer `slot`** — inputs first, then outputs, which is the
-/// order a [`Binding`] and every `Buffer{Read,Write}Call` position use.
+/// The class of buffer `slot` — inputs first, then outputs, the order a [`Binding`] uses.
 ///
-/// **This is what makes a module able to bind buffers of different classes.** A
-/// buffer's element type, array stride and block struct are that buffer's own
-/// facts, so each one is read from the fragment's per-buffer class lists rather
-/// than from a single module-wide answer; a fragment whose lists do not reach a
-/// slot falls back to [`module_class`], which is the class its parameters imply.
-///
-/// `pub(crate)` because the **dispatch path asks it too**: the bytes staged for a
-/// buffer are that buffer's class's `byte_width()`, and a fragment with two
-/// classes stages two widths. One question, asked by both sides, so a caller and
-/// the module it binds cannot disagree about how wide a buffer is.
+/// # Invariant
+/// A buffer's element type, array stride and block struct are that buffer's own facts,
+/// so each is read from the fragment's per-buffer class lists rather than from a single
+/// module-wide answer, and a slot those lists do not reach falls back to
+/// [`module_class`]. `pub(crate)` because the dispatch path asks it too: the bytes
+/// staged for a buffer are that buffer's class's `byte_width()`.
 pub(crate) fn buffer_class_of(
     fragment: &KernelFragment,
     slot: usize,
@@ -731,12 +632,12 @@ pub(crate) fn buffer_class_of(
         .unwrap_or(fallback)
 }
 
-/// Every class a fragment's **buffers** hold, in [`ScalarClass::ALL`] order.
+/// Every class a fragment's buffers hold, in [`ScalarClass::ALL`] order.
 ///
-/// **The set the module declares a type chain for.** A class no buffer holds is
-/// not declared: an unused `OpTypeStruct` is legal but it would be a second copy
-/// of a rule nobody asked for, and a fragment that declares it has no way to say
-/// which of its chains a given binding means.
+/// # Invariant
+/// The set the module declares a type chain for: a class no buffer holds is not
+/// declared, because an unused `OpTypeStruct` is a second copy of a rule nobody asked
+/// for, and a fragment that declared it could not say which chain a binding means.
 fn buffer_classes(fragment: &KernelFragment, fallback: ScalarClass) -> Vec<ScalarClass> {
     let used = |class: &ScalarClass| {
         fragment.input_classes.contains(class) || fragment.output_classes.contains(class)
@@ -749,28 +650,15 @@ fn buffer_classes(fragment: &KernelFragment, fallback: ScalarClass) -> Vec<Scala
         .collect()
 }
 
-/// The class a fragment's **arithmetic** is built for — the default scalar, and
-/// the answer a fragment with no declared buffer class is read as.
+/// The class a fragment's arithmetic is built for, and the answer for one with no
+/// declared buffer class.
 ///
-/// # Where it is read from, and why that order
-///
-/// The **buffer element classes come first**: they are what the body reads and
-/// writes, and they are the positions data crosses the ABI at. A fragment with
-/// no declared buffer class at all — a body that only computes — is read off its
-/// parameter leaves **except the index**, because this target's index is the
-/// invocation id rather than a value of the fragment: a parallel fragment's
-/// `param_shape` is `(config, index)` and both leaves are integers whatever its
-/// buffers hold.
-///
-/// A fragment with neither (no buffers, one leaf, that leaf being the index) is
-/// an integer module, which is what every fragment was before a class existed.
-///
-/// **It no longer refuses a fragment whose buffers disagree.** It is one module's
-/// *arithmetic* class now, and a buffer's element type is that buffer's own
-/// class ([`buffer_class`]); the refusal this function used to end with is gone
-/// with the assumption behind it. The first buffer class wins, so a fragment
-/// with no arithmetic of its own is built for the class of the first buffer it
-/// binds, which is the one its values came from.
+/// # Invariant
+/// The buffer element classes come first: they are what the body reads and writes, and
+/// the positions data crosses the ABI at. A fragment with no declared buffer class is
+/// read off its parameter leaves **except the index**, and one with neither is an
+/// integer module. It no longer refuses a fragment whose buffers disagree — a buffer's
+/// element type is that buffer's own class.
 pub fn module_class(fragment: &KernelFragment) -> Result<ScalarClass, SpirvRefusal> {
     if let Some(class) = fragment
         .input_classes
@@ -791,17 +679,13 @@ pub fn module_class(fragment: &KernelFragment) -> Result<ScalarClass, SpirvRefus
         .unwrap_or(ScalarClass::Int))
 }
 
-/// Whether a module for this fragment declares the 64-bit integer type, and so
-/// needs a device that offers `shaderInt64`.
+/// Whether a module for this fragment declares the 64-bit integer type, and needs
+/// `shaderInt64`.
 ///
-/// **SPIR-V's `Float32` is core, so a float fragment needs no capability at
-/// all**: its index is 32-bit and no value in it is a 64-bit integer.
-///
-/// **It asks whether a 64-bit integer is used *anywhere*, not whether the module
-/// is an integer one.** That is the difference a mixed fragment makes: it reads
-/// an `Int` buffer, so its module declares the `Int64` chain and needs the
-/// feature, even though its arithmetic default is `Float` and it would have
-/// answered `false` before.
+/// # Invariant
+/// It asks whether a 64-bit integer is used *anywhere*, not whether the module is an
+/// integer one: a mixed fragment reads an `Int` buffer, so its module declares the
+/// `Int64` chain and needs the feature even though its arithmetic default is `Float`.
 pub fn needs_int64(fragment: &KernelFragment) -> Result<bool, SpirvRefusal> {
     let holds_an_integer_buffer = fragment
         .input_classes
@@ -831,19 +715,8 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
         left: 0,
     })?;
 
-    // Pass 1 — allocate every module-scope id, then walk the body into an
-    // instruction list. The function-local ids come from `next`, which starts
-    // after the last module-scope id and ends as the module's id bound.
-    //
-    // A float module declares no 64-bit integer, so `ulong` is reserved and left
-    // undefined there. An id that nothing defines is legal: the id bound is an
-    // upper limit, not a count.
-    //
-    // **The storage-buffer type chain is allocated per class in use**, and this is
-    // what lets one module bind an `Int` buffer and a `Float` buffer: five ids per
-    // class the fragment's buffers actually hold, in [`ScalarClass::ALL`] order. A
-    // class no buffer holds is not allocated, so `Ids::chain_of` is only
-    // read for a class [`buffer_classes`] reported.
+    // Pass 1 — every module-scope id is allocated, then the body is walked into an
+    // instruction list.
     let (one_integer, zero_integer, one_float, zero_float, gid) = match class {
         ScalarClass::Int => (17, 18, 19, 20, 21),
         ScalarClass::Float => (19, 16, 17, 18, 20),
@@ -933,19 +806,15 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
         ScalarClass::Float => component,
     };
 
-    // The structure the emitter adds: which blocks are loop headers, and one merge
-    // block per `OpLoopMerge` / `OpSelectionMerge`. See [`plan_body`].
+    // The structure the emitter adds: loop headers and one merge block per merge
+    // instruction; see [`plan_body`].
     let plan = plan_body(fragment, ids.label, next)?;
     next += plan.fresh_labels;
-    // One `OpPhi` list per block, filled in as the edges that reach it are emitted:
-    // a predecessor's terminator is emitted before the block it enters.
+    // One `OpPhi` list per block, filled as the edges that reach it are emitted.
     let mut blocks: Vec<Block> = plan.nodes.iter().map(|_| Block::default()).collect();
 
-    // The index parameter is the one entry-block parameter this target can place:
-    // it is the invocation id, not a value of the fragment's domain. **A parameter
-    // is named by which value it is**, so this is a binding rather than an
-    // instruction to interpret, and any other parameter is refused where it is
-    // read rather than silently given some id.
+    // **The index parameter is the one entry-block parameter this target can place**:
+    // it is the invocation id.
     let mut slots: HashMap<ValueId, Slot> = HashMap::new();
     if let Some(index_parameter) = fragment.body.parameters().get(index as usize).copied() {
         slots.insert(index_parameter, scalar(index_value, ScalarClass::Int));
@@ -981,12 +850,8 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                     let instruction = op;
                     match instruction {
                         KernelInstr::Const(class, value) => {
-                            // A constant is emitted once per (class, value) no matter how
-                            // often the body pushes it: SPIR-V requires every id to be
-                            // defined exactly once. The push takes the class the
-                            // *instruction* names, which is the reading a value position
-                            // wants; a position that wants an integer asks the pool for that
-                            // reading instead.
+                            // One id per (class, value): SPIR-V requires every id defined
+                            // exactly once.
                             let id = literals.get(class, value, &ids, &mut next);
                             slots.insert(definition, literal(id, value));
                         }
@@ -994,12 +859,8 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                             let rhs = operand(1)?;
                             let lhs = operand(0)?;
                             let operand_class = bin_class(lhs.kind, rhs.kind, class);
-                            // A comparison is the one operator whose operands may not be
-                            // scalars — `(a < b) == c` compares the *scalar* a comparison
-                            // means — and the one whose result is not one. Every other
-                            // operator takes and produces a scalar of the class its operands
-                            // are, which is the integer class when an index and a literal
-                            // meet and the value class otherwise.
+                            // A comparison's operands and result need not be scalars, so
+                            // both are materialised here.
                             let lhs = as_class(
                                 lhs,
                                 operand_class,
@@ -1020,20 +881,12 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                             )?;
                             let result = next;
                             next += 1;
-                            // The last element of each row says the operands are compared as
-                            // **bit patterns**: the language's `==`/`!=` over two values
-                            // route through `ValueExt::value_eq`, which for a float compares
-                            // `to_bits`, so `0.0 == -0.0` is `0` and `NaN == NaN` is `1`
-                            // (`docs/notes/floating-point.md` §3.7). `OpFOrdEqual` is the
-                            // trap here — right for IEEE and wrong for this language — so a
-                            // float equality reinterprets both operands and compares the
-                            // integers, which is `to_bits` exactly.
+                            // Float `==`/`!=` compares **bit patterns**, so both operands are
+                            // reinterpreted (`docs/notes/floating-point.md` §3.7).
                             let (opcode, result_type, result_kind, as_bits) =
                                 match (operand_class, operator) {
-                                    // An `Int` is unsigned: `OpSDiv`/`OpSRem` would agree below
-                                    // 2^63 and differ above, silently.  `OpUMod` is the remainder
-                                    // the language's `%` means (`OpSRem` rounds toward zero,
-                                    // which is a different function altogether).
+                                    // An `Int` is unsigned: the signed opcodes agree below
+                                    // 2^63 and diverge above, silently.
                                     (ScalarClass::Int, KernelBin::Add) => {
                                         (op::I_ADD, ids.integer(), INT_VALUE, false)
                                     }
@@ -1049,9 +902,8 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                                     (ScalarClass::Int, KernelBin::Rem) => {
                                         (op::U_MOD, ids.integer(), INT_VALUE, false)
                                     }
-                                    // A comparison yields a bool on this target, which is exactly
-                                    // what `Select` consumes — the wasm backend's widening to a
-                                    // scalar has no counterpart here, and no cost.
+                                    // A comparison yields a bool here, which is what `Select`
+                                    // consumes: no widening, and no cost.
                                     (ScalarClass::Int, KernelBin::Lt) => {
                                         (op::U_LESS_THAN, ids.boolean, Kind::Condition, false)
                                     }
@@ -1073,9 +925,8 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                                     (ScalarClass::Int, KernelBin::Neq) => {
                                         (op::I_NOT_EQUAL, ids.boolean, Kind::Condition, false)
                                     }
-                                    // The bitwise operators, which over two comparison results
-                                    // are the language's `and`/`xor`/`or` — the place a
-                                    // comparison's scalar materialisation is actually paid for.
+                                    // The bitwise operators over two comparisons are the
+                                    // language's `and`/`xor`/`or`.
                                     (ScalarClass::Int, KernelBin::BitAnd) => {
                                         (op::BITWISE_AND, ids.integer(), INT_VALUE, false)
                                     }
@@ -1094,11 +945,8 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                                     (ScalarClass::Float, KernelBin::Mul) => {
                                         (op::F_MUL, ids.float, FLOAT_VALUE, false)
                                     }
-                                    // **`OpFDiv` plainly, and no guard.** A zero divisor is
-                                    // undefined here and IEEE on wasm, and that divergence is the
-                                    // recorded price of admitting floats at all: the language does
-                                    // not specify a kernel's float division and does not promise
-                                    // one (`docs/notes/floating-point.md` §4.4).
+                                    // **`OpFDiv` plainly, and no guard**: a zero divisor is
+                                    // undefined here and IEEE on wasm.
                                     (ScalarClass::Float, KernelBin::Div) => {
                                         (op::F_DIV, ids.float, FLOAT_VALUE, false)
                                     }
@@ -1179,13 +1027,8 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                                 },
                             );
                         }
-                        // The condition a `select` needs.  **Not a no-op here**: wasm's
-                        // `i32.wrap_i64` narrows an `i64` condition to the `i32` its
-                        // `select` takes, and this target's `select` takes a *bool*, so the
-                        // same instruction is where a condition becomes one.  When the
-                        // condition is already a comparison's bool — which is what the
-                        // emitter in `lichen-compute` produces for an `if` — it is a no-op,
-                        // and that is the case the module docs describe.
+                        // **Not a no-op here**: this target's `select` takes a bool, so this
+                        // is where a condition becomes one.
                         KernelInstr::I32WrapI64 => {
                             let popped = operand(0)?;
                             slots.insert(
@@ -1197,9 +1040,8 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                             let selector = operand(2)?;
                             let otherwise = operand(1)?;
                             let then = operand(0)?;
-                            // The arms are the language's scalars (a `select`'s result type
-                            // is its arms' type, and a scalar is what a lichen value is),
-                            // and the selector is the bool `select` takes.
+                            // The arms are the language's scalars; the selector is the bool
+                            // `select` takes.
                             let then = as_class(
                                 then,
                                 ids.class,
@@ -1228,15 +1070,8 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                             ));
                             slots.insert(definition, scalar(result, ids.class));
                         }
-                        // The language's two class crossings.  **The direction is the
-                        // instruction's**, and that is the whole reason the IR carries the
-                        // pair: `Int → Float` and `Float → Int` have the same operand shape,
-                        // so a target that read the direction off the operand would be
-                        // guessing — and the two targets could guess differently.
-                        //
-                        // The operand is the class the conversion is *from*, and a literal or
-                        // a comparison's `0`/`1` is materialised into it here — the same two
-                        // positions the rest of this emitter decides a class at.
+                        // **The direction is the instruction's**, which is why the IR carries
+                        // the pair: both crossings have one operand shape.
                         KernelInstr::Conv { from, to } => {
                             let (from, to) = (from, to);
                             let seen = operand(0)?;
@@ -1249,22 +1084,14 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                                 &mut next,
                                 at,
                             )?;
-                            // A crossing between one class and itself is a reclassification:
-                            // the value already holds the answer, and nothing is emitted.
+                            // A crossing between one class and itself is a reclassification,
+                            // and emits nothing.
                             if from == to {
                                 slots.insert(definition, seen);
                                 continue;
                             }
-                            // **Every crossing the language has is representable here, in
-                            // both module classes.**  The module declares both element types
-                            // (see the module docs), so the operand's type always has an id:
-                            // `Int → Float` is `OpConvertUToF` from the module's integer — the
-                            // 64-bit one in an integer module, the 32-bit element index in a
-                            // float one — and `Float → Int` is `OpConvertFToU` back to it.
-                            // Only the 64-bit integer and its `Int64` capability are
-                            // conditional, which is why a float module's `Int` data is 32-bit
-                            // and a value past 2³² diverges from the wasm target — the
-                            // recorded price (`docs/notes/floating-point.md`).
+                            // **Every crossing is representable here**, because the module
+                            // declares both element types.
                             let result = next;
                             next += 1;
                             let opcode = match (from, to) {
@@ -1279,9 +1106,8 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                         KernelInstr::BufferReadCall(_) => {
                             let element = operand(1)?;
                             let position = operand(0)?;
-                            // An access chain's index is an **integer**, so a float in this
-                            // position is a fragment asking for a conversion the language
-                            // does not have, and `as_class` refuses it by name.
+                            // An access chain's index is an integer, so a float here is refused
+                            // by name.
                             let element = as_class(
                                 element,
                                 ScalarClass::Int,
@@ -1292,18 +1118,16 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                                 at,
                             )?;
                             let slot = buffer_slot(position, at, 0, binding.inputs, "input")?;
-                            // **A read yields that buffer's element class**, so the value's kind
-                            // and the type the access chain reaches through are both the
-                            // buffer's own — which is what lets one module read an `Int`
-                            // buffer and a `Float` one.
+                            // **A read yields that buffer's element class**, so one module can
+                            // read `Int` and `Float` buffers.
                             let element_class = buffer_class_of(fragment, slot, ids.class);
                             let chain = ids.chain_of(element_class);
                             let pointer = next;
                             next += 1;
                             let loaded = next;
                             next += 1;
-                            // Three indices: the buffer struct's only member, then the element
-                            // within that runtime array, then the element struct's only member.
+                            // Three indices: the block struct's member, the element, the
+                            // element struct's member.
                             code.push(Inst::new(
                                 op::ACCESS_CHAIN,
                                 vec![
@@ -1322,10 +1146,8 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                             slots.insert(definition, scalar(loaded, element_class));
                         }
                         KernelInstr::BufferWriteCall(_) => {
-                            // **The one place a loop changes what `dispatch` may assume.** It
-                            // allocates output buffers without initialising them because every
-                            // lane reaches its write, and a zero trip count is a lane that
-                            // reaches the body's zero times.
+                            // **The one place a loop changes what `dispatch` may assume**: a
+                            // zero trip count never runs the body.
                             if plan.inside[node] {
                                 return Err(SpirvRefusal::WriteInsideLoop { at });
                             }
@@ -1339,10 +1161,8 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                                 binding.outputs,
                                 "output",
                             )?;
-                            // **A write stores that buffer's element class**, whichever class
-                            // the body computed the value in — so a value crossing into a
-                            // `Float` buffer is materialised into `Float` here, and a value of
-                            // the *other* class is refused rather than converted.
+                            // **A write stores that buffer's element class**, whichever class the
+                            // body computed in.
                             let element_class = buffer_class_of(fragment, slot, ids.class);
                             let chain = ids.chain_of(element_class);
                             let value = as_class(
@@ -1446,9 +1266,7 @@ fn resolve_operand(
     if let Some(slot) = slots.get(&value).copied() {
         return Ok(slot);
     }
-    // **A value that is missing because it is a *parameter* has its own refusal**:
-    // on this target a buffer is bound as a storage buffer, so there is no value
-    // for a domain parameter to hold.
+    // **A missing *parameter* has its own refusal**: a buffer is bound, not a value.
     if let Some(local) = fragment
         .body
         .parameters()
@@ -1477,8 +1295,8 @@ fn type_of(ids: &Ids, kind: Kind) -> u32 {
     }
 }
 
-/// The kind a block parameter has. A literal is fixed to the module's class,
-/// because an `OpPhi` has one type however its edges were written.
+/// The kind a block parameter has: an `OpPhi` has one type however its edges were
+/// written.
 fn resolved(kind: Kind, ids: &Ids) -> Kind {
     match kind {
         Kind::Literal(_) => Kind::Scalar(ids.class),
@@ -1552,11 +1370,12 @@ struct Plan {
 
 /// Lay a body out as structured SPIR-V control flow.
 ///
-/// **A loop is recognised structurally, because SSA has no `While`**: a block is a
-/// loop header when an edge on the active depth-first path returns to it, and that
-/// is the same rule that makes it the dominator of everything the loop holds. A
-/// `CondBr` that is not a loop header is a selection, whose merge block is the
-/// immediate post-dominator of its arms. See `docs/notes/loop-conversion.md` §8.4.
+/// # Invariant
+/// A loop is recognised structurally, because SSA has no `While`: a block is a loop
+/// header when an edge on the active depth-first path returns to it, and that is the
+/// same rule that makes it the dominator of everything the loop holds. A `CondBr` that
+/// is not a loop header is a selection, whose merge block is the immediate
+/// post-dominator of its arms.
 fn plan_body(
     fragment: &KernelFragment,
     entry_label: u32,
@@ -1620,8 +1439,7 @@ fn plan_body(
             });
         };
         let (one, zero) = (if_true.target, if_false.target);
-        // **Which branch stays in the loop is which one can reach the header
-        // again**, so the exit is decided by the same edge the header was.
+        // **Which branch stays in the loop is the one that can reach the header again**.
         let (body_entry, exit) = match (
             reaches(&successors, one, header),
             reaches(&successors, zero, header),
@@ -1641,9 +1459,8 @@ fn plan_body(
                 });
             }
         };
-        // `OpLoopMerge`'s continue target has to differ from the header and be
-        // dominated by it, which is what makes the header's body branch the
-        // continue construct's entry.
+        // `OpLoopMerge`'s continue target must differ from the header and be dominated
+        // by it.
         if body_entry == header || !dominates[body_entry][header] {
             return Err(SpirvRefusal::ControlFlow {
                 detail: format!(
@@ -1690,9 +1507,8 @@ fn plan_body(
                 ),
             });
         }
-        // **A selection's merge block must be dominated by the selection.** A join
-        // the selection is inside — a loop header, an outer join — is not, so the
-        // selection gets a pass-through of its own and branches the join from it.
+        // **A selection's merge block must be dominated by the selection**, or it gets a
+        // pass-through.
         if dominates[join][header] {
             merges[header] = Some(join);
         } else {
@@ -1824,8 +1640,8 @@ fn plan_body(
     })
 }
 
-/// Resolve a declared branch target through the pass-throughs: an edge that leaves
-/// a selection by its join enters the pass-through first.
+/// Resolve a declared target through the pass-throughs an edge crosses when it leaves a
+/// selection.
 fn redirect(
     nodes: &[Node],
     successors: &[Vec<usize>],
@@ -1848,8 +1664,8 @@ fn redirect(
         if !inside_selection(successors, header, join, origin) {
             continue;
         }
-        // **The innermost enclosing selection**: a header that dominates the one
-        // already chosen is deeper, so it takes the edge first.
+        // **The innermost enclosing selection**: a header dominating the one chosen is
+        // deeper.
         match best {
             Some((seen, _)) if !dominates[seen][header] => {}
             _ => best = Some((header, pass)),
@@ -1944,7 +1760,7 @@ fn dominators(count: usize, successors: &[Vec<usize>], entry: usize) -> Vec<Vec<
 }
 
 /// The immediate post-dominator of each node, over the graph with one virtual exit
-/// every return reaches. The virtual exit is the node numbered `count`.
+/// every return reaches.
 fn immediate_post_dominators(count: usize, successors: &[Vec<usize>]) -> Vec<Option<usize>> {
     let exit = count;
     let mut reversed: Vec<Vec<usize>> = vec![Vec::new(); count + 1];
@@ -1960,8 +1776,8 @@ fn immediate_post_dominators(count: usize, successors: &[Vec<usize>]) -> Vec<Opt
     let post = dominators(count + 1, &reversed, exit);
     (0..count)
         .map(|node| {
-            // The virtual exit post-dominates everything that returns, so it is
-            // the answer only when no real block is a strict post-dominator.
+            // The virtual exit post-dominates everything that returns, so it is the
+            // fallback answer.
             (0..count)
                 .filter(|candidate| *candidate != node && post[node][*candidate])
                 // The immediate one is post-dominated by every other strict
@@ -2002,8 +1818,11 @@ fn loop_headers(count: usize, successors: &[Vec<usize>], entry: usize) -> Vec<bo
 }
 
 /// The nodes in depth-first pre-order from `entry`, or `None` if some node is not
-/// reached. **Pre-order is what makes a definition precede its uses**: a dominator
-/// is an ancestor in the depth-first tree, so it is written first.
+/// reached.
+///
+/// # Invariant
+/// Pre-order is what makes a definition precede its uses: a dominator is an ancestor in
+/// the depth-first tree, so it is written first.
 fn depth_first(count: usize, successors: &[Vec<usize>], entry: usize) -> Option<Vec<usize>> {
     let mut order = Vec::with_capacity(count);
     let mut visited = vec![false; count];
@@ -2141,9 +1960,8 @@ impl Emitter<'_> {
         let label = self.plan.labels[node];
         match self.fragment.body.blocks[block].terminator.clone() {
             Terminator::Return { values } => {
-                // **The returned values are the terminator's list**, so a body's
-                // result arity is a fact of the body rather than of whatever
-                // happened to be left over.
+                // **The returned values are the terminator's list**, so the result arity is
+                // the body's fact.
                 if values.len() != 1 || !self.slots.contains_key(&values[0]) {
                     return Err(SpirvRefusal::ResultArity {
                         results: self.fragment.result_classes.len(),
@@ -2300,15 +2118,8 @@ fn assemble(
         )],
     );
 
-    // 4. Annotations. Decorating a type or variable declared in the *next*
-    // section is legal, and is why `OpDecorate` is a separate section at all.
-    //
-    // The stride is the **buffer's own** element width — eight bytes for the
-    // integer ABI's `i64`, four for an `f32` — and it is the *only* place the
-    // module states it: the runtime array it decorates is the buffer a dispatch
-    // binds. **One stride per class in use**, because a module that binds an
-    // `Int` buffer and a `Float` buffer declares both and a dispatch reads the
-    // stride off the buffer it is binding rather than off the module.
+    // 4. Annotations: the stride is the **buffer's own** element width, stated here and
+    // nowhere else.
     let mut annotations = Vec::new();
     for used in classes {
         let types = ids.chain_of(*used);
@@ -2322,9 +2133,8 @@ fn assemble(
             op::MEMBER_DECORATE,
             vec![types.elem, 0, decoration::OFFSET, 0],
         ));
-        // …and the struct that *contains* the runtime array must say so, or the
-        // module does not describe a block-backed resource at all. A `Block`
-        // struct has to be explicitly laid out, so its member needs an offset too.
+        // …and the struct containing the runtime array must say so, with its member's
+        // offset.
         annotations.push(Inst::new(
             op::DECORATE,
             vec![types.buffer_struct, decoration::BLOCK],
@@ -2351,23 +2161,14 @@ fn assemble(
     ));
     emit_all(&mut out, &annotations);
 
-    // 5. Types, then the constants (module-scope, so the body's literals belong
-    // here and not in the function), then the globals. The order within the
-    // section is the spec's: types, constants, global variables.
-    //
-    // The element struct's only member is **that buffer's own scalar**, which is
-    // where "does this buffer hold floats" is decided — per buffer, not per
-    // module.
+    // 5. Types, then the constants (module-scope, so the body's literals belong here),
+    // then the globals.
     let mut types = vec![
         Inst::new(op::TYPE_VOID, vec![ids.void]),
         Inst::new(op::TYPE_BOOL, vec![ids.boolean]),
     ];
-    // **Both scalar types are declared in every module**, because a body may hold
-    // values of either class and cross between them through `Conv`. `Float32` is
-    // core SPIR-V and carries no capability, so it is unconditional; the 64-bit
-    // integer is what costs `Int64`, and it is declared whenever **anything** in
-    // the fragment is 64-bit — an integer buffer counts, which is the difference
-    // a mixed fragment makes (`needs_int64` asks the same question).
+    // **Both scalar types are declared**: `Float32` carries no capability, the
+    // 64-bit integer costs `Int64`.
     types.push(Inst::new(op::TYPE_FLOAT, vec![ids.float, 32]));
     if needs_int64 {
         types.push(Inst::new(op::TYPE_INT, vec![ids.ulong, 64, 0]));
@@ -2458,11 +2259,8 @@ fn assemble(
         vec![ids.ptr_in, ids.gid, storage_class::INPUT],
     )];
     for slot in 0..binding.total() {
-        // **A buffer's variable is typed with its own class's block struct.** This
-        // is the line that makes a mixed module bindable: a dispatch binds a
-        // descriptor against the type the shader declares for that binding, so the
-        // `Int` variable must be the `Int` chain and the `Float` variable the
-        // `Float` one.
+        // **A buffer's variable is typed with its own class's block struct**, which is
+        // what makes a mixed module bindable.
         let chain = ids.chain_of(buffer_class_of(fragment, slot, ids.class));
         globals.push(Inst::new(
             op::VARIABLE,
@@ -2475,9 +2273,7 @@ fn assemble(
     }
     emit_all(&mut out, &globals);
 
-    // 6. The function, its body, and its end. The body is every block in the
-    // plan's order — an `OpLabel`, its `OpPhi`s, its code, its terminator — so the
-    // last block's terminator is the last instruction before `OpFunctionEnd`.
+    // 6. The function, its body, and its end: every block in the plan's order.
     emit_all(
         &mut out,
         &[Inst::new(
