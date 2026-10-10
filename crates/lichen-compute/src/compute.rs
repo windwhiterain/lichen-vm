@@ -3988,16 +3988,13 @@ fn argument_kind(value: Option<&LowValue>) -> &'static str {
     }
 }
 
-/// What a node's value is, for a refusal that has to say — across **both**
-/// vocabularies, in that order.
+/// What a node's value is, for a refusal that has to say — across both
+/// vocabularies.
 ///
-/// A buffer position can be reached by a `compute.read` or a `compute.collect`,
-/// and the value there is a [`ComputeValue`] when it is a buffer and a
-/// [`LowValue`] when it is anything else, so a refusal that named only one of
-/// the two would say "no value" about a perfectly ordinary array. `argument_kind`
-/// cannot be reused for this: it is written for launch arguments, where `USize`
-/// and `Array` are the two shapes a parameter vector may take and are recognised
-/// before it is asked, and an array is exactly the case here.
+/// # Invariant
+/// The value is a [`ComputeValue`] when it is a buffer and a [`LowValue`]
+/// otherwise, so a refusal that named only one would say "no value" about an
+/// ordinary array.
 fn what_this_is<P>(module: &Module<P>, node: AnyNodeId) -> &'static str
 where
     P: Program,
@@ -4020,14 +4017,12 @@ where
         })
 }
 
-/// One collected element, materialized as a fresh scalar node of `block` and
-/// wrapped as an array item.
+/// One collected element, materialized as a fresh scalar node of `block`.
 ///
-/// A buffer's elements all have the buffer's class, so a collected array is
-/// homogeneous — but an integer element and a float element are two different
-/// [`LowValue`] variants, and the class is only known at run time.  This is the
-/// one place that turns one element into one node, so the two classes cannot
-/// drift into two slightly different constructions.
+/// # Invariant
+/// This is the one place that turns one element into one node, so the two classes
+/// cannot drift into two slightly different constructions: a collected array is
+/// homogeneous, and the class is only known at run time.
 fn scalar_item<P>(module: &mut Module<P>, block: BlockId, element: LowValue) -> ArrayItem
 where
     P: Program,
@@ -4043,20 +4038,10 @@ where
 
 /// A buffer position holding something that is not a buffer.
 ///
-/// **This is a refusal, and the undecided answer it replaces was a silent
-/// no-op.** The lazy cell is what makes a kernel's own read deferrable and what
-/// makes an undecided argument stay undecided — but a program array *is*
-/// decided, it is an ordinary lichen value with ordinary elements, and
-/// answering `undecided` for it made `compute.read ((compute.Read _)(.from
-/// data, .at i))` a plausible-looking program that produced an empty value while
-/// still
-/// printing `array<?a, ?b>`. There is no way to make a buffer out of a program
-/// value, so the honest answer names that rather than waiting for a buffer that
-/// will not arrive.
-///
-/// `subject` says what the position is *for* and `at` names it, so the three
-/// sites that reach this describe their own mistake rather than sharing one
-/// sentence.
+/// # Invariant
+/// A refusal: the undecided answer it replaces was a silent no-op. A program array
+/// *is* decided, and there is no way to make a buffer out of a program value, so the
+/// honest answer names that rather than waiting for a buffer that will not arrive.
 fn not_a_buffer<P>(
     module: &mut Module<P>,
     node: AnyNodeId,
@@ -4079,19 +4064,11 @@ where
     None
 }
 
-/// The value a completed kernel run produces: the bare scalar for a
-/// single-result kernel, and the **tuple** of them for a multi-result one.
+/// The value a completed kernel run produces: the bare scalar, or the tuple of them.
 ///
-/// This is the same shape `ParLaunch` builds for its several output buffers —
-/// each result becomes a node of `block` first, so the array holds live nodes
-/// rather than detached values — and it is the direct counterpart of
-/// [`codomain_leaves`], which is what decided how many results there are.  A
-/// lichen tuple is an ordinary array value, so `r(0)`/`r(1)` index it with no
-/// special case, exactly as the codomain's leaves were ordinary scalars.
-///
-/// **Each result is the class the run said it was**: an integer result is the
-/// `USize` it always was, and a float result is the language's own `Float`, not
-/// the bit pattern of one read as an integer.
+/// # Invariant
+/// Each result becomes a node of `block` first, so the array holds live nodes — the
+/// same shape `ParLaunch` builds — and each result is the class the run said it was.
 fn kernel_results_value<P>(
     module: &mut Module<P>,
     block: BlockId,
@@ -4104,8 +4081,7 @@ where
 {
     let scalar = |value: &ScalarValue| <P::Value as From<LowValue>>::from(value.low());
     let Some((first, rest)) = results.split_first() else {
-        // A fragment always leaves at least one value, so an empty run is not
-        // reachable; stay lazy rather than fabricating a value for it.
+        // A fragment always leaves at least one value: stay lazy for an empty run.
         return None;
     };
     if rest.is_empty() {
@@ -4125,13 +4101,10 @@ where
 
 /// Read a binary op/`Index` operand array `[a, b]` as two operand nodes.
 ///
-/// An operand may be a node of a **frozen** module: an apply of a static
-/// function leaves the callee's unchanged subterms as references into the frozen
-/// module, so a constant the callee's body wrote (`operands[0]`'s `0`) arrives
-/// beside nodes of the caller's own.  Reading an operand is therefore not a
-/// question about *which* module it is in — [`emit_operand`] is where the walk
-/// decides what to do with the answer, and `dyn_node` is where a caller says it
-/// needs a node of its own.
+/// # Invariant
+/// An operand may be a node of a frozen module: an apply of a static function leaves
+/// the callee's unchanged subterms as references into it, so reading an operand is
+/// not a question about which module it is in.
 fn operand_pair<P>(
     module: &Module<P>,
     operand: Option<NodeId>,
@@ -4163,14 +4136,11 @@ where
 
 /// Record one dispatch into the graph being built, in place of running it.
 ///
-/// **The argument is read for its placeholders, not for its data.** The extent
-/// and each buffer sit at the paths the role walk found (`KernelRoles`), the same
-/// positions a real launch reads, so the body is walked by exactly the path a run
-/// would take and the only thing that differs is what comes back. A value that is
-/// neither a placeholder nor an input the parameter supplied is refused here by
-/// name rather than coerced: this is the filter, and it is where a jit'd
-/// function's arbitrary values are sorted into the two roles a graph's value
-/// table has.
+/// # Invariant
+/// The argument is read for its placeholders, not its data: the extent and each
+/// buffer sit at the paths the role walk found, so the body is walked exactly as a
+/// run would walk it. A value that is neither a placeholder nor an input is refused
+/// by name rather than coerced.
 fn record_launch<P>(module: &mut Module<P>, block: BlockId, operand: P::Value) -> Option<P::Value>
 where
     P: Program,
@@ -4183,8 +4153,8 @@ where
     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
         unreachable!("ParLaunch expects an operand array of [kernel, cfg]")
     };
-    // SAFETY: `operands` is the operand array the VM just evaluated for this
-    // operation, and every walk below stays inside this borrow of `module`.
+    // SAFETY: `operands` is the array the VM just evaluated, and every walk below
+    // stays inside this borrow.
     let operands = unsafe { operands.items() };
     if operands.len() < 2 {
         refuse(
@@ -4222,17 +4192,12 @@ where
         refuse(module, "a recorded dispatch's cfg is not a node".into());
         return None;
     };
-    // Every leaf of the argument is read at the path the role walk found
-    // (`KernelRoles`), not at a position: that walk is the one enumeration the
-    // emitter, the run and this recorder read, so a recorded body walks the
-    // parameter the way a real run does.
+    // Every leaf is read at the path the role walk found (`KernelRoles`), the one
+    // enumeration all three readers share.
     let roles = fragment.roles.clone();
-    // The declared class of each output, read before the fragment is handed to
-    // the recorder: the `.element` of the `Buf` the result structure wraps.
+    // The declared class of each output: the `.element` of the wrapped `Buf`.
     let output_classes = fragment.output_classes.clone();
-    // The extent, read on its own: a count is a different role from a buffer, and
-    // a caller who swapped the two deserves to be told which was wrong rather
-    // than that a shape did not match.
+    // The extent, read on its own: a count is a different role from a buffer.
     let extent = match roles
         .scalars
         .first()
@@ -4243,9 +4208,8 @@ where
                 .node_value(node)
                 .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
                 .and_then(|value| match value {
-                    // A literal the build already had. Collapsing it into a value
-                    // would mean inventing a node that produces a number for
-                    // free, doing no work.
+                    // A literal the build already had; collapsing it would invent a
+                    // free-producing node.
                     LowValue::USize(count) => Some(Extent::Constant(count)),
                     _ => None,
                 });
@@ -4293,11 +4257,8 @@ where
             return None;
         }
     };
-    // **The argument's leaves are the parameter's**, whatever shape the author
-    // wrote, so the runtime scalars are `roles.scalars` rather than a positional
-    // count.  A recorded dispatch carries the extent alone for now: a runtime
-    // scalar would have to be an edge like the extent is, so it is refused by
-    // name rather than read as an input buffer.
+    // The argument's leaves are the parameter's, whatever shape the author wrote,
+    // so the runtime scalars are `roles.scalars`.
     let scalar_leaves = roles.scalars.len().saturating_sub(1);
     if scalar_leaves > 1 {
         refuse(
@@ -4312,8 +4273,8 @@ where
     }
     let mut inputs: Vec<Placed> = Vec::new();
     for (position, path) in roles.inputs.iter().enumerate() {
-        // An input path names the `Buf` the caller passes; the placeholder rides
-        // in the wrapper's payload, which is what `buf_payload` takes.
+        // An input path names the `Buf` the caller passes; the placeholder rides in
+        // its payload.
         let Some(node) =
             value_at_path::<P>(module, cfg, path).and_then(|buf| buf_payload::<P>(module, buf))
         else {
@@ -4348,11 +4309,8 @@ where
             return None;
         }
     };
-    // **The same shape a real launch produces**: the parameter's `.out`
-    // structure, one `Buf`-wrapped placeholder per declared output at the path
-    // the walk found.  Each placeholder becomes a node of this block first, so
-    // the structure holds live nodes rather than detached values, and the body
-    // downstream reads a result exactly as it reads a run's.
+    // The shape a real launch produces: `.out` with a `Buf`-wrapped placeholder
+    // per output, each a live node.
     if roles.outputs.is_empty() {
         return match placed.first() {
             // A parameter with no `.out` fields: the body produced nothing, and
@@ -4401,15 +4359,12 @@ where
     }
 }
 
-/// Build a graph by applying a function to placeholders and recording what it
-/// dispatches.
+/// Build a graph by applying a function to placeholders and recording dispatches.
 ///
-/// **The apply is the VM's own.** No lowlevel seam grows for this: a plain
-/// `Apply` node is built over the function and a placeholder tuple, and the
-/// module's `evaluate_node` runs it, so the clone pass, the parameter unify and
-/// the pattern walk are the ones every other call gets. A lowering that hand-rolled
-/// those would be a second apply with its own bugs, and the bugs would be in the
-/// part nobody tests.
+/// # Invariant
+/// The apply is the VM's own: a plain `Apply` node over the function and a
+/// placeholder tuple, run by the module's `evaluate_node`, so the clone pass, the
+/// parameter unify and the pattern walk are the ones every other call gets.
 fn build_graph<P>(
     module: &mut Module<P>,
     block: BlockId,
@@ -4423,11 +4378,8 @@ where
     let refuse = |module: &mut Module<P>, reason: String| {
         module.record_extension_diagnostic(GRAPH_DIAGNOSTIC, None, reason);
     };
-    // A **check, not a resolution.** The apply below consumes the operand *node*,
-    // because a function id and a node id are different id spaces and `Apply`
-    // addresses its callee as a node. So this only has to answer "is this
-    // operand a function at all" — and it answers it by reading the node's own
-    // value, which is the same read the apply's callee extraction will do.
+    // A check, not a resolution: `Apply` addresses its callee as a node, so this
+    // only asks if the operand is a function.
     let is_function = module
         .evaluate_node(function_node, Some(block))
         .and_then(|value| value.as_enum());
@@ -4438,16 +4390,11 @@ where
         );
         return None;
     };
-    // **The parameter's shape is the placeholder's shape.**  When the parameter's
-    // type reads as the named struct, the walk over that type gives the cells'
-    // paths, and the slots are numbered **depth-first in field order** — which is
-    // lexicographic in the paths — so the run's own depth-first walk of the same
-    // structure lands on the same numbers, and the two ends agree by construction
-    // rather than through a stored table.
-    //
-    // A parameter that is *not* a named struct — an unannotated `ins => …` body,
-    // whose reads are positional (`ins(0)`) — keeps the flat ceiling below: a flat
-    // tuple is exactly the shape such a body reads.
+    // The parameter's shape is the placeholder's shape: the type walk gives the
+    // cells' paths.
+
+    // Slots are numbered depth-first in field order, so the run's own walk lands
+    // on the same numbers.
     let mut roles = None;
     let mut parameter_slot = None;
     if let AnyFunctionId::Dynamic(fid) = function {
