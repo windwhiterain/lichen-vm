@@ -189,10 +189,15 @@ impl<'backend> Runner<'backend> {
                         }
                     };
 
+                    // **A node's kernel is its own launch set.** A graph edge is a
+                    // dispatch of one fragment, and a fragment that cross-calls
+                    // brings its callees with it — the backend resolves the call
+                    // against the set rather than the node naming a callee here.
+                    let launch = lichen_kernel_ir::LaunchSet::single(&kernel.fragment);
                     let produced = match self.policy {
                         Policy::Serial => self
                             .backend
-                            .run(&kernel.fragment, &slots, count)
+                            .run(&launch, &slots, count)
                             .map(|ids| {
                                 Value::device_all(ids, count, &kernel.fragment.output_classes)
                             })
@@ -203,7 +208,7 @@ impl<'backend> Runner<'backend> {
                         _ => {
                             let submission = self
                                 .backend
-                                .submit(&kernel.fragment, &slots, count)
+                                .submit(&launch, &slots, count)
                                 .map_err(|reason| GraphRefusal::Backend {
                                 what: "submitting a kernel node",
                                 reason,

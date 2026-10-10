@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use lichen_graph_ir::{Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, ParallelBackend, Pending, ResidentId, ScalarClass, ScalarData,
+    KernelShape, LaunchSet, ParallelBackend, Pending, ResidentId, ScalarClass, ScalarData,
 };
 
 /// `out[i] = in[i] + in[i] + 1`, which is `adds` everywhere else in this tree.
@@ -128,7 +128,7 @@ impl ParallelBackend for Stub {
 
     fn run(
         &self,
-        _fragment: &KernelFragment,
+        _launch: &LaunchSet<'_>,
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<Vec<ResidentId>, String> {
@@ -138,7 +138,7 @@ impl ParallelBackend for Stub {
 
     fn submit<'backend>(
         &'backend self,
-        _fragment: &KernelFragment,
+        _launch: &LaunchSet<'_>,
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<Box<dyn Pending + 'backend>, String> {

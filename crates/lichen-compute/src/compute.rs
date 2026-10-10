@@ -6237,15 +6237,19 @@ fn run_kernel(id: KernelId, args: &[ScalarValue]) -> Result<Vec<ScalarValue>, St
         .collect()
 }
 
-/// Assemble the wasm bytes of the root kernel's **relative launch set** — the
-/// root plus every kernel it (transitively) cross-calls.
+/// The fragments of a kernel's **relative launch set**, in BFS order, and where
+/// each kernel id sits in that order.
 ///
-/// The set is discovered in BFS order: `ordered[i]` becomes wasm function
-/// index `i`; `index` maps a callee kernel-id to that index.  The result is a
-/// function of the root id alone (the registry's fragments are immutable and
-/// ids are never reused), which is what makes the id a sufficient cache key
-/// for [`cached_module`].
-fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
+/// The set is the root plus every kernel it (transitively) cross-calls, so
+/// `ordered[i]` is position `i` and `index` maps a callee kernel-id to that
+/// position. **The fragments are cloned and the registry lock released before
+/// this returns**, because every consumer emits from the set and an emitter that
+/// reaches the registry again would deadlock on a lock that is not reentrant.
+///
+/// One derivation, and both consumers take it: [`assemble_launch_set`] links it
+/// into wasm and [`run_on_installed_backend`] hands it to an installed backend,
+/// so the two cannot enumerate a call graph differently.
+fn ordered_launch_set(id: KernelId) -> Result<OrderedLaunchSet, String> {
     let mut ordered: Vec<KernelFragment> = Vec::new();
     let mut index: HashMap<KernelId, u32> = HashMap::new();
     let mut seen: HashSet<KernelId> = HashSet::new();
@@ -6274,7 +6278,24 @@ fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
         ordered.push(frag);
     }
     drop(fragments);
+    Ok(OrderedLaunchSet { ordered, index })
+}
 
+/// The two halves of a launch set, owned so the registry lock is gone before
+/// anything is emitted from them.
+struct OrderedLaunchSet {
+    ordered: Vec<KernelFragment>,
+    index: HashMap<KernelId, u32>,
+}
+
+/// Assemble the wasm bytes of the root kernel's **relative launch set** — the
+/// root plus every kernel it (transitively) cross-calls.
+///
+/// The result is a function of the root id alone (the registry's fragments are
+/// immutable and ids are never reused), which is what makes the id a sufficient
+/// cache key for [`cached_module`].
+fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
+    let OrderedLaunchSet { ordered, index } = ordered_launch_set(id)?;
     assemble_module(&ordered, &index)
 }
 
@@ -6336,9 +6357,10 @@ struct ParallelState<'a> {
 /// author's, and overriding it here would be the one place the language's
 /// explicit dataflow quietly stopped being explicit.
 ///
-/// The fragment is cloned out of the registry and the lock released before the
-/// call, because a backend that emitted a cross-kernel call would reach the
-/// registry again — the lock is not reentrant.
+/// The fragment is cloned out of the registry — as is every fragment it
+/// cross-calls, into one launch set — and the lock released before the call,
+/// because a backend that emits a cross-kernel call reads the set again, and the
+/// lock is not reentrant.
 fn run_on_installed_backend(
     id: KernelId,
     count: usize,
@@ -6352,19 +6374,17 @@ fn run_on_installed_backend(
              device"
         ));
     };
-    let fragment = {
-        let fragments = kernels().lock().unwrap();
-        fragments
-            .get(&id)
-            .cloned()
-            .ok_or_else(|| format!("parallel kernel {id} is not registered"))?
-    };
+    let OrderedLaunchSet { ordered, index } = ordered_launch_set(id)?;
+    let fragment = ordered
+        .first()
+        .expect("a launch set is built from a root, so it holds at least one fragment");
     if fragment.outputs != outputs {
         return Err(format!(
             "parallel kernel {id} declares {} output(s) here and {} in the fragment it names",
             outputs, fragment.outputs
         ));
     }
+    let launch = lichen_kernel_ir::LaunchSet::new(&ordered, &index);
     // The class check runs before the dispatch: a host slot is a raw bit
     // payload, so a buffer of the wrong class would reach the device as the
     // right shape and the wrong numbers.
@@ -6399,7 +6419,7 @@ fn run_on_installed_backend(
             RunInput::Resident(resident) => BufferSlot::Resident(resident.id),
         })
         .collect();
-    let resident = backend.run(&fragment, &slots, count).map_err(|reason| {
+    let resident = backend.run(&launch, &slots, count).map_err(|reason| {
         format!(
             "the {:?} backend declined this run: {reason}",
             backend.name()
@@ -7122,7 +7142,7 @@ mod parallel_launch_tests {
             }
             fn run(
                 &self,
-                _fragment: &KernelFragment,
+                _launch: &lichen_kernel_ir::LaunchSet<'_>,
                 _inputs: &[BufferSlot],
                 _count: usize,
             ) -> Result<Vec<ResidentId>, String> {
@@ -7201,7 +7221,7 @@ mod parallel_launch_tests {
         }
         fn run(
             &self,
-            _fragment: &KernelFragment,
+            _launch: &lichen_kernel_ir::LaunchSet<'_>,
             inputs: &[BufferSlot],
             _count: usize,
         ) -> Result<Vec<ResidentId>, String> {
@@ -7339,7 +7359,7 @@ mod parallel_launch_tests {
             }
             fn run(
                 &self,
-                _fragment: &KernelFragment,
+                _launch: &lichen_kernel_ir::LaunchSet<'_>,
                 _inputs: &[BufferSlot],
                 _count: usize,
             ) -> Result<Vec<ResidentId>, String> {

@@ -46,6 +46,7 @@
 //! backend contract that lived in a backend's crate would make every other
 //! backend depend on that backend.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 mod body;
@@ -303,12 +304,85 @@ impl Pending for Waited {
     }
 }
 
+/// One **launch set**: the fragments a single dispatch emits together, in the
+/// order the module lays them out, and where each callee kernel sits in that
+/// order.
+///
+/// # Invariant
+/// `ordered[0]` is the root, `index` covers every fragment in `ordered`, and the
+/// two cannot disagree: a [`KernelInstr::CallKernel`] resolves to a **position**
+/// rather than to a name, so a backend that emits the set as one module and a
+/// backend that emits it as one module per fragment read the same two facts and
+/// cannot disagree about what a call means.
+#[derive(Debug, Clone)]
+pub struct LaunchSet<'a> {
+    ordered: Vec<&'a KernelFragment>,
+    index: HashMap<KernelId, u32>,
+}
+
+impl<'a> LaunchSet<'a> {
+    /// The set a caller already has: the fragments and their positions.
+    pub fn new(ordered: &'a [KernelFragment], index: &HashMap<KernelId, u32>) -> Self {
+        Self {
+            ordered: ordered.iter().collect(),
+            index: index.clone(),
+        }
+    }
+
+    /// The degenerate one-fragment set — one kernel, no callee, no position to
+    /// resolve.
+    pub fn single(fragment: &'a KernelFragment) -> Self {
+        Self {
+            ordered: vec![fragment],
+            index: HashMap::new(),
+        }
+    }
+
+    /// The fragments, root first.
+    pub fn ordered(&self) -> &[&'a KernelFragment] {
+        &self.ordered
+    }
+
+    /// Each callee [`KernelId`]'s position in [`Self::ordered`].
+    pub fn index(&self) -> &HashMap<KernelId, u32> {
+        &self.index
+    }
+
+    /// The fragment that runs over the index range: `ordered[0]`.
+    ///
+    /// # Invariant
+    /// It exists, because a set is only ever built from a root — an empty one has
+    /// nothing to dispatch, and a caller that has one has already gone wrong.
+    pub fn root(&self) -> &'a KernelFragment {
+        self.ordered
+            .first()
+            .copied()
+            .expect("a launch set is built from a root, so it holds at least one fragment")
+    }
+
+    /// The fragment `kernel` names, and where it sits, or `None` when the set does
+    /// not hold it.
+    pub fn callee(&self, kernel: KernelId) -> Option<(usize, &'a KernelFragment)> {
+        let at = *self.index.get(&kernel)? as usize;
+        let fragment = *self.ordered.get(at)?;
+        Some((at, fragment))
+    }
+}
+
 /// A backend that can run a parallel fragment over an index range.
 ///
 /// This is deliberately *not* the shape of a compiled module, a memory pool or a
 /// device queue. It is the smallest thing a host program has to hand over, and
-/// the smallest thing a backend has to promise: given a fragment, its input
+/// the smallest thing a backend has to promise: given a launch set, its input
 /// buffers and a count, produce one output buffer per declared output.
+///
+/// # What it is handed is a set, and why
+///
+/// A [`KernelInstr::CallKernel`] names a kernel rather than inlining it, so
+/// nothing but the **set** can resolve one: a backend that emits the whole set
+/// into one module needs the callee's position and the callee's own domain,
+/// neither of which the calling fragment carries. A single-fragment call would
+/// have to refuse every cross-kernel call for want of a fact the caller holds.
 ///
 /// # Outputs are ids, not data
 ///
@@ -331,17 +405,17 @@ pub trait ParallelBackend: Send + Sync {
     /// produces, so a reader can tell *which* backend declined.
     fn name(&self) -> &'static str;
 
-    /// Run `fragment` over the index range `[0, count)`.
+    /// Run the launch set's root over the index range `[0, count)`.
     ///
-    /// `inputs` holds one slot per read position; a [`BufferSlot::Host`] must be
-    /// at least `count` elements long, each element [`ScalarClass::byte_width`]
-    /// bytes wide for the class the fragment declares at that position. The
-    /// result is one [`ResidentId`] per
+    /// `inputs` holds one slot per read position of [`LaunchSet::root`]; a
+    /// [`BufferSlot::Host`] must be at least `count` elements long, each element
+    /// [`ScalarClass::byte_width`] bytes wide for the class that fragment declares at that
+    /// position. The result is one [`ResidentId`] per
     /// [`KernelFragment::outputs`], each holding at least `count` elements, owned
     /// by the host until it [`Self::release`]s it.
     fn run(
         &self,
-        fragment: &KernelFragment,
+        launch: &LaunchSet<'_>,
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<Vec<ResidentId>, String>;
@@ -356,12 +430,12 @@ pub trait ParallelBackend: Send + Sync {
     /// implemented overlap yet".
     fn submit<'backend>(
         &'backend self,
-        fragment: &KernelFragment,
+        launch: &LaunchSet<'_>,
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<Box<dyn Pending + 'backend>, String> {
         Ok(Box::new(Waited {
-            ids: self.run(fragment, inputs, count)?,
+            ids: self.run(launch, inputs, count)?,
         }))
     }
 
