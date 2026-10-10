@@ -354,13 +354,13 @@ Two defects were behind the one refusal, and fixing either alone still refuses:
 A name that is **not** a field of that struct is refused by name, not answered
 with a wrong number: `resolve_steps` says so and names the fields it did find.
 
-The shape now runs end to end on the wasm backend
-(`a_body_reads_a_scalar_leaf_of_its_input_struct`, four lanes of `a + i`). It is
-**not** a two-backend test: a fragment carrying a runtime scalar is refused by
-the `"gpu"` dispatch, which pushes the launch extent alone
-(`RunError::ScalarsNotPushed`, `crates/lichen-compute-gpu/src/dispatch.rs`).
-That refusal is the GPU crate's own and pre-existing; this change makes the shape
-reachable for the first time, which is what exposes it.
+The shape runs end to end on the wasm backend
+(`a_body_reads_a_scalar_leaf_of_its_input_struct`, four lanes of `a + i`) and
+**now on the device too**: a fragment carrying a runtime scalar is pushed as a
+push constant beside the extent
+([compute-runtime-scalars](compute-runtime-scalars.md)), and the same program
+answers `7 + i` on both backends. The test itself is still written for one
+backend and is the next thing to widen.
 
 ### A placeholder under a `Buf` wrapper
 

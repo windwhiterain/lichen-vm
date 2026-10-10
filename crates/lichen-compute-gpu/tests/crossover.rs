@@ -12,33 +12,6 @@ use lichen_kernel_ir::{
     LaunchSet, ScalarClass, Terminator,
 };
 
-/// A one-output fragment over `(input, index)`.
-///
-/// # Invariant
-/// `inputs` is taken rather than assumed because the tail decides it: a tail reading position 0 needs
-/// one buffer and a tail reading nothing needs none. The classes are the only class this ABI has.
-fn body_with(inputs: usize, tail: Vec<FlatOp>) -> KernelFragment {
-    let mut body: Vec<FlatOp> = vec![
-        FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos, in the *output* space
-        FlatOp::Read(1),                                        // idx
-    ];
-    body.extend(tail);
-    KernelFragment {
-        roles: KernelRoles::default(),
-        param_shape: KernelShape::Tuple(vec![
-            KernelShape::Scalar(ScalarClass::Int),
-            KernelShape::Scalar(ScalarClass::Int),
-        ]),
-        body: KernelBody::from_flat(2, &body),
-        inputs,
-        outputs: 1,
-        input_classes: vec![ScalarClass::Int; inputs],
-        output_classes: vec![ScalarClass::Int],
-        result_classes: vec![ScalarClass::Int; 1],
-        int_width: IntWidth::I64,
-    }
-}
-
 const ONE_IN_ONE_OUT: Binding = Binding {
     inputs: 1,
     outputs: 1,
@@ -164,24 +137,6 @@ fn a_callee_outside_the_launch_set_is_refused_by_name() {
         message.contains("does not hold"),
         "says the set is what is missing: {message}"
     );
-}
-
-#[test]
-fn reading_a_non_index_parameter_is_refused_by_name() {
-    // Parameter 0 is an input slot, not the index: a buffer is bound, not passed.
-    let fragment = body_with(
-        0,
-        vec![
-            FlatOp::Read(0),
-            FlatOp::Instr(KernelInstr::BufferWriteCall(ScalarClass::Int)),
-            FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
-        ],
-    );
-    let refusal =
-        spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
-    // `at` is the instruction's position in the entry block, as for every refusal.
-    assert_eq!(refusal, SpirvRefusal::NonIndexParameter { local: 0, at: 1 });
-    assert!(refusal.to_string().contains("storage buffer"));
 }
 
 /// The regression that matters most, because it is silent: reads and writes address

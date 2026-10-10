@@ -58,12 +58,21 @@ pub enum RunError {
         input: ScalarClass,
         output: ScalarClass,
     },
-    /// A fragment whose body reads a parameter beside the extent.
+    /// A launch whose runtime scalars are not the ones its parameter declares.
+    ScalarLeavesMismatch { declared: usize, given: usize },
+    /// A fragment whose extent leaf is not an integer.
     ///
     /// # Invariant
-    /// The dispatch carries no leaf but the index, so a second read leaf has nowhere to go; a leaf
-    /// the body never reads is not this, because nothing is missing from it.
-    ScalarsNotPushed { leaves: usize },
+    /// The extent's value is the count the dispatch runs over, and there is no float a count could
+    /// be read as without inventing one: the ABI calls this leaf a count, so a `Float` one would
+    /// push a converted number where the program wrote a whole number.
+    ExtentNotAnInteger { class: ScalarClass },
+    /// A leaf block past what this device offers.
+    ///
+    /// # Invariant
+    /// A device's limit is a floor, not a promise: a fragment may declare more scalar leaves than
+    /// `maxPushConstantsSize` covers, and the block would be truncated silently.
+    PushConstantsTooLarge { bytes: u32, max: u32 },
     /// A resident id this context is not holding: never issued, or released.
     UnknownResident { id: u64 },
     /// A pool depth of zero, which is not a smaller pool.
@@ -122,12 +131,24 @@ impl fmt::Display for RunError {
                  writes {output:?}."
             ),
             RunError::Emit(refusal) => write!(f, "{refusal}"),
-            RunError::ScalarsNotPushed { leaves } => write!(
+            RunError::ScalarLeavesMismatch { declared, given } => write!(
                 f,
-                "this fragment's parameter declares {leaves} leaf/leaves (the launch extent, \
-                 any runtime scalar, and the index), and a dispatch pushes the extent alone: \
-                 a runtime scalar needs the leaf list the CPU path passes, so this is refused \
-                 rather than dispatched with the argument missing"
+                "this fragment's parameter declares {declared} runtime scalar(s) beside the \
+                 extent and this launch fixes {given}: a leaf is read at the position the \
+                 parameter declares, so the two have to agree or a lane would compute from another \
+                 leaf's value"
+            ),
+            RunError::ExtentNotAnInteger { class } => write!(
+                f,
+                "this fragment's parameter declares its extent leaf as {class:?}, and the extent \
+                 is the count this run dispatches over: there is no float a count could be read as \
+                 without inventing one, so it is refused rather than converted"
+            ),
+            RunError::PushConstantsTooLarge { bytes, max } => write!(
+                f,
+                "this fragment's scalar leaves fill {bytes} byte(s) of push constants and this \
+                 device offers {max}, so it is refused here rather than dispatched with a block \
+                 the device would read past"
             ),
             RunError::InputShorterThanCount { buffer, len, count } => write!(
                 f,
@@ -161,6 +182,17 @@ impl fmt::Display for RunError {
 
 impl std::error::Error for RunError {}
 
+/// One leaf's bytes at its member's offset, at the width the emitter gave that class.
+///
+/// # Invariant
+/// The low bytes of the word, little-endian: a narrower member is the same number read at a
+/// smaller width, which is what an integer leaf of a float module is.
+fn write_leaf(bytes: &mut [u8], offset: u32, module: ScalarClass, class: ScalarClass, bits: i64) {
+    let width = spirv::push_width(module, class) as usize;
+    let word = (bits as u64).to_le_bytes();
+    bytes[offset as usize..][..width].copy_from_slice(&word[..width]);
+}
+
 /// Turn a Vulkan failure into a named `RunError`.
 fn check<T>(stage: &'static str, result: Result<T, vk::Result>) -> Result<T, RunError> {
     result.map_err(|code| RunError::Vulkan {
@@ -190,6 +222,12 @@ pub struct GpuContext {
     /// fragment needs the feature, a float one's integers are 32-bit indices. So it is recorded
     /// here and checked where a fragment is compiled, rather than rejecting the device.
     shader_int64: bool,
+    /// The most push-constant bytes this device offers.
+    ///
+    /// # Invariant
+    /// A limit, not a promise: a fragment may declare more scalar leaves than it covers, and the
+    /// block would be read past rather than refused, so it is checked where the block is built.
+    push_constant_bytes: u32,
     /// The pipeline cache, keyed on the **whole set's** digests, not the root's:
     /// two sets sharing a root are two modules.
     pipelines: Mutex<HashMap<(Vec<u64>, usize, usize), vk::Pipeline>>,
@@ -204,8 +242,9 @@ pub struct GpuContext {
     /// This is what makes more than one submission in flight possible: a single command buffer
     /// cannot be recorded while a previous recording of it runs.
     slots: Mutex<Slots>,
-    /// The descriptor set and pipeline layouts for a run with `n` buffers.
-    layouts: Mutex<HashMap<usize, Layouts>>,
+    /// The descriptor set and pipeline layouts for a run with `n` buffers and a
+    /// push-constant block of `push` bytes.
+    layouts: Mutex<HashMap<(usize, u32), Layouts>>,
     /// Device buffers that have been given back, keyed by their element count and class.
     ///
     /// # Invariant
@@ -294,8 +333,8 @@ struct Token(u32);
 /// How many freed buffers of one size are kept for reuse.
 const RECYCLED_PER_SIZE: usize = 4;
 
-/// The two layouts a dispatch binds, which depend only on how many buffers the
-/// run has in total.
+/// The descriptor set and pipeline layouts for a run, keyed by its buffers and its
+/// push-constant block.
 #[derive(Clone, Copy)]
 struct Layouts {
     set: vk::DescriptorSetLayout,
@@ -385,6 +424,7 @@ impl GpuContext {
             });
         };
         let name = device_name(&properties);
+        let push_constant_bytes = properties.limits.max_push_constants_size;
 
         // The priorities array has to outlive the create-info that points into it,
         // so it is a local rather than a temporary.
@@ -430,6 +470,7 @@ impl GpuContext {
             physical,
             name,
             shader_int64,
+            push_constant_bytes,
             pipelines: Mutex::new(HashMap::new()),
             resident: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
@@ -558,26 +599,9 @@ impl GpuContext {
         count: usize,
     ) -> Result<Staged, RunError> {
         let fragment = launch.root();
-        // **The device path pushes no leaf at all**, so a parameter the body *reads* is
-        // refused by name.
-        let leaves = fragment.param_shape.flat_arity();
-        let index = spirv::index_local(fragment);
-        // A declared leaf the body never reads is not missing; the emitter draws the same
-        // line.
-        let index_param = index.and_then(|index| {
-            fragment.body.blocks[fragment.body.entry]
-                .params
-                .get(index as usize)
-        });
-        let reads_a_parameter = fragment
-            .body
-            .operands()
-            .iter()
-            .any(|value| fragment.body.is_a_parameter(*value) && Some(value) != index_param);
-        if reads_a_parameter {
-            return Err(RunError::ScalarsNotPushed { leaves });
-        }
         let class = spirv::module_class(fragment).map_err(RunError::Emit)?;
+        // The block the entry point reads the launch's leaves out of.
+        let scalars = self.scalar_block(launch, class, count)?;
         let binding = Binding {
             inputs: inputs.len(),
             outputs: fragment.outputs,
@@ -595,7 +619,7 @@ impl GpuContext {
                 });
             }
         }
-        let pipeline = self.pipeline(launch, binding)?;
+        let pipeline = self.pipeline(launch, binding, scalars.len() as u32)?;
 
         // Round up so the last workgroup's surplus lanes address padding rather
         // than memory past the end; see the module docs.
@@ -676,7 +700,7 @@ impl GpuContext {
         }
 
         segment.begin()?;
-        segment.record(pipeline, &descriptors, &uploads, count)?;
+        segment.record(pipeline, &descriptors, &uploads, count, &scalars)?;
         // Nothing below can fail, so the bookkeeping comes after the submit: a failed
         // submit means nothing reached the queue.
         let token = segment.submit()?;
@@ -761,12 +785,18 @@ impl GpuContext {
             });
         }
 
+        let scalars = self.scalar_block(
+            launch,
+            spirv::module_class(fragment).map_err(RunError::Emit)?,
+            count,
+        )?;
         let pipeline = self.pipeline(
             launch,
             Binding {
                 inputs: 1,
                 outputs: 1,
             },
+            scalars.len() as u32,
         )?;
         let padded = count.div_ceil(LOCAL_SIZE_X as usize) * LOCAL_SIZE_X as usize;
         if padded == 0 {
@@ -825,7 +855,7 @@ impl GpuContext {
             } else {
                 &[]
             };
-            segment.record(pipeline, &descriptors, uploads, count)?;
+            segment.record(pipeline, &descriptors, uploads, count, &scalars)?;
             current = into;
             std::mem::swap(&mut into, &mut onto);
         }
@@ -849,6 +879,51 @@ impl GpuContext {
             },
         );
         Ok(id)
+    }
+
+    /// The push-constant bytes this launch hands the shader.
+    ///
+    /// # Invariant
+    /// **One layout, from one rule**: the bytes sit at the offsets [`spirv::push_layout`]
+    /// gave the module's members, each at the width the emitter gave that class.
+    ///
+    /// Member `0` is the extent, whose value is the `count` this run dispatches over: the
+    /// ABI's first scalar **is** that count, so a caller stating it again would be giving
+    /// this function two answers to one question.
+    fn scalar_block(
+        &self,
+        launch: &LaunchSet<'_>,
+        class: ScalarClass,
+        count: usize,
+    ) -> Result<Vec<u8>, RunError> {
+        let fragment = launch.root();
+        let leaves = launch.leaves();
+        let declared = fragment.runtime_scalars();
+        if leaves.len() != declared {
+            return Err(RunError::ScalarLeavesMismatch {
+                declared,
+                given: leaves.len(),
+            });
+        }
+        let classes = fragment.param_shape.leaf_classes();
+        let (offsets, size) = spirv::push_layout(class, &classes[..fragment.scalar_leaves()]);
+        if size > self.push_constant_bytes {
+            return Err(RunError::PushConstantsTooLarge {
+                bytes: size,
+                max: self.push_constant_bytes,
+            });
+        }
+        let mut bytes = vec![0u8; size as usize];
+        // The extent is a count, at the class the parameter declared.
+        let extent = classes.first().copied().unwrap_or(ScalarClass::Int);
+        if extent != ScalarClass::Int {
+            return Err(RunError::ExtentNotAnInteger { class: extent });
+        }
+        write_leaf(&mut bytes, offsets[0], class, extent, count as i64);
+        for (leaf, offset) in leaves.iter().zip(offsets[1..].iter()) {
+            write_leaf(&mut bytes, *offset, class, leaf.class, leaf.bits);
+        }
+        Ok(bytes)
     }
 
     /// The device-local buffer behind a resident id.
@@ -1079,6 +1154,7 @@ impl GpuContext {
         descriptors: &[vk::DescriptorBufferInfo],
         uploads: &[Transfer],
         count: usize,
+        scalars: &[u8],
     ) -> Result<(), RunError> {
         let total = descriptors.len();
         if total > MAX_DESCRIPTOR_BINDINGS {
@@ -1090,9 +1166,8 @@ impl GpuContext {
         let device = &self.device;
         let staging = slot.staging.handle;
 
-        // The two layouts are a function of `total` alone, built once per shape, and
-        // `pipeline` builds the same pair.
-        let layouts = self.layouts(total)?;
+        // A function of `total` and the block alone, built once per shape.
+        let layouts = self.layouts(total, scalars.len() as u32)?;
 
         let set_layout = layouts.set;
         let mut set = vk::DescriptorSet::null();
@@ -1190,6 +1265,17 @@ impl GpuContext {
                 &[set],
                 &[],
             );
+            // The launch's leaves, uniform across the workgroup: one push serves
+            // every lane, and a run with none pushes nothing.
+            if !scalars.is_empty() {
+                device.cmd_push_constants(
+                    command,
+                    layouts.pipeline,
+                    vk::ShaderStageFlags::COMPUTE,
+                    0,
+                    scalars,
+                );
+            }
             device.cmd_dispatch(command, count.div_ceil(LOCAL_SIZE_X as usize) as u32, 1, 1);
             // The trailing barrier names every reader of these results, including a later
             // dispatch in the same command buffer.
@@ -1213,8 +1299,8 @@ impl GpuContext {
     }
 
     /// The descriptor set and pipeline layouts for a run binding `total` buffers.
-    fn layouts(&self, total: usize) -> Result<Layouts, RunError> {
-        if let Some(layouts) = self.layouts.lock().unwrap().get(&total) {
+    fn layouts(&self, total: usize, push: u32) -> Result<Layouts, RunError> {
+        if let Some(layouts) = self.layouts.lock().unwrap().get(&(total, push)) {
             return Ok(*layouts);
         }
         let device = &self.device;
@@ -1233,11 +1319,18 @@ impl GpuContext {
                 None,
             )
         })?;
+        // A zero-length range is not a range: the block is declared only when the launch
+        // has leaves to push.
+        let ranges = [vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::COMPUTE,
+            offset: 0,
+            size: push,
+        }];
         let pipeline = match check("pipeline layout", unsafe {
             device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
                     .set_layouts(&[set])
-                    .push_constant_ranges(&[]),
+                    .push_constant_ranges(if push == 0 { &[] } else { &ranges }),
                 None,
             )
         }) {
@@ -1248,7 +1341,7 @@ impl GpuContext {
             }
         };
         let layouts = Layouts { set, pipeline };
-        self.layouts.lock().unwrap().insert(total, layouts);
+        self.layouts.lock().unwrap().insert((total, push), layouts);
         Ok(layouts)
     }
 
@@ -1256,8 +1349,15 @@ impl GpuContext {
     ///
     /// # Invariant
     /// The SPIR-V is emitted only on a cache miss: emitting it on every run puts a whole-module
-    /// emission on the critical path of a dispatch whose pipeline is already built.
-    fn pipeline(&self, launch: &LaunchSet<'_>, binding: Binding) -> Result<vk::Pipeline, RunError> {
+    /// emission on the critical path of a dispatch whose pipeline is already built. The push-constant
+    /// block is a function of the fragment alone — its leaf classes and the module's — so it does not
+    /// enter the cache key: the digests already fix it.
+    fn pipeline(
+        &self,
+        launch: &LaunchSet<'_>,
+        binding: Binding,
+        push: u32,
+    ) -> Result<vk::Pipeline, RunError> {
         // **The cache key is the whole set**, not the root: two sets sharing a
         // root and differing in a callee are two modules.
         if spirv::needs_int64(launch).map_err(RunError::Emit)? && !self.shader_int64 {
@@ -1285,7 +1385,7 @@ impl GpuContext {
         })?;
         // The same cached pair `dispatch` binds against, so a pipeline and the
         // descriptor sets that use it cannot disagree.
-        let layouts = match self.layouts(binding.total()) {
+        let layouts = match self.layouts(binding.total(), push) {
             Ok(layouts) => layouts,
             Err(error) => {
                 unsafe { self.device.destroy_shader_module(module, None) };
@@ -1785,9 +1885,10 @@ impl Segment<'_> {
         descriptors: &[vk::DescriptorBufferInfo],
         uploads: &[Transfer],
         count: usize,
+        scalars: &[u8],
     ) -> Result<(), RunError> {
         self.context
-            .record_dispatch(self.slot(), pipeline, descriptors, uploads, count)
+            .record_dispatch(self.slot(), pipeline, descriptors, uploads, count, scalars)
     }
 
     /// Close the recording and hand it to the queue, without waiting.

@@ -18,7 +18,7 @@ use lichen_highlevel::shape::{
 };
 use lichen_kernel_ir::{
     BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelRoles, KernelShape,
-    ResidentId, ScalarClass, ScalarData, fragment_digest,
+    ResidentId, ScalarClass, ScalarData, ScalarLeaf, fragment_digest,
 };
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
@@ -2372,15 +2372,7 @@ where
 /// `f32` local inside a body that may compute integers, and the argument encoding
 /// follows the same per-leaf answer.
 pub(crate) fn param_classes(fragment: &KernelFragment) -> Vec<ScalarClass> {
-    fn walk(shape: &KernelShape, out: &mut Vec<ScalarClass>) {
-        match shape {
-            KernelShape::Scalar(class) => out.push(*class),
-            KernelShape::Tuple(items) => items.iter().for_each(|item| walk(item, out)),
-        }
-    }
-    let mut classes = Vec::with_capacity(fragment.param_shape.flat_arity());
-    walk(&fragment.param_shape, &mut classes);
-    classes
+    fragment.param_shape.leaf_classes()
 }
 
 /// The host import name a buffer call of `class` resolves to.
@@ -2724,8 +2716,7 @@ fn parallel_leaf_classes(id: KernelId) -> Result<Vec<ScalarClass>, String> {
     let fragment = fragments
         .get(&id)
         .ok_or_else(|| format!("parallel kernel {id} is not registered"))?;
-    let classes = param_classes(fragment);
-    Ok(classes[..classes.len().saturating_sub(1)].to_vec())
+    Ok(param_classes(fragment)[..fragment.scalar_leaves()].to_vec())
 }
 
 /// The facts a run reads off the fragment's register: the walk's paths, and each
@@ -5154,6 +5145,8 @@ fn run_on_installed_backend(
     count: usize,
     inputs: &[RunInput],
     outputs: usize,
+    leaves: &[i64],
+    leaf_classes: &[ScalarClass],
 ) -> Result<RunOutcome, String> {
     let Some(backend) = lichen_kernel_ir::parallel_backend() else {
         return Err(format!(
@@ -5172,7 +5165,13 @@ fn run_on_installed_backend(
             outputs, fragment.outputs
         ));
     }
-    let launch = lichen_kernel_ir::LaunchSet::new(&ordered, &index);
+    // Each word at its own leaf's class; the extent is the count, not one.
+    let runtime_scalars: Vec<ScalarLeaf> = leaves[1..]
+        .iter()
+        .zip(&leaf_classes[1..])
+        .map(|(&bits, &class)| ScalarLeaf { class, bits })
+        .collect();
+    let launch = lichen_kernel_ir::LaunchSet::new(&ordered, &index).with_leaves(&runtime_scalars);
     // The class check runs first: a host slot is raw bits, so a wrong class would
     // reach the device as the wrong numbers.
     check_input_classes(&fragment.input_classes, inputs)?;
@@ -5313,14 +5312,13 @@ fn run_parallel_kernel(
         let fragment = fragments
             .get(&id)
             .ok_or_else(|| format!("parallel kernel {id} is not registered"))?;
-        let classes = param_classes(fragment);
         (
             fragment.outputs,
             fragment_class(fragment),
             fragment.input_classes.clone(),
             // The ABI's leaves are the scalars then the index; only the scalars are
             // handed in.
-            classes[..classes.len().saturating_sub(1)].to_vec(),
+            param_classes(fragment)[..fragment.scalar_leaves()].to_vec(),
             fragment.output_classes.clone(),
         )
     };
@@ -5337,7 +5335,7 @@ fn run_parallel_kernel(
     // classes alone.
     check_input_classes(&input_classes, &inputs)?;
     if let Backend::Gpu = backend {
-        return run_on_installed_backend(id, count, &inputs, outputs);
+        return run_on_installed_backend(id, count, &inputs, outputs, &leaves, &leaf_classes);
     }
     // A "cpu" run has no device, so an input a "gpu" run left there is brought home
     // before the run starts.

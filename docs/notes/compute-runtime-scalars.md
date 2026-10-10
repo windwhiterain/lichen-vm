@@ -1,8 +1,8 @@
 # Runtime scalars in a parallel kernel
 
-> Status: current — the **CPU path is end to end**; the device path and a
-> recorded body still carry the extent alone and are **refused by name** rather
-> than mis-run.
+> Status: current — the path is **end to end on both backends**. The device reads a
+> runtime scalar out of a push-constant block beside the extent, and a launch
+> fixes them on `LaunchSet`.
 >
 > What this note is: how a parallel kernel takes a number the host fixes at
 > launch (`k.alpha`) beside its count, and why that needs a per-leaf ABI. The
@@ -12,8 +12,9 @@
 >
 > Points at: `crates/lichen-compute/src/compute.rs` (`scalar_leaf_classes`,
 > `parallel_roles`, `ComputeOperator::ParLaunch`, `run_parallel_range`),
-> `crates/lichen-compute-gpu/src/dispatch.rs` (`stage_run`,
-> `RunError::ScalarsNotPushed`), and `crates/lichen-language/tests/compute.rs`.
+> `crates/lichen-compute-gpu/src/spirv.rs` (`push_layout`, `push_width`), and
+> `crates/lichen-compute-gpu/src/dispatch.rs` (`scalar_block`,
+> `RunError::ScalarLeavesMismatch`).
 
 ## What a runtime scalar is, and why it is the point
 
@@ -54,7 +55,7 @@ does not run and nothing says so.
 | Carry the leaf words and their classes on the state | `ParallelState` (`leaves`, `leaf_classes`) | landed |
 | Pass them beside the index as the `main` arguments | `run_parallel_range` | the argument list is the leaves in field order with the index appended, and only the index moves per element |
 | Assemble the fragment's signature | `compile_parallel_fragment`'s `param_shape` | landed with the leaf classes — the assembler derives `main`'s parameters from it |
-| Push the scalar leaves to the shader | `lichen-compute-gpu/src/dispatch.rs`'s `stage_run` | **refused by name** (`RunError::ScalarsNotPushed`): a dispatch pushes the extent alone, so a fragment with a runtime scalar is declined rather than dispatched with a leaf missing |
+| Push the scalar leaves to the shader | `lichen-compute-gpu/src/dispatch.rs`'s `scalar_block` | landed: the block's member `0` is the extent (the run's own `count`) and the rest are the runtime scalars, at the offsets `spirv::push_layout` gave the module |
 | Carry a runtime scalar in a **recorded** body | `record_launch` | **refused by name**: a recording carries the extent alone, and a runtime scalar would have to be one of its edges |
 
 The decode is **positional**, and that is the ABI's rule rather than a
@@ -112,6 +113,13 @@ inbuf.z))` — and the answer is `(12, 13, 14)`: three indices (the extent reach
 `k.n`), `inbuf = [10, 11, 12]` (the first kernel), and each element plus
 `float2int k.alpha = 2` (the runtime scalar).
 
+**And the same program answers the same on the device.** With `"gpu"` in place of
+`"cpu"` and a device installed, the collected answer is `(12, 13, 14)` — the `Float`
+leaf is pushed at four bytes beside an `Int` extent, which in a `Float` module is
+*also* four bytes, and the shader multiplies by `2.0`. An `Int` leaf reads the same
+way: a body reading `k.in.a` with `a = 7` answers `7 + i` on both backends at
+`LOCAL_SIZE_X + 5` elements.
+
 The refusal path is measured too: `Host(.n 3, .alpha 2, .I In(.b inbuf.z))` — an
 `Int` where the parameter declares `Float` — reports
 
@@ -166,23 +174,27 @@ independent, not because `_` is impossible.
 
 ## What is still open
 
-1. **The device path.** `stage_run` refuses by name
-   (`RunError::ScalarsNotPushed`); pushing the leaf list is the work.
-2. **A recorded body.** A recording carries the extent alone, so a runtime scalar
-   in a recorded body is refused rather than recorded as an edge.
-3. **An interleaved parameter.** The host decode is positional and the fragment
+1. **A runtime scalar in a recorded body, and in a graph node.** A `KernelNode`
+   carries its extent and its buffers and nothing else, so a node whose fragment
+   declares a runtime scalar is refused by leaf count. The block is written; the
+   graph IR has no value to put in it.
+2. **An interleaved parameter.** The host decode is positional and the fragment
    carries no role table, so a parameter that interleaves scalars with `.in`
    should be refused by name; that refusal is not written.
-4. **The host input struct is the author's to spell.** No shipped lambda builds
+3. **The host input struct is the author's to spell.** No shipped lambda builds
    the runtime-scalar shape, because a shipped one would have to hardcode a scalar
    name.
-5. **A `plrun` result's element class reaches the type graph through the read
+4. **A `plrun` result's element class reaches the type graph through the read
    argument's shape rather than the result's own cell.** With the struct argument
    the old path is gone: `a_gpu_program_chains_two_kernels_on_a_device` saw its
    collected array's element type go from `Int` to undecided, and it now pins the
    **values** rather than the element type. The honest fix is
    [class-channel](class-channel.md) §2/§3 — one authority for a class's value,
    read by the result's own cell.
+5. **A loop body reading a scalar at the language level.** A `@loop` helper whose
+   state a kernel body destructures is refused at lowering ("a kernel body's index
+   cannot be placed"), so the scalar cannot yet be carried *into* a loop body from
+   lichen. The IR expresses it, and the emitter's module for it is validated.
 
 ## Recovered measurements
 

@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use lichen_kernel_ir::{
-    KernelBin, KernelFragment, KernelId, KernelInstr, KernelShape, LaunchSet, ScalarClass,
-    Terminator, ValueDef, ValueId,
+    KernelBin, KernelFragment, KernelId, KernelInstr, LaunchSet, ScalarClass, Terminator, ValueDef,
+    ValueId,
 };
 
 /// SPIR-V opcodes.  Not from memory: these are the `SpvOp*` values in the
@@ -100,6 +100,7 @@ mod capability {
 /// `SpvStorageClass` values used below.
 mod storage_class {
     pub const INPUT: u32 = 1;
+    pub const PUSH_CONSTANT: u32 = 9;
     pub const STORAGE_BUFFER: u32 = 12;
 }
 
@@ -168,8 +169,6 @@ pub enum SpirvRefusal {
         results: usize,
         at: usize,
     },
-    /// A parameter read that is not the index.
-    NonIndexParameter { local: u32, at: usize },
     /// A buffer position that is not a compile-time constant.
     NonConstantBufferPosition { at: usize },
     /// A buffer position outside the space it addresses.
@@ -233,12 +232,6 @@ impl fmt::Display for SpirvRefusal {
                 "instruction {at} calls kernel {kernel}, which leaves {results} value(s). A call \
                  here is typed by the callee's one return value, so a callee that leaves none or \
                  several has no signature to call."
-            ),
-            SpirvRefusal::NonIndexParameter { local, at } => write!(
-                f,
-                "instruction {at} reads parameter {local}, which is not the index. A buffer is \
-                 bound to this shader as a storage buffer rather than passed as a value, so there \
-                 is no value for a non-index parameter to hold."
             ),
             SpirvRefusal::NonConstantBufferPosition { at } => write!(
                 f,
@@ -518,6 +511,23 @@ struct Ids {
     gid: u32,
     /// The first of `binding.total()` consecutive storage-buffer variables.
     buffers: u32,
+    /// The push-constant block's struct, its variable, and a pointer to each class's
+    /// member within it.
+    ///
+    /// # Invariant
+    /// The one place a launch's scalar leaves reach the shader: a compute entry point
+    /// takes no parameters, so a value the host fixes per dispatch arrives here rather
+    /// than through the function's signature.
+    push_block: u32,
+    push_block_ptr: u32,
+    push_var: u32,
+    /// A pointer to one member of the block, one per class — at most two, so a run of any
+    /// leaf list is built from these.
+    push_pointers: [u32; ScalarClass::ALL.len()],
+    /// One 32-bit member index per pushed leaf, the indices its access chains name.
+    push_index: Vec<u32>,
+    /// How many leaves this module pushes: the root's leaves but the index.
+    push_members: usize,
 }
 
 impl Ids {
@@ -594,12 +604,37 @@ pub(crate) fn index_local(fragment: &KernelFragment) -> Option<u32> {
     (arity > 0).then(|| (arity - 1) as u32)
 }
 
-/// Every parameter leaf's class, in flattening order — the order [`flat_arity`] counts.
-fn leaf_classes(shape: &KernelShape) -> Vec<ScalarClass> {
-    match shape {
-        KernelShape::Scalar(class) => vec![*class],
-        KernelShape::Tuple(items) => items.iter().flat_map(leaf_classes).collect(),
+/// The bytes one pushed leaf occupies in the block.
+///
+/// # Invariant
+/// The width of the type the emitter gives it, **not** [`ScalarClass::byte_width`]: an
+/// integer leaf is `i64` in an integer module and `u32` in a float one, the rule the
+/// invocation id follows too. The buffer width would place the next leaf four bytes early.
+pub(crate) fn push_width(module: ScalarClass, class: ScalarClass) -> u32 {
+    match (module, class) {
+        (ScalarClass::Int, ScalarClass::Int) => 8,
+        _ => 4,
     }
+}
+
+/// The byte offset of each pushed leaf inside the push-constant block, and the block's
+/// size.
+///
+/// # Invariant
+/// **One answer for the emitter and the dispatch**: a member's `Offset` decoration and the
+/// bytes `cmd_push_constants` writes are the same number written twice, so they are computed
+/// once here. A leaf sits at the next offset its own width divides, because SPIR-V requires a
+/// member's offset to be a multiple of its type's alignment.
+pub(crate) fn push_layout(module: ScalarClass, leaves: &[ScalarClass]) -> (Vec<u32>, u32) {
+    let mut offsets = Vec::with_capacity(leaves.len());
+    let mut cursor = 0u32;
+    for &class in leaves {
+        let width = push_width(module, class);
+        cursor = cursor.div_ceil(width) * width;
+        offsets.push(cursor);
+        cursor += width;
+    }
+    (offsets, cursor)
 }
 
 /// The class of buffer `slot` — inputs first, then outputs, the order a [`Binding`] uses.
@@ -664,7 +699,7 @@ pub fn module_class(fragment: &KernelFragment) -> Result<ScalarClass, SpirvRefus
     {
         return Ok(class);
     }
-    let leaves = leaf_classes(&fragment.param_shape);
+    let leaves = fragment.param_shape.leaf_classes();
     let index = index_local(fragment);
     Ok(leaves
         .iter()
@@ -750,6 +785,14 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
     let function_types = take(ordered.len() as u32);
     let functions = take(ordered.len() as u32);
     let buffers = take(binding.total() as u32);
+    // The push-constant block's ids: struct, pointer, variable, per-class
+    // pointers, and one member index per leaf.
+    let push_members = root.scalar_leaves();
+    let push_block = take(1);
+    let push_block_ptr = take(1);
+    let push_var = take(1);
+    let push_pointer_base = take(ScalarClass::ALL.len() as u32);
+    let push_index: Vec<u32> = (0..push_members).map(|_| take(1)).collect();
     let ids = Ids {
         class,
         void,
@@ -773,6 +816,12 @@ pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, Spi
         zero_float,
         gid,
         buffers,
+        push_block,
+        push_block_ptr,
+        push_var,
+        push_pointers: std::array::from_fn(|class| push_pointer_base + class as u32),
+        push_index,
+        push_members,
     };
 
     // `OpConstant` is module-scope, so the literals are emitted with the types.
@@ -861,64 +910,73 @@ fn emit_function(
     let mut parameters: Vec<Inst> = Vec::new();
     let mut slots: HashMap<ValueId, Slot> = HashMap::new();
 
-    if entry {
-        // The index value: the invocation id's x component, an integer whatever the
-        // fragment's leaves say.
-
-        // An integer module widens it to the fragment's 64-bit `Int`, which the body may
-        // then use as a scalar.
-
-        // A float module leaves it 32-bit, keeping a 64-bit integer and its capability
-        // out.
-        let loaded = next;
-        next += 1;
-        let component = next;
-        next += 1;
-        prologue.push(Inst::new(op::LOAD, vec![ids.v3uint, loaded, ids.gid]));
-        prologue.push(Inst::new(
-            op::COMPOSITE_EXTRACT,
-            vec![ids.uint, component, loaded, 0],
-        ));
-        let index_value = match ids.class {
-            ScalarClass::Int => {
-                let widened = next;
-                next += 1;
-                prologue.push(Inst::new(
-                    op::U_CONVERT,
-                    vec![ids.ulong, widened, component],
-                ));
-                widened
-            }
-            ScalarClass::Float => component,
+    // Every parameter is placed by the one mechanism this target has for it.
+    let leaves = fragment.param_shape.leaf_classes();
+    for (offset, &value) in fragment.body.parameters().iter().enumerate() {
+        let Some(&class) = leaves.get(offset) else {
+            return Err(SpirvRefusal::ControlFlow {
+                detail: format!(
+                    "this body takes {} parameter(s) but its domain flattens to {}, so the \
+                     parameter at position {offset} has nothing to bind to",
+                    fragment.body.parameters().len(),
+                    leaves.len()
+                ),
+            });
         };
-        // **The index parameter is the one entry-block parameter this target can
-        // place**: it is the invocation id.
-        if let Some(index_parameter) = fragment.body.parameters().get(index as usize).copied() {
-            slots.insert(index_parameter, scalar(index_value, ScalarClass::Int));
-        }
-    } else {
-        // **A callee's domain arrives as function parameters**; the entry
-        // point's cannot.
-        let leaves = leaf_classes(&fragment.param_shape);
-        for (offset, &value) in fragment.body.parameters().iter().enumerate() {
-            let Some(class) = leaves.get(offset).copied() else {
-                return Err(SpirvRefusal::ControlFlow {
-                    detail: format!(
-                        "this body takes {} parameter(s) but its domain flattens to {}, so the \
-                         call that names it has no signature",
-                        fragment.body.parameters().len(),
-                        leaves.len()
-                    ),
-                });
-            };
+        let (id, read_as) = if !entry {
             let id = next;
             next += 1;
             parameters.push(Inst::new(
                 op::FUNCTION_PARAMETER,
                 vec![ids.type_of(class), id],
             ));
-            slots.insert(value, scalar(id, class));
-        }
+            (id, class)
+        } else if offset as u32 == index {
+            // The index is the invocation, and `Int` whatever the leaf declares.
+            let loaded = next;
+            next += 1;
+            let component = next;
+            next += 1;
+            prologue.push(Inst::new(op::LOAD, vec![ids.v3uint, loaded, ids.gid]));
+            prologue.push(Inst::new(
+                op::COMPOSITE_EXTRACT,
+                vec![ids.uint, component, loaded, 0],
+            ));
+            let id = match ids.class {
+                ScalarClass::Int => {
+                    let widened = next;
+                    next += 1;
+                    prologue.push(Inst::new(
+                        op::U_CONVERT,
+                        vec![ids.ulong, widened, component],
+                    ));
+                    widened
+                }
+                ScalarClass::Float => component,
+            };
+            (id, ScalarClass::Int)
+        } else {
+            // One member of the block, read once where every use can reach it.
+            let pointer = next;
+            next += 1;
+            let loaded = next;
+            next += 1;
+            prologue.push(Inst::new(
+                op::ACCESS_CHAIN,
+                vec![
+                    ids.push_pointers[class.index()],
+                    pointer,
+                    ids.push_var,
+                    ids.push_index[offset],
+                ],
+            ));
+            prologue.push(Inst::new(
+                op::LOAD,
+                vec![ids.type_of(class), loaded, pointer],
+            ));
+            (loaded, class)
+        };
+        slots.insert(value, scalar(id, read_as));
     }
     let first_label = next;
 
@@ -952,7 +1010,7 @@ fn emit_function(
                             results: fragment.result_classes.len(),
                             left: 0,
                         })?;
-                        resolve_operand(fragment, &slots, *value, at)
+                        resolve_operand(fragment, &slots, *value)
                     };
                     let instruction = op;
                     match instruction {
@@ -1314,7 +1372,7 @@ fn emit_function(
                                     at,
                                 });
                             };
-                            let leaves = leaf_classes(&target.param_shape);
+                            let leaves = target.param_shape.leaf_classes();
                             if args.len() != leaves.len() {
                                 return Err(SpirvRefusal::CrossKernelArity {
                                     kernel: callee,
@@ -1403,30 +1461,18 @@ fn emit_function(
     Ok(body)
 }
 
-/// The one entry-block parameter this target places is the index; any other is
-/// refused by name.
+/// The slot a value reads through, or the body's own refusal for a value nothing
+/// defined.
+///
+/// # Invariant
+/// Every parameter is placed before the body is walked, so an operand with no slot is a
+/// value no instruction produced — which the body already validated against.
 fn resolve_operand(
     fragment: &KernelFragment,
     slots: &HashMap<ValueId, Slot>,
     value: ValueId,
-    at: usize,
 ) -> Result<Slot, SpirvRefusal> {
-    if let Some(slot) = slots.get(&value).copied() {
-        return Ok(slot);
-    }
-    // **A missing *parameter* has its own refusal**: a buffer is bound, not a value.
-    if let Some(local) = fragment
-        .body
-        .parameters()
-        .iter()
-        .position(|parameter| *parameter == value)
-    {
-        return Err(SpirvRefusal::NonIndexParameter {
-            local: local as u32,
-            at,
-        });
-    }
-    Err(SpirvRefusal::ResultArity {
+    slots.get(&value).copied().ok_or(SpirvRefusal::ResultArity {
         results: fragment.result_classes.len(),
         left: 0,
     })
@@ -2011,24 +2057,16 @@ struct Emitter<'a> {
 }
 
 impl Emitter<'_> {
-    fn operand(&self, value: ValueId, at: usize) -> Result<Slot, SpirvRefusal> {
-        resolve_operand(self.fragment, self.slots, value, at)
+    fn operand(&self, value: ValueId) -> Result<Slot, SpirvRefusal> {
+        resolve_operand(self.fragment, self.slots, value)
     }
 
-    fn arguments(&self, values: &[ValueId], at: usize) -> Result<Vec<Slot>, SpirvRefusal> {
-        values
-            .iter()
-            .map(|&value| self.operand(value, at))
-            .collect()
+    fn arguments(&self, values: &[ValueId]) -> Result<Vec<Slot>, SpirvRefusal> {
+        values.iter().map(|&value| self.operand(value)).collect()
     }
 
-    fn condition(
-        &mut self,
-        value: ValueId,
-        code: &mut Vec<Inst>,
-        at: usize,
-    ) -> Result<Slot, SpirvRefusal> {
-        let slot = self.operand(value, at)?;
+    fn condition(&mut self, value: ValueId, code: &mut Vec<Inst>) -> Result<Slot, SpirvRefusal> {
+        let slot = self.operand(value)?;
         Ok(as_condition(slot, self.ids, self.literals, code, self.next))
     }
 
@@ -2145,7 +2183,7 @@ impl Emitter<'_> {
             }
             Terminator::Br(br) => {
                 let target = self.plan.targets[node][0];
-                let args = self.arguments(&br.args, at)?;
+                let args = self.arguments(&br.args)?;
                 self.record(target, label, args, code, at)?;
                 code.push(Inst::new(op::BRANCH, vec![self.plan.labels[target]]));
             }
@@ -2154,7 +2192,7 @@ impl Emitter<'_> {
                 if_true,
                 if_false,
             } => {
-                let condition = self.condition(cond, code, at)?;
+                let condition = self.condition(cond, code)?;
                 let targets = self.plan.targets[node].clone();
                 let exit_first = self.plan.loop_bodies[node]
                     .is_some_and(|body_entry| if_true.target != body_entry);
@@ -2164,8 +2202,8 @@ impl Emitter<'_> {
                     } else {
                         (if_false, if_true)
                     };
-                    let body_args = self.arguments(&body.args, at)?;
-                    let exit_args = self.arguments(&exit.args, at)?;
+                    let body_args = self.arguments(&body.args)?;
+                    let exit_args = self.arguments(&exit.args)?;
                     // Both edges first: a coercion a phi needs belongs before the
                     // merge instruction, which is second-to-last in the block.
                     self.record(targets[0], label, body_args, code, at)?;
@@ -2189,13 +2227,13 @@ impl Emitter<'_> {
                             ),
                         });
                     }
-                    let args = self.arguments(&if_true.args, at)?;
+                    let args = self.arguments(&if_true.args)?;
                     self.record(targets[0], label, args, code, at)?;
                     code.push(Inst::new(op::BRANCH, vec![self.plan.labels[targets[0]]]));
                     return Ok(());
                 } else {
                     for (position, br) in [&if_true, &if_false].into_iter().enumerate() {
-                        let args = self.arguments(&br.args, at)?;
+                        let args = self.arguments(&br.args)?;
                         self.record(targets[position], label, args, code, at)?;
                     }
                     let merge = self.plan.merges[node];
@@ -2321,6 +2359,21 @@ fn assemble(
             vec![types.buffer_struct, 0, decoration::OFFSET, 0],
         ));
     }
+    // One `Offset` per leaf, from the layout the dispatch writes into.
+    let pushed: Vec<ScalarClass> = root.param_shape.leaf_classes()[..ids.push_members].to_vec();
+    if ids.push_members > 0 {
+        let (offsets, _) = push_layout(ids.class, &pushed);
+        for (member, offset) in offsets.into_iter().enumerate() {
+            annotations.push(Inst::new(
+                op::MEMBER_DECORATE,
+                vec![ids.push_block, member as u32, decoration::OFFSET, offset],
+            ));
+        }
+        annotations.push(Inst::new(
+            op::DECORATE,
+            vec![ids.push_block, decoration::BLOCK],
+        ));
+    }
     for slot in 0..binding.total() {
         let variable = ids.buffers + slot as u32;
         annotations.push(Inst::new(
@@ -2378,6 +2431,30 @@ fn assemble(
         op::TYPE_POINTER,
         vec![ids.ptr_in, storage_class::INPUT, ids.v3uint],
     )]);
+    // One block member per leaf, in the parameter's own order.
+    if ids.push_members > 0 {
+        let mut block = vec![ids.push_block];
+        block.extend(pushed.iter().map(|class| ids.type_of(*class)));
+        types.push(Inst::new(op::TYPE_STRUCT, block));
+        types.push(Inst::new(
+            op::TYPE_POINTER,
+            vec![
+                ids.push_block_ptr,
+                storage_class::PUSH_CONSTANT,
+                ids.push_block,
+            ],
+        ));
+        for class in ScalarClass::ALL {
+            types.push(Inst::new(
+                op::TYPE_POINTER,
+                vec![
+                    ids.push_pointers[class.index()],
+                    storage_class::PUSH_CONSTANT,
+                    ids.type_of(class),
+                ],
+            ));
+        }
+    }
     // **One function type per fragment**: `OpFunctionCall` is typed by the
     // callee's.
     for (position, fragment) in launch.ordered().iter().copied().enumerate() {
@@ -2388,7 +2465,9 @@ fn assemble(
         }
         let mut operands = vec![ty];
         operands.extend(
-            leaf_classes(&fragment.param_shape)
+            fragment
+                .param_shape
+                .leaf_classes()
                 .iter()
                 .map(|class| ids.type_of(*class)),
         );
@@ -2405,6 +2484,13 @@ fn assemble(
     emit_all(&mut out, &types);
 
     let mut constants = vec![Inst::new(op::CONSTANT, vec![ids.uint, ids.zero, 0])];
+    // One 32-bit constant per pushed leaf, the member index its access chain names.
+    constants.extend(
+        ids.push_index
+            .iter()
+            .enumerate()
+            .map(|(member, &id)| Inst::new(op::CONSTANT, vec![ids.uint, id, member as u32])),
+    );
     // The scalar `1` and `0` a comparison is materialised into, over two floats and
     // over the module's integer.
 
@@ -2463,6 +2549,16 @@ fn assemble(
                 chain.ptr_array,
                 ids.buffers + slot as u32,
                 storage_class::STORAGE_BUFFER,
+            ],
+        ));
+    }
+    if ids.push_members > 0 {
+        globals.push(Inst::new(
+            op::VARIABLE,
+            vec![
+                ids.push_block_ptr,
+                ids.push_var,
+                storage_class::PUSH_CONSTANT,
             ],
         ));
     }

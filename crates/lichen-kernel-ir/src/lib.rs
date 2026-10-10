@@ -175,15 +175,20 @@ impl Pending for Waited {
     }
 }
 
-/// One launch set: the fragments a dispatch emits together, in module order.
+/// One launch set: the fragments a dispatch emits together, and the runtime
+/// scalars it fixes.
 ///
 /// # Invariant
 /// `ordered[0]` is the root and `index` covers every fragment: a [`KernelInstr::CallKernel`]
-/// resolves to a position, so both spellings of a run read the same two facts.
+/// resolves to a position, so both spellings of a run read the same two facts. The leaves
+/// travel **with** the set rather than beside it: a dispatch reads its values from the launch
+/// it was handed, and a second place they could be changed in is a way to run one value as
+/// another.
 #[derive(Debug, Clone)]
 pub struct LaunchSet<'a> {
     ordered: Vec<&'a KernelFragment>,
     index: HashMap<KernelId, u32>,
+    leaves: &'a [ScalarLeaf],
 }
 
 impl<'a> LaunchSet<'a> {
@@ -192,6 +197,7 @@ impl<'a> LaunchSet<'a> {
         Self {
             ordered: ordered.iter().collect(),
             index: index.clone(),
+            leaves: &[],
         }
     }
 
@@ -201,12 +207,30 @@ impl<'a> LaunchSet<'a> {
         Self {
             ordered: vec![fragment],
             index: HashMap::new(),
+            leaves: &[],
         }
+    }
+
+    /// This set, with the scalar leaves the launch fixes beside the extent.
+    ///
+    /// # Invariant
+    /// One list, in [`KernelFragment::runtime_scalars`] order and that long: a backend reads a
+    /// leaf at the position the parameter declares, so a list of another length would place a value
+    /// under a leaf the body never names. The extent is **not** here — it is the count every run is
+    /// already handed — and stating it twice would be two arguments that could disagree.
+    pub fn with_leaves(mut self, leaves: &'a [ScalarLeaf]) -> Self {
+        self.leaves = leaves;
+        self
     }
 
     /// The fragments, root first.
     pub fn ordered(&self) -> &[&'a KernelFragment] {
         &self.ordered
+    }
+
+    /// The launch's runtime scalars: the root's parameter leaves beside the extent.
+    pub fn leaves(&self) -> &[ScalarLeaf] {
+        self.leaves
     }
 
     /// Each callee [`KernelId`]'s position in [`Self::ordered`].
@@ -382,6 +406,35 @@ impl KernelShape {
             KernelShape::Tuple(items) => items.iter().map(KernelShape::flat_arity).sum(),
         }
     }
+
+    /// Each leaf's class, in the order [`Self::flat_arity`] counts them.
+    ///
+    /// # Invariant
+    /// One walk, one order: a body that declared its arguments in a second order than the
+    /// parameter list would read one kernel's arguments as another's, and a `Float` leaf read
+    /// at another leaf's width is a wrong number rather than a failure.
+    pub fn leaf_classes(&self) -> Vec<ScalarClass> {
+        match self {
+            KernelShape::Scalar(class) => vec![*class],
+            KernelShape::Tuple(items) => items.iter().flat_map(KernelShape::leaf_classes).collect(),
+        }
+    }
+}
+
+/// One launch scalar: the value of a parameter's scalar leaf, at that leaf's own class.
+///
+/// # Invariant
+/// The class is the leaf's, not the launch's: an `Int` extent and a `Float` scalar are leaves of
+/// one parameter, and a list carrying a single class would read the `Float` at eight bytes. The
+/// payload is one word either way — the number for `Int`, the `f32`'s bits for `Float` — because
+/// that is what a buffer payload carries and a scalar must cross the boundary the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScalarLeaf {
+    /// The class this leaf's parameter field declared.
+    pub class: ScalarClass,
+    /// The leaf's bits: the number for [`ScalarClass::Int`], the `f32`'s bits for
+    /// [`ScalarClass::Float`].
+    pub bits: i64,
 }
 
 /// A binary arithmetic/comparison operator of the kernel-safe subset.
@@ -604,6 +657,30 @@ pub struct KernelFragment {
     pub result_classes: Vec<ScalarClass>,
     /// The integer width the body was lowered to mean.
     pub int_width: IntWidth,
+}
+
+impl KernelFragment {
+    /// How many scalar leaves a launch fixes for this fragment: its domain's leaves but the
+    /// index.
+    ///
+    /// # Invariant
+    /// The index is the last leaf and is not a launch value — on a device it is the invocation a
+    /// lane is, and on the host the worker's loop variable — so a launch supplies exactly this
+    /// many. A backend that pushed a different number would place one leaf's value under another.
+    pub fn scalar_leaves(&self) -> usize {
+        self.param_shape.flat_arity().saturating_sub(1)
+    }
+
+    /// How many runtime scalars a launch fixes for this fragment: its leaves but the extent
+    /// and the index.
+    ///
+    /// # Invariant
+    /// **The extent is not a runtime scalar.** It is the count the launch dispatches over, which
+    /// every backend already holds, and the ABI's first scalar by definition — so a launch states
+    /// it once, as the count, rather than twice.
+    pub fn runtime_scalars(&self) -> usize {
+        self.scalar_leaves().saturating_sub(1)
+    }
 }
 
 /// A fragment's content digest: what makes a [`KernelId`] an identity.

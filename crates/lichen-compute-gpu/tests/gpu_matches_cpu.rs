@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use lichen_kernel_ir::{
     BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaunchSet, Pending, ScalarClass, ScalarData,
+    KernelShape, LaunchSet, Pending, ScalarClass, ScalarData, ScalarLeaf,
 };
 
 /// A one-fragment launch set: every kernel here stands alone, and a set's
@@ -790,6 +790,186 @@ fn a_submission_can_be_fed_to_one_that_is_still_in_flight() {
     );
     context.release(first_ids[0]);
     context.release(second_ids[0]);
+}
+
+/// `out[i] = in[i] + a`, over `(n, a, index)` — the launch's runtime scalar.
+///
+/// # Invariant
+/// Three leaves, not two: the extent, the scalar the host fixes beside it, and the index. The
+/// fragment names its own class for each, and the second is the one the device used to refuse.
+fn adds_a_runtime_scalar() -> KernelFragment {
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body: KernelBody::from_flat(
+            3,
+            &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
+                FlatOp::Read(2),                                        // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos
+                FlatOp::Read(2),
+                FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)), // in[i]
+                FlatOp::Read(1),                                              // the runtime scalar
+                FlatOp::Instr(KernelInstr::Bin(ScalarClass::Int, KernelBin::Add)),
+                FlatOp::Instr(KernelInstr::BufferWriteCall(ScalarClass::Int)),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            ],
+        ),
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int; 1],
+        int_width: IntWidth::I64,
+    }
+}
+
+/// `out[i] = in[i] * alpha`, over `(n, alpha, index)` — a `Float` scalar beside an `Int` extent.
+///
+/// # Invariant
+/// **A different width on each leaf**: this module is a float one, so its `Int` extent is a
+/// 32-bit index where the integer module above had it at eight. A block written at the buffer
+/// widths would leave `alpha` four bytes past the end.
+fn scales_by_a_runtime_float() -> KernelFragment {
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Float),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body: KernelBody::from_flat(
+            3,
+            &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
+                FlatOp::Read(2),                                        // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos
+                FlatOp::Read(2),
+                FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Float)), // in[i]
+                FlatOp::Read(1), // the runtime scalar
+                FlatOp::Instr(KernelInstr::Bin(ScalarClass::Float, KernelBin::Mul)),
+                FlatOp::Instr(KernelInstr::BufferWriteCall(ScalarClass::Float)),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            ],
+        ),
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Float],
+        output_classes: vec![ScalarClass::Float],
+        result_classes: vec![ScalarClass::Float; 1],
+        int_width: IntWidth::I64,
+    }
+}
+
+/// The runtime scalar the host fixes reaches the shader, at its own width.
+///
+/// # Invariant
+/// **Two values of one fragment, two answers.** A scalar the shader read from anywhere else would
+/// give the same answer both rounds, which is the failure this rules out: a push constant read at
+/// the wrong offset is a wrong number and not an error.
+#[test]
+fn a_launch_scalar_reaches_the_shader_at_its_own_width() {
+    let Some(context) = common::context("a_launch_scalar_reaches_the_shader_at_its_own_width")
+    else {
+        return;
+    };
+    let count = 100;
+    let input: Vec<i64> = (0..count as i64).map(|value| value - 40).collect();
+    let packed = pack(&input);
+    let fragment = adds_a_runtime_scalar();
+
+    let mut answers = Vec::new();
+    for scalar in [7i64, 1000] {
+        let leaves = [ScalarLeaf {
+            class: ScalarClass::Int,
+            bits: scalar,
+        }];
+        let resident = context
+            .run(
+                &LaunchSet::single(&fragment).with_leaves(&leaves),
+                &[BufferSlot::Host(&packed)],
+                count,
+            )
+            .unwrap_or_else(|refusal| panic!("a run with a runtime scalar at {scalar}: {refusal}"));
+        let got = words(
+            context
+                .fetch(resident[0], count)
+                .expect("the result comes back off the device"),
+        );
+        assert_eq!(
+            got,
+            input
+                .iter()
+                .map(|value| value + scalar)
+                .collect::<Vec<i64>>(),
+            "the shader added the pushed scalar {scalar}, not a value it found elsewhere"
+        );
+        context.release(resident[0]);
+        answers.push(got);
+    }
+    assert_ne!(
+        answers[0], answers[1],
+        "two launches of one fragment with two scalars are two answers"
+    );
+
+    // A launch fixing no leaves cannot fill the block.
+    let refusal = context
+        .run(
+            &LaunchSet::single(&fragment),
+            &[BufferSlot::Host(&packed)],
+            count,
+        )
+        .expect_err("a launch that fixes no leaves cannot fill the block");
+    assert!(
+        refusal.to_string().contains("runtime scalar"),
+        "the message names what the launch did not supply: {refusal}"
+    );
+}
+
+/// The same feature in a float module, where the `Int` extent is a 32-bit member.
+///
+/// # Invariant
+/// The extent leaf and the `Float` scalar are **both four bytes** here, so the scalar sits at
+/// offset four. Reading it at eight would land on padding and multiply by a wrong number.
+#[test]
+fn a_float_scalar_is_pushed_beside_a_narrower_extent() {
+    let Some(context) = common::context("a_float_scalar_is_pushed_beside_a_narrower_extent") else {
+        return;
+    };
+    let count = 70;
+    let input: Vec<f32> = (0..count).map(|value| value as f32 - 20.0).collect();
+    let packed: Vec<u8> = input.iter().flat_map(|value| value.to_le_bytes()).collect();
+    let alpha = 2.5f32;
+    let leaves = [ScalarLeaf {
+        class: ScalarClass::Float,
+        bits: alpha.to_bits() as i64,
+    }];
+    let resident = context
+        .run(
+            &LaunchSet::single(&scales_by_a_runtime_float()).with_leaves(&leaves),
+            &[BufferSlot::Host(&packed)],
+            count,
+        )
+        .unwrap_or_else(|refusal| panic!("a float run with a runtime scalar: {refusal}"));
+    let ScalarData::Float(got) = context
+        .fetch(resident[0], count)
+        .expect("the result comes back off the device")
+    else {
+        panic!("a float fragment's result came back as integers")
+    };
+    assert_eq!(
+        got,
+        input
+            .iter()
+            .map(|value| value * alpha)
+            .collect::<Vec<f32>>(),
+        "the shader scaled by the pushed float, read at its own offset"
+    );
+    context.release(resident[0]);
 }
 
 /// A submission nobody waited for is still released when it is dropped.
