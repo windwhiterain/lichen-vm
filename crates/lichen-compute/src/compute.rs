@@ -2603,12 +2603,11 @@ const MAX_KERNEL_BODY_DEPTH: usize = 512;
 /// encoding re-enters from spinning.
 const MAX_PARAMETER_DEPTH: usize = 32;
 
-/// The refusal [`emit_node`] gives past [`MAX_KERNEL_BODY_DEPTH`], naming the
-/// limit, what the limit is protecting, and the form that does not expand.
+/// The refusal [`emit_node`] gives past [`MAX_KERNEL_BODY_DEPTH`].
 ///
-/// One string rather than a `format!` at the call site so that every refusal of
-/// this cause carries the same three facts — the same discipline
-/// [`CONDITIONAL_WRITE`] follows.
+/// # Invariant
+/// One string rather than a `format!` at the call site, so every refusal of this
+/// cause carries the same three facts.
 fn kernel_body_too_deep() -> String {
     format!(
         "a kernel body's expression nests more than {MAX_KERNEL_BODY_DEPTH} levels, so lowering it \
@@ -2625,63 +2624,48 @@ fn kernel_body_too_deep() -> String {
 
 /// The buffer positions one kernel body addresses, counted as it is emitted.
 ///
-/// **Two counters, one per buffer space, and they are the two halves of one
-/// fact.** A body says which of the buffers it was handed it reads, and which of
-/// the buffers it was given to fill it writes; those positions are compile-time
-/// constants (`parallel_buffer_pos` refuses anything else by name), and the
-/// fragment carries the totals as [`KernelFragment::inputs`] and
-/// [`KernelFragment::outputs`]. Counting them here rather than letting a caller
-/// discover them is what makes the two numbers impossible to disagree with the
-/// body: a caller that is handed the wrong number is refused rather than given a
+/// # Invariant
+/// Two counters, one per buffer space: the positions are compile-time constants
+/// (`parallel_buffer_pos` refuses anything else), and the fragment carries the
+/// totals — so a caller handed the wrong number is refused rather than given a
 /// shader that reads a binding nobody bound.
 #[derive(Debug, Default, Clone)]
 struct Positions {
-    /// The `out_pos` the next `compute.write` is given, and the number of
-    /// writes emitted so far once the walk returns — the write's position in
-    /// the index function's codomain.
+    /// The `out_pos` the next write is given — its position in the codomain.
     writes: usize,
-    /// One past the highest input position any `compute.read` named, so `0` for
-    /// a body that reads no buffer. The max rather than a count, because the
-    /// read positions are a sparse space: a body that reads only the second
-    /// input still needs two buffers, or the one it read was never bound.
+    /// One past the highest input position any `compute.read` named.
+    ///
+    /// # Invariant
+    /// A max rather than a count, because read positions are a sparse space: a body
+    /// that reads only the second input still needs two buffers.
     reads: usize,
-    /// The element class of each write ordinal emitted, in ordinal order — the
-    /// class half of the same fact [`Self::writes`] counts, filled at the same
-    /// site so the two cannot disagree.
+    /// The element class of each write ordinal, in ordinal order.
     write_classes: Vec<ScalarClass>,
-    /// The element class of each input position read, in read order — the class
-    /// half of the same fact [`Self::reads`] bounds. A body that never reads a
-    /// buffer leaves this empty, exactly as a body that reads one leaves `0` in
-    /// the other.
+    /// The element class of each input position read, in read order.
     ///
-    /// **This is a list of the reads, not of the positions**, and the two are not
-    /// the same list: [`Self::reads`] is a *max* over a sparse position space, so
-    /// a body that reads position 1 and not position 0 has one entry here and a
-    /// count of two. [`Self::input_classes`] is what reconciles them, and the
-    /// reconciliation is decided in one place rather than left to each caller.
-    ///
-    /// **Every entry is the class the reads are *declared* in**, which is
-    /// [`Self::element_class`] rather than the read node's: a buffer's element
-    /// class is a fact of the value the host binds at the run, not of any node in
-    /// the graph, so the lowering declares it and the run checks the binding
-    /// against it ([`check_input_classes`]).  Every *other* value's class is its
-    /// own, read from the node.
+    /// # Invariant
+    /// A list of the *reads*, not of the positions: [`Self::reads`] is a max over a
+    /// sparse space, so a body that reads position 1 and not 0 has one entry here
+    /// and a count of two. Every entry is the class the reads are *declared* in
+    /// ([`Self::element_class`]), because a buffer's element class is a fact of the
+    /// value the host binds at the run, not of any node.
     read_classes: Vec<ScalarClass>,
     /// The class a buffer read's element is declared in.
     ///
-    /// **The one class that stays the fragment's.**  A read's element is the only
-    /// value whose class no node can carry, because the buffer it comes from is
-    /// bound by the host rather than computed by the body.  `None` before the
-    /// caller has said, and `Int` — the ABI's default — until then.
+    /// # Invariant
+    /// The one class that stays the fragment's: a read's element is the only value
+    /// whose class no node carries, because the host binds the buffer. `Int` by
+    /// default until the caller says otherwise.
     element_class: Option<ScalarClass>,
 }
 
 impl Positions {
-    /// The declared class of every input position, `declared` entries long — the
-    /// count the fragment declares, which is the highest position a body read for
-    /// a `(n, (buffers…))` parameter and the `.in` field count for a struct one.
-    /// A position a body never read is still a position a caller binds, and it
-    /// takes the declared class for the same reason the reads do.
+    /// The declared class of every input position, `declared` entries long.
+    ///
+    /// # Invariant
+    /// The count is the fragment's declaration — the highest position a tuple-form
+    /// body read, the `.in` field count for a struct one — so a position a body
+    /// never read still takes the declared class.
     fn input_classes(&self, declared: usize) -> Vec<ScalarClass> {
         let class = self.element_class.unwrap_or(ScalarClass::Int);
         let mut classes = self.read_classes.clone();
@@ -2695,25 +2679,15 @@ impl Positions {
     }
 }
 
-/// The class a fragment's **own** values are lowered in: the dummy result a
-/// parallel body leaves, and the type of every local a loop carries.
+/// The class a fragment's own values are lowered in: the body's dummy result and
+/// a loop's carried locals.
 ///
-/// **Not the class of its body.**  A body may compute in more than one class, so
-/// this is the class of its *first produced value* and nothing more — every
-/// instruction carries its own, and a backend reads them rather than this.  The
-/// two places it is still the answer are the ones that have no value to ask: the
-/// dummy scalar is a value nobody reads, and a loop's carried locals are typed
-/// once for the whole loop.
-///
-/// **Read off [`KernelFragment::output_classes`] first, then
-/// [`KernelFragment::result_classes`].**  A parallel fragment's output list is one
-/// entry per write ordinal, so its first entry is what the index function's first
-/// write computes in; a scalar fragment has no output buffers and declares its
-/// wasm results in `result_classes`.  A fragment with neither — a hand-built one
-/// — is the ABI's integer default rather than a panic.
-///
-/// A loop carrying values of *two* classes is the limitation this names: it needs
-/// the carried list to be typed per position rather than per loop.
+/// # Invariant
+/// Not the class of its body — a body may compute in more than one class, and every
+/// instruction carries its own — but the class of its *first produced value*, read
+/// off `output_classes` and then `result_classes`. A hand-built fragment with
+/// neither takes the ABI's integer default rather than panicking. A loop carrying
+/// two classes needs its carried list typed per position.
 pub(crate) fn fragment_class(fragment: &KernelFragment) -> ScalarClass {
     fragment
         .output_classes
@@ -2723,32 +2697,28 @@ pub(crate) fn fragment_class(fragment: &KernelFragment) -> ScalarClass {
         .unwrap_or(ScalarClass::Int)
 }
 
-/// A constant in the representation the class's opcode reads: an `Int` local
-/// takes the value, a `Float` local takes an `f32`'s bits.
+/// A constant in the representation the class's opcode reads.
 ///
-/// **The class is the instruction's own**, and one body may hold constants of
-/// both, so a class read off the fragment would be a second answer to a question
-/// the instruction already answers.  An integer a `Float` instruction carries —
-/// a buffer position, a literal index — is converted here, once, rather than at
-/// each emission site.
+/// # Invariant
+/// The class is the instruction's own, and one body may hold constants of both, so a
+/// class read off the fragment would answer a question the instruction already
+/// answers; an integer a `Float` instruction carries is converted here, once.
 fn const_bits(class: ScalarClass, value: i64) -> i64 {
     match class {
         ScalarClass::Int => value,
-        // Exact for every value a fragment carries as an integer: buffer
-        // positions are ordinals and the loop index is bounded by
-        // `MAX_PARALLEL_ELEMENTS`, both far below 2^24.
+        // Exact for the integers a fragment carries: ordinals, and an index bounded
+        // by `MAX_PARALLEL_ELEMENTS`.
         ScalarClass::Float => float_bits(value as f32),
     }
 }
 
-/// The **scalar leaves** of a registered parallel fragment's signature: its
-/// parameter's scalars in field order, the launch extent first, without the index
-/// the ABI appends ([`param_classes`] folds the shape into one list).
+/// The scalar leaves of a registered parallel fragment's signature, in field
+/// order.
 ///
-/// The host half of the per-leaf ABI ([`param_classes`]'s own reading, one layer
-/// out): a launch's `cfg` carries these positions, and how many there are is a
-/// property of the fragment rather than of the call, so the arm reads them here
-/// (`docs/notes/compute-runtime-scalars.md` §1, §3).
+/// # Invariant
+/// The parameter's scalars without the index the ABI appends
+/// ([`param_classes`] folds the shape into one list); a launch's `cfg` carries
+/// exactly these positions, and how many there are is the fragment's.
 fn parallel_leaf_classes(id: KernelId) -> Result<Vec<ScalarClass>, String> {
     let fragments = kernels().lock().unwrap();
     let fragment = fragments
@@ -2758,9 +2728,8 @@ fn parallel_leaf_classes(id: KernelId) -> Result<Vec<ScalarClass>, String> {
     Ok(classes[..classes.len().saturating_sub(1)].to_vec())
 }
 
-/// The facts a run reads off the fragment's own register: the walk's paths, and
-/// the class each declared output's elements are.  A fragment that states no
-/// roles is the tuple form, whose leaves and buffers are read positionally.
+/// The facts a run reads off the fragment's register: the walk's paths, and each
+/// declared output's element class.
 struct FragmentFacts {
     roles: KernelRoles,
     output_classes: Vec<ScalarClass>,
@@ -2781,11 +2750,11 @@ fn fragment_facts(id: KernelId) -> FragmentFacts {
         })
 }
 
-/// The run input a buffer node names: the payload's words, or the resident
-/// result a device left behind — the two roles a dispatch reads.  `None`, with
-/// the refusal recorded under `where_`, for anything else: a decided non-buffer
-/// here is the one way a launch can be handed something it cannot run on, and it
-/// used to answer `parameterized` with no diagnostic at all.
+/// The run input a buffer node names: the payload's words, or a resident result.
+///
+/// # Invariant
+/// `None`, with the refusal recorded, for anything else: a decided non-buffer is
+/// the one way a launch can be handed something it cannot run on.
 fn run_input<P>(
     module: &mut Module<P>,
     node: AnyNodeId,
