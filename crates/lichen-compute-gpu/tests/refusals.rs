@@ -1,8 +1,8 @@
 //! What this backend refuses, and that it says which cause.
 //!
-//! These need no device: they are properties of the emitter, and a refusal that
-//! only appeared once a GPU was present would be a refusal nobody could test on
-//! a machine without one.
+//! # Invariant
+//! These need no device: they are properties of the emitter, and a refusal that only appeared once a
+//! GPU was present would be a refusal nobody could test on a machine without one.
 
 use std::collections::HashMap;
 
@@ -14,11 +14,9 @@ use lichen_kernel_ir::{
 
 /// A one-output fragment over `(input, index)`.
 ///
-/// `inputs` is taken rather than assumed because the tail decides it — a tail
-/// that reads position 0 needs one buffer and a tail that reads nothing needs
-/// none — and these tests exist precisely to be about the tail. The classes are
-/// the only class this ABI has: an `i64` buffer element
-/// (`docs/notes/floating-point.md` §3.8).
+/// # Invariant
+/// `inputs` is taken rather than assumed because the tail decides it: a tail reading position 0 needs
+/// one buffer and a tail reading nothing needs none. The classes are the only class this ABI has.
 fn body_with(inputs: usize, tail: Vec<FlatOp>) -> KernelFragment {
     let mut body: Vec<FlatOp> = vec![
         FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos, in the *output* space
@@ -46,8 +44,7 @@ const ONE_IN_ONE_OUT: Binding = Binding {
     outputs: 1,
 };
 
-/// A callee whose domain is **one `Int` leaf**, and whose body is `tail` over it:
-/// `from_flat` seeds its stack empty, so a body reads the parameter in by name.
+/// A callee whose domain is one `Int` leaf, and whose body is `tail` over it.
 fn unary_callee(tail: Vec<FlatOp>) -> KernelFragment {
     let mut ops = vec![FlatOp::Read(0)];
     ops.extend(tail);
@@ -64,8 +61,7 @@ fn unary_callee(tail: Vec<FlatOp>) -> KernelFragment {
     }
 }
 
-/// A callee whose domain is **empty**: the shape a call has to disagree with for
-/// the arity refusal to be reachable at all.
+/// A callee whose domain is empty: the shape an arity refusal needs.
 fn nullary_callee() -> KernelFragment {
     KernelFragment {
         param_shape: KernelShape::Tuple(Vec::new()),
@@ -74,12 +70,11 @@ fn nullary_callee() -> KernelFragment {
     }
 }
 
-/// The caller every cross-kernel test here uses: it reads input 0 at the index,
-/// calls kernel `7` with that element, and writes the answer to output 0.
+/// The caller every cross-kernel test here uses.
 ///
-/// **Hand-built, not `from_flat`.** A flat body gives a `CallKernel` no arguments
-/// — the arity is the callee's own and a flat builder has no callee to read it
-/// from — so the argument list these tests are about has to be written out.
+/// # Invariant
+/// Hand-built, not `from_flat`: a flat body gives a `CallKernel` no arguments, because the arity is the
+/// callee's own and a flat builder has no callee to read it from.
 fn calls_kernel_7() -> KernelFragment {
     let mut body = KernelBody::new();
     let entry = body.add_block();
@@ -128,11 +123,8 @@ fn calls_kernel_7() -> KernelFragment {
     }
 }
 
-/// **The refusal this test used to pin is gone, and it is gone rather than
-/// unused.** A cross-kernel call is a call into a function the module declares, so
-/// the launch set is what says which one, and two different callees are two
-/// different modules — which is what says the callee reached the emitter instead
-/// of being ignored.
+/// The refusal this test used to pin is gone rather than unused: a cross-kernel
+/// call is a call into a declared function.
 #[test]
 fn a_cross_kernel_call_is_emitted_into_the_launch_sets_module() {
     let caller = calls_kernel_7();
@@ -165,9 +157,7 @@ fn a_cross_kernel_call_is_emitted_into_the_launch_sets_module() {
     );
 }
 
-/// A call whose callee the set does not hold is **refused by name**, and the
-/// message says which kernel is missing: the set is the caller's to assemble, so
-/// that is where the fix is.
+/// A call whose callee the set does not hold is refused by name.
 #[test]
 fn a_callee_outside_the_launch_set_is_refused_by_name() {
     let caller = calls_kernel_7();
@@ -185,9 +175,8 @@ fn a_callee_outside_the_launch_set_is_refused_by_name() {
     );
 }
 
-/// The arity of a call is the **callee's own domain**, which is the read that
-/// makes the callee's fragment necessary: `KernelInstr::arity` answers `None` for
-/// a call because the IR does not carry it.
+/// The arity of a call is the callee's own domain, the read that makes its
+/// fragment necessary.
 #[test]
 fn a_call_the_callees_domain_does_not_fit_is_refused_by_name() {
     let caller = calls_kernel_7();
@@ -216,9 +205,7 @@ fn a_call_the_callees_domain_does_not_fit_is_refused_by_name() {
 
 #[test]
 fn reading_a_non_index_parameter_is_refused_by_name() {
-    // Parameter 0 is an input slot, not the index. On this target a buffer is
-    // bound as a storage buffer rather than passed as a value, so there is no
-    // value for it to hold.
+    // Parameter 0 is an input slot, not the index: a buffer is bound, not passed.
     let fragment = body_with(
         0,
         vec![
@@ -229,28 +216,22 @@ fn reading_a_non_index_parameter_is_refused_by_name() {
     );
     let refusal =
         spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
-    // `at` is the instruction's position in the entry block — not the operand's
-    // position in its argument list, which is what the refusal used to name.
+    // `at` is the instruction's position in the entry block.
     assert_eq!(refusal, SpirvRefusal::NonIndexParameter { local: 0, at: 1 });
     assert!(refusal.to_string().contains("storage buffer"));
 }
 
-/// The regression that matters most, because it is silent: reads and writes
-/// address **separate** position spaces, so a write's position `0` is the first
-/// output. Collapsing them makes every run write into its input and read back
-/// zeroes, with no error anywhere.
+/// The regression that matters most, because it is silent: reads and writes address
+/// separate position spaces.
 ///
-/// The fragment is the shape a real two-input parallel kernel lowers to:
-/// `param_shape` is `(config, index)` — two leaves — however many inputs there
-/// are, because the extra inputs are reached through a read's position rather
-/// than through a further parameter. **`inputs` is what says how many there
-/// are**, and this fragment is why: it reads input 1 and so declares 2, while
-/// its shape still flattens to 2 and a shape-derived count would have read that
-/// coincidence as agreement.
+/// # Invariant
+/// A write's position `0` is the first output, and collapsing the two spaces makes every run write into
+/// its input and read back zeroes with no error. The fragment reads input 1 so declares `inputs` 2
+/// while its shape still flattens to 2 — a shape-derived count would read that coincidence as
+/// agreement.
 #[test]
 fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
-    // Read input 1, write output 0. With the position spaces collapsed, that
-    // write would land on input 0 and the output would stay zero.
+    // Read input 1, write output 0: collapsed spaces would land the write on input 0.
     let fragment = KernelFragment {
         roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
@@ -287,10 +268,8 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
     let beyond = KernelFragment {
         roles: KernelRoles::default(),
         body: KernelBody::from_flat(
-            // **Two, matching the two reads below.** A domain of one would make
-            // `Read(1)` name a parameter that does not exist, and validate()
-            // refuses that as a structural break before the emitter reads a
-            // position — so the test would be about the wrong refusal.
+            // Two, matching the two reads below: a domain of one would make `Read(1)`
+            // name a parameter that does not exist.
             2,
             &[
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1)), // out_pos 1, but there is one output
@@ -309,8 +288,7 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
             position: 1,
             space: "output",
             bound: 1,
-            // The position's own `ValueId`: under SSA the emitter reads the
-            // constant by name rather than counting operand stack slots.
+            // The position's own `ValueId`: the emitter reads the constant by name.
             at: 2,
         }
     );
@@ -319,9 +297,8 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
 
 #[test]
 fn an_operator_with_too_few_operands_is_refused_by_arity() {
-    // `Bin(Add)` names two operands and is given none. Under SSA there is no
-    // operand stack: `KernelBody::validate` — the gate every backend calls
-    // first — refuses this by arity, naming the operator and both counts.
+    // `Bin(Add)` names two operands and is given none: `KernelBody::validate`
+    // refuses this by arity.
     let fragment = KernelFragment {
         roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
@@ -361,9 +338,9 @@ fn an_operator_with_too_few_operands_is_refused_by_arity() {
 
 /// A loop body that writes: the write a zero trip count can skip.
 ///
-/// `dispatch` allocates output buffers without initialising them, so this is the
-/// one refusal the no-zero-fill claim rests on and it is enforced here too, not
-/// only in the lowering. See `docs/notes/loop-conversion.md` §6.
+/// # Invariant
+/// `dispatch` allocates output buffers uninitialised, so this is the refusal the no-zero-fill claim
+/// rests on.
 #[test]
 fn a_write_inside_a_loop_is_refused_by_name() {
     let mut body = KernelBody::new();

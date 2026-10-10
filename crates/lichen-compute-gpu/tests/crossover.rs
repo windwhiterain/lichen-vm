@@ -1,8 +1,8 @@
 //! What this backend refuses, and that it says which cause.
 //!
-//! These need no device: they are properties of the emitter, and a refusal that
-//! only appeared once a GPU was present would be a refusal nobody could test on
-//! a machine without one.
+//! # Invariant
+//! These need no device: they are properties of the emitter, and a refusal that only appeared once a
+//! GPU was present would be a refusal nobody could test on a machine without one.
 
 use std::collections::HashMap;
 
@@ -14,11 +14,9 @@ use lichen_kernel_ir::{
 
 /// A one-output fragment over `(input, index)`.
 ///
-/// `inputs` is taken rather than assumed because the tail decides it — a tail
-/// that reads position 0 needs one buffer and a tail that reads nothing needs
-/// none — and these tests exist precisely to be about the tail. The classes are
-/// the only class this ABI has: an `i64` buffer element
-/// (`docs/notes/floating-point.md` §3.8).
+/// # Invariant
+/// `inputs` is taken rather than assumed because the tail decides it: a tail reading position 0 needs
+/// one buffer and a tail reading nothing needs none. The classes are the only class this ABI has.
 fn body_with(inputs: usize, tail: Vec<FlatOp>) -> KernelFragment {
     let mut body: Vec<FlatOp> = vec![
         FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos, in the *output* space
@@ -46,8 +44,7 @@ const ONE_IN_ONE_OUT: Binding = Binding {
     outputs: 1,
 };
 
-/// A callee whose domain is **one `Int` leaf**, and whose body is `tail` over it:
-/// `from_flat` seeds its stack empty, so a body reads the parameter in by name.
+/// A callee whose domain is one `Int` leaf, and whose body is `tail` over it.
 fn unary_callee(tail: Vec<FlatOp>) -> KernelFragment {
     let mut ops = vec![FlatOp::Read(0)];
     ops.extend(tail);
@@ -64,12 +61,11 @@ fn unary_callee(tail: Vec<FlatOp>) -> KernelFragment {
     }
 }
 
-/// The caller the cross-kernel tests here use: it reads input 0 at the index,
-/// calls kernel `7` with that element, and writes the answer to output 0.
+/// The caller the cross-kernel tests here use.
 ///
-/// **Hand-built, not `from_flat`.** A flat body gives a `CallKernel` no arguments
-/// — the arity is the callee's own and a flat builder has no callee to read it
-/// from — so the argument list this test is about has to be written out.
+/// # Invariant
+/// Hand-built, not `from_flat`: a flat body gives a `CallKernel` no arguments, because the arity is the
+/// callee's own and a flat builder has no callee to read it from.
 fn calls_kernel_7() -> KernelFragment {
     let mut body = KernelBody::new();
     let entry = body.add_block();
@@ -118,10 +114,8 @@ fn calls_kernel_7() -> KernelFragment {
     }
 }
 
-/// **The refusal this test used to pin is gone, and it is gone rather than
-/// unused.** A cross-kernel call becomes a call into a function the module
-/// declares, so the launch set is what resolves it — and the callee's own body is
-/// what the module then holds, which is what the two emissions below differ in.
+/// The refusal this test used to pin is gone rather than unused: a call becomes a
+/// call into a declared function.
 #[test]
 fn a_cross_kernel_call_is_emitted_into_the_launch_sets_module() {
     let caller = calls_kernel_7();
@@ -154,9 +148,7 @@ fn a_cross_kernel_call_is_emitted_into_the_launch_sets_module() {
     );
 }
 
-/// **`at` is the call's own index**, which is what it names now that a body is
-/// SSA: the stack position it used to be has no meaning here, and a refusal
-/// pointing at one would point at something that is not in the body.
+/// `at` is the call's own index, which is what it names now that a body is SSA.
 #[test]
 fn a_callee_outside_the_launch_set_is_refused_by_name() {
     let caller = calls_kernel_7();
@@ -176,9 +168,7 @@ fn a_callee_outside_the_launch_set_is_refused_by_name() {
 
 #[test]
 fn reading_a_non_index_parameter_is_refused_by_name() {
-    // Parameter 0 is an input slot, not the index. On this target a buffer is
-    // bound as a storage buffer rather than passed as a value, so there is no
-    // value for it to hold.
+    // Parameter 0 is an input slot, not the index: a buffer is bound, not passed.
     let fragment = body_with(
         0,
         vec![
@@ -189,28 +179,22 @@ fn reading_a_non_index_parameter_is_refused_by_name() {
     );
     let refusal =
         spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
-    // `at` is the instruction's position in the entry block, as it is for every
-    // other refusal, and not the operand's position in its argument list.
+    // `at` is the instruction's position in the entry block, as for every refusal.
     assert_eq!(refusal, SpirvRefusal::NonIndexParameter { local: 0, at: 1 });
     assert!(refusal.to_string().contains("storage buffer"));
 }
 
-/// The regression that matters most, because it is silent: reads and writes
-/// address **separate** position spaces, so a write's position `0` is the first
-/// output. Collapsing them makes every run write into its input and read back
-/// zeroes, with no error anywhere.
+/// The regression that matters most, because it is silent: reads and writes address
+/// separate position spaces.
 ///
-/// The fragment is the shape a real two-input parallel kernel lowers to:
-/// `param_shape` is `(config, index)` — two leaves — however many inputs there
-/// are, because the extra inputs are reached through a read's position rather
-/// than through a further parameter. **`inputs` is what says how many there
-/// are**, and this fragment is why: it reads input 1 and so declares 2, while
-/// its shape still flattens to 2 and a shape-derived count would have read that
-/// coincidence as agreement.
+/// # Invariant
+/// A write's position `0` is the first output, and collapsing the two spaces makes every run write into
+/// its input and read back zeroes with no error. The fragment reads input 1 so declares `inputs` 2
+/// while its shape still flattens to 2 — a shape-derived count would read that coincidence as
+/// agreement.
 #[test]
 fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
-    // Read input 1, write output 0. With the position spaces collapsed, that
-    // write would land on input 0 and the output would stay zero.
+    // Read input 1, write output 0: collapsed spaces would land the write on input 0.
     let fragment = KernelFragment {
         roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
@@ -247,11 +231,8 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
     let beyond = KernelFragment {
         roles: KernelRoles::default(),
         body: KernelBody::from_flat(
-            // **Two leaves, matching `param_shape` below**, because the body reads
-            // parameter 1. A `Read` past the domain pushes nothing, so a fragment
-            // that declared fewer parameters than it reads comes up short and the
-            // refusal names the *consumer's* arity rather than the read — which is
-            // what this test was accidentally asserting.
+            // Two leaves, matching `param_shape` below, because the body reads
+            // parameter 1: a `Read` past the domain pushes nothing.
             2,
             &[
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1)), // out_pos 1, but there is one output
@@ -304,12 +285,8 @@ fn an_unbalanced_body_is_refused() {
     };
     let refusal =
         spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
-    // **There is no such thing as an unbalanced body any more.** An instruction
-    // names its operands by `ValueId`, so an operator cannot "pop from an empty
-    // stack" — the shape that made `UnbalancedStack` mean something is gone, and
-    // the variant went with it. What is left is the honest refusal: the operator
-    // declares two operands and the body gives it none, and
-    // `KernelBody::validate` says so before the emitter reads anything.
+    // There is no unbalanced body any more: an instruction names its operands by
+    // `ValueId`.
     assert!(
         refusal
             .to_string()
