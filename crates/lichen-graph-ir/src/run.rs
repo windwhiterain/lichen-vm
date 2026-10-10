@@ -8,38 +8,31 @@ use crate::value::Value;
 
 /// When the host submits, and when it waits.
 ///
-/// **This is the only knob, and it is deliberately not in the graph.** A graph
-/// says what has to happen before what. It must never say when the host is
-/// allowed to notice that something finished, because a graph that could name
-/// its own synchronisation would be a graph whose correctness depended on where
-/// somebody put a keyword — and the two answers to "may I read this yet" would
-/// then disagree between the builder and the runner.
+/// # Invariant
+/// The only knob, deliberately not in the graph: a graph says what precedes what, never
+/// when the host may notice a finish, or correctness would depend on where somebody put a
+/// keyword and the builder and the runner would disagree about the same graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Policy {
     /// Submit and wait for every node, one at a time.
     ///
-    /// What a plain kernel run does today. It buys nothing, and it is here so
-    /// that the other two have something to be measured against and so that a
-    /// graph run with no choice behaves exactly as the un-graphed code did.
+    /// # Invariant
+    /// What a plain kernel run does today: it buys nothing, and it is here so a graph run
+    /// with no choice behaves exactly as the un-graphed code did.
     Serial,
-    /// Submit a node as soon as it is recordable, and wait only where something
-    /// needs the data.
+    /// Submit a node as soon as it is recordable, and wait only where data is needed.
     ///
-    /// The submissions are the same count as [`Self::Serial`] — nothing is fused
-    /// away — but the host is not idle between them. What it collects is bounded
-    /// and the bound was **measured**, not assumed: one submission's device time,
-    /// and no more. Host work in the gap is hidden up to that and fully exposed
-    /// past it. See
-    /// [compute-graph-jit.md](../../docs/notes/compute-graph-jit.md).
+    /// # Invariant
+    /// The submissions are the same count as [`Self::Serial`] — nothing is fused away — but
+    /// the host is not idle between them. What it collects is bounded, and the bound was
+    /// measured: one submission's device time, no more.
     Async,
     /// Record every dispatchable node into one submission and wait once.
     ///
-    /// **Refused.** A backend can only do this if it can be handed several
-    /// dispatches to put in one command buffer, and the backend contract has no
-    /// way to ask for that — `submit` records one run and hands it over. Until
-    /// the contract grows a fused-submission shape, a runner that accepted
-    /// `Batch` could only run it as something else, and both things it could run
-    /// it as report a number for a schedule nobody asked for.
+    /// # Invariant
+    /// Refused: the backend contract has no way to ask for several dispatches in one command
+    /// buffer — `submit` records one run and hands it over — so a `Batch` a runner accepted
+    /// could only run as something else, reporting a number for a schedule nobody asked for.
     Batch,
 }
 
@@ -73,26 +66,14 @@ impl<'backend> Runner<'backend> {
         self.policy
     }
 
-    /// Run `graph` over `inputs`, and hand back **every value the graph has**.
+    /// Run `graph` over `inputs`, and hand back every value the graph has.
     ///
-    /// The result is the whole value table, the inputs first and then everything
-    /// the nodes produced, and not the last node's outputs, on purpose. What a
-    /// caller returns from the function it compiled into this graph is the
-    /// *function's* business, and the caller is the thing that knows it:
-    /// [`Graph::returns`] is where that answer is recorded. A runner that picked
-    /// a node would be making that decision for them, and a graph with a dead tail
-    /// would be unable to express its own return at all.
-    ///
-    /// The inputs are **taken** rather than borrowed, and that is not a
-    /// convenience: a `Value` can be a submission, and a submission is consumed
-    /// by its wait, so there is no honest way to copy one. Taking them also says
-    /// what is true — the runner owns the graph's arguments for the length of the
-    /// run and hands back what it produced.
-    ///
-    /// Every value is settled before this returns, so every id handed back names
-    /// a buffer the device has written. Returning with a submission still in
-    /// flight would be handing the caller a handle to memory that is still
-    /// moving, and the only way to notice would be to read it.
+    /// # Invariant
+    /// The result is the whole value table — the inputs, then everything the nodes
+    /// produced — not the last node's outputs: what the function returns is
+    /// [`Graph::returns`]' answer. The inputs are taken, because a `Value` can be a
+    /// submission and a wait consumes it. Every value is settled before this returns, so
+    /// every id names a buffer the device has written.
     pub fn run(
         &self,
         graph: &Graph,
@@ -112,21 +93,11 @@ impl<'backend> Runner<'backend> {
         for (index, node) in graph.nodes().iter().enumerate() {
             match node {
                 Node::Kernel(kernel) => {
-                    // How many buffers this node was given is checked against
-                    // how many its fragment **reads** — a count the emitter
-                    // derived from the read positions it emitted, so it cannot
-                    // disagree with the body.
-                    //
-                    // It is deliberately *not* read off `param_shape`. A parallel
-                    // fragment's shape is `(config, index)` however many buffers
-                    // it reads, because the buffers are bound rather than
-                    // passed; an earlier version of this check asked the shape
-                    // anyway and refused correct graphs whose kernels read no
-                    // buffer at all. Checked here rather than left to the
-                    // backend, because the backend's refusal would be about a
-                    // run and this is about a graph — and because a backend that
-                    // binds what it is handed would otherwise hand a shader a
-                    // binding its body never reads.
+                    // The given buffers are checked against the count the fragment
+                    // reads, derived by the emitter.
+
+                    // Not `param_shape`: a parallel fragment's shape is `(config,
+                    // index)` however many buffers it reads.
                     let wanted = kernel.fragment.inputs;
                     if kernel.inputs.len() != wanted {
                         return Err(GraphRefusal::InputArity {
@@ -137,12 +108,8 @@ impl<'backend> Runner<'backend> {
                     }
                     let mut slots = Vec::with_capacity(kernel.inputs.len());
                     for &value in &kernel.inputs {
-                        // **The refusal is assembled here rather than by the
-                        // filter.** `slot` says what the value *is*, and this is
-                        // the only place that knows who wanted it as a buffer and
-                        // which edge they named — so a refusal raised inside the
-                        // value would have to leave those two out and say
-                        // something a reader could not look up.
+                        // Assembled here: `slot` says what the value is, and only this
+                        // place knows who wanted it.
                         slots.push(
                             values
                                 .get(value)
@@ -162,16 +129,11 @@ impl<'backend> Runner<'backend> {
                             other,
                         });
                     }
-                    // The count is read **after** the buffers, and separately from
-                    // them, so a node that swapped the two is told which of the two
-                    // roles it got wrong rather than that a shape did not match.
-                    //
-                    // **The number is turned into an extent here, not by
-                    // `as_number`.** A negative count is about the number, and a
-                    // number reaches a graph in two ways — a node's count edge,
-                    // and a function's own return, which is asked for by nobody at
-                    // all — so the conversion belongs to whoever is about to
-                    // dispatch over `[0, count)` and the filter does not make it.
+                    // The count is read after the buffers, so a swapped node is told
+                    // which role it got wrong.
+
+                    // The extent conversion happens here, not in `as_number`: it
+                    // belongs to whoever dispatches over `[0, count)`.
                     let count = match kernel.count {
                         Count::Constant(count) => count,
                         Count::Value(value) => {
@@ -189,10 +151,8 @@ impl<'backend> Runner<'backend> {
                         }
                     };
 
-                    // **A node's kernel is its own launch set.** A graph edge is a
-                    // dispatch of one fragment, and a fragment that cross-calls
-                    // brings its callees with it — the backend resolves the call
-                    // against the set rather than the node naming a callee here.
+                    // A node's kernel is its own launch set: a cross-call brings its
+                    // callees with it.
                     let launch = lichen_kernel_ir::LaunchSet::single(&kernel.fragment);
                     let produced = match self.policy {
                         Policy::Serial => self
@@ -236,17 +196,11 @@ impl<'backend> Runner<'backend> {
 
 /// Two host inputs of different payload lengths, if the slots have any.
 ///
-/// A resident slot has no length to disagree with — its own run's business — so
-/// this can only ever be about the host slots, and it is checked here so the
-/// refusal can name both lengths rather than leaving the backend to say
-/// "input 1 is shorter than the count".
-///
-/// The comparison is on the **payload bytes**, which is the one length a slot can
-/// answer without the fragment: a slot carries no class, so how many elements its
-/// bytes hold is not a question it can be asked.  Two slots of different classes
-/// with their width ratio between them would therefore compare equal here — and
-/// that is a shape the class check refuses before a dispatch, which is where the
-/// class is known.
+/// # Invariant
+/// A resident slot has no length to disagree with, so this is about host slots. The
+/// comparison is on payload bytes, the one length a slot can answer without the fragment:
+/// two slots of different classes with their width ratio between them compare equal here,
+/// which the class check refuses before a dispatch.
 fn ragged_host(slots: &[lichen_kernel_ir::BufferSlot<'_>]) -> Option<(usize, usize)> {
     let length = |slot: &lichen_kernel_ir::BufferSlot<'_>| match slot {
         lichen_kernel_ir::BufferSlot::Host(data) => Some(data.len()),

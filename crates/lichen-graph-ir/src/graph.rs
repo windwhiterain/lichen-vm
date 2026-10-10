@@ -4,37 +4,35 @@ use lichen_kernel_ir::KernelFragment;
 
 /// One value a node produces, named by its position in the graph's value table.
 ///
-/// **A value number, not a reference.** Edges are numbers because the graph is
-/// built by recording an evaluation that has already happened, and by then every
-/// operand is a `NodeId` the VM allocated — a stable integer that will outlive
-/// whatever arena the run lived in, which a reference into that arena would not.
+/// # Invariant
+/// A number, not a reference: the graph is built by recording an evaluation that already
+/// happened, and by then every operand is a `NodeId` the VM allocated — a stable integer
+/// that outlives the arena a reference would point into.
 pub type ValueId = usize;
 
 /// A DAG of kernel launches and host calls.
 ///
-/// Nodes are in evaluation order and a node's inputs are **always** values
-/// produced by earlier nodes, so the vector *is* a topological order and there is
-/// no sort, no cycle check and no way to write a cycle. A graph that is
-/// malformed in the ways a graph can be malformed cannot be constructed through
-/// this type, which is why nothing at run time has to check for one.
+/// # Invariant
+/// Nodes are in evaluation order and a node's inputs are always values earlier nodes
+/// produced, so the vector *is* a topological order: there is no sort, no cycle check and
+/// no way to write a cycle, which is why nothing at run time checks for one.
 #[derive(Debug, Clone, Default)]
 pub struct Graph {
     nodes: Vec<Node>,
     /// How many values the graph takes as arguments.
     inputs: usize,
-    /// How many values exist in total: the inputs, plus everything the nodes have
-    /// produced. An edge naming a value at or past this is a mistake in whoever
-    /// built the graph, and it is caught by [`Self::push`] rather than left to
-    /// index out of bounds at run time.
+    /// How many values exist in total: the inputs plus everything the nodes produced.
+    ///
+    /// # Invariant
+    /// An edge naming a value at or past this is caught by [`Self::push`], not by an
+    /// out-of-bounds index at run time.
     values: usize,
     /// Which values the function this graph was compiled from returns.
     ///
-    /// [`None`] until [`Self::returning`] says so, and **`None` is not "returns
-    /// nothing"** — it is "nobody has said", which a caller reads as *take
-    /// everything*. The distinction matters because an empty `Vec` is a real
-    /// answer (a function that returns a unit) and silently meaning it by
-    /// forgetting to record would make a forgotten call indistinguishable from a
-    /// deliberate one.
+    /// # Invariant
+    /// `None` is "nobody has said", not "returns nothing": a caller reads it as take
+    /// everything, and an empty `Vec` is the real answer for a unit. Meaning it by
+    /// forgetting to record would be indistinguishable from meaning it.
     returns: Option<Vec<ValueId>>,
 }
 
@@ -56,16 +54,11 @@ impl Graph {
 
     /// Record which values the source function returns.
     ///
-    /// **This is the function's own return, and it is why a runner does not get
-    /// to choose one.** The value a caller ends up with is a decision about what
-    /// the program computes, not about what the last node happened to be — and a
-    /// graph whose tail is dead cannot express its return at all if "the tail" is
-    /// the rule. So the builder records it here, once, from the function it
-    /// compiled.
-    ///
-    /// Recording twice is refused rather than merged: a lowering that answers this
-    /// question twice has two opinions about what its own function returns, and
-    /// the second one quietly winning is a wrong answer wearing a working graph.
+    /// # Invariant
+    /// This is the function's own return, which is why a runner does not choose one: a
+    /// graph whose tail is dead cannot express its return if "the tail" is the rule.
+    /// Recording twice is refused rather than merged — the second opinion quietly winning
+    /// is a wrong answer wearing a working graph.
     pub fn returning(&mut self, values: Vec<ValueId>) -> Result<(), crate::GraphRefusal> {
         use crate::GraphRefusal;
         if let Some(recorded) = &self.returns {
@@ -85,25 +78,20 @@ impl Graph {
 
     /// What the source function returns, or `None` if nobody recorded it.
     ///
-    /// A caller reading `None` takes **every** value the graph has. That is the
-    /// same answer a recorded return gives when the function returns all of them,
-    /// so an unrecorded graph is the permissive one rather than a broken one.
+    /// # Invariant
+    /// A caller reading `None` takes every value the graph has, which is the same answer a
+    /// recorded return gives when the function returns all of them.
     pub fn returns(&self) -> Option<&[ValueId]> {
         self.returns.as_deref()
     }
 
     /// Append a node, and name the values it produces.
     ///
-    /// Returns the first of them; the rest are consecutive after it, so a node
-    /// with three outputs yields `first`, `first + 1`, `first + 2`.
-    ///
-    /// Two things are refused here rather than at run time, because both are
-    /// mistakes in the graph rather than in the program that built it and both
-    /// are cheaper to find now: an **edge that names a value this graph has not
-    /// produced yet**, which is how a cycle would be written, and an **output
-    /// count that disagrees with the node** — a kernel produces
-    /// `fragment.outputs`, so a caller that passes a different number is asking
-    /// for value numbers that mean something else.
+    /// # Invariant
+    /// The rest are consecutive after the returned first, so three outputs are `first`,
+    /// `first + 1`, `first + 2`. Two things are refused here rather than at run time: an
+    /// edge naming a value this graph has not produced — how a cycle would be written —
+    /// and an output count that disagrees with the node.
     pub fn push(&mut self, node: Node, outputs: usize) -> Result<ValueId, crate::GraphRefusal> {
         use crate::GraphRefusal;
         let declared = match &node {
@@ -155,14 +143,11 @@ impl Graph {
 
 /// What one node of a graph is.
 ///
-/// **One kind, and the enum is left as the place a second would go.** The graph
-/// IR used to have two, a dispatch and a host call, and the host call was a bare
-/// `fn` pointer. That is what made a user closure inexpressible, and it opened
-/// a contradiction that outlived three attempts to settle it. The answer was not
-/// a better pointer: it was that **a closure is a compiled artifact like any
-/// other**, so it lowers to a fragment and is dispatched like one. One kind of
-/// node means one set of rules about what a node's environment is, and nothing
-/// a trait object could make unsound behind it.
+/// # Invariant
+/// One kind, and the enum is where a second would go: the host call that used to be the
+/// other was a bare `fn` pointer, which made a user closure inexpressible. A closure is a
+/// compiled artifact like any other, so it lowers to a fragment and is dispatched like
+/// one, and one kind of node means one set of rules about a node's environment.
 #[derive(Debug, Clone)]
 pub enum Node {
     /// A dispatch: one fragment over one index range.
@@ -195,26 +180,22 @@ pub struct KernelNode {
     pub count: Count,
 }
 
-/// The extent of a dispatch: a number the build already had, or one the value
-/// table holds.
+/// The extent of a dispatch: a number the build already had, or one the value table
+/// holds.
 ///
-/// **A count is a value, because a program's count is.** How many elements a
-/// kernel covers routinely depends on data — a length off a `collect`, a size
-/// the host computed — and a graph that could only be given a build-time count
-/// would have to be rebuilt for every run, which is the same as not having a
-/// graph. [`crate::Value::Native`] is what makes the edge expressible.
-///
-/// `Constant` is not a wart on that. It is the one case where the build already
-/// had the answer, and collapsing it into a value would mean inventing a **third
-/// kind of node** — one that produces a number for free, doing no work — which
-/// is exactly the kind of node the two-kind rule exists to keep out.
+/// # Invariant
+/// A count is a value, because a program's count is: a kernel's extent routinely depends
+/// on data, and a graph that could only take a build-time count would be rebuilt for every
+/// run. `Constant` is not a wart — it is the case where the build already had the answer,
+/// and collapsing it into a value would mean inventing a node that produces a number for
+/// free.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Count {
     /// `[0, count)`, decided while the graph was built.
     Constant(usize),
     /// A value in the table, read when the node runs.
     ///
-    /// **Never pending.** A number is not produced by a device, so a count edge
-    /// never needs the wait that a buffer edge does not need but might.
+    /// # Invariant
+    /// Never pending: a number is not produced by a device, so a count edge owes no wait.
     Value(ValueId),
 }

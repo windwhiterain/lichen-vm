@@ -4,21 +4,19 @@ use std::fmt;
 
 /// Why a graph could not be built or run.
 ///
-/// Every variant names what was wrong, not merely that something was. The
-/// alternative is a `String` and a caller who has to guess, and the two refusals
-/// that are not about a backend at all — an edge before its producer, an output
-/// count that disagrees with its node — are mistakes in the *graph*, and saying
-/// so is the difference between a bug someone fixes and a bug someone argues
-/// about.
+/// # Invariant
+/// Every variant names what was wrong, not merely that something was: the two refusals
+/// that are not about a backend — an edge before its producer, an output count that
+/// disagrees with its node — are mistakes in the *graph*, and saying so is the difference
+/// between a bug someone fixes and one someone argues about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GraphRefusal {
     /// A node read a value the graph has not produced yet.
     ///
-    /// This is what a cycle looks like when a graph is built by appending in
-    /// evaluation order: an edge can only point backwards, so the only way to
-    /// name a later value is to name one that does not exist. Refused at the
-    /// point of building, because a graph that could hold one would make every
-    /// run of it a question about cycles instead of a walk of a list.
+    /// # Invariant
+    /// What a cycle looks like when a graph is built by appending in evaluation order: an
+    /// edge can only point backwards. Refused at build time, because a graph that could
+    /// hold one would make every run a question about cycles.
     EdgeBeforeItsProducer {
         node: usize,
         value: usize,
@@ -26,10 +24,9 @@ pub enum GraphRefusal {
     },
     /// A node was pushed with an output count its own body does not agree with.
     ///
-    /// A kernel produces `fragment.outputs`. A caller passing a different number
-    /// is asking for value numbers that will mean something else for the rest of
-    /// the graph, so it is refused here rather than producing a value table that
-    /// is quietly misaligned.
+    /// # Invariant
+    /// A kernel produces `fragment.outputs`; another number is asking for value numbers
+    /// that will mean something else for the rest of the graph.
     OutputCount {
         node: usize,
         declared: usize,
@@ -37,34 +34,31 @@ pub enum GraphRefusal {
     },
     /// A node read a value number the graph does not have.
     ///
-    /// Distinct from [`Self::EdgeBeforeItsProducer`]: that one is caught while
-    /// the graph is built, and this one is a value table that came from a caller
-    /// rather than from [`crate::Graph::push`].
+    /// # Invariant
+    /// Distinct from [`Self::EdgeBeforeItsProducer`], which is caught while the graph is
+    /// built; this one is a value table that came from a caller.
     UnknownValue { node: usize, value: usize },
     /// The source function's return was recorded twice.
     ///
-    /// A lowering that answers "what does this function return" twice has two
-    /// opinions, and letting the second one win is a wrong answer that still runs.
-    /// `recorded` is how many values the first call recorded, because the number
-    /// is usually what tells the two opinions apart.
+    /// # Invariant
+    /// Letting the second opinion win is a wrong answer that still runs; `recorded` says
+    /// how many values the first call recorded, which is what tells them apart.
     ReturnAlreadyRecorded { recorded: usize },
     /// The run was handed the wrong number of arguments for the graph.
     ///
-    /// Distinct from [`Self::InputArity`], and it has no node because it is
-    /// about the *run* rather than about any one dispatch: a graph's inputs are
-    /// its first values, and handing it a different number names a different
-    /// graph. The two are separate refusals because a caller told only "wrong
-    /// number of arguments" has to work out which of the two counts they got
-    /// wrong, and the repair is different — this one is fixed at the call, that
-    /// one in the graph.
+    /// # Invariant
+    /// Distinct from [`Self::InputArity`] and node-less, because it is about the run
+    /// rather than any one dispatch: a graph's inputs are its first values, and a
+    /// different number names a different graph. The repair differs too — this one is
+    /// fixed at the call.
     RunArity { wanted: usize, got: usize },
     /// A node's inputs did not match the number of buffers its fragment reads.
     ///
-    /// The fragment says how many buffers its body addresses, and a slot list of
-    /// another length is not a run with fewer arguments — it is a different
-    /// program. The count comes from [`KernelFragment::inputs`], not from
-    /// `param_shape`: a parallel fragment's shape is `(config, index)` however
-    /// many buffers it reads, because the buffers are bound rather than passed.
+    /// # Invariant
+    /// The count comes from [`KernelFragment::inputs`], not `param_shape`, because a
+    /// parallel fragment's shape is `(config, index)` however many buffers it reads: the
+    /// buffers are bound, not passed. A different length is not a run with fewer
+    /// arguments, but a different program.
     InputArity {
         node: usize,
         wanted: usize,
@@ -72,10 +66,10 @@ pub enum GraphRefusal {
     },
     /// A node's inputs were not all the same length.
     ///
-    /// A dispatch over `[0, count)` reads `count` elements of every input, so
-    /// two inputs of different lengths means one lane would read past the
-    /// shorter one. The backend would refuse the run, but the graph is where the
-    /// mistake is, and the message here can name both lengths.
+    /// # Invariant
+    /// A dispatch over `[0, count)` reads `count` elements of every input, so unequal
+    /// lengths mean a lane reads past the shorter one; the graph is where the message can
+    /// name both lengths.
     RaggedInputs {
         node: usize,
         first: usize,
@@ -83,17 +77,11 @@ pub enum GraphRefusal {
     },
     /// A dispatch was given a number where it wanted a buffer.
     ///
-    /// The mirror of [`Self::CountNotANumber`], and separate for the same
-    /// reason: the two are different mistakes in different positions, and a
-    /// caller told only "wrong shape" has to work out which one they hit. There
-    /// is a repair that looks reasonable here — read the number as a one-element
-    /// host vector — and taking it would run a kernel nobody wrote.
-    ///
-    /// **It names the node and the value because a graph has many of each.** A
-    /// sentence saying only what the value was leaves a reader of a forty-node
-    /// graph to work out which of forty demands was the wrong one, and the two
-    /// numbers are the ones the graph already gave away: `node` is the position
-    /// the runner is at, and `value` is the edge the node was built with.
+    /// # Invariant
+    /// The mirror of [`Self::CountNotANumber`] and separate for the same reason: reading
+    /// the number as a one-element host vector would run a kernel nobody wrote. It names
+    /// the node and the value, because a sentence saying only what the value was leaves a
+    /// reader of a forty-node graph to find which demand was wrong.
     NotBufferData {
         node: usize,
         value: usize,
@@ -101,16 +89,10 @@ pub enum GraphRefusal {
     },
     /// A dispatch's count resolved to something that is not a number.
     ///
-    /// A count is an extent, so the only thing that can be one is a number, and
-    /// this refusal is about the *value* rather than about the role — the role was
-    /// right and the value was not. Naming what the value is what tells a caller
-    /// whether the edge points at the wrong value or the builder wrote a number
-    /// into a slot meant for data.
-    ///
-    /// **It carries the same two numbers as [`Self::NotBufferData`] and for the
-    /// same reason**: a count edge is one of a node's two roles, so saying which
-    /// role was wrong without saying which node asked leaves the harder half of
-    /// the question open.
+    /// # Invariant
+    /// A count is an extent, so the refusal is about the value rather than the role. It
+    /// carries the node and the value like [`Self::NotBufferData`], for the same reason:
+    /// a count edge is one of a node's two roles.
     CountNotANumber {
         node: usize,
         value: usize,
@@ -118,25 +100,18 @@ pub enum GraphRefusal {
     },
     /// A count was negative.
     ///
-    /// `i64` in the value type so this is reportable rather than wrapped: a
-    /// `usize` would have turned `-1` into an enormous extent and dispatched
-    /// over memory nobody owns.
-    ///
-    /// **This is the one refusal here with no node, and the asymmetry is the
-    /// point rather than an omission.** The other two are about a *demand* — a
-    /// node asked for a role — and a value cannot say who asked. This one is
-    /// about the number itself, and a number is asked for as an extent by a node
-    /// *or* handed back as a function's own return, which is asked for by nobody
-    /// in particular. Putting a node in this variant would mean inventing one
-    /// where the mistake is not in any node at all, which is the bug an earlier
-    /// version of this enum had with `node: usize::MAX`.
+    /// # Invariant
+    /// `i64` in the value type so this is reportable rather than wrapped: a `usize` would
+    /// have turned `-1` into an enormous extent. This is the one refusal with no node,
+    /// because a number is asked for as an extent by a node *or* handed back as a return
+    /// value nobody asked for; naming one would invent a node where the mistake is in none.
     CountNegative { number: i64 },
     /// The policy asked for is not something a backend can do.
     ///
-    /// Named rather than approximated, and the reason is that the two
-    /// approximations are both wrong in a way that is hard to see: running the
-    /// policy as a slower one reports a number for a schedule that is not the
-    /// one being asked about, and the gap is a *speedup* nobody can account for.
+    /// # Invariant
+    /// Named rather than approximated: running the policy as a slower one reports a
+    /// number for a schedule nobody asked about, and the gap is a speedup nobody can
+    /// account for.
     PolicyUnsupported {
         policy: &'static str,
         reason: &'static str,

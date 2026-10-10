@@ -1,11 +1,9 @@
 //! A graph of kernel nodes, run on a backend that is not a device.
 //!
-//! The stub computes on the host, so what is checked here is the **scheduling**
-//! and not the arithmetic. With one kind of node there is no mid-graph demand
-//! point at all — nothing in a run reads a value on the host — so the schedule
-//! this file pins down is the one that follows from that: a run submits each
-//! node in turn and waits exactly once, at the end. The arithmetic on a real
-//! device is `lichen-compute-gpu`'s business.
+//! # Invariant
+//! The stub computes on the host, so what is checked is the scheduling, not the
+//! arithmetic: with one node kind there is no mid-graph demand point, so a run submits each
+//! node and waits once at the end.
 
 use std::sync::{Arc, Mutex};
 
@@ -50,13 +48,12 @@ fn fragment() -> KernelFragment {
     }
 }
 
-/// A backend that keeps its buffers in host memory, and records **what the host
-/// asked for and in what order**.
+/// A backend that keeps its buffers in host memory, recording what the host asked for and
+/// in what order.
 ///
-/// The order is the interesting part: it says whether a run waited when it did
-/// not have to. `run` and `submit` are told apart because that is exactly what a
-/// policy chooses between, and a stub that treated them alike could not tell the
-/// difference.
+/// # Invariant
+/// The order says whether a run waited when it did not have to, so `run` and `submit` are
+/// told apart — a policy chooses between them.
 #[derive(Clone, Default)]
 struct Stub {
     /// One column per resident id, indexed by `id.0 - 1`.
@@ -78,9 +75,8 @@ impl Stub {
         let mut columns = Vec::with_capacity(inputs.len());
         for slot in inputs {
             match slot {
-                // A host slot is packed bytes, so the elements are decoded as the
-                // `Int` words every fragment in this file declares rather than
-                // taken as bytes.
+                // A host slot is packed bytes, decoded as the `Int` words every
+                // fragment here declares.
                 BufferSlot::Host(data) => {
                     columns.push(
                         data.chunks_exact(8)
@@ -149,9 +145,7 @@ impl ParallelBackend for Stub {
         }))
     }
 
-    /// A host stub's buffers hold integers, so it answers with the class it
-    /// holds them as — the fetch's own class, which is what a real backend
-    /// takes from the buffer it was asked about.
+    /// A host stub's buffers hold integers, so it answers with that class.
     fn fetch(&self, id: ResidentId, count: usize) -> Result<ScalarData, String> {
         self.asked.lock().unwrap().push("fetch");
         Ok(ScalarData::Int(
@@ -164,11 +158,9 @@ impl ParallelBackend for Stub {
 
 /// One dispatch, then a second over its output.
 ///
-/// **The second node is what makes this a graph rather than a loop.** It records
-/// against a value the device may not have written, which is only sound because
-/// the recording happened first and the submission behind it was recorded first
-/// too — so the chain is the shape the whole feature exists for, and it is worth
-/// pinning even though it is two lines.
+/// # Invariant
+/// The second records against a value the device may not have written, which is sound
+/// because the recording came first — the chain the whole feature exists for.
 fn chain(count: usize) -> Graph {
     let mut graph = Graph::with_inputs(1);
     let first = graph
@@ -251,26 +243,13 @@ fn an_async_graph_of_kernels_waits_once_and_only_at_the_end() {
         .run(&chain(count), vec![Value::host(input)])
         .expect("the graph runs");
 
-    // The whole schedule, asserted as a sequence rather than as counts, because
-    // *where* the waits are the claim and a count cannot say it.
-    //
-    //   submit   the first dispatch goes to the queue
-    //   submit   the second records against a value the device may not have
-    //            written yet, which is sound precisely because it does not read
-    //   wait     the first submission is waited for
-    //   wait     the second is
-    //
-    // **Both waits are at the end, and neither is before a dispatch, and that is
-    // the whole measurement.** The host work between the two submissions is the
-    // submission itself, so `hidden = min(host, device)` is `min(nothing,
-    // device) = 0` and Async earns no milliseconds on a chain of pure kernels.
-    // A wait in the middle would be the graph reaching for the one thing that
-    // would make the overlap real, and there is nothing in a graph of kernels
-    // that reaches.
-    //
-    // Two waits rather than one is not two rounds of synchronisation: a run that
-    // has to hand back an id has to have *every* submission the device finished,
-    // and two nodes submitted two things.
+    // The whole schedule, asserted as a sequence because *where* the waits are is the
+    // claim, and a count cannot say it.
+
+    // Both waits are at the end and neither precedes a dispatch: the host work between
+    // them is the submission itself.
+
+    // That is the measurement: Async earns nothing on a chain of pure kernels.
     assert_eq!(
         stub.asked(),
         vec!["submit", "submit", "wait", "wait"],
@@ -367,12 +346,11 @@ fn an_output_count_the_body_disagrees_with_is_refused_rather_than_misaligning_th
     );
 }
 
-/// [`chain`] with the source function's return recorded as its **first** node's
-/// output, so the last node is a dead tail.
+/// [`chain`] with the source function's return recorded as its first node's output.
 ///
-/// This is the case the record exists for. "The tail" would answer this graph
-/// with the wrong value, and a runner that picked the last node could not
-/// express this function's return at all.
+/// # Invariant
+/// The case the record exists for: "the tail" would answer with the wrong value, and a
+/// runner that picked the last node could not express this return at all.
 fn graph_with_a_dead_tail(count: usize) -> Graph {
     let mut graph = chain(count);
     // Value 0 is the input, so the first node's output is value 1.
@@ -397,18 +375,14 @@ fn a_dead_tail_still_returns_whatever_the_source_function_returned() {
         [1],
         "the recorded return is the first node's output, and the runner did not overrule it"
     );
-    // The dead tail still ran. A return is a *choice among the graph's values*,
-    // not a truncation of it — which is the whole reason it is recorded rather
-    // than read off the end.
+    // A return is a choice among the graph's values, not a truncation of it.
     assert_eq!(
         stub.asked(),
         vec!["submit", "submit", "wait", "wait"],
         "the same schedule as without a dead tail: the tail is not skipped, and the return does \
          not change what runs"
     );
-    // The returned value is still a resident id, because nothing in the run ever
-    // needed it on the host. Taking it home is the caller's choice, not the
-    // runner's — which is the other half of why the return is recorded.
+    // The returned value is still a resident id: taking it home is the caller's choice.
     assert_eq!(
         stub.fetch(resident(&out[returned[0]]), count)
             .expect("the returned value comes back"),
@@ -478,8 +452,7 @@ fn counted_by_input() -> Graph {
 fn a_count_can_be_one_of_the_graphs_own_values() {
     let stub = Stub::new();
     let graph = counted_by_input();
-    // The count is an argument, so the same graph runs at a different extent
-    // without being rebuilt — which is the whole reason a count is a value.
+    // The count is an argument, so one graph runs at a different extent.
     for count in [1_i64, 3, 8] {
         let input: Vec<i64> = (0..count).collect();
         let out = Runner::new(&stub, Policy::Serial)
@@ -497,8 +470,7 @@ fn a_count_can_be_one_of_the_graphs_own_values() {
 
 #[test]
 fn a_count_read_from_data_and_a_buffer_given_a_number_are_two_different_refusals() {
-    // A count edge pointing at data. The node reads input 0, so that is the
-    // buffer slot and value 1 is what the count is read from.
+    // A count edge pointing at data: the node reads input 0, so value 1 is the count.
     let count_from_data = Runner::new(&Stub::new(), Policy::Serial)
         .run(
             &counted_by_input(),
@@ -574,10 +546,8 @@ fn a_negative_count_is_refused_rather_than_wrapped_into_an_enormous_extent() {
 
 #[test]
 fn a_number_is_ready_and_has_no_extent_because_it_is_neither() {
-    // The two properties `Int` is refused for are also the two it is safe by, and
-    // they are not the same fact. A number is never pending because a device
-    // does not produce one, so there is no wait owed against it; and it has no
-    // length, so a reported `0` would be a number a caller could dispatch over.
+    // The properties `Int` is refused for are the ones it is safe by: never pending, so
+    // no wait is owed.
     let value = Value::int(4);
     assert!(
         value.is_ready(),
