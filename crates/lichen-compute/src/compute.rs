@@ -258,20 +258,18 @@ mod kernel_intern_tests {
         }
     }
 
-    /// A counting loop, in the shape the IR can express: a header that receives the
-    /// carried state, a body that computes the next one, and an exit that takes
-    /// what the header has at that point.
+    /// A counting loop, in the shape the IR can express.
     ///
-    /// **The loop's state is the header block's `params`**, so the body's read of
-    /// it is an ordinary read of a named value — which is what the loop-carried
-    /// value needed and what `KernelInstr::LocalGet` could not say.
+    /// # Invariant
+    /// The loop's state is the header block's `params`, so a body's read of it is an
+    /// ordinary read of a named value — a header that receives the carried state, a body
+    /// computing the next one, and an exit taking what the header has.
     fn counting_loop(backedge: bool) -> KernelBody {
         let mut body = KernelBody::new();
         let entry = body.add_block();
         let one = body.add_const(entry, ScalarClass::Int, 1);
-        // **A branch hands the target its parameters, so entering the header hands
-        // it the state it starts from.** An empty handover is a malformed branch,
-        // not an entry that happens to carry nothing.
+        // **A branch hands the target its parameters**, so entering the header hands it
+        // the state it starts from.
         body.set_terminator(
             entry,
             Terminator::Br(Br {
@@ -289,8 +287,7 @@ mod kernel_intern_tests {
             vec![ScalarClass::Int],
         );
         // **A backedge *is* a branch back to the header**, handing over the next
-        // iteration's state — so "has a backedge" is a question about whether any
-        // branch names the header, and it is answered by reading the body.
+        // iteration's state.
         body.set_terminator(
             header,
             if backedge {
@@ -317,13 +314,7 @@ mod kernel_intern_tests {
         body
     }
 
-    /// A loop is a branch back to the header, handing over the next iteration's
-    /// state — so **a backedge is not a special form to be checked for; it is a
-    /// `Br` naming the current block.** The old IR had a rule refusing a loop
-    /// whose body never returned to its header, because its only expressible loop
-    /// body was a bare jump; a body that computes its next state did not fit, so
-    /// "no backedge" was the only thing to say. That limitation is gone, and what
-    /// remains to refuse is a branch to a block this body does not have.
+    /// A backedge is not a special form: it is a `Br` naming the current block.
     #[test]
     fn a_backedge_is_a_branch_to_the_header_and_a_branch_nowhere_is_refused() {
         counting_loop(true)
@@ -392,10 +383,8 @@ mod kernel_intern_tests {
         assert!(registry.contains_key(&a) && registry.contains_key(&b));
     }
 
-    /// A branch that hands a block more values than it takes has no source for
-    /// them, so it is refused **before** a backend reads it rather than emitted
-    /// with a phi that cannot be built. The exit's state is the header's `params`,
-    /// so the bound is exactly that.
+    /// A branch handing a block more values than it takes is refused before a backend
+    /// reads it.
     #[test]
     fn a_branch_handing_over_more_than_its_target_takes_is_refused() {
         let mut body = KernelBody::new();
@@ -574,11 +563,11 @@ fn float_bits(value: f32) -> i64 {
 
 /// Whether a value is a graph placeholder, **or a `Buf` wrapper around one**.
 ///
-/// An operator that reads a buffer names the **wrapper**, and the recorder puts
-/// the placeholder in `.native`, so asking only whether an operand *is* a
-/// placeholder answers `false` for the case the rule exists to catch. The
-/// wrapper is recognised by [`buf_value`]'s own construction — two items, the
-/// second an element **type**.
+/// # Invariant
+/// An operator that reads a buffer names the **wrapper**, and the recorder puts the
+/// placeholder in `.native`, so asking only whether an operand *is* a placeholder
+/// answers `false` for the case the rule exists to catch. The wrapper is recognised by
+/// [`buf_value`]'s own construction — two items, the second an element **type**.
 fn is_a_graph_placeholder<P>(module: &Module<P>, node: AnyNodeId) -> bool
 where
     P: Program,
@@ -596,8 +585,8 @@ where
     let Some(LowValue::Array(wrapper)) = AsEnum::<LowValue>::as_enum(&value) else {
         return false;
     };
-    // SAFETY: `wrapper` is a live array of `module` on this borrow, and this reads
-    // only the two slots the `Buf` wrapper is built from.
+    // SAFETY: `wrapper` is a live array of `module`, and this reads only the `Buf`
+    // wrapper's two slots.
     let wrapper = unsafe { wrapper.items() };
     let [payload, element] = wrapper else {
         return false;
@@ -616,14 +605,12 @@ where
 
 /// Whether any operand of `operator` is one of a graph's placeholders.
 ///
-/// **One level, and one level is enough.** Every operator that reads a dispatch's
-/// output takes it as a direct item of its operand array — `collect [b]`, `read
-/// [b, i]`, `call [k, a]` — so a graph's value is never buried inside a structure
-/// the scan would have to walk to find. A `plrun`'s argument *is* the
-/// placeholder structure (the parameter's own shape, a leaf per cell), which is
-/// why this is asked about operators other than a parallel launch. The one level
-/// of wrapping it looks through is the `Buf` wrapper — see
-/// [`is_a_graph_placeholder`].
+/// # Invariant
+/// One level, and one level is enough: every operator that reads a dispatch's output takes
+/// it as a direct item of its operand array, so a graph's value is never buried in a
+/// structure the scan would walk. A `plrun`'s argument *is* the placeholder structure, which
+/// is why this is asked about operators other than a parallel launch; the one level it looks
+/// through is the `Buf` wrapper.
 fn handed_a_placeholder<P>(module: &Module<P>, operand: &P::Value) -> bool
 where
     P: Program,
@@ -2525,10 +2512,8 @@ where
     let class = result_classes.first().copied().unwrap_or(ScalarClass::Int);
     // The class a buffer read is declared in; see [`Positions::element_class`].
     tally.element_class = Some(class);
-    // **One walk of the graph into one SSA body.** The lowering resolves what each
-    // node names through the lowlevel and emits a value per definition, so a
-    // shared subexpression is emitted once and no consumer re-derives the
-    // operand order.
+    // **One walk of the graph into one SSA body**, so a shared subexpression is emitted
+    // once.
     let body = Lower::lower(module, &params, param_value, fid, ret_value, &mut tally)?;
 
     Ok(KernelFragment {
@@ -2723,28 +2708,13 @@ where
         })
         .next()
         .unwrap_or(ScalarClass::Int);
-    // **The outputs are the codomain's, for both shapes.**  A `compute.write` is
-    // a *value*, so a body that writes several outputs returns a tuple of them
-    // and one that writes one returns it directly; the graph is lazy, so a write
-    // whose result nothing uses is never emitted at all.  A struct parameter's
-    // `.out` therefore declares how many there are and what class each holds, and
-    // the check below is what keeps the declaration and the body agreeing.
-    //
-    // One `compute.write` per codomain position, in position order, so write `k`
-    // takes `out_pos = k`.  The whole index function is **one body**: emitting the
-    // outputs one at a time was only ever a way to count them, and the count is
-    // what the check below reads.  A write reached nested inside a position's
-    // value still consumes an ordinal of its own, so a total that exceeds the
-    // declared count catches it.
+    // **The outputs are the codomain's**, one `compute.write` per position in position
+    // order.
     let mut tally = Positions::default();
     // The class a buffer read is declared in; see [`Positions::element_class`].
     tally.element_class = Some(class);
-    // **A conditional is left to the walk**, whether the write is the output itself
-    // or sits inside a branch. A write behind a condition is not reduced, so the
-    // refusal belongs to the walk, which knows *why* it did not reduce — and a
-    // conditional write is precisely the case where the cause matters
-    // (`docs/notes/loop-conversion.md` §6).  Answering here would replace a
-    // specific cause with a generic one.
+    // **A conditional is left to the walk**, which knows *why* it did not reduce the
+    // write.
     for (position, output) in outputs.iter().enumerate() {
         let conditional = match module.define_in(fid, *output) {
             lichen_lowlevel::Define::Computed(definition) => matches!(
@@ -4102,49 +4072,15 @@ where
         return Ok(None);
     };
     if let Some(roles) = &slot.roles {
-        // **A struct field read is read by the path on its own chain.**
-        //
-        // Walking from the *parameter* cannot answer this: the parameter's value
-        // half is an alias with no operation, and the link between it and a read is
-        // the equality class rather than the shape. Walking from the read can,
-        // because the chain *is* the read — and `TableGet(names, "in")` arrives
-        // already specialised to `Index`, so the selectors are **positions**.
-        //
-        // **Measured, and the two disagree by one at the head**:
-        //
-        //     positions on the read's chain = [0, 0]
-        //     roles.inputs                   = [[1, 0]]
-        //
-        // `.in` is field **1** of the parameter struct and the chain says 0, so
-        // either the chain indexes the value's own fields rather than the
-        // struct's, or the role table counts the struct's. **Which of the two is
-        // right is the next thing to read**, and it is a fact about the checker's
-        // parameter layout, not a rule this function can decide.
-        //
-        // **`positions` is read from the *unpeeled* operand.** The peel resolves
-        // the wrapper's slot-read destructuring and takes one `Index` off the
-        // front, so a path read after it is missing its head.
+        // **A struct field read is read by the path on its own chain**, from the *unpeeled*
+        // operand.
         let positions = unpeeled
             .dynamic()
             .and_then(|unpeeled| named_path(module, unpeeled));
         if let Some(positions) = positions.as_deref() {
             for (position, candidate) in roles.inputs.iter().enumerate() {
-                // **The chain is the role path's tail, below the wrapper's slot-read
-                // and below whatever the alias folded away.** Measured:
-                //
-                //     1103: Index(0) -> 1105: Index(0) -> 1107: bare cell
-                //     roles.inputs[0] = [1, 0]
-                //
-                // Two levels of the chain are not levels of the path. The first is
-                // the wrapper's slot-read destructuring — the step `peeled_argument`
-                // resolves, which is why the path is read from the *unpeeled*
-                // operand. The second is `.in`, **which the alias consumed**: 1107
-                // is the aliased `.in` cell, so no `Index` states it. What remains
-                // is `[0]`, and `[1, 0]` ends with `[0]`.
-                //
-                // So the relation is a suffix, and the chain's own head is dropped
-                // first: comparing `[0, 0]` against `[1, 0]` matches nothing, and
-                // comparing `[0]` matches exactly one input.
+                // **The chain is the role path's tail**: the relation is a suffix, with the
+                // chain's own head dropped.
                 let Some(tail) = positions.get(1..).filter(|tail| !tail.is_empty()) else {
                     continue;
                 };
@@ -4153,9 +4089,8 @@ where
                 }
             }
         }
-        // **The chain walk is the fallback, not the answer.** It resolves a
-        // *positional* parameter read — the `[n, (buffers…)]` shape — where the
-        // role table is empty and there is nothing to compare against.
+        // **The chain walk is the fallback**, for a positional parameter read where the role
+        // table is empty.
         let path = param_path(module, slot.pair, node)?;
         if let Some(path) = path {
             let mut as_field = vec![0];
@@ -4293,9 +4228,6 @@ where
 }
 
 /// A `[value, type]` pair's value half, or the node itself when it is not a pair.
-///
-/// **The pair width is the lowlevel's** (`Module::pair_value_half`), so the
-/// caller never re-derives it.
 fn param_value_of<P>(module: &Module<P>, pair: NodeId) -> Result<NodeId, String>
 where
     P: Program,
@@ -4327,12 +4259,8 @@ where
     let Some(selector) = selector.dynamic() else {
         return Ok(None);
     };
-    // **A named read reaches a lowering in one of two shapes, and this function
-    // must answer both.** Unspecialised it is `TableGet(name-table, "name")`, and
-    // the name is the second operand. Specialised — which is what the evaluator
-    // hands the emitter — it is `Index(target, "name")`, where the selector *is*
-    // the string and carries no operation at all. Reading only the first shape is
-    // why every struct field read came back nameless.
+    // **A named read arrives in two shapes**: `TableGet(names, "name")`, or `Index`
+    // carrying the name as its selector.
     let key = match module.node_operation(selector) {
         Some(operation) => match AsEnum::<LowOperator>::as_enum(&operation.operator) {
             Some(LowOperator::TableGet) => operand_pair(module, operation.operand)?.1,
@@ -4390,35 +4318,12 @@ where
     // does not state it.
     let mut steps: Vec<IndexStep> = Vec::new();
     let mut current = node;
-    // **This walk cannot answer a struct field read, and the reason is worth
-    // stating because two rounds went the other way.** Measured on
-    // `a_struct_parameter_..._carrying_wrapper`:
-    //
-    //     chain[0] Index(921, 952)      // 952 is a *static* selector — a name
-    //     chain[1] Index(923, 926)      // 926 likewise
-    //     chain[2] 923: no operation     // the alias carries the field's class
-    //     param_pair: 22                 // never reached
-    //
-    // Walking **down** from a read finds the field it read and stops; the
-    // parameter is *above* it and the two are joined only by the equality class,
-    // which is what `alias_read` set. So the caller must search the role table's
-    // own paths for the one whose node is class-equal to the read — see
-    // `parallel_buffer_pos`.
-    //
+    // **This walk cannot answer a struct field read**: the parameter is joined to the read
+    // only by the equality class.
     for _ in 0..MAX_PARAMETER_DEPTH {
         let Some(operation) = module.node_operation(current) else {
-            // **A bare value cell ends the chain; it does not void it.** Two
-            // things stop here and they are different: a whole-parameter read,
-            // which `emit_node` matched by comparing the cell's class against
-            // the slot's, and a **struct field read**, whose `TableGet` the
-            // evaluator *aliased* to the field it resolved
-            // (`Module::alias_read`) — so the node is a bare cell carrying the
-            // field's class, not an operation at all.
-            //
-            // Returning `None` here threw both away and said "this is not a
-            // parameter path" for a node that plainly is one. The steps
-            // collected so far are kept; whether they name the field is the
-            // caller's question, and it has the role table to ask it with.
+            // **A bare value cell ends the chain, it does not void it**: a whole-parameter
+            // read stops there too.
             break;
         };
         if !matches!(
@@ -4436,16 +4341,8 @@ where
             return Ok(None);
         };
         if target == AnyNodeId::Dynamic(param_pair) {
-            // **Step into the pair's value and keep walking.** A struct
-            // parameter's fields live *inside* the value half, and the path
-            // `roles` holds is made of field positions with no step for the peel
-            // itself — so `cfg.I.a` is two steps in, not a whole-parameter read.
-            //
-            // **This is known not to reach the answer** — see the measured note in
-            // `node_at_named_path`: the value half is an alias with no operation,
-            // so the descent it drives stops immediately. What is kept is the step
-            // record, because `resolve_steps` is right about what a *positional*
-            // path means and wrong only about where a named one can be resolved.
+            // **Step into the pair's value and keep walking**: a struct parameter's fields
+            // live inside the value half.
             match field_name(module, selector)? {
                 Some(name) => steps.push(IndexStep::Named(name)),
                 None => match usize_value(module, selector) {
@@ -4472,11 +4369,8 @@ where
                 None => return Ok(None),
             },
         }
-        // The innermost read: its target is the parameter's value, so the chain
-        // ends here.  **The test is the equality class**, which is what the
-        // lowlevel's `class_root` reads and what `define_in` matches a parameter
-        // against — two tests that could disagree were two answers to "is this the
-        // parameter's own value".
+        // The innermost read's target is the parameter's value; **the test is the equality
+        // class**.
         if module.class_root(target_node) == module.class_root(param_value_of(module, param_pair)?)
         {
             break;
@@ -4827,16 +4721,11 @@ where
 
 /// The field positions a read's own chain names, walking **down from the read**.
 ///
-/// **A named read reaches a lowering already resolved.** `TableGet(names, "in")`
-/// is specialised into `Index(field, 0)`, so the chain a body actually holds
-/// carries **positions**, not names — which is why matching against the name table
-/// found nothing. The positions are the role table's own, so the comparison is
-/// exact.
-///
-/// Walking from the *parameter* cannot answer this: the parameter's value half is
-/// an alias with no operation, and the link between it and a read is the equality
-/// class rather than the shape. Walking from the read can, because the chain is
-/// the read.
+/// # Invariant
+/// A named read reaches a lowering already resolved: `TableGet(names, "in")` is specialised
+/// into `Index(field, 0)`, so the chain carries **positions** rather than names, and the
+/// positions are the role table's own. Walking from the parameter cannot answer this: its
+/// value half is an alias with no operation, and the link to a read is the equality class.
 fn named_path<P>(module: &Module<P>, node: NodeId) -> Option<Vec<usize>>
 where
     P: Program,
@@ -6842,11 +6731,7 @@ fn run_parallel_kernel(
         outputs
             .into_iter()
             .enumerate()
-            // **Each output is tagged with its own declared class**, at its write
-            // ordinal. One class for all of them was a one-fragment-one-class
-            // assumption, and a fragment whose outputs are of different classes
-            // hands an `f32` back labelled `Int` — the same bits, the wrong type,
-            // which the next launch refuses as a class conflict.
+            // **Each output is tagged with its own declared class**, at its write ordinal.
             .map(|(ordinal, words)| BufferWords {
                 class: output_classes.get(ordinal).copied().unwrap_or(class),
                 words,
@@ -7159,10 +7044,8 @@ fn word_value(class: ScalarClass, word: i64) -> wasmi::Val {
 #[cfg(test)]
 mod parallel_launch_tests {
     use super::*;
-    // **`KernelBody` and `FlatOp` reach a hand-written body, and nothing else in
-    // this file does.** `from_flat` is the one construction a test — or a
-    // fixture — has, since it has no graph to lower; keeping them out of the
-    // crate's imports is what says the SSA walk does not build bodies this way.
+    // **`KernelBody` and `FlatOp` reach a hand-written body**, which is the test's own
+    // construction.
     use lichen_kernel_ir::{FlatOp, KernelBody, ResidentId};
 
     /// A two-output parallel fragment over `(n, i)`: `out0[i] = i + 1` and

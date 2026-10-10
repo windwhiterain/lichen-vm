@@ -461,6 +461,15 @@ program than it was lowered from. One instruction is exempt from the arity half 
 rule 4: a call's arity is the **callee's own domain**, which the IR crate does not
 know, so the check that could contradict it belongs to whoever holds the callee.
 
+**A backedge is not a form to be checked for.** The old IR had a rule refusing a
+loop whose body never returned to its header, because its only expressible loop body
+was a bare jump — a body that computes its next state did not fit, so "no backedge"
+was the only thing to say. That limitation is gone: a loop is a branch back to the
+header handing over the next iteration's state, so "has a backedge" is a question
+about whether any branch names the header, and what remains to refuse is a branch to
+a block this body does not have. The exit's state is the header's `params`, so the
+arity bound on a branch is exactly that.
+
 The three read-side accessors answer different questions and are not
 interchangeable: `parameters` is the entry block's params, which is the ABI and the
 one place the body's shape and a call's argument list have to agree; `instrs` is
@@ -645,6 +654,29 @@ value was supposed to mean something would be indistinguishable from one where i
 does not. The fragment's domain is the config's leaves *plus* the invocation index,
 which is not part of the config parameter's own shape and is therefore added rather
 than counted from a shape that does not contain it.
+
+Four facts about how a parallel fragment's outputs are counted:
+
+- **The outputs are the codomain's, for both shapes.** A `compute.write` is a
+  *value*, so a body that writes several outputs returns a tuple of them and one
+  that writes one returns it directly; the graph is lazy, so a write whose result
+  nothing uses is never emitted at all. A struct parameter's `.out` therefore
+  declares how many there are and what class each holds, and the count check is
+  what keeps the declaration and the body agreeing.
+- **The whole index function is one body.** Emitting the outputs one at a time was
+  only ever a way to count them, and the count is what the check reads. A write
+  reached nested inside a position's value still consumes an ordinal of its own, so
+  a total that exceeds the declared count catches it.
+- **A conditional write is left to the walk**, whether the write is the output
+  itself or sits inside a branch. A write behind a condition is not reduced, so the
+  refusal belongs to the walk, which knows *why* it did not reduce — and a
+  conditional write is precisely the case where the cause matters
+  ([loop-conversion §6](loop-conversion.md#6-why-a-loop-body-may-not-write)).
+  Answering at the caller would replace a specific cause with a generic one.
+- **Each output is tagged with its own declared class**, at its write ordinal. One
+  class for all of them was a one-fragment-one-class assumption, and a fragment
+  whose outputs are of different classes hands an `f32` back labelled `Int` — the
+  same bits, the wrong type, which the next launch refuses as a class conflict.
 
 ## 5. Launch-time assembly (the deferred linker)
 
