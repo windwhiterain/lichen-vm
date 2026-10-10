@@ -4257,8 +4257,7 @@ where
             return None;
         }
     };
-    // The argument's leaves are the parameter's, whatever shape the author wrote,
-    // so the runtime scalars are `roles.scalars`.
+    // The argument's leaves are the parameter's, whatever shape the author wrote.
     let scalar_leaves = roles.scalars.len().saturating_sub(1);
     if scalar_leaves > 1 {
         refuse(
@@ -4409,11 +4408,8 @@ where
     let arity = graph::MAX_GRAPH_INPUTS;
     let placeholders = match roles {
         Some(roles) => {
-            // A **buffer role's cell is a `Buf` wrapper** around the placeholder,
-            // because that is what the field's type is: the body hands `s.in.b` on
-            // as an argument, and the dispatch reads the wrapper's payload
-            // (`buf_payload`).  A scalar role stays bare, because the extent is a
-            // number the dispatch reads as one.
+            // A buffer role's cell is a `Buf` wrapper around the placeholder, since
+            // that is the field's type; a scalar role stays bare.
             let mut paths: Vec<(&Vec<usize>, bool)> = roles
                 .scalars
                 .iter()
@@ -4433,16 +4429,11 @@ where
                 };
                 cells.push((path.clone(), node));
             }
-            // **The declaration builds the tuple, not the paths.**  A group the
-            // role walk found no leaf under — `In1 = struct<>` under `.in` — has
-            // no path to reach it, so a walk driven by the paths has no arity for
-            // it and answers nothing at all; the type says the group is there.
-            //
-            // A parameter whose type slot is not readable is the one case the
-            // declaration cannot answer, and the paths are all there is: the
-            // roles were decoded, so the slot was readable a moment ago, and
-            // falling back to the path walk keeps a readable parameter from
-            // losing its placeholder without a word.
+            // The declaration builds the tuple: a group with no leaf under it has
+            // no path to reach it.
+
+            // An unreadable type slot falls back to the path walk for the same
+            // placeholder.
             let built = match parameter_slot {
                 Some(type_slot) => {
                     assemble_parameter::<P>(module, block, type_slot, None, &cells, &[])
@@ -4452,11 +4443,7 @@ where
             match built {
                 Some(root) => root,
                 None => {
-                    // **A recording that answers nothing is refused by name.**
-                    // The parameter declared a named struct — the roles were
-                    // decoded from it — so a placeholder the type walk could not
-                    // fill is a leaf the ABI has no local for, and a graph whose
-                    // placeholder is `none` answers `none` for a program that
+                    // A recording that answers nothing is refused by name: the body
                     // asked for numbers.
                     refuse(
                         module,
@@ -4469,17 +4456,11 @@ where
                 }
             }
         }
-        // **The arity is not knowable here, and that is the finding.** A read of
-        // `ins(i)` compiles to a bare cell with no operation and no subscript, so
-        // the unapplied body contains nothing that says which slot a read wants; and
-        // the parameter's own value node cannot answer it either, because in a
-        // template that value is an undecided cell rather than a tuple — so there is
-        // no length to read anywhere before the apply. The tuple is therefore built
-        // at a ceiling and the graph is trimmed to the slots the body actually read.
-        //
-        // One placeholder per slot, **and the slot is the number**, so the apply's
-        // tuple walk binds the `k`-th argument to the `k`-th cell and `ins(k)` is the
-        // `k`-th argument with no ordering to guess.
+        // The arity is not knowable: a read in an unapplied body is a bare cell, so
+        // the tuple is built at a ceiling.
+
+        // One placeholder per slot, and the slot is the number, so `ins(k)` is the
+        // `k`-th argument.
         None => {
             let cells: Vec<ArrayItem> = (0..arity)
                 .map(|slot| {
@@ -4493,11 +4474,8 @@ where
             root
         }
     };
-    // The argument is a **pair**, because a parameter is one: the value side is
-    // the placeholder tuple and the type side is left undecided. The type side
-    // has to stay undecided rather than be invented, because a parameter's type
-    // is what says which role each argument has — and that is precisely the
-    // question this recording is going to answer by looking at the values.
+    // The argument is a pair: the value side is the placeholder tuple, the type
+    // side left undecided.
     let undecided = module.add_node(block, None, None);
     let argument = array_node::<P>(
         module,
@@ -4521,40 +4499,13 @@ where
         }),
         None,
     );
-    // Started **before** the apply and finished after it, so a dispatch the body
-    // performs is inside the window. A recording started after would miss the
-    // body's own work and build an empty graph that still looked like a graph.
+    // Started before the apply and finished after it, so a dispatch the body
+    // performs is inside the window.
     graph::begin();
-    // **Deep, not shallow, and that is the whole difference between recording a
-    // body and applying one.** A block's value is the tuple of its statements'
-    // values, so a shallow evaluation of the body produces that tuple and stops —
-    // the statements inside it have not run, and a recording taken here is an
-    // empty graph that still looks like a graph. The deep pass is what *demands*
-    // the tuple, and demanding it is what performs the dispatches.
-    //
-    // **Not forced, and this is now measured rather than argued.** A graph is not
-    // a transcript of the source, it is a transcript of the run, and the run does
-    // not perform a dispatch whose result nothing reads: the same body, called
-    // directly with no graph anywhere in the program, reaches the backend twice
-    // where it writes three dispatches. There is no expression-level CSE in this
-    // compiler to account for the missing one, so the elimination is the laziness
-    // every unread binding already gets. A walk that forced the rest would be
-    // adding a dispatch the program never makes.
-    //
-    // **Forcing was tried anyway, and it broke more than it reached.**
-    // `Module::evaluate_node_forced` — an entry point since deleted, together
-    // with the operand forcing it was named for — performed every statement, and
-    // it also left
-    // the function's return slot empty, so the reader that has to name the return
-    // finds no value and *every* recording refuses — including bodies with no
-    // unread statement at all. The empty slot was isolated to the operand forcing
-    // rather than the shallow descent: a walk that descends every position in
-    // order (`skip_shallow` off, `force_operand` off) recorded the same two
-    // dispatches, and turning `force_operand` on alone emptied the return slot
-    // with the shallow mask untouched. See the landmine. (The `force_operand`
-    // knob those two rows name has since been deleted — see the operand-arm
-    // follow-up in `docs/notes/code-audit.md` — so only the first row is still
-    // buildable; the measurement is what stands.)
+    // Deep, not shallow: a shallow pass stops at the block's tuple, so no
+    // dispatch runs.
+
+    // Not forced, and measured: an unread dispatch is not performed.
     let result = module.evaluate_node_deep(apply, Some(block));
     let Some(result) = result else {
         refuse(
@@ -4569,12 +4520,8 @@ where
         return None;
     };
     let recorded = returned_value_ids::<P>(module, &result);
-    // **An unreadable return is a refusal, not an unrecorded one.** A graph with
-    // no recorded return answers with its whole value table, so treating "I
-    // could not read what this function returns" as "it returns everything" hands
-    // the caller an extent and a buffer nobody asked to have returned — a wrong
-    // answer that runs. The permissive reading of an unrecorded return belongs to
-    // a graph nobody recorded, and the language path has just recorded one.
+    // An unreadable return is a refusal: a graph with no recorded return answers
+    // with its whole value table.
     let Some(values) = recorded else {
         refuse(
             module,
@@ -4595,11 +4542,8 @@ where
             <P::Value as From<ComputeValue>>::from(ComputeValue::Graph(id, backend))
         }
         Err(reason) => {
-            // **An empty recording with a decided result is a different mistake
-            // from an empty one with no result**, and only this one says the body
-            // *ran* — so the two refusals have to name different causes or a
-            // caller will go looking in the wrong place.  An undecided result
-            // was refused above, so the body's own value here is decided.
+            // An empty recording with a decided result is a different mistake: the
+            // refusals name different causes.
             let reason = format!(
                 "{reason} (the body's own value came back as a decided value, not a lazy one)"
             );
@@ -4610,12 +4554,12 @@ where
     Some(value)
 }
 
-/// A lichen tuple as a **node**, which is what an operand or a result has to be.
+/// A lichen tuple as a node, which is what an operand or a result has to be.
 ///
-/// An array value is a handle into `block`'s arena and an operand slot wants a
-/// node, so the value is allocated and then given a node of its own. Every item
-/// is already a node, so the tuple holds live nodes rather than detached values —
-/// the same discipline every other multi-value result in this file follows.
+/// # Invariant
+/// An array value is a handle into `block`'s arena and an operand slot wants a node,
+/// so the value is allocated and given one; every item is already a node, so the
+/// tuple holds live nodes.
 fn array_node<P>(module: &mut Module<P>, block: BlockId, items: &[ArrayItem]) -> NodeId
 where
     P: Program,
@@ -4626,15 +4570,12 @@ where
     module.add_node(block, None, Some(value))
 }
 
-/// The placeholders a result node names, walked **through the structure** a named
-/// parameter's result is.
+/// The placeholders a result node names, walked through the structure.
 ///
-/// A kernel's result is the parameter's `.out` group — a `Buf`-wrapped
-/// placeholder per output, nested exactly as the author wrote it — so the leaves
-/// are the values the graph can hand back, in field order.  A body whose
-/// parameter has no `.out` fields returns the unit value, which names nothing: a
-/// graph's return is a list of value references, and the empty list is what "the
-/// body produced nothing" is recorded as.
+/// # Invariant
+/// A kernel's result is the parameter's `.out` group — a `Buf`-wrapped placeholder
+/// per output, nested as the author wrote it — so the leaves are the values the graph
+/// hands back, in field order; an empty list is "the body produced nothing".
 fn place_of_node<P>(module: &Module<P>, node: AnyNodeId) -> Option<Vec<Placed>>
 where
     P: Program,
@@ -4657,11 +4598,8 @@ where
     let items = unsafe { array.items() };
     let mut placed = Vec::new();
     for item in items {
-        // **A type slot is not a value.**  The `Buf` wrapper's `.element` holds
-        // the element's type, which is not something the table names — it is the
-        // type level's half of the wrapper, and the payload beside it is the
-        // half a run reads.  Anything else this walk cannot name is the refusal
-        // it reports.
+        // A type slot is not a value: `.element` is the type half, and the payload
+        // beside it is what a run reads.
         if module
             .node_value(item.node)
             .is_some_and(|value| ValueType::is_kind_marker(&value))
@@ -4674,14 +4612,11 @@ where
 }
 
 /// The leaves of a graph run's argument, in the order the recording numbered its
-/// slots: **depth-first in field order**.
+/// slots: depth-first in field order.
 ///
-/// A nested array is a group — the parameter's shape — and its leaves follow in
-/// field order, which is the order the recording walked the same structure in
-/// (`build_graph` sorts the role paths, and a lexicographic path order *is*
-/// depth-first field order).  A **type slot** — the `Buf` wrapper's `.element` —
-/// is not a value and is skipped, the same rule the recording's return walk
-/// follows.
+/// # Invariant
+/// A nested array is a group and its leaves follow in field order, which is the order
+/// the recording walked; a type slot is not a value and is skipped.
 fn flatten_leaves<P>(module: &mut Module<P>, node: AnyNodeId, out: &mut Vec<AnyNodeId>)
 where
     P: Program,
@@ -4710,32 +4645,18 @@ where
 /// The value references a recorded body's result names, if it is a placeholder or
 /// a tuple of them.
 ///
-/// **A block's value is taken from its first item, and that is this crate's
-/// existing convention rather than a new one:** [`compile_fragment`] and
-/// [`parallel_output_nodes`] both resolve a function's return by reading
-/// `array_items(body)[0]`, because a block's tuple is wider than the one value
-/// the function returns. Reading the whole tuple instead would ask the graph to
-/// return every statement's value, which is a different function's answer.
-///
-/// **Both placeholder kinds are accepted, and an extent is the reason.** A
-/// function that returns its own argument is returning an *input* value, which
-/// is in the table like any other; refusing it would leave the return
-/// unrecorded, and a graph with no recorded return answers with its whole value
-/// table — which is a number and a buffer nobody asked to have returned.
-///
-/// `None` rather than a refusal, because a body may return something a graph's
-/// value table cannot name at all — a kernel, say. The graph's return is then
-/// unrecorded, and the caller reads that as "take everything", which is
-/// permissive rather than broken.
+/// # Invariant
+/// A block's value is taken from its first item, the convention [`compile_fragment`]
+/// and [`parallel_output_nodes`] both follow. Both placeholder kinds are accepted,
+/// since a function returning its own argument returns an input value; `None` rather
+/// than a refusal, because a body may return something a value table cannot name.
 fn returned_value_ids<P>(module: &Module<P>, value: &P::Value) -> Option<Vec<Placed>>
 where
     P: Program,
     P::Value: AsEnum<ComputeValue> + AsEnum<LowValue> + ValueType,
 {
-    // The items of a result are **nodes**, not values, so each one is read back
-    // through the module rather than matched in place. That is the same reason a
-    // multi-output launch gives every buffer a node of its own before wrapping
-    // them in a tuple.
+    // The items of a result are nodes, so each is read back through the module
+    // rather than matched in place.
     let place_of = |node: AnyNodeId| place_of_node::<P>(module, node);
     // One lichen value read as the references it names: a bare placeholder is
     // one, and a **materialized tuple** is one per element — the multi-value
