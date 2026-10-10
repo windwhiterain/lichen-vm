@@ -1,52 +1,14 @@
-//! The native-plugin contract.
-//!
-//! A **native plugin** is a crate that extends the core — [`lichen_utils`],
-//! [`lichen_lowlevel`], [`lichen_highlevel`] — through the program-generic
-//! extension points, and can be composed into a *fixed* host layer without
-//! the host codesigning with it.  Concretely, a native plugin never names the
-//! host's concrete `Program` marker, its IR, its grammar, or its on-disk
-//! format — so a host can pull the crate and rebuild a compiler without
-//! editing the language layer.
-//!
-//! It contributes, in any combination:
-//! - **vocabulary leaves** — value/operator enums the host combines with
-//!   [`enum_ext!`](lichen_utils::enum_ext);
-//! - **native operators** — `NativeOp` impls, exposed through a
-//!   plugin-provided `#[macro_export] macro_rules! <name>_native_ops` that,
-//!   for a host program `$program`, expands to a `NativeOps` value (the
-//!   host invokes it to build its private per-module registry);
-//! - **an attribute** — an `AttrSpec` marker + `AttrExt` provider, listed in
-//!   the host composition's `attrs` manifest — which is also where its slot
-//!   comes from (see [`AttrSet`](crate::attr::AttrSet));
-//! - **a `GlobalExt` component** — composed by the host with
-//!   [`compose_ext!`](lichen_utils::compose_ext).
-//!
-//! [`NativePlugin`] is the nominal marker a plugin implements to *name* that
-//! it plays this role; nothing is generic-bound on it, so the `impl` records
-//! the claim rather than enforcing the contract.  The mechanics are macro-based
-//! because *enum composition is
-//! inherently a compile-time expansion*, so a plugin set is fixed at build
-//! time (a package manager assembles a compiler crate that lists the chosen
-//! plugins) rather than loaded at runtime.
+//! The native-plugin contract. See `docs/notes/plugin-taxonomy.md`.
 
-/// The nominal marker of a native plugin: a plugin type that registers
-/// native operations (see the [module docs](self)).
+/// The nominal marker of a native plugin (see the [module docs](self)).
 ///
-/// The trait carries no methods and nothing is generic-bound on it, so the
-/// `impl` is a declaration, not a check — the mechanics are macro-based (enum
-/// composition is a compile-time expansion), and a conforming plugin
-/// contributes its vocabulary leaves and a
-/// `#[macro_export] macro_rules! <name>_native_ops` for the host to invoke,
-/// alongside any `AttrExt` / `GlobalExt` it supplies.  A marker is a unit
-/// struct with an explicit `impl NativePlugin for ..`.
-///
-/// It is kept as a published trait precisely because nothing constrains it: a
-/// plugin crate implements it out of tree, so dropping it would break external
-/// implementors for no gain.
+/// # Invariant
+/// Nothing constrains the trait: it has no methods and no generic bound, so the
+/// `impl` declares the role rather than checking it. It stays published because
+/// a plugin crate implements it out of tree.
 pub trait NativePlugin {}
 
-// `NativeOp`/`NativeOps`/`AttrExt` are referenced in the module docs above;
-// the lint does not count doc-link usage, so keep them bound with allow.
+// Unused-import lint does not count doc-link usage; `allow` keeps these bound.
 #[allow(unused_imports)]
 use crate::attr::AttrExt as _AttrExtDoc;
 #[allow(unused_imports)]

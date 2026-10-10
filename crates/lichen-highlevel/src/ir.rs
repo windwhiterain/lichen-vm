@@ -1,32 +1,19 @@
-//! The highlevel expression IR: a dense, id-referenced tree built once by
-//! the language frontend and walked by the checker.
+//! The highlevel expression IR: a dense, id-referenced tree. See
+//! docs/language-spec.md.
 //!
-//! Not slotmap-shaped: the IR never changes structurally, never runs, and is
-//! never GC'd, so a plain [`Vec`] with [`ExprId`] indices suffices.  The
-//! checker only reads it (its products — pairs, type cells — are lowlevel
-//! nodes, so the table does not even grow).  The frontend records the
-//! block-wide binding placeholder ids in [`IR::block_roots`]; the checker
-//! uses that set to place its cycle-cut skeleton only where a cycle can
-//! actually form.
+//! # Invariant
+//! The frontend builds it and the checker only reads it: the IR never changes
+//! structurally, never runs and is never GC'd, so a plain `Vec` of [`ExprId`]
+//! indices suffices. A `Checker` holds it as an `Arc<IR>`, which makes that
+//! read-only-ness compiler-checked.
 
 use std::collections::HashSet;
 
 use crate::attr::{AttrSpec, NoAttr};
 use crate::program::{HighProgramLiteral, TypeOperator};
 
-/// The static schema of an expression: which compile-time attributes ride on
-/// its runtime pair and in which order.  `tail` is index-aligned with the
-/// slots below the `[value, type]` head — an empty `tail` is the ordinary
-/// 2-wide pair, a `[Perspective]` tail a 3-wide pair `[value, type, attr]`.
-///
-/// The ordinary "type" is a *runtime* value (the `[value, type]` pair); a
-/// schema is lichen's first *static* thing — it describes the *shape* of an
-/// expression's runtime pair (its arity and which attribute sits in which
-/// slot) and is known at lowering.  It is never a runtime node, never unified,
-/// never cloned: the checker consumes it to decide how to build the runtime
-/// pair, then it is gone.  It is generic over the attribute type `A` (the
-/// `HighProgram::Attr`), so a language plugs in its own attribute marker and
-/// the highlevel stays attribute-agnostic.
+/// The static schema of an expression: which attributes ride on its runtime
+/// pair. See `docs/notes/attributes.md`.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Schema<A> {
     pub tail: Vec<A>,
@@ -38,28 +25,18 @@ impl<A> Default for Schema<A> {
     }
 }
 
-/// An interned index into [`IR::schema_table`].  `0` is always the default
-/// (empty-`tail`) schema, so a fresh [`IR::alloc`] needs no write.
+/// An interned index into [`IR::schema_table`]; `0` is the default schema, so
+/// a fresh [`IR::alloc`] needs no write.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SchemaId(pub u32);
 
-/// A binary operation.  The arithmetic ops (`Add`, `Sub`, `Mul`, `Div`, `Rem`)
-/// and the bitwise ops (`BitAnd`, `BitOr`, `BitXor`) yield their result; the
-/// comparisons (`Lt`, `Gt`, `Leq`, `Geq`, `Eq`, `Neq`) yield `USize(0/1)` so the
-/// result can drive the lazy `Index` branch of an `if` — there is no `Bool`
-/// value in the universe.
+/// A binary operation. Comparisons and `In` yield `USize(0/1)`, which drives
+    /// an `if`. See docs/language-spec.md.
 ///
-/// `Eq`/`Neq` are the **generalized** equality (see `docs/language-spec.md`):
-/// they compare any two same-typed values whole, so they are the only two whose
-/// operands the checker does not pin to `Int`.  Everything else is `Int`-only,
-/// and unsigned — an `Int` is a machine-sized unsigned integer, so `Div`/`Rem`
-/// are the unsigned division and remainder.
-///
-/// `In` is the membership predicate `value @in set`: it yields `0`/`1` like a
-/// comparison, and its two operands are a value and a **set** of such values
-/// (`docs/notes/operator-polymorphism.md` §3).  It is not arithmetic, so it is
-/// the third member — after `Eq`/`Neq` — whose operands are not pinned to
-/// `Int`; unlike them it pins nothing at all and is checked structurally.
+/// # Invariant
+/// Everything but `Eq`/`Neq`/`In` is `Int`-only and unsigned: `Eq`/`Neq` are the
+/// generalized equality, and `In` is the structural membership predicate
+/// `value @in set`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BinOp {
     Add,
@@ -80,11 +57,8 @@ pub enum BinOp {
     In,
 }
 
-/// Every [`BinOp`] names the [`TypeOperator`] the checker runs: the two enums
-/// spell the same operators, so the checker converts once here instead
-/// of repeating the mapping at each site.  [`TypeOperator::Fresh`] is the
-/// other direction and has no [`BinOp`] spelling — it mints a nominal struct
-/// id, which no source operator does.
+/// The [`TypeOperator`] each [`BinOp`] runs; `Fresh` mints a nominal struct id
+/// and has no [`BinOp`] spelling.
 impl From<BinOp> for TypeOperator {
     fn from(operator: BinOp) -> Self {
         match operator {
@@ -107,24 +81,20 @@ impl From<BinOp> for TypeOperator {
     }
 }
 
-/// A prefix **class conversion**: `int2float e` and `float2int e`, the two
-/// directions between the language's two scalar classes.
+/// A prefix **class conversion**: `int2float e` and `float2int e`. See
+    /// `docs/notes/floating-point.md` §4.2.
 ///
-/// These are the only place `Int` and `Float` meet at all — every other
-/// operator computes *within* one class and the checker refuses a mixture
-/// (`docs/notes/floating-point.md` §4.2).  Each direction is a total function
-/// on values but not on types: `int2float` widens without loss, `float2int`
-/// truncates toward zero and has no answer for a `NaN` or a magnitude past the
-/// machine integer (see [`crate::program::OUT_OF_RANGE`]).
+/// # Invariant
+/// These are the only place `Int` and `Float` meet: every other operator
+/// computes within one class. `float2int` has no answer for a `NaN` or a
+/// magnitude past the machine integer ([`crate::program::OUT_OF_RANGE`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ConvOp {
     Int2Float,
     Float2Int,
 }
 
-/// Every [`ConvOp`] names the [`TypeOperator`] it runs, exactly as
-/// [`BinOp`](Self::BinOp) does: the two spell the same computation, so the
-/// checker converts once here.
+/// The [`TypeOperator`] each [`ConvOp`] runs, as [`BinOp`] does.
 impl From<ConvOp> for TypeOperator {
     fn from(operator: ConvOp) -> Self {
         match operator {
@@ -134,9 +104,11 @@ impl From<ConvOp> for TypeOperator {
     }
 }
 
-/// A dense index into [`IR::expr`].  References are pre-resolved: a
-/// use of a parameter *is* the [`ExprKind::Parameter`]'s own `ExprId` (the
-/// checker's scope stack is keyed by it), so the IR carries no name strings.
+/// A dense index into [`IR::expr`].
+    ///
+/// # Invariant
+/// References are pre-resolved: a use of a parameter *is* the
+/// [`ExprKind::Parameter`]'s own `ExprId`, so the IR carries no name strings.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ExprId(pub u32);
 
@@ -162,8 +134,11 @@ fn push_opt(id: &Option<ExprId>, push: &mut impl FnMut(ExprId)) {
 }
 
 /// Append `values` to an arena and return the half-open [`ChildRange`] they
-/// occupy.  Every variadic arena write goes through here, so a range and the
-/// push it describes cannot disagree.
+    /// occupy.
+///
+/// # Invariant
+/// Every variadic arena write goes through here, so a range and the push it
+/// describes cannot disagree.
 fn extend_range<T>(arena: &mut Vec<T>, values: impl IntoIterator<Item = T>) -> ChildRange {
     let start = arena.len() as u32;
     arena.extend(values);
@@ -173,23 +148,13 @@ fn extend_range<T>(arena: &mut Vec<T>, values: impl IntoIterator<Item = T>) -> C
     }
 }
 
-/// A source-blind diagnostic location: the IR expression a check is about,
-/// plus a single **recursive** descent path through its `[value, type, …]`
-/// spine.
+/// A source-blind diagnostic location: an IR expression and a **recursive**
+    /// path through its `[value, type, …]` spine.
 ///
-/// The highlevel is deliberately source-blind — it never sees a source span —
-/// so a location must
-/// be expressible purely in terms of the expression's structure.  The highlevel
-/// *does* parse each level of that structure, tagging it as either an
-/// expression's `[value, type]` pair (a [`LocStep::Value`]/[`LocStep::Type`]/
-/// [`LocStep::Attr`] slot) or a tuple/array/struct shape (a [`LocStep::Elem`]),
-/// so the language layer can build a precise diagnostic without re-deriving
-/// the type grammar.
-///
-/// There is no distinct "kind" in lichen: `kind` is just the type's type, one
-/// more `[value, type]` pairing, and that chain is unbounded (`Type : Type`).
-/// So a [`LocStep::Type`] may repeat arbitrarily; a [`LocStep::Type`] followed
-/// by [`LocStep::Type`] is the type's type, and so on.
+/// # Invariant
+/// The highlevel never sees a source span, so a location is expressed purely
+/// in terms of the expression's structure. There is no distinct "kind":
+/// `LocStep::Type` is the type's type and may repeat arbitrarily.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Loc {
     /// The IR expression the diagnostic is about.
@@ -216,46 +181,44 @@ pub enum LocStep {
     Elem(usize),
 }
 
-/// The highlevel program: a pure expression tree, generic over the
-/// compile-time attribute type `A` (an expression schema's tail) and the
-/// literal vocabulary `L` (the [`LiteralExt`](crate::program::LiteralExt)
-/// value a literal node carries, defaulting to the built-in
-/// [`HighProgramLiteral`]).
+/// The highlevel program: a pure expression tree, generic over the attribute
+/// type `A` and the literal vocabulary `L`.
 #[derive(Clone, Debug)]
 pub struct IR<A = NoAttr, L = HighProgramLiteral> {
     pub expr: Vec<Expr<L>>,
-    /// One dense arena for all variadic children lists ([`ExprKind::Tuple`],
-    /// [`ExprKind::TypeTuple`], [`ExprKind::Array`], [`ExprKind::TypeStruct`],
-    /// [`ExprKind::ShallowArray`], [`ExprKind::Table`]).
+    /// One dense arena for all variadic children lists.
     pub children: Vec<ExprId>,
-    /// One dense arena for struct **field names** — index-aligned with the
-    /// [`ExprKind::TypeStruct`] `fields` range **and** the
-    /// [`ExprKind::Instantiate`] `value` tuple's elements: `None` for an
-    /// unnamed (positional) field/argument, `Some(name)` for a `.name Ty`
-    /// field or a `.name bool` argument.
+    /// One dense arena for struct **field names**; `None` for a positional entry.
+    ///
+    /// # Invariant
+    /// It is index-aligned with both [`ExprKind::TypeStruct`]'s `fields` range and
+    /// [`ExprKind::Instantiate`]'s value tuple elements.
     pub struct_names: Vec<Option<&'static str>>,
-    /// One dense arena for the shallow depths of [`ExprKind::ShallowArray`]
-    /// — one `usize` per element: 0 = unmarked, `usize::MAX` = the bare `~`
-    /// (the whole subtree shallow), n = the value slot at each of the first
-    /// n levels of the element's type spine shallow.
+    /// One dense arena for the `~` depths of [`ExprKind::ShallowArray`].
+    ///
+    /// # Invariant
+    /// One `usize` per element: 0 unmarked, `usize::MAX` the bare `~`, n the value
+    /// slot at the first n levels of the element's type spine.
     pub depths: Vec<usize>,
     pub root: ExprId,
-    /// The block-wide binding placeholder ids — the only `ExprId`s whose
-    /// subtree can reference themselves (a self/mutual cycle).  The checker
-    /// pre-registers a cycle-cut skeleton only for these: an inline compound
-    /// term can never cycle, and its skeleton's extra cells would otherwise
-    /// poison the apply-time unify (a placeholder reached through an
-    /// index-typed apply would stay an undecided `?a`).
+    /// The block-wide binding placeholder ids — the only `ExprId`s whose subtree
+    /// can reference themselves.
+    ///
+    /// # Invariant
+    /// The checker pre-registers a cycle-cut skeleton only for these: an inline
+    /// compound term can never cycle, and its skeleton's extra cells would
+    /// otherwise poison the apply-time unify.
     pub block_roots: HashSet<ExprId>,
-    /// The top-level (outer-block) statement expression ids, in source order —
-    /// bindings and bare-expression statements, NOT including the final
-    /// expression.  The build's cascade deep pass already computed each one's
-    /// value/type; a reader (the language server) reads them by id rather than
-    /// re-deriving them from the root, and never re-evaluates (lazy/recursive
-    /// bindings stay undecided and are not forced).
+    /// The top-level statement expression ids, in source order, NOT including the
+    /// final expression.
+    ///
+    /// # Invariant
+    /// The build's cascade deep pass already computed each one's value/type, so a
+    /// reader takes them by id and never re-evaluates — a lazy or recursive
+    /// binding stays undecided rather than forced.
     pub stmt_roots: Vec<ExprId>,
     /// The per-expression static schema, index-aligned with [`IR::expr`] — one
-    /// [`SchemaId`] each.  `alloc` stamps the default (empty-`tail`) schema.
+    /// [`SchemaId`] each, default-stamped by `alloc`.
     pub schemas: Vec<SchemaId>,
     /// The interned schema table (see [`Schema`]); [`SchemaId`]s index it.
     pub schema_table: Vec<Schema<A>>,
@@ -266,184 +229,151 @@ pub struct Expr<L> {
     pub kind: ExprKind<L>,
 }
 
-/// The expression kinds.  Generic over the literal vocabulary `L` — a literal
-/// node carries an extensible [`LiteralExt`](crate::program::LiteralExt)
-/// value (any struct that builds a `value : type` pair); the built-in leaf
-/// literal wraps a raw value token.
+/// The expression kinds. Generic over the literal vocabulary `L`; the
+/// built-in leaf literal wraps a raw value token.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ExprKind<L> {
-    /// A literal leaf — a `value : type` pair declared together.  The literal
-    /// is any struct implementing [`LiteralExt`](crate::program::LiteralExt):
-    /// it builds the value and type nodes through the curated
-    /// [`Ctx`](crate::program::Ctx) (a leaf literal is the built-in case — an
-    /// int literal or a type constant whose type is derived via
-    /// [`ValueType::type_of`]).
+    /// A literal leaf — a `value : type` pair declared together.
+    ///
+    /// # Invariant
+    /// The literal builds its value and type nodes through the curated
+    /// [`Ctx`](crate::program::Ctx), never raw lowlevel nodes.
     Literal(L),
-    /// A function parameter (or, `let` desugared by the frontend, a let-bound
-    /// name).  Uses of the parameter in the return expression are the
-    /// parameter's own `ExprId`.
+    /// A function parameter, or a `let`-bound name.
     Parameter,
     /// `{ parameter, return }` — the parameter is a [`ExprKind::Parameter`].
-    /// `parent` is the enclosing function's IR node — the explicit link the
-    /// checker hands to `begin_function` as this function's
-    /// [`Function::parent`](lichen_lowlevel::Function::parent).  It keeps
-    /// sibling functions' template scopes disjoint while absorbing
-    /// truly-nested closures into their parent's template; it is carried in
-    /// the IR because a `Function` node is allocated *after* its body, so the
-    /// enclosing function's id is not known to the checker at that point.
-    /// `None` for a top-level function (and for the mutual-recursion sibling
-    /// case — see the frontend's `fn_parents` invariant).
+    ///
+    /// # Invariant
+    /// `parent` is the enclosing function's IR node — it keeps sibling template
+    /// scopes disjoint while absorbing nested closures into the parent's, and
+    /// rides here because the node is allocated after its body. `None` for a
+    /// top-level function.
     Function {
         parameter: ExprId,
-        /// The annotated parameter's type (`x : T => e`): compiled *in
-        /// body scope* — so in-body readers of the parameter see the
-        /// annotated kind (an array annotation's length, a function
-        /// annotation's arrow) — while the parameter's type slot still
-        /// performs the argument check at each apply.  `None` for an
-        /// unannotated parameter.
+        /// The annotated parameter's type (`x : T => e`), compiled *in body scope*.
+        ///
+        /// # Invariant
+        /// The parameter's type slot still performs the argument check at each apply,
+        /// so compiling in body scope changes what the body sees, not what is checked.
         parameter_type: Option<ExprId>,
-        /// The annotated parameter's attribute (`x # n => e`), compiled in
-        /// body scope like `parameter_type`.  `None` for an unannotated
-        /// parameter.  This is the optimization for the `x # n => e` →
-        /// `x => { x # n; e }` desugar (an unannotated body statement would
-        /// otherwise materialize a block; the field rides the `Function`
-        /// and the checker compiles it in body scope).
+        /// The annotated parameter's attribute (`x # n => e`), compiled in body
+        /// scope like `parameter_type`.
+        ///
+        /// # Invariant
+        /// This is the optimization for the `x # n => e` → `x => { x # n; e }` desugar:
+        /// an unannotated body statement would otherwise materialize a block.
         parameter_attribute: Option<ExprId>,
         r#return: ExprId,
         parent: Option<ExprId>,
-        /// The `@loop` marker, carried from the source binding onto the
-        /// `Function` node its value compiled to — a marked binding's node
-        /// **is** its value's node (the frontend transplants one into the
-        /// other), so the binding's mark and the function's are the same fact.
+        /// The `@loop` marker, carried from the source binding onto the `Function` node
+        /// its value compiled to.
         ///
-        /// The marker is **permission, not a command**: it says this
-        /// function's recursion *may* become a loop, and the default is still
-        /// the unroll whenever the trip count is decidable
-        /// (`docs/notes/loop-conversion.md` §1.1).  It is the only thing the
-        /// evaluator has to go on, so it rides here rather than being
-        /// re-derived from the source.
-        ///
-        /// `false` for every function the source did not mark, which is the
-        /// overwhelming majority and must behave exactly as it always did.
+        /// # Invariant
+        /// The binding's node **is** its value's node, so the mark and the function
+        /// are the same fact. The marker is **permission, not a command**: recursion
+        /// *may* become a loop and the default is still the unroll whenever the trip
+        /// count is decidable (`docs/notes/loop-conversion.md` §1.1).
         looping: bool,
     },
     /// `{ function, argument }`.
     Apply { function: ExprId, argument: ExprId },
-    /// `{ operator, left, right }` — a binary integer operation: `+`, `-`,
-    /// `<=`, `==`.  The operand types are checked against `Int`, and the
-    /// result's type is `Int` (a comparison's `0/1` drives an `if` branch).
+    /// `{ operator, left, right }` — a binary integer operation.
+    ///
+    /// # Invariant
+    /// The operand types are checked against `Int` and the result's type is `Int`:
+    /// a comparison's `0/1` drives an `if` branch.
     BinOp {
         operator: BinOp,
         left: ExprId,
         right: ExprId,
     },
-    /// `{ type_expr, value, names }` — struct instantiation: `s(1, 2)` wraps
-    /// the positional tuple `value` in the struct type `type_expr`.  `names`
-    /// is a range into [`IR::struct_names`], index-aligned with `value`'s
-    /// tuple elements, one optional field name per argument (a `.x 1`
-    /// argument is `Some("x")`, a positional `1` is `None`); the checker
-    /// reorders the value's elements to the definition's positional order
-    /// against the struct type's name table.  The value's element types are
-    /// checked against the struct's field list, and the expression's type is
-    /// the struct type itself.  Emitted by the frontend for the glued
-    /// comma-disciplined paren (`C()`, `C(,)`, `C(e,)`, `C(e1, …, en)`) —
-    /// recognition is *syntactic*; the checker validates that the callee's
-    /// type is a struct kind (a non-struct callee is a
-    /// [`DiagKind::InstantiateCallee`](crate::DiagKind) diagnostic).
+    /// `{ type_expr, value, names }` — struct instantiation `s(1, 2)`.
+    ///
+    /// # Invariant
+    /// `names` is index-aligned with `value`'s tuple elements, so the checker can
+    /// reorder them to the definition's order against the struct type's name table.
+    /// The frontend recognises the glued comma-disciplined paren (`C()`, `C(,)`)
+    /// syntactically; the checker still validates that the callee is a struct kind.
     Instantiate {
         type_expr: ExprId,
         value: ExprId,
         names: ChildRange,
     },
-    /// `{ value, names }` — a struct-returning block (`RecordBlock`): `value`
-    /// is a positional tuple of the emitted field values, and `names` is a
-    /// range into [`IR::struct_names`] holding each field's optional name
-    /// (parallel to the tuple elements).  The checker builds an anonymous
-    /// struct type from the value's element types and wraps the value in it,
-    /// so the block's value is a struct instance whose fields read
-    /// positionally or by name.  A `let` field does not make it here — it is
-    /// a block-local.
+    /// `{ value, names }` — a struct-returning block (`RecordBlock`).
+    ///
+    /// # Invariant
+    /// The checker builds an anonymous struct type from the value's element types,
+    /// so the block's value is a struct instance reading positionally or by name.
     Record { value: ExprId, names: ChildRange },
-    /// `assert(condition)` — an explicit constraint, not a unify: the
-    /// condition's value node is registered as an assert point.  The
-    /// checker deep-evaluates every assert after the definition pass
-    /// and requires `USize(1)`; a condition that stays
-    /// undecided (an undecided parameter, a lazy marker) is not triggered, and the apply clone
-    /// re-checks the instantiated condition per call.  The expression
-    /// compiles to the condition itself — the assert is a side constraint.
+    /// `assert(condition)` — a constraint, not a unify; the expression compiles to
+    /// the condition itself.
+    ///
+    /// # Invariant
+    /// The checker registers the condition as an assert point, deep-evaluates it
+    /// after the definition pass and requires `USize(1)`. A condition that stays
+    /// undecided is pending, not failed, and the apply clone re-checks the
+    /// instantiated condition per call.
     Assert { condition: ExprId },
-    /// `int2float e` / `float2int e` — a **class conversion**, the one
-    /// construct that crosses between `Int` and `Float`.  The checker pins the
-    /// operand to the direction's source class and gives the expression the
-    /// target class, so `int2float x` on a float `x` is a check error rather
-    /// than a no-op; the value is the single operand (a one-element operand
-    /// array, since [`TypeOperator`](crate::program::TypeOperator)'s unary
-    /// forms read `operands[0]`).
+    /// `int2float e` / `float2int e` — a **class conversion**.
+    ///
+    /// # Invariant
+    /// The checker pins the operand to the direction's source class and gives the
+    /// expression the target class, so `int2float x` on a float `x` is a check
+    /// error rather than a no-op.
     Convert { operator: ConvOp, value: ExprId },
-    /// `{ array, index }` — an element read `a[i]`; the container is *pinned*
-    /// to an array type (its element type is the pinned shape's element cell
-    /// and the read registers an `i < length` bounds assert), so this form
-    /// never kind-dispatches.
+    /// `{ array, index }` — an element read `a[i]`, the container *pinned* to an
+    /// array type.
+    ///
+    /// # Invariant
+    /// The read registers an `i < length` bounds assert and never kind-dispatches.
     Index { array: ExprId, index: ExprId },
-    /// `{ container, index }` — a *raw* positional read `X<e>` (the glued `<`
-    /// postfix): element `index` of the container's **value**, read
-    /// structurally through the lowlevel `Index` **without type validation**.
-    /// There is no array-type pinning, no [`IndexTarget`](crate::DiagKind)
-    /// guard, and no bounds assert — the container is read by value whatever
-    /// its type, so it reads a component of a type-as-value
-    /// (`<Int, string><0>`, `struct<.f Int, .g string><1>`) or of any expression's
-    /// value.  The result is the element's own pair: its value is element 0
-    /// of the read, its type element 1, both lazily (an undecided container
-    /// resolves at the apply).  This form is what the `T<e>` array-type
-    /// postfix used to be; the array type is now [`Self::TypeArray`] spelled
-    /// `array<T, n>`.
+    /// `{ container, index }` — a *raw* positional read `X<e>`, read without type
+    /// validation.
+    ///
+    /// # Invariant
+    /// No array-type pinning, no guard and no bounds assert: the container is read
+    /// by value whatever its type, and the result is the element's own pair.
     RawIndex { container: ExprId, index: ExprId },
-    /// `{ container, key }` — a positional slot read `a(k)` over a tuple
-    /// element or struct field (both shapes are positional type lists; the
-    /// nominal struct id lives in the kind, so the extraction is the same
-    /// for both).  The value is the structural `Index` over the container's
-    /// value; the type is `Index(shape, k)` over the container type's shape,
-    /// evaluated lazily so an untyped parameter resolves at the call.  The
-    /// frontend emits it for the *adjacent* single-expression paren form —
-    /// `a(1)` — the syntactic distinction from struct instantiation
-    /// (`a(1,)`, `a(1,1)`, `a()`, `a(,)`) and from function application
-    /// (a spaced paren).
+    /// `{ container, key }` — a positional slot read `a(k)` over a tuple element
+    /// or struct field.
+    ///
+    /// # Invariant
+    /// The type is `Index(shape, k)` evaluated lazily, so an untyped parameter
+    /// resolves at the call. The frontend emits it for the *adjacent* paren form
+    /// `a(1)`, distinct from instantiation (`a(1,)`) and application (`a (1)`).
     Field { container: ExprId, key: ExprId },
-    /// `{ container, name }` — a *named* field read `a.name`.  The checker
-    /// resolves `name` against the container type's struct name table to the
-    /// positional index, then reads like [`Self::Field`].  `name` is an
-    /// interned `&'static str` (the source's leaked field name).
+    /// `{ container, name }` — a *named* field read `a.name`.
+    ///
+    /// # Invariant
+    /// `name` is an interned `&'static str`; the checker resolves it against the
+    /// container type's struct name table, then reads like [`Self::Field`].
     NamedField {
         container: ExprId,
         name: &'static str,
     },
-    /// `{ container, name }` — a *raw* named component read `X::a`.  Unlike
-    /// [`Self::NamedField`] (whose name table sits in the container type's
-    /// **kind**, `container_ty[1][0][1]`), this reads the table directly from
-    /// the container's **type**, which must be a TypeStruct (`container_ty[0][1]`),
-    /// and yields the field's *type* as a value (`S::a` on
-    /// `struct<.a Int, .b string>` is `Int : Type`).  `name` is an interned
-    /// `&'static str`.  The requirement is a check-time unify (a concretely
-    /// non-TypeStruct container is a diagnostic), so it is *not* raw in the
-    /// no-validation sense of [`Self::RawIndex`].
+    /// `{ container, name }` — a *raw* named component read `X::a`, yielding the
+    /// field's *type* as a value.
+    ///
+    /// # Invariant
+    /// Unlike [`Self::NamedField`], this reads the name table straight from the
+    /// container's **type**, which must be a TypeStruct (`container_ty[0][1]`) —
+    /// a check-time unify, so it is not raw in the sense of [`Self::RawIndex`].
     RawNamedField {
         container: ExprId,
         name: &'static str,
     },
-    /// `{ container, key }` — a table lookup `t{k}`: the entry whose stored
-    /// key is deep-content-equal to `k`.  The frontend emits it for the
-    /// *adjacent* brace form — the syntactic distinction from positional
-    /// [`Self::Index`] — so the checker compiles the read to the dedicated
-    /// lowlevel `TableGet` directly, never a kind dispatch.
+    /// `{ container, key }` — a table lookup `t{k}`.
+    ///
+    /// # Invariant
+    /// The checker compiles the read to the dedicated lowlevel `TableGet`, never a
+    /// kind dispatch.
     Find { container: ExprId, key: ExprId },
     /// `{ value, type?, attributes }` — a type and/or attribute annotation.
-    /// `: T` fills `r#type`.  `attributes` is a contiguous range into
-    /// [`IR::children`] holding one value expression per schema-tail entry,
-    /// **aligned by position** with the node's schema tail (so a `# p ? doc`
-    /// tail `[Perspective, Doc]` pairs `attributes[0]` with the perspective
-    /// and `attributes[1]` with the doc).  The attributes also stamp the
-    /// annotated node's schema — the one asymmetry with `:` (the slots come
-    /// into existence by being annotated).
+    ///
+    /// # Invariant
+    /// `attributes` is **aligned by position** with the node's schema tail, and it
+    /// also stamps that schema: the slots come into existence by being annotated,
+    /// which is the one asymmetry with `:`.
     Annotation {
         value: ExprId,
         r#type: Option<ExprId>,
@@ -452,116 +382,99 @@ pub enum ExprKind<L> {
     /// `{ parameter, return }` — a function type, compiled to the kinded
     /// arrow `[[in, out], [FunctionType, Type]]`.
     TypeFunction { parameter: ExprId, r#return: ExprId },
-    /// A tuple instance `[v1, ..., vn]` — one type slot per element, so the
-    /// elements may be heterogeneous.  Elements stored in
-    /// [`IR::children`].
+    /// A tuple instance `[v1, ..., vn]`.
+    ///
+    /// # Invariant
+    /// One type slot per element, so the elements may be heterogeneous.
     Tuple(ChildRange),
-    /// A tuple type expression `[T1, ..., Tn]` — the element types, kinded
-    /// `[[T1, ..., Tn], [TupleType, Type]]`.  Elements stored in
-    /// [`IR::children`].
+    /// A tuple type expression `[T1, ..., Tn]`, kinded `[[T1, …, Tn],
+    /// [TupleType, Type]]`.
     TypeTuple(ChildRange),
-    /// A struct type expression.  `fields` is the field-type list; the
-    /// corresponding `names` range (into [`IR::struct_names`] holds each
-    /// field's optional name.  The checker builds it as the usual
-    /// `[shape, kind]` pair — shape `[T1, …, Tn]`, kind
-    /// `[[id, names, names_in_order], TypeStruct]` — so the *fresh nominal* id
-    /// and the
-    /// optional name table sit in the kind's marker payload, never in the shape
-    /// (see the
-    /// checker's struct-type construction).  A struct type is reused by
-    /// binding it once through a parameter.
+    /// A struct type expression; `names` is the parallel range into
+    /// [`IR::struct_names`].
+    ///
+    /// # Invariant
+    /// The *fresh nominal* id and the optional name table sit in the kind's marker
+    /// payload, never in the shape: `[[id, names, names_in_order], TypeStruct]`.
     TypeStruct {
         fields: ChildRange,
         names: ChildRange,
     },
-    /// An array instance `[v1, ..., vn]` — every element shares one type
-    /// (unlike a [`Self::Tuple`]'s per-element slots).  Elements stored in
-    /// [`IR::children`].
+    /// An array instance `[v1, ..., vn]`.
+    ///
+    /// # Invariant
+    /// Every element shares one type, unlike a [`Self::Tuple`]'s per-element slots.
     Array(ChildRange),
-    /// A set `set{a, b, …}` — every member shares one type (a set is
-    /// homogeneous, like an [`Self::Array`]), but the instance is typed by the
-    /// set kind, not by `array<T, n>`: the *value* is the members themselves
-    /// and the set's identity is its type.  That is what keeps a set out of
-    /// array indexing, and it is why no value-level tag is needed
-    /// (`docs/notes/operator-polymorphism.md` §3).  Members in
-    /// [`IR::children`].
+    /// A set `set{a, b, …}`, homogeneous like an [`Self::Array`].
+    ///
+    /// # Invariant
+    /// The instance is typed by the set kind, not by `array<T, n>`: the *value* is
+    /// the members and the set's identity is its type, so no value-level tag is
+    /// needed.
     Set(ChildRange),
-    /// A constant table instance `table { k1 ==> v1, k2 ==> v2, … }` — every
-    /// key shares one key type and every value one value type (checked
-    /// against two shared cells, like an array's single element cell).  The
-    /// entries are stored interleaved in [`IR::children`]:
-    /// `[k1, v1, k2, v2, …]`.  The checker builds the lowlevel table value
-    /// eagerly — keys must be deep-evaluated to hash them — and drops an
-    /// entry whose key is not concrete (recording the error), per the table
-    /// contract.
+    /// A constant table `table { k1 ==> v1, … }`, interleaved in [`IR::children`].
+    ///
+    /// # Invariant
+    /// Every key shares one key type and every value one value type. The checker
+    /// builds the table eagerly — keys must be deep-evaluated to hash them — and
+    /// drops an entry whose key is not concrete.
     Table(ChildRange),
     /// An array instance with `~`-marked positions — `[v1, ~ v2, ~2 v3]`.
-    /// Typed like a tuple (per-element type slots — a homogeneous
-    /// [`Self::Array`] type would reject `[x, ~ f(x+1)]` with an `Int` head
-    /// and a `Stream` tail).  Elements stored in [`IR::children`],
-    /// the per-element depths in [`IR::depths`] (0 = unmarked, `usize::MAX`
-    /// = the bare `~`, n = the value slot shallow at the first n levels of
-    /// the element's type spine).
+    ///
+    /// # Invariant
+    /// Typed like a tuple, not an [`Self::Array`]: a homogeneous element type
+    /// would reject `[x, ~ f(x+1)]` with an `Int` head and a `Stream` tail.
     ShallowArray {
         range: ChildRange,
         depths: ChildRange,
     },
-    /// `_` — an inference placeholder hole, usable in any position (type or
-    /// value).  Compiles to a fresh undecided cell that binds to whatever the
-    /// context unifies it with: `x : _`, `x : Int -> _`, `x : array<Int, _>`,
-    /// `x : <Int, _>`, `struct<.f Int, .g _>`, and the value holes `_ : Int`,
-    /// `f _`, `(1, _)`.
+    /// `_` — an inference placeholder hole, usable in any position.
+    ///
+    /// # Invariant
+    /// It compiles to a fresh undecided cell that binds to whatever the context
+    /// unifies it with, so a hole at the top level is one cell for the whole
+    /// program.
     Placeholder,
-    /// A recovered-error region, masked at the frontend: an opaque leaf the
-    /// checker *skips* (no cells, no unification, no cascade).  Distinct from
-    /// [`ExprKind::Placeholder`] (a real `_` inference hole the context
-    /// fills) so the frontend can identify an error region and exclude it
-    /// from a content signature / diff.  The checker compiles it to a pair of
-    /// fresh, never-unified cells, so it cannot emit a *type*-level
-    /// "expected X, found Y" from inside itself; the parser's own *syntactic*
-    /// diagnostic for the region still fires at the parse layer.
+    /// A recovered-error region, masked at the frontend as an opaque leaf.
+    ///
+    /// # Invariant
+    /// The checker skips it (no cells, no unification, no cascade) and compiles it
+    /// to a pair of fresh, never-unified cells, so it cannot emit a *type*-level
+    /// "expected X, found Y" from inside itself.
     ErrorBlock,
-    /// The real array type `{ element_type, length }`.  Its type instance
-    /// is the 2-element shape `[element_type, length]` — element 0 is the
-    /// type shared by all elements, element 1 the length — kinded
+    /// The real array type `{ element_type, length }`, kinded
     /// `[[element_type, length], [ArrayType, Type]]`.
     TypeArray {
         element_type: ExprId,
         length: ExprId,
     },
-    /// A value imported from a package in the shared registry.  The IR only
-    /// carries the exported pair node ref; the checker materializes it and
-    /// extracts the value/type leaves (the payload itself stays in the
-    /// package's static arena).
+    /// A value imported from a package in the shared registry; the IR carries only
+    /// the exported pair node ref.
+    ///
+    /// # Invariant
+    /// The checker materializes the ref and extracts the value/type leaves; the
+    /// payload itself stays in the package's static arena.
     Static {
         export: lichen_lowlevel::StaticNodeId,
     },
-    /// `$name(args…)` — a call to a native operator registered by the compiling
-    /// module's plugin.  `op` is a *private* name (an interned `&'static str`),
-    /// resolved only against that module's registry
-    /// ([`Checker::native_ops`](crate::checker::Checker)) — so two plugins each
-    /// registering `$jit` never collide.  The checker compiles each argument
-    /// (stored in [`IR::children`], like a tuple), delegates to the plugin's
-    /// [`NativeOp`] builder, and adopts the `[value, type]` pair it returns; it
-    /// has no knowledge of what the operator does.
+    /// `$name(args…)` — a native operator call registered by the compiling module's
+    /// plugin.
+    ///
+    /// # Invariant
+    /// `op` is a *private* name resolved only against that module's registry, so
+    /// two plugins each registering `$jit` never collide. The checker compiles each
+    /// argument and adopts the pair the plugin's builder returns.
     NativeCall { op: &'static str, args: ChildRange },
 }
 
 impl<L> ExprKind<L> {
-    /// Every expression id this kind holds, in declaration order: the named
-    /// fields *and* the variadic kinds' arena range, resolved to ids.
+    /// Every expression id this kind holds, in declaration order.
     ///
-    /// The complete child list, which is what a walk over the IR needs —
-    /// [`IR::range_children`] alone is the variadic arena only, so a descent
-    /// built on it would skip every named operand (`Apply`, `BinOp`, `Index`,
-    /// …) and miss most of the graph.  The non-variadic kinds are named rather
-    /// than caught by a wildcard, for the same reason
-    /// [`Self::repoint`] names them: a new kind that forgets to list its
-    /// children here is a walk that silently skips it.
-    ///
+    /// # Invariant
     /// A [`Self::Function`]'s `parent` is **not** an operand — it names the
-    /// enclosing function's node, not an expression of this body — so it is
-    /// left out, and the list is exactly the subtree the checker compiles.
+    /// enclosing function's node — so the list is exactly the subtree the checker
+    /// compiles. The non-variadic kinds are named rather than caught by a
+    /// wildcard, or a new kind could compile and then be silently skipped.
     pub fn children(&self, ir: &IR<impl crate::attr::AttrSpec, L>) -> Vec<ExprId> {
         let mut out = Vec::new();
         let mut push = |id: ExprId| out.push(id);
@@ -651,9 +564,8 @@ impl<L> ExprKind<L> {
         out
     }
 
-    /// Replace every `from` reference in the kind's own fields with `to` —
-    /// one half of [`IR::repoint`].  The variadic kinds hold ranges into the
-    /// children arena, not ids; the arena is [`IR::repoint`]'s other half.
+    /// Replace every `from` reference in the kind's own fields with `to` — one half
+    /// of [`IR::repoint`].
     pub fn repoint(&mut self, from: ExprId, to: ExprId) {
         let fix = |id: &mut ExprId| {
             if *id == from {
@@ -778,10 +690,8 @@ impl<A: AttrSpec, L> IR<A, L> {
         id
     }
 
-    /// Allocate an [`ExprKind::Annotation`] whose attribute value expressions
-    /// are `attrs` — stored contiguously in [`IR::children`] and referenced as
-    /// the node's `attributes` range, so the checker pairs each one with its
-    /// schema-tail entry by position.
+    /// Allocate an [`ExprKind::Annotation`] whose attribute expressions are
+    /// `attrs`.
     pub fn alloc_annotation(
         &mut self,
         value: ExprId,
@@ -828,11 +738,12 @@ impl<A: AttrSpec, L> IR<A, L> {
         &self.schema_table[self.schemas[e.0 as usize].0 as usize]
     }
 
-    /// Stamp an already-allocated node with its real kind — the write half of
-    /// the reserve-then-fill discipline a block-wide binding and a `Function`
-    /// both use, where a node's id must exist before its own subtree compiles
-    /// (a self/mutual reference, a nested closure's parent link) but its kind
-    /// is only known after.
+    /// Stamp an already-allocated node with its real kind.
+    ///
+    /// # Invariant
+    /// A node's id must exist before its own subtree compiles (a self or mutual
+    /// reference, a nested closure's parent link), so the kind is stamped after
+    /// the subtree, not allocated with it.
     pub fn set_kind(&mut self, e: ExprId, kind: ExprKind<L>) {
         self.expr[e.0 as usize].kind = kind;
     }
@@ -883,15 +794,13 @@ impl<A: AttrSpec, L> IR<A, L> {
         self.alloc_variadic(elements, ExprKind::Array)
     }
 
-    /// Allocate a set literal: the members are variadic children like an
-    /// array's elements; the kind alone decides the type the checker gives it.
+    /// Allocate a set literal: the members are variadic children, and the kind
+    /// alone decides the type.
     pub fn alloc_set(&mut self, members: &[ExprId]) -> ExprId {
         self.alloc_variadic(members, ExprKind::Set)
     }
 
-    /// Allocate a constant table literal: each `(key, value)` pair is
-    /// flattened into the children arena (interleaved, entry by entry), and
-    /// the expression is an [`ExprKind::Table`] over that range.
+    /// Allocate a constant table literal, interleaved entry by entry.
     pub fn alloc_table(&mut self, entries: &[(ExprId, ExprId)]) -> ExprId {
         let range = extend_range(
             &mut self.children,
@@ -900,8 +809,7 @@ impl<A: AttrSpec, L> IR<A, L> {
         self.alloc(ExprKind::Table(range))
     }
 
-    /// Allocate a shallow-marked array: each `(element, depth)` pair carries
-    /// the element's `~` depth (0 = unmarked, `usize::MAX` = bare `~`).
+    /// Allocate a shallow-marked array, each element carrying its `~` depth.
     pub fn alloc_shallow_array(&mut self, elements: &[(ExprId, usize)]) -> ExprId {
         let range = extend_range(
             &mut self.children,
@@ -920,23 +828,13 @@ impl<A: AttrSpec, L> IR<A, L> {
         self.alloc(make(range))
     }
 
-    /// The children of a **variadic** expression (`Tuple`, `TypeTuple`,
-    /// `Array`, `TypeStruct`, `ShallowArray`, `Table`, `NativeCall`).
+    /// The children of a **variadic** expression.
     ///
-    /// The kinds that store their children in named fields rather than an
-    /// arena range are named rather than caught by a wildcard: this is the
-    /// *open* end of the encoding — a new kind that stores its children as a
-    /// [`ChildRange`] must be added to the range arm, and a wildcard would let
-    /// it compile and then panic at run time.  One reads as no children (not
-    /// an `unreachable!`) so a caller that only ever passes a variadic kind
-    /// needs no knowledge of which kinds exist; a non-variadic kind reaching
-    /// here is a caller's mistake, and `debug_assert` says so.
-    ///
-    /// **The checker's own `range_children` is the authority, not this.** It
-    /// already spelled this list out — including `Set`, which the first draft
-    /// of this function left out, which is the drift a second list invites.
-    /// This is kept as the *closure* end: a caller's mistake reads as a
-    /// `debug_assert` naming itself rather than a wrong child list.
+    /// # Invariant
+    /// A kind storing its children in named fields reads as no children rather
+    /// than an `unreachable!`, so a non-variadic kind reaching here is a caller's
+    /// mistake that `debug_assert` names. This is the *closure* end of the
+    /// encoding: a new [`ChildRange`] kind must be added to the range arm.
     pub fn range_children(&self, e: ExprId) -> Vec<ExprId> {
         let range = match self.expr[e.0 as usize].kind {
             ExprKind::Tuple(range)
@@ -958,8 +856,7 @@ impl<A: AttrSpec, L> IR<A, L> {
         self.children[range.start as usize..range.end as usize].to_vec()
     }
 
-    /// The children of `e` — every kind, named fields and arena alike.  See
-    /// [`ExprKind::children`], which is the authority this defers to.
+    /// The children of `e`, every kind. See [`ExprKind::children`].
     pub fn children(&self, e: ExprId) -> Vec<ExprId> {
         self.expr[e.0 as usize].kind.children(self)
     }
@@ -968,26 +865,18 @@ impl<A: AttrSpec, L> IR<A, L> {
         self.root = root;
     }
 
-    /// Record the top-level statement expression ids, in source order.  The
-    /// build's cascade deep pass computes each one's value/type; a reader
-    /// (the language server) reads them by id instead of re-deriving them from
-    /// the root, and never re-evaluates.
+    /// Record the top-level statement expression ids, in source order.
     pub fn set_stmt_roots(&mut self, stmt_roots: Vec<ExprId>) {
         self.stmt_roots = stmt_roots;
     }
 
-    /// Re-point every stored occurrence of `from` to `to`: the kind fields of
-    /// every expression, the variadic children arena, the root, and the
-    /// block-root set.  The frontend's alias fixup: a block-wide binding whose
-    /// value is a bare name (`c = b`) aliases its target, so the uses that
-    /// captured the binding's reserved placeholder (compiled before the alias
-    /// statement) are re-pointed to the aliased node — the placeholder keeps
-    /// no references and leaves the block-root set.  The alias target is a
-    /// block root already (a forward alias is another binding's placeholder)
-    /// or a `let`/statement value no new cycle can form through.
+    /// Re-point every stored occurrence of `from` to `to`.
     ///
-    /// No-op when `from == to` (the degenerate self-alias `a = a`): the
-    /// placeholder must stay referenced and block-rooted.
+    /// # Invariant
+    /// The frontend's alias fixup: a block-wide binding aliased to a bare name
+    /// re-points the uses that captured its reserved placeholder, which then
+    /// leaves the block-root set. No-op when `from == to`, so the self-alias
+    /// `a = a` keeps its placeholder referenced.
     pub fn repoint(&mut self, from: ExprId, to: ExprId) {
         if from == to {
             return;

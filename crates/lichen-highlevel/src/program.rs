@@ -1,15 +1,11 @@
-//! The highlevel's concrete lowlevel program.
+//! The highlevel's concrete lowlevel program. See
+//! `docs/notes/compiler-plugin.md`.
 //!
-//! Each layer provides a plain enum of its own variants: the lowlevel's
-//! [`LowValue`]/[`LowOperator`], the highlevel's type values
-//! ([`TypeValue`]) and type-level operators ([`TypeOperator`]).  The
-//! composed vocabularies [`HighProgramValue`] and [`HighProgramOperator`]
-//! are flat unions — one `lichen_utils::enum_ext!` invocation carrying each
-//! extension whole as one sibling variant — so the checker builds and
-//! inspects every value and emits every operator without an `Ext` wrapper:
-//! a structural value sits one carry variant down
-//! (`HighProgramValue::LowValue(..)`), the highlevel's type values sit in
-//! theirs, and nothing nests.
+//! # Invariant
+//! The composed vocabularies [`HighProgramValue`] and [`HighProgramOperator`]
+//! are flat unions — one `enum_ext!` invocation carrying each extension whole as
+//! one sibling variant — so the checker builds and inspects every value without
+//! an `Ext` wrapper.
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -32,9 +28,8 @@ use crate::shape::for_each_kind_marker;
 /// [`HighGlobalExt`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct HighGlobal {
-    /// The next nominal type id — [`HighProgramOperator::Fresh`] reads and
-    /// increments it, so each call yields a distinct
-    /// [`HighProgramValue::TypeId`].
+    /// The next nominal type id; `Fresh` reads and increments it, so each call
+    /// yields a distinct id.
     pub type_id_counter: usize,
 }
 
@@ -49,29 +44,20 @@ impl HighGlobal {
 }
 
 lichen_utils::compose_ext! {
-    /// The highlevel's global extension state, injected into the lowlevel
-    /// [`Module`]'s `global_ext` slot and threaded through the extension
-    /// operators.
+    /// The highlevel's global extension state, in `Module`'s `global_ext` slot.
     ///
-    /// It is a *tuple* host built by [`lichen_utils::compose_ext!`] over its
-    /// extension components — a downstream composes more components by adding
-    /// their types to this tuple and reads or mutates each one through
-    /// [`lichen_utils::compose::AsField`] and the component's own methods (no
-    /// per-component accessor trait).
+    /// # Invariant
+    /// Read and mutated through `AsField`.
     ///
     /// ```
     /// use lichen_highlevel::program::{HighGlobal, HighGlobalExt};
     /// use lichen_utils::compose::AsField;
     ///
     /// let mut ext = HighGlobalExt::default();
-    /// assert_eq!(
-    ///     AsField::<HighGlobal>::get_mut(&mut ext).next_type_id(),
-    ///     0
-    /// );
-    /// assert_eq!(
-    ///     AsField::<HighGlobal>::get_mut(&mut ext).next_type_id(),
-    ///     1
-    /// );
+    /// for expected in [0, 1] {
+    ///     let id = AsField::<HighGlobal>::get_mut(&mut ext).next_type_id();
+    ///     assert_eq!(id, expected);
+    /// }
     /// assert_eq!(AsField::<HighGlobal>::get(&ext).type_id_counter, 2);
     /// ```
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -81,28 +67,26 @@ lichen_utils::compose_ext! {
 }
 impl GlobalExt for HighGlobalExt {}
 
-/// Per-package metadata for the highlevel `Program`.  The package layer
-/// stores the single exported `[value, type]` pair ref here; the lowlevel's
-/// [`Package`] only carries this as an opaque `Default` slot, keeping
-/// highlevel concepts out of the lowlevel registry machinery.
+/// Per-package metadata for the highlevel `Program`: the exported pair ref and
+/// the direct bindings.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HighPackageMeta {
-    /// The package's exported final-expression pair, filled by the language
-    /// package store after freezing.  `None` until a higher layer records it.
+    /// The package's exported final-expression pair; `None` until a higher
+    /// layer records it.
     pub export: Option<lichen_lowlevel::StaticNodeId>,
-    /// The package's directly-exposed `(name, export)` bindings
-    /// (`crate::preprocess::ResolvedImport::direct`), recorded so a *later* store
-    /// over the same shared registry can rebuild the handle instead of
-    /// recompiling the module — which the registry refuses, a key naming one
-    /// artifact.  Empty for an ordinary package.
+    /// The package's directly-exposed `(name, export)` bindings.
+    ///
+    /// # Invariant
+    /// They are recorded so a *later* store over the same shared registry can
+    /// rebuild the handle instead of recompiling the module, which the registry
+    /// refuses — a key names one artifact.
     pub direct: Vec<(String, lichen_lowlevel::StaticNodeId)>,
-    /// The package's **own source**, kept only for a built-in: the file its
-    /// source is exposed at and the position of every frozen node.  A runtime
-    /// failure whose condition was cloned out of this module names it by a
-    /// [`StaticNodeId`](lichen_lowlevel::StaticNodeId), and this is what turns
-    /// that ref into a position in the file the user can open
-    /// (`docs/notes/core-prelude.md`).  `None` for an ordinary package, which
-    /// caches as an opaque artifact and keeps no source.
+    /// The package's **own source**, kept only for a built-in. See
+    /// `docs/notes/core-prelude.md`.
+    ///
+    /// # Invariant
+    /// A runtime failure names a frozen node by `StaticNodeId`; this is what
+    /// turns that ref into a position in the file the user can open.
     pub source: Option<PackageSource>,
 }
 
@@ -110,7 +94,7 @@ pub struct HighPackageMeta {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageSource {
     /// The file the source is exposed at — the copy the store materialized under
-    /// the device's cache root (the source itself is embedded in the binary).
+    /// the device's cache root.
     pub path: std::path::PathBuf,
     /// The source text, so a renderer can print the line a position is on
     /// without a second read of the file.
@@ -130,12 +114,13 @@ impl PackageSource {
     }
 }
 
-/// The result of building a literal: the compiled `[value, type]` pair plus
-/// its value and type nodes.  The checker records all three (the value and
-/// type are read for the surrounding constructs), and the pair is the
-/// expression's compiled term.  `Type : Type` is the one case where the pair
-/// *is* the value's universe node (self-referential), not `[value, type]` —
-/// so a literal returns all three rather than assuming `pair = [value, ty]`.
+/// The result of building a literal: the compiled `[value, type]` pair plus its
+/// value and type nodes.
+///
+/// # Invariant
+/// `Type : Type` is the one case where the pair *is* the value's universe node
+/// (self-referential), not `[value, type]`, so a literal returns all three
+/// rather than assuming `pair = [value, ty]`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LiteralBuild {
     pub pair: NodeId,
@@ -144,8 +129,7 @@ pub struct LiteralBuild {
 }
 
 // The marker-node accessors are generated from the registry — one
-// `fn …_marker_node(&self) -> NodeId` per marker, each returning the
-// checker's installed shared node for it.
+// `fn …_marker_node(&self) -> NodeId` per marker.
 macro_rules! define_ctx_marker_accessors {
     ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
         $(
@@ -155,24 +139,19 @@ macro_rules! define_ctx_marker_accessors {
     };
 }
 
-/// The curated safe context an extension point sees — the program-generic
-/// subset of the checker's *encoding* surface.  This is the "who encode, who
-/// parse" boundary: the highlevel owns the `[value, type]` grammar, and an
-/// extension expresses *content* through these semantic encoders rather than
-/// hand-assembling lowlevel nodes.  Each encoder builds a well-formed
-/// structure by construction — a [`Self::pair`] is always `[value, type]`, a
-/// [`Self::kind_expr`] always `[marker, Type]` — and the active block is
-/// managed internally, so an extension can never build into the wrong block.
+/// The curated safe context an extension point sees: the program-generic subset
+/// of the checker's encoding surface.
 ///
-/// The checker implements this; a literal's [`LiteralExt::build`], a native
-/// operator's [`crate::native::NativeExt::check_apply`], and an attribute's
-/// [`crate::attr::AttrExt`] all drive it.  (The one deliberate exception: the
-/// lowlevel-only constructs a native operator genuinely needs — a fresh cell,
-/// an op node, an array shape — are the *shape* of the grammar, not a
-/// bypass.)
+/// # Invariant
+/// Every encoder builds a well-formed structure by construction — a
+/// [`Self::pair`] is always `[value, type]`, a [`Self::kind_expr`] always
+/// `[marker, Type]` — and the active block is managed internally, so an
+/// extension can never build into the wrong block. Driven by a literal's
+/// `LiteralExt::build`, a native operator's `NativeOp::build`, and an
+/// attribute's `AttrExt`.
 pub trait Ctx<P: Program> {
-    /// The value node for a raw value: a built-in type marker reuses the
-    /// checker's installed shared marker node; anything else allocates a node.
+    /// The value node for a raw value; a built-in marker reuses the installed
+    /// shared node.
     fn value_node(&mut self, value: P::Value) -> NodeId;
     /// An array node of the given element nodes — a structural shape.
     fn array_node(&mut self, ids: &[NodeId]) -> NodeId;
@@ -182,48 +161,43 @@ pub trait Ctx<P: Program> {
     fn pair(&mut self, value: NodeId, ty: NodeId) -> NodeId;
     /// A kind expression `[marker, Type]`.
     fn kind_expr(&mut self, marker: NodeId) -> NodeId;
-    /// A function type expression `[[domain, codomain], [FunctionType,
-    /// Type]]` — the single spelling of the arrow encoding
-    /// [`crate::shape`] documents but deliberately never builds.
+    /// A function type expression `[[domain, codomain], [FunctionType, Type]]`.
     ///
-    /// It does **not** register the result in the checker's `arrows` set:
-    /// that set drives the type *printer* (it is what renders a pair as
-    /// `T -> U` instead of `<T, U>`), so only a genuinely source-level arrow
-    /// belongs in it.  An arrow built as a unification *pattern* — the
-    /// function-ness guard's `[[?d, ?c], [FunctionType, K]]` — must stay out;
-    /// the caller that prints inserts it.
+    /// # Invariant
+    /// It does **not** register the result in the checker's `arrows` set: that
+    /// set drives the type *printer*, so only a source-level arrow belongs in
+    /// it. An arrow built as a unification *pattern* stays out.
     fn arrow(&mut self, domain: NodeId, codomain: NodeId) -> NodeId;
     /// A fresh undecided type cell.
     fn fresh(&mut self) -> NodeId;
-    /// The canonical universe node `[Type, ↺]` (`Type : Type`).  Referenced,
-    /// not rebuilt — the prebuilt composite that must be shared, because
-    /// cloning the self-referential universe breaks unification.
+    /// The canonical universe node `[Type, ↺]`, referenced rather than
+    /// rebuilt: cloning it breaks unification.
     fn universe(&self) -> NodeId;
-    /// The canonical, shared `[int, Type]` type expression — the type of every
-    /// int value and the pair of the `Int` type constant.  Referenced, not
-    /// rebuilt: a composite type with a single semantic identity is shared
-    /// across occurrences, since diagnostics are attributed by the lowlevel
-    /// unify trace and the checker's edges (never by span-on-node).
+    /// The canonical, shared `[int, Type]` type expression: the type of every
+    /// int value and of the `Int` type constant.
+    ///
+    /// # Invariant
+    /// Referenced, never rebuilt — a composite type with a single semantic
+    /// identity is shared, because diagnostics are attributed by the lowlevel
+    /// unify trace and the checker's edges, never by span-on-node.
     fn int_type(&self) -> NodeId;
-    /// The canonical, shared `[float, Type]` type expression — the type of
-    /// every `Float` value and the pair of the `Float` type constant.
-    /// Referenced, not rebuilt: shared across occurrences on the same terms as
-    /// [`Self::int_type`] (`docs/notes/floating-point.md` §3.4).
+    /// The canonical, shared `[float, Type]` type expression, shared on the
+    /// same terms as [`Self::int_type`].
     fn float_type(&self) -> NodeId;
-    /// The canonical, shared `[string, Type]` type expression — the type of
-    /// every `Str` value and the pair of the `string` type constant.  Shared
-    /// across occurrences like [`Self::int_type`].
+    /// The canonical, shared `[string, Type]` type expression, shared like
+    /// [`Self::int_type`].
     fn string_type(&self) -> NodeId;
-    // The 9 marker-node accessors (`int_marker_node`, `string_marker_node`,
-    // `type_marker_node`, …) are registry-derived — one per kind marker.
+    // The 9 marker-node accessors are registry-derived — one per kind marker.
     for_each_kind_marker!(define_ctx_marker_accessors);
-    /// A checker-issued unification — an extension's type check, executed
-    /// through the highlevel's own discipline (diary-attributed).
+    /// A checker-issued unification, executed through the highlevel's own
+    /// discipline (diary-attributed).
     fn check_unify(&mut self, a: NodeId, b: NodeId, loc: Loc, kind: DiagKind);
     /// A unification that may be relaxed by an attribute's optional subtype
-    /// relation (see [`Checker::check_unify_relaxed`]).  The `is_subtype`
-    /// callback receives the curated context, so relation reads go through
-    /// [`Self::class_value`] again — never raw node inspection.
+    /// relation. See [`Checker::check_unify_relaxed`].
+    ///
+    /// # Invariant
+    /// The `is_subtype` callback receives the curated context, so relation reads
+    /// go through [`Self::class_value`], never raw node inspection.
     fn check_unify_relaxed(
         &mut self,
         a: NodeId,
@@ -237,25 +211,19 @@ pub trait Ctx<P: Program> {
     fn class_value(&self, node: NodeId) -> Option<P::Value>;
 }
 
-/// A literal — the operator-like value-extension point: any struct that
-/// builds a `value : type` pair through the curated [`Ctx`].  A literal's
-/// [`LiteralExt::build`] is the single creation function: it decides the
-/// value node and the type node (referencing the prebuilt singleton exprs the
-/// context exposes).
+/// A literal — the operator-like value-extension point. See
+/// `docs/notes/compiler-plugin.md`.
 ///
-/// A downstream composes its literal vocabulary with
-/// [`lichen_utils::enum_ext!`](`lichen_utils::extend`), carrying the
-/// built-in literal structs and its own literal structs as sibling variants,
-/// then implements this trait for the composed enum (delegating each variant
-/// to its own build) and passes the enum as the program's `Literal` type.
+/// # Invariant
+/// `build` is the single creation function: it decides the value node and the
+/// type node, referencing the prebuilt singleton exprs the context exposes.
 pub trait LiteralExt<P>: Clone + Copy + PartialEq + std::fmt::Debug {
     /// Build this literal's value and type nodes (and their pair).
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild;
 }
 
-/// The built-in int literal: stores just the value.  `build` references the
-/// canonical, shared `[int, Type]` type expression for the type, so the
-/// composite is never duplicated per occurrence.
+/// The built-in int literal: stores just the value, and references the shared
+/// `[int, Type]` type expression.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct IntLit(pub usize);
 
@@ -275,11 +243,12 @@ where
     }
 }
 
-/// The built-in float literal: stores the `f32` value the lexer round-tripped
-/// (`docs/notes/floating-point.md` §3.3).  `build` references the canonical,
-/// shared `[float, Type]` type expression for the type, so the pair is
-/// `[Float(1.5), [float, Type]]` — never an `Int`-shaped pair, which §4.2 makes
-/// a *different type* rather than a lossy rendering of this one.
+/// The built-in float literal: stores the `f32` the lexer round-tripped.
+/// See `docs/notes/floating-point.md` §3.3.
+///
+/// # Invariant
+/// The pair is `[Float(1.5), [float, Type]]`, never an `Int`-shaped pair: §4.2
+/// makes that a *different type*, not a lossy rendering of this one.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct FloatLit(pub f32);
 
@@ -299,10 +268,8 @@ where
     }
 }
 
-/// The built-in string literal: stores the (immutable) string content, a
-/// `&'static str` leaked once from the source.  `build` references the
-/// canonical, shared `[string, Type]` type expression for the type, exactly
-/// as [`IntLit`] mirrors `[int, Type]`.
+/// The built-in string literal: a `&'static str` leaked once from the source,
+/// plus the shared `[string, Type]`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct StrLit(pub &'static str);
 
@@ -322,10 +289,8 @@ where
     }
 }
 
-/// The built-in `Int` type constant — `Int : Type`.  A unit literal (the type
-/// constant carries no data).  `build` produces the value node `int_marker`
-/// and its type the canonical universe; the pair is the shared `[int, Type]`
-/// type expression.
+/// The built-in `Int` type constant — `Int : Type`. A unit literal whose pair
+/// is the shared `[int, Type]`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct IntTypeLit;
 
@@ -345,9 +310,8 @@ where
     }
 }
 
-/// The built-in `Float` type constant — `Float : Type`.  A unit literal.  Its
-/// pair is the shared `[float, Type]` type expression, exactly as
-/// [`IntTypeLit`]'s is `[int, Type]`.
+/// The built-in `Float` type constant — `Float : Type`. A unit literal whose
+/// pair is the shared `[float, Type]`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct FloatTypeLit;
 
@@ -367,9 +331,8 @@ where
     }
 }
 
-/// The built-in `string` type constant — `string : Type`.  A unit literal.
-/// `build` produces the value node `string_marker` and its type the canonical
-/// universe; the pair is the shared `[string, Type]` type expression.
+/// The built-in `string` type constant — `string : Type`. A unit literal whose
+/// pair is the shared `[string, Type]`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct StringTypeLit;
 
@@ -389,9 +352,8 @@ where
     }
 }
 
-/// The built-in `Type` type constant — `Type : Type`.  A unit literal.  Its
-/// pair is the canonical self-referential universe node (the single prebuilt
-/// composite that must be shared, not rebuilt).
+/// The built-in `Type` type constant — `Type : Type`. A unit literal whose pair
+/// is the self-referential universe node.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TypeTypeLit;
 
@@ -408,10 +370,8 @@ where
     }
 }
 
-// The highlevel program's literal vocabulary: the built-in int, float & string
-// literals and the `Int`/`Float`/`string`/`Type` type-constant literals, as
-// sibling carry variants.  Each type constant has its own literal; each `build`
-// rebuilds its value/type nodes fresh per occurrence.
+// The highlevel program's literal vocabulary: the built-in literals as sibling
+// carry variants.
 lichen_utils::enum_ext! {
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum HighProgramLiteral {
@@ -442,29 +402,29 @@ where
     }
 }
 
-// The 9 kind-marker variants are generated from the registry
-// ([`crate::shape::for_each_kind_marker`]) — adding or removing a marker
-// touches that one list.  `TypeId` is NOT a kind marker (it carries the
-// nominal id a struct marker references) and is spelled out below.
+// The 9 kind-marker variants are generated from the registry.
+// `TypeId` is not a kind marker and is spelled out below.
 macro_rules! define_type_value {
     ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
-        /// The highlevel's own value extension — a plain enum of the type constants,
-        /// provided whole for the compositions below (and for a language crate
-        /// composing its own vocabulary from [`LowValue`] + this).
+        /// The highlevel's own value extension: a plain enum of the type
+        /// constants.
         ///
-        /// Every variant is a *type constant*: its own type is the canonical
-        /// universe (`Type : Type`), which makes the composed vocabulary's literal
-        /// build a one-arm answer for this whole branch.
+        /// # Invariant
+        /// Every variant is a *type constant* whose own type is the canonical
+        /// universe (`Type : Type`), which makes the composed vocabulary's
+        /// literal build a one-arm answer for this branch.
         #[derive(Debug, Clone, Copy, PartialEq)]
         pub enum TypeValue {
             $(
                 $(#[$doc])*
                 $variant,
             )*
-            /// A nominal type id — a struct type's identity marker, living at
-            /// `shape[0]` of a `TypeStruct`-kinded pair.  Equal ids unify,
-            /// different ids don't (nominal identity), and an id never unifies
-            /// with the structural markers above.
+            /// A nominal type id: a struct type's identity marker, at `shape[0]`
+            /// of a `TypeStruct`-kinded pair.
+            ///
+            /// # Invariant
+            /// Equal ids unify, different ids do not, and an id never unifies with
+            /// the structural markers above.
             TypeId(usize),
         }
     };
@@ -474,8 +434,9 @@ for_each_kind_marker!(define_type_value);
 impl TypeValue {
     /// The nominal type id carried by a `TypeId` value, if this is one.
     ///
-    /// A composed value vocabulary's `ValueType::type_id` delegates here; the
-    /// leaf keeps the one place the id lives.
+    /// # Invariant
+    /// A composed vocabulary's `ValueType::type_id` delegates here; the leaf
+    /// keeps the one place the id lives.
     pub fn as_type_id(&self) -> Option<usize> {
         match self {
             TypeValue::TypeId(n) => Some(*n),
@@ -485,14 +446,10 @@ impl TypeValue {
 }
 
 // The highlevel program's value vocabulary: a flat union of the lowlevel
-// structural values and the highlevel type values, each carried whole as
-// one sibling variant — one `lichen_utils::enum_ext!` invocation listing
-// every layer's enum.  A language crate composes its own vocabulary the
-// same way: `+ LowValue as LowValue; + TypeValue as TypeValue;` plus its
-// own variants.
+// structural values and the type values.
 lichen_utils::enum_ext! {
     /// The highlevel program's value vocabulary: the lowlevel structural
-    /// values and the highlevel type values, as sibling carry variants.
+    /// values and the type values, as sibling variants.
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum HighProgramValue {
     }
@@ -506,10 +463,7 @@ impl ValueExt for HighProgramValue {
     }
 }
 
-// The marker methods are generated from the registry with default bodies:
-// any vocabulary carrying the `TypeValue` leaf whole (an `enum_ext!`
-// composition, which generates `From<TypeValue>`) gets every marker for
-// free; an impl may still override individual methods.
+// The marker methods are generated from the registry with default bodies.
 macro_rules! define_value_type_marker_methods {
     ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
         $(
@@ -518,11 +472,8 @@ macro_rules! define_value_type_marker_methods {
                 Self::from(TypeValue::$variant)
             }
         )*
-        /// Whether this value is one of the registry's kind markers — the
-        /// honest tag test behind "is this atom a type-level marker", as
-        /// opposed to a structural guess (an array of the right arity).
-        /// `TypeId` is not a kind marker; it is tested through
-        /// [`Self::type_id`].
+        /// Whether this value is one of the registry's kind markers — the honest
+        /// tag test, not a structural guess.
         fn is_kind_marker(&self) -> bool {
             $( if *self == Self::$marker_fn() { return true; } )*
             false
@@ -531,30 +482,23 @@ macro_rules! define_value_type_marker_methods {
 }
 
 /// An extension value leaf's contribution to the **open** kind-marker set: the
-/// leaf's own type-constant atoms.  (Compute used to contribute
-/// `TypeBuffer`/`TypeWrite` here and contributes none now that a buffer is an
-/// ordinary `Buf` struct — but the leaf's own set is what this trait is for.)
+/// leaf's own type-constant atoms.
 ///
-/// The highlevel's 9 kind markers are closed ([`crate::shape::for_each_kind_marker`]),
-/// but the marker *concept* is open: any plugin composing its own value leaf
-/// into a language vocabulary (`lang_compose_vocabulary!`) may add type
-/// constants, and the composed `ValueType::is_kind_marker` consults this
-/// trait for each extra leaf.  A leaf with no type constants implements it
-/// returning `false` for everything.
+/// # Invariant
+/// The highlevel's 9 kind markers are closed, but the marker *concept* is open:
+/// a plugin composing its own value leaf into a language vocabulary may add type
+/// constants, and the composed `ValueType::is_kind_marker` consults this trait.
 pub trait LeafKindMarkers {
     /// Whether this value is one of the leaf's kind markers.
     fn is_kind_marker(&self) -> bool;
 }
 
-/// The value→type contract a value vocabulary must satisfy to flow through
-/// the checker: the type-constant markers it installs, the value→type
-/// mapping for constants, and the kind classification the checker's
-/// structural type checks dispatch on.  Every value union — the highlevel's
-/// own [`HighProgramValue`] or an extended one — implements this; the
-/// checker is generic over it.
+/// The value→type contract a vocabulary must satisfy to flow through the
+/// checker. See `docs/notes/compiler-plugin.md`.
 ///
-/// The 9 kind-marker methods are registry-derived
-/// ([`crate::shape::for_each_kind_marker`]) with default bodies over
+/// # Invariant
+/// Every value union implements it and the checker is generic over it. The 9
+/// kind-marker methods are registry-derived with default bodies over
 /// `From<TypeValue>`; an implementation spells only [`Self::type_id`] and
 /// [`Self::type_id_value`].
 pub trait ValueType:
@@ -579,51 +523,28 @@ impl ValueType for HighProgramValue {
     }
 }
 
-// The highlevel's own operator extension — a plain enum of the type-level
-// computations that have no structural operator form, provided whole for the
-// composition below.
+// The highlevel's own operator extension: the type-level computations with no
+// structural operator form.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TypeOperator {
     /// A fresh nominal type id: each call reads and increments
-    /// [`HighGlobal::next_type_id`] and returns a `TypeId(n)` type value.
+    /// [`HighGlobal::next_type_id`].
+    ///
+    /// # Invariant
     /// Nullary — the checker emits it with no operand, so it fires once per
-    /// source occurrence and the cached value is reused wherever the struct
-    /// type it tags is referenced.
+    /// source occurrence and the cached value is reused wherever the struct type
+    /// it tags is referenced.
     Fresh,
-    /// Binary operators over `[left, right]`.
+    /// Binary operators over `[left, right]`. See
+    /// `docs/notes/floating-point.md` §4.2.
     ///
-    /// `Add`/`Sub`/`Mul`/`Div` and the four order comparisons
-    /// (`Lt`/`Gt`/`Leq`/`Geq`) compute over one of the language's two scalar
-    /// classes, `Int` or `Float`, and never over a mixture: the classes do not
-    /// convert (`docs/notes/floating-point.md` §4.2), so the checker pins both
-    /// operands to the class a concretely float operand selects — or to `Int`
-    /// when neither operand names one.  `Rem` and `BitAnd`/`BitOr`/`BitXor` are
-    /// `Int`-only, because a float has no remainder and no bit pattern here.
-    ///
-    /// A comparison yields `USize(0/1)` whatever its operands are — no `Bool`
-    /// value exists, and the result drives the lazy `Index` branch of an `if`
-    /// directly.  The four arithmetic operators yield their operands' own
-    /// class, which is what makes a float sum a `Float` again.
-    ///
-    /// **An `Int` is unsigned**, so `Div`/`Rem` are integer division and
-    /// remainder on the machine-sized unsigned value and the four order
-    /// comparisons are the unsigned ones when their operands are `Int`s;
-    /// `Div`/`Rem` by zero have no value and are the one case the integer side
-    /// refuses at run time (see [`DIVIDE_BY_ZERO`]).  `Mul` and `Sub` wrap,
-    /// exactly as `Add` does.  A float's arithmetic is IEEE instead, division
-    /// by zero included (§4.3's infinity and `NaN` are ordinary float values
-    /// here), so nothing on the float side is refused.
-    ///
-    /// `Eq`/`Neq` are the generalized equality (docs/language-spec.md): they
-    /// compare any two *same-typed* values whole (two `Int`s, two floats, or
-    /// two type values — `S::a == Int` is `1`) through the values' own
-    /// [`ValueExt::value_eq`], while a cross-type comparison is a check-time
-    /// error (the checker unifies the operand types).
-    ///
-    /// The lowlevel deep-evaluates the operand and gates on its
-    /// undecided subtree before calling `run`, so an undecided operand
-    /// (a template parameter during the definition pass) is already the
-    /// lazy marker, and `run` stays lazy on any undecided side.
+    /// # Invariant
+    /// Arithmetic and the order comparisons compute over one scalar class and
+    /// never over a mixture: the checker pins both operands to the class a
+    /// float operand selects, or to `Int`. `Rem` and the bitwise trio are
+    /// `Int`-only. A comparison yields `USize(0/1)`, the arithmetic the
+    /// operands' class, and `Div`/`Rem` by zero is the integer side's one
+    /// run-time refusal ([`DIVIDE_BY_ZERO`]).
     Add,
     Sub,
     Mul,
@@ -638,126 +559,73 @@ pub enum TypeOperator {
     BitAnd,
     BitOr,
     BitXor,
-    /// The two **class conversions** — unary, over `[value]`.
+    /// The two **class conversions** — unary, over `[value]`. See
+    /// `docs/notes/floating-point.md` §4.2.
     ///
-    /// `int2float` moves an `Int` into the float class; every `Int` up to
-    /// `2^24` maps to exactly one `f32`, and beyond that the float's 24-bit
-    /// significand keeps the magnitude and drops the low bits, so the result is
-    /// the nearest representable float.  That loss is the value's own fact, not
-    /// a refusal: an `Int` is machine-sized and an `f32` is not, and no
-    /// rounding mode was ever asked for.
-    ///
-    /// `float2int` truncates toward zero (`3.7` → `3`, `-3.7` → `-3`), and it is
-    /// the one partial operator in this vocabulary: a `NaN`, an infinity, a
-    /// negative (the language's `Int` is unsigned, so there is no value to land
-    /// on) or a magnitude at or past the machine integer has **no answer**, and
-    /// [`OUT_OF_RANGE`] records that and leaves the result lazy — the
-    /// [`DIVIDE_BY_ZERO`] shape, a run-time refusal rather than a check error,
-    /// because the operand is a runtime value the checker cannot see.
-    ///
-    /// The checker pins the operand to the direction's source class and the
-    /// result is the target class, so a conversion is the *only* expression
-    /// whose type differs from its operand's.
+    /// # Invariant
+    /// `int2float` maps every `Int` up to `2^24` to one `f32` and above that
+    /// keeps the magnitude while dropping low bits — a value fact, not a
+    /// refusal. `float2int` truncates toward zero and is the one partial
+    /// operator here: a `NaN`, an infinity, a negative or an out-of-range
+    /// magnitude has no answer, so [`OUT_OF_RANGE`] records it and leaves the
+    /// result lazy.
     Int2Float,
     Float2Int,
-    /// Whether a value's class is a member of a **class domain** —
+    /// Whether a value's class is a member of a **class domain**:
     /// `[class value, domain value]`, answering `USize(0/1)`.
     ///
-    /// This is the refinement's membership test, and it exists as an operator
-    /// rather than as a combination of `==` for one measured reason:
-    /// [`TypeOperator::Eq`] compares through [`ValueExt::value_eq`], which for
-    /// an array is *handle* identity — so a structurally identical class node
-    /// out of another module (an imported artifact's `int` type) would compare
-    /// unequal and the refinement would refuse a value it should admit.  This
-    /// operator decodes **structurally**, the same way
-    /// [`crate::shape::low_type_of`] does.
-    ///
-    /// A side whose class is still undecided leaves the whole operator lazy
-    /// (undecided), which is what keeps a refinement on an open parameter
-    /// **pending** rather than failed until an application supplies the class.
+    /// # Invariant
+    /// It exists as an operator rather than as `==`: [`TypeOperator::Eq`]
+    /// compares through [`ValueExt::value_eq`], which for an array is *handle*
+    /// identity, so a structurally identical class node out of another module
+    /// would compare unequal. This operator decodes structurally. An undecided
+    /// side leaves the operator lazy, which keeps a refinement on an open
+    /// parameter pending.
     InDomain,
-    /// Whether a type value is a **struct type** — `[shape, [marker, K]]`
-    /// whose kind's marker is the `TypeStruct` tag (`[payload, TypeStruct]`,
-    /// [`crate::shape::is_struct_type_any`]) — answering `USize(0/1)`.
+    /// Whether a type value is a **struct type**, answering `USize(0/1)`.
     ///
-    /// The operand is `[type value, universe]`: the type value to judge and
-    /// the checker's canonical universe node, which the reader needs to
-    /// recognise the kind's [`KIND_UNIVERSE_SLOT`](crate::shape::KIND_UNIVERSE_SLOT).
-    /// Like [`Self::InDomain`], a still-undecided operand leaves the answer
-    /// lazy rather than `0` — a question about a type nothing has decided yet
-    /// has no answer.
-    ///
-    /// The named field read `a.name` states its container requirement with
-    /// this operator.  Its container's type is not decided at check time (a
-    /// parameter, a call result), so the read cannot be judged where it
-    /// stands; the condition is registered on the **assert channel**, which
-    /// re-checks it per apply clone exactly as [`Self::InDomain`] does
-    /// (`docs/notes/eval-before-unify.md` §6.2 option 1).  A decided
-    /// container needs none of this — the read judges it where it is.
+    /// # Invariant
+    /// The operand is `[type value, universe]`: the value to judge and the
+    /// checker's canonical universe, needed to recognise the kind's universe
+    /// slot. The decode is `shape::is_struct_type_any`, the reader the checker
+    /// judges a decided container with. An undecided operand stays lazy.
     IsStructType,
 }
 
 /// The category an **integer** `Div`/`Rem` by zero is recorded under.
 ///
-/// **A run-time refusal, not a check error**, and recorded through the
-/// lowlevel's general extension channel because [`eval_errors`] is a closed
-/// enum of *structural* value facts (an out-of-bounds index, a table miss) —
-/// a divisor that evaluated to zero is neither.  The operator's answer is the
-/// lazy marker, which is what every other refused computation in this language
-/// answers, so the program reports the undecided result and this says why.
-///
-/// **`Int`-only**: a float `Div` has the IEEE answer — an infinity or a `NaN`,
-/// both ordinary float values here — so no float divisor is recorded (see
-/// [`TypeOperator`] and `docs/notes/floating-point.md` §3.7).
-///
-/// Only the interpreter refuses.  A JIT'd kernel has already left this crate:
-/// wasm's integer division traps and SPIR-V's is undefined, and a guard would
-/// need a branch, which the GPU backend's straight-line body (the thing that
-/// makes its uninitialised output buffers sound) does not allow.  See
-/// `docs/notes/operators.md`.
-///
-/// [`eval_errors`]: lichen_lowlevel::Module::eval_errors
+/// # Invariant
+/// A run-time refusal, not a check error: `Module::eval_errors` is a closed
+/// enum of *structural* value facts, and a zero divisor is not one, so the
+/// lowlevel's general extension channel carries it. The answer is the lazy
+/// marker. `Int`-only: a float `Div` has the IEEE answer, so no float divisor
+/// is recorded. Only the interpreter refuses — a JIT'd kernel has left this
+/// crate.
 pub const DIVIDE_BY_ZERO: &str = "operator.divide_by_zero";
 
-/// A `Float2Int` whose operand has no `Int` to truncate toward: a `NaN`, an
-/// infinity, a negative, or a magnitude at or past the machine integer.
+/// A `Float2Int` whose operand has no `Int` to truncate toward.
 ///
-/// The same shape as [`DIVIDE_BY_ZERO`] — a **run-time refusal** recorded on the
-/// lowlevel's general extension channel, answered by the lazy marker, and for
-/// the same reason: whether a float is in range is a fact about a runtime
-/// value, so the checker cannot see it and [`eval_errors`] is a closed enum of
-/// structural value facts.  `Int2Float` never refuses; every `Int` has a float
-/// (the nearest one, past `2^24`).
-///
-/// Again only the interpreter refuses: a JIT'd float→int conversion is wasm's
-/// `i32.trunc_f32_s` (a trap out of the whole invocation) or SPIR-V's
-/// `OpConvertFToU` (undefined for an out-of-range operand), and a guard would
-/// need a branch.  See `docs/notes/operators.md`.
-///
-/// [`eval_errors`]: lichen_lowlevel::Module::eval_errors
+/// # Invariant
+/// The four shapes are named rather than lumped together because the fix differs
+/// for each. In range is a fact about a runtime value, not a checkable type, so
+/// this is the [`DIVIDE_BY_ZERO`] answer.
 pub const OUT_OF_RANGE: &str = "operator.out_of_range";
 
 // --- the highlevel leaves' per-leaf artifact codec --------------------------
-//
-// `TypeValue` and `TypeOperator` have no arena payload, so their codecs ignore
-// the relocation context and are the smallest leaf-codec implementations: an
-// exhaustive tag write and an inverse read.  Both sides of the `TypeValue`
-// codec are generated from the kind-marker registry
-// ([`crate::shape::for_each_kind_marker`]): each entry's tag is the persisted
-// artifact tag, a compatibility contract — an existing entry's tag never
-// changes and a new marker takes the next unused tag, so the tags are
-// deliberately not the list positions (`TypeString` is `7`).  `TypeId` is not
-// a kind marker; it keeps tag 8, spelled here — a registry entry claiming 8
-// would shadow this read arm (`unreachable_patterns`, a warning rather than
-// the compile error it was believed to be) and silently decode every
-// persisted `TypeId` as that marker.
+
+// `TypeValue` and `TypeOperator` have no arena payload, so their codecs are the
+// smallest leaf-codec implementations.
+
+// Both sides are generated from the kind-marker registry: each entry's tag is
+// the persisted artifact tag.
+
+// `TypeId` keeps tag 8, spelled here: a registry entry claiming 8 would shadow
+// this read arm.
 macro_rules! define_type_value_codec {
     ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
         impl TypeValue {
-            /// Every kind-marker variant, in registry order — registry-derived,
-            /// so the codec round-trip tests iterate the same list the enum
-            /// and codec are generated from.  `TypeId` is not a kind marker
-            /// and is sampled separately.
+            /// Every kind-marker variant, in registry order — the same list the
+            /// enum and codec are generated from.
             pub const KIND_MARKERS: &[TypeValue] = &[$(TypeValue::$variant),*];
         }
 
@@ -795,17 +663,18 @@ macro_rules! define_type_value_codec {
 }
 for_each_kind_marker!(define_type_value_codec);
 
-// The one list of the type-level operators: the codec's two sides and the
-// exhaustive [`TypeOperator::ALL`] list the round-trip tests iterate are
-// generated from it.  Each tag is the persisted artifact tag — the same
-// compatibility contract as the kind-marker tags above.  The write side is
-// an exhaustive match over the enum, so an enum variant missing from this
-// list fails to compile.
+// The one list of the type-level operators: the codec's two sides and
+// [`TypeOperator::ALL`] are generated from it.
+
+// Each tag is the persisted artifact tag — the same contract as the kind-marker
+// tags above.
+
+// The write side is an exhaustive match, so a variant missing from this list
+// fails to compile.
 macro_rules! define_type_operator_codec {
     ($( $variant:ident = $tag:literal; )*) => {
         impl TypeOperator {
-            /// Every variant — generated from the same list as the codec, so
-            /// the round-trip tests iterate the codec's full domain.
+            /// Every variant, generated from the same list as the codec.
             pub const ALL: &[TypeOperator] = &[$(TypeOperator::$variant),*];
         }
 
@@ -848,12 +717,8 @@ define_type_operator_codec! {
     IsStructType = 18;
 }
 
-// The highlevel program's operator vocabulary: a flat union of the
-// structural [`LowOperator`] and the highlevel type-level
-// [`TypeOperator`], each carried whole as one sibling variant.
-// [`HighProgram`]'s second type parameter lets a downstream that needs more
-// operators compose its own union over these same leaves and still reuse the
-// lowlevel runtime/registry machinery.
+// The highlevel program's operator vocabulary: a flat union of the structural
+// and type-level operators.
 lichen_utils::enum_ext! {
     /// The highlevel program's operator vocabulary: the structural and
     /// type-level operators, as sibling carry variants.
@@ -879,27 +744,23 @@ where
     ) -> Option<V> {
         match self {
             // The structural operators never reach `run`: the VM dispatches
-            // them through `AsEnum` before falling through.
+            // them through `AsEnum`.
             HighProgramOperator::LowOperator(_) => {
                 unreachable!("structural operators are dispatched by the VM")
             }
-            // The type-level operators are the highlevel's own computation —
-            // delegated to the program-generic [`OperatorExt`] impl for
-            // [`TypeOperator`], so any composed union reuses the same
-            // semantics.
+            // The type-level operators are delegated to [`OperatorExt`] for
+            // [`TypeOperator`].
             HighProgramOperator::TypeOperator(op) => op.run(operand, _block, module),
         }
     }
 
-    /// The union's low-type transfer is the same uniform dispatch: each leaf
-    /// states what its own computation produces, and the structural leaf is
-    /// unreachable because the pass owns the [`LowOperator`] transfers.
+    /// The union's low-type transfer: each leaf states its own computation's
+    /// low shape.
     fn low_type(&self, arguments: &[Option<LowShape>]) -> Option<LowShape> {
         match self {
             HighProgramOperator::LowOperator(_) => None,
-            // Qualified: a transfer is a method of the program-generic
-            // `OperatorExt` impl, and it mentions no `P`-typed argument, so an
-            // unqualified call could not infer which program's impl is meant.
+            // Qualified: a transfer mentions no `P`-typed argument, so the
+            // impl could not be inferred.
             HighProgramOperator::TypeOperator(op) => <TypeOperator as OperatorExt<
                 ProgramImpl<V, HighProgramOperator, A, L, G>,
             >>::low_type(op, arguments),
@@ -907,14 +768,13 @@ where
     }
 }
 
-/// The highlevel's own type-level operators, dispatched as an extension
-/// operator by *any* program whose value vocabulary implements [`ValueType`]
-/// and whose global state carries the [`HighGlobal`] component — the shipped
-/// `LangProgram`, a plugin-built compiler's program, and the highlevel's own
-/// default `HighProgramOperator` program all share this one impl (they differ
-/// only in which union wraps the operator).  The semantics are the
-/// spec-documented ones: `==`/`!=` are the generalized equality over any two
-/// same-typed values, every other binary operator is Int-only and unsigned.
+/// The highlevel's own type-level operators. See
+/// `docs/notes/operator-polymorphism.md`.
+///
+/// # Invariant
+/// Dispatched by any program whose value vocabulary implements [`ValueType`] and
+/// whose global state carries [`HighGlobal`]; every such program shares this one
+/// impl and differs only in which union wraps the operator.
 impl<P> OperatorExt<P> for TypeOperator
 where
     P: Program,
@@ -922,47 +782,35 @@ where
     P::GlobalExt: AsField<HighGlobal>,
 {
     fn run(&self, operand: P::Value, _block: BlockId, module: &mut Module<P>) -> Option<P::Value> {
-        // An operator that cannot decide yet answers `None`, which is the
-        // trait's own spelling of "undecided" (see `OperatorExt::run`).  The
-        // closure gives every early `return` inside an arm one return type.
+        // An undecided answer is `None` (see `OperatorExt::run`); the closure
+        // gives every early `return` one return type.
         (|| match self {
             TypeOperator::Fresh => {
                 let id = AsField::<HighGlobal>::get_mut(&mut module.global_ext).next_type_id();
                 Some(P::Value::type_id_value(id))
             }
-            // The two class conversions — one operand, held the same way the
-            // binary operators hold theirs but in a one-element array.  The
-            // checker pinned the operand to the direction's source class, so a
-            // wrong shape here arrived through an argument unify that already
-            // failed (and already reported): stay lazy rather than guess.
+            // The two class conversions: one operand, in a one-element array.
             TypeOperator::Int2Float | TypeOperator::Float2Int => {
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("a conversion expects a one-element operand array")
                 };
-                // SAFETY: `operands` is the operand array the VM just evaluated
-                // for this operation node, so its home block is alive for the
-                // duration of the run.
+                // SAFETY: `operands` is the array the VM just evaluated for this
+                // node; its home block is alive here.
                 let items = unsafe { operands.items() };
                 // An undecided operand keeps the operator lazy.
                 let Some(value) = module.node_value(items[0].node) else {
                     return None;
                 };
                 match (self, value.as_enum()) {
-                    // A machine-sized `Int` into an `f32`: exact up to `2^24`,
-                    // and the nearest float above it.  That is the float's own
-                    // fact rather than a refusal — no rounding was asked for,
-                    // and an `Int` is wider than an `f32`'s significand.
+                    // `Int` into `f32`: exact up to `2^24`, nearest above it.
                     (TypeOperator::Int2Float, Some(LowValue::USize(n))) => {
                         Some(P::Value::from(LowValue::Float(n as f32)))
                     }
-                    // Truncation toward zero, with the operand shapes that have
-                    // no `Int` to land on named instead of answered by a
-                    // saturated guess.
+                    // Truncation toward zero, unnamed shapes staying lazy.
                     (TypeOperator::Float2Int, Some(LowValue::Float(f))) => {
                         let truncated = f.trunc();
-                        // `usize::MAX as f64` is `2^64` (the f64 rounds up), so
-                        // this is the exclusive ceiling of the language's
-                        // unsigned machine integer on either target width.
+                        // The exclusive ceiling of the unsigned machine integer
+                        // on either target width.
                         if !f.is_finite()
                             || truncated < 0.0
                             || (truncated as f64) >= (usize::MAX as f64)
@@ -990,15 +838,12 @@ where
             | TypeOperator::BitXor
             | TypeOperator::InDomain
             | TypeOperator::IsStructType => {
-                // The VM already deep-evaluates the operand and gates on its
-                // undecided subtree, so an undecided operand never reaches
-                // this operator (the definition pass flags the node instead).
+                // An undecided operand never reaches this operator.
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("binary operators expect an operand array of [left, right]")
                 };
-                // SAFETY: `operands` is the operand array the VM just
-                // evaluated for this operation node, so its home block is
-                // alive for the duration of the run.
+                // SAFETY: `operands` is the array the VM just evaluated for this
+                // node; its home block is alive here.
                 let operands = unsafe { operands.items() };
                 // An undecided side (an empty slot) keeps the operator lazy.
                 let left = module.node_value(operands[0].node);
@@ -1007,19 +852,10 @@ where
                     return None;
                 };
                 match self {
-                    // A non-`Int` operand is a *reported* type error, not an
-                    // invariant violation: the checker pins both operands to
-                    // `Int`, so a wrong shape only arrives here through an
-                    // argument unify that already failed (recording the
-                    // diagnostic) — stay lazy instead of panicking.
-                    //
-                    // `Int` is a machine-sized **unsigned** integer, so `%` and
-                    // the bitwise trio are the unsigned operations, and a zero
-                    // divisor is the one operand shape that has no value at all:
-                    // it is recorded rather than panicked — the same lazy answer
-                    // every other refused computation gives.  Only these
-                    // operators refuse; the float arithmetic below has an IEEE
-                    // answer for both zero-divisor cases.
+                    // A non-`Int` operand is a reported type error: stay lazy
+                    // rather than panic.
+
+                    // A zero divisor is recorded rather than panicked.
                     TypeOperator::Rem
                     | TypeOperator::BitAnd
                     | TypeOperator::BitOr
@@ -1043,11 +879,8 @@ where
                         };
                         Some(P::Value::from(LowValue::USize(value)))
                     }
-                    // `+ - * /` and the four order comparisons compute over the
-                    // two scalar classes and never over a mixture: the checker
-                    // has already refused a cross-class operand (recording the
-                    // diagnostic), so the mixed case stays lazy here rather
-                    // than coercing (`docs/notes/floating-point.md` §4.2).
+                    // A cross-class operand is already refused, so the mixed case
+                    // stays lazy rather than coercing.
                     TypeOperator::Add
                     | TypeOperator::Sub
                     | TypeOperator::Mul
@@ -1077,14 +910,8 @@ where
                             };
                             Some(P::Value::from(LowValue::USize(value)))
                         }
-                        // A float's arithmetic is IEEE, and that is the whole of
-                        // its refusal story: `1.0 / 0.0` is an infinity and
-                        // `0.0 / 0.0` is a `NaN`, both ordinary float values here
-                        // — phase 0's lexer produces an infinity from an
-                        // overflowing literal and the printer spells `NaN`
-                        // deliberately — so no divisor is recorded.  A float
-                        // comparison is IEEE too: `NaN` is less than, greater
-                        // than and equal to nothing.
+                        // A float's arithmetic is IEEE: a zero divisor is an
+                        // ordinary infinity or `NaN`.
                         (Some(LowValue::Float(left)), Some(LowValue::Float(right))) => match self {
                             TypeOperator::Add => {
                                 Some(P::Value::from(LowValue::Float(left + right)))
@@ -1114,18 +941,8 @@ where
                         },
                         _ => None,
                     },
-                    // `==`/`!=` are the generalized equality, and it is the
-                    // values' own relation: [`ValueExt::value_eq`] is the
-                    // identity every reader of a value shares — the unification
-                    // of two concrete values, table keys, frozen-artifact reuse —
-                    // so routing the operator through it makes `==` and identity
-                    // agree by construction.  For a float that relation is its
-                    // 32 bits, decided at the float's own site by `LowValue`'s
-                    // hand-written `PartialEq` (`docs/notes/floating-point.md`
-                    // §3.1), which is why `0.0 == -0.0` is `0` and `NaN == NaN`
-                    // is `1`.  The checker unifies the operands' types, so a
-                    // cross-type comparison is already a reported error before
-                    // `run`.
+                    // `==` routes through [`ValueExt::value_eq`], so the two
+                    // agree by construction.
                     TypeOperator::Eq => Some(P::Value::from(LowValue::USize(
                         left.value_eq(&right) as usize,
                     ))),
@@ -1136,27 +953,17 @@ where
                     TypeOperator::Int2Float | TypeOperator::Float2Int => {
                         unreachable!("the conversions are unary, and handled above")
                     }
-                    // `[class value, domain value]` — the refinement's membership
-                    // test.  The outer arm has already gated on an undecided
-                    // side, which is what keeps a refinement on an open parameter
-                    // *pending* until an application supplies the class.
+                    // The refinement's membership test; the outer arm already
+                    // gated on an undecided side.
                     TypeOperator::InDomain => {
-                        // Operand 1 is the domain — a set's *value*, its
-                        // members — operand 0 the class being tested; the
-                        // decode is structural, so a class node out of another
-                        // module matches by its shape rather than by its
-                        // allocation.
+                        // Operand 1 is the domain, operand 0 the class tested;
+                        // the decode is structural.
                         let member =
                             crate::set::contains(module, operands[1].node, operands[0].node);
                         Some(P::Value::from(LowValue::USize(member as usize)))
                     }
-                    // `[type value, universe]` — the named read's container
-                    // requirement.  The decode is the tag-based
-                    // [`crate::shape::is_struct_type_any`], the same reader the
-                    // checker judges a decided container with, so the deferral
-                    // cannot drift from the check-time answer.  The universe is
-                    // the checker's canonical node (an operand rather than a
-                    // module fact: the lowlevel has no universe to read).
+                    // The named read's container requirement, decoded as the
+                    // checker decodes a decided container.
                     TypeOperator::IsStructType => {
                         let AnyNodeId::Dynamic(universe) = operands[1].node else {
                             return None;
@@ -1172,21 +979,13 @@ where
 
     /// The low-type transfer of the type-level operators.
     ///
-    /// Every comparison produces a `USize` — lichen has no `Bool` value, so a
-    /// comparison result *is* a machine scalar — and so do the `Int`-only
-    /// operators and the generalized equality, whose result is a scalar even
-    /// when its operands are not.
-    ///
-    /// The four arithmetic operators produce their operands' own class: a
-    /// `USize` transfer here, and `Float` when either operand's low type is a
-    /// float.  That is what keeps a float-valued expression out of a backend —
-    /// the kernel domain walk refuses a `Float` leaf
-    /// (`docs/notes/floating-point.md` §3.8) — while leaving an operand whose
-    /// type is still undecided on the `USize` transfer a pre-apply template has
-    /// always been given.
-    ///
-    /// `Fresh` produces a nominal type id, which the low type vocabulary has no
-    /// shape for, so it declines.
+    /// # Invariant
+    /// Every comparison, the `Int`-only operators and the equality produce a
+    /// machine scalar, so their transfer is `USize`. The arithmetic
+    /// operators produce their operands' own class: `Float` when either operand's
+    /// low type is a float, keeping a float-valued expression out of a
+    /// backend, else `USize`. `Fresh` is a nominal type id, which the
+    /// vocabulary has no shape for, so it declines.
     fn low_type(&self, arguments: &[Option<LowShape>]) -> Option<LowShape> {
         match self {
             TypeOperator::Add | TypeOperator::Sub | TypeOperator::Mul | TypeOperator::Div => {
@@ -1224,9 +1023,9 @@ where
 
 /// A `Div`/`Rem` whose divisor evaluated to zero: record why and stay lazy.
 ///
-/// `remainder` picks the wording (a remainder by zero is as undefined as a
-/// division, and saying which operator it was is the difference between a
-/// message a reader can act on and one they have to guess at).
+/// # Invariant
+/// `remainder` picks the wording, because saying which operator it was is the
+/// difference between a message a reader can act on and one they must guess at.
 fn divide_by_zero<P>(module: &mut Module<P>, remainder: bool) -> Option<P::Value>
 where
     P: Program,
@@ -1243,13 +1042,11 @@ where
 }
 
 /// A `Float2Int` whose operand has no `Int` to truncate toward: record which
-/// shape it was and stay lazy — the [`DIVIDE_BY_ZERO`] answer, for the same
-/// reason (in range is a fact about a runtime value, not a checkable type).
+/// shape it was and stay lazy.
 ///
+/// # Invariant
 /// The four shapes are named rather than lumped together because the fix differs
-/// for each: a `NaN` came from a refused float computation, an infinity from an
-/// overflowing one, a negative needs the value re-derived (this language's `Int`
-/// is unsigned) and an out-of-range magnitude has no machine integer at all.
+/// for each. In range is a fact about a runtime value, not a checkable type.
 fn out_of_range<P>(module: &mut Module<P>, value: f32) -> Option<P::Value>
 where
     P: Program,
@@ -1273,40 +1070,28 @@ where
     None
 }
 
-/// The highlevel's associated-type collector: what the checker is generic
-/// over.  It extends the lowlevel [`Program`] (which carries `Value`,
-/// `Operator`, `GlobalExt`, `PackageMeta`) with the one thing the highlevel
-/// needs on top — the attribute type carried by an expression's schema
-/// ([`Schema`](crate::ir::Schema)).  A language frontend implements this for
-/// its own compiled program, plugging in a concrete attribute (e.g.
-/// `Perspective`); the checker never names a concrete attribute, only
+/// The highlevel's associated-type collector: what the checker is generic over.
+///
+/// # Invariant
+/// It extends the lowlevel [`Program`] with the attribute type an expression's
+/// schema carries; the checker never names a concrete attribute, only
 /// `Self::Attr`.
 pub trait HighProgram: Program {
     /// The compile-time attribute type an expression's schema may carry: a
-    /// composed attribute *set* ([`AttrSet`]), which also owns the canonical
-    /// order the checker lays attributes out in.  `NoAttr` (highlevel's inert
-    /// single-attribute set) is the default — a program with no attribute
-    /// extension — while a language plugs in its own (e.g. the composed
-    /// `Perspective` + `Doc` set).
+    /// composed attribute *set* ([`AttrSet`]).
     type Attr: AttrSet;
-    /// The literal vocabulary — a downstream's composed `enum_ext!` union (or
-    /// the built-in [`HighProgramLiteral`] for the default).  Every literal
-    /// node carries a value of this type; the checker builds it through
-    /// [`LiteralExt::build`].
+    /// The literal vocabulary: a downstream's composed union, or the built-in
+    /// [`HighProgramLiteral`].
     type Literal: LiteralExt<Self>;
 }
 
-/// The highlevel's concrete lowlevel program: a marker generic over the value
-/// vocabulary, the operator vocabulary, the attribute type, *and* the literal
-/// vocabulary.
+/// The highlevel's concrete lowlevel program: a marker generic over its four
+/// vocabularies.
 ///
-/// The default [`HighProgramOperator`] is what the checked highlevel builder
-/// emits.  A downstream that needs additional lowlevel operators can compose
-/// its own operator enum with `lichen_utils::enum_ext!` (carrying
-/// [`LowOperator`] and [`TypeOperator`] as siblings, plus its own attribute
-/// operators) and use `Module<ProgramImpl<V, MyOperator, MyAttr>>`; the
-/// runtime/static-module/registry machinery is then reusable with the extended
-/// operator set.
+/// # Invariant
+/// A downstream needing more operators composes its own enum carrying
+/// [`LowOperator`] and [`TypeOperator`] as siblings; the
+/// runtime/static-module/registry machinery is then reusable unchanged.
 pub struct ProgramImpl<
     V: ValueType = HighProgramValue,
     O: std::fmt::Debug + Copy + PartialEq = HighProgramOperator,
@@ -1315,11 +1100,8 @@ pub struct ProgramImpl<
     G: GlobalExt = HighGlobalExt,
 >(#[doc(hidden)] pub PhantomData<(V, O, A, L, G)>);
 
-// The marker's `Debug`/`Clone`/`Copy`/`PartialEq` are structural: the single
-// `PhantomData` field is `Clone`/`Copy`/`Debug`/`PartialEq` for *any* type
-// argument, so the impls carry only the struct's own bounds and never demand
-// `G: Debug`/`G: Copy` — keeping `GlobalExt` flexible (it only promises
-// `Default`).
+// The marker's `Debug`/`Clone`/`Copy`/`PartialEq` are structural: `PhantomData`
+// is all four for *any* type argument.
 impl<V, O, A, L, G> std::fmt::Debug for ProgramImpl<V, O, A, L, G>
 where
     V: ValueType,
