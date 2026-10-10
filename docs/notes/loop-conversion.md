@@ -1,9 +1,14 @@
 # Loop conversion: compiling a marked recursive function into a loop nest
 
 > Status: **in progress.** The design below is settled, and the parts [§8.2](#82-landed-on-dev)
-> lists are landed on `dev` — the `KernelBody` IR with `Flow::Seq`, the validator,
-> the `@loop` keyword, the wasm emitter, and the depth refusal. **The conversion
-> itself is not written.** Three of [§8.3](#83-known-broken-and-by-whom)'s items are now
+> lists are landed on `dev` — the `KernelBody` IR and its validator, the `@loop`
+> keyword, the conversion (`Module::loop_conversion`) with its host-loop consumer,
+> the wasm emitter, and the depth refusal. The IR is **SSA** since `af6f6f2`, which
+> deleted `Flow`, `BlockId`, `LocalGet` and the stack machine, so §8.2's IR bullet
+> is the pre-SSA shape and §8.4/§8.6 are current. **The missing link is the JIT's
+> kernel reader** ([§8.5](#85-the-critical-path-to-the-acceptance-case) item 4):
+> nothing in production builds a non-straight-line `KernelBody`. Three of
+> [§8.3](#83-known-broken-and-by-whom)'s items are now
 > **closed** — the `passed_out` contract, a loop body that can compute its state and
 > reach the backedge (`Terminator::Jump`, and a validator that lets a body name the
 > loop's landmarks), and the graph-dispatch item — and the wasm `While` fix is
@@ -13,9 +18,14 @@
 > mis-compiling one. `feature/waffle-spike` has lowered every non-looping kernel
 > body through `waffle` already; what is missing is `If`/`Jump`/`While`
 > ([wasm-backend-handoff](wasm-backend-handoff.md) §3.2).
-> [§8.4](#84-unmerged-branches-and-exactly-what-each-needs) is what the two unmerged
-> branches need, and [§8.5](#85-the-critical-path-to-the-acceptance-case) is the
-> critical path to the acceptance case.
+> [§8.4](#84-unmerged-branches-and-what-each-still-needs) is what the two unmerged
+> branches needed, and [§8.5](#85-the-critical-path-to-the-acceptance-case) is the
+> critical path to the acceptance case. **The SPIR-V loop emitter has since
+> landed on SSA** (`feature/spirv-loop-emitter-ssa`, `0a1c9f4`): the backend
+> emits every block of a body, with `OpBranch`, `OpSelectionMerge`, `OpLoopMerge`
+> and one `OpPhi` per block parameter, refuses a write in a loop body by name,
+> and is validated against a real `spirv-val`. §8.4 says what it does and refuses
+> now.
 > [§8.6](#86-nothing-produces-a-loop) is the finding that reorders the reader's
 > expectations of step 4: **nothing in the tree produces a loop**, and the reason
 > is not in the evaluator.
@@ -45,7 +55,7 @@
 > Points at: `crates/lichen-kernel-ir/src/lib.rs` (`KernelInstr`,
 > `KernelFragment::body`), `crates/lichen-compute/src/compute.rs` (`emit_node`'s
 > `Apply` arm, `lower_body`, `CONDITIONAL_WRITE`),
-> `crates/lichen-compute-gpu/src/spirv.rs` (the single-`OpLabel` invariant) and
+> `crates/lichen-compute-gpu/src/spirv.rs` (the write-reachability invariant) and
 > `dispatch.rs` (the uninitialised-output-buffer claim it underwrites),
 > `crates/lichen-lowlevel/src/lib.rs` (`LowShape`),
 > `crates/lichen-language/examples/recursion.rs` (the probe).
@@ -290,8 +300,9 @@ The premise it would break is stated as a theorem in
 run is "bit-identical to the sequential loop's, for every `count` and whatever
 the worker count" — and it is exactly what lets `dispatch` allocate output
 buffers **without initialising them** ([dispatch.rs](../../crates/lichen-compute-gpu/src/dispatch.rs),
-and the single-`OpLabel` invariant it is derived from in
-[spirv.rs](../../crates/lichen-compute-gpu/src/spirv.rs)). A loop is the first
+and the write-reachability invariant it is derived from in
+[spirv.rs](../../crates/lichen-compute-gpu/src/spirv.rs), which now enforces the
+same rule as `SpirvRefusal::WriteInsideLoop`). A loop is the first
 construct that makes a lane's *reachability* of a `write` data-dependent: a
 trip count of zero means the body never runs. The every-ordinal-written claim is
 then void, and the host reads back whatever a fresh allocation held.
@@ -610,17 +621,17 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
     reads is not a missing one*. `KernelBody::operands()` and
     `is_a_parameter` answer the same question the `LocalGet` scan asked.
 
-- **`feature/spirv-loop-emitter`** (`a0bfa2c`) — a complete SPIR-V emitter
-  for `If` and `While`, validated with a real `spirv-val` (which rejected
-  four genuine bugs during development), straight-line output byte-identical
-  at 185 words, and the `single-OpLabel` invariant **replaced** with a
-  stated structural one that `dispatch.rs` now cites. It also refuses a write
-  inside a loop body by name.
+- **`feature/spirv-loop-emitter`** (`a0bfa2c`) — the parked branch: a complete
+  SPIR-V emitter for `If` and `While`, validated with a real `spirv-val` (which
+  rejected four genuine bugs during development), straight-line output
+  byte-identical at 185 words *against its own base*, and the `single-OpLabel`
+  invariant replaced with a stated structural one. It also refuses a write inside
+  a loop body by name.
 
-  **What it needs is now the whole port, and it is one piece of work.** The
-  branch was cut on the **pre-SSA** IR, so its `Walk` is a `Vec<Slot>`
-  operand stack over `Flow`/`Terminator` — the two mechanisms
-  [`af6f6f2`](../af6f6f2) deleted. Porting it means:
+  **The port landed**, on `feature/spirv-loop-emitter-ssa` (`0a1c9f4`), and it is
+  smaller than the branch in the three ways below — the branch was cut on the
+  **pre-SSA** IR, so its `Walk` is a `Vec<Slot>` operand stack over
+  `Flow`/`Terminator`, the two mechanisms [`af6f6f2`](../af6f6f2) deleted:
 
   | branch          | `dev` since `af6f6f2`         |
   |-----------------|-------------------------------|
@@ -629,11 +640,81 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   | `BlockId` labels  | `Vec<u32>` indexed by block  |
   | derived arity/below/edges | the block's declared `params` |
 
-  Its `is_straight_line` refusal is the one thing that must **go**, and the
-  single-`OpLabel` invariant is what the port replaces. Verified available
-  for the port: `spirv-val` v2024.4 and the Vulkan SDK are on `PATH`, so the
-  emitted modules can be validated rather than eyeballed — which is what
-  makes this landable in one piece rather than in halves.
+  Its `is_straight_line` refusal is **gone**, and the single-`OpLabel` invariant
+  is replaced by a structural one; `spirv-val` v2024.4 ruled on every module
+  below rather than on an eyeball, which is what let this land in one piece.
+
+  #### What the emitter does now, and what it still refuses
+
+  **It emits every block of the body**, in an order where a block's definitions
+  precede its uses — a depth-first pre-order, so a dominator is always written
+  first — each as an `OpLabel`, its `OpPhi`s, its instructions and its
+  terminator:
+
+  - **one `OpPhi` per declared block parameter**, with one
+    `(value, predecessor label)` pair per incoming edge, assembled from the edges
+    the predecessors recorded. The first edge to arrive fixes one kind per
+    parameter — an `OpPhi` has one type — and every later edge is coerced to it,
+    so a literal or a comparison arriving at a merge is materialised in the
+    predecessor's own block;
+  - **`OpBranch`** for a `Br`, **`OpSelectionMerge` + `OpBranchConditional`** for
+    a `CondBr` that is not a loop header, and **`OpLoopMerge` +
+    `OpBranchConditional`** for one that is, with both edges recorded *before* the
+    merge instruction, which SPIR-V requires to be second-to-last in its block;
+  - **`OpReturn`** for `Return { values }`, with the same one-value arity refusal
+    a straight-line body got.
+
+  A one-block body emits exactly what it did before: the same 196-word module,
+  byte for byte, checked against `369c95b`.
+
+  What it **still refuses**, all by name:
+
+  | shape | the refusal, and why |
+  |---|---|
+  | a write in a loop body | `WriteInsideLoop`: a zero trip count leaves an output element unwritten and `dispatch` does not clear output buffers ([§6](#6-why-a-loop-body-may-not-write)) |
+  | a loop header whose two branches both reach it | its loop has no exit, so `OpLoopMerge` has no merge block |
+  | a loop header that tests nothing (its terminator is a `Br`) | an unconditional header has no exit block either |
+  | a loop body entered without passing its header | `OpLoopMerge`'s continue target must be dominated by its header |
+  | a selection whose arms never meet again, or both leave the function | its merge block would be the function's exit, which no header may name |
+  | a `CondBr` to one block with two different value lists | an unconditional branch cannot say which arrived |
+  | an unreachable block | it has no arrival, so its `OpPhi` would have no pair |
+  | the entry block as a loop header | its parameters are the function's own, not a phi |
+
+  **Three statements of the settled mapping needed correcting, and the code is
+  what corrected them:**
+
+  - **Recognition is the DFS active-path rule, not "transitively reaches".** The
+    literal phrasing marks *every* block of a cycle — in `H → B → H`, `B` reaches
+    `H` and `H` branches back to `B` — so it would give one loop two headers. The
+    operational rule the same paragraph states is the one that works: an edge to a
+    block on the active path is a backedge and its **target** is the header.
+  - **The merge block is always a block the emitter adds**, not the header's
+    false-edge target. That target is reached from outside the loop whenever the
+    loop is entered under a selection — the ordinary case, since the entry's
+    `CondBr` falls through to the same exit — so the header does not dominate it
+    and `spirv-val` rejects the module. The branch's `merge = self.fresh_label()`
+    did the same thing for the same reason, and the design's "the backedge rule
+    already proves it is dominated by the header" does not hold.
+  - **The continue target is the header's non-exit successor** — the loop's body
+    entry — not "the block the backedge branches from". A conditional backedge has
+    no unique such block, and the body entry is what the pre-SSA emitter used
+    (`body_label`). A conditional backedge then arrives as a selection whose join
+    *is* the header, which is exactly what the pass-through block is for: the
+    selection's arms branch to the pass-through and the pass-through branches to
+    the header, so the continue target dominates every backedge block and is
+    post-dominated by them.
+
+  **Evidence.** `tests/spirv_validation.rs`'s `a_body_with_control_flow_validates`
+  emits three modules and hands each to a real `spirv-val` v2024.4 — a selection,
+  a loop with a carried value, and a loop whose body leaves on a conditional
+  backedge (the pass-through case above); `tests/refusals.rs`'s
+  `a_write_inside_a_loop_is_refused_by_name` pins `WriteInsideLoop`. The
+  disassembly of the third is what the design predicted: the header's
+  `OpLoopMerge %merge %body`, a `%pass` that both arms branch to and that carries
+  the backedge to the header, and one `OpPhi` pair per predecessor everywhere.
+  `dispatch.rs`'s three citations of the old single-`OpLabel` invariant now cite
+  the write-reachability one, which a selection arm still satisfies and a loop
+  body does not.
 
   #### The mapping is settled, and the SSA side is *smaller*
 
@@ -641,11 +722,11 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   a translation — **the SSA IR deletes most of what the stack version had to
   carry.** Three facts make it smaller:
 
-  - **Instruction emission is already done.** `spirv.rs`'s body loop reads
+  - **Instruction emission was already done.** `spirv.rs`'s body loop reads
     `ValueDef::Instr { op, args, .. }` and resolves each operand through
     `slots: HashMap<ValueId, Slot>`. There is no `Vec<Slot>` anywhere in it. The
-    branch's `emit_instrs` has **nothing to port** — only the terminator is
-    still single-block.
+    branch's `emit_instrs` had **nothing to port** — only the terminator was
+    still single-block, which is what the port replaced.
   - **A block's parameters are declared, so the phi bookkeeping is read, not
     derived.** The branch's `Block { arity, below, edges, parameters, kinds }`
     exists because a stack has to *work out* how many values a block receives and
@@ -665,29 +746,26 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   no `While` variant.** `CondBr` covers both a selection and a loop's exit test,
   and the two look identical: a loop's header does
   `CondBr { cond, if_true: body, if_false: exit }` and a selection branches to two
-  *different* blocks. They are told apart **structurally**, by a backedge: a
-  block is a loop header iff some block it (transitively) reaches branches back
-  to it. That is a DFS over the block graph with the active path as the stack,
-  and it is the same rule that makes the header the merge block's dominator —
-  so recognising the loop and emitting it correctly are the *same* question
-  rather than two.
+  *different* blocks. They are told apart **structurally**, by a backedge: a block
+  is a loop header when an edge on the active depth-first path returns to it
+  (the phrasing "some block it transitively reaches branches back to it" is
+  **wrong** and is corrected above). That is a DFS over the block graph with the
+  active path as the stack, and it is the same rule that makes the header the
+  dominator of everything the loop holds — so recognising the loop and emitting
+  it correctly are the *same* question rather than two.
 
   | branch (`Flow`/`Terminator`) | SSA (`BasicBlock`)                       |
   |------------------------------|------------------------------------------|
   | `Terminator::If { on_one, on_zero, join, passes }` | `CondBr` to two distinct blocks; the join is a block reached by ordinary edges |
-  | `Terminator::While { header, body, exit, carried, passed_out }` | a `CondBr` in a block that some reachable block branches back to |
+  | `Terminator::While { header, body, exit, carried, passed_out }` | a `CondBr` in a block some reachable block branches back to |
   | `Flow::Jump { target, passes }` | `Br { target, args }` — the args **are** the target's `params` |
   | a loop's `carried`/`passed_out` | the header block's own `params`, and an exit block's |
   | the pass-through block for a join inside a selection | still needed: a merge block must be dominated by its header |
   | `is_straight_line` | goes — a `Br`/`CondBr` is what this emitter now emits |
 
-  **`OpLoopMerge`'s two operands follow from the backedge.** The *merge* block is
-  the header's false-edge target (the loop's exit — it is dominated by the
-  header, which the backedge rule already guarantees). The *continue* target must
-  be post-dominated by the backedge and must differ from the header, so it is
-  **the block the backedge branches from**, not the header — which is the case
-  the branch had to refuse when a body was nothing but the transfer, because
-  under SSA that body is a real block by construction.
+  **`OpLoopMerge`'s two operands follow from the backedge, with the two
+  corrections stated above**: the merge block is a block the emitter adds, and the
+  continue target is the header's non-exit successor.
 
 ### 8.5 The critical path to the acceptance case
 
@@ -747,11 +825,13 @@ cleared the CPU side but nothing turns on it yet, because 1c is not:**
     *expressible* now without any loop that reaches the backend being able to
     terminate. That instruction is **item 1c**, and it is what this list turns on.
     See [wasm-backend-handoff](wasm-backend-handoff.md) §3.2.
-3. **Port `feature/spirv-loop-emitter` onto the SSA body** — this is §8.6's
-   item 5, which supersedes the `Seq` wording this list used to carry, and the
-   blocker this item inherits is now the port itself rather than 1b. Its
-   `Walk` is a `Vec<Slot>` over `Flow`/`Terminator`, both of which `af6f6f2`
-   deleted; §8.4 states the substitution table.
+3. ~~**Port `feature/spirv-loop-emitter` onto the SSA body**~~ — **done**, at
+   `0a1c9f4`, exactly as §8.4 states it. The `Vec<Slot>` walk over
+   `Flow`/`Terminator` became a `HashMap<ValueId, Slot>` walk over `BasicBlock`s;
+   the emitter now writes `OpBranch`, `OpBranchConditional`, `OpSelectionMerge`,
+   `OpLoopMerge` and one `OpPhi` per block parameter, refuses a write in a loop
+   body by name, and emits a one-block body byte for byte as before. §8.4 lists
+   the shapes it still refuses and the three design claims the port corrected.
 4. **Make the JIT *emit* what the conversion returned.** The conversion half is
    no longer missing — it is `Module::loop_conversion` (§8.2) — and neither is
    its first consumer: the **host loop** (§8.2) runs a marked recursion in the
@@ -770,12 +850,13 @@ cleared the CPU side but nothing turns on it yet, because 1c is not:**
    level ceiling, at more than one length so the count is demonstrably not a
    compile-time constant.
 
-**Do not start 3 before 1** — **and this is now satisfied.** Doing SPIR-V first
-against a contract that is already known to be wrong is how the `br_if` bug above
-came about, and it is the one mistake this section exists to prevent. Item 1c
-answered at `af6f6f2`: the carried tuple needed no new instruction, because a
-header's `params` *are* the state. Item 3 is therefore unblocked — what it needs
-now is the port in §8.4, and nothing else.
+**Do not start 3 before 1** — **and this is now satisfied, and 3 has landed.**
+Doing SPIR-V first against a contract that is already known to be wrong is how the
+`br_if` bug above came about, and it is the one mistake this section exists to
+prevent. Item 1c answered at `af6f6f2`: the carried tuple needed no new
+instruction, because a header's `params` *are* the state. Item 3 followed, and
+what is left on this list is item 4 — the JIT building the body the SPIR-V
+emitter can now write.
 
 ### 8.6 Where the conversion lives: lowlevel, and the JIT reads it
 
@@ -916,13 +997,12 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
    header that takes its state as block parameters, so "emit a nest" is no longer a
    new emitter feature but the same `BasicBlock` walk every straight-line body
    already does.
-5. **Port `feature/spirv-loop-emitter`** onto the SSA body, which is what
-   `dev` has carried since `af6f6f2`. Its emitter walks an operand
-   `Vec<Slot>` over `Flow`/`Terminator`, and both are gone: `Vec<Slot>`
-   becomes a `HashMap<ValueId, Slot>`, and the control flow arrives as
-   `BasicBlock`s with `params`. The single-`OpLabel` invariant is what
-   actually has to be replaced here, which is why this is one item and not two.
-   §8.4 has the substitution table and the tooling that verifies the result.
+5. ~~**Port `feature/spirv-loop-emitter`** onto the SSA body.~~ **Done**, at
+   `0a1c9f4`. Its emitter walked an operand `Vec<Slot>` over `Flow`/`Terminator`,
+   and both are gone: `Vec<Slot>` became a `HashMap<ValueId, Slot>`, and the
+   control flow arrives as `BasicBlock`s with `params`. The single-`OpLabel`
+   invariant is replaced. §8.4 has the substitution table, what the emitter now
+   emits, what it still refuses, and the three design claims the port corrected.
 6. **Make the JIT *emit* what the conversion returned.** The conversion half is
    `Module::loop_conversion` and its first consumer is the **host loop**, so the
    conversion is observable today. What remains is the *kernel* reader: build the
@@ -952,10 +1032,10 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
      is the whole of what a header's carried state needs. So the walk itself is
      **one new pass in `lichen-compute`, not a backend change**, which is not
      obvious from reading either side alone.
-   - **The SPIR-V side is the one that cannot.** `spirv.rs` still refuses a body
-     that is not straight-line (`is_straight_line`), because `OpLoopMerge` needs a
-     merge block and an unconditional branch, and the single-`OpLabel` invariant is
-     what has to be replaced — item 5 above, and it should not be started in halves.
+   - **The SPIR-V side can now lower it too.** `spirv.rs` refused a body that is
+     not straight-line until item 5 landed; it now writes a label, its phis, its
+     instructions and its terminator per block, so the body this item builds is a
+     module it can already emit.
 
    See [wasm-backend-handoff](wasm-backend-handoff.md) §3.2.
 
@@ -971,9 +1051,10 @@ record one yet", which is a diagnostic that names the missing piece instead of t
 **Stage 1 — the structured body, and it must carry values, not just control
 flow.** `KernelFragment::body` becomes an arena of basic blocks with explicit
 terminators, and both backends are taught it: wasm gains `block`/`loop`/`br_if` and
-a label stack; the SPIR-V emitter gains one `OpLabel` per block and **replaces** the
+a label stack; the SPIR-V emitter gains one `OpLabel` per block and **replaced** the
 single-`OpLabel` invariant with a structural one (one label per block, one
-terminator per block, every merge block dominated by its header).
+terminator per block, every merge block dominated by its header). **Both halves
+have landed** — the wasm reader in §8.2, the SPIR-V emitter at `0a1c9f4`.
 
 **The correction: a CFG alone is not enough, and a Stage 1 without it is a Stage 1
 that cannot be used.** A loop needs two things and they are not the same thing:
@@ -986,11 +1067,11 @@ An earlier draft of this section specified only the first, on the assumption tha
 loop could borrow a Function-storage-class `OpVariable` for its carried value. **It
 can, and it must not**: that is scratch memory rather than a register, and on a GPU
 it is the difference between a loop that runs and a loop that is memory-bound. The
-repository's own invariant already names both missing pieces in one sentence — "the
+repository's own module docs named both missing pieces in one sentence — "the
 emitter emits **no branch and no phi**"
-([spirv.rs](../../crates/lichen-compute-gpu/src/spirv.rs)) — and this stage has to
-answer both, because **the `phi` is the half that costs nothing to get right and
-everything to get wrong later.** The rule is not a preference: SPIR-V's validator
+([spirv.rs](../../crates/lichen-compute-gpu/src/spirv.rs)), which `0a1c9f4`
+replaced — and this stage had to answer both, because **the `phi` is the half that
+costs nothing to get right and everything to get wrong later.** The rule is not a preference: SPIR-V's validator
 rejects a Function-storage-class `OpVariable` outside a function's first block, so
 on the GPU target the scratch route is not merely slow, it is illegal.
 
