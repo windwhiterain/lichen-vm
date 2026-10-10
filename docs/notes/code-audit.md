@@ -817,13 +817,13 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
     where each keystroke's literal is a new distinct string.  It bounds the
     growth rate, not the growth.
 
-  The decision is therefore recorded **at the leak sites themselves**
-  (`compile.rs`'s `intern_op` / `intern_str` and the `Expr::Str` arm), not only
-  here, because the failure mode this guards against is a reader concluding the
-  leak was overlooked: the sites now state the measured rate, why the
-  `&'static str` is load-bearing, and that `D14` is the decision to revisit
-  rather than the comment to delete.  `lowlevel/codec.rs`'s deserializer leak is
-  the same shape and carries the same note.
+  The decision is therefore recorded **here, and the leak sites point at it**
+  (`compile.rs`'s `intern_op` / `intern_str` and the `Expr::Str` arm;
+  `lowlevel/codec.rs`'s deserializer leak is the same shape): each site carries a
+  one-line note naming `D14`, because the failure mode this guards against is a
+  reader concluding the leak was overlooked.  The measured rate, and why the
+  `&'static str` is load-bearing, live in this entry — `D14` is the decision to
+  revisit rather than the comment to delete.
 
   *What would revisit it:* the rate changing by orders of magnitude (a host that
   compiles far more often than a keystroke stream), or `ExprKind`'s `Copy`
