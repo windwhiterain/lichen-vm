@@ -26,8 +26,9 @@ fn adds() -> KernelFragment {
         body: KernelBody::from_flat(
             2,
             &[
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
-                FlatOp::Read(1),                                        // the write's index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // out_pos
+                FlatOp::Read(1),                                          // the write's index
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos, the *input* space
                 FlatOp::Read(1),
                 FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)), // in[i]
@@ -66,8 +67,9 @@ fn sums() -> KernelFragment {
         body: KernelBody::from_flat(
             2,
             &[
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
-                FlatOp::Read(1),                                        // idx
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // out_pos
+                FlatOp::Read(1),                                          // idx
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
                 FlatOp::Read(1),
                 FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)), // a[i]
@@ -102,9 +104,10 @@ fn with_a_runtime_scalar() -> KernelFragment {
         body: KernelBody::from_flat(
             3,
             &[
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
-                FlatOp::Read(2),                                        // idx
-                FlatOp::Read(1),                                        // the runtime scalar
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // out_pos
+                FlatOp::Read(2),                                          // idx
+                FlatOp::Read(1),                                          // the runtime scalar
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
                 FlatOp::Read(2),
                 FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)), // in[i]

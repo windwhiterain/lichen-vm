@@ -1956,6 +1956,9 @@ impl Segment<'_> {
                     })
                     .collect(),
             ),
+            ScalarClass::State => {
+                unreachable!("a state token carries nothing, so it is never a buffer element")
+            }
         })
     }
 }

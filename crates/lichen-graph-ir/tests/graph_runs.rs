@@ -24,6 +24,7 @@ fn fragment() -> KernelFragment {
         body: KernelBody::from_flat(
             2,
             &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
                 FlatOp::Read(1),
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),

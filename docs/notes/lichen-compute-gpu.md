@@ -457,6 +457,18 @@ branch-free. The tests pin **both** ends of that: a count that is not a multiple
 of 64 (so the padding is exercised) and one that is exactly a multiple (so it is
 not).
 
+**The same padding discharges a workgroup barrier's convergence obligation, and
+it does so for free.** "A write is reached by every invocation" — the invariant
+the next paragraph rests on — is exactly what `OpControlBarrier` needs: a barrier
+every lane of the workgroup does not arrive at is a hang, and a `count` that is
+not a multiple of 64 would hang the last workgroup if the surplus lanes exited
+early. They do not: there is no bounds test, so every lane runs the whole shader
+and reaches every barrier, and a partial group's barrier is arrived at by all 64.
+What remains a hang is a barrier under **divergent** control flow, which is a
+refusal and not a padding question — see
+[shared-memory-and-barriers §8](shared-memory-and-barriers.md#the-tail-lane-obligation-is-already-discharged-for-free).
+There is no barrier in the emitter today; that section records where one goes.
+
 **An uninitialised output buffer is safe only because a write is reached by every
 invocation.** `dispatch` allocates output buffers and does not initialise them, so
 a lane that never reaches its `BufferWriteCall` leaves a hole the reader would

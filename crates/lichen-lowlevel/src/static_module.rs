@@ -103,11 +103,14 @@ impl<P: Program> Module<P> {
             let node = module.nodes.get(local.index)?;
             if let Some(operation) = &node.operation {
                 if crate::AsEnum::<crate::LowOperator>::as_enum(&operation.operator).is_none() {
-                    // Two compute operators in one body have no single answer.
-                    if found.is_some() {
-                        return None;
+                    // **An operand-less call is no compute operator**: a nominal id reads none.
+                    if let Some(operand) = operation.operand {
+                        // Two compute operators in one body have no single answer.
+                        if found.is_some() {
+                            return None;
+                        }
+                        found = Some((operation.operator, operand));
                     }
-                    found = Some((operation.operator, operation.operand?));
                 }
                 if let Some(operand) = operation.operand {
                     pending.push(operand);

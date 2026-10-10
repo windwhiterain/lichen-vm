@@ -53,10 +53,17 @@ nothing has to declare a kind beside it.
 Buf     = T => struct<.native _, .element T>
 Read    = T => struct<.from (Buf T), .at Int>
 Write   = T => struct<.to (Buf T), .at Int, .value T>
+State   = struct<>
 read    = (x : (Read _))  => $read(x.from, x.at): x.from.element
-write   = (x : (Write _)) => $write(x.to, x.at, x.value)
+write   = (x : (Write _)) => $write(x.to, x.at, x.value): State
 collect = (b : (Buf _))   => $collect(b)
 ```
+
+`State` is the zero-width token a write leaves so the next effect can be ordered
+after it — no element, no address, nothing a caller can read. It is not part of
+the buffer ABI: a run still binds inputs-then-outputs and a fragment's result is
+still a data class. What it is for, and what it unlocks, is
+[shared-memory-and-barriers](shared-memory-and-barriers.md#62-the-spine-what-landed).
 
 - The ops take the **`Buf` value**, and the engine takes the payload: the path
   the checker resolves for `x.from` is then *the same path* the role walk records

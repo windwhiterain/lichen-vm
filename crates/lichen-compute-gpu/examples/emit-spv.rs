@@ -16,6 +16,7 @@ fn main() {
     // The read is three instructions, not two, because a `BufferReadCall` takes
     // `[cfg_pos, idx]`.
     let count_prologue = vec![
+        FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state
         FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // buffer position, in the *output* space
         FlatOp::Read(1),                                        // the index
         FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos, in the *input* space

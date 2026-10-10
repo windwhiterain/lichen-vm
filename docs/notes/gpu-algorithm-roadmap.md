@@ -349,13 +349,24 @@ the unroll, and it is the largest single item in this roadmap:
 > [shared-memory-and-barriers](shared-memory-and-barriers.md) works it out: the
 > write must return something a read consumes before a body's DAG carries the
 > edge a barrier needs; a barrier is needed iff the two lanes' addresses may
-> overlap and the lanes differ; and the *overlap* half is `DP`, the second half
-> of a typed perspective, which is why the memory hierarchy belongs in the type
-> (`shared(T, N)` with `DP = block[1]`) rather than in a new buffer *kind* — a
-> buffer is already a struct wrapper. The one bullet below that the note
-> **corrects** is "a new buffer kind": it is a second wrapper, and it needs the
-> `UP` lattice to grow a **level** component first, because `thread(n)`,
-> `block(n)` and `grid(n)` currently collapse into one number.
+> overlap and the lanes differ; and the memory hierarchy belongs in the type
+> rather than in a new buffer *kind*, because a buffer is already a struct
+> wrapper. The one bullet below that the note **corrects** is "a new buffer
+> kind": it is a second wrapper, `Shared = T => struct<.native _, .element T,
+> .n Int>`.
+>
+> **A code audit then corrected the note twice**, and both corrections shrink
+> this item; its [§9](shared-memory-and-barriers.md#9-the-staging) is the
+> staging that follows. First, the overlap judgement is **not** `DP`: it is the
+> nominal wrapper (which says whether a slot is block-shared at all) plus a
+> def-cone query over the body, both local to `lichen-kernel-ir`. `UP`/`DP` is a
+> precision upgrade on a refusal that already works, so growing the `UP` lattice
+> with a **level** component — which is what this callout used to say the item
+> needs *first* — is deferred to a trigger that has not arrived. Second, the
+> expensive half is not the analysis but the **host backend**: a barrier makes
+> the body a function of a workgroup rather than of an index, so the first
+> landing refuses `Shared` on the CPU path and loses `gpu_matches_cpu` coverage
+> for this class of algorithm.
 
 - **The surface is a native plugin** (a new operator, a new buffer kind bound at
   a group scope, a barrier op) — but the *IR* must grow, because a fragment has
@@ -403,10 +414,11 @@ last-writer-wins with no diagnostic, on both backends. The ladder's histogram of
 64 elements into 3 buckets answers `(1, 1, 1)`.
 
 **The cost here is semantic, and it is the reason this axis is last.**
-[compute-buffer-wrapper](compute-buffer-wrapper.md)
-states the invariant as a theorem: a run is "bit-identical to the sequential
-loop's, for every `count` and whatever the worker count... There is no
-reduction, no accumulation and no order to depend on." An atomic accumulate makes
+[compute-buffer-wrapper](compute-buffer-wrapper.md#the-parallel-abi)
+states the invariant as a theorem: "the **result is bit-identical to the
+sequential loop's** as long as no two indices write the same output slot: the
+partition depends only on the count and the worker count, never on a schedule or
+a timing." An atomic accumulate makes
 the answer **order-dependent**, and the partition — which is a function of the
 count and the worker count and nothing else — becomes what decides the winner.
 The note already says this is reachable and already says what it costs; the

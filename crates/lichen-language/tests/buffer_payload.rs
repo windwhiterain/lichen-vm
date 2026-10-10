@@ -34,6 +34,9 @@ fn payload_items(value: &LangValue) -> Vec<i64> {
                     ScalarClass::Float => {
                         i64::from(u32::from_le_bytes(element.try_into().unwrap_or_default()))
                     }
+                    ScalarClass::State => {
+                        panic!("a state token carries nothing, so it is no buffer's element")
+                    }
                 })
                 .collect()
         }

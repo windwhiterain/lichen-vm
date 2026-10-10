@@ -39,6 +39,7 @@ are blocked until that permission is given (see [Decisions](#decisions), `D3`).
 | P1-36 | medium | highlevel | A duplicate kind-marker tag shadows a codec arm and warns instead of failing | todo |
 | P1-39 | medium | compute | A `compute.call` inside a **parallel** kernel body is refused with a `NodeId`, so the device has no working call route | todo |
 | P1-40 | medium | lowlevel | The apply budget refuses a long **terminating** loop as non-terminating | todo |
+| P1-41 | low | compute | `ComputeOperator::Graph`'s doc claims a `run_deferred` override that does not exist anywhere in the workspace | todo |
 | P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 
 ## P1 — correctness
@@ -484,6 +485,43 @@ keeps that argument and changes the operator**, and its Stage 1 is also the fix
 shape for the second ceiling: the structured body is what turns the emitter's
 400-to-1000 **crash** into a named refusal, independently of whether any loop is
 ever written.
+
+### P1-41 — `ComputeOperator::Graph`'s doc claims an override that does not exist `reported`
+
+`reported` at `dev@637cc12`, found while auditing what makes `Write`'s `run` arm
+lazy for [shared-memory-and-barriers](shared-memory-and-barriers.md#2-what-the-write-is-today).
+Not independently traced to a wrong behaviour, so the line reference is a lead.
+
+`crates/lichen-compute/src/compute.rs:889` states of `Graph`:
+
+```text
+/// The operand is deliberately not evaluated first: the function's body is
+/// what has to be walked, and a deep pass has already erased the shape that
+/// says which nodes are the body's own. This is the one operator that
+/// overrides [`OperatorExt::run_deferred`].
+```
+
+**Nothing in the workspace overrides `run_deferred`.** The only occurrences are
+the trait's own default (`crates/lichen-lowlevel/src/lib.rs:374`) and its one call
+site (`crates/lichen-lowlevel/src/evaluation.rs:229`). That default *does* evaluate
+the operand first — `module.evaluate_node_deep(node, Some(block))` — so the
+mechanism the comment names is absent.
+
+Two readings, and they need telling apart before either is fixed:
+
+- the comment is **stale**, and `Graph` gets its operand-evaluation behaviour from
+  somewhere else (`run_deferred`'s `undecided` early return, or a value the deep
+  pass left set) — then the fix is the comment, and the real mechanism should be
+  named in its place;
+- the comment is **true of the intent and false of the code**, and `Graph`'s body
+  walk is in fact running against an operand a deep pass has already erased — then
+  this is a latent correctness bug wearing a doc comment, and the fix is an
+  override.
+
+The trait's own doc points at the constraint that decides it: "Overriding is only
+sound together with `ValueExt::traced`: a reference kept past this call is invisible
+to the GC unless the value declares it" (`lib.rs:371`), so an override is not free
+and its absence may be deliberate.
 
 ## P4 — optimization
 

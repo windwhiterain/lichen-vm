@@ -246,15 +246,13 @@ fn type_values(walk: &mut Walk<'_, '_>) -> Result<(), String> {
         }
     }
 
-    // Every value the body reads must have a type before emission; a write produces
-    // nothing and is read by nothing.
+    // Every value the body defines must have a type before emission.
     for (index, ty) in types.iter().enumerate() {
         if ty.is_some() {
             continue;
         }
         let block = match &body.values[index] {
             ValueDef::BlockParam { block, .. } => format!("block {block}'s parameter"),
-            ValueDef::Instr { op, .. } if op.produces() == 0 => continue,
             ValueDef::Instr { op, .. } => format!("{op:?}"),
         };
         return Err(format!(
@@ -287,8 +285,7 @@ fn type_values(walk: &mut Walk<'_, '_>) -> Result<(), String> {
     Ok(())
 }
 
-/// The wasm type `op` leaves when its operands are `operands`, or `None` for an operation
-/// that produces nothing.
+/// The wasm type `op` leaves, or `None` for a type its own form does not fix.
 ///
 /// # Invariant
 /// The typing half of [`lower_instr`], and the two must agree: every arm here states the type
@@ -314,8 +311,8 @@ fn instruction_type(context: &ModuleCtx<'_>, op: KernelInstr, operands: &[Type])
                 .map(super::assemble::value_type)
         }
         KernelInstr::BufferReadCall(class) => Some(super::assemble::value_type(class)),
-        // A write leaves nothing, so it has no type to decide.
-        KernelInstr::BufferWriteCall(_) => None,
+        // **A write leaves the state token**, materialised as the narrow integer.
+        KernelInstr::BufferWriteCall(_) => Some(super::assemble::value_type(ScalarClass::State)),
     }
 }
 
@@ -338,6 +335,8 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
             let (operator, ty) = match class {
                 ScalarClass::Int => (Operator::I64Const { value: bits as u64 }, Type::I64),
                 ScalarClass::Float => (Operator::F32Const { value: bits as u32 }, Type::F32),
+                // The token's payload is nothing, so its bits are never read.
+                ScalarClass::State => (Operator::I32Const { value: bits as u32 }, Type::I32),
             };
             let value = walk.add(operator, &[], &[ty]);
             walk.values.insert(instr, (value, ty));
@@ -468,9 +467,10 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
             walk.values.insert(instr, (value, result));
         }
         KernelInstr::BufferWriteCall(class) => {
-            let (position, _) = operands[0];
-            let (index, _) = operands[1];
-            let (value, _) = operands[2];
+            // **The state is dropped and the call leaves nothing**.
+            let (position, _) = operands[1];
+            let (index, _) = operands[2];
+            let (value, _) = operands[3];
             let function_index = *walk.context.imports.write.get(&class).ok_or_else(|| {
                 format!("compute.wasm: no `write` import was declared for {class:?} elements")
             })?;
@@ -481,6 +481,9 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
                 &[position, index, value],
                 &[],
             );
+            let result = super::assemble::value_type(ScalarClass::State);
+            let state = walk.add(Operator::I32Const { value: 0 }, &[], &[result]);
+            walk.values.insert(instr, (state, result));
         }
     }
     Ok(())
@@ -600,6 +603,12 @@ fn binary_operator(class: ScalarClass, operator: KernelBin) -> Result<Operator, 
                 "compute.wasm: {operator:?} has no floating-point form — the bitwise operators and \
                  `Rem` are the language's integer-scalar operators, so a float operand here is a \
                  fragment the class walk should already have refused"
+            ));
+        }
+        (ScalarClass::State, operator) => {
+            return Err(format!(
+                "compute.wasm: {operator:?} is asked of a state token, which carries no number — \
+                 nothing in the language makes a state an operand"
             ));
         }
     })

@@ -58,11 +58,12 @@ fn calls_kernel_7() -> KernelFragment {
         vec![element],
         vec![ScalarClass::Int],
     );
+    let state = body.add_const(entry, ScalarClass::State, 0);
     body.add_op(
         entry,
         KernelInstr::BufferWriteCall(ScalarClass::Int),
-        vec![out_position, index, called],
-        Vec::new(),
+        vec![state, out_position, index, called],
+        vec![ScalarClass::State],
     );
     let returned = body.add_const(entry, ScalarClass::Int, 0);
     body.set_terminator(
@@ -159,6 +160,7 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
         body: KernelBody::from_flat(
             2,
             &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos, in the *output* space
                 FlatOp::Read(1),                                        // idx
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1)), // cfg_pos, in the *input* space
@@ -190,6 +192,7 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
             // parameter 1: a `Read` past the domain pushes nothing.
             2,
             &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1)), // out_pos 1, but there is one output
                 FlatOp::Read(1),
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 5)),
@@ -206,7 +209,7 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
             position: 1,
             space: "output",
             bound: 1,
-            at: 2,
+            at: 3,
         }
     );
     assert!(refusal.to_string().contains("output"));

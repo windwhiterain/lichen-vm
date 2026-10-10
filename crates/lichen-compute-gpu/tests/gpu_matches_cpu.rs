@@ -63,11 +63,14 @@ fn fragment(body: Vec<FlatOp>) -> KernelFragment {
 ///
 /// # Invariant
 /// The push order is the IR's, not the expression's: a `BufferWriteCall` takes
-/// `[out_pos, idx, val]` with the value on top.
+/// `[state, out_pos, idx, val]`, so the state is pushed first and stays at the bottom
+/// while the other three are built above it. The trailing `Const(Int, 0)` is what the
+/// body returns: a state token is no fragment result.
 fn adds() -> KernelFragment {
     fragment(vec![
-        FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
-        FlatOp::Read(1),                                        // idx
+        FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
+        FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // out_pos
+        FlatOp::Read(1),                                          // idx
         FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
         FlatOp::Read(1),
         FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)), // in[i]
@@ -95,6 +98,7 @@ fn conditional() -> KernelFragment {
         body.push(FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)));
     };
     let mut body = vec![
+        FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
         FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
         FlatOp::Read(1),
     ];
@@ -128,6 +132,7 @@ fn arithmetic() -> KernelFragment {
         body.push(FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)));
     };
     let mut body = vec![
+        FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
         FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
         FlatOp::Read(1),
     ];
@@ -173,6 +178,7 @@ fn predicates() -> KernelFragment {
         body.push(FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)));
     };
     let mut body = vec![
+        FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
         FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
         FlatOp::Read(1),
     ];
@@ -223,6 +229,7 @@ fn unsigned_reading() -> KernelFragment {
         body.push(FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)));
     };
     let mut body = vec![
+        FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
         FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
         FlatOp::Read(1),
     ];
@@ -308,6 +315,7 @@ impl Scalar {
             (Scalar::Literal(value), ScalarClass::Int) => value != 0,
             (Scalar::Int(value), _) => value != 0,
             (Scalar::Float(value), _) => value.to_bits() != 0,
+            (Scalar::Literal(value), ScalarClass::State) => value != 0,
         }
     }
 }
@@ -317,6 +325,7 @@ fn boolean(class: ScalarClass, holds: bool) -> Scalar {
     match class {
         ScalarClass::Int => Scalar::Int(i64::from(holds)),
         ScalarClass::Float => Scalar::Float(if holds { 1.0 } else { 0.0 }),
+        ScalarClass::State => panic!("the reference makes a condition from a data class"),
     }
 }
 
@@ -354,8 +363,7 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                 continue;
             };
             let operand = |at: usize| -> Scalar { values[&args[at]] };
-            let mut produced = Scalar::Int(0);
-            let mut leaves_nothing = false;
+            let produced: Scalar;
             match *op {
                 KernelInstr::Const(ScalarClass::Int, value) => produced = Scalar::Literal(value),
                 // A float local takes an `f32`'s bits, which is the width the
@@ -363,6 +371,8 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                 KernelInstr::Const(ScalarClass::Float, value) => {
                     produced = Scalar::Float(f32::from_bits(value as u32));
                 }
+                // The state root: it orders the writes and holds nothing.
+                KernelInstr::Const(ScalarClass::State, _) => produced = Scalar::Int(0),
                 // A comparison yields 1 or 0 here, or 1.0 and 0.0 over floats; a
                 // `select` only tests it.
                 KernelInstr::Bin(_, operator) => {
@@ -452,24 +462,27 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                         // This reading's own word layout, not the ABI's: a float
                         // element in an `i64` word is its low 32 bits.
                         ScalarClass::Float => Scalar::Float(f32::from_bits(value as u32)),
+                        ScalarClass::State => {
+                            panic!("the reference reads no buffer of state tokens")
+                        }
                     };
                 }
                 KernelInstr::BufferWriteCall(_) => {
-                    let value = operand(2).as_class(class);
-                    let element_index = operand(1).as_index();
-                    let position = operand(0).as_index();
+                    // `[state, position, index, value]`: the state is the token, which
+                    // carries nothing and is what a later write reads.
+                    let value = operand(3).as_class(class);
+                    let element_index = operand(2).as_index();
+                    let position = operand(1).as_index();
                     if position == 0 {
                         output[element_index] = value.bits();
                     }
-                    leaves_nothing = true;
+                    produced = Scalar::Int(0);
                 }
                 KernelInstr::CallKernel(_) => {
                     panic!("the reference emits no cross-kernel calls")
                 }
             }
-            if !leaves_nothing {
-                values.insert(definition, produced);
-            }
+            values.insert(definition, produced);
         }
     }
     output
@@ -808,9 +821,10 @@ fn adds_a_runtime_scalar() -> KernelFragment {
         body: KernelBody::from_flat(
             3,
             &[
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
-                FlatOp::Read(2),                                        // the index
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // out_pos
+                FlatOp::Read(2),                                          // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // cfg_pos
                 FlatOp::Read(2),
                 FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)), // in[i]
                 FlatOp::Read(1),                                              // the runtime scalar
@@ -845,9 +859,10 @@ fn scales_by_a_runtime_float() -> KernelFragment {
         body: KernelBody::from_flat(
             3,
             &[
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
-                FlatOp::Read(2),                                        // the index
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // out_pos
+                FlatOp::Read(2),                                          // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // cfg_pos
                 FlatOp::Read(2),
                 FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Float)), // in[i]
                 FlatOp::Read(1), // the runtime scalar

@@ -39,6 +39,7 @@ fn adds_one() -> KernelFragment {
         body: KernelBody::from_flat(
             2,
             &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos, in the *output* space
                 FlatOp::Read(1),                                        // the index
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos, in the *input* space
@@ -76,6 +77,7 @@ fn scales_a_float() -> KernelFragment {
     };
     // out_pos, then the index: the [position, index] a write takes.
     let mut body = vec![
+        FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
         FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
         FlatOp::Read(1),
     ];
@@ -194,13 +196,14 @@ fn branches_to_a_merge() -> KernelFragment {
             args: vec![index],
         }),
     );
+    let state = body.add_const(join, ScalarClass::State, 0);
     let position = body.add_const(join, ScalarClass::Int, 0);
     let written = body.add_const(join, ScalarClass::Int, 7);
     body.add_op(
         join,
         KernelInstr::BufferWriteCall(ScalarClass::Int),
-        vec![position, index, written],
-        Vec::new(),
+        vec![state, position, index, written],
+        vec![ScalarClass::State],
     );
     body.set_terminator(
         join,
@@ -298,13 +301,14 @@ fn counts_to_ten(exit_first: bool) -> KernelFragment {
         }),
     );
 
+    let state = body.add_const(exit, ScalarClass::State, 0);
     let position = body.add_const(exit, ScalarClass::Int, 0);
     let written = body.add_const(exit, ScalarClass::Int, 7);
     body.add_op(
         exit,
         KernelInstr::BufferWriteCall(ScalarClass::Int),
-        vec![position, index, written],
-        Vec::new(),
+        vec![state, position, index, written],
+        vec![ScalarClass::State],
     );
     body.set_terminator(
         exit,
@@ -405,13 +409,14 @@ fn conditional_backedge() -> KernelFragment {
         }),
     );
 
+    let state = body.add_const(exit, ScalarClass::State, 0);
     let position = body.add_const(exit, ScalarClass::Int, 0);
     let written = body.add_const(exit, ScalarClass::Int, 7);
     body.add_op(
         exit,
         KernelInstr::BufferWriteCall(ScalarClass::Int),
-        vec![position, index, written],
-        Vec::new(),
+        vec![state, position, index, written],
+        vec![ScalarClass::State],
     );
     body.set_terminator(
         exit,
@@ -529,8 +534,9 @@ fn index_to_float() -> KernelFragment {
         body: KernelBody::from_flat(
             2,
             &[
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
-                FlatOp::Read(1),                                        // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // out_pos
+                FlatOp::Read(1),                                          // the index
                 FlatOp::Read(1), // the same index, what `int2float` reads
                 FlatOp::Instr(KernelInstr::Conv {
                     from: ScalarClass::Int,
@@ -569,10 +575,11 @@ fn crosses_both_ways() -> KernelFragment {
         body: KernelBody::from_flat(
             2,
             &[
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
-                FlatOp::Read(1),                                        // the index
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos
-                FlatOp::Read(1),                                        // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // out_pos
+                FlatOp::Read(1),                                          // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // cfg_pos
+                FlatOp::Read(1),                                          // the index
                 FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)), // in[i]
                 FlatOp::Instr(KernelInstr::Conv {
                     from: ScalarClass::Float,
@@ -649,10 +656,11 @@ fn two_buffer_classes() -> KernelFragment {
         body: KernelBody::from_flat(
             2,
             &[
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
-                FlatOp::Read(1),                                        // the index
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos
-                FlatOp::Read(1),                                        // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // out_pos
+                FlatOp::Read(1),                                          // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // cfg_pos
+                FlatOp::Read(1),                                          // the index
                 FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)), // in[i], an Int buffer
                 FlatOp::Instr(KernelInstr::Conv {
                     from: ScalarClass::Int,
@@ -700,8 +708,9 @@ fn calls_a_nullary_kernel() -> KernelFragment {
         body: KernelBody::from_flat(
             2,
             &[
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
-                FlatOp::Read(1),                                        // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // out_pos
+                FlatOp::Read(1),                                          // the index
                 FlatOp::Instr(KernelInstr::CallKernel(7)),
                 FlatOp::Instr(KernelInstr::BufferWriteCall(ScalarClass::Int)),
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
@@ -774,6 +783,7 @@ fn calls_a_unary_kernel_with_a_pushed_leaf() -> KernelFragment {
     let _extent = body.add_param(entry);
     let leaf = body.add_param(entry);
     let index = body.add_param(entry);
+    let state = body.add_const(entry, ScalarClass::State, 0);
     let position = body.add_const(entry, ScalarClass::Int, 0);
     let doubled = body.add_op(
         entry,
@@ -784,8 +794,8 @@ fn calls_a_unary_kernel_with_a_pushed_leaf() -> KernelFragment {
     body.add_op(
         entry,
         KernelInstr::BufferWriteCall(ScalarClass::Int),
-        vec![position, index, doubled],
-        Vec::new(),
+        vec![state, position, index, doubled],
+        vec![ScalarClass::State],
     );
     let left = body.add_const(entry, ScalarClass::Int, 0);
     body.set_terminator(entry, Terminator::Return { values: vec![left] });
@@ -889,12 +899,13 @@ fn loops_over_a_pushed_leaf() -> KernelFragment {
             args: vec![step],
         }),
     );
+    let state = body.add_const(exit, ScalarClass::State, 0);
     let position = body.add_const(exit, ScalarClass::Int, 0);
     body.add_op(
         exit,
         KernelInstr::BufferWriteCall(ScalarClass::Int),
-        vec![position, index, result],
-        Vec::new(),
+        vec![state, position, index, result],
+        vec![ScalarClass::State],
     );
     body.set_terminator(
         exit,
@@ -971,9 +982,10 @@ fn adds_a_runtime_scalar() -> KernelFragment {
         body: KernelBody::from_flat(
             3,
             &[
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
-                FlatOp::Read(2),                                        // the index
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // out_pos
+                FlatOp::Read(2),                                          // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // cfg_pos
                 FlatOp::Read(2),
                 FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)), // in[i]
                 FlatOp::Read(1), // the pushed runtime scalar
@@ -1008,9 +1020,10 @@ fn scales_by_a_runtime_float() -> KernelFragment {
         body: KernelBody::from_flat(
             3,
             &[
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
-                FlatOp::Read(2),                                        // the index
-                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::State, 0)), // the state the write threads
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // out_pos
+                FlatOp::Read(2),                                          // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),   // cfg_pos
                 FlatOp::Read(2),
                 FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Float)), // in[i]
                 FlatOp::Read(1), // the pushed runtime scalar

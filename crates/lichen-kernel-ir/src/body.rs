@@ -23,10 +23,10 @@ pub enum ValueDef {
     /// A computation: the operator, the values it reads, and what it leaves behind.
     ///
     /// # Invariant
-    /// `classes` is per result and may be empty: a `BufferWriteCall` leaves nothing, a
-    /// call to another kernel leaves its callee's result class, and a comparison
-    /// leaves one scalar. The list is what the definition produces and a consumer
-    /// reads; it is never inferred backwards.
+    /// `classes` is per result and one long for every instruction: a `BufferWriteCall`
+    /// leaves its state token, a call to another kernel leaves its callee's result class,
+    /// and a comparison leaves one scalar. The list is what the definition produces and a
+    /// consumer reads; it is never inferred backwards.
     Instr {
         op: KernelInstr,
         args: Vec<ValueId>,
@@ -184,20 +184,14 @@ pub fn from_flat(domain: usize, ops: &[FlatOp]) -> KernelBody {
                 let take = instr.arity().unwrap_or(0).min(values.len());
                 let args = values[values.len() - take..].to_vec();
                 values.truncate(values.len() - take);
-                let classes = if instr.produces() == 0 {
-                    Vec::new()
-                } else {
-                    vec![instr.own_class().unwrap_or(ScalarClass::Int)]
-                };
+                let classes = vec![instr.own_class().unwrap_or(ScalarClass::Int)];
                 let value = body.add_op(entry, instr, args, classes);
-                if instr.produces() > 0 {
-                    values.push(value);
-                }
+                values.push(value);
             }
         }
     }
-    // **The return hands out the top of the stack and nothing else**, and a body that
-    // produces nothing returns nothing.
+    // **The return hands out the top of the stack and nothing else**, so a body ending
+    // in a write returns its state token.
     body.set_terminator(
         entry,
         Terminator::Return {
@@ -290,7 +284,7 @@ impl KernelBody {
     /// (1) The entry block exists, and so does every block a transfer names; (2) every
     /// value a block reads is available there, checked by walk order; (3) a branch's
     /// `args` are exactly its target's `params`; (4) an instruction's `classes` matches
-    /// what it produces — zero for a write, one for everything else.
+    /// what it produces — one for every instruction, a write's state token included.
     pub fn validate(&self) -> Result<(), String> {
         if self.blocks.is_empty() {
             return Err("a body must have at least its entry block".into());
