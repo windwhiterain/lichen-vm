@@ -335,7 +335,9 @@ reach for has to be nested *inside* the statement that is the body's value.
 
 Both are logged in `crates/lichen-lowlevel`, and both are documented in their own
 code. They are extension points for an operator that must keep something alive
-past its own call — and the graph uses exactly one of them.
+past its own call — **and the graph uses neither**, which is worth saying where
+the seam is described rather than only where each half is: this note originally
+claimed the graph overrides `run_deferred`, and no override was ever written.
 
 **`ValueExt::traced`** — a holder that keeps lowlevel **nodes** past the operator
 call says which, so the GC walks them with the same `garbage_collect_node` it uses
@@ -365,13 +367,25 @@ fn run_deferred(&self, operand: Option<NodeId>, block: BlockId, module: &mut Mod
 
 The default reproduces the VM's former extension arm verbatim — deep pass,
 `Parameterized` read-back, nullary `Error` stand-in — so an operator that does not
-override it cannot tell the difference. **This is the seam the graph uses**: the
-`Graph` operator decides for itself when its operand is evaluated.
+override it cannot tell the difference. **Nothing in the workspace does**: the only
+two occurrences are the trait default (`crates/lichen-lowlevel/src/lib.rs`) and its
+one call site (`crates/lichen-lowlevel/src/evaluation.rs`).
+
+**The override was designed for `Graph` and then not needed, and the record of why
+is in the `run` arm rather than here.** A graph records a function's dispatches, so
+it has to walk that function's *body*, and a deep pass erases the shape that says
+which nodes are the body's own — which is what made the seam look necessary. It is
+not, because a graph's operand is a **bare function**: the deep-evaluated operand
+still names it, and `build_graph` reaches the body by building a plain `Apply` over
+the function and a placeholder tuple and running that through the module's own
+`evaluate_node` — "the apply is the VM's own". The body's shape is read off the
+apply the VM performs, not off the operand the deep pass left behind.
 
 **Overriding `run_deferred` without implementing `traced` is unsound** (a
 reference kept past the call is invisible to the GC), and `traced` without
 `run_deferred` is inert (nothing can hold a reference past a call). They ship as
-one change, recorded in both doc comments.
+one change — so with no override, `traced` has no user either, as above, and the
+first real one writes both.
 
 Two shapes were rejected on the way, and both look like the answer: a
 `&[NodeId]` instead of a callback demands the value hold its references as one

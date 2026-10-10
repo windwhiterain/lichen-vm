@@ -885,10 +885,10 @@ pub enum ComputeOperator {
     /// a `Graph`.
     ///
     /// # Invariant
-    /// The operand is deliberately not evaluated first: the function's body is
-    /// what has to be walked, and a deep pass has already erased the shape that
-    /// says which nodes are the body's own. This is the one operator that
-    /// overrides [`OperatorExt::run_deferred`].
+    /// The operand **is** deep-evaluated first, by `run_deferred`'s default: this
+    /// operator overrides nothing. That is enough because a graph is a bare
+    /// function, so the evaluated operand still names it, and `build_graph` reaches
+    /// the body through an `Apply` it builds and runs itself.
     Graph,
     /// `[graph, arguments]` — run a graph over its source function's values.
     GraphRun,
