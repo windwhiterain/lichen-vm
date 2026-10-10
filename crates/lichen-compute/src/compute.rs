@@ -5278,71 +5278,21 @@ pub fn parallel_launch_workers() -> usize {
     PARALLEL_LAUNCH_WORKERS.get()
 }
 
-/// Run a **parallel** kernel over the index range `[0, count)`, computing the
-/// index function once per index with the parameter's extent `count` and its
-/// input buffers fixed, and collecting the writes into the output buffers.
+/// Run a parallel kernel over `[0, count)`, once per index, collecting the writes.
 ///
-/// The kernel is a wasm function with two host imports — `read(cfg_pos, idx)`
-/// reads an input buffer element, `write(out_pos, idx, val)` writes an output
-/// buffer element — wired to the host-side input/output buffers through the
-/// [`ParallelState`] the store carries.  The kernel is called once per index;
-/// the writes accumulate into the output buffers (last write to a slot wins, a
-/// scatter).
-///
-/// **The run is parallel.**  The index range is cut into one contiguous chunk
-/// per worker, each worker gets a **disjoint span of every output buffer**
-/// ([`ParallelState`]'s partition invariant) and its own store, linker and
-/// instance over the one cached module and engine, and the calling thread runs
-/// the first chunk itself.  The kernel sees **global** indices in every chunk
-/// and the `write` import rebases by the worker's base, so the emitted wasm is
-/// identical whichever worker runs it.
-///
-/// How many output buffers there are is the compiled fragment's
-/// [`KernelFragment::outputs`] — the index function's codomain arity, read when
-/// the kernel was compiled — so the allocation here is a static fact and never
-/// a discovery of which slots happened to be written.  Every ordinal is written
-/// on every index (see [`compile_parallel_fragment`]), so each buffer is fully
-/// defined after the run.
-///
-/// **Determinism.**  The result is bit-identical to the sequential loop's, for
-/// every `count` and whatever the worker count: the chunks depend only on the
-/// count and the worker count (never on a schedule or a timing), each worker
-/// writes only the slots it owns, and no value is accumulated or reduced — so
-/// regrouping the indices cannot change what is computed.  This holds exactly
-/// for an index function that writes its own slot, which is what the primitive
-/// is a map over.  The general statement is narrower: the result equals the
-/// sequential loop's **iff no two indices write the same slot**, and a kernel
-/// that writes a slot that is not its own
-/// (`compute.write ((compute.Write _)(.to n, .at i - i, .value v))`,
-/// whose index is `0` for every `i`, so all of them collide) already had an
-/// order-dependent winner sequentially — the partition, not the launch, is then
-/// what decides it.
-///
-/// `count > `[`MAX_PARALLEL_ELEMENTS`] is refused with an `Err` before the
-/// buffers are allocated.  The caller records the reason through
-/// [`Module::record_extension_diagnostic`] and returns the lazy
-/// (undecided) answer, which is this plugin's channel for every runtime
-/// refusal: `Module::eval_errors` is a closed enum of structural value facts,
-/// and its `BudgetExhausted` names the apply/depth budgets — false here, the
-/// program terminated and merely asked for too much.  **Queueing is not the
-/// alternative:** `plrun` is a synchronous, caller-blocking call, so there is
-/// nothing to queue onto — the choice is refuse or run.
-///
-/// The module comes from [`cached_module`], and one `Engine` backs every
-/// worker's store.  The [`wasmi::Linker`] is deliberately rebuilt per worker
-/// rather than cached or shared: it is the object that carries host-function
-/// bindings to *that* worker's state, so building it here makes "no host
-/// binding is shared between two launches, or between two workers of one"
-/// true by construction, and its cost is the two fixed registrations below.
+/// # Invariant
+/// The output count is the fragment's `outputs` — a static fact, not a discovery of
+/// which slots were written — and every ordinal is written on every index, so each
+/// buffer is fully defined. The result equals the sequential loop's iff no two indices
+/// write the same slot: the partition decides a collision. A count past
+/// `MAX_PARALLEL_ELEMENTS` is refused before allocation.
 fn run_parallel_kernel(
     id: KernelId,
     backend: Backend,
     leaves: Vec<i64>,
     inputs: Vec<RunInput>,
 ) -> Result<RunOutcome, String> {
-    // The ABI's first leaf is the launch extent (`docs/notes/compute-runtime-scalars.md`
-    // §1): it is how many indices the dispatch covers, so it is also the one
-    // ordinal this side needs.
+    // The ABI's first leaf is the launch extent, the one ordinal this side needs.
     let Some(&extent) = leaves.first() else {
         return Err(
             "a parallel launch's signature has no scalar leaves, so there is no extent to \
@@ -5356,11 +5306,8 @@ fn run_parallel_kernel(
             "parallel launch count {count} exceeds the limit of {MAX_PARALLEL_ELEMENTS} elements"
         ));
     }
-    // The output count **and the element class** are properties of the
-    // *registered fragment*, so they are read here rather than carried in: a
-    // kernel id is content-addressed, so the fragment it names cannot be a
-    // different one.  The lock is released before any emission or assembly,
-    // which locks the same registry again.
+    // The output count and class are the fragment's, read here rather than carried
+    // in: an id is content-addressed.
     let (outputs, class, input_classes, leaf_classes, output_classes) = {
         let fragments = kernels().lock().unwrap();
         let fragment = fragments
@@ -5371,9 +5318,8 @@ fn run_parallel_kernel(
             fragment.outputs,
             fragment_class(fragment),
             fragment.input_classes.clone(),
-            // The ABI's leaves are the parameter's scalars followed by the
-            // index; the index is the worker's loop variable, so only the
-            // scalars are handed in.
+            // The ABI's leaves are the scalars then the index; only the scalars are
+            // handed in.
             classes[..classes.len().saturating_sub(1)].to_vec(),
             fragment.output_classes.clone(),
         )
@@ -5387,19 +5333,14 @@ fn run_parallel_kernel(
             leaves.len()
         ));
     }
-    // A borrow of data already out of the registry, so the class check is a
-    // function of the classes rather than a second reason to hold the lock.
+    // A borrow of data already out of the registry: the check is a function of the
+    // classes alone.
     check_input_classes(&input_classes, &inputs)?;
     if let Backend::Gpu = backend {
         return run_on_installed_backend(id, count, &inputs, outputs);
     }
-    // A `"cpu"` run has no device, so an input a `"gpu"` run left there is
-    // brought home before the run starts.  This is the one place the two
-    // backends meet, and it is a *fetch* rather than a silent refusal: the
-    // program's data is on the device and the CPU has no way to reach it, so
-    // moving it is what running on the CPU means — not a change in what is
-    // computed.  A fetched payload is turned into the same words a host input
-    // holds, so the interpreted run cannot tell the two apart.
+    // A "cpu" run has no device, so an input a "gpu" run left there is brought home
+    // before the run starts.
     let mut host_inputs: Vec<BufferWords> = Vec::with_capacity(inputs.len());
     for (position, input) in inputs.into_iter().enumerate() {
         match input {
@@ -5434,17 +5375,13 @@ fn run_parallel_kernel(
         };
         run_parallel_range(&engine, &module, state, 0, count)?;
     } else {
-        // Contiguous chunk bounds, a function of the count and the worker count
-        // alone: the leading chunks carry the remainder elements, so the
-        // calling thread's chunk is never the shortest.
+        // Contiguous chunk bounds, a function of the count and worker count alone:
+        // the leading chunks carry the remainder.
         let bounds = chunk_bounds(count, workers);
         let partitions = partition_outputs(output_spans(&mut outputs), &bounds);
         let mut failures: Vec<Option<Result<(), String>>> = (0..workers).map(|_| None).collect();
-        // Scoped, not detached: every worker borrows its partition and the
-        // engine, so the scope joins them all before the borrowed buffers are
-        // read back.  A scoped thread cannot be aborted, so a failing worker is
-        // **joined like any other** and the run reports the first failure in
-        // index order below — a failure is never dropped for a partial result.
+        // Scoped, not detached: the scope joins every worker before the borrowed
+        // buffers are read back.
         std::thread::scope(|scope| {
             for ((failure, partition), window) in
                 failures.iter_mut().zip(partitions).zip(bounds.windows(2))
@@ -5504,16 +5441,12 @@ fn run_parallel_kernel(
     ))
 }
 
-/// Refuse a run whose input buffers are not the class the fragment reads them
-/// as.
+/// Refuse a run whose input buffers are not the class the fragment reads them as.
 ///
-/// **The one place the two halves of a buffer's class meet before an upload**:
-/// the fragment declares a class per read position, and each value carries the
-/// class it was produced with.  A disagreement is a wrong number rather than a
-/// wrong shape — the words are the same 64 bits either way — so it is refused by
-/// name rather than reinterpreted, the same discipline
-/// [`fetch_resident`] applies to a device's answer
-/// (`docs/notes/floating-point.md` §4.2, §4.4).
+/// # Invariant
+/// The one place the two halves of a buffer's class meet before an upload: a
+/// disagreement is a wrong number rather than a wrong shape — the words are the same
+/// 64 bits either way — so it is refused by name rather than reinterpreted.
 fn check_input_classes(declared: &[ScalarClass], inputs: &[RunInput]) -> Result<(), String> {
     for (position, input) in inputs.iter().enumerate() {
         let declared = declared.get(position).copied().unwrap_or(ScalarClass::Int);
@@ -5533,12 +5466,10 @@ fn check_input_classes(declared: &[ScalarClass], inputs: &[RunInput]) -> Result<
 
 /// Bring one resident buffer home, naming the position it was read at.
 ///
-/// The count the buffer holds travels with the value, so a fetch asks for what
-/// the run actually produced rather than for the device's padded allocation.  The
-/// class travels with it too, which is what makes the answer's own class the
-/// value's rather than a guess: a fetch has no fragment to consult, so the only
-/// thing that can say whether these elements are integers or floats is the
-/// resident value it was asked about.
+/// # Invariant
+/// The count and the class travel with the value, so a fetch asks for what the run
+/// produced rather than the padded allocation, and the answer's class is the value's
+/// own: a fetch has no fragment to consult.
 fn fetch_resident(resident: ResidentBuffer, position: usize) -> Result<ScalarData, String> {
     let Some(backend) = lichen_kernel_ir::parallel_backend() else {
         return Err(format!(
@@ -5557,11 +5488,11 @@ fn fetch_resident(resident: ResidentBuffer, position: usize) -> Result<ScalarDat
         })?;
     match data.class() == resident.class {
         true => Ok(data),
-        // The device's answer and the class this value was issued with disagree,
-        // and the fetch is the only thing that can see both.  Refused by name
-        // rather than reinterpreted: reading an `f32` payload as `i64` (or the
-        // reverse) is not a wrong shape, it is a wrong number, and it would
-        // check perfectly (`docs/notes/floating-point.md` §4.3).
+        // The device's answer and the issued class disagree, and the fetch is the
+        // only thing that can see both.
+
+        // Refused by name: reading an `f32` payload as `i64` is a wrong number, not
+        // a wrong shape.
         false => Err(format!(
             "input buffer {position} (buffer {}) was issued as a {:?} buffer but the backend \
              returned {:?} elements",
@@ -5572,19 +5503,13 @@ fn fetch_resident(resident: ResidentBuffer, position: usize) -> Result<ScalarDat
     }
 }
 
-/// The chunk end of each of `workers` contiguous chunks of `count` indices, so
-/// `bounds.len() == workers + 1`, `bounds[0] == 0` and `bounds[workers] ==
-/// count`.
+/// The chunk end of each of `workers` contiguous chunks of `count` indices.
 ///
-/// A function of its two arguments and nothing else — not of a schedule or a
-/// timing — so a given partition is reproducible, and (each index being handled
-/// by exactly one worker) the result does not depend on how the indices are
-/// grouped.  Chunk `k` is `count / workers` long, and the first
-/// `count % workers` chunks are one element longer, so the chunks differ in
-/// length by at most one element and always cover every index exactly once.  The
-/// calling thread takes chunk `0`, so giving the *front* chunks the extra
-/// elements keeps the later workers — which pay an extra wakeup before they
-/// start — off the shortest chunk.
+/// # Invariant
+/// A function of its two arguments and nothing else, so a partition is reproducible
+/// and the result does not depend on how the indices are grouped. Chunk `k` is
+/// `count / workers` long with the first `count % workers` one longer, and the calling
+/// thread takes chunk 0 so the later workers are off the shortest chunk.
 fn chunk_bounds(count: usize, workers: usize) -> Vec<usize> {
     let (length, extra) = (count / workers, count % workers);
     (0..=workers)
@@ -5601,15 +5526,12 @@ fn output_spans(outputs: &mut [Vec<i64>]) -> Vec<&mut [i64]> {
         .collect()
 }
 
-/// Cut every buffer of `spans` into one contiguous chunk per `[bounds[i],
-/// bounds[i + 1])`, in worker order.
+/// Cut every buffer of `spans` into one contiguous chunk per worker.
 ///
-/// Each split consumes the spans by value so that both halves come back with
-/// the full lifetime the store's state needs: a `&mut` reborrowed *through* a
-/// vector element cannot outlive the vector borrow, so moving each span's
-/// ownership out first is what makes the partition possible without `unsafe`.
-/// Every span is split once per level, and the result is the disjoint
-/// `bounds` partition of `[0, count)`.
+/// # Invariant
+/// Each split consumes the spans by value: a `&mut` reborrowed through a vector element
+/// cannot outlive the vector borrow, so moving each span's ownership out first is what
+/// makes the partition possible without `unsafe`.
 fn partition_outputs<'a>(
     mut spans: Vec<&'a mut [i64]>,
     bounds: &[usize],
@@ -5632,7 +5554,7 @@ fn partition_outputs<'a>(
 }
 
 /// Cut the leading `len` elements off every span of `spans` — the same length in
-/// each, because a worker owns a span of *every* output buffer.
+/// each.
 fn split_spans<'a>(
     spans: Vec<&'a mut [i64]>,
     len: usize,
@@ -5647,13 +5569,12 @@ fn split_spans<'a>(
     (heads, tails)
 }
 
-/// Run one worker's index range `[base, end)` — the store, the linker, the
-/// instance and the per-index call loop, for a worker that owns exactly
-/// `state.outputs`' slots.
+/// Run one worker's index range `[base, end)`: the store, linker, instance and the
+/// per-index call loop.
 ///
-/// The extent is the first of `state.leaves`, and it is the **whole launch's**:
-/// the index function is a function of the full extent, not of the chunk, so a
-/// worker must not see a narrowed one.
+/// # Invariant
+/// The extent is the first of `state.leaves` and is the whole launch's: the index
+/// function is a function of the full extent, not of the chunk.
 fn run_parallel_range(
     engine: &wasmi::Engine,
     module: &wasmi::Module,
@@ -5665,11 +5586,8 @@ fn run_parallel_range(
     let mut store = wasmi::Store::new(engine, state);
     let mut linker = wasmi::Linker::<ParallelState<'_>>::new(engine);
 
-    // **One `read`/`write` pair per class**, matching what `assemble_module`
-    // declared: the position and the index are `i64` in both, and only the
-    // element's own type follows the class.  Both pairs are defined even when the
-    // module declares only one, and the two sides derive the names from the class
-    // through [`buffer_import_name`] rather than agreeing by construction.
+    // One `read`/`write` pair per class: both are defined even when the module
+    // declares only one.
     for (element_class, value_type) in [
         (ScalarClass::Int, wasmi::ValType::I64),
         (ScalarClass::Float, wasmi::ValType::F32),
