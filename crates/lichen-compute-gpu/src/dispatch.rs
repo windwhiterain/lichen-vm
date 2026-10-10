@@ -102,6 +102,17 @@ pub enum RunError {
     /// buffers. A wider shape is a real requirement and a real graph node, but
     /// it is not a linear chain.
     ChainNotLinear { inputs: usize, outputs: usize },
+    /// A chain whose fragment reads one class and writes the other.
+    ///
+    /// A chain feeds link `n`'s output buffer into link `n + 1`'s **input** slot,
+    /// and a module types those two slots by their own classes — so a crossed
+    /// fragment's second link would read a `Float` buffer through the `Int`
+    /// element type.  Refused by name: that is a wrong number rather than a
+    /// failed run, and a chain cannot carry the value across.
+    ChainCrossesClasses {
+        input: ScalarClass,
+        output: ScalarClass,
+    },
     /// A fragment whose body **reads** a parameter beside the extent: the
     /// dispatch carries no leaf but the index, so a second read leaf has nowhere
     /// to go.  Refused by name rather than dispatched with the argument missing,
@@ -109,19 +120,6 @@ pub enum RunError {
     /// the whole leaf list (`docs/notes/compute-runtime-scalars.md` §3).  A leaf
     /// the body never reads is *not* this: nothing is missing from it.
     ScalarsNotPushed { leaves: usize },
-    /// A fragment whose buffers are **not all one class**.
-    ///
-    /// **The emitter already lowers this**, and `spirv-val` accepts the module: an
-    /// element type, an array stride, a block struct and a variable type are each
-    /// read off the buffer they belong to.  What is still one-per-fragment is the
-    /// **host staging** — an upload block is sized at `count ×` *the fragment's*
-    /// `byte_width()` and the next block is offset by that same width — so staging
-    /// a mixed fragment would upload eight bytes per `f32` element.
-    ///
-    /// Refused by name because that is a **silently wrong number**, not a slow
-    /// one.  The follow-up is per-buffer staging; see
-    /// [`spirv::buffers_are_uniform`].
-    MixedBufferClasses,
     /// A resident id this context is not holding — never issued, or already
     /// released.  Refused rather than read as empty: an id is a handle, and using
     /// a dead one means the host lost track of its own buffers, which reporting
@@ -180,14 +178,13 @@ impl fmt::Display for RunError {
                 "a chain needs one input and one output per link so each can be handed the \
                  previous one's result, and this fragment has {inputs} and {outputs}."
             ),
-            RunError::Emit(refusal) => write!(f, "{refusal}"),
-            RunError::MixedBufferClasses => write!(
+            RunError::ChainCrossesClasses { input, output } => write!(
                 f,
-                "this fragment binds buffers of more than one class, and a dispatch still stages \
-                 one width per fragment — so it would upload eight bytes per f32 element and read \
-                 back a wrong number. The SPIR-V module itself is lowered and validated; what is \
-                 missing is per-buffer host staging."
+                "a chain feeds each link's output back into the next link's input slot, so both \
+                 ends of the fragment must be one class, and this one reads {input:?} and \
+                 writes {output:?}."
             ),
+            RunError::Emit(refusal) => write!(f, "{refusal}"),
             RunError::ScalarsNotPushed { leaves } => write!(
                 f,
                 "this fragment's parameter declares {leaves} leaf/leaves (the launch extent, \
@@ -740,11 +737,10 @@ impl GpuContext {
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<Staged, RunError> {
-        // **The class, and so the width, comes from the fragment the run is
-        // emitting for.**  A fragment's positions are all one class
-        // (`spirv::module_class` refuses a mixed one), which is the same class the
-        // emitted module's element type and `ArrayStride` are, so the bytes staged
-        // here are the bytes that module reads.
+        // **A buffer's width is that buffer's own class**, read by
+        // [`spirv::buffer_class_of`]: a fragment that reads an `Int` buffer and
+        // writes a `Float` one stages, allocates and reads back each at that
+        // buffer's `byte_width()` rather than at one module-wide answer.
         //
         // **The device path pushes no leaf at all**, so a parameter a body
         // *reads* has nowhere for its value to arrive: refused by name rather
@@ -777,10 +773,6 @@ impl GpuContext {
             return Err(RunError::ScalarsNotPushed { leaves });
         }
         let class = spirv::module_class(fragment).map_err(RunError::Emit)?;
-        if !spirv::buffers_are_uniform(fragment) {
-            return Err(RunError::MixedBufferClasses);
-        }
-        let element = class.byte_width() as vk::DeviceSize;
         let binding = Binding {
             inputs: inputs.len(),
             outputs: fragment.outputs,
@@ -814,9 +806,6 @@ impl GpuContext {
             // has nothing to dispatch, and saying so beats a driver error.
             return Err(RunError::EmptyRun);
         }
-        let data_bytes = count as vk::DeviceSize * element;
-        let padded_bytes = padded as vk::DeviceSize * element;
-
         // The slot is taken before anything is staged into it, and the order is
         // the point: the staging a run writes is the *slot's* staging, so a run
         // that staged first and acquired second would be writing into a mapping
@@ -824,35 +813,49 @@ impl GpuContext {
         // "this run's upload is somewhere the device is not reading" true by
         // construction rather than by the caller remembering it.
         let mut segment = self.acquire()?;
-        let host_inputs: Vec<&[u8]> = inputs
+        // **The staging a host input needs is its own `count × byte_width()`**, so
+        // the reservation is the sum over the host inputs rather than one width
+        // times their number.
+        let staging_bytes: vk::DeviceSize = inputs
             .iter()
-            .filter_map(|slot| match slot {
-                BufferSlot::Host(data) => Some(*data),
-                BufferSlot::Resident(_) => None,
+            .enumerate()
+            .map(|(index, slot)| match slot {
+                BufferSlot::Host(_) => {
+                    count as vk::DeviceSize
+                        * spirv::buffer_class_of(fragment, index, class).byte_width()
+                            as vk::DeviceSize
+                }
+                BufferSlot::Resident(_) => 0,
             })
-            .collect();
-        segment.reserve(self, host_inputs.len() as u64 * data_bytes)?;
+            .sum();
+        segment.reserve(self, staging_bytes)?;
 
         let mut scratch = ScratchGuard {
             context: self,
             buffers: Vec::new(),
         };
         let mut descriptors: Vec<vk::DescriptorBufferInfo> = Vec::with_capacity(binding.total());
-        let mut uploads: Vec<Transfer> = Vec::with_capacity(host_inputs.len());
-        for slot in inputs {
+        let mut uploads: Vec<Transfer> = Vec::with_capacity(inputs.len());
+        // **Each upload block begins where the previous one ended**, and a block is
+        // its own buffer's `count × byte_width()` — the per-buffer arithmetic
+        // `reserve` above summed.
+        let mut offset: vk::DeviceSize = 0;
+        for (index, slot) in inputs.iter().enumerate() {
             let buffer = match slot {
                 // Used where it lies: this is the whole point of a resident id,
                 // and it is why chaining two runs costs one upload, not two.
                 BufferSlot::Resident(id) => self.resident_buffer(*id)?,
                 BufferSlot::Host(data) => {
-                    let buffer = self.allocate(padded, class)?;
-                    let offset = uploads.len() as u64 * data_bytes;
-                    // SAFETY: `reserve` sized the slot's staging for every host
-                    // input's `count` elements, and `offset` counts whole such
-                    // blocks that come before this one, so this block lies inside
-                    // the mapping. The device is not reading this mapping: the
-                    // slot was claimed above and nothing has been submitted on it
-                    // since.
+                    let buffer_class = spirv::buffer_class_of(fragment, index, class);
+                    let element = buffer_class.byte_width() as vk::DeviceSize;
+                    let data_bytes = count as vk::DeviceSize * element;
+                    let padded_bytes = padded as vk::DeviceSize * element;
+                    let buffer = self.allocate(padded, buffer_class)?;
+                    // SAFETY: `reserve` covered the sum of every host input's own
+                    // block, and `offset` is the sum of the blocks before this one,
+                    // so this block lies inside the mapping. The device is not
+                    // reading this mapping: the slot was claimed above and nothing
+                    // has been submitted on it since.
                     unsafe {
                         std::ptr::copy_nonoverlapping(
                             data.as_ptr(),
@@ -866,6 +869,7 @@ impl GpuContext {
                         bytes: data_bytes,
                         tail: padded_bytes - data_bytes,
                     });
+                    offset += data_bytes;
                     // A host upload is a scratch target: nothing refers to it once
                     // the run is over, so it does not become resident.
                     scratch.buffers.push(buffer);
@@ -886,8 +890,15 @@ impl GpuContext {
         // the dispatch covers `[0, padded)`.  A zero-fill would be a second pass
         // over memory the shader is about to overwrite in full; `spirv`'s module
         // docs carry this invariant.
-        for _ in 0..binding.outputs {
-            let buffer = self.allocate(padded, class)?;
+        //
+        // **Each output is sized by its own class**, and the same class is what
+        // its resident record carries, so a fetch reads it back at the width the
+        // module wrote it.
+        let output_classes: Vec<ScalarClass> = (0..binding.outputs)
+            .map(|ordinal| spirv::buffer_class_of(fragment, binding.inputs + ordinal, class))
+            .collect();
+        for buffer_class in &output_classes {
+            let buffer = self.allocate(padded, *buffer_class)?;
             descriptors.push(buffer.descriptor());
             scratch.buffers.push(buffer);
         }
@@ -902,9 +913,11 @@ impl GpuContext {
         let token = segment.submit()?;
         let mut resident = self.resident.lock().unwrap();
         let mut ids = Vec::with_capacity(binding.outputs);
-        for buffer in scratch
+        for (ordinal, buffer) in scratch
             .buffers
             .split_off(scratch.buffers.len() - binding.outputs)
+            .into_iter()
+            .enumerate()
         {
             let id = ResidentId(self.next_id.fetch_add(1, AtomicOrdering::Relaxed));
             resident.insert(
@@ -913,10 +926,10 @@ impl GpuContext {
                     handle: buffer.handle,
                     memory: buffer.memory,
                     padded,
-                    // The class the shader's element type was emitted for, so a
-                    // fetch of this buffer reads it back at the width it was
-                    // written at rather than at the integer default.
-                    class,
+                    // The class this output's element type was emitted for, so a
+                    // fetch reads it back at the width it was written at rather
+                    // than at another buffer's.
+                    class: output_classes[ordinal],
                 },
             );
             ids.push(id);
@@ -961,26 +974,40 @@ impl GpuContext {
                 max: MAX_DISPATCHES_PER_SUBMISSION,
             });
         }
-        // The class comes off the fragment, exactly as it does in `stage_run`, so
-        // the bytes this chain stages are the bytes the emitted module reads.
-        let class = spirv::module_class(fragment).map_err(RunError::Emit)?;
-        if !spirv::buffers_are_uniform(fragment) {
-            return Err(RunError::MixedBufferClasses);
+        // A parallel fragment's parameters are its input slots followed by the
+        // index, so one buffer input is an arity of two — but the **buffer
+        // counts**, not the arity, are what a chain needs: a chain hands link
+        // `n`'s output to link `n + 1`'s input slot and can name no second buffer.
+        // See `spirv::index_local`.
+        if fragment.param_shape.flat_arity() != 2 || fragment.inputs != 1 || fragment.outputs != 1 {
+            return Err(RunError::ChainNotLinear {
+                inputs: fragment.inputs,
+                outputs: fragment.outputs,
+            });
         }
-        let element = class.byte_width();
+        // **Each end of the chain is the class of its own slot**, read the way
+        // `stage_run` reads them: slot 0 is the uploaded input, slot 1 the resident
+        // answer.
+        let class = spirv::module_class(fragment).map_err(RunError::Emit)?;
+        let input_class = spirv::buffer_class_of(fragment, 0, class);
+        let output_class = spirv::buffer_class_of(fragment, 1, class);
+        // A chain feeds link `n`'s output buffer into link `n + 1`'s **input**
+        // slot, and a module types each slot by its own class, so the two ends must
+        // be one class. A crossed fragment would make every later link read the
+        // previous link's output at the other width — a wrong number rather than a
+        // failed run — so it is refused by name.
+        if input_class != output_class {
+            return Err(RunError::ChainCrossesClasses {
+                input: input_class,
+                output: output_class,
+            });
+        }
+        let element = input_class.byte_width();
         if input.len() < count * element {
             return Err(RunError::InputShorterThanCount {
                 buffer: 0,
                 len: input.len() / element,
                 count,
-            });
-        }
-        // A parallel fragment's parameters are its input slots followed by the
-        // index, so one buffer input is an arity of two. See `spirv::index_local`.
-        if fragment.param_shape.flat_arity() != 2 || fragment.outputs != 1 {
-            return Err(RunError::ChainNotLinear {
-                inputs: fragment.param_shape.flat_arity().saturating_sub(1),
-                outputs: fragment.outputs,
             });
         }
 
@@ -1012,7 +1039,7 @@ impl GpuContext {
             context: self,
             buffers: Vec::with_capacity(1),
         };
-        let source = self.allocate(padded, class)?;
+        let source = self.allocate(padded, input_class)?;
         scratch.buffers.push(source);
         // SAFETY: `reserve` sized and mapped this slot's staging for `count`
         // elements before anything was recorded, and the copy below writes
@@ -1050,8 +1077,8 @@ impl GpuContext {
         // buffers at once, and then which can be shared is a question about
         // liveness, which is the graph's to answer — see the memory note in the
         // graph design.
-        let first = self.allocate(padded, class)?;
-        let second = self.allocate(padded, class)?;
+        let first = self.allocate(padded, output_class)?;
+        let second = self.allocate(padded, output_class)?;
 
         // One reset for the whole submission and **none** inside it, and it
         // happened in `acquire` rather than here: a reset frees every set,
@@ -1094,7 +1121,7 @@ impl GpuContext {
                 handle: current.handle,
                 memory: current.memory,
                 padded,
-                class,
+                class: output_class,
             },
         );
         Ok(id)

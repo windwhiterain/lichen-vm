@@ -58,27 +58,23 @@
 //! two conversions where the position demands them instead (see
 //! [`as_class`]/[`as_condition`]). Same IR, same semantics, two spellings.
 //!
-//! # A module's *buffers* have one numeric class; its values may be either
+//! # A module's arithmetic has one class; each buffer its own
 //!
-//! [`module_class`] reads the class a module is built for off the fragment's
-//! declared positions, and that class is baked in rather than chosen per
-//! dispatch: the storage buffer's element type, the pointer into it and its
-//! array stride are all module-scope instructions — and [`Binding`], the
-//! caller's record of how many buffers a run binds, has nowhere to say which
-//! class they hold.
+//! A buffer's element type, array stride, block struct and variable type are read
+//! **per buffer** through [`buffer_class_of`]. [`module_class`] is the fragment's
+//! *arithmetic* class — the scalar type, the opcodes a `Bin` reaches, and the
+//! fallback for a slot its class lists do not reach — and it is baked in rather
+//! than chosen per dispatch because those are module-scope instructions.
 //!
-//! **Both element types are nevertheless declared in every module.** `Int` and
-//! `Float` do not convert in either direction on their own
-//! (`docs/notes/floating-point.md` §4.2), but a body may compute in one class
-//! and cross to the other through the explicit `Conv`, so both the module's
-//! scalar and the other element type have to have an id to name. `OpTypeFloat 32`
-//! is core SPIR-V and costs no capability, so only the **64-bit integer** is
-//! conditional: an integer module's scalar is that 64-bit unsigned integer, its
-//! buffer element is eight bytes, and it declares `Int64`; a float module's
-//! scalar is a 32-bit float, its element is four bytes, and its **index** is
-//! 32-bit, so it declares no 64-bit integer at all and needs no device with
-//! `shaderInt64` — [`needs_int64`] is what a caller checks before it builds a
-//! pipeline.
+//! **A crossing always has the type it needs.** `Int` and `Float` do not convert
+//! in either direction on their own (`docs/notes/floating-point.md` §4.2), but a
+//! body may compute in one class and cross to the other through the explicit
+//! `Conv`, so each class's scalar needs an id to name. `OpTypeFloat 32` is core
+//! SPIR-V and costs no capability, so only the **64-bit integer** is conditional:
+//! an integer fragment's scalar is that 64-bit unsigned integer and it declares
+//! `Int64`; a float fragment's scalar is a 32-bit float and its **index** is
+//! 32-bit, so it needs no device with `shaderInt64` — [`needs_int64`] is what a
+//! caller checks before it builds a pipeline.
 //!
 //! The price of the missing 64-bit integer is that a float module's `Int` data
 //! is 32-bit where the wasm target's is 64-bit, so the two diverge past 2³²; it
@@ -825,37 +821,6 @@ pub fn needs_int64(fragment: &KernelFragment) -> Result<bool, SpirvRefusal> {
         .chain(fragment.output_classes.iter())
         .any(|class| *class == ScalarClass::Int);
     Ok(holds_an_integer_buffer || module_class(fragment)? == ScalarClass::Int)
-}
-
-/// Whether every buffer a fragment binds is of one class.
-///
-/// # Why this is asked at all when the module no longer cares
-///
-/// **The module side already answers a mixed fragment**: the element type, the
-/// array stride, the block struct and the variable's own type are each read off
-/// *that buffer's* class, and `spirv-val` accepts the result. What has **not**
-/// been made per-buffer is the **host staging**: a dispatch reserves one upload
-/// block per host input at `count × class.byte_width()` and offsets the next
-/// block by that same width, so a fragment binding an `Int` buffer and a `Float`
-/// one would upload eight bytes per `f32` element and read back a wrong number.
-///
-/// That is a silently wrong answer rather than a slow one, so a mixed fragment is
-/// **refused by name here** until staging is per-buffer too. The refusal is in
-/// the dispatch path on purpose: the emitter must keep accepting a mixed fragment,
-/// because that is the half that is finished and is what `spirv-val` checks.
-pub fn buffers_are_uniform(fragment: &KernelFragment) -> bool {
-    let mut seen: Option<ScalarClass> = None;
-    for class in fragment
-        .input_classes
-        .iter()
-        .chain(fragment.output_classes.iter())
-    {
-        match seen {
-            Some(previous) if previous != *class => return false,
-            _ => seen = Some(*class),
-        }
-    }
-    true
 }
 
 /// Compile one fragment to SPIR-V words.
