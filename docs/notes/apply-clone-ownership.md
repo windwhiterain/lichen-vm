@@ -180,6 +180,13 @@ being minted twice — the property the workaround of the companion note needs).
 a template that ran and could not decide leaves the clone `runned = false` with
 an empty slot, rather than claiming an answer it does not hold.)*
 
+**The rule is the clone rule, not the dynamic clone's rule.**  A frozen node now
+carries the same two fields this section reads (`runned` and `evaluated_deep`, in
+place of one collapsed `undecided`), and the static materialize walk asks the same
+question through the same shared policy — that is what stopped a frozen
+constructor from minting the second generation of holes; see
+[kernel-parameter-class](kernel-parameter-class.md).
+
 ## 7. Hypotheses that measurement ruled out
 
 Recorded so they are not walked again.  Each was a plausible cause; each was

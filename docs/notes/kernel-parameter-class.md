@@ -1,18 +1,25 @@
 # The kernel parameter's class: two measured losses
 
-> Status: **current.**  Two defects that both surface as `the kernel parameter's
-> class is not decided when the kernel is compiled`, measured on `dev` at
-> `fb62d96`.  Neither is the defect the two parked `#[ignore]` reasons in
-> `crates/lichen-language/tests/compute.rs` name, and neither is what
-> [function-type-merge](function-type-merge.md) said it was; the corrections are
-> in [what this refutes](#what-this-refutes).  Points at:
+> Status: **current, and both defects are fixed.**  Two defects that both surface
+> as `the kernel parameter's class is not decided when the kernel is compiled`,
+> measured on `dev` at `fb62d96`.  Neither is the defect the two parked
+> `#[ignore]` reasons in `crates/lichen-language/tests/compute.rs` named, and
+> neither is what [function-type-merge](function-type-merge.md) said it was; the
+> corrections are in [what this refutes](#what-this-refutes).  **Defect II** (the
+> decoder could not read a written arrow's node) is fixed in `7e795f9`, and the
+> case it parked is un-parked.  **Defect I** (a frozen module's applied struct
+> lost its field-type cells) is fixed by making the frozen node mirror the
+> ordinary one: the maintainer's ruling was that an applied kernel struct's type
+> **must** carry the signature and that a class write **must** cross the frozen
+> boundary, and `StaticNode` now carries the fields that let the materialize walk
+> carry the answer it already solved.  Points at:
 > `crates/lichen-highlevel/src/shape.rs` (`low_type_of`, `low_type_of_slot`),
 > `crates/lichen-lowlevel/src/{equality,static_module}.rs`,
 > `crates/lichen-compute/src/compute.rs` (`compile_fragment`, `kernel_domain`,
 > `argument_kind`), `crates/lichen-render/src/render/value_printer.rs`
 > (`raw_cells`).
 
-## Defect I — a frozen module's applied struct loses its field-type cells
+## Defect I — a frozen module's applied struct loses its field-type cells *(fixed)*
 
 A struct built by a **frozen** (imported) module, whose field argument is the
 frozen callee's **own parameter cell**, gets field-type cells that hold nothing.
@@ -80,24 +87,48 @@ static ref** (measured per item; every one is a `Dynamic` clone made by the
 `undecided` arm), and the frozen template's four cells are all `undecided`, not
 baked.  The loss is on the clone/class side.
 
-**The local path differs at exactly that step, and that is the repair's shape.**
+**The local path differs at exactly that step, and the difference is the repair.**
 The dynamic walk **carries a residual operation's own answer** when the template's
 operator produced it and the deep pass ran (`function.rs:524`) and then **maps the
 answer's items onto this call's clones** (`value_apply`, `function.rs:577`); the
-static walk drops the answer and re-runs the frozen callee instead.  Mirroring
-that rule alone is **measured not to be enough**: with it, the missing class
-members are cloned and land in `n47`'s class, and the render is *unchanged*,
-because the same clone is the apply node of the re-run and
-`wire_apply_result`'s `write_node_value` (`apply.rs:161`) puts the re-run's
-product into it first — the reconciliation at `equality.rs:397` then compares the
-answer with itself.  So the repair joins **two** sites: the walk's reachability
-(carry the answer, or clone the class of an undecided clone) **and** the
-reconciliation (unify the re-run's product with what the class already holds,
-rather than overwriting the slot).  The first pays either the answer's subtree or,
-for a class-wide rule, the class's size — the freeze note measures a shared type
-class of 601 members.  Neither rule exists outside `static_module/apply.rs`, so
-neither touches the local path, and neither writes a frozen cell: only its clones
-are written, which is what keeps the frozen module from binding.
+static walk dropped the answer and re-ran the frozen callee instead.  It dropped it
+because it **could not ask the question**: the frozen node stored one collapsed
+flag, `evaluated_deep.is_none_or(|e| e.undecided)`, where the rule tests two facts
+apart, `runned && evaluated_deep.is_some()`.
+
+**The fix is the mirror the maintainer ruled for.**  `StaticNode` carries `runned`
+and `evaluated_deep` exactly as `Node` does; `undecided()` is *derived* from the
+latter rather than stored beside it; `freeze` copies both instead of collapsing
+them; and `static_node_apply` runs the dynamic clone rule itself, with the policy
+stated once — `apply::answer_elements_are_undecided`, read by both walks.  The
+persisted artifact encodes the two fields and `ARTIFACT_FORMAT_VERSION` went `9` →
+`10`: a version-`9` artifact's collapsed byte cannot be read as the verdict it was
+derived from, so the bump turns that into the recompile the version check intends.
+
+Measured on a clean rebuild: the two-line repro's imported render is
+**byte-identical to its local control**, `(Int, Int): struct<.I Type, .O Type>`,
+from `(raw Int, raw Int): struct<.I raw[?a, ?b], .O raw[?c, ?d]>`.  The
+expectation that pinned the old render, `a_kernel_value_and_type_render_by_name`,
+is re-pinned to
+`(raw Kernel, Int, Int): struct<.native raw[?a, ?b], .I Type, .O Type>` — each
+signature field's **type** is `Type` (the field holds a *type value*, and the
+universe is the type of one) while its **value** is that type.  Unchanged:
+`lichen-lowlevel --test basic` 155/0, `lichen-highlevel --test checker` 87/0,
+`compute` 57/0/3, `graph_jit` 8/0/1, `graph_structure` 4/0, `examples` 1/0,
+`persist` 15/0, `artifact_transitivity` 1/0, `frozen_function_type` 1/0,
+`cargo check --workspace` clean.
+
+**One prediction this section made first is refuted.**  It recorded that mirroring
+the carry rule alone would not be enough, because `wire_apply_result`'s
+`write_node_value` (`apply.rs:161`) would put the re-run's product into a node the
+carried answer's class already held, so the reconciliation would compare the answer
+with itself.  With the mirror in place that did not happen: `wire_apply_result` is
+**unmodified** and the render moved to the control.  The probe that suggested
+otherwise carried the answer without the `runned` claim at all, and a first attempt
+at the mirror inverted that claim (`runned` set where the items' slots were
+*empty*); both left the render unmoved, and with the claim stated as the dynamic
+rule states it — `runned = mapped.is_some_and(|value| !undecided(value))` — it
+moved.  The claim follows `mapped`, not `carried`: that was the whole of it.
 
 **The static type-value gap is a different mechanism**, measured separately: a
 *reader* cannot name a static ref — `low_type_of`'s new arm is gated on
@@ -249,19 +280,25 @@ annotation.  Splitting it is a separate change.
 
 ## What is still open, and who decides
 
-1. **Defect I's requirement.**  Either an applied kernel struct's type *must*
-   carry the signature — [compute-kernel-struct](compute-kernel-struct.md)'s "the
-   concrete signature rides in the struct" — in which case the frozen field cell
-   is a bug to fill; or "rides in the values" is enough, in which case the parked
-   expectation is rewritten to today's honest dump and the reason is replaced.
-2. **If it is filled, the passing sibling changes.**  `a_kernel_value_and_type_render_by_name`
-   (`compute.rs:644`) pins `(raw Kernel, raw Int, raw Int)`; a filled cell makes
-   those `Int`.  Two currently pinned expectations conflict under any fill.
-3. **Where the fill is owed** — the struct instantiation's field-list unify or
-   the static apply's carry — and whether a class write may cross the frozen
-   boundary.  Not narrowed here.
-4. **The `UNDECIDED_DOMAIN` text** is still one message for two conditions; the
-   split above is a change nobody has approved.
-5. **Whether the applied kernel's *type* half**
-   (`struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>`) is accepted as
-   the applied kernel's type at all — the same decision as 1.
+1. **The `UNDECIDED_DOMAIN` text** is still one message for two conditions; the
+   split described above is a change nobody has approved.
+2. **The static type-value reader gap.**  `low_type_of`'s arm is gated on
+   `AnyNodeId::Dynamic` and `pair_type_half` answers `None` for a static type
+   half, so a frozen function type decodes as `Function(Unknown, Unknown)` while
+   the same node local decodes fully.  It is a *reader* that cannot name a static
+   ref — a different mechanism from Defect I, neither causing the other — and no
+   caller is known to need it; widening it is a separate change.
+3. **The empty `.in` group's coverage.**  The capability is measured end to end on
+   both backends, and the graph-placeholder hole it exposed is fixed (`7643a37`),
+   but no test exercises either one; whether the fillers the tests and examples
+   carry should migrate to the empty group is a maintainer's decision.
+4. Two silent compute failures recorded elsewhere are **not** this note's and are
+   still open: a bare `plrun` whose body reads a runtime scalar on a device answers
+   `none` with no diagnostic, and the `graph` chain's `flat_arity` guard was read
+   but never measured.
+
+Resolved here, and no longer open: Defect I's requirement (the type **must** carry
+the signature), where the fill was owed (the static materialize walk's carry rule,
+which needed the frozen node's mirrored fields), whether a class write may cross
+the frozen boundary (**it must**, and it does), and the sibling expectation that
+conflicted with the model (it pinned the defect and is re-pinned above).

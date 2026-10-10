@@ -2,7 +2,7 @@
 //!
 //! A float's value encoding is tag `8` plus its 32 bits
 //! (`crates/lichen-lowlevel/src/codec.rs`), and the artifact format version is
-//! the current `ARTIFACT_FORMAT_VERSION` (now `9`;
+//! the current `ARTIFACT_FORMAT_VERSION` (now `10`;
 //! `crates/lichen-language/src/persist.rs`).  The round trip must be
 //! bit-identical, and it must keep `LowValue`'s hand-written identity: `0.0` and
 //! `-0.0` come back as two distinct values while two equal `NaN` bit patterns
