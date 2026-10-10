@@ -68,7 +68,10 @@ Three routes refine it:
   read, never the payload. It is hooked at both value-write sites —
   `write_node_value` (re-binding) and `add_node` (a literal, a marker, or a
   freshly built array arrives with its value already concrete) — because hooking
-  only the first would leave every literal without a low type.
+  only the first would leave every literal without a low type. A value the
+  vocabulary has no shape for states nothing at all: the `Str` literal, the unit
+  `None` and an empty `Error` all observe as `None`, which is what keeps
+  observation from ever widening a class it knows more about.
 - **The merge join** — `add_equality` joins the two representatives' low types
   onto the new representative.
 - **The abstract-interpretation pass** — `infer_template_low_types`, on demand,

@@ -55,6 +55,15 @@ first call's parameter cells are then everyone's, and the value is never rebuilt
 - The clone's `origin` is recorded separately — the node it instantiates — so a
   runtime failure that names a clone can be attributed to the argument the caller
   passed.
+- **Template membership is the chain test, or a scope hit.** A node belongs to the
+  template when its `Function::parent` chain reaches the applied function — **or**
+  when it is inside a closure branch whose scope is hit. The chain test alone does not
+  cover a closure that arrived through a unification (a parameter bound to a function
+  value): it is walked under the *enclosing* anchor, and its own nodes' chains are
+  rooted at the original id, whose parent chain need not reach that anchor, so they
+  read as outside the template and the fresh closure's scope would be shared across
+  calls. A closure's own scope is always in its own template, so membership is the
+  chain test or a scope hit.
 
 ## 2. What a clone may carry
 

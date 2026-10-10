@@ -34,6 +34,18 @@ imported package, a native plugin source) and then read in the importing module.
 A kind built locally holds the dynamic universe, whose class is not the kind's
 class, so the honest representative test already answers no.
 
+The same encoding also costs the walks. The universe `K = [Type, ↺]` is reached
+**twice** by any walk that follows type structure, and both such walks handle it
+rather than loop: the deep pass cuts the re-entry and **assumes the node concrete**
+for the readers that reach it while its own frame is still computing it — the
+coinductive step that lets a cyclic value be proven at all. The assumption fills a
+missing verdict and never overrides one, and is cleared where the real verdict is
+written. `evaluate_pattern_argument` instead keeps a `seen` set of `(pattern,
+argument)` pairs, because a typed pattern's spine reaches the universe twice and must
+be walked once. Cloning the universe per apply is a unification *conflict* rather
+than a slowdown, which is why the checker refuses it outright instead of paying for
+it.
+
 ## 2. The printer mis-spelled a correct arrow as `TypeStruct` (fixed)
 
 `compute.jit`'s `.sig` field — the standard library's `type_of f` read in a
