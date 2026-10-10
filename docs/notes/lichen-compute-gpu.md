@@ -364,10 +364,14 @@ guard indices the host already knows.
 Instead every buffer is allocated rounded up to a whole number of workgroups and
 the padding is zeroed — inputs so the surplus lanes' reads are in bounds and
 return `0`, outputs so their writes land in padding rather than past the end.
-Only the first `count` elements are read back. Out-of-range access is impossible
-by construction rather than by a runtime test, and the shader stays branch-free.
-The tests pin **both** ends of that: a count that is not a multiple of 64 (so the
-padding is exercised) and one that is exactly a multiple (so it is not).
+Inputs are zeroed **on the device**, by a `cmdFillBuffer` recorded next to the
+upload: only the `count` real elements cross the bus, and the tail is cleared
+where it already lives rather than uploaded as zeroes the host had copies of
+anyway. Only the first `count` elements are read back. Out-of-range access is
+impossible by construction rather than by a runtime test, and the shader stays
+branch-free. The tests pin **both** ends of that: a count that is not a multiple
+of 64 (so the padding is exercised) and one that is exactly a multiple (so it is
+not).
 
 **An uninitialised output buffer is safe only because a write is reached by every
 invocation.** `dispatch` allocates output buffers and does not initialise them, so
@@ -416,6 +420,30 @@ put the backend back where it started, with nothing in the output to say so. Thi
 is the same rule the rest of the crate follows: no silent fallback onto a path
 that changes what the numbers mean.
 
+## What a host-side run refuses, and what it assumes
+
+- **A parameter the body *reads* is refused by name** (`RunError::ScalarsNotPushed`):
+  the device path pushes no leaf at all — the extent and the index and nothing
+  else — so a read parameter would have no value to arrive, and every lane would
+  compute from the wrong value
+  ([compute-runtime-scalars](compute-runtime-scalars.md) §3). **A declared leaf the
+  body never reads is not missing**, and that is the whole of the condition: a
+  parameter declares its leaves whether or not the body names one, so an input
+  group's filler is a leaf nothing demands
+  ([compute-buffer-wrapper](compute-buffer-wrapper.md)). `spirv` draws the same
+  line at `SpirvRefusal::NonIndexParameter`; this side's test is "is this operand a
+  *different* entry-block parameter", since a parameter read is an operand naming a
+  block parameter.
+- **A host input shorter than the run's count is refused**, each against its own
+  class's width rather than one module-wide answer. Only a host slot can be too
+  short: a resident buffer already holds what an earlier run put there, and its
+  length is that run's business.
+- **The outputs are not initialised.** They are what the caller keeps, so they
+  become resident, and they go into the same descriptor list as the inputs — the
+  binding layout is inputs-then-outputs in one set, so a run's outputs occupy the
+  slots after its inputs rather than a second set. Each is allocated and recorded
+  at its own class, the width a fetch reads it back at.
+
 ## What the GPU actually costs, and where the crossover is
 
 Two numbers decide the design, and both are measured on the development machine:
@@ -448,7 +476,11 @@ Three design facts the measurement bought, all of them load-bearing:
 - **A recycled buffer needs no clearing**, because every consumer writes all of
   it: an output is written across `[0, padded)` by the shader's straight-line
   body, and an input is uploaded across `[0, count)` with the tail cleared on the
-  device.
+  device. The pool is keyed by exact element count **and class**, so a chain at a
+  fixed size and class is served from it forever, while a different size — or the
+  same size in the other class, whose elements are half as wide — simply
+  allocates. A cap keeps that from turning a release into a permanent VRAM
+  reservation.
 - **Allocating one output buffer per link is not merely bigger, it is three times
   slower than not fusing at all.** A link reads the buffer the link before it
   wrote, so two buffers ping-ponged round a chain are enough; a pool that has to
@@ -583,6 +615,22 @@ Stated here because they are silent-wrong-answer rules rather than slow ones:
   `SHADER_WRITE → SHADER_READ | TRANSFER_READ`. It over-covers the
   single-dispatch case, which is a cost — measured as not measurable, but not
   free.
+
+  A **third** case made the destination wide rather than naming a third reader: a
+  chain that hands the same buffer round again — `run_chain` ping-pongs two
+  buffers rather than allocating one per link — has this dispatch **reading** a
+  buffer a later dispatch **writes**, a write-after-read hazard the other two
+  scopes do not order at all. Each of the three is a case where leaving it out
+  does not slow anything down, it makes the chain read undefined data: not stale
+  data, and not a crash. The widening was measured rather than assumed: 16 links
+  at 1 048 576 elements cost 7.79 ms before it and 7.17 ms after, and an empty
+  dispatch 0.046 against 0.048, both inside the run-to-run spread. That is "not
+  measurable", not "free". **The write-after-read half is not measured that way**:
+  only a chain that reuses a buffer needs it, nothing on the `run` path depends on
+  it, and it is paid on the strength of the specification. What does *not* imply
+  this barrier is needed is `spirv`'s write-reachability invariant: that says
+  every invocation reaches its write, and nothing about ordering between
+  dispatches.
 - **A slot is not released until its fence signals.** A recorded-but-unsubmitted
   command buffer is clobbered by the next recording into it, and a command buffer
   whose submission is still in flight cannot be recorded into at all. This is the

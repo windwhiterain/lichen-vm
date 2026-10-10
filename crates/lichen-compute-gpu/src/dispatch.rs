@@ -1,30 +1,10 @@
 //! The Vulkan side: a device, a pipeline per fragment, and a dispatch.
 //!
-//! # The tail-lane obligation, and how it is discharged
-//!
-//! A dispatch covers [`spirv::LOCAL_SIZE_X`] invocations per workgroup, so the
-//! last workgroup runs lanes whose index is past the end. The shader has **no
-//! bounds test**, deliberately: a bounds test would be a branch every lane takes,
-//! on the hottest path, to guard indices the host already knows about.
-//!
-//! Instead every buffer is allocated rounded up to a whole number of workgroups,
-//! and the padding is handled by allocation rather than by data:
-//!
-//! - **Inputs** have their padding zeroed **on the device**, by a
-//!   `cmdFillBuffer` recorded next to the upload. Only the `count` real elements
-//!   cross the bus; the tail is cleared where it already lives rather than
-//!   uploaded as zeroes the host had copies of anyway. The surplus lanes'
-//!   *reads* are therefore in bounds and return `0`.
-//! - **Outputs** are not initialised at all. The emitter emits a write only where
-//!   every invocation reaches it — a selection arm is reached by exactly the lanes
-//!   that take it, and a write in a loop body is refused by name — so every
-//!   invocation reaches its write and the dispatch covers `[0, padded)` in full.
-//!   A zero-fill would be a second pass over memory the shader is about to
-//!   overwrite completely. The surplus lanes' *writes* land in the padding rather
-//!   than past the end of it.
-//!
-//! Only the first `count` elements are ever read back.
-//!
+//! # Invariant
+//! Every buffer is allocated rounded up to a whole workgroup, and every invocation
+//! reaches its write, so only the `count` real elements are ever read back. The
+//! tail-lane accounting, where the data lives, and the memory ordering:
+//! `docs/notes/lichen-compute-gpu.md`.
 //! # Where the data lives
 //!
 //! Buffers are **device-local**: the shader reads and writes them where the
@@ -272,20 +252,12 @@ pub struct GpuContext {
     /// in total. They are a function of `n` alone — the same two objects the old
     /// per-run code built and dropped for every dispatch.
     layouts: Mutex<HashMap<usize, Layouts>>,
-    /// Device buffers that have been given back, keyed by their element count.
+    /// Device buffers that have been given back, keyed by their element count and class.
     ///
-    /// Reuse is safe **without clearing**, and that is worth spelling out because
-    /// it is what makes this a saving rather than a trade: every consumer of a
-    /// buffer writes all of it. An output is written by the shader across
-    /// `[0, padded)` — see `spirv`'s write-reachability invariant — and an input
-    /// is uploaded across `[0, count)` with the tail filled on the device, so no
-    /// stale byte is ever read back.
-    ///
-    /// Keyed by exact element count **and class**, so a chain at a fixed size and
-    /// class is served from here forever and a different size — or the same size
-    /// in the other class, whose elements are half as wide — simply allocates.
-    /// The cap is what keeps this from turning a release into a permanent VRAM
-    /// reservation.
+    /// # Invariant
+    /// Reuse is safe **without clearing**: every consumer of a buffer writes all of it —
+    /// an output across `[0, padded)` and an input across `[0, count)` — so no stale byte
+    /// is ever read back.
     recycled: Mutex<HashMap<(usize, ScalarClass), Vec<DeviceBuffer>>>,
 }
 
@@ -731,25 +703,12 @@ impl GpuContext {
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<Staged, RunError> {
-        // A buffer's width is that buffer's own class, read by [`spirv::buffer_class_of`].
-        //
-        // **The device path pushes no leaf at all**, so a parameter a body
-        // *reads* has nowhere for its value to arrive: refused by name rather
-        // than dispatched with a leaf missing, which would compute every lane
-        // from the wrong value (`docs/notes/compute-runtime-scalars.md` §3).
-        //
-        // **A leaf the body never reads is not missing**, and that is the whole
-        // of the condition: a parameter declares its leaves whether or not the
-        // body names one, so an input group's filler — or any other declared leaf
-        // the body does not read — is a leaf nothing demands
-        // (`docs/notes/compute-buffer-wrapper.md`).  The emitter draws the same
-        // line at [`spirv::SpirvRefusal::NonIndexParameter`].
+        // **The device path pushes no leaf at all**, so a parameter the body *reads* is
+        // refused by name.
         let leaves = fragment.param_shape.flat_arity();
         let index = spirv::index_local(fragment);
-        // A parameter read is an operand naming a **block parameter**, so a
-        // dispatch pushes the extent and the index and nothing else: any
-        // operand naming a *different* entry parameter is a leaf with no
-        // value to arrive.
+        // A declared leaf the body never reads is not missing; the emitter draws the same
+        // line.
         let index_param = index.and_then(|index| {
             fragment.body.blocks[fragment.body.entry]
                 .params
@@ -769,12 +728,7 @@ impl GpuContext {
             outputs: fragment.outputs,
         };
         for (index, slot) in inputs.iter().enumerate() {
-            // Only a host slot can be too short; a resident one already holds what
-            // an earlier run put there, and its length is that run's business.
-            //
-            // **The width is this buffer's own class**, so a fragment that reads an
-            // `Int` buffer and a `Float` one checks each against its own width
-            // rather than against one module-wide answer.
+            // **The width is this buffer's own class**, not one module-wide answer.
             let width = spirv::buffer_class_of(fragment, index, class).byte_width();
             if let BufferSlot::Host(data) = slot
                 && data.len() < count * width
@@ -862,21 +816,11 @@ impl GpuContext {
             descriptors.push(buffer.descriptor());
         }
 
-        // The outputs are what the caller keeps, so they are the buffers that
-        // become resident.  They go into the same descriptor list: the binding
-        // layout is inputs-then-outputs in one set, so a run's outputs occupy the
-        // slots after its inputs rather than a second set.
-        //
-        // **Nothing is written into them here.**  The emitter emits a write only
-        // where every invocation reaches it — a loop body's write is refused by
-        // name — so every invocation reaches its `BufferWriteCall` and stores, and
-        // the dispatch covers `[0, padded)`.  A zero-fill would be a second pass
-        // over memory the shader is about to overwrite in full; `spirv`'s module
-        // docs carry this invariant.
-        // Each output is allocated and recorded at its own class, the width a fetch reads it back at.
+        // **Nothing is written into the outputs here**: every invocation reaches its write.
         let output_classes: Vec<ScalarClass> = (0..binding.outputs)
             .map(|ordinal| spirv::buffer_class_of(fragment, binding.inputs + ordinal, class))
             .collect();
+        // Each output is allocated and recorded at its own class, the width a fetch reads it at.
         for buffer_class in &output_classes {
             let buffer = self.allocate(padded, *buffer_class)?;
             descriptors.push(buffer.descriptor());
@@ -906,9 +850,8 @@ impl GpuContext {
                     handle: buffer.handle,
                     memory: buffer.memory,
                     padded,
-                    // The class this output's element type was emitted for, so a
-                    // fetch reads it back at the width it was written at rather
-                    // than at another buffer's.
+                    // The class this output's element type was emitted for, so a fetch reads
+                    // it back at the width it was written at.
                     class: output_classes[ordinal],
                 },
             );
@@ -1474,43 +1417,8 @@ impl GpuContext {
                 &[],
             );
             device.cmd_dispatch(command, count.div_ceil(LOCAL_SIZE_X as usize) as u32, 1, 1);
-            // The results stay on the device, so this does not hand them to the
-            // host; it makes them visible to whoever reads them next.
-            //
-            // **The scope is wide on purpose, and it names three readers/writers
-            // rather than the two this path was born needing.** A `fetch` in a
-            // later submission reads the results as a transfer. A dispatch
-            // recorded after this one *in the same command buffer* reads them as
-            // a shader. And a chain that hands the same buffer round again —
-            // `run_chain` ping-pongs two buffers rather than allocating one per
-            // link — has this dispatch **reading** a buffer a later dispatch
-            // **writes**, and that is a write-after-read hazard the other two
-            // scopes do not order at all.
-            //
-            // Each of the three is a case where leaving it out does not slow
-            // anything down, it makes the chain read undefined data: not stale
-            // data, and not a crash. So the scope carries all three, which
-            // over-covers the single-dispatch case that is what the `run` path
-            // records and under-covers nothing.
-            //
-            // That over-coverage is a cost, so the first widening was measured
-            // rather than assumed: 16 links at 1 048 576 elements cost 7.79 ms
-            // before it and 7.17 ms after, and an empty dispatch 0.046 against
-            // 0.048, both inside the run-to-run spread of the example that
-            // produced them. The reading was that the widening is not
-            // measurable — not that it is free.
-            //
-            // **The write-after-read half above has not been measured that way.**
-            // It is only needed by a chain that reuses a buffer, so nothing on
-            // the `run` path depends on it, and the runs of the example on this
-            // machine span a range wider than any effect it could plausibly
-            // have. It is paid here on the strength of the specification, not of
-            // a number, and that is worth knowing before anyone treats the
-            // barrier above as a cost that was justified by measurement.
-            //
-            // Note what does *not* imply this barrier is needed: `spirv`'s
-            // write-reachability invariant says every invocation reaches its
-            // write. It says nothing about ordering between dispatches.
+            // The trailing barrier names every reader of these results, including a later
+            // dispatch in the same command buffer.
             device.cmd_pipeline_barrier(
                 command,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
