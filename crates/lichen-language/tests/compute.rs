@@ -2169,17 +2169,18 @@ compute.read ((compute.Read _)(.from out.z, .at 0))
     );
 }
 
-/// A dynamic reduction on both backends at two lengths: the triangle numbers.
+/// A dynamic reduction on both backends at three lengths: the triangle numbers.
 ///
 /// # Invariant
 /// Lane `i` reads its trip count from `data[i]`, so the last lane's count is the
 /// buffer's length; the seed fills `data[i] = i + 1`, and the answer is the
-/// hand-derived `length(length + 1)/2` (`10` at four elements, `28` at seven).
-/// The continue arm is first because `spirv.rs` branches on `if_true` whichever
-/// arm leaves the loop (`docs/notes/loop-conversion.md` §8.6 item 6).
+/// hand-derived `length(length + 1)/2` — `10`, `28` and `180_300` at four, seven
+/// and six hundred elements. The continue arm is first because `spirv.rs`
+/// branches on `if_true` whichever arm leaves the loop
+/// (`docs/notes/loop-conversion.md` §8.6 item 6).
 #[test]
 fn a_kernel_loop_reduces_a_runtime_buffer_length() {
-    for length in [4_usize, 7] {
+    for length in [4_usize, 7, 600] {
         let source = format!(
             r#"
 ---

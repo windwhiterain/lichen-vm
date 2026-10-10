@@ -799,7 +799,7 @@ where
                 return self.value(residual);
             }
         }
-        // The operator's identity is a static fact of its callee, residual or not,
+// The operator's identity is a static fact of its callee, residual or not,
         // so the frozen body is read by `FunctionId`.
         if let Some(value) = self.routed_operator(node, callee, operand)? {
             return Ok(value);
@@ -1296,8 +1296,7 @@ where
                 arms.len()
             ));
         }
-        // **`[else, then]`**, so element 0 is the arm that runs when the condition
-        // is false.
+// **`[else, then]`**, so element 0 runs when the condition is false.
         let (otherwise, then) = (arms[0].node, arms[1].node);
         let emitted = self.tally.writes;
         let otherwise = self.value_item(otherwise)?;
