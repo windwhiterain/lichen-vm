@@ -3,8 +3,9 @@
 //! # Why this is hand-written
 //!
 //! The IR has a handful of value-producing operations and two buffer
-//! operations, so the whole emitter is a small stack machine over
-//! [`KernelInstr`]. A builder crate would not remove the part that actually goes
+//! operations, so the whole emitter is a small walk over [`KernelInstr`] that
+//! keeps **one id per [`ValueId`]** — SPIR-V is SSA and this emitter does not
+//! pretend otherwise. A builder crate would not remove the part that actually goes
 //! wrong: the **module contract** — the section order, which capabilities are
 //! declared, which variables carry which decorations, and what the entry point's
 //! interface lists. A builder spells opcodes for you and validates nothing about
@@ -277,8 +278,6 @@ pub enum SpirvRefusal {
     MixedClasses { at: usize },
     /// The body does not leave exactly the one value a compute shader needs.
     ResultArity { results: usize, left: usize },
-    /// The stack did not balance: an instruction popped more than it pushed.
-    UnbalancedStack { at: usize },
     /// A body whose structure the target has not been taught to emit.
     ///
     /// **Refused rather than emitted straight-line**, because a dropped branch is
@@ -345,14 +344,9 @@ impl fmt::Display for SpirvRefusal {
             ),
             SpirvRefusal::ResultArity { results, left } => write!(
                 f,
-                "the fragment declares {results} result(s) and its body leaves {left} value(s) on \
-                 the stack. A compute shader communicates through its storage buffers, so this \
-                 backend requires a fragment whose body is one balanced value."
-            ),
-            SpirvRefusal::UnbalancedStack { at } => write!(
-                f,
-                "instruction {at} popped from an empty stack; the lowered body is not a balanced \
-                 stack program."
+                "the fragment declares {results} result(s) and its body returns {left} value(s). \
+                 A compute shader communicates through its storage buffers, so this backend \
+                 requires a fragment whose body returns exactly one value."
             ),
             SpirvRefusal::ControlFlow { detail } => write!(
                 f,
@@ -400,8 +394,8 @@ impl Inst {
     }
 }
 
-/// A stack operand: the SSA id of a value, and which of the module's types that
-/// id has.
+/// One lowered value: the SSA id SPIR-V gave it, and which of the module's types
+/// that id has.
 #[derive(Debug, Clone, Copy)]
 struct Slot {
     id: u32,
@@ -474,11 +468,11 @@ impl Slot {
     /// The compile-time constant this slot is, or `None` for a computed value.
     ///
     /// A buffer operation's *position* selects **which** storage-buffer variable
-    /// to reach — a compile-time choice — so it is read off the stack as a
-    /// number rather than as an id. A position is a `Const` pushed immediately
-    /// before the call: a value that was *computed* is not an ordinal however
-    /// constant its value happens to be, and reading one as a position would
-    /// address a buffer the caller never named.
+    /// to reach — a compile-time choice — so it is read as a number rather than
+    /// as an id. A position is a `Const` computed immediately before the call: a
+    /// value that was *computed* is not an ordinal however constant its value
+    /// happens to be, and reading one as a position would address a buffer the
+    /// caller never named.
     fn constant(self) -> Option<i64> {
         match self.kind {
             Kind::Literal(value) => Some(value),
@@ -1307,8 +1301,8 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
         });
     }
     // And the id that result names must have been emitted, which is the same
-    // check the stack's length was: a body whose return is not one of its own
-    // values has produced nothing to hand back.
+    // check its arity is: a body whose return is not one of its own values has
+    // produced nothing to hand back.
     if returned
         .first()
         .is_none_or(|value| !slots.contains_key(value))

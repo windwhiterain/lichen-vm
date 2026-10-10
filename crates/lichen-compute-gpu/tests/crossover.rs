@@ -198,7 +198,7 @@ fn an_unbalanced_body_is_refused() {
     // **There is no such thing as an unbalanced body any more.** An instruction
     // names its operands by `ValueId`, so an operator cannot "pop from an empty
     // stack" — the shape that made `UnbalancedStack` mean something is gone, and
-    // the variant with it. What is left is the honest refusal: the operator
+    // the variant went with it. What is left is the honest refusal: the operator
     // declares two operands and the body gives it none, and
     // `KernelBody::validate` says so before the emitter reads anything.
     assert!(
@@ -206,9 +206,5 @@ fn an_unbalanced_body_is_refused() {
             .to_string()
             .contains("reads 2 value(s) but is given 0"),
         "the refusal names the arity it could not satisfy: {refusal}"
-    );
-    assert!(
-        !matches!(refusal, SpirvRefusal::UnbalancedStack { .. }),
-        "and the stack-shaped refusal is gone with the stack"
     );
 }
