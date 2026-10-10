@@ -1,9 +1,5 @@
-//! Device-persistence tests: the `~/.lichen` cache — cross-store round
-//! trips, incremental recompilation, stable/reclaimed device keys, file-ID
-//! keyed overwrite-on-recompile, explicit GC, crash recovery, and
-//! corrupt-artifact self-healing.  Unlike a content-addressed cache, each
-//! compiled file keeps exactly one cache slot (keyed by its file ID), so
-//! recompiling a modified file overwrites it rather than accumulating.
+//! Device-persistence tests for the `~/.lichen` artifact cache.
+//! See `docs/notes/artifact-cache.md`.
 
 use std::collections::HashMap;
 use std::fs;
@@ -54,11 +50,8 @@ fn handle_of(
 
 #[test]
 fn the_shipping_slot_is_the_one_the_package_manager_installs_into() {
-    // The compiler locates its cache root here; `lichen` (lichen-package)
-    // installs the shipping toolchain into `<lichendir>/compilers/<its own
-    // key>`.  Both call `lichen_utils::cache::compiler_slot_key`, and this is
-    // the one test that spans the two crates: a second derivation — or the
-    // same derivation over a different repository — on either side fails here.
+    // The compiler reads this slot and `lichen-package` installs into it:
+    // both crates must share one key derivation.
     let installed = lichen_package::compiler_cache::key(lichen_package::DEFAULT_REPO, &[])
         .expect("the empty plugin set needs no fetched source");
     let expected = lichen_language::persist::lichendir()
@@ -73,9 +66,6 @@ fn the_shipping_slot_is_the_one_the_package_manager_installs_into() {
 
 #[test]
 fn cache_round_trip_across_stores() {
-    // A transitive chain compiles once, then a fresh store over the same
-    // cache directory loads the whole chain from disk — same output, same
-    // device keys, zero compiles.
     let dir = temp_dir("roundtrip");
     write(&dir, "inner.lichen", "x => x + 1\n");
     write(
@@ -122,8 +112,8 @@ fn cache_round_trip_across_stores() {
 
 #[test]
 fn incremental_recompile_only_touches_the_changed_chain() {
-    // A → B → C.  Changing B recompiles B and A only; C is verified through
-    // the recorded dependency graph and loads from the cache unchanged.
+    // C is verified through the recorded dependency graph, never re-parsed
+    // (`docs/notes/artifact-cache.md`).
     let dir = temp_dir("incremental");
     write(&dir, "c.lichen", "40\n");
     write(&dir, "b.lichen", "---c = import \"c.lichen\"---c + 1\n");
@@ -196,8 +186,6 @@ fn corrupt_artifact_rebuilds_cleanly() {
 
 #[test]
 fn identical_content_gets_separate_file_id_slots() {
-    // Two paths with identical content are distinct files (distinct file IDs),
-    // so each is compiled and cached in its own slot — no content dedup.
     let dir = temp_dir("nodedupe");
     write(&dir, "a.lichen", "7\n");
     write(&dir, "b.lichen", "7\n");
@@ -216,11 +204,8 @@ fn identical_content_gets_separate_file_id_slots() {
 
 #[test]
 fn a_corrupted_body_is_rejected_by_the_header_digest() {
-    // The header's body digest is verified before any body field is read, so a
-    // body corrupted in place is a clean miss (the store recompiles) rather
-    // than a module that loads and is silently wrong.  The flipped byte is a
-    // letter of a string literal: valid UTF-8, inside no length or index, so
-    // no field parser can reject it — only the digest can.
+    // The flip lands in a string literal — valid UTF-8, inside no
+    // length or index, so only the body digest can reject it.
     const MARKER: &str = "artifact-body-digest-marker";
     let dir = temp_dir("bodydigest");
     let path = write(&dir, "pkg.lichen", &format!("\"{MARKER}\"\n"));
@@ -239,11 +224,8 @@ fn a_corrupted_body_is_rejected_by_the_header_digest() {
             .join(format!("{}.module", hex(&file_id_hash(&file_id)))),
     )
     .unwrap();
-    // Every source is seeded with the prelude, so a package's artifact records
-    // the built-in `core` module as a dependency.  The device gives an *embedded*
-    // dependency — one with no artifact record of its own, like `core` and
-    // `compute` — the all-zero sentinel, on both sides of the fold, so the
-    // importer's cache still hits (`DeviceRegistry::artifact_identity`).
+    // An embedded dependency (`core`) has no artifact of its own, so both
+    // sides of the fold give it the all-zero identity.
     let prelude = store.prelude_import().unwrap();
     let hash = artifact_hash(
         sha256(source.as_bytes()),
@@ -251,8 +233,6 @@ fn a_corrupted_body_is_rejected_by_the_header_digest() {
     );
     let modules = HashMap::new();
 
-    // A valid artifact the writer produced still loads: a digest read or
-    // computed over the wrong bytes would break every cache load.
     let (module, export) = deserialize_artifact(&bytes, handle.key, hash, &modules)
         .expect("the artifact the writer produced must load");
     assert!(export.index < module.nodes.len());
@@ -264,8 +244,6 @@ fn a_corrupted_body_is_rejected_by_the_header_digest() {
         "the loaded module carries the program's string literal"
     );
 
-    // The writer emits the string literal's bytes into the body exactly once,
-    // so the flip below lands in the body and changes no length or index.
     let at = bytes
         .windows(MARKER.len())
         .position(|window| window == MARKER.as_bytes())
@@ -292,10 +270,8 @@ fn a_corrupted_body_is_rejected_by_the_header_digest() {
 
 #[test]
 fn gc_cleans_only_non_lichen_and_non_virtual_slots() {
-    // `gc` is a "clean": it keeps artifacts whose file ID is a lichen file
-    // path or a virtual lichen-file path, and removes anything else.  Since
-    // `load_package` rejects non-`.lichen` files, a stray non-lichen file ID
-    // can only enter the registry out-of-band (here, directly) — gc prunes it.
+    // `gc` keeps `.lichen` and `virtual:` slots.  A stray file ID enters
+    // out-of-band: `load_package` admits only `.lichen`.
     let dir = temp_dir("clean");
     let keep_path = write(&dir, "keep.lichen", "42\n");
     let cache = dir.join("cache");
@@ -329,9 +305,8 @@ fn gc_cleans_only_non_lichen_and_non_virtual_slots() {
 
 #[test]
 fn non_lichen_package_is_rejected_at_load() {
-    // Only `.lichen` files are packages: a non-lichen path is rejected up
-    // front, so the cache invariant (file ID is a `.lichen` or `virtual:` path)
-    // holds by construction.
+    // Rejecting a non-`.lichen` path is what keeps the cache invariant:
+    // every file ID is a `.lichen` or `virtual:` path.
     let dir = temp_dir("extension");
     let txt_path = write(&dir, "data.txt", "7\n");
     let mut store = PackageStore::<LangProgram>::with_cache_dir(dir.join("cache"));
@@ -348,9 +323,8 @@ fn non_lichen_package_is_rejected_at_load() {
 
 #[test]
 fn a_missing_package_is_an_io_diagnostic_not_a_line_one_syntax_error() {
-    // A path that does not exist is a filesystem failure, so it carries no
-    // source position: it must not be reported as a source problem at line 1,
-    // column 1 (a caret at the first character of a file that is not there).
+    // A missing file has no source to point at, so the diagnostic carries
+    // no span — never a caret at line 1 column 1.
     let dir = temp_dir("missing");
     let missing = dir.join("absent.lichen");
     let mut store = PackageStore::<LangProgram>::with_cache_dir(dir.join("cache"));
@@ -401,9 +375,8 @@ fn remove_drops_one_package_and_recompiles_on_demand() {
 
 #[test]
 fn a_crash_between_alloc_and_publish_recovers() {
-    // Allocate a key and drop the registry without publishing (a crash
-    // between allocation and the end of the compile).  A fresh store sees
-    // the pending record as a miss, recompiles, and completes the same key.
+    // A crash between `alloc` and publish leaves a pending record: a miss
+    // that the next run recompiles into the same key.
     let dir = temp_dir("pending");
     let pkg_path = write(&dir, "pkg.lichen", "42\n");
     let cache = dir.join("cache");
@@ -424,9 +397,6 @@ fn a_crash_between_alloc_and_publish_recovers() {
 
 #[test]
 fn two_stores_share_the_device_registry() {
-    // Two store instances (two processes) over one cache directory: keys
-    // come from the one shared registry and the second store's artifacts
-    // are served to the first.
     let dir = temp_dir("twostores");
     write(&dir, "a.lichen", "1\n");
     write(&dir, "b.lichen", "2\n");
@@ -445,10 +415,8 @@ fn two_stores_share_the_device_registry() {
 
 #[test]
 fn a_package_that_imports_an_embedded_source_verifies_across_stores() {
-    // The package imports an embedded (native virtual) source instead of a file
-    // on disk.  Its bytes are compiled into the compiler binary, so the
-    // dependency can never change under this cache root and must not force the
-    // package to recompile on every run.
+    // An embedded source is compiled into the binary, so it cannot change
+    // under a cache root and must not force a recompile.
     let dir = temp_dir("embedded-dep");
     let pkg_path = write(
         &dir,

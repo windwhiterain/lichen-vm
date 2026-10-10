@@ -1,55 +1,5 @@
-//! What a `plrun` chain actually looks like to a lowering, before anything is
-//! built on top of it.
-//!
-//! The graph lowering walks a function and reads dispatches out of it without
-//! running any. Every fact it depends on was inferred from the shape
-//! `ComputeOperator::ParLaunch`'s `run` branch is handed, which is the shape of
-//! an *already evaluated* operand. This file is where those inferences are
-//! checked against the raw node structure instead, because a lowering written
-//! on inferred shapes is a lowering written on guesses — and the first guess
-//! here was simply wrong.
-//!
-//! **A native call is an `Apply`, and the operator the native op built lives in
-//! a synthesized per-call-site function that the `Apply` enters.** The source
-//! function's own node list contains no compute operator at all. A lowering that
-//! looked for `ParLaunch` in the body would find nothing and record an empty
-//! graph from a program that dispatches.
-//!
-//! The rest of what a lowering needs, and what the tests below check:
-//!
-//! - an `Apply` names its callee as a `[callee, argument, _]` operand array, and
-//!   the callee is reached through the same `Index(pair, 0)` extraction the
-//!   checker uses;
-//! - the callee's body holds the compute operator node, and *that* node's
-//!   operand array is `[kernel, cfg]`, readable without evaluating it — which is
-//!   what keeps a **build** from running a dispatch;
-//! - the `cfg` reaches the dispatch through a `value_of`-style `Index`
-//!   extraction, and the tuple behind it is readable with no evaluation at all.
-//!
-//! **But nothing in a template's body is decided**, and that is the fact the
-//! lowering turns on: the count and the buffers in the `cfg` are
-//! undecided until the function is applied. So a graph is built by
-//! *applying* the function and recording what it dispatches, not by reading a
-//! template. See
-//! [`a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied`].
-//!
-//! **And the parameter is the named struct, so a body's reads are field reads.**
-//! The parameter is still the `[value, type]` pair: the value cell carries no
-//! operation and stays undecided until the apply, and the type cell is the
-//! annotation's own struct term. What the retired *tuple* form made unpredictable
-//! is now written down — the extent is read at `.n`, each input is a `Buf` field
-//! under `.in` — so a graph's inputs are named rather than counted, and the
-//! recording binds each cell at the path the role walk found.
-//!
-//! Two tests the tuple form needed are gone with it: the one that pinned an open
-//! tuple type on the parameter through positional reads (the annotation states
-//! the struct now), and the one that pinned the body's read *order* against the
-//! argument's positions in a cfg *tuple*. The fact they were protecting — that
-//! **nothing in a template's body is decided** — is still checked, on the leaves
-//! of the argument the dispatch is handed
-//! ([`a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied`]),
-//! and the binding fact is checked by running
-//! [`a_parameter_is_bound_by_the_position_the_source_names_and_not_by_read_order`].
+//! What a `plrun` chain looks like to a graph lowering.  See
+//! `docs/notes/compute-graph-jit.md`.
 
 use std::sync::Arc;
 
@@ -64,10 +14,8 @@ use lichen_utils::extend::AsEnum;
 
 use lichen_compute::{ComputeOperator, ComputeValue};
 
-/// Compile a program the way a host does — imports resolved through a package
-/// store, so `import "compute.lichen"` brings the compute plugin in — and hand
-/// back the module rather than a rendered value, which is the point: a
-/// lowering wants to look at nodes nothing has applied.
+/// Compile the way a host does — imports through a `PackageStore` — and return
+/// the **module**, not a rendered value.
 fn run(source: &str) -> (Module<LangProgram>, NodeId) {
     let mut store = PackageStore::<LangProgram>::new();
     let (preprocessed, diags) = preprocess(source, None, &mut store);
@@ -117,9 +65,8 @@ fn function_of(module: &mut Module<LangProgram>, root: NodeId) -> AnyFunctionId 
     }
 }
 
-/// The dynamic [`FunctionId`] behind a function value. A language function is
-/// never a static one, so a static ref here would mean the program is not the
-/// shape these tests are about.
+/// The dynamic [`FunctionId`] behind a function value; a language function is
+/// never static.
 fn dynamic(fid: AnyFunctionId) -> FunctionId {
     match fid {
         AnyFunctionId::Dynamic(fid) => fid,
@@ -146,6 +93,8 @@ fn applies(module: &Module<LangProgram>, fid: AnyFunctionId) -> Vec<NodeId> {
 
 /// The compute operator nodes held in a function's body.
 ///
+/// # Invariant
+///
 /// A **static** callee has no body in this module — it lives in a frozen
 /// package — so it contributes nothing and yields nothing. That is not a shape
 /// to work around: a source body mixes both kinds of call, and a dispatch is
@@ -171,10 +120,12 @@ fn compute_nodes(
 
 /// The function an `Apply` node calls.
 ///
+/// # Invariant
+///
 /// The callee slot holds a `value_of` extraction whose **own cached value is
 /// already the function** — `Index(pair, 0)` evaluates to the pair's value, so
 /// following the `Index` further would land on the pair rather than on the
-/// function. Reading the node's value is the whole of it.
+/// function.
 fn callee_of(module: &Module<LangProgram>, apply: NodeId) -> Option<AnyFunctionId> {
     let operation = module.node_operation(apply)?;
     let operand = items(module, operation.operand?).into_iter().next()?;
@@ -184,8 +135,8 @@ fn callee_of(module: &Module<LangProgram>, apply: NodeId) -> Option<AnyFunctionI
     }
 }
 
-/// The one `ParLaunch` reachable from a function's body, through whatever
-/// indirection it takes. This is the whole of "find the dispatches".
+/// The one `ParLaunch` reachable from a function's body. This is the whole of
+/// "find the dispatches".
 fn the_dispatch(module: &Module<LangProgram>, fid: AnyFunctionId) -> Option<NodeId> {
     applies(module, fid).into_iter().find_map(|apply| {
         let callee = callee_of(module, apply)?;
@@ -196,17 +147,15 @@ fn the_dispatch(module: &Module<LangProgram>, fid: AnyFunctionId) -> Option<Node
     })
 }
 
-/// A `plrun` chain in a function that closes over its kernels and its data. This
-/// is the shape a graph is compiled from.
+/// A `plrun` chain in a function that closes over its kernels and its data — the
+/// shape a graph is compiled from.
 ///
-/// **`x => body` is the only lambda there is** — the grammar's
-/// `lambda := annotated ('=>' expr)?` puts a *name* on the left, so a lichen
-/// function always has exactly one parameter and a "free variable" is simply a
-/// name the body reads that is not that parameter. `s` is therefore a parameter
-/// rather than a free variable, which is what makes `doubler` and `data` free
-/// ones — and the captured kernel struct is exactly what
-/// [`the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct`]
-/// is about.
+/// # Invariant
+///
+/// `x => body` is the only lambda there is, and the resolver gives it exactly
+/// one binder, so a "free variable" is just a name the body reads that is not
+/// that parameter. That is what makes `s` a parameter and `doubler`/`data` free
+/// ones.
 const CHAIN: &str = r#"---
   compute = import "compute.lichen"
 ---
@@ -257,18 +206,17 @@ fn a_body_dispatches_through_an_apply_whose_callee_holds_the_operator() {
 
     let dispatch = the_dispatch(&module, function).expect("the body dispatches once");
 
-    // The operator node's own operand array is [kernel, cfg], readable without
-    // evaluating it — which is what keeps a build from dispatching.
+    // The operand array is [kernel, cfg], readable without evaluating it — which
+    // keeps a build from dispatching.
     let operation = module.node_operation(dispatch).expect("a dispatch node");
     let operands = items(&module, operation.operand.expect("operands"));
     assert_eq!(operands.len(), 2, "[kernel, cfg]");
 
-    // How far into the cfg a value-level read gets: **nowhere**. The cfg slot is
-    // an unevaluated array-constructing node, so `array_items` — which reads a
-    // node's cached payload — has nothing to read. `ParLaunch`'s `run` branch
-    // sees `[kernel, cfg]` as *values* because the VM evaluated them first, and
-    // that evaluation is the part a lowering cannot simply borrow: doing it
-    // would run the dispatch.
+    // A value-level read into the cfg gets **nowhere**: the slot is an
+    // unevaluated node, so `array_items` finds nothing.
+
+    // `ParLaunch`'s `run` sees values there only because the VM
+    // evaluated them; borrowing that step would run the dispatch.
     assert!(
         module.node_value(AnyNodeId::Dynamic(operands[1])).is_none()
             || unsafe { module.array_items(operands[1]) }.is_none(),
@@ -277,8 +225,8 @@ fn a_body_dispatches_through_an_apply_whose_callee_holds_the_operator() {
     );
 }
 
-/// Follow a `value_of` extraction — `Index(x, i)` — to `x`, which is how the
-/// checker reaches through a pair or a struct field to the value itself.
+/// Follow a `value_of` extraction — `Index(x, i)` — to `x`, as the
+/// checker reaches a pair's or a struct field's value.
 fn through_index(module: &Module<LangProgram>, node: NodeId) -> NodeId {
     let operation = module.node_operation(node).expect("an Index node");
     assert_eq!(
@@ -290,13 +238,14 @@ fn through_index(module: &Module<LangProgram>, node: NodeId) -> NodeId {
 }
 
 /// A graph function whose dispatch reads **both its count and its buffer out of
-/// its own parameter**, which is where a graph's inputs come from.
+/// its own parameter**.
+///
+/// # Invariant
 ///
 /// The parameter is the named struct, so the argument the dispatch is handed is
-/// that struct built from the parameter's own fields — `(compute.A InB)(.n s.n,
-/// .I InB(.b s.in.b))` — and there is no literal and no captured value anywhere
-/// in it. That is what makes the leaves of this dispatch's argument undecided
-/// cells, which is the fact the test below is about.
+/// that struct built from the parameter's own fields — there is no literal and
+/// no captured value anywhere in it. That is what makes the leaves of the
+/// argument undecided cells.
 const FROM_PARAMETER: &str = r#"---
   compute = import "compute.lichen"
 ---
@@ -320,9 +269,11 @@ step
 /// The nodes a value is made of at its leaves: a nested array is descended, and
 /// anything else is a leaf.
 ///
+/// # Invariant
+///
 /// A struct value is an array ([`lichen_highlevel::shape`]), so this is how a
-/// test reaches the cells an argument is built from rather than the wrapper the
-/// argument is.
+/// test reaches the cells an argument is built from rather than the argument
+/// itself.
 fn leaves_of(module: &Module<LangProgram>, node: NodeId) -> Vec<NodeId> {
     // SAFETY: `node` is a live node of `module`, whose blocks are all alive —
     // nothing has been dropped.
@@ -335,26 +286,18 @@ fn leaves_of(module: &Module<LangProgram>, node: NodeId) -> Vec<NodeId> {
     }
 }
 
-/// **Nothing in a template's body is decided, and that is the fact that decides
-/// how a graph has to be built.**
+/// **Nothing in a template's body is decided, and that decides how a graph has
+/// to be built.**
 ///
-/// The argument the dispatch is handed is readable without any evaluation, and
-/// reading it is not enough: its **leaves** — the count and the buffer the body
-/// reads out of its own parameter — are undecided cells until the function is
-/// applied, because nothing has applied it.
+/// # Invariant
 ///
-/// So a graph cannot be built by *reading* a template. It has to be built by
-/// **applying** the function and recording what it dispatches, which is what
-/// `ValueId`'s own note says ("the graph is built by recording an evaluation
-/// that has already happened"). Walking the structure without evaluating gets
-/// you the graph's shape and none of its values, and the values are the part a
-/// run needs.
+/// The argument's **leaves** — the count and the buffer the body reads from its
+/// parameter — are undecided cells until the function is applied, so a graph is
+/// built by **applying** it and recording what it dispatches, never by reading
+/// the template (`ValueId`'s note).
 ///
-/// Applying is safe, and is equivalent to not applying, for the reason the
-/// language gives for free: **every** lichen function has exactly one
-/// parameter, and this one reads it, so what is applied is exactly the structure
-/// the recording builds. A body that dispatched a captured buffer is the
-/// unrecordable case.
+/// Applying is equivalent to not applying here: the function has one parameter
+/// and this one reads it.
 #[test]
 fn a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied() {
     let (mut module, root) = run(FROM_PARAMETER);
@@ -365,9 +308,8 @@ fn a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied(
         module.node_operation(dispatch).unwrap().operand.unwrap(),
     );
 
-    // The argument reaches the dispatch through an `Index` extraction, so
-    // following it is the whole of the lookup — the same walk `value_of_node`
-    // does.
+    // The argument reaches the dispatch through an `Index`; following
+    // it is the whole lookup, the walk `value_of_node` does.
     let cfg = through_index(&module, operands[1]);
     let cfg_items = items(&module, cfg);
     assert_eq!(
@@ -402,9 +344,8 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
         module.node_operation(dispatch).unwrap().operand.unwrap(),
     );
 
-    // `k.native` — an `Index` into the captured kernel struct, with neither the
-    // struct nor the field index carrying a value, for the same reason the cfg
-    // does not. What settles it is the application, not the read.
+    // `k.native` — an `Index` into the captured kernel struct;
+    // neither it nor the field index holds a value until applied.
     assert_eq!(
         format!(
             "{:?}",
@@ -420,8 +361,8 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
     );
 }
 
-/// A graph function that reads its parameter **back to front**, and then runs,
-/// which is the only way to tell position from order.
+/// A graph function that reads its parameter **back to front**, then runs —
+/// the only way to tell position from order.
 const BACK_TO_FRONT: &str = r#"---
   compute = import "compute.lichen"
 ---
@@ -452,13 +393,15 @@ step ((ParB)(.n 4, .in InB(.b data.z), .out OutB(.w data.z)))
 
 /// The `i64`s behind a buffer value.
 ///
+/// # Invariant
+///
 /// The payload is the class's packed elements — eight bytes each for an `Int`
 /// buffer ([`lichen_kernel_ir::ScalarClass::byte_width`]) — so the words are
-/// decoded rather than viewed: a payload is bytes, and a `&[i64]` view of it would
-/// be the old word-per-element layout the ABI no longer has.
+/// decoded rather than viewed: a payload is bytes, and a `&[i64]` view of it
+/// would be the old word-per-element layout the ABI no longer has.
 fn buffer_data(handle: &lichen_lowlevel::AnyHandle<[u8]>) -> Vec<i64> {
-    // SAFETY: the handle is the value's own arena payload, its home block is the
-    // live one the evaluation just ran in, and nothing has dropped it.
+    // SAFETY: the handle is the value's own arena payload and its home block is
+    // the live one the evaluation just ran in.
     let bytes = unsafe { std::slice::from_raw_parts(handle.as_ptr(), handle.len()) };
     bytes
         .chunks_exact(std::mem::size_of::<i64>())
@@ -466,27 +409,17 @@ fn buffer_data(handle: &lichen_lowlevel::AnyHandle<[u8]>) -> Vec<i64> {
         .collect()
 }
 
-/// **`ins(i)` is the `i`-th argument, and the only way to know that is to apply
-/// the function — the unapplied body does not say.**
+/// **`ins(i)` is the `i`-th argument, and only applying the function says so.**
 ///
-/// The third correction this probe has forced, and the one that would have been
-/// the worst to get wrong.
+/// # Invariant
 ///
-/// A body read of `ins(i)` compiles to a bare cell: no operation, no subscript,
-/// and not even a member of the parameter's class, so **nothing in the
-/// unapplied body links a read to a slot** — and nothing states the arity either
-/// (a read pins an open tuple type, not a list of read cells). Which read is
-/// which slot is settled by the apply.
+/// A body read of `ins(i)` compiles to a bare cell — no operation, no subscript,
+/// not even a member of the parameter's class — so **nothing in the unapplied
+/// body links a read to a slot**, and the arity is unstated.
 ///
-/// If it were settled by read order, `step` below would take its two arguments
-/// swapped: a caller passing `(4, data)` would get a dispatch over four
-/// elements reading the **number** as a buffer. That is a silently wrong answer
-/// rather than a refusal, which is the only class of bug this repository cares
-/// most about, so it is checked by running the program and reading the numbers
-/// out of the buffer.
-///
-/// The numbers are derived, not copied: `data` is `i + 3` over `[0, 4)` and
-/// `doubler` writes `j + j`, so the result is `[6, 8, 10, 12]`.
+/// Which read is which slot is settled by the apply: read order would swap
+/// `step`'s arguments, so `(4, data)` would read the **number** as a
+/// buffer — silently wrong.
 #[test]
 fn a_parameter_is_bound_by_the_position_the_source_names_and_not_by_read_order() {
     let (mut module, root) = run(BACK_TO_FRONT);

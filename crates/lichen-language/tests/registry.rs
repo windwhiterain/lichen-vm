@@ -69,11 +69,8 @@ fn imports_a_struct_type_and_instantiates_it() {
 
 #[test]
 fn transitive_imports_apply_across_modules() {
-    // inner → middle → main: middle imports inner and exports a function
-    // whose body applies the import; the main file applies middle's export.
-    // The apply path materializes middle's template, whose baked values
-    // reference inner's module — cross-module refs carried verbatim through
-    // middle's freeze.
+    // Materializing middle's template carries its refs into inner's
+    // module verbatim, across middle's freeze.
     let dir = temp_dir("transitive");
     write(&dir, "inner.lichen", "x => x + 1\n");
     write(
@@ -92,9 +89,7 @@ fn transitive_imports_apply_across_modules() {
 
 #[test]
 fn transitive_struct_types_flow_through_packages() {
-    // A struct type defined in the inner package, instantiated in the
-    // middle one, read by name in the importer: the nominal id and the frozen
-    // type travel across two freeze boundaries.
+    // The nominal id and the frozen type travel across two freeze boundaries.
     let dir = temp_dir("transitive-struct");
     write(&dir, "inner.lichen", "struct<.f Int>\n");
     write(
@@ -111,8 +106,7 @@ fn transitive_struct_types_flow_through_packages() {
 
 #[test]
 fn diamond_imports_load_each_package_once() {
-    // main imports b and c; both import a.  The store loads a once (cache),
-    // so b and c share one frozen artifact of a through the shared registry.
+    // The store loads `a` once, so `b` and `c` share one frozen artifact of it.
     let dir = temp_dir("diamond");
     write(&dir, "a.lichen", "42\n");
     write(&dir, "b.lichen", "---a = import \"a.lichen\"---a + 1\n");
@@ -132,9 +126,8 @@ fn diamond_imports_load_each_package_once() {
 
 #[test]
 fn circular_imports_are_diagnosed() {
-    // a imports b, b imports a — the load stack re-enters a and reports the
-    // cycle.  The message carries the chain (a → b → a); the caret sits on
-    // the main file's own directive, the one location it can act on.
+    // The load stack re-enters `a`; the caret lands on the main file's
+    // own directive, the one place it can act on.
     let dir = temp_dir("cycle");
     write(&dir, "a.lichen", "---b = import \"b.lichen\"---b\n");
     write(&dir, "b.lichen", "---a = import \"a.lichen\"---a\n");
@@ -150,17 +143,14 @@ fn circular_imports_are_diagnosed() {
 
 #[test]
 fn an_imported_deferred_instantiation_points_at_the_argument_the_caller_passed() {
-    // `f`'s body defers the named instantiation `s(.x 1)` — the callee is the
-    // lambda's parameter, so it resolves only when a concrete argument arrives
-    // — and the miss is recorded on a per-apply clone the importer's checker
-    // never saw.  A frozen template's nodes are not this module's, so the clone
-    // cannot name its template; its origin is the apply that materialized it,
-    // and `Build::apply_edges` turns that into the argument expression the
-    // caller passed.  The argument is the bare name `S`, whose use *is* the
-    // binder's own expression (`compile.rs`), so the caret sits on `S`'s
-    // binding — exactly where a runtime parameter-check failure of a name
-    // argument points today.  The imported file's own `.x 1` is not reachable:
-    // an ordinary package keeps no source record.
+    // A clone of a frozen body cannot name its template, so the failure's
+    // origin is the apply that materialized it.
+
+    // `Build::apply_edges` turns that into the caller's argument; a bare
+    // name's use *is* its binder's expression.
+
+    // The imported file's own `.x 1` is unreachable: an ordinary package
+    // keeps no source record.
     let dir = temp_dir("imported-deferred");
     write(&dir, "f.lichen", "s => s(.x 1)\n");
     let main = "---f = import \"f.lichen\"---\nS = struct<.y Int>\nf (S)\n";
@@ -181,16 +171,19 @@ fn an_imported_deferred_instantiation_points_at_the_argument_the_caller_passed()
 
 #[test]
 fn an_imported_placeholder_instantiation_resolves_at_the_apply() {
-    // `_(.x 1, .y 2)` is an instantiation whose callee is the placeholder, so
-    // the struct type is unknown where it stands: later unification with the
-    // imported parameter's annotation decides it.  The callee is a static
-    // (imported) function, so the deferred instantiation crosses a materialize
-    // walk of the frozen body and must still wake when the apply binds the
-    // parameter's type cell (`docs/language-spec.md` §3, the deferred
-    // instantiation).  Asserted structurally: the instance's own field values
-    // in definition order, and the resolved type's fields read back through
-    // `type_of` — a struct type's field list and names.  The nominal id is per
-    // occurrence, so the importer cannot name it.
+    // The callee is a placeholder, so the struct type is unknown here:
+    // unification with the parameter's type decides it.
+
+    // The callee is static, so the instantiation crosses a materialize
+    // walk of the frozen body.
+
+    // It wakes when the apply binds the parameter's type cell
+    // (`docs/language-spec.md` §3).
+
+    // Asserted structurally, not via a printer: the instance's own
+    // field values, plus `type_of` read back on the result.
+
+    // The nominal id is per occurrence, so the importer cannot name it.
     let dir = temp_dir("imported-placeholder");
     write(&dir, "f.lichen", "f = x: struct<.x Int, .y Int> => x\n");
     let main = "---f = import \"f.lichen\"---\ntype_of = x => {t = _; x: t; t}\nv = f.f (_(.x 1, .y 2))\nT = type_of v\n(v, T::x == Int, T::y == Int)\n";
@@ -214,10 +207,8 @@ fn an_imported_placeholder_instantiation_resolves_at_the_apply() {
 
 #[test]
 fn two_applies_of_one_imported_placeholder_instantiation_stay_distinct() {
-    // One static function applied twice, each call with its own argument
-    // values: the two materialized clones must resolve their placeholder
-    // instantiations independently — the first call's binding must not stand
-    // in for the second's.
+    // Each apply materializes its own clone, so the first call's binding
+    // cannot stand in for the second's.
     let dir = temp_dir("imported-placeholder-twice");
     write(&dir, "f.lichen", "f = x: struct<.x Int, .y Int> => x\n");
     let main = "---f = import \"f.lichen\"---(f.f (_(.x 1, .y 2)), f.f (_(.x 3, .y 4)))\n";
@@ -234,14 +225,11 @@ fn two_applies_of_one_imported_placeholder_instantiation_stay_distinct() {
 
 #[test]
 fn a_placeholder_instantiation_deferred_inside_an_imported_body_resolves_at_the_apply() {
-    // Here the instantiation stands *in* the imported body, and the annotation
-    // that decides its type comes after the read that uses it, so the package
-    // freezes a genuinely unresolved instantiation that the apply's
-    // materialized clone must resolve.  The instance is a **static** ref into
-    // the frozen module — the body's array is proven concrete and referenced
-    // in place — so the fields are read *in the program* and the resulting
-    // dynamic tuple carries the values: `common::array_values` refuses a
-    // static-backed array by design ("language arrays are dynamic").
+    // The annotation deciding the type comes *after* the read using it, so
+    // the freeze carries an unresolved instantiation.
+
+    // The instance is a **static** ref, so the fields are read *in the
+    // program* and the dynamic tuple carries the values.
     let dir = temp_dir("imported-body-deferred");
     write(
         &dir,
@@ -268,16 +256,10 @@ fn a_placeholder_instantiation_deferred_inside_an_imported_body_resolves_at_the_
 
 #[test]
 fn two_applies_of_one_imported_function_resolve_their_own_struct_type() {
-    // The shared-clone hazard: the deferred instantiation's cells live in the
-    // *frozen* body, so if a per-apply clone reused the first call's bound
-    // cells, two calls resolving **different** struct types through one
-    // imported function would contaminate each other.  The imported body's
-    // parameter is left open and the caller supplies the type, so each call
-    // decides the instantiation for itself.  `struct<.x Int, .y Int>` reads
-    // the arguments in `.x, .y` order while `struct<.y Int, .x Int>` reverses
-    // them, so the instances' own definition-order values are `(1, 2)` and
-    // `(2, 1)`: the per-call type is visible in the value, and a leaked clone
-    // would give `(1, 2)` twice, or refuse the second call.
+    // The deferred instantiation's cells live in the *frozen* body, so a
+    // reused clone would contaminate the second call.
+
+    // The caller supplies the type, so each call decides it for itself.
     let dir = temp_dir("static-clone-hazard");
     write(
         &dir,
@@ -306,9 +288,8 @@ fn two_applies_of_one_imported_function_resolve_their_own_struct_type() {
 
 #[test]
 fn a_failing_dependency_is_reported_at_the_import_directive() {
-    // inner fails to resolve `y` at its own line 2; the main file's
-    // diagnostic points at its own @import line (not inner's coordinates)
-    // and names the package that failed to load.
+    // A dependency's failure is re-reported at the importer's directive,
+    // in its coordinates, naming the failing package.
     let dir = temp_dir("failing-dep");
     write(&dir, "inner.lichen", "42\ny\n");
     let main = "---x = import \"inner.lichen\"---x\n";
@@ -329,12 +310,8 @@ fn a_failing_dependency_is_reported_at_the_import_directive() {
 
 #[test]
 fn a_package_whose_last_statement_is_a_raw_read_reports_the_package_own_failure() {
-    // `[1, 2]<0>` is a raw read of a runtime array: the element is not a
-    // `[value, type]` pair, so the package's *own* build rejects it and the
-    // import reports that.  (The export used to reach the importer as a bare
-    // read operation instead of a pair and be refused there by the
-    // import-export guard; the read now builds the pair every expression's term
-    // is, so the failure is the honest one.)
+    // A raw read of a runtime array fails where it stands: its element
+    // is not the `[value, type]` pair a term is.
     let dir = temp_dir("raw-export");
     write(&dir, "raw.lichen", "[1, 2]<0>\n");
     let main = "---x = import \"raw.lichen\"---x\n";
@@ -354,12 +331,11 @@ fn a_package_whose_last_statement_is_a_raw_read_reports_the_package_own_failure(
 
 #[test]
 fn a_failure_inside_the_prelude_is_attributed_to_its_own_file() {
-    // The prelude's contract is a built-in module's source, so the condition a
-    // failure names belongs to *that* file: the diagnostic carries the file and
-    // the position of the line that wrote the condition, which is what makes a
-    // refusal navigable instead of "could not be attributed"
-    // (`docs/notes/core-prelude.md`).  The module is materialized on disk when a
-    // store has a cache root, and named by its own path when it has none.
+    // A built-in module's source is the prelude's contract, so a failure
+    // is located there and on the line that wrote it.
+
+    // The module is materialized on disk when a store has a cache root, and
+    // named by its own path when it has none.
     let mut store = PackageStore::<LangProgram>::new();
     let err = evaluate_raw("add [\"a\", \"b\"]\n", None, &mut store).unwrap_err();
     let attributed: Vec<_> = err.iter().filter(|d| d.file.is_some()).collect();
@@ -393,11 +369,11 @@ fn a_failure_inside_the_prelude_is_attributed_to_its_own_file() {
 
 #[test]
 fn a_failed_assert_in_an_imported_package_still_reports_a_diagnostic() {
-    // The imported body's assert is cloned into the importer's module with the
-    // *imported* module's node as its template, so this build has no expression
-    // to attribute the failure to and renders nothing for it.  The report
-    // invariant — a failed build always carries a diagnostic — is what keeps
-    // that from surfacing as an error with an empty diagnostic list.
+    // The cloned assert carries the *imported* node as its template, so
+    // this build cannot attribute the failure.
+
+    // The report invariant — a failed build always carries a diagnostic —
+    // supplies the unattributed one instead.
     let dir = temp_dir("imported-assert");
     write(&dir, "pkg.lichen", "x => @assert (x == 1)\n");
     let main = "---f = import \"pkg.lichen\"---f 2\n";
@@ -411,10 +387,8 @@ fn a_failed_assert_in_an_imported_package_still_reports_a_diagnostic() {
 
 #[test]
 fn an_unattributable_failure_in_a_dependency_names_the_package() {
-    // Here the failing assert belongs to `b`'s own build, so the failure
-    // reaches the importer through the package-load seam instead of through the
-    // importer's own build.  That seam takes the load's first diagnostic, which
-    // the report invariant guarantees exists.
+    // The failure belongs to `b`'s own build, so it reaches the importer
+    // through the package-load seam.
     let dir = temp_dir("dependency-unattributed");
     write(&dir, "c.lichen", "x => @assert (x == 1)\n");
     write(&dir, "b.lichen", "---f = import \"c.lichen\"---f 2\n");
@@ -436,15 +410,13 @@ fn an_unattributable_failure_in_a_dependency_names_the_package() {
 
 #[test]
 fn a_raw_read_of_a_non_tuple_container_in_a_package_is_refused_by_kind() {
-    // `[[1]]<0>` reads a component of an array — not of a type value — so the
-    // package's own build refuses it where it stands, stating the tuple kind.
-    // The package's own failure is the one reported, through the import: an
-    // honest refusal rather than a panic inside the importer's checker.
-    //
-    // This used to be the out-of-bounds *slot* read (the container's element
-    // was a one-element array whose type slot 1 is missing).  That shape is
-    // unreachable now that the container's type must be the tuple kind: a
-    // tuple-kinded value's components are always `[value, type]` pairs.
+    // `[[1]]<0>` reads a component of an array — not of a type value —
+    // so the package's own build refuses it.
+
+    // The out-of-bounds *slot* read this replaced is now unreachable.
+
+    // A container's type must be the tuple kind, whose components are
+    // always `[value, type]` pairs.
     let dir = temp_dir("short-export");
     write(&dir, "short.lichen", "[[1]]<0>\n");
     let main = "---x = import \"short.lichen\"---x\n";
@@ -476,9 +448,8 @@ fn package_store_caches_loaded_packages() {
 
 #[test]
 fn two_importers_share_one_package_through_one_store() {
-    // Two files importing the same package through one store: the package
-    // freezes once, and both importer modules resolve its refs through the
-    // same registry key.
+    // The package freezes once, and both importers resolve its refs through
+    // the same registry key.
     let dir = temp_dir("shared");
     write(&dir, "pkg.lichen", "x => x + 1\n");
     let mut store = PackageStore::<LangProgram>::new();
