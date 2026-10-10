@@ -412,8 +412,8 @@ sum_to (4000, 0)     -- this binding never terminates — it applied a function
 
 The second program **terminates**, in 62 ms. The budget exists to say "this never
 terminates"; here it says that about a loop that finishes, and the reader is sent
-to look for non-termination that is not there. This is the same class as `P1-31`
-(conflated verdicts), and the same fix shape: **the verdict needs to distinguish
+to look for non-termination that is not there. This is a conflated verdict, and
+the fix shape follows from that: **the verdict needs to distinguish
 "stopped because it exceeded a budget" from "stopped because it cannot
 terminate."** A budget that refuses must say which.
 
