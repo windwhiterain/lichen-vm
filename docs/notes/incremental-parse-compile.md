@@ -1,21 +1,21 @@
 # Incremental parsing / compilation for a typing editor
 
 > Status: current — the T1 heart, the O(edit) lex and statement-region
-> re-parse primitives, and the `BufferSession::compile` splice are landed and
+> re-parse primitives, and the `BufferSession::compile` splice are shipped and
 > described as shipped below; T3 (memoized check) and T4 (unification-state
-> checkpoint/rollback) remain proposed.  Nothing here reflects work that was
-> not done; the implemented stages are marked below.
+> checkpoint/rollback) remain proposed.  The implemented stages are marked below.
 >
-> **There is no production consumer** (`P2-1`): the language server caches its
-> own per-text index (`P1-17`) and never runs a session, so everything below is
-> exercised by its own tests and reachable only from them.  Wiring it is `D6`'s
-> (b), and it is the only remaining win on the keystroke path — the index cache
-> covers a repeat request for one text, not a text that changed.
+> **The keystroke path is still open** (`P1-17` (b)): the language server runs a
+> `BufferSession` per open document on its compile worker and keeps its own
+> per-text index (`P1-17`), falling back to a one-shot analysis for a compile the
+> session cannot do — so the splice below runs on the server, but the
+> finer, keystroke-granularity edit path that would avoid the lex and parse when
+> the text *changes* is not wired.
 >
-> The session has since grown the **cross-build** half as well: it holds a cell
-> store and lowers through it, so a rebuild reuses every `cache`d binding the edit
-> did not reach.  That is [incremental-update](incremental-update.md) — §7.2 for
-> what landed and §12 for the handoff — and nothing on *this* note's stages
+> The session also carries the **cross-build** half: it holds a cell store and
+> lowers through it, so a rebuild reuses every `cache`d binding the edit did not
+> reach.  That is [incremental-update](incremental-update.md) — §3 for the mark
+> and §4 for dirty propagation — and nothing on *this* note's stages
 > (lex → parse → resolve → lower → check) changed for it.
 >
 > **Implemented (the "T1" heart):**
@@ -127,41 +127,39 @@ Together they give exactly the requested behavior: a user typing a new
 unfinished piece only ever mutates an error block, so nothing below it is
 re-derived.
 
-## 2. The leak this closed (why it mattered)
+## 2. Why the split is load-bearing
 
 The codebase already obeys P1 at the **lex** boundary: `lex_with` emits a
 diagnostic and *skips* the offending character, so the parser never sees a lex
-error. That is the model to generalize.
+error. That is the model the parse boundary follows.
 
-It **violated** P1 at the **parse → compile** boundary, and this is precisely
-the conflation (the pre-fix code):
+It is the **parse → compile** boundary where conflating the two would break P1.
+The conflation to avoid is exactly this lowering:
 
 ```rust
-// compile.rs
+// compile.rs — WRONG: both arms are the same construct
 Expr::Placeholder(span) => self.alloc(ExprKind::Placeholder, span), // a real `_`
 Expr::Err(span) => self.alloc(ExprKind::Placeholder, span),         // a recovered error
 ```
 
-A recovered parse error became the **same** highlevel construct as an
-intentional `_`. The checker then treated it as a real inference hole
-(`checker.rs` `ExprKind::Placeholder => { fresh_cell(); fresh_cell(); … }`). So
+If a recovered parse error became the **same** highlevel construct as an
+intentional `_`, the checker would treat it as a real inference hole
+(`checker.rs` `ExprKind::Placeholder => { fresh_cell(); fresh_cell(); … }`), and
 the highlevel could not tell "I typed `_` on purpose" from "the parser recovered a
-broken region here". Consequences:
+broken region here". The consequences are why the two are separate today:
 
-- The highlevel *did* carry the parser's error, just disguised.
-- The error block participated in unification as if it were real code, so the
+- the highlevel would carry the parser's error, just disguised;
+- the error block would participate in unification as if it were real code, so the
   **lowlevel/check unify** path could emit a *type* "expected X, found Y" from a
-  region the user is still typing. Note this is a lowlevel/type message — **not**
-  the parser's own diagnostic; the parser also emits its *syntactic*
-  "expected X, found Y" (chumsky `RichReason::ExpectedFound`,
-  in `parse::diag_from`), which is a distinct message and is unaffected by the
-  masking decision below.
-- There was no way to mask the error region for a diff, because it was not
-  distinguished from real code.
+  region the user is still typing. That is a lowlevel/type message — **not** the
+  parser's own diagnostic; the parser also emits its *syntactic* "expected X,
+  found Y" (chumsky `RichReason::ExpectedFound`, in `parse::diag_from`), which is
+  a distinct message and is unaffected by the masking;
+- there would be no way to mask the error region for a diff, because it would not
+  be distinguished from real code.
 
-The fix (landed): split the two meanings — a real `_` stays
-`ExprKind::Placeholder`; a recovered-error region becomes an explicit error
-block that stops at the frontend.
+So the two meanings are split: a real `_` is `ExprKind::Placeholder`; a
+recovered-error region is an explicit error block that stops at the frontend.
 
 ## 3. Why reuse is structurally possible here
 
@@ -229,22 +227,22 @@ blocks. Re-parsing is needed only when a signature changes: an edit that only
 stretches the trailing error block changes no statement signature.
 
 ### AST → IR (highlevel)
-The fix that satisfies P1: **do not lower an error block into the highlevel as a
-`Placeholder`.** Two options, both cleaner than today:
+The rule that satisfies P1: **an error block is never lowered into the highlevel
+as a `Placeholder`.** Two options:
 
 - **(a) Mask it out.** Lower the well-formed statements; an error block is *cut
   out* (or replaced with a distinct `ExprKind::ErrorBlock` leaf the checker
-  *skips* — no cells, no unification, no cascade). Choose this for a 1:1 lowlevel
+  *skips* — no cells, no unification, no cascade). This is the 1:1 lowlevel
   representation.
 - **(b) Stop the pipeline.** If the required root is itself an error block,
   don't run the highlevel check at all; report only the frontend diagnostics.
 
-Recommend **(a)**: it keeps the pipeline total (there is always a root to check,
-the statements still get checked) while making the error region an explicitly
-non-code object. The essential point is that the highlevel no longer has to
+The implementation takes **(a)**: it keeps the pipeline total (there is always a
+root to check, the statements still get checked) while making the error region an
+explicitly non-code object. The essential point is that the highlevel never has to
 interpret a recovered error as a real expression — and **it never sees one**.
 
-Concretely, `Checker` gets a skip path for `ExprKind::ErrorBlock` (like its
+Concretely, `Checker` has a skip path for `ExprKind::ErrorBlock` (like its
 `Static` is handled): record the region as masked, emit nothing, mark `done`.
 The IR lowering signature covers the *clean* statements only.
 
@@ -280,14 +278,14 @@ built (`done`), so re-checking after an error-only edit does nothing.
 ```rust
 let mut sess = BufferSession::new("a = 1\nf = x => a + x\nf 2\n");
 
-// User types `g = x =>` (unfinished tail) → a masked error block, nothing else.
-sess.insert(22, "g = x =>");
-let r1 = sess.compile();     // signature (clean statements) unchanged → reuse IR/check
+// User appends `g = x =>` (an unfinished tail) → a masked error block, nothing else.
+sess.set_source("a = 1\nf = x => a + x\nf 2\ng = x =>");
+let r1 = sess.compile();     // clean signature unchanged → reuse IR/check
 
-// User types ` x +` → still an error block, still clean statements.
-sess.insert(28, " x +");
+// User completes it to `g = x => x +` → still an error block, still clean statements.
+sess.set_source("a = 1\nf = x => a + x\nf 2\ng = x => x +");
 let r2 = sess.compile();     // same clean signature → reused; only the mask grows
-assert_eq!(r1.signature, r2.signature);
+assert!(r1.reused && r2.reused);
 ```
 
 Because the mask is excluded from the signature, `r2` needs no re-lowering of
@@ -306,14 +304,13 @@ Because the mask is excluded from the signature, `r2` needs no re-lowering of
 
 ## 8. Feasibility, risks, the genuinely hard parts
 
-- **The `Placeholder` overload must be split.** Today a recovered error and an
-  intentional `_` are the same IR node. This is the root cause of the leak; fix
-  it before any incremental work, since the signature/diff hinges on being able
-  to *identify* an error region distinctly.
-- **Error regions need a byte `range`.** `Expr::Err` and the parse diagnostics
-  carry only `(line,col)`. The parser computes positions from token indices, so
-  it can derive byte ranges from `Token::range`; this should be recorded on the
-  mask.
+- **The `Placeholder` overload must stay split.** A recovered error and an
+  intentional `_` must not be the same IR node: the signature/diff hinges on being
+  able to *identify* an error region distinctly, and the checker's skip path is
+  what keeps the two apart.
+- **Error regions need a byte `range`.** A parse diagnostic carries only
+  `(line,col)`. The parser computes positions from token indices, so it derives
+  byte ranges from `Token::range`; the mask records them.
 - **Name resolution is whole-program.** A block-wide binding pre-enters one
   scope frame before any value compiles. Reusing a compiler across edits is safe
   *if* it appends `ExprId`s without renumbering; a shadowing tail binding must
@@ -331,11 +328,12 @@ Because the mask is excluded from the signature, `r2` needs no re-lowering of
   signature forces re-lowering. This is strictly more general than an
   append-only approach, at the cost of hashing the clean segments per edit
   (cheap).
-- **Thread/stack.** `parse::parse` spawns a 16 MB worker thread every call. T2
-  should thread the parser's construction once (or per masked region) rather
-  than per whole file.
-- **The window's byte projection is the splice's sharp edge** (found and fixed
-  after this note's landing, `3463f22`). The splice re-parses the token range
+- **Thread/stack.** The grammar recurses deeply enough to exceed a normal stack,
+  so `parse::parse` runs on a **process-lived `ParseWorker`** with a 16 MB stack
+  rather than the caller's thread; per-parse thread creation was itself a
+  measurable cost, so the worker is reused and parses are serialised through it.
+- **The window's byte projection is the splice's sharp edge.** The splice
+  re-parses the token range
   `[ns, ne)` and splices it between the untouched prefix and suffix, so it needs
   the window's *new* byte range and the suffix's token shift. Two rules are
   load-bearing, and both fail on an edit that **deletes whole statements**,
@@ -351,22 +349,20 @@ Because the mask is excluded from the signature, `r2` needs no re-lowering of
   truncated binding is re-parsed, the suffix is spliced after it, statements are
   duplicated, and a `stmt_ranges` entry can end one past the token stream — the
   next splice then panics on `old_tokens[old_th - 1]`. The corrupted program
-  still *evaluated* correctly, so the tell was a spurious parse diagnostic and
+  still *evaluated* correctly, so the tell is a spurious parse diagnostic and
   the later panic, not the value. An **empty** window (`ns == ne`, prefix meets
   suffix) is legal and must not be handed to the region parser, which requires at
   least one statement.
-  The oracle that found it is `incremental-update.md` §7.3's differential
-  comparison (value *and* diagnostics against a fresh compile, over every prefix
-  of an edit sequence); a count-only reading would have missed it.
+  The oracle for it is [incremental-update](incremental-update.md) §9's
+  differential comparison (value *and* diagnostics against a fresh compile, over
+  every prefix of an edit sequence); a count-only reading misses it.
 - **A cloned statement's spans must be shifted, and a boundary edit must not widen
-  the window** (found next, `35fac3e`; `incremental-update.md` §7.5).  Two rules,
-  and they interact:
+  the window.**  Two rules, and they interact:
   - a **clone's spans are stale**.  The splice clones the untouched statements
     around the window, and a clone's bytes are unchanged but its *position* is
     not — a `Span` is a `(line, col)` pair, so an edit that adds or removes a
     **line** moves every statement after it.  A diagnostic in a cloned statement
-    then renders on the wrong line (measured: deleting a line put the tail's
-    diagnostic one line too far down).  `lichen-language`'s `spans` module walks
+    then renders on the wrong line.  `lichen-language`'s `spans` module walks
     the clone and rewrites every span — and a recovered error's byte range —
     through `offset_of_span`/`line_col`, which is exact.  A *wider* window hides
     this by re-parsing; it does not fix it, and the overlap path is exposed either
@@ -374,27 +370,30 @@ Because the mask is excluded from the signature, `r2` needs no re-lowering of
   - the **boundary fallback** (`no statement body overlaps` — a separator edit, or
     an append at a statement's end) must window `[prev, prev + 2)`, not
     `[prev, old_n)`.  Widening to the end of the buffer re-parses and re-dirties
-    the whole tail: measured at 82–90% of a rebuild and ~50 of 60 retained cells
-    dropped, for the edit shape an agent produces most often (appending to a
-    line).  Two statements rather than one, because the insertion is inside the
+    the whole tail: it costs most of a rebuild and drops most retained cells, for
+    the edit shape an agent produces most often (appending to a line).  Two
+    statements rather than one, because the insertion is inside the
     byte range spanning them and the region parse is byte-bounded — several
     inserted statements are re-parsed too.
 
 ## 9. Roadmap
 
+The named tiers and their state; T3 and T4 are **proposed**, not built.
+
 1. **Split `Placeholder` vs `ErrorBlock`** and add byte-range error masks at
-   parse. ✅ (the prerequisite for every diff/reuse decision).
+   parse — landed (the prerequisite for every diff/reuse decision).
 2. **T1**: per-layer lowering signature + cached `signature → output`; error-only
-   edits reuse everything. ✅ (name-resolved signature; the user-visible behavior).
-3. **T2**: suffix lex + statement-region parse. ✅ primitives landed
+   edits reuse everything — landed with the name-resolved signature (the
+   user-visible behavior).
+3. **T2**: suffix lex + statement-region parse — the primitives landed
    (`lex::lex_resume`, `parse::parse_statement_region`, `Program::stmt_ranges`),
-   plus the per-statement signature. ✅ *wiring*: the `BufferSession::compile`
-   splice re-parses only the touched statement window (falling back to a full
-   parse on the borderline cases) and re-signs the name-resolved signature
-   incrementally — reusing the untouched statements' hashes and re-hashing only
-   the window + a binding-shifted tail, so the whole-AST hash is gone.  A
-   binding-name change or a statement-count change re-signs the tail (sound).
-4. **T3**: memoized check (`done`/`term` skip, `check_into` resume).
+   plus the per-statement signature, and the `BufferSession::compile` splice
+   re-parses only the touched statement window (falling back to a full parse on
+   the borderline cases) and re-signs the name-resolved signature incrementally —
+   reusing the untouched statements' hashes and re-hashing only the window + a
+   binding-shifted tail, so the whole-AST hash is gone. A binding-name change or
+   a statement-count change re-signs the tail (sound).
+4. **T3 — proposed**: memoized check (`done`/`term` skip, `check_into` resume).
 5. **Debounced re-check** as the fallback for edits that genuinely change code.
 
 Steps 1–4 together implement the rule: when the user writes new unfinished code,

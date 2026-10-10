@@ -1,48 +1,30 @@
 # Lichen Home for the LSP: persist the cache, self-heal = (re)create lazily
 
-> Status: current.
+> Status: current
 > Points at: `crates/lichen-language-server/src/{home.rs,server.rs,analysis.rs}`
-> (the change), `crates/lichen-language/src/{package.rs,persist.rs}` (the store
-> that already exists), and the notes
+> (the home, the compile worker and the per-document analysis),
+> `crates/lichen-language/src/{package.rs,persist.rs}` (the store), and the notes
 > [artifact-cache](artifact-cache.md),
 > [language-toolchain](language-toolchain.md),
-> [incremental-parse-compile](incremental-parse-compile.md).
+> [incremental-parse-compile](incremental-parse-compile.md),
+> [incremental-update](incremental-update.md).
 
-## The problem
+The language server routes its *settled imported packages* through the
+persistent device store at Lichen Home, so an `@import`ed package is compiled
+once and shared with the `lichen` compiler across processes, exactly as
+[artifact-cache](artifact-cache.md) requires. The open buffer's own text stays
+in-process — re-analyzed incrementally by a per-document `BufferSession` on the
+server's compile worker — and only the settled imported `.lichen` packages are
+cached on disk. (The worker and the session are
+[incremental-update](incremental-update.md) §6.4; the keystroke-path remainder is
+`P1-17` (b).)
 
-`lichen-language-server` never touched Lichen Home. Its `Backend` held only the
-per-buffer source text, and each request re-ran the whole frontend in
-`spawn_blocking`:
+Without this routing, a request built a **fresh in-memory store every time**
+(`PackageStore::<P>::new()`, dropped at the end of the request), so the server
+recompiled every imported package on every keystroke and never shared a compiled
+artifact with the CLI.
 
-```rust
-// server.rs (before)
-sources: Mutex<HashMap<Url, String>>   // the only state
-...
-Doc::<P>::new_with_base(text, base).lsp_diagnostics()
-```
-
-And `Doc::new_with_base` built a **fresh in-memory store every time**:
-
-```rust
-// analysis.rs (before)
-let mut store = PackageStore::<P>::new();   // in-memory, dropped at end of request
-```
-
-So the LSP recompiled every `@import`ed package on every keystroke, never wrote
-an artifact to disk, and never shared compiled artifacts with the `lichen`
-compiler across processes. This contradicts what `artifact-cache.md` already said
-should happen — the LSP should reuse `persist`/`package` for settled per-file
-artifacts exactly as the CLI does.
-
-## The change
-
-Route the LSP's *settled imported packages* through the persistent device store
-at Lichen Home. The open buffer's own text stays in-process — re-analyzed
-incrementally by a per-document `BufferSession` on the server's compile worker
-(`incremental-update.md` §7.6, which is where `P2-1` landed); only the settled
-imported `.lichen` packages are cached on disk and shared cross-process.
-
-### 1. `home.rs` — `LichenHome` (new)
+## 1. `home.rs` — `LichenHome`
 
 A tiny `Send + Sync` type that owns the "the home must exist" half of the
 self-heal. It holds no `P` type, so it never reintroduces the composed-program
@@ -60,7 +42,7 @@ impl LichenHome {
 }
 ```
 
-### 2. `analysis.rs` — `Doc::new_with_cache`
+## 2. `analysis.rs` — `Doc::new_with_cache`
 
 ```rust
 pub fn new_with_base(source, base) -> Doc<P> { Doc::new_with_cache(source, base, None) }
@@ -78,7 +60,7 @@ The store is persistent only when a cache root is supplied **and** the program's
 artifact codec can serialize; otherwise it is in-memory. `new_with_base` (tests,
 `NoPersist` embeddings) stays in-memory by passing `None`.
 
-### 3. `server.rs` — the compile worker owns the store
+## 3. `server.rs` — the compile worker owns the store
 
 `Backend::new` takes the vocabulary's cache root, calls `LichenHome::at(root)` +
 `ensure()` — the slot is (re)created lazily at LSP start, i.e. when a lichen
@@ -91,14 +73,15 @@ The worker is not an optimization: a `BufferSession` is `!Send` (it holds the
 checker's `Build`), and it must outlive the request that built it, so neither
 `Backend` nor a `spawn_blocking` closure can hold it. The thread owns the store,
 one shared registry, and one session per open document; only the `Send`
-`DocIndex` crosses back. See `incremental-update.md` §7.6.
+`DocIndex` crosses back. See [incremental-update](incremental-update.md) §6.4.
 
-### 4. Store root is per plugin set (consistency with the compiler)
+## 4. Store root is per plugin set (consistency with the compiler)
 
-Per `artifact-cache.md`, every vocabulary scopes its compiled-artifact store to a
-`compilers/<plugin-set-key>` slot: the shipping server uses the empty plugin set's
-slot (`lichendir()/compilers/<toolchain-key>`, [`persist::shipping_cache_root`]),
-and a plugin-composed server uses `lichendir()/compilers/<plugin-set-key>`. The
+Per [artifact-cache](artifact-cache.md), every vocabulary scopes its
+compiled-artifact store to a `compilers/<plugin-set-key>` slot: the shipping
+server uses the empty plugin set's slot
+(`lichendir()/compilers/<toolchain-key>`, [`persist::shipping_cache_root`]), and
+a plugin-composed server uses `lichendir()/compilers/<plugin-set-key>`. The
 composed server's generated `main` derives its slot the same way `plugin.rs` does
 (`lichendir()/compilers/<key>`); the shipping binary passes `shipping_cache_root()`.
 
@@ -143,31 +126,4 @@ already covers, plus the LSP supplying a root at all:
   solved rather than reintroduced: the registry never crosses a thread boundary, and
   the async half of the server keeps only `Send` values. Persistence is still the disk
   store; the resident registry is what lets a session's cells and the imports they read
-  share one place (`incremental-update.md` §7.6).
-
-## Files changed
-
-- `crates/lichen-language-server/src/home.rs` (new) — `LichenHome`.
-- `crates/lichen-language-server/src/analysis.rs` — `Doc::new_with_cache`;
-  `new_with_base` delegates to it; `index` is the shared tail the compile worker
-  also ends in.
-- `crates/lichen-language-server/src/server.rs` — `Backend::new` creates the home
-  and spawns the compile worker with `cache_root()`; the worker owns the device
-  handle, the registry and one `BufferSession` per open document.
-- `crates/lichen-language-server/src/lib.rs` — `pub mod home;`.
-
-## Verification
-
-- `cargo check` passes.
-- `cargo test -p lichen-language-server` (see below).
-
-New tests (following `crates/lichen-language/tests/persist.rs`, but through
-`Doc::new_with_cache`) cover: a package compiled into a temp cache is reused by a
-second `Doc` on the same cache; a missing home is created; a corrupt `registry`
-is tolerated (still produces diagnostics). A composed server's `Backend<P>` is
-still `Send + Sync` (the worker holds only a `Send` job sender). And
-`tests/lsp_incremental.rs` drives the real binary end to end: a burst of edits runs
-the frontend once, a close publishes nothing further, and an edit to an imported
-file refreshes the answer. The per-document cells' retention is **not** asserted by
-a test — it is the `lichen/analysis` telemetry a client (or a probe) reads, and the
-handoff says how to check it by hand (`incremental-update.md` §12.5).
+  share one place ([incremental-update](incremental-update.md) §6.4).

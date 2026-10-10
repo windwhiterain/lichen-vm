@@ -1,55 +1,51 @@
 # `_` is a placeholder anywhere (type and value)
 
-> Status: current — landed.  Supersedes the
-> "type position only" rule in [`language-spec.md`](../language-spec.md).  The
-> incremental-parse note
-> [`incremental-parse-compile.md`](incremental-parse-compile.md) still describes
-> the `Placeholder` / `ErrorBlock` split — unchanged here.
+> Status: current
+> Points at: `crates/lichen-language-lex/src/lib.rs` (`TokenKind::Placeholder`),
+> `crates/lichen-language-parser/src/parse.rs` (the placeholder primary),
+> `crates/lichen-language-parser/src/ast.rs` (`Expr::Placeholder`),
+> `crates/lichen-language-server/src/analysis.rs` (semantic-token
+> classification), and [`language-spec.md`](../language-spec.md) (grammar,
+> semantics, compile table).
+> Companion to [`no-type-mode.md`](no-type-mode.md). The incremental-parse note
+> [`incremental-parse-compile.md`](incremental-parse-compile.md) describes how
+> the resulting `Placeholder` / `ErrorBlock` split is handled; it is unchanged by
+> this.
 
-## Decision: `_` is always a placeholder, never a name
+`_` is a **placeholder hole** in any position — type and value alike — and is
+**never a name**. It is the syntax for "the inference decides this"; it is not a
+discard binding and not a parameter.
 
-Previously `_` was an inference placeholder **only** in type position (the
-right side of `:`, and the components of the type forms under it); in term
-(meaning value) position it was an ordinary identifier, so `_ = 5; _` and
-`(_ => _) 5` were a discard binding and a discard lambda.
-
-Under **Design B** `_` is a placeholder hole in **any** position — type and
-value alike — and is **never** a name:
-
-- `5 : _` — type inference (unchanged).
-- `_ : Int` — a typed *value* hole: checks, the type slot binds to `Int`, and
+- `5 : _` — type inference (the type slot is a hole).
+- `_ : Int` — a typed *value* hole: it checks, the type slot binds to `Int`, and
   the value stays underdetermined (an empty slot).
 - `f _`, `(1, _)` — a value hole the context unifies.
-- `_ = 5` and `_ => e` — **parse errors** (`_` cannot be bound / a parameter).
+- `_ = 5` and `_ => e` — **parse errors**: `_` cannot be bound and cannot be a
+  parameter.
 
 ## How it works
 
-`_` is now its own lexer token (`TokenKind::Placeholder`), not a `Name`.  The
-`name` parser never matches it, so it can never be a binder name or a lambda
-parameter; a bare `_` in an expression slot always parses to `Expr::Placeholder`
-and lowers to `ExprKind::Placeholder`.  There is no type-mode post-pass to
-rewrite `_` — the whole `apply_type_mode` / `type_mode` mechanism was removed
-(see [`no-type-mode.md`](no-type-mode.md)): `(a, b)` is always a tuple *value*
-and `<a, b>` always a tuple *type*, so `_` is a placeholder in both positions
-with no position-dependent treatment.
+`_` is its own lexer token (`TokenKind::Placeholder`), not a `Name`. The `name`
+parser never matches it, so it can never be a binder name or a lambda parameter;
+a bare `_` in an expression slot always parses to `Expr::Placeholder` and lowers
+to `ExprKind::Placeholder`.
 
 Because `_` is a distinct token, the discard/binder uses are gone rather than
-semantically repurposed: there is no scope-dependent "undecided `_` is a hole,
-bound `_` is a name" ambiguity (that was the rejected alternative, Design A).
+semantically repurposed: there is no scope-dependent rule of the form "an
+unbound `_` is a hole, a bound `_` is a name". There is also no type-mode
+post-pass that rewrites `_` — `(a, b)` is always a tuple *value* and `<a, b>`
+always a tuple *type*, so a placeholder is a placeholder in both positions with
+no position-dependent treatment (see [`no-type-mode.md`](no-type-mode.md)).
 
-## Files touched
+Anyone adding a new token to the lexer should note that `_`'s
+`TokenKind` is also what the language server's semantic-token classifier keys on;
+a new placeholder-like spelling must be classified there too.
 
-- `crates/lichen-language-lex/src/lib.rs` — `TokenKind::Placeholder`, `_` mapping.
-- `crates/lichen-language-parser/src/parse.rs` — placeholder primary; the
-  type-mode post-pass removed (see [`no-type-mode.md`](no-type-mode.md)).
-- `crates/lichen-language-parser/src/ast.rs` — `Expr::Placeholder` doc.
-- `crates/lichen-language-server/src/analysis.rs` — semantic-token
-  classification for the new token.
-- `docs/language-spec.md` — grammar + semantics + compile table.
-- Tests: lexer, parser, and `pipeline` placeholder tests updated.
+## Editor highlighting (open)
 
-## Follow-up (not blocking)
-
-The tree-sitter grammar / Zed extension highlight `_` as an identifier; a
-placeholder node could be added for accurate editor coloring.  This is a
-highlighting-only concern and does not affect the compiler.
+The tree-sitter grammar and thus the Zed extension highlight `_` as an
+identifier; a placeholder node could be added for accurate editor coloring. This
+is a highlighting-only concern and does not affect the compiler. See
+[tree-sitter-generated-files](tree-sitter-generated-files.md) and
+[zed-extension-testing](zed-extension-testing.md) for how the generated grammar
+is built and verified.

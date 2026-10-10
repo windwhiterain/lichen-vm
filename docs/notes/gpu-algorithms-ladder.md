@@ -15,9 +15,9 @@
 > its evidence and splits the gaps into four axes.
 >
 > Companions: [lichen-compute-gpu](lichen-compute-gpu.md) (the backend),
-> [compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md)
-> (the `parallel` primitive), [floating-point](floating-point.md) (proposed,
-> unimplemented), [attributes](attributes.md) (`Perspective`, checked and unread).
+> [compute-buffer-wrapper](compute-buffer-wrapper.md)
+> (the `parallel` primitive's ABI), [floating-point](floating-point.md) (the two
+> numeric classes), [attributes](attributes.md) (`Perspective`, checked and unread).
 
 ## The shape of the answer
 
@@ -155,8 +155,8 @@ hist = cfg => { n = cfg(0); i = compute.range n
 64 elements into 3 buckets answers `(1, 1, 1)` — last writer wins, on **both**
 backends, with no diagnostic and no refusal. This is the documented
 determinism caveat in
-[compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md#scope)
-("the one place the run's result stops being reproducible"), and the ladder
+[compute-buffer-wrapper](compute-buffer-wrapper.md)
+("the one place a result stops being reproducible"), and the ladder
 confirms it is reachable from ordinary-looking code. There are no atomics.
 
 ### 6. An out-of-range read is undefined, and differs per backend

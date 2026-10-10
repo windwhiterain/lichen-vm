@@ -6,7 +6,8 @@
 > (the `Schema`), `checker.rs` (`check_ann`), and
 > `crates/lichen-language/src/program.rs` (the `attrs` manifest — the one list
 > that fixes the order).
-> Inspired by [the typed-perspectives paper](../reference/perspectives-paper.md).
+> Inspired by
+> [Modular GPU Programming with Typed Perspectives](../reference/Modular%20GPU%20Programming%20with%20Typed%20Perspectives.pdf).
 
 A program already wraps every expression in a `[value, type]` pair. The attribute
 system adds **optional extra slots** whose *shape* is a compile-time `Schema` and whose
@@ -247,33 +248,27 @@ y  = (x : S2)
 ```
 
 printed `(3, 5): struct<.n Int, .I Float>` — the annotation's own type — instead
-of failing (measured on `dev` at `23f757b`). With the step in place the same
-program is refused, with the message
-`applied-struct-nominal-id.md` §2's first control recorded for it:
-`expected struct<.n Int, .I Float>#0, found struct<.n Int, .I Int>#0`. That
-control had been lost between that note's measurement and this change; the
-refusal is restored, not changed.
-`pipeline::an_applied_struct_constructor_keeps_the_occurrence_identity` is
-un-parked by it.
+of failing. With the step in place the same program is refused:
+`expected struct<.n Int, .I Float>#0, found struct<.n Int, .I Int>#0` — the
+refusal `pipeline::an_applied_struct_constructor_keeps_the_occurrence_identity`
+pins.
 
 The **single-node** run is the right strength for both gates: the operand is one
 node whose operator reads what it needs, and the deep pass would additionally
 descend its whole reachable subtree — for a type operand, the entire type value —
-and publish a concreteness verdict over it. `check_unify_relaxed` used the deep
-pass until this change; the three perspective rows above and every suite are
-unchanged by the downgrade (measured: 696 passed, 0 failed, 6 ignored over
-`lichen-lowlevel` + `highlevel` + `perspective` + `compute` + `language`).
+and publish a concreteness verdict over it. The three perspective rows above and
+every suite are unchanged by using the single-node run.
 
-The three tests that pinned these rows were parked
-(`perspective.rs::a_compound_annotation_rejects_a_mismatched_perspective`,
-`..._rejects_a_narrower_declared_perspective`,
-`..._a_failed_read_in_an_attribute_renders_as_none`) and are un-parked.
+The three tests that pin these rows are
+`perspective.rs::a_compound_annotation_rejects_a_mismatched_perspective`,
+`..._rejects_a_narrower_declared_perspective` and
+`..._a_failed_read_in_an_attribute_renders_as_none`.
 
 What this does **not** decide: an operand that is still undecided *after* being
 computed — a runtime-dependent perspective, or a position behind a shallow mark —
 leaves the check on the unify arm, where a free cell is a wildcard. Whether a
 requirement may bind a runtime-dependent provider is a separate question, and it
-is the one this change leaves standing.
+is the one this design leaves standing.
 
 ## Syntax
 
@@ -287,15 +282,40 @@ an optimization on `ExprKind::Function.parameter_attribute`. See the
 ### Labels (`?`)
 
 `?` is the **label** attribute slot — metadata that attaches to an expression but
-carries no constraint (see [`Doc`](doc-attribute-rework-plan.md)). Unlike `#`
-(a constraint a compound lives with and that the apply-time check enforces), a label
-contributes no apply-time constraint slot, and the attribute's own `is_subtype` (a doc
-returns `true`) is what permits `? b` to override an existing `? a` without conflict —
-the checker never special-cases a label's *unification*, only its metadata slot. A
-label's value is any first-class lichen value (by convention a struct instance); the
-renderer reads the value's field *names* from its **type chain** (the label's runtime
-slot carries the annotation value's `[value, type]` term pair), so nothing about a
-label's shape is hardcoded.
+carries no constraint. Unlike `#` (a constraint a compound lives with and that the
+apply-time check enforces), a label contributes no apply-time constraint slot, and the
+attribute's own `is_subtype` (a doc returns `true`) is what permits `? b` to override
+an existing `? a` without conflict — the checker never special-cases a label's
+*unification*, only its metadata slot. A label's value is any first-class lichen value
+(by convention a struct instance); the renderer reads the value's field *names* from
+its **type chain** (the label's runtime slot carries the annotation value's
+`[value, type]` term pair), so nothing about a label's shape is hardcoded.
+
+`?` takes a **general expression**, exactly as `#` does: the value is just the
+expression's value, and there is no label-specific literal. A **`Doc`** is therefore a
+plain, generic struct-typed value the *user* defines and constructs:
+
+```lichen
+Doc = struct<.name string, .description string>
+5 ? Doc(.name "five", .description "an int")
+```
+
+which renders `5 ? name = "five", description = "an int": Int`. The `Doc` marker stays
+(the attribute exists and is ordered), but the slot is fully generic — the checker
+understands only "it's a label". Because `Doc` is a real struct:
+
+- **field forcing is automatic**: `Doc{ name = … }` without `description` is an
+  ordinary struct-instantiation arity error, with no extra doc check;
+- **the renderer reads the type chain** through `render_struct_fields_named`, a
+  program-generic renderer, rather than through a positionally-rendered record; a
+  string label instead *names* the value it attaches to (`Doc::label`, used by the
+  operator refinement's `@in` spelling — see
+  [operator-polymorphism](operator-polymorphism.md) §8.1).
+
+The attribute itself — its marker and its extension — lives in `crates/lichen-doc`;
+the crate was split out of `lichen-language` along with the rest of the frontend (see
+[frontend-syntax-separation](frontend-syntax-separation.md)).
+
 
 ## Non-goals (currently)
 

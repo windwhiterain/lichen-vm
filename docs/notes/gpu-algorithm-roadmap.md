@@ -14,8 +14,8 @@
 > and why the rest is still worth doing first.
 >
 > Points at: [lichen-compute-gpu](lichen-compute-gpu.md) (the backend and the
-> numbers this re-reads), [compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md)
-> (the primitive, and the determinism invariant §4.4 would break),
+> numbers this re-reads), [compute-buffer-wrapper](compute-buffer-wrapper.md)
+> (the parallel ABI, and the determinism invariant §4.4 would break),
 > [attributes](attributes.md) (`Perspective`, checked and unread — §4.2's
 > subject), [plugin-taxonomy](plugin-taxonomy.md) (the rule each axis is
 > classified against), [floating-point](floating-point.md),
@@ -384,14 +384,14 @@ kernel has something to read.
 
 A *computed* index is already fine, on both sides: the ladder's gather reads at
 `i % 4` and its stencil reads at a clamped neighbour, and
-[compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md)
+[compute-buffer-wrapper](compute-buffer-wrapper.md)
 allows arbitrary element indices on the write too. What is missing is
 **contention** — two lanes writing the same slot — which today means
 last-writer-wins with no diagnostic, on both backends. The ladder's histogram of
 64 elements into 3 buckets answers `(1, 1, 1)`.
 
 **The cost here is semantic, and it is the reason this axis is last.**
-[compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md)
+[compute-buffer-wrapper](compute-buffer-wrapper.md)
 states the invariant as a theorem: a run is "bit-identical to the sequential
 loop's, for every `count` and whatever the worker count... There is no
 reduction, no accumulation and no order to depend on." An atomic accumulate makes

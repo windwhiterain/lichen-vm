@@ -23,7 +23,7 @@ grammar, or its on-disk format.
 It contributes, in any combination:
 
 - **vocabulary leaves** — value/operator enums the host combines with
-  [`enum_ext!`](lichen_utils::enum_ext);
+  `lichen_utils::enum_ext!`;
 - **native operators** — `NativeOp<P>` impls, exposed through a
   plugin-provided `#[macro_export] macro_rules! <name>_native_ops` that, for a
   host program `$program`, expands to a `NativeOps` value (the host invokes it
@@ -33,7 +33,7 @@ It contributes, in any combination:
   comes from (the manifest's declaration order *is* the canonical attribute
   order — see [attributes.md](attributes.md));
 - **a `GlobalExt` component** — composed by the host with
-  [`compose_ext!`](lichen_utils::compose_ext).
+  `lichen_utils::compose_ext!`.
 
 Crucially, a native plugin is **program-generic**: every entry point is
 bounded by the lowlevel/highlevel `Program` marker and the extension-point
@@ -158,11 +158,13 @@ plugin — it invents syntax/IR/persist, so no fixed host can pull it unchanged.
   and layers the host-specific shells (the caret diagnostic, the
   checker-message wording) on top.
 - **The language layer's tooling is generic over the program**: the package
-  store, run, and render are parameterized by a program's value/operator
-  vocabularies (`lichen_language::CompiledProgram<V, O>`), with the attr type
-  fixed to the language's `LangAttr`.  So a compiler built over an additional
-  native plugin routes through the shared CLI (`lichen_compiler::cli`, its own
-  crate since `P2-12`) over its own composed vocabulary, and the composition
+  store, run, session and render are parameterized by the program shape
+  (`lichen_language::LangProgramShape`), whose value/operator vocabularies vary
+  (`CompiledProgram<V, O>`) while the attr type is fixed to the language's
+  `LangAttr`.  So a compiler over an additional native plugin has the generic
+  library available to it; the composed compiler is driven through
+  `lichen_compiler::cli` (its own crate, out of the library) over its own
+  composed vocabulary, and the composition
   macro emits a **per-leaf
   [`ProgramCodec`]** (`lichen_language::persist`) so a built compiler writes a
   real device cache.  The compiler's **artifact cache is scoped per plugin

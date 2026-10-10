@@ -1,6 +1,11 @@
 # The package manager
 
-> Status: current
+> Status: current — the composition is real, and the language layer's tooling is
+> generic over the composed program (`LangProgramShape`); the composed compiler
+> binary itself is still monomorphic over the shipped `LangProgram`, so a
+> compiler built with an *additional* plugin cannot yet route through the
+> language crate's store/run machinery end to end (see
+> [plugin-taxonomy](plugin-taxonomy.md)).
 > Points at: `crates/lichen-package` (the crate), `src/main.rs` (the `lichen`
 > CLI), `src/project.rs` (`Project`), `src/git.rs` (git fetching into the
 > lichen-home source cache), `src/toolchain.rs` (binary install), `src/plugin.rs`
@@ -68,7 +73,7 @@ The block scanner and mini-frontend live in the isolated
 import path: [`lichendir`](../../crates/lichen-preprocess/src/lib.rs) /
 [`sources_root`](../../crates/lichen-preprocess/src/lib.rs)).  The package
 manager owns the **resolution seam**: before the compiler's `preprocess` runs,
-[`Project::stage`](src/project.rs) fetches every `depend` into the source cache
+[`Project::stage`](../../crates/lichen-package/src/project.rs) fetches every `depend` into the source cache
 and registers each alias with the shared store via
 [`PackageStore::register_vendored`](../../crates/lichen-language/src/package.rs).
 [`resolve_import`](../../crates/lichen-language/src/package.rs) then resolves
@@ -104,14 +109,12 @@ set via `lichen_language::lang_compose_vocabulary!`) and runs `cargo build`,
 then drives the produced `lichen-compiler-<name>` binary.  `lichen
 rebuild-plugin [<file|dir>]` is the explicit form of the same build.
 
-> **Status:** the *composition* is real.  The generated compiler's tooling (its
-> package store, persist codec, CLI, and `run` path) is currently monomorphic
-> over the shipped `LangProgram`, so a compiler built with an *additional*
-> plugin cannot yet route through the language crate's store/run machinery.
-> That generalization — making the language layer's tooling generic over the
-> `Program` marker — is the tracked follow-up in
-> [plugin-taxonomy](plugin-taxonomy.md).  A rebuild over the shipping plugin
-> set produces a fully working compiler.
+The composition is real, and the generic library is available to the generated
+compiler: the language layer's tooling is generic over the program shape
+(`LangProgramShape`).  The composed compiler binary itself is still monomorphic
+over the shipped `LangProgram`, so the tracked follow-up — driving an
+additional-plugin compiler through the language layer's store/run path end to
+end — is in [plugin-taxonomy](plugin-taxonomy.md).
 
 ## CLI
 

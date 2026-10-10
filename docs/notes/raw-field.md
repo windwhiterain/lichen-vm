@@ -1,6 +1,6 @@
 # The raw named read `X::a`
 
-> Status: current.
+> Status: current
 > Points at: `crates/lichen-language-lex` (`TableArrow`, the glued `DoubleColon`),
 > `crates/lichen-language-parser` (`Expr::RawNamedField`), `crates/lichen-language/src/compile.rs`
 > (`ExprKind::RawNamedField`), `crates/lichen-highlevel/src/ir.rs`
@@ -32,7 +32,7 @@ over a struct *instance*.  `X::a` is the **named** sibling of the raw positional
 
 ## Check-time, not raw
 
-Unlike `X<e>` (no validation at all), `X::a` requires a TypeStruct container.  A
+ Unlike `X<e>` (no validation at all), `X::a` requires a TypeStruct container.  A
 *concretely* non-struct container (an atomic type, a tuple value, an array) is a
 check-time `Guard` diagnostic — `expected TypeStruct, found …` — and the read is **not
 built** behind that refusal: the name table below is reached by walking this container's
@@ -40,8 +40,8 @@ own *type*, and for a type that is not a struct the walk lands on whatever sits 
 path instead.  Measured on `l = [10, 20]; l::a`, the walk's last step is the array's own
 universe, and the lowlevel refuses to read an array as a table
 (`unreachable!("TableGet target must be a table")`, reached from the checker's own forcing
-of the read's type — `docs/notes/type-system-cleanup-plan.md`'s census called that third
-case frontend-only, and the refusal is what makes it so).  The expression carries the hole
+of the read's type — that third case is frontend-only precisely because the refusal
+stops it before the read is built).  The expression carries the hole
 a refused definition carries instead ([`Checker::refused_pair`]), and the refusal is the
 whole answer: the read is defined for a struct type value and nothing else.  An *undecided*
 container (a parameter, a call result) is **pinned** to the struct kind and stays lazy,

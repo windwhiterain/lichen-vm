@@ -1,8 +1,8 @@
 # Language toolchain: one frontend, many tools
 
-> Status: current — the design below is the shipped toolchain layer.
+> Status: current
 > Points at: the crate boundaries below, the frontend in
-> [`crates/lichen-language`](../../crates/lichen-language/), and the two new tool
+> [`crates/lichen-language`](../../crates/lichen-language/), and the two tool
 > crates `lichen-language-server` and `lichen-language-zed`.
 
 This note is the design for the editor/toolchain layer of lichen-vm: a language
@@ -35,6 +35,13 @@ So the rule is:
 > `lichen_language::ast::Expr` the compiler lowers from; any tool that needs
 > tokens gets the *same* `lichen_language::lex::Token` the parser feeds on.
 
+The syntax half of that frontend is itself split into three crates —
+`lichen-span` (the source-position protocol), `lichen-language-lex` (tokens) and
+`lichen-language-parser` (the AST and parser) — which `lichen-language`
+re-exports, so the module paths above hold. A tool that wants only tokens and
+AST can depend on those crates directly; the concrete layout and the decoupling
+seams are [frontend-syntax-separation](frontend-syntax-separation.md).
+
 That is the whole sharing story. There is no second lexer, no second parser, no
 second AST. A formatter is correct by construction, because it prints the very
 tree the compiler parses.
@@ -61,9 +68,15 @@ So the tools are **not split by tool**. They are split by *package kind*:
 
 ```
 crates/
-  lichen-language/           the frontend + the `lichen-compiler` CLI (this
-                             c't is the single home of lex / ast / parse /
-                             compile / diag)
+  lichen-span/               the source-position protocol (Span, line_starts,
+                             line_col) — dependency-free, shared by the lexer,
+                             the parser, the language layer and the preprocessor.
+  lichen-language-lex/       the lexer: tokens, byte ranges, LexDiag.
+  lichen-language-parser/    the AST, the parser, ParseDiag, the occurrence-path
+                             vocabulary.
+  lichen-language/           the frontend + semantics, re-exporting the three
+                             crates above (this crate is the single home of
+                             compile / diag / session / the pipelines).
   lichen-language-server/    the TOOLING crate: lib.rs = the shared editor-view
                              (span↔position, node index, diagnostics→LSP), and
                              the LSP server as a [[bin]].
@@ -96,21 +109,18 @@ crate, many thin entry points, one shared editor-view library.
 
 ### What about a "lean frontend" crate?
 
-`lichen-language` currently also carries the CLI and the runtime-called names
-(`wasmi`, `wasm-encoder` for the compute package), so a pure formatter that only
-wants tokens+AST would be pulling in more than it prints. For now the tools
-depend on `lichen-language` directly — the sharing wins matter far more than the
-weight, and `wasmi`/`wasm-encoder` are already compiled into any tool that
-evaluates a program. If the weight ever matters, the *clean* seam is to lift the
-syntax-only modules out of `lichen-language` — the lexer into a `lichen-language-lex`
-crate (which owns `Span`), the parser into a `lichen-language-parser` crate (which
-consumes the lex crate's `Token`/`Span`) — and `pub use` them back through
-`lichen-language`, so existing module paths (`lichen_language::lex::…`) never
-change. `lichen-highlevel` becomes span-free in the same move (the source-position
-index moves to `lichen-language`). That is a refactor, not a redesign; the artifact
-contract above is unchanged by it. The concrete design — the crate layout, the `Span`
-and `Diag`/`Stage` decoupling seams, and the step-by-step migration — is
-[frontend-syntax-separation](frontend-syntax-separation.md).
+The syntax-only crates exist: `lichen-language-lex` owns the tokens (with
+`lichen-span` owning the position protocol) and `lichen-language-parser` owns the
+AST and parser, both re-exported through `lichen-language`. A tool that only
+wants tokens+AST depends on those directly, so a formatter does not have to pull
+in the checker or the VM.
+
+`lichen-language` still carries the semantics and the runtime-called names
+(`wasmi`, `wasm-encoder` for the compute package), so a tool that compiles a
+program pulls those in regardless; `wasmi`/`wasm-encoder` are already compiled
+into any tool that evaluates a program. See
+[frontend-syntax-separation](frontend-syntax-separation.md) for the crate layout,
+the `Span` and `Diag`/`Stage` decoupling seams, and the public surface.
 
 ### What about cross-process sharing?
 
@@ -126,8 +136,9 @@ incremental dependency-graph verification. **The tooling crates reuse that store
 for settled per-file artifacts, and the language server adds its own per-text
 index cache for the live buffer** (`P1-17`), rather than building a second
 artifact cache.  `BufferSession` — the incremental lex/parse splice documented in
-[`incremental-parse-compile.md`](incremental-parse-compile.md) — is built and
-tested but unwired (`P2-1`); wiring it is what would avoid the lex and parse on
+[`incremental-parse-compile.md`](incremental-parse-compile.md) — wired into the
+server's compile worker; the keystroke path is still open (`P1-17` (b)), and that
+is what would avoid the lex and parse on
 the keystroke path, which the index cache does not.  See
 [`artifact-cache.md`](artifact-cache.md) for the whole mechanism.
 
@@ -146,10 +157,10 @@ Concretely, the shared artifacts — all re-exported from `crates/lichen-languag
 | `TokenKind`, `Token`, `Lexed` | `lex` | syntax highlighting, edit-aware relex (`lex_resume`) |
 | `Expr`, `Stmt`, `Program`, `Binding` | `ast` | hover, go-to-definition, folding, formatting |
 | `Err`/`ErrorBlock` | `ast` | "don't format/flag this broken region" (masked) |
-| `Span` (`(u32,u32)`, 1-based line/col) | `lichen_highlevel::ir` | the universal source position |
+| `Span` (`(u32,u32)`, 1-based line/col) | `lex` (defined in `lichen-span`) | the universal source position |
 | `Diag`, `Stage` | `diag` | diagnostics (lex/parse/resolve/check) |
 | `Frontend`, `frontend*`, `Report`, `compile*` | `lib` | the full text→IR→check pipeline |
-| `BufferSession`, `SessionReport` | `session` | incremental, diff-gated diagnostics |
+| `BufferSession`, `SessionReport` | `session` | incremental re-analysis: retained cells, dirty propagation, per-edit telemetry |
 
 The one thing the raw frontend does **not** give you is the *editor view* of
 these — the reverse mapping from a cursor position back to a node, the
@@ -205,10 +216,11 @@ frontend stays a single source of truth for the *syntax*; resolution for
 
 `Doc` is built by cutting the leading `---…---` block with `preprocess`, then
 compiling the remainder with `frontend_at`/`build_report` (absolute spans). The
-server holds only the *source text* per open document and re-runs the frontend on
-demand in a blocking task, because `Doc` is `!Send` (it owns raw pointers into the
-frontend arena via the diagnostics). Making the frontend artefacts `Send` is the
-follow-up that would let the server cache a `Doc` per URI.
+server holds only the *source text* per open document; `Doc` is `!Send` (it owns
+raw pointers into the frontend arena via the diagnostics), which is why the
+per-document sessions live on one dedicated compile worker thread rather than in
+`Backend` (see [lichen-home](liche-lsp-home.md) and
+[incremental-update](incremental-update.md) §6.4).
 
 **Semantic tokens are the grammar-optional highlighting path.** Lichen's own
 frontend classifies every token — literals, keywords, operators, and names

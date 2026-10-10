@@ -16,7 +16,7 @@ own file documents exactly what it evaluates to.
 
 The tooling lives in **`lichen-tools`**, a crate of its own: it is repository maintenance,
 not a compiler surface, so an embedder of `lichen-language` links neither the generator nor
-its `CARGO_MANIFEST_DIR`-relative tree walk (`P2-6`). A run outside the repository — the
+its `CARGO_MANIFEST_DIR`-relative tree walk. A run outside the repository — the
 relative `examples/` absent — reports the unreadable path and exits non-zero.
 
 ## Why it exists

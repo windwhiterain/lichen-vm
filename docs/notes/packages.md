@@ -1,11 +1,12 @@
 # Packages & import
 
 > Status: current
-> Points at: `crates/lichen-language/src/preprocess/` (the block scan + mini-frontend),
-> `package.rs` (the store), `persist.rs` (the device cache), `run.rs`, `main.rs` (the
-> CLI). The `---…---` block *syntax* is the spec's business: [language-spec.md §2.2](../language-spec.md).
+> Points at: `crates/lichen-preprocess` (the block scan + mini-frontend),
+> `crates/lichen-language/src/package.rs` (the store), `persist.rs` (the device
+> cache), `run.rs`, `crates/lichen-compiler` (the CLI). The `---…---` block
+> *syntax* is the spec's business: [language-spec.md §2.2](../language-spec.md).
 
-A program may open with a single `--- … }@` **preprocessor block**. Inside it,
+A program may open with a single `--- … ---` **preprocessor block**. Inside it,
 `name = import "path"` loads a package bound to `name`, `name = "value"` defines a
 string metadata entry, and `name = depend "url"` declares a git dependency bound to
 `name` (fetched by the

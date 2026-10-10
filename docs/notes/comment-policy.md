@@ -7,7 +7,7 @@ that must hold, or the condition that makes an `unsafe` block sound. Anything
 longer belongs in [`docs/notes`](README.md), where it can be linked to instead
 of duplicated next to the code.
 
-The rule is enforced by [`comments-check`](https://github.com/whiting/comments-test),
+The rule is enforced by [`comments-check`](https://github.com/windwhiterain/comments-test),
 run from the `ci` workflow against [`comments-test.toml`](../../comments-test.toml).
 The configuration is the single source of truth: it states the rule and the
 numbers, and the CI step only names it.

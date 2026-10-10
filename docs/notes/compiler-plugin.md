@@ -169,8 +169,7 @@ alignment for the whole vocabulary.
 The value stays `Copy` — an `AnyHandle<T>` is `Copy` for any `T` — which is what
 makes this cheaper than any owner carried in the value: `Copy` is a
 vocabulary-wide trait bound (`ValueExt: Debug + Copy + PartialEq`), so a single
-non-`Copy` variant would cost the whole lowlevel's value handling (`D15` measured
-it at 70 sites).
+non-`Copy` variant would cost the whole lowlevel's value handling.
 
 ## Extension point 5b: keeping nodes alive (`ValueExt::traced`)
 

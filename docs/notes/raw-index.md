@@ -1,6 +1,6 @@
 # The raw index `X<e>`
 
-> Status: current.
+> Status: current
 > Points at: `crates/lichen-language-lex` (`KwArray`), `crates/lichen-language-parser`
 > (`Expr::RawIndex`, `array_type`), `crates/lichen-language/src/compile.rs`
 > (`ExprKind::RawIndex`), `crates/lichen-highlevel/src/ir.rs`
@@ -31,8 +31,8 @@ unify.  A decided container is refused where it stands:
 - an array or an atomic type: `expected TypeTuple, found array<Int, 2>` / `found Int`;
 
 An undecided container (a parameter, a call result) is **pinned** to the tuple kind,
-so the apply that binds it refuses a wrong-kind actual per call.  It used to validate
-nothing, which is why an array container reached the element read at run time.
+so the apply that binds it refuses a wrong-kind actual per call. Without that pin,
+an array container would reach the element read at run time.
 
 So it reads a component of a *type-as-value*: `<Int, string><0>` is the `Int` type.  An
 out-of-bounds subscript is still an evaluation error, recorded during the definition

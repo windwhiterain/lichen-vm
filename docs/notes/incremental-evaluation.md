@@ -26,7 +26,7 @@
 > `crates/lichen-highlevel/src/checker.rs` + `checker/lambda.rs`,
 > `crates/lichen-language/src/run.rs`,
 > and the notes [lowlevel-vm](lowlevel-vm.md), [static-modules](static-modules.md),
-> [code-audit](code-audit.md) (`P1-31`, done).
+> [code-audit](code-audit.md).
 
 ## 1. What is being asked, and what it costs today
 
@@ -105,7 +105,7 @@ Four kinds of state live in a `Module` (`lib.rs:939-1029`):
    a block `Bump` arena and its items are `Dynamic(NodeId)` refs.
 2. **Concreteness verdicts** — `Node::evaluated_deep: Option<EvaluatedDeep>`
    (`lib.rs:889`): a proof about the node's whole reachable subtree, with the
-   in-progress case named separately since `P1-31`.
+   in-progress case named separately.
 3. **Structure** — `blocks` (the GC unit and the arena owner), `functions`
    (templates), the union-find `equality` classes, the per-class `low_shape`.
 4. **Diagnostic and budget state** — the append-only error vecs
@@ -164,7 +164,7 @@ operand's verdict (`:766-774`).
 | 11 | `function.rs:339-357`, `:400-431` the apply clone walk | **new vertices**, payloads, ownership re-stamping per apply | append (**unbounded at run time**) |
 | 12 | `function.rs:158-161`, `:499`; `module.rs:340-346` `add_assert` | assert worklist entries, re-registered per apply | append |
 | 13 | `static_module.rs:142-153` `materialize_leaf` / `as_dynamic` | new vertex holding a static value | append |
-| 14 | `evaluation.rs` verdict write / `module.rs:271` verdict clear | the verdict, and (since `P1-31`) the in-progress mark | append |
+| 14 | `evaluation.rs` verdict write / `module.rs:271` verdict clear | the verdict, and the in-progress mark | append |
 | 15 | `equality.rs:123-185` `seed`/`refine`/`observe_class_low_type`; `static_module.rs:132-136` `set_node_shape` | the per-class `low_shape` lattice | monotone refinements |
 
 Two answers this inventory settles:
@@ -209,7 +209,7 @@ then say who can write what:
 
 Give the verdict a second bit. `EvaluatedDeep { undecided, settled }` where
 **`settled` means: this node's value is concrete, no position it read was
-in-progress (the `P1-31` assumption), every value-reachable item's verdict is
+in-progress (the in-progress assumption), every value-reachable item's verdict is
 itself settled, and its operand — if the node has an operation — is absent, has
 been dropped, or has a settled verdict.**
 
@@ -248,7 +248,7 @@ What remains is one bit to compute and one early return to add.
 
 - **Cyclic regions can never be settled.** The canonical universe `[Type, ↺]` is
   reached from inside its own descent, so its verdict is computed under the
-  in-progress assumption (`P1-31`) and `settled` is false there — by definition,
+  in-progress assumption and `settled` is false there — by definition,
   not by oversight. That is also where §1.3's worst redundancy sits
   (`struct_recursion`: 8.15 real/stamped, 72.4% revisits), so **the measured
   headroom is an upper bound, not a forecast**.
@@ -257,7 +257,7 @@ What remains is one bit to compute and one early return to add.
   be settled, because a later `evaluate_node_forced` walks operand edges and could
   certify the operand undecided, leaving the parent's `false` stale. The
   verdict computation now reads the **value graph only** — the operand arm is
-  deleted and the operand forcing with it (`code-audit.md`, `P1-31`, the
+  deleted and the operand forcing with it (`code-audit.md`, the
   operand-arm follow-up) — so "the operand has no verdict" cannot make a parent's
   verdict stale, and no cut has to wait on it. The rest of the bullet's finding
   still holds as a description of where the cheap and expensive descents sit: a core
@@ -285,7 +285,7 @@ the same positions, so the flag is a second accumulator over that walk (an item
 counts as settled iff its verdict is `Some(settled)`). The cut is one early return
 in `evaluate_node_deep_inner`, after the static-leaf and cycle-cut cases and
 before `deep_depth` is charged. The one subtlety is that the assumption must be
-recorded as *not settled* rather than as settled — which is why `P1-31`'s split
+recorded as *not settled* rather than as settled — which is why the split
 came first: without a named in-progress state there is no way to tell a
 deliberately assumed position from a decided one.
 
@@ -331,7 +331,7 @@ entry point, and that nothing further should be built.
   first thing the harness is for.
 - **The measured delta is small** (see §4.5). Then the redundancy is inherent to
   cyclic re-derivation, nothing further is built, and the note's finding reduces
-  to the measurement plus `P1-31`.
+  to the measurement.
 - **The ordering guarantee breaks.** If a cut lets an apply consume an unsettled
   template member, the recursion tests should fail; they are the canary.
 - **The wall-clock share is negligible.** Then even a working cut is not worth
@@ -358,12 +358,12 @@ entry point, and that nothing further should be built.
   recorded (the draft's "path-valued dependencies verified on demand" is the rejected
   alternative, recorded in that section).
 - **The CLI build path is the measurement target** (Q5, unchanged): step 0 needs
-  no editor, and `BufferSession` still has no production consumer (`P2-1`).
+  no editor, and `BufferSession` still has no production consumer.
 
 **Done:**
 
-- **Q6 / `P1-31`** — the verdict's `None` conflated "never ran" with "in
-  progress"; the split landed (`code-audit.md` `P1-31`), and §4.4 depends on it.
+- **Q6 — the verdict's in-progress state** — the verdict's `None` conflated "never ran" with "in
+  progress"; the split landed, and §4.4 depends on it.
 
 **Open:**
 
@@ -406,7 +406,7 @@ entry point, and that nothing further should be built.
   resolved on demand rather than registered, and the retained units are the user's
   `cache` marks. All of it is [incremental-update](incremental-update.md); this note
   keeps the within-build cut.
-- `P1-31` (named in the previous revision of this note) landed: the verdict's
+- the verdict's in-progress state (named in the previous revision of this note) landed: the verdict's
   `None` now means one thing, with the in-progress case named. The first of the two
   sites an earlier draft had named as defects — the **operand arm** — was not
   retracted after all: it was deleted outright, together with the operand forcing
@@ -418,4 +418,4 @@ entry point, and that nothing further should be built.
 - What this note deliberately does **not** claim: that the cut is worth building.
   §4.3 lists two reasons its reach is limited and §4.5 says the take is a
   measurement. The note's durable results are the measurement, the mutation
-  inventory, the three stability predicates, and `P1-31`.
+  inventory, the three stability predicates, and the verdict's in-progress state.

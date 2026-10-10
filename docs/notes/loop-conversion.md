@@ -299,7 +299,7 @@ replaces anyway — was the only thing standing in the way.
 the same ground and with the same discipline as `CONDITIONAL_WRITE`.
 
 The premise it would break is stated as a theorem in
-[compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md) — a
+[compute-buffer-wrapper](compute-buffer-wrapper.md) — a
 run is "bit-identical to the sequential loop's, for every `count` and whatever
 the worker count" — and it is exactly what lets `dispatch` allocate output
 buffers **without initialising them** ([dispatch.rs](../../crates/lichen-compute-gpu/src/dispatch.rs),
@@ -569,8 +569,8 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
    two changes: **`Terminator::Jump` now exists**, and **`validate_flow` lets a loop
    body name the loop's landmarks** — its header (the backedge) or its exit (leaving)
    — where the old rule required everything to reach the header.
-   [loop-body-expressiveness](loop-body-expressiveness.md) has the analysis, what was
-   unrepresentable, and the two changes.
+   [compute-kernel-struct](compute-kernel-struct.md) records the body model as it
+   stands.
 
 
 ### 8.4 Unmerged branches, and what each still needs
@@ -796,9 +796,9 @@ cleared the CPU side but nothing turns on it yet, because 1c is not:**
    `passed_out > carried` by name.
 1b. **Make a loop body expressible** (§8.3 item 4) — **half done**. The
    *transfer* is: `Terminator::Jump` exists and `validate_flow` lets a body name the
-   loop's header or its exit. The *carried read* is not, and §2.1 of
-   [loop-body-expressiveness](loop-body-expressiveness.md) is still true for that
-   reason: a body can arrive at the header but cannot carry anything new.
+   loop's header or its exit. The *carried read* is not, and the body model in
+   [compute-kernel-struct](compute-kernel-struct.md) still leaves that true:
+   a body can arrive at the header but cannot carry anything new.
 1c. **Give the IR an instruction that reads the carried tuple.** `LocalGet` names a
    **parameter leaf**, and nothing names element `k` of the loop's current state —
    so a body can only forward the header's own values, and every loop the IR can

@@ -1,27 +1,25 @@
 # Unify without forcing: can the pending/force/commit machinery go?
 
-> Status: **proposed** — the design question only.  Nothing here is built: the
-> `force`/`defer`/`pin` mechanisms it asks about are live on `dev` and this note
-> records what removing them would cost and which parts of the question are
-> already answered by measurement.  §2.5 is the strongest of those: the
-> "unify unconditionally, reconcile when the operator finishes" form was built
-> twice, the second time with reads that always answer and trigger the
-> computation, and it lands on the compute boundary.  What *did* land out of the
-> same review is the run-state half — see §4.
+> Status: **historical — the question is answered: the machinery is gone.**  The
+> removal this note proposes has landed on `dev`: `equality.rs` is now one
+> unconditional `unify_inner` plus `fill_class_holes`, and the current rules live
+> in [lowlevel-vm](lowlevel-vm.md).  Kept as the record of the design question,
+> the probes that bounded it (§2.5) and the run-state half that landed first
+> (§4); the sections below describe the machinery as it was when this was
+> written.
 >
 > Companions: [eval-before-unify](eval-before-unify.md) (the same unifier seen
 > from the staleness side, and where the *other* wakeup design — a class-
-> attached blocked list — is sketched), [defer-pending-type-forms](defer-pending-type-forms.md)
-> (the deferral as a *fix*, i.e. the case it exists for),
-> [type-system-cleanup-plan](type-system-cleanup-plan.md) §4 (D1: the deferral
-> policy is the program's hook, the lowlevel is untyped).
+> attached blocked list — is sketched), [lowlevel-vm](lowlevel-vm.md) (the rules
+> as they stand: one unconditional unify, the lowlevel untyped by design).
 
 ## 1. The question
 
-Today the unifier **computes before it compares**: `unify_inner` forces a
-pending side (`force_pending`), and when forcing is impossible it either
-resolves the read into a plain reference (`alias_index`), or asks the
-program's policy to merge and then **commits** a value onto the pending
+When this note was written the unifier **computed before it compared**:
+`unify_inner` forced a
+pending side (`force_pending`), and when forcing was impossible it either
+resolved the read into a plain reference (`alias_index`), or asked the
+program's policy to merge and then **committed** a value onto the pending
 computation (`defer_pending` → `pin_committed_value`).  The proposal:
 
 > Unify a node **whether or not it carries an operation**, and decide whether an

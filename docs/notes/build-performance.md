@@ -1,8 +1,6 @@
 # Build performance: the chumsky `.boxed()` fix
 
-> Status: current — the metrics below are from the present `lichen-language-parser` crate.
-> Related, historical: the earlier fix (bottom) was for the pre-split `lichen-language`
-> crate and is not an authority on current behaviour.
+> Status: current
 > Points at: `crates/lichen-language-parser/src/parse.rs`, `expression()`.
 
 ## Symptoms
@@ -60,16 +58,12 @@ Both are pure type erasure — the parsed output (`Expr`) is unchanged, and all
 
 ### The levels themselves are boxed too, once there are eight of them
 
-The two boxes above bound the chain's *ends*, which was enough while the chain was
-six levels deep. `* / %`, the bitwise trio and the comparison set (see
-[operators](operators.md)) took it to eight, and an unboxed level in the middle
-re-elaborates every level under it: the same crate went from ~2 s to **~15 min**
-of rustc frontend time, which is the symptom in §Symptoms arriving again from a
-different direction. So each level now ends in `.boxed()` as well, and the rule is
-the original one applied to the growth — **box where the type is threaded**, on
-both sides of every level that a new one is stacked on. Measured after the fix
-(`CARGO_INCREMENTAL=0`, warm deps): `cargo check` 0.5 s, `cargo build` 7.2 s —
-back inside the table below.
+The two boxes above bound the chain's *ends*; an unboxed level in the middle
+re-elaborates every level under it, which costs minutes of rustc frontend time.
+So each level also ends in `.boxed()`, and the rule is the original one applied
+to the growth — **box where the type is threaded**, on both sides of every level
+that a new one is stacked on. The measured result (`CARGO_INCREMENTAL=0`, warm
+deps): `cargo check` 0.5 s, `cargo build` 7.2 s.
 
 ## Optimization boundary
 
@@ -97,13 +91,7 @@ The boundary is reached with the **two** boxes above.
   boundary: their codegen is what is left, not their type-check.
 - To go lower you would have to cut codegen itself: a workspace profile with
   `debug = 0` / `debug = "line-tables-only"` (dev builds) — or, deeper, replace the
-  chumsky combinator grammar with a hand-written recursive-descent parser (the
-  direction the `frontend/chumsky` branch explores).
+  chumsky combinator grammar with a hand-written recursive-descent parser.
 
-## Historical note (pre-split `lichen-language`)
-
-A single `.boxed()` in the old `atom_parser()` once cut a ~10-min clean build to
-~8.5 s, and additional boxes at the time gave no gain (some slightly worse). That
-held for the old, flatter grammar; the re-grown grammar of the split parser crate
-needs the two boxes above. The overall lesson is unchanged: box at the chokepoint
-where the type is *threaded*, not everywhere.
+The lesson is one rule: box at the chokepoint where the type is *threaded*, not
+everywhere.

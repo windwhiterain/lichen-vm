@@ -1,8 +1,8 @@
 # The computational operators
 
-> Status: current.  The operator vocabulary a lichen program computes with, the
-> five layers one operator lives in, the three decisions that were made to add
-> it (precedence, the two tokens that are both a bracket and a comparison, and
+> Status: current — the operator vocabulary a lichen program computes with, the
+> five layers one operator lives in, the three decisions behind it (precedence,
+> the two tokens that are both a bracket and a comparison, and
 > the unsigned reading of `Int`), the two prefix keywords that cross the
 > language's scalar classes, and the editor grammar's own reading of the same
 > set.
@@ -385,8 +385,7 @@ coarser reading, and an editor grammar's job is colouring.
 **And the one thing it does not yet know is §7's two keywords.** `int2float` and
 `float2int` colour as identifiers there, because the rule would be a third
 `prec(PREC.assertion, seq(keyword, field('value', $.application)))` in a grammar
-this workspace cannot build: the generated parser is gitignored and
-`tree-sitter generate` needs a CLI that is not on this machine, and
+whose generated parser is gitignored and needs a `tree-sitter` CLI to build, and
 [tree-sitter-generated-files](tree-sitter-generated-files.md) puts a grammar
 change in the hands of whoever can test it. Nothing about the *language* waits
 for it — the compiler's own lexer, parser and checker have the two operators, the

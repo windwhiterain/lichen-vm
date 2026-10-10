@@ -1,10 +1,15 @@
 # The tree-sitter generated-files testing method
 
-> Status: current — the settled testing method.  The generated parser files are **not committed**; they are
-> regenerated from `grammar.js` at build time.  The grammar tooling is **fully decoupled**
-> from the workspace: the default `cargo test --workspace` and the Zed WASM build never build
-> the grammar and never need the tree-sitter CLI.  Grammar changes are tested locally by the
-> developer who changes `grammar.js`.
+> Status: current
+> Points at: `tree-sitter-lichen/` (`grammar.js`, `bindings/rust/build.rs`,
+> `queries/`) and `lichen-language-zed` (the opt-in `grammar-consistency`
+> feature).
+
+The generated parser files are **not committed**; they are regenerated from
+`grammar.js` at build time.  The grammar tooling is **fully decoupled** from the
+workspace: the default `cargo test --workspace` and the Zed WASM build never
+build the grammar and never need the tree-sitter CLI.  Grammar changes are
+tested locally by the developer who changes `grammar.js`.
 
 ## What `tree-sitter-lichen` is, and how it is tested
 
@@ -57,14 +62,15 @@ The samples test runs by default when testing the grammar crate directly; it can
 `tree-sitter` CLI on PATH (`cargo install tree-sitter-cli`, or your preferred method);
 `build.rs` prints exactly that if it is absent.
 
-## State in this branch
+## The grammar's state
 
-- `tree-sitter-lichen/grammar.js` is the source of truth (updated for the `==>` table
+- `tree-sitter-lichen/grammar.js` is the source of truth (the `==>` table
   separator, the `X::a` raw named read, and the full operator set — see
   [operators §9](operators.md#9-the-editor-grammar), which is where the `<`/`>`
   two-token decision and its two consequences are written down).
 - `tree-sitter-lichen/queries/highlights.scm` colours every operator in that set,
   and is mirrored in `lichen-language-zed/languages/lichen/highlights.scm`.
-- The generated `src/parser.c` etc. are **not** committed; they are regenerated on demand
-  when the grammar is built.
-- The default workspace build/test and the Zed WASM build have **no** grammar/CLI coupling.
+- The generated `src/parser.c` etc. are **not** committed; they are regenerated
+  on demand when the grammar is built.
+- The default workspace build/test and the Zed WASM build have **no**
+  grammar/CLI coupling.

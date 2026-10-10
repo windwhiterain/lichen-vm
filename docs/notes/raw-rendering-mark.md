@@ -5,7 +5,7 @@
 >
 > Companions: [type-rendering-inconsistent](type-rendering-inconsistent.md) (the
 > tag-against-structured split, which this mark does **not** fix),
-> [defer-pending-type-forms](defer-pending-type-forms.md) (whose diagnostics are
+> [eval-before-unify](eval-before-unify.md) (whose diagnostics are
 > where the mark shows).
 
 A printer that cannot read a node as a **form** falls back to the node's *raw
@@ -134,7 +134,7 @@ before: a bare `6` and an `Int` can no longer pass for a read value and a read
 type, and the *reason* a value prints the way it does is legible from the
 spelling itself — a `?a` type explains `raw 6`, and no type does.
 
-It is also what makes the two defect notes above legible: in
-[defer-pending-type-forms](defer-pending-type-forms.md) §1's matrix every
+It is also what makes the two defect notes above legible: in the
+[eval-before-unify](eval-before-unify.md) §2 matrix every
 `[?a, ?b]` is a raw reading, and a diagnostic whose whole expected side is raw
 means no form was recognised at all.

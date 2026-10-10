@@ -448,10 +448,10 @@ maps every span back to the original file.
   `let` and the two may appear together (`cache let a = …`); it is accepted in
   every scope and emits no diagnostic.  The retention mechanism is complete and
   wired into the incremental session (`BufferSession` lowers a clean cell to a
-  static read of its frozen value and drops only the cells an edit reached), but
-  **the session itself has no production caller yet**, so outside it a marked
-  binding is compiled like an unmarked one — see
-  [incremental-update](notes/incremental-update.md) §12.  Sharing means a bound
+  static read of its frozen value and drops only the cells an edit reached), and
+  the language server drives one session per open document; outside a session a
+  marked binding is compiled like an unmarked one — see
+  [incremental-update](notes/incremental-update.md) §6.  Sharing means a bound
   *non-function* value
   has one type across uses, while a bound lambda stays polymorphic — each
   application still instantiates the parameter fresh via the runtime's
@@ -524,8 +524,7 @@ maps every span back to the original file.
   (`K = [Type, K]` above).  A recursive struct type is an ordinary cyclic
   type — `A = struct<.f Int, .g B>; B = struct<.f Type, .g A>` checks and runs (see
   `examples/struct_recursion.lichen`).  This is the approved semantics
-  (decision D2 of
-  [type-system-cleanup-plan](notes/type-system-cleanup-plan.md)), not a
+  ([function-type-merge](notes/function-type-merge.md) records why), not a
   caveat: the flip side of `Type : Type`'s flexibility is that decidability
   of a lichen program is the embedding's responsibility.
 - **The computational operators.**  `+ - * / %` are arithmetic on `Int`; the

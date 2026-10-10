@@ -1,7 +1,6 @@
-# Cross-process artifact store: it already exists
+# Cross-process artifact store
 
-> Status: current — this note records *what exists* and what the
-> toolchain reuses; it is not a proposal to build.
+> Status: current
 > Points at: `crates/lichen-registry` (the type-independent device layer: the
 > byte reader/writer, `ModuleKey`, the disk `DeviceRegistry`, the hashes),
 > `crates/lichen-language/src/persist.rs` (the vocabulary artifact codec +
@@ -13,7 +12,7 @@ The request "**no matter how many processes, serialize artifacts, manage their
 dirtiness carefully, and share them as much as possible**" is answered by code
 that is already in the tree. The toolchain does **not** need a new artifact
 cache; it needs to reuse the one that exists. This note records the mechanism so
-the new tooling crates sit on it rather than rebuilding it.
+the tooling crates sit on it rather than rebuilding it.
 
 ## The compile artifact is a frozen `StaticModule`
 
@@ -63,8 +62,7 @@ a missed recompile but a wrong one: a frozen artifact is full of cross-module
 node references written as `(dependency key, index)`, so serving it after its
 dependency changed resolves those indices against the dependency's **new** node
 layout — wrong answers, and, when the index no longer names a slot, a hard
-`invalid SlotMap key used` panic. This was not hypothetical: the language server
-crashed on it every time an imported `.lichen` file was edited (recorded in
+`invalid SlotMap key used` panic. The identity fold is what prevents it (see
 [code-audit](code-audit.md), `P1-17`).
 
 Three sites answer "what identity does this dependency contribute", and they
@@ -84,10 +82,7 @@ All three read the **registry's own record**, never the caller's in-memory view:
 an embedded dependency (`virtual:<name>`) has no source file and need have no
 record, and it must contribute the all-zero sentinel on both sides of the fold
 or every dependent would miss forever. `Entry::artifact` carries that recorded
-identity per file ID, which is what makes the fold transitive past one level;
-the registry file format is version 3 for it, and a version-2 file reads as
-unreadable and is recovered as a fresh registry — one full recompile, nothing
-else.
+identity per file ID, which is what makes the fold transitive past one level.
 
 `DeviceRegistry::verify(file_id, source)` is the *incremental verification*: it
 walks the **recorded** dependency graph (each node compares one source-file hash
@@ -165,26 +160,24 @@ compiled-artifact store is scoped; the git **source** cache
 (`lichendir()/sources`) stays shared across compilers (it holds the same fetched
 plugin sources).
 
-## What this means for the new tooling crates
+## What the tooling crates do with it
 
-- **Do not build a store.** `lichen-language-server` and `lichen-language-zed`
-  should **reuse** `lichen-language::persist` / `package` for the *settled*
-  per-file artifacts, exactly as the CLI does — the LSP, run on the same
-  `~/.lichen`, sees the CLI's compiled artifacts and vice versa, which is the
-  cross-process sharing demo.
-- **The live edit path stays in-process, and it does not reuse the session.**
-  The open buffer's re-analysis is the language server's own per-text cache of
-  its extracted index (`DocIndex`, `P1-17`) — deliberately separate from the
-  frozen cross-process artifacts, because a buffer being typed is not a settled
-  module.  [`BufferSession`](incremental-parse-compile.md) is the incremental
-  machinery this note once named for that job; it is built and tested but has
-  **no production consumer** (`P2-1`), and wiring it is `D6`'s (b) — it would
-  avoid the lex and parse when the text *changes*, which the index cache does
-  not, and it stays worth doing on its own terms.
-- **What is actually new** is the editor-view glue: span↔LSP-position
-  conversion, the name-resolution index for hover / go-to-definition, and
-  diagnostics→LSP — i.e. the `lichen-language-server` tooling library, layered on
-  the existing frontend.
+- **No new store.** `lichen-language-server` and `lichen-language-zed`
+  **reuse** `lichen-language::persist` / `package` for the *settled* per-file
+  artifacts, exactly as the CLI does — the LSP, run on the same `~/.lichen`, sees
+  the CLI's compiled artifacts and vice versa, which is the cross-process sharing
+  demo.
+- **The live edit path stays in-process.** The open buffer's re-analysis is the
+  language server's own per-document session and its extracted index (`DocIndex`,
+  `P1-17`) — deliberately separate from the frozen cross-process artifacts,
+  because a buffer being typed is not a settled module.
+  [`BufferSession`](incremental-parse-compile.md) is the incremental machinery
+  for that job; the server runs it on the compile worker, and what remains open
+  is the keystroke path (`P1-17` (b)) — it would avoid the lex and parse when the
+  text *changes*, which the index cache does not.
+- **The layer on top is the editor view**: span↔LSP-position conversion, the
+  name-resolution index for hover / go-to-definition, and diagnostics→LSP — i.e.
+  the `lichen-language-server` tooling library, layered on the existing frontend.
 
 ## The remaining seam (only if re-parse is ever measured to dominate)
 

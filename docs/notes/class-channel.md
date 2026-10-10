@@ -17,8 +17,7 @@
 > carrying its signature) are landed.  The remaining half — §5.2's statement and
 > §5.4's carrier —
 > is the **open class** itself, which is the operator-polymorphism workstream's to
-> decide ([operator-polymorphism](operator-polymorphism.md) §8.4,
-> [operator-polymorphism-handoff](operator-polymorphism-handoff.md) §5: the class
+> decide ([operator-polymorphism](operator-polymorphism.md) §8.4 and §5: the class
 > domain is that workstream's value, and its reader is what commits to a member).
 > This worktree therefore proceeds with §4, the struct-argument migration, whose
 > 57-of-58 acceptance leaves exactly the element cell the two red targets want.
@@ -31,11 +30,11 @@
 > domain the compiler reads or a default it invents.  What remains is the
 > cross-kernel/`launch` argument shape §6 names.
 > Companions: [compute-runtime-scalars](compute-runtime-scalars.md) (the measured
-> case that exposed this — its §4.4 is the symptom, this note is the fix),
+> case that exposed this — this note is the fix),
 > [lowlevel-low-types](lowlevel-low-types.md) (the seed → pass → read chain),
-> [defer-pending-type-forms](defer-pending-type-forms.md) (the deferral whose side
-> effect is being relied on), [type-query-api-proposal](type-query-api-proposal.md)
-> §7 (the same "decide it where it is decided" principle one layer up),
+> [eval-before-unify](eval-before-unify.md) §3 (the deferral whose side
+> effect is being relied on), [checker-encoding-instability](checker-encoding-instability.md)
+> (the same "decide it where it is decided" principle one layer up),
 > [kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) §6 (the
 > compiler-side "specialize before JIT" direction §5 here **supersedes**: the
 > author specializes, and §6's placeholder apply is the rejected alternative).
@@ -73,8 +72,7 @@ That split is what makes today's behaviour accidental rather than stated:
   `array<?a, ?b>` (nothing was ever committed), while the GPU chain test prints
   `array<Int, ?d>` — because the consumer's **array** argument supplied the pending
   read that triggered the commit. The same test with a **tuple or struct** argument
-  prints `array<?d, ?e>`: no pending read, no commit
-  ([compute-runtime-scalars](compute-runtime-scalars.md) §4.4).
+  prints `array<?d, ?e>`: no pending read, no commit.
 - **Which node a reader asks decides what it sees.** `pin_committed_value` writes
   to the representative (and to the class's pending ops, for the apply cloner's
   sake), so a member that is neither reads nothing — an allocation-order accident,
@@ -974,6 +972,6 @@ The probes that pin the rest (scratch files, not committed):
   (`crates/lichen-language/tests/compute.rs:1308-1345`) does **not** keep its
   `array<Int, ?d>` under the struct spelling — it renders `array<?d, ?e>` with the
   same values, which is the element cell §5.2 states and the same commit path
-  [compute-runtime-scalars](compute-runtime-scalars.md) §4.4 measures.  The earlier
+  measured above.  The earlier
   reading of this bullet as "must keep" was written before §1's measurement showed
   the `Int` arriving only where a consumer's array literal is present.

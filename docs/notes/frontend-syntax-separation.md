@@ -1,213 +1,184 @@
 # Separating the lexer & parser from the language
 
-> Status: current — the split landed exactly as designed below:
-> [`crates/lichen-language-lex`](../../crates/lichen-language-lex/) owns `Span`
-> and the tokens,
-> [`crates/lichen-language-parser`](../../crates/lichen-language-parser/) owns
-> the AST and the parser, `lichen-highlevel` is span-free, and
-> [`crates/lichen-language`](../../crates/lichen-language/) re-exports both
-> crates (`pub use lichen_language_lex as lex; pub use lichen_language_parser as
-> parse; pub use lichen_language_parser::ast;`) so the old module paths hold.
-> The migration plan at the bottom records how it was executed; the coupling
-> inventory records the pre-split state it replaced.
-> Design principle: **`lex` owns the source span; the parser consumes the
-> token's span; `highlevel` is span-free.**
+> Status: current — the frontend is three layers, not one crate:
+> [`crates/lichen-span`](../../crates/lichen-span/) owns the source-position protocol,
+> [`crates/lichen-language-lex`](../../crates/lichen-language-lex/) produces tokens,
+> [`crates/lichen-language-parser`](../../crates/lichen-language-parser/) owns the AST
+> and the parser, and `lichen-highlevel` is span-free.
+> [`crates/lichen-language`](../../crates/lichen-language/) re-exports the lex and
+> parser crates (`pub use lichen_language_lex as lex; pub use lichen_language_parser as
+> parse; pub use lichen_language_parser::ast; pub use lichen_language_parser::path;`) so
+> the old module paths hold.
+>
+> Design principle: **`lex` produces the source span; the parser consumes the token's
+> span; `highlevel` is span-free.**
 
-## The problem (pre-split)
+## What it is and why
 
-Before the split `crates/lichen-language` was one crate that owned both the *syntax* front-end and
-the *language* semantics, and the syntax half was pulled up into the type-system stack:
+Before the split `crates/lichen-language` was one crate that owned both the *syntax*
+front-end and the *language* semantics, and the syntax half was pulled up into the
+type-system stack:
 
 ```
 text ──lex──▶ tokens ──parse──▶ AST ──lower──▶ IR ──check──▶ Build
-        (src/lex.rs)     (src/parse.rs)   (src/compile.rs)   (lichen-highlevel)
+        (lex crate)     (parser crate)   (compile.rs)   (lichen-highlevel)
 ```
 
-Worse, **`Span` was defined in `lichen-highlevel`** (`pub type Span = (u32, u32)` in
-`ir.rs`), so the type-system stack *owned* the source-position vocabulary. The lexer,
-parser, AST, diagnostics, and lowering all imported it from there, and the
-highlevel IR stored a span on every node (`Expr { kind, span }`), threading it through
-every `alloc*` method.
+Worse, **`Span` was defined in `lichen-highlevel`**, so the type-system stack *owned* the
+source-position vocabulary. The lexer, parser, AST, diagnostics, and lowering all imported
+it from there, and the highlevel IR stored a span on every node, threading it through every
+`alloc*` method.
 
-The downsides:
+The downsides that motivated the split:
 
 - **A syntax-only tool pays for the whole VM.** A formatter, a highlighter, or a linter
-  needs tokens + AST. Depending on `lichen-language` drags in `lichen-highlevel`
-  (IR, checker) *and* `lichen-lowlevel` (the evaluation VM) and the compute/`wasmi`
-  stack — nothing a printer uses.
-- **Source position lives in the wrong layer.** `Span` is a *frontend* concern; it
-  should be produced by `lex` and consumed leftward by the parser. Instead it is owned
-  at the bottom of the stack, so the grammar and the checker are both coupled to where
-  it happens to live. Highlevel's own `Loc` diagnostic is already "source-blind"
-  (`ir.rs` docs) — only the IR node carries a redundant span.
-- **The syntax is not independently reusable.** An editor that wants to re-lex/parse a
-  buffer and stop must import the whole dependency tree.
+  needs tokens + AST. Depending on `lichen-language` drags in `lichen-highlevel` (IR,
+  checker) *and* `lichen-lowlevel` (the evaluation VM) and the compute stack — nothing a
+  printer uses.
+- **Source position lived in the wrong layer.** `Span` is a *frontend* concern; it should
+  be produced by `lex` and consumed leftward by the parser, and a crate that only needs to
+  *name* a position should not have to pull in the lexer or the language crate at all.
+  Instead it was owned at the bottom of the stack, so the grammar and the checker were both
+  coupled to where it happened to live. Highlevel's own `Loc` diagnostic is already
+  source-blind; only an IR node carried a redundant span.
+- **The syntax was not independently reusable.** An editor that wants to re-lex/parse a
+  buffer and stop had to import the whole dependency tree.
 
 ## The dependency graph
 
-The crate split is pinned by this graph (arrows read *"flows into / is consumed by"*;
-the compile-time `depends on` edges are the reverse):
+The crate split is pinned by this graph (arrows read *"flows into / is consumed by"*; the
+compile-time `depends on` edges are the reverse):
 
 ```
-lex ──▶ parser ──▶ language ◀── highlevel ◀── lowlevel
+span ──▶ lex ──▶ parser ──▶ language ◀── highlevel ◀── lowlevel
 ```
 
-- `parser → lex`: the parser consumes `lex`'s `Token`/`Span`.
-- `language → {parser, highlevel}`: `language` ties the syntax (the AST) to the
+- `lex → span`, `parser → lex`: the lexer and the parser consume the shared
+  `Span`/`Token` vocabulary.
+- `language → {span, parser, highlevel}`: `language` ties the syntax (the AST) to the
   semantics (the highlevel IR + checker).
 - `highlevel → lowlevel`: the checker builds lowlevel modules.
-- **`highlevel` has no edge to `lex`** — it can never see `Span`. That *forces*
-  `highlevel` to be span-free, and forces the source-position index to live in
-  `language` (the one crate that can see both the AST's spans and highlevel's IR).
+- **`highlevel` has no edge to `span` or `lex`** — it can never see `Span`. That *forces*
+  `highlevel` to be span-free, and forces the source-position index to live in `language`
+  (the one crate that can see both the AST's spans and highlevel's IR).
 
 ## The principle
 
 ```
-source ──lex──▶ Token{ range, span: Span }     Span DEFINED IN lex
+source ──lex──▶ Token{ range, span }        Span lives in lichen-span
                         │  token.span
                         ▼
-                    parse ──▶ AST (every node carries a lex::Span)
+                    parse ──▶ AST (every node carries a Span)
                         │
                         ▼
               lower ──▶ IR ──▶ highlevel is span-free (no Span anywhere)
 ```
 
-1. **`lex` defines the source span.** `pub type Span = (u32, u32)` lives in the lexer
-   crate, along with `line_starts`/`line_col`/`byte_range`. Lexing is the one thing that
-   turns raw bytes into a source position, so it owns the type.
+1. **`lichen-span` defines the source position** (`pub type Span = (u32, u32)`,
+   `line_starts`, `line_col`, `line_text`, `offset_of_span`). It is a tiny
+   dependency-free crate, so a crate that only needs to *name* a source position — or
+   convert a byte offset to one — does not have to pull in the lexer or the language crate.
+   Lexing is the one thing that turns raw bytes into a source position, so it is the
+   *producer* of the type; `lichen-span` is its shared home, and `lichen-language-lex`
+   re-exports it (`pub use lichen_span::{Span, line_col, line_starts, line_text,
+   offset_of_span};`), so `lichen_language_lex::Span` still resolves.
 2. **The parser consumes the token's span.** `Token.span: Span`. Every AST node's span is
    just the lexer's `Span` carried by the token that started it. The parsed AST is
-   `lex::Span`-typed throughout; there is no second span type.
+   `Span`-typed throughout; there is no second span type.
 3. **`highlevel` is span-free.** `Expr { kind }` — no `span` field, no `Option<Span>` on
-   any `alloc*`, no `Span` type at all. Highlevel never sees a source position (its `Loc`
-   diagnostic is already source-blind). The `language` crate keeps positions in its own
-   `ExprId → Span` index, built during lowering, consulted only when it maps a checker
-   message back to a source caret.
-
-## Pre-split coupling (inventory, historical)
-
-The inventory that motivated the split, kept for context.  Every row landed
-per the structure below:
-
-| File | Depends on (outside the crate) | Role |
-|---|---|---|
-| `src/lex.rs` | `logos`, `lichen_highlevel::ir::Span`, `crate::diag` | tokens, `Lexed`, `lex`/`lex_with`/`lex_resume`, `line_starts`/`line_col` |
-| `src/ast.rs` | `lichen_highlevel::ir::Span` | AST node definitions (`Expr`/`Stmt`/`Program`…) |
-| `src/parse.rs` | `chumsky`, `lichen_highlevel::ir::Span`, `crate::ast`, `crate::lex`, `crate::diag` | parser, `collect_error_blocks`, `parse_statement_region*` (no type-mode pass — see [`no-type-mode.md`](no-type-mode.md)) |
-| `src/diag.rs` | `lichen_highlevel::ir::Span`, `lichen_highlevel::diagnostic::Diag<LangProgram>`, `crate::program::LangProgram` | `Diag { span, message, stage, check }`, `Stage { Preprocess,Lex,Parse,Resolve,Check }` |
-| `src/compile.rs` | `lichen_highlevel`, `crate::ast`, `crate::diag`, `crate::preprocess::ResolvedImport` | AST → IR lowering + name resolution; passes spans to `alloc*`, copies spans placeholder↔value |
-| `src/preprocess/{lex,parse}.rs` | `logos` (lex only) | directive-block body lexer/parser (byte `(u32,u32)` ranges, self-contained) |
-| `src/preprocess/mod.rs` | `lichen_highlevel::ir::Span`, `lichen_lowlevel::StaticNodeId`, `crate::package::PackageStore`, `crate::lex`, `crate::diag` | `scan_block`, `split_block`, import resolution |
-| `crates/lichen-highlevel/src/ir.rs` | — | **defines** `pub type Span`; `Expr { kind, span }`; `Option<Span>` on `alloc*` methods |
-
-Existing readers of **IR node spans** (the sites that must move to an external index
-when highlevel goes span-free):
-
-| Site | Reads |
-|---|---|
-| `crates/lichen-language/src/lib.rs:153` | `build.ir[loc.expr].span` — map a checker `Loc` back to a source span |
-| `crates/lichen-language/src/compile.rs` | copies the resolved value's span onto the placeholder `self.ir.expr[p].span` |
-| `crates/lichen-language/src/tests/compile_tests.rs:105,148` | asserts `expr.span` / `ir[root].span` |
-| `crates/lichen-language-server/src/analysis.rs:208,250,344` | `e.span`, `build.ir[id].span`, `build.ir[container].span` |
-| `crates/lichen-highlevel/tests/checker.rs` (many) | sets/reads `ir.expr[…].span` to assert diagnostic positions |
-
-Existing external consumers of the syntax surface:
-
-| Consumer | Uses |
-|---|---|
-| `crates/lichen-language-server/src/analysis.rs` | `ast::{Expr,Program,Stmt,Binding}`, `diag::{Diag,Stage}`, `lex::*`, `parse`, `preprocess` |
-| `crates/lichen-language-server/src/lsp.rs` | `lex::line_col` / `lex::line_starts` (and the `Span` type) |
-| `crates/lichen-language/tests/pipeline.rs` | `diag::Stage` |
+   any `alloc*`, no `Span` type at all. Highlevel never sees a source position. The
+   `language` crate keeps positions in its own `ExprId → Span` index, built during
+   lowering, consulted only when it maps a checker message back to a source caret.
 
 ## The structure
 
-Two crates plus the span-freed highlevel (all landed):
+Three crates plus the span-freed highlevel:
 
 ```
+crates/lichen-span/
+  Cargo.toml            # no dependencies
+  src/lib.rs            # pub: Span = (u32, u32), line_starts, line_col, line_text,
+                        #      offset_of_span
+
 crates/lichen-language-lex/
-  Cargo.toml            # deps: logos            (NOTHING else; no highlevel/lowlevel)
-  src/lib.rs            # pub: Span, line_starts, line_col, byte_range,
-                        #      Token{ kind, span, range }, TokenKind, Lexed,
-                        #      lex / lex_with / lex_resume, LexDiag{span,message}
+  Cargo.toml            # deps: lichen-span, logos    (no highlevel/lowlevel)
+  src/lib.rs            # pub: Token{ kind, span, range }, TokenKind, Lexed, LexDiag,
+                        #      lex / lex_with / lex_resume,
+                        #      re-exported Span, line_starts, line_col
+  src/tests/            # lexer tests
 
 crates/lichen-language-parser/
-  Cargo.toml            # deps: chumsky, lichen-language-lex
-  src/lib.rs            # pub mod ast: Expr/Stmt/Program/Binding/… (spans are lex::Span)
+  Cargo.toml            # deps: chumsky, stacksafe, lichen-language-lex
+  src/lib.rs            # pub mod ast: Expr/Stmt/Program/Binding/… (spans are Span)
                         #        parse: parse, parse_statement_region*,
                         #               collect_error_blocks
+                        #        path: the occurrence-path vocabulary
                         #        diag: ParseDiag{span,message}
 ```
 
-The `Span` type lives in `lichen-language-lex`; the AST and parser live in
-`lichen-language-parser` and import `Span`/`Token` from the lex crate. Nowhere in
-`lichen-highlevel` is a span. `language` re-exports both crates so existing paths hold.
-
-What moved, what stayed:
+What lives where, and why:
 
 | Piece | Destination | Why |
 |---|---|---|
-| `src/lex.rs` + `Span`/`line_starts`/`line_col`/`byte_range` | `crates/lichen-language-lex` | `lex` is the source-position authority; `logos` only |
-| `src/ast.rs` | `crates/lichen-language-parser` | the AST is the parser's output type |
-| `src/parse.rs` | `crates/lichen-language-parser` | parser over `lex::Token`; consumes `lex::Span` |
-| `lichen-highlevel::ir::Span` + `Expr.span` + alloc span params | **removed** from `lichen-highlevel` | highlevel is span-free (enforced by the graph) |
-| `compile.rs` (lowering + resolve) | **stays** in `lichen-language` (builds the `SpanIndex`) | semantics — the only crate on both the parser edge and the highlevel edge |
-| `diag.rs` wide `Diag`/`Stage` | **stays** in `lichen-language` | adds `Resolve`/`Check` + checker payload |
-| `src/preprocess/mod.rs` (orchestrator) | **stays** in `lichen-language` | resolves imports via `PackageStore` (`StaticNodeId`) |
-| `src/preprocess/{lex,parse}.rs` (directive block) | **stays** in `lichen-language` (see seam #5) | preprocessor/package-specific; byte-range, not `Span` |
+| `Span`, `line_starts`, `line_col` | `crates/lichen-span` | the source-position protocol every frontend crate agrees on; a crate that only names a position need not pull in the lexer |
+| the lexer, `Token`/`TokenKind`/`Lexed`, `lex`/`lex_with`/`lex_resume`, `LexDiag` | `crates/lichen-language-lex` | `lex` is the source-position producer; `logos` only |
+| the AST, the parser, `ParseDiag`, the `path` vocabulary | `crates/lichen-language-parser` | the AST is the parser's output type; it consumes `lex::Token`/`Span` |
+| `Span` + `Expr.span` + alloc span params | **removed** from `lichen-highlevel` | highlevel is span-free (enforced by the graph) |
+| `compile.rs` (lowering + resolve, and the `SpanIndex`) | **stays** in `lichen-language` | semantics — the only crate on both the parser edge and the highlevel edge |
+| the wide `Diag`/`Stage` | **stays** in `lichen-language` | adds `Resolve`/`Check` + the checker payload |
+| the preprocessor | **moved** to `crates/lichen-preprocess` (a `pub use` shim in `language`) | see [preprocessor-isolation](preprocessor-isolation.md) |
 | `program.rs`, `session.rs`, `render.rs`, `run.rs`, `package.rs`, `persist.rs` | **stay** in `lichen-language` | semantics / tooling |
-| `cli.rs` + the `lichen-compiler` binary | **moved** to `lichen-compiler` (`P2-12`) | the library must not link `clap` for every embedder |
-| `readme.rs` + the `sync-readme` binary | **moved** to `lichen-tools` (`P2-6`) | repo tooling that panics outside a checkout must not ship in a library |
+| `cli.rs` + the `lichen-compiler` binary | `lichen-compiler` | the library must not link `clap` for every embedder |
+| `readme.rs` + the `sync-readme` binary | `lichen-tools` | repo tooling that panics outside a checkout must not ship in a library |
 | `lib.rs` (pipeline glue) | **stays** in `lichen-language` | merges lex/parse + resolve + check diagnostics |
 
-### Back-compat re-export in `lichen-language`
+### The back-compat re-export in `lichen-language`
 
 ```rust
 // lichen-language/src/lib.rs
 pub use lichen_language_lex as lex;              // lichen_language::lex::Token, ::lex::Span, …
+pub use lichen_language_lex::{LexDiag, Span};
 pub use lichen_language_parser as parse;         // lichen_language::parse::parse, ::parse::Parsed, …
 pub use lichen_language_parser::ast;             // lichen_language::ast::Expr, ::ast::Program, …
+pub use lichen_language_parser::path;            // lichen_language::path::Path, …
+pub use lichen_language_parser::{ParseDiag, Parsed};
 ```
 
 Every existing module path (`lichen_language::lex::Token`, `lichen_language::ast::Expr`,
 `lichen_language::parse::parse`, the `frontend*`/`compile*`/`BufferSession` pipelines)
-resolves identically, so `lichen-language-server` and the tests keep compiling unedited
-until you choose to point them at the new crates.
+resolves identically, so `lichen-language-server` and the tests keep compiling unedited.
+A consumer that wants only the syntax can point at `lichen-language-lex` /
+`lichen-language-parser` directly instead.
 
 ## The decoupling seams
 
-### 1. `Span` lives in `lichen-language-lex`
+### 1. The span protocol lives in `lichen-span`
 
-`lex` declares `pub type Span = (u32, u32)` (and `line_starts`, `line_col`,
-`byte_range`). `Token.span: Span`. The parser, AST, `ParseDiag`, `LexDiag`, and
-`lichen-language::diag` all import `Span` from `lichen-language-lex`. `lichen-highlevel`
-stops defining it entirely.
+`lichen-span` declares `pub type Span = (u32, u32)` with `line_starts`, `line_col`,
+`line_text` and `offset_of_span`. `Token.span: Span`, and the parser, AST, `ParseDiag`,
+`LexDiag` and `lichen-language::diag` all use that one type. `lichen-highlevel` defines no
+span at all.
 
 `Span` stays a **transparent alias** — a tuple, not a newtype. That is deliberate: it is
 cheap to copy, trivially comparable, and usable directly wherever the source→span math
-lives, with no nominal break between the lex crate and the rest of the language layer.
+lives, with no nominal break between the crates that consume it. The column counts
+**bytes**, not characters and not UTF-16 code units; the language server converts to LSP's
+0-based UTF-16 `character` at its own boundary.
 
 ### 2. The parser consumes token spans
 
-`Token.span` is set by `lex`. Every AST node's span is the `lex::Span` of the token that
-started it (`Expr::Int(n, t.span)`, `span_at(tokens, …)`, etc.). The parser never
-recomputes a position — it only forwards the lexer's. The `Glue`/`Separator`/`Eof`
-bookkeeping that feeds the postfix-vs-application decision stays in `lex` (it already
-does).
+`Token.span` is set by `lex`. Every AST node's span is the `Span` of the token that started
+it. The parser never recomputes a position — it only forwards the lexer's; its own
+`byte_range` helper turns a `SimpleSpan` into the token's `(u32, u32)` byte range. The
+`Glue`/`Separator`/`Eof` bookkeeping that feeds the postfix-vs-application decision stays
+in `lex`.
 
 ### 3. `highlevel` is span-free (the `language`-level index)
 
-Remove from `crates/lichen-highlevel/src/ir.rs`:
-
-- `pub type Span = (u32, u32)` (and its doc comment);
-- the `pub span: Option<Span>` field on `Expr<L>`;
-- the `span: Option<Span>` parameter from every `alloc*` method (`alloc`,
-  `alloc_annotation`, `alloc_tuple`, `alloc_type_tuple`, `alloc_type_struct`,
-  `alloc_instantiate`, `alloc_record`, `alloc_array`, `alloc_table`,
-  `alloc_shallow_array`, …).
-
-Nothing in highlevel's *logic* used the span — the checker's diagnostic `Loc` is already
-a source-blind `[expr, path]` structure (`ir.rs` docs). The span only existed to be read
-back by the language layer. So removing it is mechanical.
+`crates/lichen-highlevel/src/ir.rs` has no `Span`, no `span` field on `Expr`, and no span
+parameter on any `alloc*`. Nothing in highlevel's *logic* needed it — the checker's
+diagnostic `Loc` is a source-blind `[expr, path]` structure — so the span only existed to
+be read back by the language layer.
 
 The `language` crate keeps positions in a **secondary map keyed by the IR id**, filled
 exactly where it creates the IR:
@@ -216,32 +187,24 @@ exactly where it creates the IR:
 // lichen-language
 /// ExprId → the source span the expr lowers from.  Populated by `compile.rs`
 /// as it creates each IR node; parallel to `IR.expr` (an index, so a Vec).
-pub type SpanIndex = Vec<Option<Span>>;   // Span = lichen_language_lex::Span
+pub type SpanIndex = Vec<Option<Span>>;
 ```
 
-The lowering loop becomes a two-step call, not one:
-
-```rust
-// compile.rs (in language) — the AST→IR lowering
-let Span { .. } = node_span;
-let id = self.ir.alloc(kind);        // 1. call the highlevel API → get an ExprId
-self.span_index[id] = Some(node_span); // 2. stash the span in this crate's secondary map
-```
-
-Highlevel's `alloc*` signature shrinks from `alloc(kind, span) -> ExprId` to
-`alloc(kind) -> ExprId`; the span never crosses the boundary. The placeholder↔value span
-copy (`self.ir.expr[p].span = self.ir.expr[value].span`) becomes a map copy,
-`self.span_index[p] = self.span_index[value]`.
+A lowering step is therefore two operations, not one: allocate the IR node through
+highlevel's API, then stash the span in this crate's map. The placeholder↔value span copy
+becomes a map copy.
 
 - `frontend_at` returns `Frontend { ir, span_index, diagnostics }`.
-- `build_report(ir, span_index, diagnostics, registry, native_ops)` maps a checker `Loc`
-  back to a source span with `span_index[loc.expr.0 as usize]` instead of
-  `build.ir[loc.expr].span` — the id still identifies the node, but the span comes from
-  `language`'s map, not the IR.
-- `Report` carries the `span_index` (`span_index: Option<SpanIndex>`), so the language
-  server and tests can read it after the build.
-- `lichen-language-server/src/analysis.rs:208,250,344` and the `compile_tests.rs`
-  assertions read `span_index[id]` instead of `build.ir[id].span`.
+- `build_report` maps a checker `Loc` back to a source span with
+  `span_index[loc.expr.0 as usize]` instead of reading a span off the IR node — the id
+  still identifies the node, but the span comes from `language`'s map.
+- `Report` carries the `span_index` (`span_index: Option<compile::SpanIndex>`), so the
+  language server and tests can read it after the build.
+
+**`SpanIndex` drift is the risk to keep in view.** The index must stay parallel to
+`IR.expr` (one `alloc` produces one `Expr` and one `SpanIndex` entry). The guard is that
+the `SpanIndex` is built inside the same compiler object that owns the IR, so a node and
+its span are written together and cannot desync.
 
 ### 4. `Diag` / `Stage` (narrow diagnostics, widened in `language`)
 
@@ -254,108 +217,20 @@ pub struct LexDiag { pub span: Option<Span>, pub message: String }
 pub struct ParseDiag { pub span: Option<Span>, pub message: String }
 ```
 
-These are `Send` (no highlevel payload). `lichen-language::diag` keeps the wide `Stage`
-and `Diag` (adding `Resolve`, `Check` and the
-`check: Option<Box<highlevel::diagnostic::Diag<LangProgram>>>` field) and maps each into
-it — a pure `From`/`extend` over `span`/`message`, no loss. `lib.rs::frontend_at` merges:
-`lex` → `Diag` at `Stage::Lex`, `parse` → `Stage::Parse`, `preprocess` →
-`Stage::Preprocess`, then lowering/check diagnostics append at `Resolve`/`Check`. The
-public `lichen_language::diag::{Diag, Stage}` contract is unchanged. Bonus: the parse
-worker no longer needs a `!Send`-diag workaround (the old `(Span, String, Stage)` tuple
-was only because `Diag` was `!Send`); the parser returns `ParseDiag` directly.
+These are `Send` (no highlevel payload). `lichen-language::diag` keeps the wide `Stage` and
+`Diag` (adding `Resolve`, `Check` and the
+`check: Option<Box<highlevel::diagnostic::Diag<LangProgram>>>` field) and maps each into it
+— a pure `From`/`extend` over `span`/`message`, no loss. `lib.rs::frontend_at` merges: lex
+→ `Diag` at `Stage::Lex`, parse → `Stage::Parse`, preprocess → `Stage::Preprocess`, then
+lowering/check diagnostics append at `Resolve`/`Check`. The public
+`lichen_language::diag::{Diag, Stage}` contract is unchanged. A parse worker therefore
+needs no `!Send`-diagnostic workaround: the parser returns `ParseDiag` directly.
 
-### 5. The `---…---` preprocessor block
+## What stays public in `lichen-language`
 
-The block *body* is checker-free and byte-range-typed, and it is **now isolated**
-in the [`lichen-preprocess`](../../crates/lichen-preprocess/) crate:
-`preprocess/mod.rs`, `preprocess/lex.rs`, and `preprocess/parse.rs` moved there
-(`lex`/`parse` as crate submodules), so the package manager can depend on the
-preprocessor without pulling in the language/VM stack.  The block's `Span`
-positioning uses the shared [`lichen-span`](../../crates/lichen-span/) protocol
-type rather than the lexer.  The orchestrator `preprocess`/`stage_depends` do
-not stay vocabulary-bound: they go through a small
-[`ImportResolver`](../../crates/lichen-preprocess/src/lib.rs) trait and are generic
-only over the export handle type.  The language crate re-exports them (a
-`pub use` shim) so the existing `lichen_language::preprocess::*` and
-`lichen_language::preprocess::{split_block, block_directives, block_metadata}`
-paths (used by `readme`/`sync-readme` and the server) resolve unchanged.
-
-## Migration (executed)
-
-The split was executed in these steps, each keeping `cargo check`/`cargo test` green:
-
-1. **Scaffold the lex crate.** Add `crates/lichen-language-lex` (dep `logos` only),
-   register in workspace `members`. Move `Span`, `line_starts`, `line_col`, `byte_range`,
-   `Token`/`TokenKind`/`Lexed`, `lex`/`lex_with`/`lex_resume`, and `src/lex.rs`'s tests.
-   In `lichen-language`: `pub use lichen_language_lex as lex;` — old paths hold.
-2. **Scaffold the parser crate.** Add `crates/lichen-language-parser` (deps `chumsky`,
-   `lichen-language-lex`). Move `src/ast.rs` (imports `Span` from the lex crate) and
-   `src/parse.rs`. In `lichen-language`:
-   `pub use lichen_language_parser as parse; pub use lichen_language_parser::ast;`.
-3. **Split `diag.rs`.** Introduce `LexDiag`/`ParseDiag`; have `lichen-language::diag`
-   map them into the wide `Diag`/`Stage`. Restore the exact round-trip in
-   `frontend_at`/`build_report`.
-4. **Make `highlevel` span-free.** Remove `Span`/`Expr.span`/alloc span params from
-   `ir.rs`; update `crates/lichen-highlevel/tests/checker.rs` (it sets/reads
-   `ir.expr[…].span`) to assert positions through their own param or a local map.
-5. **Thread `SpanIndex` through the pipeline.** `compile.rs` populates it;
-   `frontend_at`/`build_report`/`Report` carry it; `lib.rs:153`, `compile_tests.rs`, and
-   `lichen-language-server/src/analysis.rs` read it instead of `build.ir[id].span`.
-6. **Decouple deps.** `lichen-language` drops direct `logos`/`chumsky` (they live in the
-   lex/parser crates). Its remaining deps: the two new crates, `lichen-highlevel`,
-   `lichen-lowlevel`, `lichen-{compute,doc,perspective,render,utils}`, and `sha2`.
-7. **Optional: point consumers at the new crates.** `lichen-language-server`
-   (`analysis.rs`/`lsp.rs`), `pipeline.rs` (`Stage`), and future tool crates take
-   `lichen_language_lex`/`lichen_language_parser` paths directly. The re-export shim can
-   be dropped once no internal consumer uses it.
-
-### What stays public in `lichen-language` (unchanged)
-
-`pub use lichen_language_lex as lex;` and `pub use lichen_language_parser as parse;`
-`pub use lichen_language_parser::ast;` keep `lichen_language::{lex, parse, ast}` alive.
-`pub mod diag` (wide `Diag`/`Stage`), `pub mod program`, `compile`, `session`, `run`,
-`render`, `package`, `persist`, `readme`, `preprocess`, and `pub use lichen_language_lex::Span;`
-all remain. So `lichen_language::lex::Token`, `lichen_language::ast::Expr`, the
+`lex`, `parse`, `ast` and `path` (the re-exports above), `Span`, `LexDiag`, `ParseDiag`,
+`Parsed`, `pub mod diag` (the wide `Diag`/`Stage`), `program`, `compile`, `session`, `run`,
+`render`, `package`, `persist`, `readme`, and the `preprocess` shim all remain. So
+`lichen_language::lex::Token`, `lichen_language::ast::Expr`, the
 `frontend*`/`compile*`/`BufferSession` pipelines, and `lichen_language::diag::{Diag, Stage}`
-resolve exactly as today. `Report` gains a `span_index` field (additive).
-
-## Verification
-
-Per [`AGENTS.md`](../../AGENTS.md), after each step:
-
-```
-cargo check            # compilation passes
-cargo test             # behaviour correct (lex/parse/session/pipeline/readme/lsp/highlevel checker)
-cargo fix --allow-dirty && cargo fmt   # final tidy
-cargo run -p lichen-compiler -- examples   # example parity
-```
-
-The lex/parser move is a pure relocation (types unchanged, `Span` a transparent alias).
-The `highlevel` span-free step is the one with real footguns — it touches `ir.rs`,
-`compile.rs` (the span copy), `lib.rs` and `analysis.rs` (the `build.ir[id].span`
-readers), and `checker.rs`/`compile_tests.rs`. The suite stays green because every
-`.span` read is replaced by the equivalent `span_index[id]` read, and the `SpanIndex` is
-populated with exactly the spans the old node carried.
-
-## Risks
-
-- **`SpanIndex` drift.** The index must stay parallel to `IR.expr` (an `alloc` produces one
-  `Expr` and one `SpanIndex` entry). The cleanest guard: build the `SpanIndex` inside the
-  same `Compiler` that owns `ir`, so a node and its span are written together and can
-  never desync.
-- **`Send` isolation.** The lex/parser crates' diagnostics (and the parser worker) become
-  `Send` — the old `!Send` `Diag` never enters those crates. The wide `Diag` stays `!Send`
-  and is assembled in `language`. Net effect: `Doc: Send` becomes reachable (the
-  language-toolchain note flags this as the follow-up that would let the server cache a
-  `Doc` per URI).
-- **The Zed vendor copy.** `lichen-language-zed/grammars/lichen/crates/…` is a
-  vendored snapshot of the whole workspace for the WASM build. The crate move *and* the
-  `highlevel` span-free change must be mirrored there or the Zed build breaks.
-- **Public `Span` import churn.** `lichen_highlevel::ir::Span` disappears, so every
-  external import of it (the language server's `analysis.rs`/`lsp.rs`, `compile.rs`,
-  `diag.rs`, `render.rs`) must switch to `lichen_language::lex::Span` (or
-  `lichen_language_lex::Span`). `cargo build` surfaces these; one-line import fixes.
-- **Rustdoc intra-links.** The moved modules cross-reference `crate::compile`,
-  `crate::program`, and the checker `Diag`. When they land in the lex/parser crates those
-  links must be re-pointed to `lichend-language`'s paths (or reworded) or `cargo doc`
-  will warn/break.
+resolve as the split's callers expect.

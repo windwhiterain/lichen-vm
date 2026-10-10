@@ -179,21 +179,6 @@ release-lichen.yml`), which builds the supported host triples on GitHub's runner
   do not patch them by hand); a stale one simply means the last dev-install was before the
   latest source change.
 
-## A green run (observed)
-
-| Layer | Command | Result |
-|---|---|---|
-| Host check | `cargo check -p lichen-language-zed` | OK (exit 0) |
-| WASM build | `cargo build -p lichen-language-zed --features zed --target wasm32-wasip2 --release` | OK, 216,803 bytes |
-| `zed:api-version` | byte-scan of the built `.wasm` | Present, `00 00 00 07 00 00` (= 0.7.0) |
-| Manifests | `tomllib` parse of `extension.toml` + `config.toml` | OK; grammar `rev` exists |
-| Grammar | `cargo test --manifest-path tree-sitter-lichen/Cargo.toml` | 2 passed |
-| LSP server | `cargo test -p lichen-language-server` | 27 passed (21 lib + 3 smoke + 3 stmt) |
-| Frontend | `cargo test -p lichen-language` | 319 passed |
-| LSP on `$PATH` | `Get-Command lichen-language-server` | `~/.cargo/bin/lichen-language-server.exe` |
-
-(Totals across the three test crates: **348 tests passed, 0 failed**.)
-
 ## Integrated / automated test methods (beyond `cargo`)
 
 Zed ships **no first-party framework for running an extension's test *inside the real host
@@ -245,18 +230,17 @@ This is true host integration but needs a display/GUI environment.
 
 The `test-extensions` workflow is a *CI convenience*, but **every check in it has a local
 equivalent** — only the `zed-extension` CLI download itself is Linux/CI-specific, and even
-its sub-checks are reproducible locally. Run these on a stock dev box (all verified on
-Windows here):
+its sub-checks are reproducible locally:
 
-| CI job step | Local command | Observed result |
-|---|---|---|
-| `cargo fmt --check` | `cargo fmt -p lichen-language-zed -p lichen-language-server -- --check` | **clean** |
-| verify it compiles | `cargo check -p lichen-language-zed` | **ok** |
-| build the WASM + section | `cargo build -p lichen-language-zed --features zed --target wasm32-wasip2 --release` | **ok** (216 KB) |
-| run the crate's tests | `cargo test -p lichen-language -p lichen-language-server` | **348 passed** |
-| load grammar + validate `.scm` | `tree-sitter query languages/lichen/{highlights,outline}.scm <sample>.lichen` | **ok** |
-| guard the grammar `rev` (opt-in) | `cargo test -p lichen-language-zed --features grammar-consistency --test grammar_consistency` | **passes; fails if `rev` goes stale** |
-| `cargo clippy … -D warnings` | `cargo clippy -p lichen-language-zed --all-features -- -D warnings` | **fails at `lichen-highlevel` (not the plugin)** |
+| CI job step | Local command |
+|---|---|
+| `cargo fmt --check` | `cargo fmt -p lichen-language-zed -p lichen-language-server -- --check` |
+| verify it compiles | `cargo check -p lichen-language-zed` |
+| build the WASM + section | `cargo build -p lichen-language-zed --features zed --target wasm32-wasip2 --release` |
+| run the crate's tests | `cargo test -p lichen-language -p lichen-language-server` |
+| load grammar + validate `.scm` | `tree-sitter query languages/lichen/{highlights,outline}.scm <sample>.lichen` |
+| guard the grammar `rev` (opt-in) | `cargo test -p lichen-language-zed --features grammar-consistency --test grammar_consistency` |
+| `cargo clippy … -D warnings` | `cargo clippy -p lichen-language-zed --all-features -- -D warnings` |
 
 The LSP stdio test and the grammar query check are the two that the manual "Install Dev
 Extension" flow never covers, and both run headless here.
@@ -279,24 +263,14 @@ opt-in (`--features grammar-consistency`) and needs a git checkout (it shells ou
 the generated files are not committed, so the committed grammar surface is `grammar.js` + the
 `.scm` queries.
 
-**The strict `-D warnings` clippy check still fails further up the dependency tree** — a
-monorepo-wide lint backlog, not a problem in the plugin. Two of the original blockers are now
-fixed (the plugin source itself was never touched):
-
-- `cargo fmt -p tree-sitter-lichen -- --check` was failing on `tests/samples.rs` (comment
-  alignment); `cargo fmt` fixed it, and that crate now passes `fmt --check` and its tests.
-- `cargo clippy -p lichen-lowlevel --all-features -- -D warnings` was failing
-  (`collapsible_if` in `static_module.rs`, `doc_lazy_continuation` in `lib.rs`); both are
-  clean now, and `cargo test -p lichen-lowlevel` (125 tests) still passes.
-
-What still blocks a fully-green
-`cargo clippy -p lichen-language-zed --all-features -- -D warnings` is **`lichen-highlevel`**
-(and likely `lichen-language` / `lichen-language-server` after it):
-`type_complexity`, `question_mark`, `collapsible_if`, `get_first`, `needless_range_loop`,
-`map_flatten` in `checker.rs` / `diagnostic.rs`. lichen-vm is a monorepo with path deps, so
-clippy lints the whole tree under `-D warnings`; a plain `cargo clippy -p lichen-language-zed
---all-features` (no `-D warnings`) reports these as *warnings* and exits 0. That cleanup is
-independent of the Zed plugin and touches the checker, so it is a separate task.
+**The strict `-D warnings` clippy check fails further up the dependency tree**, not in the
+plugin: lichen-vm is a monorepo with path deps, so clippy lints the whole tree under `-D
+warnings`, and `lichen-highlevel` (and likely `lichen-language` /
+`lichen-language-server` after it) still carries a lint backlog — `type_complexity`,
+`question_mark`, `collapsible_if`, `get_first`, `needless_range_loop`, `map_flatten`.
+A plain `cargo clippy -p lichen-language-zed --all-features` (no `-D warnings`) reports
+these as *warnings* and exits 0. That cleanup is independent of the Zed plugin and touches
+the checker, so it is a separate task.
 
 The `zed-extension` CLI is a prebuilt **Linux** binary (CI downloads it from
 `https://zed-extension-cli.nyc3.digitaloceanspaces.com/…`), so the *packaging* step is not

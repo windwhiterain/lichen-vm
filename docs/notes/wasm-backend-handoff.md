@@ -34,7 +34,7 @@ Six things were in doubt at the start of this work and are not any more.
    was only `Flow::Jump`, a variant of `Flow` — and the consequence was stronger
    than "a reduction is hard": the only body that type-checked passed the header's
    *own* values, so no terminating loop was representable at all.
-   [loop-body-expressiveness](loop-body-expressiveness.md) §2.
+   [compute-kernel-struct](compute-kernel-struct.md) records the body model.
 2. **The exit's values are the header's own** (`passed_out`), which is what gives a
    zero-trip loop a defined result. In the IR's own doc.
 3. **waffle can lower the loop we need.** Its IR has **block params**, so a
@@ -239,7 +239,8 @@ probe produced, and it is not a backend defect: `KernelInstr::LocalGet` names a
 cannot compute a state smaller than the one the preheader supplied. Every loop a
 body can express today either runs zero trips or runs forever — the header's test
 is a function of the function's own arguments, which do not change. That is the
-shape [loop-body-expressiveness](loop-body-expressiveness.md) §2.1 describes, and
+shape the body model in [compute-kernel-struct](compute-kernel-struct.md)
+leaves, and
 it survives §3.2: a loop now *lowers* and is *expressible* as structure, but no
 program that reaches it can terminate. **What is still missing is an instruction
 that reads the carried tuple into the body** — the same gap that leaves the
