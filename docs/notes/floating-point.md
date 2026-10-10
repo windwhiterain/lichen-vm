@@ -658,12 +658,12 @@ module, but a module declared **one** storage-buffer element type and **one**
 `ArrayStride`: `spirv::module_class` folded `input_classes` and
 `output_classes` into a single class, and `Ids`' `elem`/`array`/`buffer_struct`
 and the one `ARRAY_STRIDE` derived from it. So a kernel that reads an `Int`
-buffer and writes a `Float` buffer was refused by `MixedElementClasses` even
+buffer and writes a `Float` buffer was refused by name even
 though **every class it needs was already carried** — `input_classes` and
 `output_classes` are per-buffer vectors, and nothing about the IR forbade the
 mixture.
 
-**The module side is done, and the host side is refused rather than wrong.**
+**The module side is done, and the host staging followed it.**
 `Ids` now holds a `BufferTypes` chain per class a fragment actually uses
 (`ScalarClass::index` is the key, and `ScalarClass::ALL` is the length), and the
 chain is read **per buffer** in the four places that were one module-wide answer:
@@ -721,7 +721,7 @@ different fact, it is already shared between both backends, and no layout change
 touches it.
 
 **A crossing is always representable on both targets, and the width is what it
-costs.** Both element types are declared in every SPIR-V module, so only the
+costs.** Each class's scalar is declared in every SPIR-V module, so only the
 64-bit integer — and its `Int64` capability — stays conditional. That is what
 makes the *other* class's data narrower in one direction:
 

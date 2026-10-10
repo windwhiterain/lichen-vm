@@ -258,11 +258,6 @@ pub enum SpirvRefusal {
     },
     /// The fragment declares an integer width this target cannot represent.
     UnsupportedIntWidth { bits: u32 },
-    /// The fragment's declared positions are not all of one class, and a module
-    /// has one element type: one struct, one pointer into it, one array stride.
-    /// `Int` and `Float` do not convert (`docs/notes/floating-point.md` §4.2),
-    /// so there is no second element type to emit and nothing to choose between.
-    MixedElementClasses,
     /// An operation over `Float` the language has no form for. A `Float` takes
     /// `+ - * /` and the four order comparisons and nothing else
     /// (`docs/notes/floating-point.md` §3.7), so `%` and the bitwise trio have
@@ -323,13 +318,6 @@ impl fmt::Display for SpirvRefusal {
                 f,
                 "the fragment was lowered for {bits}-bit integers, which this target does not \
                  represent."
-            ),
-            SpirvRefusal::MixedElementClasses => write!(
-                f,
-                "the fragment's declared positions are not all of one class. A module's element \
-                 type, the pointer into it and its array stride are one decision baked into the \
-                 module, and `Int` and `Float` do not convert, so a fragment that declares both \
-                 has no module here."
             ),
             SpirvRefusal::UnsupportedFloatOperator { operator, at } => write!(
                 f,
