@@ -10,8 +10,10 @@
 > `Lower::lower_loop` builds a nest for a marked recursion inside a kernel body,
 > and a non-straight-line `KernelBody` is now produced in production. **The
 > acceptance case runs on both backends** ([§8.5](#85-the-critical-path-to-the-acceptance-case)
-> item 5): a dynamic reduction whose trip count is a run-time buffer read, `10` at
-> a length of four and `28` at seven. **Two device-side defects were measured on
+> item 5): a dynamic reduction whose trip count is a run-time buffer read, `10`,
+> `28` and `180_300` at four, seven and six hundred elements — the last past the
+> emitter's 512-level walk, with a `2001`-element run past the VM's apply budget
+> measured beside it. **Two device-side defects were measured on
 > the way and are reported, not worked around**: `spirv.rs` branches a loop
 > header on the plan's body/exit order rather than on the terminator's arm order,
 > so the base-first spelling of the nest is mis-compiled on the device; and a
@@ -822,20 +824,17 @@ done** — the acceptance case at item 5 runs on both backends:
    defects, one cause (hand-tracked operand-stack height) took the hand-written
    reorder out of the picture; the backend lowers the whole body through `waffle`
    ([wasm-control-flow](wasm-control-flow.md) §5).
-2a. ~~**Lower `If`/`Jump`/`While` through `waffle`.**~~ **Done — the CPU-side
-    blocker is cleared.** The hand-written slot-based emitter this step called for
-    was **not written** — `waffle` owns the slot-first pipeline
+2a. ~~**Lower `If`/`Jump`/`While` through `waffle`.**~~ **Done, and item 5's case
+    is what runs it.** The hand-written slot-based emitter this step called for was
+    **not written** — `waffle` owns the slot-first pipeline
     ([wasm-control-flow](wasm-control-flow.md) §5), so the step was its
-    control-flow mapping. All three transfers land in
-    `crates/lichen-compute/src/compute/wasm/flow.rs`: the header's carried tuple as
-    blockparams, `CondBr` at the test, `Br` at the backedge, and a selection's arms
-    as blocks of their own. 62 kernel-execution tests green on all of it; the
-    type-section ordering bug §2 found was fixed earlier. **What it does not clear
-    is the backend's own gap**: no repository test builds a loop body, so the
-    backedge is verified by structure rather than by a run, and the IR still has no
-    instruction that reads the carried tuple into a body — so a loop may be
-    *expressible* now without any loop that reaches the backend being able to
-    terminate. That instruction is **item 1c**, and it is what this list turns on.
+    control-flow mapping, and the SSA rewrite folded that mapping into the single
+    walk in `crates/lichen-compute/src/compute/wasm/lower.rs`: the header's carried
+    tuple is the block's parameters, `CondBr` is the test, `Br` the backedge.
+    `type_values` then made a **carried state the entry block computes** — a
+    buffer read, a call's constants — typeable from the entry edge instead of
+    waiting for a cycle to close, which turned the backedge from a shape verified
+    by structure into one verified by a run.
     See [wasm-backend-handoff](wasm-backend-handoff.md) §3.2.
 3. ~~**Port `feature/spirv-loop-emitter` onto the SSA body**~~ — **done**, at
    `0a1c9f4`, exactly as §8.4 states it. The `Vec<Slot>` walk over
@@ -934,17 +933,27 @@ done** — the acceptance case at item 5 runs on both backends:
 5. **Run the reduction on both backends**, past the 2000-apply budget and the 512
    level ceiling, at more than one length so the count is demonstrably not a
    compile-time constant. **Landed: `a_kernel_loop_reduces_a_runtime_buffer_length`**
-   (`crates/lichen-language/tests/compute.rs`) answers `10` at a length of four
-   and `28` at seven, on **both** backends, against the hand-derived triangle
-   number `length(length + 1)/2`.
+   (`crates/lichen-language/tests/compute.rs`) answers `10` at a length of four,
+   `28` at seven and `180_300` at six hundred, on **both** backends, against the
+   hand-derived triangle number `length(length + 1)/2`.
 
    **The expected value is derived by hand, not off a second implementation of
    the same reading.** The seed fills `data[i]` with `i + 1`; lane `i` reads its
    trip count from `data[i]`, so it runs `i + 1` times and folds `data[i]` down
    to `data[0]` into an accumulator that starts at `0`; lane `length - 1` folds
    all `length` of them, so the value at the last index is `1 + 2 + … + length`.
-   `4` gives `10` and `7` gives `28`, and the same source runs at both with no
-   compile-time constant anywhere in it.
+   `4` gives `10`, `7` gives `28` and `600` gives `180_300`, and the same source
+   runs at all three with no compile-time constant anywhere in it.
+
+   **The length of six hundred is the one that answers the ceiling.** The
+   emitter's walk is budgeted at `MAX_KERNEL_BODY_DEPTH` = 512 and costs about
+   three levels per expanded copy, so an *expansion* runs out in the low hundreds;
+   the committed case crosses that and answers, because the nest is a device loop
+   whose compile cost does not move with the count. **A length of `2001` was
+   measured too** — past the VM's 2000-apply budget, answering `2_003_001` on both
+   backends — and it is deliberately not committed: a per-lane prefix costs
+   `length²/2` iterations on the cpu path, so that single length takes about
+   twenty seconds where all three committed ones together add none.
 
    **Three measurements are what the case needed to say, and each is a refusal
    the source had to be written around:**
@@ -955,10 +964,12 @@ done** — the acceptance case at item 5 runs on both backends:
    | **the device branches the nest's test the wrong way round** | the same program written base-first — `if s(0) == 0 then s(1) else sum_to (…)`, the spelling this section sketches — answers `10` on the cpu and **`0`** on the device. `spirv-dis` on the emitted module reads `OpIEqual %bool %35 %ulong_0_0`, `OpLoopMerge %31 %28 None`, `OpBranchConditional %37 %28 %31`: true goes to the **step** (%28), false to the **exit** (%31) | `spirv.rs`'s `plan_body` decides which arm leaves the loop from the graph while `terminator` emits `OpBranchConditional cond body exit` **whichever arm `if_true` names**, so the base-first spelling is **silently mis-compiled on the device**. The case is therefore spelled continue-first, which both backends answer. This is a defect in `crates/lichen-compute-gpu`, reported rather than worked around |
    | **a `@loop` entered with a body-local argument is refused by the checker** | `sum_to (i, 0)` with `i = compute.range k.n` reports `a struct parameter field read names 'in', which is not a field of the type it is read from — that type's fields are None` for the loop's own `k.in.b` | the count is passed through a **buffer read**, which is what avoids a marked recursion losing its captured environment's types |
 
-   **Past both ceilings, by construction rather than by measurement at a length**:
-   the nest is a device loop, so its cost is the trip count and not nesting, and
-   the reader never expands the recursion at all — the count is undecided before
-   the first iteration is looked for.
+   **Both ceilings are answered at a length rather than only by construction**:
+   `600` crosses the emitter's 512-level walk and `2001` crosses the VM's
+   2000-apply budget, and both answer the hand-derived number on both backends.
+   What the reader never does is expand the recursion — the count is undecided
+   before the first iteration is looked for, so a nest is built whatever the count
+   turns out to be.
 
 **Do not start 3 before 1** — **and this is now satisfied, and 3 has landed.**
 Doing SPIR-V first against a contract that is already known to be wrong is how the
@@ -1305,14 +1316,15 @@ p = compute.parallel (k => { … sum_to (compute.read ((compute.Read _)(.from k.
 ```
 
 Three things must be true of it, and each is a rule above being exercised: it runs
-at a length **past the 2000-apply budget** (rule set by Stage 1 removing the
-ceiling), its accumulator is a **carried value** (Stage 1's `phi`), and its
-trip count is **per-lane** (the performance model of §9, not a correctness one).
-**Measured**: `10` at a length of four and `28` at seven, both backends, against
-the hand-derived `length(length + 1)/2` — and the count is a **buffer read**
-rather than the launch extent because a device dispatch pushes the extent alone.
-§8.5's item 5 has the source as it runs and the two device-side defects the
-spelling had to work around.
+at a length **past the 512-level walk** and, measured separately, past the
+**2000-apply budget**, its accumulator is a **carried value** (Stage 1's `phi`),
+and its trip count is **per-lane** (the performance model of §9, not a
+correctness one). **Measured**: `10`, `28` and `180_300` at four, seven and six
+hundred elements, both backends, against the hand-derived
+`length(length + 1)/2` — and the count is a **buffer read** rather than the launch
+extent because a device dispatch pushes the extent alone. §8.5's item 5 has the
+source as it runs, the `2001`-element measurement, and the two device-side defects
+the spelling had to work around.
 
 **Stage 2 — the conversion.** Cycle extraction, defunctionalisation, nest
 construction, and rules 1, 2, 3, 5, 6. The probe grows two cases:
