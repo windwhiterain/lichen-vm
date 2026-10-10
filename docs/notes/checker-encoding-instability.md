@@ -106,7 +106,7 @@ value it reads is an operand of the operation being performed**:
 |---|---|---|
 | `apply.rs` (two sites) | element 1 of a **parameter** node — the declared type, for `ApplyError` attribution only | **Wiring.** The apply pass built or cloned the pair it is reading; element 1 is an operand of the check it is performing. |
 | `apply.rs` (`wire_apply_result`) | element 1 of the **return pair** it just cached, to bind the checker's result cell | **Wiring.** The cell is the third operand of the apply. |
-| `resolve.rs` (`pair_value_half`) | a **body's** parameter or return, and a 2..=3 width test, to decide which half is the value | **Encoding reader, and the lowlevel's own convention.** The caller-stated form (`define_in(domain, node)`) is preferred *where the caller has the value*; where the analysis starts from `Function`'s two nodes — `parameter_leaves`, and `loop_conversion.rs`'s state and spine roots — there is no caller to state it. |
+| `resolve.rs` (`pair_value_half`) | a **body's** parameter or return, and a 2..=3 width test, to decide which half is the value | **Encoding reader, and the lowlevel's own convention.** `define_in(function, node)` derives the domain itself, through `parameter_leaves`, from the pair the template carries; where the analysis starts from `Function`'s two nodes — `parameter_leaves`, and `loop_conversion.rs`'s state and spine roots — there is no caller to state it. |
 | `loop_conversion.rs` | a template's parameter, to resolve a read to the path into the parameter's value, and its return, for the spine's roots | **The same standing as `parameter_leaves`.** The loop's analysis is a template-shape question, so it reads the pair the template carries. |
 | `equality.rs` (`is_static_universe_id`) | a 2-element array whose element 1 points back at the same module and index | **Mixed.** The `[Type, ↺]` universe is the canonical instance, but the predicate is stated as a *generic* graph shape and unifies any two such cycles. It decodes the positions and reads no meaning. |
 | `evaluation.rs` (`table_get_operands`) | elements 0 and 1 of a `TableGet`'s operand, which the arm's own check already proved is a 2-element array | **Not an encoding reader.** A destructure of `[table, key]`; no pair is involved. |
@@ -116,13 +116,12 @@ A **per-analysis** boundary is the honest description; a crate-wide one is not:
 which is a claim about *that pass*, while `apply.rs` and `control_flow.rs` are in
 the same crate and do learn it.
 
-**The defect among the readers is fixed by a caller contract, not by a lowlevel
-change.** A function's `parameter` and `r#return` are `NodeId`s that hold the
+**The defect among the readers is answered by a stated convention, not by a
+sniff.** A function's `parameter` and `r#return` are `NodeId`s that hold the
 checker's pair, and `Function` says nothing about their shape. `Module::define_in`
-therefore takes the **domain value as an argument** — the JIT's own applied
-parameter, which `ParamSlot` already resolves — and the analyses that *start*
-from the pair read it deliberately rather than sniffing for a width. A caller
-that states the value has done the decoding; where there is no such caller, the
+derives the domain itself — `parameter_leaves` reads the pair the template
+carries — and the analyses that *start*
+from the pair read it deliberately rather than sniffing for a width. Such a
 read is the lowlevel's own stated convention about `Function`, not a heuristic
 standing in for one. The lowlevel is the evaluator the checker's graph was
 written for — `P::Value` for the lichen frontend is the checker's own term — so
