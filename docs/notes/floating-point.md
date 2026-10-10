@@ -684,16 +684,33 @@ arithmetic default is `Float`. `ScalarClass::index` and `ScalarClass::ALL` exist
 so that table's length is the number of classes rather than something restated
 beside it.
 
-**What is not done is the host staging, and it is refused rather than
-silently wrong.** A dispatch reserves one upload block per host input at
-`count ×` *the fragment's* `byte_width()` and offsets the next block by that
-same width, so a mixed fragment would upload eight bytes per `f32` element and
-read back a wrong number. `spirv::buffers_are_uniform` is the question, and
-both dispatch entry points answer `RunError::MixedBufferClasses` when it says
-no. **The refusal is in the dispatch path on purpose** — the emitter must keep
-accepting a mixed fragment, because that is the half that is finished and is
-what `spirv-val` checks. The follow-up is per-buffer `allocate`, per-buffer
-`reserve` and per-upload `offset`, all in `stage_run`.
+**The host staging is per-buffer too, so a mixed fragment runs.**
+`stage_run` reads each buffer's class through `spirv::buffer_class_of`:
+`reserve` is the sum of each host input's own `count × byte_width()`, each
+upload's `offset` is that sum for the blocks before it, `data_bytes` and
+`padded_bytes` are per buffer, `allocate` is called at that buffer's own class,
+and each output's `DeviceBuffer` carries its class so `fetch` reads it back at
+the width the module wrote it. The `MixedBufferClasses` refusal and
+`spirv::buffers_are_uniform` are gone with the one-width assumption. **None of
+this changes an emitted module or a straight-line output**: the module layout
+was already per-buffer, and this half is host arithmetic.
+
+**A chain is the one place a mixture is still refused, and by name.** A chain
+feeds link `n`'s output buffer into link `n + 1`'s **input slot**, and a module
+types each slot by its own class, so a fragment whose two ends differ is refused
+as `RunError::ChainCrossesClasses` rather than read at the other width.
+
+**The mixed fragment is now a test, and the one thing it cannot compare
+directly.** `a_fragment_whose_buffers_are_of_two_classes_agrees_across_the_two_backends`
+runs an `Int` input and an `Int`+`Float` codomain through both backends at
+`LOCAL_SIZE_X + 5`. Its codomain needs the second output because the language
+types every **input** position by the fragment's *first* output class
+(`Positions::element_class`), so a lone `Float` output would make a host `Int`
+buffer be read as `Float` and refused by that name. The CPU backend types every
+**output** by that same first class as well, so the `Float` output arrives there
+as its elements' bit patterns; the test compares those patterns against the
+device's floats, which is the same element-for-element claim. Per-output classes
+on the CPU side are the other half of this and are not done here.
 
 Straight-line output is no longer byte-identical: the id numbering moved
 (`fn_ty` and `ptr_in` follow the per-class chains), which is arbitrary but real.
