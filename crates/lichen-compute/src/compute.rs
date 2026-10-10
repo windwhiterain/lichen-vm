@@ -1,64 +1,5 @@
-//! The `lichen-compute` extension: a native "compute" wrapper package.
-//!
-//! The native part injects a [`ComputeValue`] vocabulary — the **`Kernel`**
-//! value (a compiled, runnable wasm artifact), a **`ParKernel`** value, a
-//! **`Buffer`** value (a packed payload), and a **`DeviceBuffer`** one (a
-//! resident result) — plus
-//! the first-class **`Native` Operator values** (`jit`, `launch`, `call`,
-//! `parallel`, `plrun`, `range`, `read`, `write`, `collect`), and the
-//! [`ComputeOperator`]s
-//! `Jit`/`Launch`/`Call`/`Parallel`/`ParLaunch`/`Range`/`Read`/`Write`/
-//! `BufferCollect`, whose [`OperatorExt::run`] does the wasm compile/execute
-//! and the global kernel/buffer registries.
-//!
-//! **A kernel and a buffer are both ordinary lichen structs**:
-//!
-//! ```lichen
-//! K   = _x => struct<.native _, .I _, .O _>       # the artifact + its signature
-//! Buf = T => struct<.native _, .element T>        # the payload + its element type
-//! ```
-//!
-//! There is **no** `TypeKernel`/`TypeParKernel` kind marker, and no
-//! `TypeBuffer`/`TypeWrite` counterpart: the vocabulary does not special-case
-//! either type, so the checker and the shared renderer treat them as ordinary
-//! structs.  The type level allows **anything under `I`/`O` at any depth**;
-//! finding the buffers is the JIT's job, and it refuses what it does not support
-//! **by name with its path** (`docs/notes/compute-buffer-wrapper.md`).
-//!
-//! Operators are bound to source through the `NativeCall` IR: `$jit`, `$launch`,
-//! and friends parse to a `NativeCall` that the checker routes to the matching
-//! [`NativeOp`] builder, which emits the [`ComputeOperator`] and does that
-//! operator's type check.  The runtime `LowOperator::Apply` never sees them.
-//!
-//! The plugin is **program-generic**: it never names a concrete host
-//! `Program`.  Every entry point is bounded by the same set of
-//! associated-type constraints a host program satisfies automatically when
-//! its composed value/operator vocabularies carry [`ComputeValue`],
-//! [`ComputeOperator`], [`LowOperator`], and [`TypeOperator`] (all leaves of
-//! `LangProgram`'s `enum_ext!` composition).  A host composes those leaves
-//! and wires the plugin's native registry itself (see the `lichen-language`
-//! crate's `package.rs`).
-//!
-//! ## Type-checking coverage
-//!
-//! - `jit f` requires `f` to be a *function* (function-ness gate) and wraps the
-//!   bare artifact into a kernel struct `(K _)(.native $jit(f), .I I, .O O)`.
-//! - `launch k a` reads `k.native` with `k.I`/`k.O` for the signature: it gates
-//!   the domain lazily, unifies `a` against it, and its result is the kernel's
-//!   codomain — a function-style apply over a kernel.  A **tuple** codomain is
-//!   the multi-result form: the body is flattened to one stack slot per leaf,
-//!   the wasm function returns one `i64` per leaf, and the launch yields the
-//!   tuple of them.
-//! - `parallel f` lifts an index function into a parallel kernel struct.  The
-//!   body's parameter is the **named** struct `struct<.n Int, .in …, .out …>`
-//!   (`compute.P (compute.KT _)(.I In, .O Out)`): `.n` is the launch extent,
-//!   `.in`'s fields are the input buffers, `.out`'s are the outputs, and the
-//!   body produces no value — it dispatches writes.  `plrun k a` runs it over
-//!   `[0, k.n)`, a body reading an input as
-//!   `compute.read ((compute.Read _)(.from k.in.b, .at i))` and writing as
-//!   `compute.write ((compute.Write _)(.to k.out.z, .at i, .value val))`, and
-//!   its result is the parameter's `.out` structure — one `Buf` field per
-//!   output, which is why multiple outputs are fields rather than a tuple.
+//! The `lichen-compute` native plugin.
+//! See docs/notes/lichen-compute.md and compute-kernel-struct.md.
 
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -99,22 +40,18 @@ pub use graph::GraphId;
 
 /// The diagnostic a graph's own refusals are recorded under.
 ///
-/// **Separate from the parallel one on purpose.** Every refusal this module emits
-/// for a graph is about the *graph* — what it captured, which backend it named,
-/// what it returned — and none of them is about a run. Filing them under
-/// `compute.parallel` would attribute a mistake in the recording to the launch
-/// the author did not write.
+/// # Invariant
+/// Every graph refusal is about the recording, never about a run, so filing one
+/// under `compute.parallel` would blame the launch the author did not write.
 pub const GRAPH_DIAGNOSTIC: &str = "compute.graph";
 
 /// The schedule a graph run uses.
 ///
-/// **Rust-side only, and deliberately not in the language.** A graph says what has
-/// to happen before what; it must never say when the host is allowed to notice
-/// something finished, because a graph that could name its own synchronisation
-/// would be a graph whose correctness depended on where somebody put a keyword —
-/// and the builder and the runner would then disagree about the same graph.
-/// [`Policy::Async`] is the default because it costs nothing over `Serial` and
-/// everything under `Batch` depends on a host that asks for it explicitly.
+/// # Invariant
+/// Rust-side only, and never in the language: a graph states what precedes
+/// what, never when the host may notice a finish — a graph that named its own
+/// synchronisation would make correctness depend on where a keyword was put.
+/// `Policy::Async` is the default; `Batch` needs a host that asks for it.
 pub fn set_graph_policy(policy: Policy) {
     GRAPH_POLICY.with(|current| current.set(policy));
 }
@@ -123,69 +60,33 @@ thread_local! {
     static GRAPH_POLICY: Cell<Policy> = const { Cell::new(Policy::Async) };
 }
 
-/// The program-generic bounds the kernel-safe JIT requires.
+/// A compiled kernel artifact's identity: a compact index into the process
+/// kernel registry.
 ///
-/// A value vocabulary that composes [`ComputeValue`] (so a `Kernel` value
-/// fits as a sibling leaf) and an operator vocabulary that composes the
-/// structural [`LowOperator`], the highlevel's [`TypeOperator`] (the scalar
-/// arithmetic the kernel-safe subset lowers), and [`ComputeOperator`]
-/// (`Jit`/`Launch`).
-///
-/// [`ValueType`] is among them because a kernel's domain is *seeded* from the
-/// parameter's type slot, and decoding a type slot is the encoding
-/// authority's job ([`lichen_highlevel::shape::low_type_of`]) — the one place
-/// this crate is allowed to read the `[value, type]` pair, and the read that
-/// the low-type layer exists to end.
-///
-/// A host program satisfies these automatically whenever its `enum_ext!`
-/// vocabulary carries those leaves (as `LangProgram` does).  Every codegen
-/// entry point carries this same associated-type bound set as its `where`
-/// clause, so all of them share one canonical constraint.
-///
-/// A compiled kernel artifact's identity — a compact index into the process
-/// kernel registry (the compiled wasm bytes).  A kernel value is host-owned
-/// (a small `Copy` scalar), so it is never an arena payload and never needs GC
-/// re-homing or static freeze.
-///
-/// The id itself belongs to the lowered-kernel IR, because a cross-kernel call
-/// in that IR has to name a callee and the IR must not depend on this crate to
-/// say so.  Re-exported here because this is where a host finds it.
+/// # Invariant
+/// A kernel value is host-owned (a small `Copy` scalar), so it is never an arena
+/// payload and needs no GC re-homing; the id lives in the lowered-kernel IR
+/// because a cross-kernel call there must name a callee.
 pub use lichen_kernel_ir::KernelId;
 
-/// A runtime parallel-buffer artifact's payload: the `n` collected element
-/// results, held **in the block arena** as a packed byte slice rather than in a
-/// process registry (`D15`) — see [`ComputeValue::Buffer`].
+/// A parallel-buffer artifact's payload: `n` collected elements, packed (`D15`).
+/// See [`ComputeValue::Buffer`].
 ///
-/// The value is a `Copy` handle, exactly like the lowlevel's own array/table
-/// payloads, so the buffer dies with its block and the crate's copy path
-/// relocates it like any other payload.  There is no id, no registry and no
-/// eviction: the arena's block lifetime *is* the ownership.
-///
-/// **The payload is the class's elements packed at
-/// [`ScalarClass::byte_width`] bytes each** — an `Int` element is its `i64`, a
-/// `Float` element its `f32`, and the class that says which travels beside the
-/// handle ([`ComputeValue::Buffer`]).  The width is the class's and is not
-/// restated here, so a host float buffer is literally the bytes a device module
-/// reads: `count * ScalarClass::Float.byte_width()` of them, which is what makes
-/// one buffer able to feed either backend.
-///
-/// A byte payload is the same type for every class, so the arena, the copy path
-/// and the codec move it without knowing what is in it.  What it must not do is
-/// assume the length is the element count: it is the length in *bytes*, and an
-/// element count is that over the class's width.
+/// # Invariant
+/// A `Copy` handle like an array/table payload: the block's lifetime *is* the
+/// ownership, and the length is in *bytes*, never elements.
 pub type BufferPayload = AnyHandle<[u8]>;
 
-/// The process kernel registry: compiled kernel **fragments** (bytecode units),
-/// keyed by [`KernelId`].  Kernels are immutable artifacts shared across
-/// modules in the process.  The fragment is the durable JIT output; the module
-/// bytes are derived on demand by [`assemble_module`] at launch.
+/// The process kernel registry: compiled fragments, keyed by [`KernelId`].
+///
+/// # Invariant
+/// Kernels are immutable artifacts shared across modules; the fragment is the
+/// durable JIT output and the module bytes are derived on demand at launch.
 static KERNELS: OnceLock<Mutex<HashMap<KernelId, KernelFragment>>> = OnceLock::new();
 fn kernels() -> &'static Mutex<HashMap<KernelId, KernelFragment>> {
     KERNELS.get_or_init(Default::default)
 }
-/// The next kernel id — a **fallback** allocator, used only when a content
-/// digest is already taken by a *different* fragment (see [`intern_kernel`]).
-/// Monotone, so an id minted here never aliases another entry.
+/// The fallback id allocator — monotone, so an id minted here never aliases.
 static NEXT_KERNEL_ID: AtomicUsize = AtomicUsize::new(0);
 fn alloc_kernel_id() -> KernelId {
     NEXT_KERNEL_ID.fetch_add(1, Ordering::Relaxed)
@@ -193,17 +94,12 @@ fn alloc_kernel_id() -> KernelId {
 
 /// The content index: a fragment's digest → the id it is registered under.
 ///
-/// **Kernel ids are content-addressed** (`D15`).  A compiled fragment is a pure
-/// function of the function it came from, so the same source recompiled — which
-/// an editor does on every keystroke — must produce the *same* id, or nothing
-/// downstream can be reused: the derived-module cache is keyed on the
-/// `KernelId`, so a fresh id per compile means it can never hit
-/// and every keystroke re-assembles and re-runs `wasmi::Module::new`.
-///
-/// A digest is not an identity, so the index is an **intern table and nothing
-/// more**: [`intern_kernel`] verifies the fragment it finds, and a genuine
-/// collision falls back to a unique id.  The loser of a collision simply stops
-/// being interned — the cost is a recompile, never a wrong fragment.
+/// # Invariant
+/// Ids are content-addressed (`D15`): the same source recompiled yields the same
+/// id, which the derived-module cache is keyed on. A digest is not an identity —
+/// the index is an intern table, [`intern_kernel`] verifies the fragment, and a
+/// collision falls back to a unique id, costing a recompile and never a wrong
+/// fragment.
 static KERNEL_INDEX: OnceLock<Mutex<HashMap<u64, KernelId>>> = OnceLock::new();
 fn kernel_index() -> &'static Mutex<HashMap<u64, KernelId>> {
     KERNEL_INDEX.get_or_init(Default::default)
@@ -211,20 +107,15 @@ fn kernel_index() -> &'static Mutex<HashMap<u64, KernelId>> {
 
 /// Register `fragment` and return its id — the existing id when an identical
 /// fragment is already registered.
+///
+/// # Invariant
+/// The lookup and the insert are one decision, so both registries are held
+/// across it: otherwise a concurrent intern of the same digest can land its own
+/// id after this caller read the entry, handing out a second id for one
+/// fragment. Lock order is `kernels()` before `kernel_index()`.
 fn intern_kernel(fragment: KernelFragment) -> KernelId {
     let digest = fragment_digest(&fragment);
-    // The lookup and the insert are **one** decision, so both registries are held
-    // across it.  Releasing the index in between lets a concurrent intern of the
-    // same digest land its own id after this caller already read the entry, and
-    // this caller is then handed a *second* id for the same fragment on a later
-    // call — defeating content addressing, which every downstream cache is keyed
-    // on.  Serializing the decision also means the reuse path never overwrites
-    // the entry, so the index converges on one id per digest.
-    //
-    // **Lock order: `kernels()` before `kernel_index()`.**  This is the only
-    // place that nests the two; the registry comes first because verifying a
-    // candidate id means reading it, and the digest index is the outer
-    // decision's lookup, not a prerequisite for it.
+    // Lock order: `kernels()` then `kernel_index()`, as the doc says.
     let mut registry = kernels().lock().unwrap();
     let mut index = kernel_index().lock().unwrap();
     if let Some(id) = index.get(&digest).copied()
@@ -337,8 +228,7 @@ mod kernel_intern_tests {
         );
     }
 
-    /// The straight-line path is unchanged: a body with no transfer is still the
-    /// form a lowering produces, and both backends lower it as they always did.
+    /// A straight-line body is still the form a lowering produces.
     #[test]
     fn a_straight_line_body_is_still_straight_line() {
         let body = KernelBody::from_flat(
@@ -354,11 +244,8 @@ mod kernel_intern_tests {
             .expect("a straight-line body is well formed");
     }
 
-    /// The point of content addressing: the same function compiled twice — which
-    /// an editor does on every keystroke — must intern to **one** id, because
-    /// everything downstream is keyed on it (the derived-module cache on the
-    /// `KernelId`).  A fresh id per compile is what made that
-    /// cache unable to hit.
+    /// The same function compiled twice must intern to one id: every cache is
+    /// keyed on it.
     #[test]
     fn the_same_fragment_interns_to_one_id() {
         let one = KernelBody::from_flat(1, &[FlatOp::Read(0)]);
@@ -463,20 +350,15 @@ fn flatten_classes_into(shape: &LowShape, classes: &mut Vec<ScalarClass>) {
 /// reader of an arena payload carries (`lichen_lowlevel::Handle::from_raw`).
 fn buffer_items(payload: &BufferPayload) -> Option<&[u8]> {
     match payload {
-        // SAFETY: the caller holds the value on a module borrow, so the
-        // payload's home block — and therefore this slice — is alive.
+        // SAFETY: the value is held on a module borrow, so its payload's home
+        // block — and this slice — is alive.
         AnyHandle::Dynamic(handle) => Some(unsafe { &*handle.as_ptr() }),
-        // A static payload would be a *frozen* buffer, which `P1-29` refuses to
-        // serialize and so cannot exist: a buffer is runtime-only.
+        // A buffer is runtime-only: the codec refuses to serialize a frozen one.
         AnyHandle::Static(_) => None,
     }
 }
 
 /// How many elements a packed payload of `bytes` bytes holds at `class`'s width.
-///
-/// The payload holds whole elements and nothing else, so this is exact: the
-/// width comes from the class ([`ScalarClass::byte_width`]) and never from a
-/// constant here.
 fn element_count(class: ScalarClass, bytes: usize) -> usize {
     bytes / class.byte_width()
 }
@@ -489,11 +371,9 @@ fn element_bytes(class: ScalarClass, payload: &[u8], index: usize) -> Option<&[u
 
 /// One buffer element as the class says it is, from the packed bytes it occupies.
 ///
-/// The encoding is the element's own: an `Int` is the eight bytes of its `i64`,
-/// a `Float` the four bytes of its `f32`.  The class has to travel beside the
-/// payload because it is what says how many bytes an element is — the width is a
-/// method on the class and not a fact the bytes can answer
-/// (`docs/notes/floating-point.md` §4.4).
+/// # Invariant
+/// The class travels beside the payload because it is what says how many bytes
+/// an element is; the bytes alone cannot answer that.
 fn element_value(class: ScalarClass, bytes: &[u8]) -> Option<LowValue> {
     match class {
         ScalarClass::Int => {
@@ -507,11 +387,11 @@ fn element_value(class: ScalarClass, bytes: &[u8]) -> Option<LowValue> {
     }
 }
 
-/// The packed payload of `words` at `class`'s width — the encoding side of
-/// [`element_value`], and the only place a value's payload is built.
+/// The packed payload of `words` at `class`'s width — encoding for [`element_value`].
 ///
+/// # Invariant
 /// Each element is written as exactly its own width, so a float buffer's payload
-/// is `count * 4` bytes: what a device module's declared `ArrayStride` reads.
+/// is `count * 4` bytes — what a device module's declared `ArrayStride` reads.
 fn pack_elements(class: ScalarClass, words: &[i64]) -> Vec<u8> {
     let mut payload = Vec::with_capacity(words.len() * class.byte_width());
     for word in words {
@@ -523,14 +403,12 @@ fn pack_elements(class: ScalarClass, words: &[i64]) -> Vec<u8> {
     payload
 }
 
-/// The words an interpreter's state holds for `class`, from a packed payload —
-/// the decoding side of [`pack_elements`].
+/// The words an interpreter's state holds for `class`, from a packed payload.
 ///
-/// The parallel interpreter's own state is word-per-element for both classes (an
-/// `f32` rides its bits in the low 32 of a word), which is a fact about that
-/// interpreter and not about the ABI: this is the boundary where the packed
-/// payload becomes the words it runs on, and [`pack_elements`] is the boundary
-/// back.
+/// # Invariant
+/// The interpreter's state is word-per-element for both classes (an `f32` rides
+/// its bits in the low 32), which is a fact about that interpreter and not about
+/// the ABI; [`pack_elements`] is the conversion back.
 fn unpack_elements(class: ScalarClass, payload: &[u8]) -> Vec<i64> {
     (0..element_count(class, payload.len()))
         .map(|index| match class {
@@ -553,12 +431,8 @@ fn float_bits(value: f32) -> i64 {
     i64::from(value.to_bits())
 }
 
-// The lowered-kernel IR — `KernelBin`, `KernelInstr`, `KernelFragment`,
-// `KernelShape`, `IntWidth` and the content digest — lives in the dependency-free
-// `lichen-kernel-ir` crate, not here, so that a backend other than this crate's
-// wasm one can consume a fragment without pulling in `wasmi`.  What follows is
-// the *wasm* half: this crate compiles a checked graph down to that IR and then
-// lowers the IR to a wasm module.  See `docs/notes/compute-jit-low-types.md`.
+// The lowered-kernel IR lives in `lichen-kernel-ir`, not here, so another
+// backend reads a fragment without `wasmi`.
 
 /// Whether a value is a graph placeholder, **or a `Buf` wrapper around one**.
 ///
@@ -626,27 +500,14 @@ where
         .any(|item| is_a_graph_placeholder(module, item.node))
 }
 
-/// Why this operator cannot appear in a body that is being recorded, if it cannot.
+/// Why this operator cannot appear in a body that is being recorded.
 ///
-/// **Two shapes, and the difference is whether a graph has anywhere to put the
-/// value at all.** A scalar kernel has no node to be: the one node kind is a
-/// parallel dispatch with its buffers bound to it, while a scalar fragment works
-/// on the kernel's own operand stack and names no buffer whatsoever. So whatever
-/// it produces has no home in a graph, and that is true whether or not a
-/// placeholder is involved — which is why this one is refused outright.
-///
-/// The other two are fine in general and wrong *here*. A host read and a collect
-/// both say "give me this as host data", and the value either would hand back is
-/// a number or an array that a graph has no edge for. They are refused only when
-/// they were actually handed a placeholder, because a read of a host buffer the
-/// body closed over is ordinary host arithmetic, and if its result is used as a
-/// count or an input the value-table filter already refuses that by name.
-///
-/// Both of these used to fall through to a bare undecided answer with no
-/// diagnostic, and that is not a smaller mistake than a wrong number — it is an
-/// absent one. A body that collected a dispatch's result mid-chain recorded a
-/// graph that was quietly missing the collect, and the chain's own numbers looked
-/// right anyway.
+/// # Invariant
+/// A graph has nowhere to put a scalar value: the one node kind is a parallel
+/// dispatch with buffers bound to it. A host read or a collect is refused only
+/// when it was handed a placeholder — a read of a closed-over host buffer is
+/// ordinary host arithmetic. Both used to answer `None` silently, which is an
+/// absent answer rather than an undecided one.
 fn unrecordable<P>(
     operator: &ComputeOperator,
     module: &Module<P>,
@@ -682,40 +543,25 @@ where
     }
 }
 
-/// The diagnostic categories this plugin records through the lowlevel's
-/// general extension channel ([`Module::record_extension_diagnostic`]).  They
-/// are the plugin's own compile-time constants, so a consumer selects on them
-/// without parsing a message.
+/// The diagnostic categories this plugin records through the extension channel.
 const JIT_DIAGNOSTIC: &str = "compute.jit";
 const PARALLEL_DIAGNOSTIC: &str = "compute.parallel";
-/// Running an already-compiled kernel: the `Launch` and `Call` arms, which
-/// give a [`KernelId`] an argument and read the result back.  Named for the
-/// **path**, not for either operator tag, because the two refuse on the same
-/// three facts — an argument that is not a parameter vector, a tuple element
-/// that is not a concrete `Int`, and a run that failed — so a consumer
-/// selecting on this category catches a `compute.call` refusal too instead of
-/// needing to know which arm produced it.
+/// Running an already-compiled kernel: the `Launch` and `Call` arms.
+///
+/// # Invariant
+/// Named for the path, so one category catches a `compute.call` refusal too. The
+/// two arms refuse on the same three facts: an argument that is not a parameter
+/// vector, a tuple element that is not a concrete `Int`, and a run that failed.
 const KERNEL_LAUNCH_DIAGNOSTIC: &str = "compute.kernel_launch";
 
 /// Where a parallel kernel's runs are dispatched.
 ///
-/// A **named, required** choice rather than a default: `parallel` takes the
-/// backend as an argument, so a program always says where its parallel kernels
-/// run and there is no ambient setting to be surprised by.  There is deliberately
-/// no "try either" value — a backend that declines is a *named* failure, because
-/// a program that silently ran somewhere other than where it asked is a program
-/// whose timing means nothing.
-///
-/// Only `parallel` takes one.  A `jit` kernel is launched a single invocation at
-/// a time, and a device is for the thousands a dispatch runs at once, so there is
-/// nothing there for a backend to choose between.
-///
-/// The IR is unaffected: a fragment does not record a backend, so the choice
-/// rides on the **value** rather than on the compiled kernel — which is why it
-/// is a field of [`ComputeValue::ParKernel`] and not something the digest hashes.
-/// Two programs that compile the same function for different backends therefore
-/// share one fragment id, and the choice cannot make a cache serve one backend's
-/// module for another's.
+/// # Invariant
+/// A named, required choice: `parallel` takes the backend as an argument, so a
+/// program always says where its kernels run, and a backend that declines is a
+/// named failure. The choice rides on the value ([`ComputeValue::ParKernel`]),
+/// not on the fragment, so two programs compiling one function for different
+/// backends share an id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
     /// This crate's wasm backend: one interpreter per worker thread.
@@ -737,10 +583,10 @@ impl Backend {
 
 /// A backend name that is neither `cpu` nor `gpu`.
 ///
-/// The message quotes what was written and what is accepted, because a string
-/// parameter with no enum to check it against is exactly the case where a typo
-/// must be reported rather than defaulted.  The language has no enum type yet,
-/// which is why this is a string at all — and why the parse has to be strict.
+/// # Invariant
+/// The message quotes what was written and what is accepted: a string parameter
+/// has no enum to check against, so a typo must be reported rather than
+/// defaulted.
 fn unknown_backend(written: &str) -> String {
     format!("{written:?} is not a compute backend; name one of \"cpu\" or \"gpu\"")
 }
@@ -756,9 +602,9 @@ fn parse_backend(written: &str) -> Result<Backend, String> {
 
 /// The backend named by an operand, recording a refusal by name.
 ///
-/// A backend argument that is not a string at all is as much a refusal as one
-/// that is the wrong string, and it is reported the same way — a `Str` parameter
-/// has no type to lean on, so both are the programmer's to fix.
+/// # Invariant
+/// A non-string backend argument is as much a refusal as the wrong string, and
+/// is reported the same way.
 fn backend_argument<P>(
     module: &mut Module<P>,
     node: Option<NodeId>,
@@ -792,128 +638,77 @@ where
 
 /// One value of a graph's value table.
 ///
-/// A `usize`, and stable for the life of the graph: a node's outputs are
-/// consecutive from the first, so three outputs yield `first`, `first + 1`,
-/// `first + 2` and nothing has to be looked up to know which is which.
+/// # Invariant
+/// A `usize`, stable for the graph's life: a node's outputs are consecutive from
+/// the first, so nothing has to be looked up to know which is which.
 pub type GraphValueId = usize;
 
-/// The compute value vocabulary — injected as a sibling leaf into a host's
-/// value union (see a host `program` module).  A plain enum of exactly this
-/// extension's variants, composed with [`lichen_utils::enum_ext!`].
+/// The compute value vocabulary — a sibling leaf in a host's value union.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ComputeValue {
     /// A compiled, runnable kernel artifact.
     ///
-    /// **No backend, deliberately.** A `jit` kernel is launched one invocation
-    /// at a time, and a device is for the thousands a dispatch runs at once, so
-    /// there is nothing for a backend to choose between. The choice belongs to
-    /// [`Self::ParKernel`], which is the only variant a run is dispatched from.
+    /// # Invariant
+    /// No backend, deliberately: a `jit` kernel is launched an invocation at a
+    /// time, so the choice belongs to [`Self::ParKernel`].
     Kernel(KernelId),
     /// A compiled **parallel** kernel artifact, and where its runs are dispatched.
     ///
-    /// A curried `?a -> USize -> ?b` function flattened to a `(?a, USize) -> ?b`
-    /// wasm function (the config is the first group of parameters, the *index*
-    /// the last scalar).
+    /// # Invariant
+    /// A curried `?a -> USize -> ?b` flattened to `(?a, USize) -> ?b`: the config
+    /// is the first group of parameters, the *index* the last scalar.
     ParKernel(KernelId, Backend),
-    /// A runtime results **buffer**: `plrun` ran the parallel kernel over the
-    /// index range `[0, n)` and collected the `n` `?b` results here.
+    /// A runtime results **buffer**: `plrun` collected the `n` `?b` results here.
     ///
-    /// The payload is a **packed byte slice** in the block arena — a `Copy`
-    /// handle, like the lowlevel's own array/table payloads — so a buffer is
-    /// owned by the block it was created in and dies with it rather than living
-    /// in a process registry that nothing can bound (`D15`, and see
-    /// [`Self::is_handle`]).  `reads`/`collect`s therefore dereference the
-    /// arena, and the crate's copy path relocates the payload when the value is
-    /// copied into another block.  Its elements are [`ScalarClass::byte_width`]
-    /// bytes each — four for a float — so one buffer can feed either backend.
-    ///
-    /// **The element class rides on the value**, because the payload alone
-    /// cannot say it: the bytes of an `f32` and the bytes of an `i64` are not
-    /// distinguishable by length alone.  It is read off the producing fragment's
-    /// [`KernelFragment::output_classes`] at the ordinal the buffer was produced
-    /// at (or, for a `"gpu"` result, off the [`ResidentBuffer`] the backend
-    /// issued), so a buffer names what its elements are without anyone having to
-    /// still hold the fragment.
+    /// # Invariant
+    /// The payload is a packed byte slice in the block arena — a `Copy` handle
+    /// owned by its block (`D15`) — whose elements are [`ScalarClass::byte_width`]
+    /// bytes each. **The element class rides on the value**: the payload cannot
+    /// say it, so it is read off the producing fragment's
+    /// [`KernelFragment::output_classes`] at the ordinal.
     Buffer(BufferPayload, ScalarClass),
     /// A run's results, still **on the device**.
     ///
-    /// A `"gpu"` `plrun` produces one of these per declared output rather than a
-    /// [`Self::Buffer`], so nothing crosses the bus until something asks for the
-    /// values as host data.  `compute.collect` and `compute.read` are what ask.
-    ///
-    /// **Not a handle, and that is the point:** the id is plain data, so the copy
-    /// path copies it rather than relocating a pointer into a block arena.  That
-    /// is also why there is no per-value release — the id names device memory
-    /// that is reclaimed when the backend is dropped, or when an allocation is
-    /// refused because the device is full.  The discipline is deliberately the
-    /// same as [`Self::Buffer`], which likewise has no individual free.
+    /// # Invariant
+    /// Not a handle: the id is plain data, so the copy path copies it rather than
+    /// relocating an arena pointer — and there is no per-value release, because
+    /// the id names device memory reclaimed when the backend drops.
     DeviceBuffer(ResidentBuffer),
     /// A built graph, as its registry slot.
     ///
-    /// **A `usize` and nothing else.** A graph is kernel ids, edge numbers and
-    /// counts, all plain data with no block, no arena and no device lifetime in
-    /// them, so a graph value needs no tracing, states no host obligation and
-    /// costs no copy to move. What the registry holds is the *program's* data,
-    /// not the graph's, and nothing in the graph points at it.
-    ///
-    /// Not a handle, for the same reason a [`Self::ParKernel`] is not: the copy
-    /// path relocates arena payloads and this is a slot number.
-    ///
-    /// **The backend rides here rather than in the registry entry**, exactly as it
-    /// rides on a [`Self::ParKernel`]: the graph's *shape* is content-addressed, so
-    /// two programs that record the same chain share one id, and an entry that also
-    /// stored which device to run it on would answer for whichever built it first.
-    /// Reading it off the value is what lets the registry store no answer.
+    /// # Invariant
+    /// A `usize` and nothing else: a graph is kernel ids, edge numbers and
+    /// counts, so it needs no tracing and states no host obligation. The backend
+    /// rides on the value, exactly as it does on [`Self::ParKernel`], because the
+    /// graph's shape is content-addressed and the registry stores no answer.
     Graph(GraphId, Backend),
     /// A placeholder for a graph's own `slot`-th input.
     ///
-    /// **The slot is the number**, so `ins(i)` binds to the `i`-th argument and
-    /// no ordering has to be guessed. Inert: it is a `usize` and no operation
-    /// turns one into device memory, so a value holding it cannot read a buffer
-    /// — which is what makes a closure that captured one harmless rather than a
-    /// capture that reaches inside the graph.
-    ///
-    /// **Invisible to the checker, and that is what makes it usable here.** The
-    /// type at a `cfg` position is fixed by `check_unify` at compile time;
-    /// nothing re-derives a type from a runtime value, so a new variant is not a
-    /// type error anywhere.
+    /// # Invariant
+    /// The slot is the number, so `ins(i)` binds the `i`-th argument — and it is
+    /// inert: no operation turns a `usize` into device memory, so a closure that
+    /// captured one cannot read a buffer.
     GraphInput(usize),
     /// A placeholder for a value this recording has already produced.
     ///
-    /// **Carrying the value number is the whole design.** The placeholder sits in
-    /// the node the next dispatch reads, so the edge follows the operand without a
-    /// side table saying which node produced which value — a second copy of a
-    /// fact that could disagree with the first.
+    /// # Invariant
+    /// Carrying the value number is the design: the placeholder sits in the node
+    /// the next dispatch reads, so the edge follows the operand with no side
+    /// table to disagree with.
     GraphValue(GraphValueId),
 }
 
 /// A run's results as the language holds them while they are still on a device.
 ///
-/// The id alone would not be enough to use: fetching needs to know how many
-/// elements to ask for, and the device allocation is padded up to a whole
-/// workgroup, so the allocation's size is not the answer. The count travels with
-/// the value rather than in a side table so that an id cannot outlive the length
-/// it was issued with, and so two backends' ids can never be confused for one
-/// another's by a lookup.
-///
-/// # The element class travels here too, and for the same reason
-///
-/// It is a fact about *this buffer* that is not recoverable from the id, and the
-/// id is all a fetch is given. It is taken from the producing fragment's
-/// [`KernelFragment::output_classes`] at the ordinal the buffer was produced at,
-/// so a value that stays on a device names what its elements are without anyone
-/// having to still hold the fragment it came from — and a later run can check
-/// its own declared input class against it rather than reading a float buffer as
-/// integers (`docs/notes/floating-point.md` §3.8, §4.4).
-///
-/// The class is a fieldless tag, so this struct stays `Eq` and a resident value
-/// stays comparable: an `f32` *payload* is not `Eq`, and it is deliberately not
-/// here — the elements are on the device and are handed over, classed, only by
-/// [`lichen_kernel_ir::ParallelBackend::fetch`].
+/// # Invariant
+/// The count travels with the value, not in a side table: fetching needs to know
+/// how many elements to ask for. The element class travels here too — a fact
+/// about this buffer that the id cannot recover, taken from the producing
+/// fragment's [`KernelFragment::output_classes`] at the ordinal — and being a
+/// fieldless tag keeps the struct `Eq`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResidentBuffer {
-    /// The backend's own name for the buffer. Meaningless outside its issuer,
-    /// which is why it is not comparable and not persistent.
+    /// The backend's own name for the buffer: meaningless outside its issuer.
     pub id: ResidentId,
     /// How many elements the run produced — the count, not the padded length.
     pub count: usize,
@@ -921,19 +716,13 @@ pub struct ResidentBuffer {
     pub class: ScalarClass,
 }
 
-/// One host buffer's payload as the interpreter holds it: the class its elements
-/// are, and **one `i64` word per element** — an `Int` element is its value, a
-/// `Float` element is an `f32`'s bits in the low 32 bits.
+/// One host buffer's payload as the interpreter holds it: class and words.
 ///
-/// The word-per-element shape is the **parallel interpreter's own state**, not
-/// the ABI's: its `read`/`write` imports are typed in the class each call names,
-/// so a float run hands its bits over in a word and the imports read them.  What
-/// crosses the boundary — an arena payload, a graph argument, a [`BufferSlot`] —
-/// is packed at [`ScalarClass::byte_width`] bytes per element, and
-/// [`pack_elements`]/[`unpack_elements`] are the two places the two shapes are
-/// converted.  A backend reads the class from the fragment's
-/// [`KernelFragment::input_classes`]/[`KernelFragment::output_classes`], which
-/// is the only thing that can say what a raw byte means.
+/// # Invariant
+/// The word-per-element shape is the parallel interpreter's own state, not the
+/// ABI's ([`BufferSlot`] crosses packed at [`ScalarClass::byte_width`] bytes per
+/// element), and [`pack_elements`]/[`unpack_elements`] are the two conversions.
+/// A backend reads the class from the fragment's `input_classes`/`output_classes`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BufferWords {
     class: ScalarClass,
@@ -957,9 +746,9 @@ impl BufferWords {
 
 /// What one parallel run produced: host data, or results left on the device.
 ///
-/// A `"cpu"` run always produces the first and a `"gpu"` run the second.  The
-/// distinction is the whole point: a run that produced host data would have paid
-/// a download whether or not anyone ever looked at the result.
+/// # Invariant
+/// A `"cpu"` run always produces the first and a `"gpu"` run the second: a run
+/// that produced host data would have paid a download nobody asked for.
 #[derive(Debug, PartialEq, Eq)]
 enum RunOutcome {
     Host(Vec<BufferWords>),
@@ -975,36 +764,26 @@ enum RunInput {
     Resident(ResidentBuffer),
 }
 
-/// The compute leaf has **no kind markers**: a buffer's type is the struct the
-/// type level reads (`docs/notes/compute-buffer-wrapper.md`), and a kernel
-/// never had a marker of its own, so nothing here is a type constant a kind
-/// slot could hold.  The impl exists because a composed vocabulary asks every
-/// leaf ([`LeafKindMarkers`]).
+/// The compute leaf has no kind markers: a buffer's type is the struct the type
+/// level reads, and a kernel never had one.
 impl LeafKindMarkers for ComputeValue {
     fn is_kind_marker(&self) -> bool {
         false
     }
 }
 
-/// The compute leaf's payload contract: only [`ComputeValue::Buffer`] carries
-/// arena data, and this is what makes the crate's copy path relocate it.
+/// The compute leaf's payload contract: only [`ComputeValue::Buffer`] is arena data.
 ///
-/// The lowlevel routes a **program-specific** value to `copy_ext`, which
-/// consults `is_handle` on the composed value; a leaf that owns a payload and
-/// does not answer `true` here would be copied by reference, leaving a handle
-/// pointing into a block that may be released.  `Kernel`/`ParKernel` name
-/// process-registry *code*, not arena data, and the markers carry none.
+/// # Invariant
+/// A leaf that owns a payload and does not answer `true` here would be copied by
+/// reference, leaving a handle pointing into a block that may be released.
 impl ValueExt for ComputeValue {
     fn is_handle(&self) -> bool {
         matches!(self, ComputeValue::Buffer(..))
     }
 
-    /// The buffer's payload viewed as bytes — the class's elements packed at
-    /// [`ScalarClass::byte_width`] bytes each, which is how the crate's copy path
-    /// and the codec move it.
-    ///
-    /// The payload is already a byte handle, so this is the value's own view of
-    /// itself and the byte count is exactly the payload's length.
+    /// The buffer's payload viewed as bytes: the class's elements packed at
+    /// [`ScalarClass::byte_width`] bytes each.
     fn handle(&self) -> AnyHandle<[u8]> {
         match self {
             ComputeValue::Buffer(handle, _) => *handle,
@@ -1015,36 +794,29 @@ impl ValueExt for ComputeValue {
     fn set_handle(&mut self, payload: AnyHandle<[u8]>) {
         match self {
             ComputeValue::Buffer(slot, _) => {
-                // The payload is the same allocation, re-viewed as bytes: the
-                // copy path allocated exactly `len` bytes for this value's
-                // payload, and a byte handle is what that length means.  **No
-                // class is consulted**, because none is needed: the width states
-                // how many bytes one element is, and the payload's length is
-                // what it is either way.
+                // The same allocation, re-viewed as bytes; the width says the
+                // element size, so no class is consulted.
                 *slot = payload;
             }
             _ => unreachable!("only Buffer carries a payload"),
         }
     }
 
-    /// A packed element needs no more than `i64`'s alignment to be read
-    /// (`docs/notes/floating-point.md` §4.4: every element access goes through a
-    /// decoded copy, never through a `&[i64]` view of the payload).  The
-    /// composition takes the strictest alignment over its leaves, so this is what
-    /// the freeze layout follows too.
+    /// A packed element needs no more than `i64`'s alignment to be read.
+    ///
+    /// # Invariant
+    /// Every element access goes through a decoded copy, never a `&[i64]` view;
+    /// the composition takes the strictest alignment over its leaves.
     fn alignment() -> usize {
         std::mem::align_of::<i64>()
     }
 
-    /// A value that left its results **on the device** owns device memory, and a
-    /// freeze of it takes the obligation to give that memory back.
+    /// A value that left its results on the device: freezing it owes that memory back.
     ///
+    /// # Invariant
     /// The id alone cannot release: it names a buffer in the backend that issued
-    /// it.  That backend is the **installed** one — the same assumption `collect`
-    /// and `read` already make when they fetch by id — so the obligation holds the
-    /// `Arc` the lookup hands back, which also keeps the issuer alive for as long
-    /// as the obligation does.  A backend that is not installed has nothing to
-    /// release: its memory went with it.
+    /// it, so the obligation holds the `Arc` the lookup hands back — which keeps
+    /// the issuer alive. A backend that is not installed has nothing to release.
     fn release_obligations(&self, out: &mut Vec<Box<dyn Release>>) {
         let ComputeValue::DeviceBuffer(resident) = self else {
             return;
@@ -1058,8 +830,7 @@ impl ValueExt for ComputeValue {
     }
 }
 
-/// One device buffer's release, owed by the artifact that froze the value naming
-/// it (see [`ValueExt::release_obligations`]).
+/// One device buffer's release, owed by the artifact that froze the value.
 struct ReleaseResident {
     backend: std::sync::Arc<dyn lichen_kernel_ir::ParallelBackend>,
     id: ResidentId,
@@ -1071,68 +842,42 @@ impl Release for ReleaseResident {
     }
 }
 
-/// The compute operator vocabulary — the `Jit`/`Launch` operations dispatched
-/// by the VM through [`OperatorExt::run`].  Composed into a host's operator
-/// union (see a host `program` module).
+/// The compute operator vocabulary, composed into a host's operator union.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ComputeOperator {
     /// Compile a function value to wasm bytecode → a `Kernel` value.
     Jit,
     /// `[kernel, arg]` operand — run the kernel on the arg → the result.
     Launch,
-    /// `[kernel, arg]` operand — a cross-kernel call: run kernel `k` (a
-    /// `.native` extracted from a kernel struct) on `arg` → the result.
+    /// `[kernel, arg]` — a cross-kernel call: run kernel `k` on `arg` → the result.
     Call,
-    /// Compile a `compute.P` index function (its parameter is the named struct
-    /// `struct<.n Int, .in …, .out …>`) to a parallel kernel — the kernel body
-    /// is lowered over the loop index; a tuple codomain of `Write`s is the
-    /// multi-output form → a `ParKernel` value.
+    /// Compile a `compute.P` index function to a parallel kernel → a `ParKernel`.
     Parallel,
-    /// `[parallel_kernel, cfg]` operand — run the parallel kernel over the
-    /// index range `[0, cfg.n)` → the parameter's `.out` structure, one `Buf`
-    /// field per output the kernel declares.
+    /// `[parallel_kernel, cfg]` — run it over `[0, cfg.n)` → the `.out` structure.
     ParLaunch,
-    /// `[n]` operand — the loop index of the current parallel invocation,
-    /// `i ∈ [0, n)`.  Kernel-only; the VM sees an undecided operand.
+    /// `[n]` — the loop index of the current parallel invocation, `i ∈ [0, n)`.
     Range,
-    /// `[buffer, index]` operand — read one buffer element → `?b`.  Inside a
-    /// kernel this lowers to a host `read` import; at the VM it reads a
-    /// `Buffer` value's element (the post-`plrun` read).
+    /// `[buffer, index]` — read one buffer element → `?b`.
     Read,
-    /// `[length, index, value]` operand — a pending parallel write.  Kernel-only
-    /// (lowers to a host `write` import); the VM sees an undecided operand.
+    /// `[length, index, value]` — a pending parallel write; kernel-only.
     Write,
     /// `[buffer]` operand — collect the whole buffer into a lichen array `[?b]`.
     BufferCollect,
-    /// `[function]` operand — **record** the dispatches that function performs,
-    /// rather than run them, and hand back a `Graph`.
+    /// `[function]` — record the dispatches that function performs, and hand back
+    /// a `Graph`.
     ///
-    /// The operand is deliberately **not** evaluated before this operator runs:
-    /// the function's body is what has to be walked, and a deep pass has already
-    /// erased the shape that says which of its nodes are the body's own. So this
-    /// is the one operator that overrides
-    /// [`OperatorExt::run_deferred`] and builds its own `Apply`.
+    /// # Invariant
+    /// The operand is deliberately not evaluated first: the function's body is
+    /// what has to be walked, and a deep pass has already erased the shape that
+    /// says which nodes are the body's own. This is the one operator that
+    /// overrides [`OperatorExt::run_deferred`].
     Graph,
-    /// `[graph, arguments]` operand — run a graph over the values its source
-    /// function took, and hand back what that function returned.
+    /// `[graph, arguments]` — run a graph over its source function's values.
     GraphRun,
 }
 
-// --- the compute leaves' per-leaf artifact codec ----------------------------
-//
-// A kernel/par-kernel/buffer value and every compute operator are **runtime
-// only**: they are process-local registry handles/operations with no stable
-// on-disk identity, so a persistent artifact must never carry them (a frozen
-// module is a *type* artifact, not a runnable kernel).  No compute value is
-// serializable at all — a buffer's type is a struct the type level reads
-// (`docs/notes/compute-buffer-wrapper.md`), not a kind marker this leaf owns.
-//
-// These arms **refuse** rather than panic, and the difference is reachable, not
-// cosmetic: a package that `$jit`s at its top level and is then imported holds a
-// live kernel in a module that the importer must freeze, so the shape is
-// ordinary user code.  The program is valid — the same `$jit` in a single file
-// runs — so the refusal is of the *cache*, not of the compile: the caller leaves
-// the package uncached and the program still runs.
+// Compute values are runtime-only: a frozen module is a type artifact, and
+// these arms refuse rather than panic.
 
 impl ValueCodec for ComputeValue {
     fn write_value<P: Program>(
@@ -1180,12 +925,8 @@ impl ValueCodec for ComputeValue {
                         .into(),
                 );
             }
-            // **The two placeholders are refused here rather than encoded**, and
-            // the reason is sharper than "runtime only": a placeholder's whole
-            // meaning is a position in *this* recording's value table, so a number
-            // on disk would not name the same value in a rebuilt package. Writing
-            // one as a plain integer would be a graph that loads and computes the
-            // wrong thing.
+            // A placeholder is refused: its meaning is a position in this
+            // recording's value table, not a number.
             ComputeValue::GraphInput(_) | ComputeValue::GraphValue(_) => {
                 return Err(
                     "this package is not cached: it holds a graph's own placeholder at its top \
@@ -1204,9 +945,8 @@ impl ValueCodec for ComputeValue {
         _self_base: *const u8,
         _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
     ) -> Result<Self, String> {
-        // No tag reaches here: every compute value is a runtime value and
-        // [`Self::write_value`] refuses each of them, so an artifact that
-        // carries one was not written by this codec.
+        // No tag reaches here: every compute value is runtime-only, and
+        // `write_value` refuses each of them.
         Err(format!("unknown compute-value tag {}", r.u8()?))
     }
 }
@@ -1214,10 +954,8 @@ impl ValueCodec for ComputeValue {
 impl OperatorCodec for ComputeOperator {
     fn write_operator(_w: &mut Writer, op: Self) -> Result<(), String> {
         match op {
-            // Every compute operator is an operation the VM performs, not a
-            // value the artifact describes: a frozen module holds the *types* a
-            // package exports, and no exported type is a kernel call.  Refused
-            // for the same reason a kernel value is (see `ValueCodec` above).
+            // An operator is an operation the VM performs, not a value an artifact
+            // describes; refused like a kernel value.
             ComputeOperator::Jit
             | ComputeOperator::Launch
             | ComputeOperator::Call
@@ -1249,15 +987,13 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    /// The compute leaf's applicability policy: a **kernel** apply is the one
-    /// lowlevel `Apply` this vocabulary can lower, as a cross-kernel call, so
-    /// it stays lazy instead of being refused.  Both halves of the answer are
-    /// the JIT's own predicate: [`kernel_id_of`] for a kernel whose value is
-    /// decided — the same call `emit_cross_kernel_call` needs to emit — and
-    /// [`pending_kernel`] for the struct pair whose value slot the lowlevel
-    /// consults before the deep pass has evaluated it.  A static node is never
-    /// a kernel: a kernel artifact is process-local, so a frozen module
-    /// carries none.
+    /// The compute leaf's applicability policy.
+    ///
+    /// # Invariant
+    /// A **kernel** apply is the one lowlevel `Apply` this vocabulary lowers, as
+    /// a cross-kernel call, so it stays lazy instead of being refused: both halves
+    /// of the answer are the JIT's own predicate — [`kernel_id_of`] and
+    /// [`pending_kernel`]. A static node is never a kernel.
     fn is_callable(module: &Module<P>, callee: AnyNodeId) -> bool {
         match callee {
             AnyNodeId::Dynamic(node) => {
@@ -1268,21 +1004,13 @@ where
     }
 
     fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> Option<P::Value> {
-        // An operator that cannot decide yet answers `None`, which is the
-        // trait's own spelling of "undecided".  The closure gives every early
-        // return inside an arm one return type to agree on.
+        // An operator that cannot decide yet answers `None`, the trait's own
+        // spelling of "undecided".
         (|| {
-            // **A recorded body is a sequence of dispatches, and this is where
-            // anything else is stopped.** A `plrun` is the one operator that can
-            // consume a graph's placeholders, because a graph's values are edges into
-            // a run; every other operator handed one is asking for something a graph
-            // has no way to be. Checked here, once, rather than in each arm, because
-            // the arms all fail the same way — an undecided answer with no
-            // diagnostic — and a boundary that is drawn in four places is not a
-            // boundary.
-            //
-            // The reason is computed on an immutable borrow and recorded after it
-            // ends, so the walk's own module is not borrowed across the diagnostic.
+            // A recorded body is a sequence of dispatches; anything else is
+            // stopped here rather than in each arm.
+
+            // The reason is computed on a borrow, and recorded after it ends.
             if graph::is_recording()
                 && let Some(reason) = unrecordable(self, module, &operand)
             {
@@ -1293,28 +1021,22 @@ where
                 ComputeOperator::Jit => {
                     let Some(LowValue::Function(function)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
-                        // A non-function jit target is a *reported* type error (the
-                        // checker's function-ness gate), not an invariant violation —
-                        // stay lazy rather than panicking.
+                        // A non-function jit target is a reported type error; stay
+                        // lazy rather than panicking.
                         return None;
                     };
                     match compile_fragment(module, function) {
                         Ok(fragment) => {
-                            // Content-addressed, so recompiling the same function —
-                            // which is what a keystroke does — keeps one id and
-                            // lets the derived-module cache hit (`D15`).
+                            // Content-addressed (`D15`): a recompile keeps one id,
+                            // so the derived-module cache hits.
                             let id = intern_kernel(fragment);
                             Some(<P::Value as From<ComputeValue>>::from(
                                 ComputeValue::Kernel(id),
                             ))
                         }
                         Err(err) => {
-                            // The body is outside the kernel-safe subset, or the
-                            // parameter's domain is undecided.  Either way the
-                            // honest result is a lazy value plus a recorded reason:
-                            // the definition pass reports the undecided result, and
-                            // this says *why* — which is the difference between a
-                            // user who can fix the program and one who cannot.
+                            // Outside the kernel-safe subset, or an undecided
+                            // domain: a lazy value plus the reason.
                             module.record_extension_diagnostic(JIT_DIAGNOSTIC, None, err);
                             None
                         }
@@ -1325,9 +1047,8 @@ where
                     else {
                         unreachable!("Launch expects an operand array of [kernel, arg]")
                     };
-                    // SAFETY: `operands` is the operand array the VM just evaluated
-                    // for this operation; its home block is alive for the duration
-                    // of the run.
+                    // SAFETY: `operands` is the array the VM just evaluated for
+                    // this operation; its home block is alive for the run.
                     let operands = unsafe { operands.items() };
                     let Some(ComputeValue::Kernel(id)) = module
                         .node_value(operands[0].node)
@@ -1335,14 +1056,8 @@ where
                     else {
                         return None;
                     };
-                    // The argument is a scalar for an arity-1 kernel, or an `Array`
-                    // (possibly nested for a tuple-of-tuples domain) for a
-                    // tuple-domain kernel.  Flatten it to the wasm argument vector.
-                    // Anything else (a non-literal element, e.g. a computed scalar)
-                    // stays lazy — the definition pass reports the undecided result —
-                    // and each way that can happen records the cause it is, because
-                    // the lazy marker alone tells the user nothing about the
-                    // argument they wrote.
+                    // A scalar for an arity-1 kernel, an `Array` for a tuple-domain
+                    // one; anything else stays lazy, and records why.
                     let args = match kernel_arguments(module, operands[1].node) {
                         Ok(args) => args,
                         Err(reason) => {
@@ -1357,10 +1072,8 @@ where
                     match run_kernel(id, &args) {
                         Ok(results) => kernel_results_value(module, block, results),
                         Err(err) => {
-                            // Whatever the wasm run said — the assembly, the `main`
-                            // export, or the call itself — is this refusal's own
-                            // cause, so it is recorded as it stands rather than
-                            // replaced by a summary that would name none of them.
+                            // Whatever the wasm run said is recorded as it stands,
+                            // not replaced by a summary that names none of them.
                             module.record_extension_diagnostic(KERNEL_LAUNCH_DIAGNOSTIC, None, err);
                             None
                         }
@@ -1371,9 +1084,8 @@ where
                     else {
                         unreachable!("Call expects an operand array of [kernel, arg]")
                     };
-                    // SAFETY: `operands` is the operand array the VM just evaluated
-                    // for this operation; its home block is alive for the duration
-                    // of the run.
+                    // SAFETY: `operands` is the array the VM just evaluated for
+                    // this operation; its home block is alive for the run.
                     let operands = unsafe { operands.items() };
                     let Some(ComputeValue::Kernel(id)) = module
                         .node_value(operands[0].node)
@@ -1427,24 +1139,17 @@ where
                     };
                     match compile_parallel_fragment(module, function) {
                         Ok(fragment) => {
-                            // Content-addressed like `jit`'s, and for the same
-                            // reason: the module cache is keyed on the `KernelId`,
-                            // so a fresh id per compile is a re-assembly per
-                            // compile.  The backend is *not* part of the
-                            // fragment, so the same body compiled for either
-                            // backend shares this one id.
+                            // Content-addressed like `jit`'s: the backend is not in
+                            // the fragment, so both backends share one id.
                             let id = intern_kernel(fragment);
                             Some(<P::Value as From<ComputeValue>>::from(
                                 ComputeValue::ParKernel(id, backend),
                             ))
                         }
                         Err(err) => {
-                            // **"Not yet" is not an error.**  A parameter whose
-                            // annotation has not resolved leaves the operator
-                            // undecided with no diagnostic, so a later pass — after
-                            // the annotation states the struct — compiles the
-                            // kernel with its roles.  Every other refusal names
-                            // what is wrong where the author wrote it.
+                            // An unresolved parameter annotation leaves the operator
+                            // undecided and silent — not an error: a later pass
+                            // compiles it.
                             if err == PARALLEL_PARAMETER_UNDECIDED {
                                 return None;
                             }
@@ -1454,11 +1159,8 @@ where
                     }
                 }
                 ComputeOperator::ParLaunch => {
-                    // **A recording intercepts here, before anything is parsed.** A
-                    // recorded dispatch has no buffers to look at and no count to
-                    // read: its arguments are placeholders, which is the whole reason
-                    // the body can be walked at all. So the interception is first and
-                    // the real launch is the rest of the arm.
+                    // A recording intercepts first: a recorded dispatch's arguments
+                    // are placeholders, with no buffers or count to read.
                     if graph::is_recording() {
                         return record_launch::<P>(module, block, operand);
                     }
@@ -1466,9 +1168,8 @@ where
                     else {
                         unreachable!("ParLaunch expects an operand array of [kernel, cfg]")
                     };
-                    // SAFETY: `operands` is the operand array the VM just evaluated
-                    // for this operation; the note covers this arm's `items()`
-                    // calls, all of live nodes of `module`.
+                    // SAFETY: the VM just evaluated `operands`; the arm's `items()`
+                    // calls are live nodes of `module`.
                     let operands = unsafe { operands.items() };
                     let Some(ComputeValue::ParKernel(id, backend)) = module
                         .node_value(operands[0].node)
@@ -1485,11 +1186,8 @@ where
                     let Some(cfg_items) = (unsafe { module.array_items(cfg_node) }) else {
                         return None;
                     };
-                    // **The cfg is the parameter's scalar leaves in field order, then
-                    // the input buffers**: the leaves are the leading positions (the
-                    // launch extent first — `docs/notes/compute-runtime-scalars.md`
-                    // §1), and how many there are is a property of the fragment, so
-                    // the leaf classes are read from it.
+                    // The cfg: the parameter's scalar leaves in field order, then the
+                    // input buffers. The fragment says the leaf classes.
                     let leaf_classes = match parallel_leaf_classes(id) {
                         Ok(classes) => classes,
                         Err(err) => {
@@ -1509,13 +1207,8 @@ where
                         let value = node
                             .and_then(|node| module.node_value(node))
                             .and_then(|v| AsEnum::<LowValue>::as_enum(&v));
-                        // A leaf is read at the class its own field declares, and a
-                        // **decided** value of the wrong class is refused by name
-                        // rather than left lazy: staying lazy here would mean the
-                        // dispatch quietly does not run and nothing says so, which is
-                        // the one answer this channel exists to stop giving.  An
-                        // *undecided* leaf is still lazy — that is a program the
-                        // language has not evaluated yet, not a mistake.
+                        // A decided wrong-class leaf is refused by name; an undecided
+                        // one stays lazy.
                         let word = match (class, value) {
                             (ScalarClass::Int, Some(LowValue::USize(n))) => n as i64,
                             (ScalarClass::Float, Some(LowValue::Float(x))) => float_bits(x),
@@ -1548,10 +1241,8 @@ where
                         };
                         leaves.push(word);
                     }
-                    // Input buffers: the named form reads each one where the walk
-                    // found it — the path ends at the `Buf` wrapper's payload — and
-                    // the tuple form reads the position after the leaves, a tuple of
-                    // `Buffer` values.
+                    // Input buffers: the named form reads each where the walk found
+                    // it; the tuple form reads the position after the leaves.
                     let mut inputs: Vec<RunInput> = Vec::new();
                     if !facts.roles.inputs.is_empty() {
                         for (position, path) in facts.roles.inputs.iter().enumerate() {
@@ -1591,10 +1282,8 @@ where
                     }
                     match run_parallel_kernel(id, backend, leaves, inputs) {
                         Ok(RunOutcome::Host(results)) => {
-                            // The named form's result **is** the kernel's codomain:
-                            // every output buffer placed where the walk found it and
-                            // wrapped as the `Buf` the type level reads
-                            // (`docs/notes/compute-buffer-wrapper.md`).
+                            // The named form's result is the kernel's codomain: every
+                            // output wrapped as the `Buf` the type level reads.
                             if !facts.roles.outputs.is_empty() {
                                 let outputs: Vec<(NodeId, ScalarClass)> = results
                                     .iter()
@@ -1614,15 +1303,11 @@ where
                                     .collect();
                                 return build_outputs::<P>(module, block, &facts.roles, &outputs);
                             }
-                            // Several outputs are the **tuple** of them, which
-                            // `compute.read`/`compute.collect` address by ordinal.
-                            // Each buffer value becomes a node of this block first,
-                            // the way a collected element does, so the tuple holds
-                            // live nodes rather than detached values.
-                            //
+                            // Several outputs are the tuple of them, each buffer a live
+                            // node of this block rather than a detached value.
+
                             // Each buffer carries the class its producer declared for
-                            // the ordinal, so a float run's results are float buffers
-                            // all the way to `collect`.
+                            // the ordinal.
                             if results.len() != 1 {
                                 let items: Vec<ArrayItem> = results
                                     .iter()
@@ -1645,11 +1330,8 @@ where
                                     handle,
                                 )));
                             }
-                            // A single output is a bare `Buffer` — the single-output
-                            // form, exactly what it was.  Each payload lands in the
-                            // arena, so the buffer is owned by this block and dies
-                            // with it (`D15`) — the same bump allocation every other
-                            // payload uses.
+                            // A single output is a bare `Buffer`; its payload lands in
+                            // the arena, so the block owns it (`D15`).
                             Some(<P::Value as From<ComputeValue>>::from(
                                 ComputeValue::Buffer(
                                     module.alloc_payload(&results[0].packed(), block),
@@ -1658,17 +1340,14 @@ where
                             ))
                         }
                         Ok(RunOutcome::Resident(results)) => {
-                            // The same shape, with the results left where the shader
-                            // wrote them.  A resident buffer is plain data rather than
-                            // an arena pointer, so a node holding one needs no payload
-                            // and the copy path leaves it alone.
+                            // The same shape, results left on the device: a resident
+                            // buffer is plain data, so the copy path leaves it alone.
                             let value = |resident: ResidentBuffer| {
                                 <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(
                                     resident,
                                 ))
                             };
-                            // The named form's result is the codomain here too, with
-                            // each output's declared class from the fragment: a
+                            // The named form's result is the codomain here too; a
                             // resident buffer carries no class of its own.
                             if !facts.roles.outputs.is_empty() {
                                 let outputs: Vec<(NodeId, ScalarClass)> = results
@@ -1704,14 +1383,8 @@ where
                             Some(value(results[0]))
                         }
                         Err(err) => {
-                            // The refusal is the reason this launch produced no
-                            // value, so it is recorded rather than discarded: the
-                            // lazy marker alone would tell the user nothing about
-                            // why they got `undecided`.  The general channel
-                            // owns it (see `P1-30`), because `BudgetExhausted` is
-                            // the *non-termination* verdict and every one of its
-                            // renderings says "never terminates" — false here, the
-                            // program terminated and merely asked for too much.
+                            // The refusal is recorded: `BudgetExhausted`'s renderings
+                            // would say "never terminates", which is false here.
                             module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
                             None
                         }
@@ -1722,9 +1395,8 @@ where
                     else {
                         unreachable!("Read expects an operand array of [buffer, index]")
                     };
-                    // SAFETY: `operands` is the operand array the VM just evaluated
-                    // for this operation; its home block is alive for the duration
-                    // of the run.
+                    // SAFETY: `operands` is the array the VM just evaluated for
+                    // this operation; its home block is alive for the run.
                     let operands = unsafe { operands.items() };
                     let index = match module
                         .node_value(operands[1].node)
@@ -1747,10 +1419,8 @@ where
                             match buffer_items(&payload)
                                 .and_then(|items| element_bytes(class, items, index))
                             {
-                                // The element becomes the value its class says it is
-                                // — the buffer's own class, which is what says how
-                                // many bytes the element occupies and how to read
-                                // them.
+                                // The element becomes the value its class says: the
+                                // buffer's class says how many bytes it occupies.
                                 Some(bytes) => match element_value(class, bytes) {
                                     Some(element) => <P::Value as From<LowValue>>::from(element),
                                     None => {
@@ -1763,18 +1433,14 @@ where
                             }
                         }
                         Some(ComputeValue::DeviceBuffer(resident)) => {
-                            // This is where a resident buffer stops being on the
-                            // device: a read asks for one number, so it is the point
-                            // at which the program has said it wants host data.
+                            // A read is where a resident buffer stops being on the
+                            // device: the program has asked for host data.
                             if index >= resident.count {
                                 return None;
                             }
-                            // The fetch brings back everything *up to* the index,
-                            // not one element, because the trait hands over owned
-                            // data rather than a view into a mapping.  Naming that
-                            // cost is better than a `fetch_range` nothing else needs
-                            // yet — and a read near the end of a large buffer is
-                            // therefore a whole-buffer transfer.
+                            // The fetch returns everything up to the index: the trait
+                            // hands over owned data, so a late read transfers the
+                            // buffer.
                             match fetch_resident(
                                 ResidentBuffer {
                                     id: resident.id,
@@ -1783,10 +1449,8 @@ where
                                 },
                                 0,
                             ) {
-                                // The element becomes the value its class says it
-                                // is: an integer element is the scalar it always
-                                // was, and a float element is the language's own
-                                // `Float` — not an integer it was never computed as.
+                                // The element becomes the value its class says: an
+                                // integer stays a scalar, a float becomes `Float`.
                                 Ok(ScalarData::Int(elements)) => {
                                     <P::Value as From<LowValue>>::from(LowValue::USize(
                                         elements[index] as usize,
@@ -1821,9 +1485,8 @@ where
                     Some(element)
                 }
                 ComputeOperator::Range | ComputeOperator::Write => {
-                    // Kernel-only operators: `range`/`write` are lowered by the
-                    // parallel JIT to the index/write host imports and never reach
-                    // the VM as a standalone apply.  Stay lazy.
+                    // Kernel-only operators: `range`/`write` never reach the VM as a
+                    // standalone apply — stay lazy.
                     None
                 }
                 ComputeOperator::BufferCollect => {
@@ -1831,9 +1494,8 @@ where
                     else {
                         unreachable!("BufferCollect expects an operand array of [buffer]")
                     };
-                    // SAFETY: `operands` is the operand array the VM just evaluated
-                    // for this operation; its home block is alive for the duration
-                    // of the run.
+                    // SAFETY: `operands` is the array the VM just evaluated for
+                    // this operation; its home block is alive for the run.
                     let operands = unsafe { operands.items() };
                     // A resident buffer is fetched here, in full: `collect` is the
                     // operation that says "give me these as host values", so this is
