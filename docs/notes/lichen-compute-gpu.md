@@ -28,14 +28,21 @@ else in the workspace, and nothing in the workspace depends on it. A build that
 never dispatches a kernel to a device never links a Vulkan loader.
 
 **The IR needed no change to be emitted for a completely different target.** The
-same `Vec<KernelInstr>` lowers to wasm bytes and to SPIR-V, and the one place
-the two disagree is the clearest evidence it is genuinely neutral:
+same SSA `KernelBody` lowers to wasm bytes and to SPIR-V, and the one place the
+two disagree is the clearest evidence it is genuinely neutral:
 
 | | wasm backend | this backend |
 |---|---|---|
 | buffer access | a host import, `call` a function | `OpAccessChain` + `OpLoad`/`OpStore` on a storage buffer |
 | comparison result | an `i64`, narrowed to `i32` for `select` | a `bool` already |
 | `KernelInstr::I32WrapI64` | **emitted** | **a no-op** *when the condition is a comparison* |
+
+**Neither backend tracks an operand stack**, and that is what made the table above
+survive a rewrite that deleted `LocalGet`, `Flow` and `BlockId`. Both walk the
+body's blocks; the wasm one maps a `ValueId` to a slot and a type, this one to a
+`Slot`. `spirv.rs` still refuses a non-straight-line body — it cannot emit
+`OpLoopMerge` yet — so it is the backend that is behind, not the IR. See
+[loop-conversion](loop-conversion.md) §8.5 item 3.
 
 That last row is the whole argument in one line. `I32WrapI64` exists *solely*
 because the wasm MVP's `select` takes an `i32` condition; SPIR-V's

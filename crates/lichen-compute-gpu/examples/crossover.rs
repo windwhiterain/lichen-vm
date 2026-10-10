@@ -20,8 +20,8 @@ use std::time::Instant;
 use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X};
 use lichen_kernel_ir::BufferSlot;
 use lichen_kernel_ir::{
-    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelRoles, KernelShape, Pending,
-    ScalarClass, ScalarData,
+    FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape,
+    Pending, ScalarClass, ScalarData,
 };
 
 /// The **packed** bytes of `words`, one `i64` each — the host payload an integer
@@ -53,22 +53,24 @@ fn fragment() -> KernelFragment {
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
         ]),
-        body: vec![
-            KernelInstr::Const(ScalarClass::Int, 0),
-            KernelInstr::LocalGet(1),
-            KernelInstr::Const(ScalarClass::Int, 0),
-            KernelInstr::LocalGet(1),
-            KernelInstr::BufferReadCall(ScalarClass::Int),
-            KernelInstr::Const(ScalarClass::Int, 0),
-            KernelInstr::LocalGet(1),
-            KernelInstr::BufferReadCall(ScalarClass::Int),
-            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
-            KernelInstr::Const(ScalarClass::Int, 1),
-            KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
-            KernelInstr::BufferWriteCall(ScalarClass::Int),
-            KernelInstr::Const(ScalarClass::Int, 0),
-        ]
-        .into(),
+        body: KernelBody::from_flat(
+            2,
+            &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+                FlatOp::Read(1),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+                FlatOp::Read(1),
+                FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+                FlatOp::Read(1),
+                FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)),
+                FlatOp::Instr(KernelInstr::Bin(ScalarClass::Int, KernelBin::Add)),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1)),
+                FlatOp::Instr(KernelInstr::Bin(ScalarClass::Int, KernelBin::Add)),
+                FlatOp::Instr(KernelInstr::BufferWriteCall(ScalarClass::Int)),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            ],
+        ),
         inputs: 1,
         outputs: 1,
         input_classes: vec![ScalarClass::Int],

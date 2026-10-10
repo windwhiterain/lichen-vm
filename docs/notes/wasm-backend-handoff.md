@@ -91,13 +91,20 @@ plainly: a machine-checked stack is not immune to the operand stack, it only
 catches the mistake. The new lowering is not exempt from §2's rule, it is the first
 one where a mistake has a name.
 
+> **Since this was written, the operand stack is gone from the kernel IR too, not
+> just from the backend.** The body is SSA — every instruction names its operands
+> by `ValueId` — so §2's class of bug is now unrepresentable rather than
+> merely caught. The map below is what landed at the time; `LocalGet` no longer
+> exists and the lowering is one walk of the SSA body rather than a
+> stack plus a reorder. See [loop-conversion](loop-conversion.md) §8.5 item 1c.
+
 The map itself, as landed:
 
 | kernel | `waffle` |
 |---|---|
 | `Const(Int, bits)` | `I64Const { value: bits as u64 }` |
 | `Const(Float, bits)` | `F32Const { value: bits as u32 }` — `Operator`'s value is the `f32`'s bits, so the 0.248 `Ieee32` the bump existed for is no longer ours to write |
-| `LocalGet(k)` | the `k`th blockparam of the entry block — **the ABI passes each leaf as its own argument** |
+| `LocalGet(k)` | **gone.** A parameter is read by naming the `ValueId` the entry block's blockparams gave it — the ABI passes each leaf as its own argument, and the body's values are SSA rather than slots |
 | `Bin(class, op)` | the class's operator — see the trap below |
 | `I32WrapI64` | `I32WrapI64` |
 | `Select` | `Select` |

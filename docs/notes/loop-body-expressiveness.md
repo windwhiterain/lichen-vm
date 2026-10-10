@@ -97,35 +97,35 @@ consequence has **two** halves, and only one of them is closed:
    the header", which is what the old rule said and what made a loop with a body that
    decides between continuing and leaving inexpressible.
 
-### 4.1 The half that is *not* closed: nothing reads the carried tuple
+### 4.1 Closed: the carried tuple is a block parameter, not an instruction
 
-**`KernelInstr::LocalGet` names a parameter leaf, and no instruction names a
-carried tuple element.** The IR has no way for a body's instructions to read the
-loop's own state, which is the second half of §2.1's consequence and the half that
-decides whether a loop can terminate:
+**This section was written when it was the open half of §2.1, and it is no longer
+open. `KernelInstr::LocalGet` has been deleted.**
 
-- `LocalGet(k)` reads offset `k` of the fragment's **parameter domain**;
-- the header's blockparams are the carried values, and nothing reaches them;
-- so the only state a body can forward is the header's own, which is exactly what
-  `Terminator::Jump` does.
+The body is **SSA** now. A block declares the values it receives in
+`BasicBlock::params`, an instruction names its operands by `ValueId`, and a
+`Return` hands out a **list**. So:
 
-**Which means §2.1's sentence is still true of today's IR**: a condition over a
-state that cannot change "evaluated the same way on every iteration — an infinite
-loop or a zero-trip one, and nothing between". A reduction has no representation,
-and no other loop does either. The two changes above let a body *arrive* at the
-header; none of them lets it *carry* anything new.
+- a header's carried values **are** its block parameters;
+- reading one is an ordinary read of a named value, with no instruction to
+  invent;
+- a backedge's arguments **are** the next iteration's state, because
+  `Br { target, args }` hands the target exactly its `params` — which
+  `KernelBody::validate` checks, so a phi cannot be built incompletely.
 
-This is what the wasm lowering found on its way past: `Flow::While` lowers, and the
-thing it lowers cannot run. `compute.rs`'s own two loop fixtures are the forwarding
-shape — a bare `Jump` over the header's own value — which is why they validate and
-cannot be executed.
+**And the entry block's parameters are the fragment's own domain leaves**, in
+flattening order. That is the whole of why one rule serves both: "read the
+function's argument" and "read the loop's carried state" are the same operation,
+because a parameter *is* a value the block received.
 
-**What it needs is an instruction**, and it belongs in `lichen-kernel-ir` beside
-`LocalGet`: something that reads element `k` of the loop's current state. Its
-shape has one real question — whether it is a new `KernelInstr` or a second domain
-for `LocalGet` — and the note that settles it is
-[loop-conversion](loop-conversion.md) §8.5, where it is a step rather than a
-footnote.
+§2.1's sentence — a condition over a state that cannot change is evaluated the
+same way on every iteration — no longer describes the IR. What is still true is
+that **no source program reaches a loop yet**: the conversion that builds the nest
+from a `@loop`-marked recursion is not written, so the capability exists and
+nothing uses it.
+
+The note that settles why it dissolved rather than becoming a new instruction is
+[loop-conversion](loop-conversion.md) §8.5 item 1c.
 
 `Terminator::Jump` does duplicate `Flow::Jump`, and that is deliberate: the two enums
 split transfers by **where they can appear**, not by what they mean. An `If` arm is a

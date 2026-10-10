@@ -56,7 +56,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use ash::vk;
 use lichen_kernel_ir::{
-    BufferSlot, KernelFragment, KernelInstr, ResidentId, ScalarClass, ScalarData, fragment_digest,
+    BufferSlot, KernelFragment, ResidentId, ScalarClass, ScalarData, fragment_digest,
 };
 
 use crate::spirv::{self, Binding, LOCAL_SIZE_X, SpirvRefusal};
@@ -739,10 +739,20 @@ impl GpuContext {
         // line at [`spirv::SpirvRefusal::NonIndexParameter`].
         let leaves = fragment.param_shape.flat_arity();
         let index = spirv::index_local(fragment);
-        let reads_a_parameter =
-            fragment.body.instrs().into_iter().any(
-                |instr| matches!(instr, KernelInstr::LocalGet(local) if Some(*local) != index),
-            );
+        // A parameter read is an operand naming a **block parameter**, so a
+        // dispatch pushes the extent and the index and nothing else: any
+        // operand naming a *different* entry parameter is a leaf with no
+        // value to arrive.
+        let index_param = index.and_then(|index| {
+            fragment.body.blocks[fragment.body.entry]
+                .params
+                .get(index as usize)
+        });
+        let reads_a_parameter = fragment
+            .body
+            .operands()
+            .iter()
+            .any(|value| fragment.body.is_a_parameter(*value) && Some(value) != index_param);
         if reads_a_parameter {
             return Err(RunError::ScalarsNotPushed { leaves });
         }

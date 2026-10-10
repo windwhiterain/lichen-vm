@@ -64,13 +64,19 @@ whose phase 0 is a kind marker, a literal, a printer and a codec.
 
 ### 2. There is no loop, in a kernel or in a workgroup
 
-A kernel body is a `Vec<KernelInstr>` stack machine with no branch but a
-two-element `select`, so every cross-index term must appear as its own read.
-A sum over `N` elements is therefore `N` reads in one body, or `log N` kernels
-chained. A prefix sum is `i + 1` reads at index `i` — quadratic in the source
-text, and unreachable in practice. A matmul's inner loop over `K` must be
-unrolled at a `K` the author chose, because a kernel cannot branch on a
-runtime bound.
+The IR can express a branch and a loop — `BasicBlock`s with `params` and
+`CondBr`/`Br` carry them, and a header's parameters *are* the loop's state — so
+the obstacle below is **not** the instruction set. **What is missing is the
+conversion**: nothing turns a `@loop`-marked recursion into a nest, so no source
+program reaches a backend with one. Until that exists every cross-index term must
+still appear as its own read. A sum over `N` elements is therefore `N` reads in
+one body, or `log N` kernels chained. A prefix sum is `i + 1` reads at index `i` —
+quadratic in the source text, and unreachable in practice. A matmul's inner loop
+over `K` must be unrolled at a `K` the author chose, because no kernel a program
+can currently write branches on a runtime bound.
+
+See [loop-conversion](loop-conversion.md) §8.5 — items 1c and 2a are done, and
+item 4 is the one this section turns on.
 
 What a GPU algorithm actually needs here is a *workgroup*: lanes that can see
 each other, a barrier, shared memory, and a sub-group reduction. None of those

@@ -840,15 +840,16 @@ worry (one kind of node means one set of rules, and nothing a trait object could
 make unsound behind it).
 
 **Two things about that, one of which costs something.** A "closure kernel" is a
-closure that **lowers** — `KernelInstr` is a flat stack machine of constants,
-arithmetic, `Select`, `LocalGet`, `CallKernel` and buffer reads, so a closure
-that allocates, collects, or recurses beyond the static `CallKernel` graph is not
-one. That boundary has somewhere to land, because the domain shape is already
-refused by name before a kernel lowers. And the cost: a closure kernel is still
-**device** work, so `hidden = min(host, device)` is unchanged and a graph of
-them is still worth no milliseconds under `Serial` or `Async`. That is not a
-regression from the direction — it is the same conclusion the measurement below
-already reached, now for a stronger reason.
+closure that **lowers** — a kernel body is a **fixed** graph of blocks over the
+scalar operators (`KernelInstr`: constants, arithmetic, comparisons, the two class
+conversions, a selection, buffer reads and writes, and a `CallKernel`), with no
+allocation, no collection, and no recursion beyond the static `CallKernel` graph —
+so a closure that does those is not one. That boundary has somewhere to land,
+because the domain shape is already refused by name before a kernel lowers. And
+the cost: a closure kernel is still **device** work, so `hidden = min(host, device)`
+is unchanged and a graph of them is still worth no milliseconds under `Serial` or
+`Async`. That is not a regression from the direction — it is the same conclusion
+the measurement below already reached, now for a stronger reason.
 
 **None of it blocks the recording.** The second inhabitant is already there —
 `Native::Pointer` is the slot, with no producer and no consumer yet, which is
@@ -957,6 +958,32 @@ What survives unchanged:
 
 What changes: "the count is a decided value and only it needs evaluating" is
 false. In an unapplied body *nothing* is decided.
+
+### What the lowering is allowed to see: no `TableGet`
+
+**A `TableGet` never reaches the lowering.** It is a *lazy, unresolved read* —
+`TableGet(names, "I")` is a field lookup against a name table whose contents may
+not be built yet. By the time a body is lowered the evaluator has already
+**specialised it into an `Index`** (`Module::alias_read`, in
+`finish_table_get`: the read node is aliased to the element it resolved to, so
+its equality class *is* that element's).
+
+So a lowering sees `Index`, `Apply`, `TableGet` is not one of its cases, and code
+that reaches for a `TableGet` in a backend is reading a shape that cannot occur.
+
+**This is a two-way door, and the way back is the expensive one.** The chain walk
+that resolves a parameter read (`param_path`) walks `Index` nodes and **stops at a
+node with no operation** — which is exactly what an aliased field read looks
+like, because aliasing replaced the operation with a class rather than with a
+node. So the walk terminating is not "this is not a parameter path"; it is
+"this path ends in an alias", and the identity is in the **class**, not in the
+steps. Reading a field read by walking its shape from the outside in is the wrong
+mechanism, and the lesson cost three refusals that each named a different cause.
+
+> Written after being told this rule in conversation and then trying to teach
+> `param_path` to walk `TableGet` directly. The rule was true, load-bearing, and
+> **nowhere in `docs/`** — a fact about the lowering that only existed in a
+> reviewer's head is a fact the next change will re-learn the hard way.
 
 ### Refusals this design owes, all of them about a graph and not a run
 

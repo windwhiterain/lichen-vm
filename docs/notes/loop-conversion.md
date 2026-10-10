@@ -698,13 +698,16 @@ is not in `feature/eval-loop-recording`. Four facts, each one a read of the code
 rather than an inference:
 
 1. **Nothing in production builds a non-straight-line `KernelBody`.**
-   `KernelFragment::body` is reached through `From<Vec<KernelInstr>>`, which is
-   `KernelBody::straight_line` — a `Flow::Block` with `entry: None` and a
-   `Return`. The only `Flow::While` / `Terminator::While` constructions anywhere in
-   the tree are in `lichen-compute`'s `kernel_intern_tests`: hand-built bodies
-   that prove the IR can *express* a loop, not that anything **produces** one.
-   `emit_node` refuses the recursion before it gets that far: its `Apply` arm's
-   "Style 1 — a full lichen-function call (inline its body)" is *deferred*.
+   `KernelFragment::body` is reached through a **single block** whose terminator is
+   a `Return` — `KernelBody::straight_line` was the constructor, and it is now
+   `KernelBody::new` plus one `Return` set by the caller, because `Flow` and its
+   `entry: Option` are gone. The only `Terminator::While` constructions anywhere in
+   the tree were in `lichen-compute`'s `kernel_intern_tests`: hand-built bodies
+   that proved the IR could *express* a loop, not that anything **produced** one.
+   `emit_node` refused the recursion before it got that far: its `Apply` arm's
+   "Style 1 — a full lichen-function call (inline its body)" is *deferred*, and is
+   still deferred. **That is still the state of the world** — and it is the first
+   link in this chain, not the last, which is what the rest of this list says.
 2. **The graph cannot express control flow.** `LowOperator` is exactly
    `Index | Apply | TableGet`; a `Node`'s `operation` is **one** operator and **one**
    operand array, defined once by `add_node` or `close_operation_cycle` and never
@@ -768,20 +771,44 @@ pass expands them, and a consumer reads its answer.
 
 **The skeleton says *what runs when*; the JIT keeps saying *how to emit it*.** That
 split is what makes this cheap: class tracking, `Positions`, the depth budget and
-every refusal the emitter has stay in `lichen-compute`, and lowlevel grows no
-knowledge of kernels.
+1c. ~~**Give the IR an instruction that reads the carried tuple.**~~ **Done, and it
+    was **not** an instruction.** `KernelInstr::LocalGet` **no longer exists**.
+    The body is SSA: a block declares the values it receives in
+    `BasicBlock::params`, and an instruction names its operands by `ValueId`. A
+    header's carried values are therefore its block parameters, reading one is an
+    ordinary read, and a backedge's `Br { args }` **is** the next iteration's
+    state — checked against the target's `params` by `KernelBody::validate`, so a
+    phi cannot be half-built.
 
-**And it costs nothing I was wrong about in the A/B fork this section used to
-carry.** A loop never has to be a *node*. Nodes stay values — so the GC roots,
-`TraceContext`, and the deep pass's verdicts (`evaluated_deep`, `assumed_concrete`)
-are untouched, which was the whole of the objection to a loop node — and the graph
-gains one flag plus one derived structure. The fork I wrote framed the choice as
-"the graph carries control flow" against "control flow is nowhere"; there was a
-third answer and it is the right one.
+    **The entry block's parameters are the fragment's own domain leaves**, which
+    is why one rule serves both a function's argument and a loop's carried value:
+    a parameter *is* a value a block received. The question this item posed — a
+    new `KernelInstr` beside `LocalGet`, or a second domain for `LocalGet` — is
+    answered by **neither**, because the IR stopped having instructions that name
+    anything at all.
 
-#### The order the work goes in
+    What this cleared is the IR's half. **No source program reaches it yet**: the
+    conversion that builds the nest from a marked recursion is not written, so a
+    loop is expressible and unused. See §8.6.
+2. ~~**Fix the wasm `While`** (§8.3 item 1).~~ **Done, by way of `waffle`.** Four
+    defects, one cause (hand-tracked operand-stack height) took the hand-written
+    reorder out of the picture; the backend lowers the whole body through `waffle`
+    ([wasm-control-flow](wasm-control-flow.md) §5).
+2a. ~~**Lower `If`/`Jump`/`While` through `waffle`.**~~ **Done — the CPU-side
+    blocker is cleared.** The hand-written slot-based emitter this step called for
+    was **not written** — `waffle` owns the slot-first pipeline
+    ([wasm-control-flow](wasm-control-flow.md) §5), so the step was its
+    control-flow mapping.
 
-Each step is landable and each is *used* by the one before it lands:
+    **What changed since:** that mapping lived in
+    `crates/lichen-compute/src/compute/wasm/flow.rs`, and it **no longer exists**.
+    `flow.rs` and the stack-based `lower.rs` were replaced by a single walk of the
+    SSA body (`lower.rs`), the operand stack replaced by a
+    `ValueId -> (Value, Type)` map. `Flow`, `BlockId` and
+    `Terminator::{Jump, If, While}` are gone; the terminators are
+    `Return { values }`, `Br` and `CondBr`, and a block's parameters are its
+    incoming state. The wasm lowering is now the same shape as SPIR-V's, which is
+    the point.
 
 1. **The mark moves down.** `Function::looping`, stamped by the checker where the
    function's shell exists. **Done.**
@@ -790,23 +817,56 @@ Each step is landable and each is *used* by the one before it lands:
    keeps only stamping and recording sites. **Done, in `loop_conversion.rs`** —
    `loop_component` walks the marked call graph over the templates (nested
    closures included) and the checker only *asks*, per component entry, what the
-   conversion says. The checker's own IR-level Tarjan run stays for what it alone
-   can answer: which **call sites** enter a component and whether their argument
-   is decided.
+   conversion says.
 3. **The conversion facts**, and the JIT reads them for ordering and for the
-   nest's shape. A body with no marked cycle is one block, which is exactly what
-   the JIT emits today, so nothing else has to move. **Landed as
-   `Module::loop_conversion`** (§8.2): a shape that converts, or a
-   `LoopRefusal` naming the rule that refused it. **What remains is the reader** —
-   no backend consumes `LoopConversion` yet, so a converted-and-undecided marked
-   call still fails the build, now as `DiagKind::LoopNotEmitted` rather than as
-   the generic refusal.
-4. **The deep pass stops expanding a marked cycle** it cannot decide. Until this
-   lands there is no graph with a live cycle in it for step 5 to read — and this is
-   the step most likely to be underestimated: `function_apply` clones per
-   application, and the budget refusal is the symptom.
-5. **The nest**: defunctionalise, build the loops, and teach the JIT to emit
-   `Flow::While` from them.
+   nest's shape. **Landed as `Module::loop_conversion`** (§8.2): a shape that
+   converts, or a `LoopRefusal` naming the rule that refused it. **What remains is
+   the reader** — no backend consumes `LoopConversion` yet.
+4. **The nest**: defunctionalise, build the loops, and teach the JIT to emit them.
+   **The IR half is done and the naming moved with it** — a loop is a `Br` to a
+   header that takes its state as block parameters, so "emit a nest" is no longer a
+   new emitter feature but the same `BasicBlock` walk every straight-line body
+   already does.
+5. **Rebase and extend `feature/spirv-loop-emitter`** onto the SSA body. Its
+   emitter walks an operand `Vec<Slot>` over `Flow`/`Terminator`, and both are
+   gone: `Vec<Slot>` becomes a `HashMap<ValueId, Slot>`, and the control flow
+   arrives as `BasicBlock`s with `params`. The single-`OpLabel` invariant is what
+   actually has to be replaced here, which is why this is one item and not two.
+6. **Make the JIT *emit* what the conversion returned.** The conversion half is
+   `Module::loop_conversion` and its first consumer is the **host loop**, so the
+   conversion is observable today. What remains is the *kernel* reader: build the
+   loop's `KernelBody` — one block per level, the header's `params` carrying the
+   state, the exit taking what the header has at that point, the backedge handing
+   the next iteration's state — and emit it. **This is the item the feature turns
+   on**: the IR can express a loop and a backend can lower one, and nothing yet
+   connects the two.
+
+   **Measured on the merged tree, so the next step does not re-derive it:**
+
+   - **There is no kernel-level `@loop` program anywhere.** Every marked recursion
+     in the tree runs through the **host** loop — `lichen-language`'s
+     `loop_run.rs` says so in its first line, and no `compute.jit` /
+     `compute.parallel` program in any test is marked. The conversion is covered
+     where it lives (`lichen-lowlevel`'s `loop_conversion` tests answer "does it
+     convert"), and the host loop covers "does a marked recursion run as one" —
+     **nothing covers "does a kernel body become a nest", because no such program
+     exists yet.** So item 6 is the walk *and* its acceptance case, and the
+     acceptance case is a program to write, not a test to point at.
+   - **Nothing outside `lichen-lowlevel` reads `LoopConversion`.** Its only
+     caller today is `lichen-highlevel`'s `checker/loops.rs`, asking per component
+     entry. There is no `LoopConversion` anywhere in `lichen-compute`.
+   - **The wasm side can already lower the body this item builds.** `lower.rs`
+     creates a waffle block per kernel-IR block, binds their blockparams in order,
+     and types the non-entry ones by a fixed point over the incoming edges — which
+     is the whole of what a header's carried state needs. So the walk itself is
+     **one new pass in `lichen-compute`, not a backend change**, which is not
+     obvious from reading either side alone.
+   - **The SPIR-V side is the one that cannot.** `spirv.rs` still refuses a body
+     that is not straight-line (`is_straight_line`), because `OpLoopMerge` needs a
+     merge block and an unconditional branch, and the single-`OpLabel` invariant is
+     what has to be replaced — item 5 above, and it should not be started in halves.
+
+   See [wasm-backend-handoff](wasm-backend-handoff.md) §3.2.
 
 **Stage 0 — the `loop` keyword and the evaluator's choice.** The surface lands
 first, and it is the smallest thing that can be observed working: a `loop` keyword

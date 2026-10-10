@@ -58,7 +58,9 @@ fn a_cross_kernel_call_is_refused_by_name() {
         ],
     );
     let refusal = spirv::compile(&fragment, ONE_IN_ONE_OUT).expect_err("refused");
-    // `at` is the instruction's position in the entry block.
+    // **`at` is the instruction's own index**, which is what it names now that a
+    // body is SSA. The stack position it used to be has no meaning here, and a
+    // refusal pointing at one would point at something that is not in the body.
     assert_eq!(refusal, SpirvRefusal::CrossKernelCall { kernel: 7, at: 3 });
     // The message has to name the kernel and say what is missing, or the reader
     // has nothing to act on.
@@ -137,10 +139,11 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
     let beyond = KernelFragment {
         roles: KernelRoles::default(),
         body: KernelBody::from_flat(
-            // **Two, matching the two reads below.** A domain of one would make
-            // `Read(1)` name a parameter that does not exist, and validate()
-            // refuses that as a structural break before the emitter reads a
-            // position — so the test would be about the wrong refusal.
+            // **Two leaves, matching `param_shape` below**, because the body reads
+            // parameter 1. A `Read` past the domain pushes nothing, so a fragment
+            // that declared fewer parameters than it reads comes up short and the
+            // refusal names the *consumer's* arity rather than the read — which is
+            // what this test was accidentally asserting.
             2,
             &[
                 FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1)), // out_pos 1, but there is one output
@@ -159,8 +162,6 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
             position: 1,
             space: "output",
             bound: 1,
-            // The position's own `ValueId`: under SSA the emitter reads the
-            // constant by name rather than counting operand stack slots.
             at: 2,
         }
     );
@@ -168,10 +169,8 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
 }
 
 #[test]
-fn an_operator_with_too_few_operands_is_refused_by_arity() {
-    // `Bin(Add)` names two operands and is given none. Under SSA there is no
-    // operand stack: `KernelBody::validate` — the gate every backend calls
-    // first — refuses this by arity, naming the operator and both counts.
+fn an_unbalanced_body_is_refused() {
+    // No operands pushed before the operator, so it pops from an empty stack.
     let fragment = KernelFragment {
         roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(vec![
@@ -196,14 +195,20 @@ fn an_operator_with_too_few_operands_is_refused_by_arity() {
         int_width: IntWidth::I64,
     };
     let refusal = spirv::compile(&fragment, ONE_IN_ONE_OUT).expect_err("refused");
-    match refusal {
-        SpirvRefusal::ControlFlow { ref detail } => {
-            assert!(
-                detail.contains("Bin(Int, Add)")
-                    && detail.contains("reads 2 value(s) but is given 0"),
-                "the refusal names the operator and both counts: {detail}"
-            );
-        }
-        other => panic!("an operator given too few operands is refused by arity, got {other:?}"),
-    }
+    // **There is no such thing as an unbalanced body any more.** An instruction
+    // names its operands by `ValueId`, so an operator cannot "pop from an empty
+    // stack" — the shape that made `UnbalancedStack` mean something is gone, and
+    // the variant with it. What is left is the honest refusal: the operator
+    // declares two operands and the body gives it none, and
+    // `KernelBody::validate` says so before the emitter reads anything.
+    assert!(
+        refusal
+            .to_string()
+            .contains("reads 2 value(s) but is given 0"),
+        "the refusal names the arity it could not satisfy: {refusal}"
+    );
+    assert!(
+        !matches!(refusal, SpirvRefusal::UnbalancedStack { .. }),
+        "and the stack-shaped refusal is gone with the stack"
+    );
 }
