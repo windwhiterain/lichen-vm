@@ -1,32 +1,11 @@
 //! Refuse a fragment whose body meets an `Int` and a `Float` in one operation.
+//! See docs/notes/floating-point.md §4.2.
 //!
-//! # What this walk is for, and why it is here rather than in a consumer
-//!
-//! `Int` and `Float` **do not convert in either direction**
-//! (`docs/notes/floating-point.md` §4.2), so a value of one class in a position
-//! of the other is a malformed fragment rather than a shape a conversion could
-//! serve. Each backend used to answer that question from its own walk, and the
-//! refusal wording is a **contract between two crates that do not depend on each
-//! other**: SPIR-V's `SpirvRefusal::MixedClasses` renders the same sentence
-//! [`mixed_classes`] renders here, and a program that runs on both must not be
-//! told two different things about the same fragment.
-//!
-//! **It runs before any module exists**, so a fragment that mixes classes costs no
-//! emitted instruction.
-//!
-//! # The stack is gone, and this walk got simpler because of it
-//!
-//! This walked an operand `Vec<OperandClass>`, popping and pushing as it went,
-//! and an underflow was a real case it had to answer — the answer being
-//! [`OperandClass::Opaque`], because a callee's arity is its own domain's and a
-//! loop's carried values arrived from a label it did not resolve.
-//!
-//! **In SSA every operand is named**, so the walk is a map from
-//! [`ValueId`](lichen_kernel_ir::ValueId) to a class, and the class of an operand
-//! is a fact of the definition that produced it rather than something this walk
-//! tracks by position. The `Opaque` case survives only where it really is
-//! unanswerable: a block parameter whose incoming branches have not been read yet,
-//! and a cross-kernel call's results.
+//! # Invariant
+//! The two classes do not convert in either direction, so a value of one in the other's
+//! position is a malformed fragment, and the refusal's wording is a contract between two
+//! crates that do not depend on each other — SPIR-V renders the same sentence. It runs before
+//! any module exists, so a mix costs no emitted instruction. In SSA every operand is named.
 
 use std::collections::HashMap;
 
@@ -36,11 +15,10 @@ use crate::compute::param_classes;
 
 /// The class a value has, as far as a walk of the lowered body can see it.
 ///
-/// **The same cases the SPIR-V emitter's `Kind` names**
-/// (`crates/lichen-compute-gpu/src/spirv.rs`).** The IR is untyped and each
-/// emitter supplies the types, so a refusal that meant one thing in one of them
-/// and another in the other would be the very disagreement this walk exists to
-/// remove.
+/// # Invariant
+/// The same cases the SPIR-V emitter's `Kind` names: the IR is untyped and each emitter
+/// supplies the types, so a refusal meaning one thing in one and another in the other would be
+/// the disagreement this walk exists to remove.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OperandClass {
     /// A value of the class it was computed in — a literal's own, a buffer
@@ -48,12 +26,11 @@ enum OperandClass {
     Scalar(ScalarClass),
     /// A comparison's `0`/`1` scalar, which is `1`/`0` in either class.
     Condition,
-    /// A value this walk cannot classify: a cross-kernel call's results, whose arity
-    /// is the callee's domain rather than this fragment's.
+    /// A value this walk cannot classify: a cross-kernel call's results.
     ///
-    /// **Unclassifiable is not the other class.** It is the absence of an answer,
-    /// and a check that read it as one would refuse a fragment the IR says nothing
-    /// about — so it is carried, never judged.
+    /// # Invariant
+    /// Unclassifiable is not the other class: a check that read it as one would refuse a
+    /// fragment the IR says nothing about, so it is carried, never judged.
     Opaque,
 }
 
@@ -62,9 +39,7 @@ pub(super) fn refuse_mixed_classes(fragment: &KernelFragment) -> Result<(), Stri
     let params = param_classes(fragment);
     let body = &fragment.body;
 
-    // The entry block's parameters are the ABI's leaves, in flattening order — so
-    // **a leaf's class is its own**, read from `param_shape`, not the fragment's: a
-    // parallel fragment's count and index are `Int` whatever the body computes.
+    // A leaf's class is its own, from `param_shape`, not the fragment's.
     let mut defined: HashMap<ValueId, OperandClass> = HashMap::new();
     for (offset, &value) in body.parameters().iter().enumerate() {
         defined.insert(
@@ -76,10 +51,8 @@ pub(super) fn refuse_mixed_classes(fragment: &KernelFragment) -> Result<(), Stri
         );
     }
 
-    // **A block parameter's class comes from the branches that reach it**, and a
-    // branch hands over values that some block computes — so this is a fixed point,
-    // not a sweep. Two incoming branches that disagree are the same mix this walk
-    // refuses, raised at the merge rather than at an operation.
+    // A block parameter's class comes from the branches that reach it, so this is a fixed
+    // point rather than a sweep.
     for _ in 0..body.blocks.len() {
         let mut changed = false;
         for block in &body.blocks {
@@ -106,30 +79,23 @@ pub(super) fn refuse_mixed_classes(fragment: &KernelFragment) -> Result<(), Stri
         }
     }
 
-    // Then the instructions, in walk order. **A definition's class is its own
-    // declaration**, checked against what its operands say — which is what makes
-    // this exact: a value's class is a fact of the value, so the only question a
-    // mix raises is whether two values of *different* classes meet in one
-    // operation. The fragment has no class to consult — `fragment_class` is its
-    // first write's, and a body may compute in more than one.
+    // A definition's class is its own declaration, checked against its operands.
     for block in &body.blocks {
         for (at, &instr) in block.instrs.iter().enumerate() {
             let Some(ValueDef::Instr { op, args, .. }) = body.values.get(instr.0 as usize) else {
                 continue;
             };
             let (op, args) = (*op, args.clone());
-            // **Each definition records what it leaves behind**, which is what makes
-            // the walk a map rather than a stack: an operand's class is the class the
-            // instruction that defined it produced, not something tracked by position.
+            // Each definition records what it leaves behind, so an operand's class is
+            // the defining instruction's.
             let produced = check(op, &args, &defined, at)?;
             if op.produces() > 0 {
                 defined.insert(instr, produced);
             }
         }
     }
-    // **A terminator adds nothing to check**: every value it hands over was
-    // checked where it was computed, and a block's parameter classes were settled
-    // by the fixed point above.
+    // A terminator adds nothing to check: every value it hands over was checked where it
+    // was computed.
     Ok(())
 }
 
@@ -143,17 +109,12 @@ fn check(
 ) -> Result<OperandClass, String> {
     let class_of = |value: &ValueId| defined.get(value).copied().unwrap_or(OperandClass::Opaque);
     match op {
-        // A literal is a value of its own class: `1` is an integer and `1.0` is
-        // not, and the language refuses an integer in a float position before this
-        // walk sees it (`(x : Float) => x * 2` does not check), so nothing here
-        // converts one into the other. There is no operand to meet anything with.
+        // A literal is a value of its own class, and nothing here converts one.
         KernelInstr::Const(class, _) => Ok(OperandClass::Scalar(class)),
         KernelInstr::Bin(class, operator) => {
             as_operand_class(class_of(&args[0]), class, at)?;
             as_operand_class(class_of(&args[1]), class, at)?;
-            // **A comparison yields the language's `0`/`1` scalar**, which is `1`/`0`
-            // in either class — so it is not an integer and must not be refused as
-            // one where a condition is wanted.
+            // A comparison yields the language's `0`/`1` scalar, in either class.
             Ok(match operator {
                 KernelBin::Lt
                 | KernelBin::Gt
@@ -164,12 +125,9 @@ fn check(
                 _ => OperandClass::Scalar(class),
             })
         }
-        // **The narrowing a `0`/`1` scalar takes** to become a `select` condition or
-        // a branch's: whatever came in is now a condition, which is the one place
-        // the two classes stop being a question.
+        // The narrowing a `0`/`1` scalar takes to become a condition.
         KernelInstr::I32WrapI64 => Ok(OperandClass::Condition),
-        // **A `select`'s arms are the value it yields, so they are one class**,
-        // and the narrowing is what makes the condition a `0`/`1` scalar.
+        // A `select`'s arms are the value it yields, so they are one class.
         KernelInstr::Select => {
             let arms = arms_class(class_of(&args[0]), class_of(&args[1]));
             if let Some(class) = arms {
@@ -185,44 +143,32 @@ fn check(
             Ok(OperandClass::Scalar(class))
         }
         KernelInstr::BufferWriteCall(class) => {
-            // **This is where a mix is caught**: a value of the other class stored
-            // into this buffer, or an index that is not an integer.
+            // This is where a mix is caught: the other class stored into a buffer.
             as_operand_class(class_of(&args[2]), class, at)?;
             as_operand_class(class_of(&args[1]), ScalarClass::Int, at)?;
-            // A write leaves nothing behind, and the class this answers is the
-            // absent one rather than a guess at what a caller would do with it.
+            // A write leaves nothing behind, and the class it answers is the absent one.
             Ok(OperandClass::Opaque)
         }
-        // The language's two class crossings (`int2float`/`float2int`) as one
-        // instruction. **The pair is what makes it explicit**: the two directions
-        // have the same shape, so a backend that read the direction off the operand
-        // would be guessing — and the two backends could guess differently
-        // (`docs/notes/floating-point.md` §5.1).
-        //
-        // The operand must be the class the instruction converts *from*, and
-        // nothing gives way: `1.5 + 1` and `int2float 1.0` are refusals made before
-        // any of this.
-        //
-        // `from == to` is a **reclassification, not a no-op**: it is what the
-        // lowering writes for a value that already holds its result's
-        // representation. A value this walk cannot name stays unnamed rather than
-        // being asserted into `to`.
+        // The two class crossings as one instruction: the pair makes the direction
+        // explicit rather than guessed.
+
+        // The operand must be the class it converts from; `from == to` is a
+        // reclassification, not a no-op.
         KernelInstr::Conv { from, to } => match as_operand_class(class_of(&args[0]), from, at)? {
             OperandClass::Opaque => Ok(OperandClass::Opaque),
             _ => Ok(OperandClass::Scalar(to)),
         },
-        // **The call's results are unclassified**: the callee's arity is its own
-        // domain's and this walk holds only the fragment. A value it cannot place
-        // is not a value of the other class, so it is absent rather than guessed —
-        // and an operand that reads it back is `Opaque`, which no position judges.
+        // The call's results are unclassified — the callee's arity is its own — so an
+        // operand reading one back is `Opaque`.
         KernelInstr::CallKernel(_) => Ok(OperandClass::Opaque),
     }
 }
 
 /// The class two `select` arms agree on, if they do.
 ///
-/// **One operand is enough to state it**, because a select's arms are one class by
-/// construction; two that disagree are refused by the caller.
+/// # Invariant
+/// One operand is enough: a select's arms are one class by construction, and two that disagree
+/// are refused by the caller.
 fn arms_class(then: OperandClass, otherwise: OperandClass) -> Option<ScalarClass> {
     match (then, otherwise) {
         (OperandClass::Scalar(class), _) => Some(class),
@@ -231,22 +177,19 @@ fn arms_class(then: OperandClass, otherwise: OperandClass) -> Option<ScalarClass
     }
 }
 
-/// `operand` in a position that wants `want`, or the refusal when the two classes
-/// meet and neither gives way.
+/// `operand` in a position that wants `want`, or the refusal when classes meet.
 ///
-/// **The refusal is the whole point of the walk.** `Int` and `Float` do not
-/// convert in either direction (`docs/notes/floating-point.md` §4.2), so a value of
-/// one class in a position of the other is a malformed fragment rather than a
-/// shape a conversion could serve.
+/// # Invariant
+/// The two classes do not convert in either direction, so a value of one in the other's
+/// position is a malformed fragment rather than one a conversion could serve.
 fn as_operand_class(
     operand: OperandClass,
     want: ScalarClass,
     at: usize,
 ) -> Result<OperandClass, String> {
     match operand {
-        // A comparison's `0`/`1` is `1`/`0` in either class, so a position that
-        // wants one takes it: the one case the IR leaves open on purpose, and the
-        // one the other emitter converts rather than refuses.
+        // A comparison's `0`/`1` is `1`/`0` in either class: the one case the IR leaves
+        // open on purpose.
         OperandClass::Condition => Ok(OperandClass::Scalar(want)),
         OperandClass::Scalar(seen) if seen == want => Ok(OperandClass::Scalar(want)),
         OperandClass::Scalar(_) => Err(mixed_classes(at)),
@@ -256,19 +199,11 @@ fn as_operand_class(
 
 /// The reason a `jit` reports when one operation meets an `Int` and a `Float`.
 ///
-/// **The sentence is the SPIR-V emitter's, byte for byte** — the one
-/// `SpirvRefusal::MixedClasses` renders in
-/// `crates/lichen-compute-gpu/src/spirv.rs`. The two emitters read the same
-/// untyped IR and reach this answer independently, and a program that runs on both
-/// backends must not be told two different things about the same fragment — so
-/// the wording is a contract between the two crates rather than a constant one of
-/// them owns, neither crate depending on the other.
-///
-/// `at` is **the index of the instruction in its own block**, which is what
-/// SPIR-V's `at` is: the position the refusal was raised at, not a line of the
-/// program. It is why a mix is reported where the two classes actually meet — a
-/// `write` storing an integer into a float buffer is refused at the write, and the
-/// arithmetic that computed the integer is not where the reader should look.
+/// # Invariant
+/// The sentence is the SPIR-V emitter's, byte for byte: the two emitters read the same untyped
+/// IR and reach this answer independently, so a program that runs on both must not be told two
+/// different things. `at` is the instruction's index in its own block, so a mix is reported
+/// where the two classes meet rather than where the value was computed.
 pub(super) fn mixed_classes(at: usize) -> String {
     format!(
         "instruction {at} mixed an integer and a float in one operation. `Int` and `Float` do not \

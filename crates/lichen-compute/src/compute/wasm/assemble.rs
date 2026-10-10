@@ -1,19 +1,10 @@
-//! Assembling a launch set onto a `waffle` [`Module`].
+//! Assembling a launch set onto a `waffle` module.
 //!
-//! **This replaces the emitter's own section-by-section assembly rather than
-//! sitting beside it.** `waffle`'s `to_wasm_bytes` writes every section from the
-//! module's index spaces, so what this file has to get right is not *how* a
-//! section is serialized but *what order the entities are pushed in* — the order
-//! is the index space, and the host's linker resolves by name while the
-//! cross-kernel call indices are computed from it.
-//!
-//! The three facts that must be reproduced exactly:
-//!
-//! - imports `env.read_i64`/`env.write_i64` (and the `f32` pair), **each class's
-//!   `read` first and then its `write`**, so `base` is `2 ×` the classes;
-//! - one function per fragment, in the `ordered` BFS order, with the root
-//!   (position 0) exported as `main`;
-//! - a [`KernelInstr::CallKernel`]'s index is `base` + the callee's position.
+//! # Invariant
+//! What must be right is not how a section is serialized but the order entities are pushed in,
+//! because the order is the index space. Three facts are reproduced exactly: the `read`/`write`
+//! imports per class with each class's read first, one function per fragment in BFS order with
+//! position 0 exported as `main`, and a call index of `base` plus the callee's position.
 
 use std::collections::HashMap;
 
@@ -38,8 +29,7 @@ pub(super) fn value_type(class: ScalarClass) -> Type {
 /// The buffer imports the launch set declares, and where the defined functions
 /// start.
 pub(super) struct BufferImports {
-    /// The wasm function index the first defined function takes, which is every
-    /// buffer import — so `base + i` is `ordered[i]`.
+    /// The wasm function index the first defined function takes: base + i is ordered[i].
     pub(super) base: u32,
     pub(super) read: HashMap<ScalarClass, Func>,
     pub(super) write: HashMap<ScalarClass, Func>,
@@ -47,12 +37,9 @@ pub(super) struct BufferImports {
 
 /// Assemble an ordered slice of kernel fragments into a single wasm module.
 ///
-/// `ordered[i]` becomes wasm function index `base + i`; `index` maps each callee
-/// [`KernelId`] to its position, so a cross-kernel [`KernelInstr::CallKernel`]
-/// lowers to an in-module `call`. The root (position 0) is exported as `main`.
-/// For a single-kernel set this is the degenerate link — one fragment = one
-/// module; for a kernel that cross-calls others it is the launch-time assembly
-/// that pulls the relative kernel set into one module.
+/// # Invariant
+/// `ordered[i]` becomes function index `base + i` and the root is exported as `main`; `index`
+/// maps each callee to its position, so a cross-kernel call lowers to an in-module `call`.
 pub(crate) fn assemble_module(
     ordered: &[KernelFragment],
     index: &HashMap<KernelId, u32>,
@@ -61,10 +48,8 @@ pub(crate) fn assemble_module(
         return Err("compute.wasm: a launch set must hold at least the root fragment".to_string());
     };
 
-    // **Every fragment is read before the module's first entity is created.** A
-    // class is a property of the lowered IR rather than of anything this file
-    // emits, so the whole launch set is checked in one pass here — and a refusal
-    // costs nothing: no entity exists yet, let alone an instruction.
+    // Every fragment is read before the first entity exists: a class is a property of the
+    // IR, so a refusal costs nothing.
     for fragment in ordered {
         refuse_mixed_classes(fragment)?;
     }
@@ -86,9 +71,8 @@ pub(crate) fn assemble_module(
                 .collect(),
         });
         let body = lower_into(fragment, ordered, index, &module, signature, &imports)?;
-        // **The function index is the push order**, so a fragment is pushed in
-        // `ordered`'s order and a cross-kernel call resolves through `base` plus
-        // the callee's position — the same two numbers the linker sees.
+        // The function index is the push order: a cross-kernel call resolves through
+        // `base` plus the callee's position.
         module
             .funcs
             .push(FuncDecl::Body(signature, format!("kernel{position}"), body));
@@ -107,10 +91,10 @@ pub(crate) fn assemble_module(
 
 /// Build one fragment's waffle body, with the launch set as its context.
 ///
-/// **The signature builds the entry block's blockparams** (`FunctionBody::new`
-/// does it from the signature, and nothing may add to them), so the body's own
-/// parameter values *are* those blockparams — which is what makes a function's
-/// argument and a loop's carried value one read rather than two.
+/// # Invariant
+/// The signature builds the entry block's blockparams and nothing may add to them, so the
+/// body's parameter values *are* those blockparams — one read for a function argument and a
+/// loop's carried value.
 fn lower_into<'a>(
     fragment: &'a KernelFragment,
     ordered: &'a [KernelFragment],
@@ -121,10 +105,8 @@ fn lower_into<'a>(
 ) -> Result<FunctionBody, String> {
     let leaves = param_classes(fragment);
     let mut builder = FunctionBody::new(module, signature);
-    // **The entry block's parameters are its blockparams**, built from the
-    // signature by `FunctionBody::new`, and nothing may add to them
-    // (`docs/notes/wasm-backend-handoff.md` §3.2).  They are the first
-    // `n_params` values.
+    // The entry block's parameters are its blockparams, built from the signature and
+    // not addable to.
     let params: Vec<Value> = (0..builder.n_params as u32).map(Value::from).collect();
     let context = ModuleCtx {
         callees: ordered,
@@ -139,10 +121,9 @@ fn lower_into<'a>(
 
 /// Declare one `read`/`write` import pair per class, the reads first.
 ///
-/// **The order is the ABI's**, because it decides the import function indices:
-/// the reads come first and the writes after them, one entry per class.
-/// `run_parallel_range` resolves its closures against the same list, so the two
-/// cannot disagree about which index a class took.
+/// # Invariant
+/// The order is the ABI's, because it decides the import indices, and
+/// `run_parallel_range` resolves its closures against the same list.
 fn declare_buffer_imports(module: &mut Module, classes: &[ScalarClass]) -> BufferImports {
     let mut imports = BufferImports {
         base: 0,
@@ -150,11 +131,8 @@ fn declare_buffer_imports(module: &mut Module, classes: &[ScalarClass]) -> Buffe
         write: HashMap::new(),
     };
     for class in classes {
-        // **The position and the index are `i64` in every class**, and only the
-        // element's own type follows the class: a position is a compile-time
-        // ordinal in the buffer space and an index is a lane number, so neither
-        // is ever the data (`docs/notes/floating-point.md` §4.4). The host's
-        // closures in `run_parallel_range` declare the same signatures.
+        // The position and the index are `i64` in every class; only the element's own
+        // type follows the class.
         let value = value_type(*class);
         let signature = module.signatures.push(SignatureData {
             params: vec![Type::I64, Type::I64],
@@ -192,18 +170,13 @@ fn declare_import(module: &mut Module, signature: Signature, name: String) -> Fu
     function
 }
 
-/// The classes a launch set's buffer `read`/`write` calls name, in a fixed order
-/// — `Int` before `Float` — and empty for a set that calls neither.
+/// The classes a launch set's buffer calls name, `Int` before `Float`, empty for a set
+/// that calls neither.
 ///
-/// **One `read`/`write` pair per class the set uses**, which is what lets one
-/// module hold fragments of different classes at all: a class nobody reads or
-/// writes costs no import.
-///
-/// **Every instruction in the body, transfers included** — the question is "which
-/// classes does this fragment call a buffer import in", and a read or write inside
-/// a branch still needs its import declared. A walk over `straight_line_instrs`
-/// would miss a branch and leave the module calling an import it never declared
-/// ([`KernelBody::instrs`](lichen_kernel_ir::KernelBody::instrs)).
+/// # Invariant
+/// One pair per class the set uses, so a class nobody reads or writes costs no import — which
+/// is what lets one module hold fragments of different classes. Every instruction is walked,
+/// transfers included: a read or write inside a branch still needs its import declared.
 fn buffered_classes(ordered: &[KernelFragment]) -> Vec<ScalarClass> {
     let mut classes: Vec<ScalarClass> = Vec::new();
     for fragment in ordered {
@@ -218,8 +191,7 @@ fn buffered_classes(ordered: &[KernelFragment]) -> Vec<ScalarClass> {
             }
         }
     }
-    // A fixed order, so the indices are a function of the *set* rather than of
-    // the order the walk happened to meet the classes in.
+    // A fixed order, so the indices follow the set rather than the walk.
     classes.sort_by_key(|class| match class {
         ScalarClass::Int => 0,
         ScalarClass::Float => 1,
