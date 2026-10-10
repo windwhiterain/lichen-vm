@@ -1,13 +1,9 @@
-//! Running a source program to its output value.
+//! Running a source program to its rendered output value.
 //!
-//! [`evaluate`] compiles and checks a program, runs it (the deep evaluation
-//! of its root value), and renders the result as text — the program's
-//! output, with its type: `5: Int`, `[1, 2, 3]: array<Int, 3>`.  The value renders
-//! *against its type chain* (a struct type value prints `struct<.f Int, .g Type>`,
-//! a tuple `(1, Int)`) — see [`crate::render`].  Diagnostics are returned
-//! unrendered so the caller (the CLI, the example tests) can render them
-//! with carets.  The output rendering itself lives in [`crate::render`] —
-//! the same pretty printer also drives the checker diagnostics' messages.
+//! # Invariant
+//!
+//! The output line is formed in one place, so [`evaluate`] and [`evaluate_raw`]
+//! cannot drift; diagnostics are returned unrendered.
 
 use std::path::Path;
 
@@ -26,23 +22,13 @@ use lichen_highlevel::checker::Build;
 use lichen_highlevel::program::ValueType;
 use lichen_utils::extend::AsEnum;
 
-/// Run a checked build to its output text: deep-evaluate the root value and
-/// type, then render `value<attributes>: type`.  The one place the output line
-/// is formed, so [`evaluate`] and [`evaluate_raw`] — which differ only in how
-/// they obtain the build — cannot drift.
+/// Run a checked build to its output text: `value<attributes>: type`.
 ///
-/// **A refusal is an explanation, so it is reported only when there is
-/// something to explain.**  The deep evaluation is where an operator actually
-/// executes, so it is where a plugin's *runtime* refusal lands (a `plrun` whose
-/// element count is past the limit, say — see `P1-30`), and the value that comes
-/// back is the lazy marker: returning that as the output would print
-/// `parameterized: Int` and say nothing about why.  But the same channel also
-/// carries a **provisional** refusal — the checker evaluates speculatively, so a
-/// `$jit` whose parameter domain is not decided *yet* records one, and a later
-/// attempt with the domain known compiles the very same kernel.  That program
-/// works and has a value.  The line between them is the outcome, not the
-/// channel: a refusal explains a value that never arrived, and a program that
-/// produced one has nothing to explain.
+/// # Invariant
+///
+/// A runtime refusal explains a value that never arrived, so it is reported
+/// only when evaluation produced nothing; a provisional refusal on a program
+/// that produced a value is not reported. See docs/notes/language-toolchain.md.
 fn render_build<P>(build: Build<P>) -> Result<String, Vec<Diag<P>>>
 where
     P: LangProgramShape,
@@ -68,9 +54,7 @@ where
         ),
     };
     if produced_nothing && !module.extension_diagnostics.is_empty() {
-        // The refusing layer's own text, rendered by the host that owns the
-        // message channel — see `docs/notes/compiler-plugin.md`.  No span: the
-        // entry names a lowlevel node, not an IR expression.
+        // The refusing layer's own text; no span. See docs/notes/compiler-plugin.md.
         return Err(module
             .extension_diagnostics
             .iter()
@@ -85,20 +69,15 @@ where
     // Render only the attributes the root expression actually carries.
     let attr_ext = lang_attr_ext::<P>();
     let tail = &build.root_schema_tail;
-    // A value one of whose attributes **names** it reads as that name: the
-    // override is the general one (`docs/notes/operator-polymorphism.md` §8.1),
-    // not a rule about a particular attribute, and it is what lets a value with
-    // no spelling of its own — a refinement's predicate, a function — be shown
-    // at all.
+    // A value one of whose attributes names it reads as that name.
+    // See docs/notes/operator-polymorphism.md §8.1.
     if let Some(label) = value_label::<P>(&module, build.root_term, tail, &*attr_ext) {
         return Ok(format!(
             "{label}: {}",
             print_type_lang::<P>(&module, build.root_ty)
         ));
     }
-    // An **undecided** root — an empty slot — has no value of its own, so it
-    // renders as the printer's no-value reading, exactly as a value-less
-    // element already does.
+    // An undecided root renders as the printer's no-value reading.
     let value = value.unwrap_or_else(|| P::Value::from(lichen_lowlevel::LowValue::None));
     Ok(format!(
         "{}{}: {}",
@@ -117,12 +96,11 @@ where
 
 /// Compile, check, and run `source`; the rendered output value and its type.
 ///
-/// On failure the diagnostics (frontend and checker) are returned.  A
-/// terminating program evaluates to its value.  A non-terminating one (a
-/// recursive function whose recursion never reaches a base case) exhausts a
-/// VM budget, which is a recorded failure rather than an abort: the guard
-/// latches [`BudgetExhausted`] instead of unwinding, and the checker turns it
-/// into a `NonTerminating` diagnostic naming the budget and its limit.
+/// # Invariant
+///
+/// A non-terminating program exhausts a VM budget, which is recorded as a
+/// [`BudgetExhausted`] failure and turned into a `NonTerminating` diagnostic
+/// rather than an abort.
 pub fn evaluate(source: &str) -> Result<String, Vec<Diag<LangProgram>>> {
     let report = compile(source);
     if !report.ok() {
@@ -131,10 +109,7 @@ pub fn evaluate(source: &str) -> Result<String, Vec<Diag<LangProgram>>> {
     render_build(report.build.unwrap())
 }
 
-/// Compile, check, and run a raw source file after preprocessing imports.
-/// The package store is caller-owned so multiple files can share a registry.
-/// Generic over a single program type `P` (the associated-type collector),
-/// so a plugin-built compiler runs through the same path.
+/// Compile, check, and run a preprocessed source file; the store is the caller's.
 pub fn evaluate_raw<P>(
     source: &str,
     base: Option<&Path>,

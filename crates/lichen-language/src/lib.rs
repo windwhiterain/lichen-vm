@@ -1,26 +1,12 @@
 //! The minimal source language: text → highlevel IR → checked program.
 //!
-//! The pipeline is [`frontend`] (lex → parse → resolve → an
-//! [`lichen_highlevel::ir::IR`], the highlevel IR, with names pre-resolved to binder ids and
-//! every expression carrying a source span) followed by
-//! [`lichen_highlevel::checker::Checker::build`], which runs unchanged.
-//! [`compile`] runs the whole pipeline and merges the frontend and checker
-//! diagnostics; [`render`] prints them with source carets.
+//! # Invariant
 //!
-//! The frontend does not stop at the first error: lex errors accumulate, the
-//! parser *recovers* (a broken statement is skipped and reported, and the
-//! partial program still compiles), and the checker runs on the partial
-//! program — so one pass reports every problem it can find, and a bad input
-//! never panics.  Even an *unresolved name* is absorbed at the resolve layer
-//! (it lowers to the same inert [`ExprKind::ErrorBlock`] a parse error uses and
-//! its diagnostic is reported), so the lowering is total and the checker runs
-//! on the effective content.
-//!
-//! See `docs/language-spec.md` for the language spec.
+//! The frontend is total and never panics: lex errors accumulate, parse errors
+//! recover, and an unresolved name lowers to an inert error block, so one pass
+//! reports every problem it can find. See docs/language-spec.md.
 
-// The lexer and parser live in their own crates; re-export them here so
-// existing module paths (`lichen_language::lex::Token`, `lichen_language::ast::Expr`,
-// `lichen_language::parse::parse`) resolve unchanged.
+// The lexer and parser live in their own crates; re-export them for old paths.
 pub use lichen_language_lex as lex;
 pub use lichen_language_lex::{LexDiag, Span};
 pub use lichen_language_parser as parse;
@@ -60,16 +46,7 @@ pub use diag::{Diag, Stage};
 use preprocess::ResolvedImport;
 use program::{GcdOp, LangProgram, lang_attr_ext};
 
-/// A program the language tooling drives: a [`ProgramCodecOf`] program that
-/// additionally carries the language's own `LangAttr` attribute set, the
-/// highlevel literal vocabulary, and the highlevel package-meta type — the
-/// shape every [`lang_compose_vocabulary!`](crate::lang_compose_vocabulary)
-/// program has.  The frontend/checker/build the store all speak in those
-/// concrete types, so a single-`P` function needs these associated-type
-/// equalities (plus `'static`, which `NativeOps`/`lang_attr_ext` demand) in
-/// one bound.  A program implements this automatically when it satisfies the
-/// equalities; only the composition site (the language's own program, a
-/// plugin-built one) ever names it.
+/// A program the tooling drives: `ProgramCodecOf` plus the language's shapes.
 pub trait LangProgramShape:
     ProgramCodecOf
     + ::lichen_highlevel::program::HighProgram<
@@ -92,13 +69,7 @@ where
 {
 }
 
-/// The inner program shape a composed program wraps: the value and operator
-/// vocabularies vary (`V`, `O`), while the compile-time attribute set is fixed
-/// to the language's [`program::LangAttr`] and the literal / global-ext
-/// defaults are the highlevel's own.  This is the `ProgramImpl` that the
-/// [`lang_compose_vocabulary!`](crate::lang_compose_vocabulary) newtype
-/// `LangProgram` wraps; downstream tooling is generic over `LangProgram`
-/// (the single associated-type collector), not over this alias.
+/// The inner program shape `LangProgram` wraps: `LangAttr` fixed, `V`/`O` varying.
 pub type CompiledProgram<V, O> = lichen_highlevel::program::ProgramImpl<
     V,
     O,
@@ -107,28 +78,22 @@ pub type CompiledProgram<V, O> = lichen_highlevel::program::ProgramImpl<
     HighGlobalExt,
 >;
 
-/// The version of the lichen library (`lichen-language`).  The package manager
-/// keys its compiler cache by this — a change to the library means any
-/// previously built compiler binary is stale and must be rebuilt.
+/// The version of `lichen-language`, which the package manager keys its compiler cache by.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The result of compiling and checking a source program.
 ///
-/// `build` is `Some` on every path this crate produces: the frontend's
-/// lowering is total, so even an unresolved name yields an IR and its error
-/// rides in `diagnostics`.  `None` is reserved for a caller of [`build_report`]
-/// that has no IR to check.  `diagnostics` holds the frontend's
-/// errors (which may be many — lex errors accumulate and parse errors are
-/// recovered) and the checker's rendered failures.
+/// # Invariant
+///
+/// `build` is `Some` on every path this crate produces; `None` is reserved for
+/// a caller of [`build_report`] that has no IR to check.
 pub struct Report<P: HighProgram>
 where
     P::Value: ValueType,
 {
     pub build: Option<Build<P>>,
     pub diagnostics: Vec<Diag<P>>,
-    /// The source span of each IR node, keyed by [ExprId] — the frontend's own
-    /// position index (highlevel is span-free).  Present whenever `build` is
-    /// `Some`; the caller maps a checker `Loc` back to a source caret through it.
+    /// The source span of each IR node, keyed by [ExprId]; present with `build`.
     pub span_index: Option<compile::SpanIndex>,
 }
 
@@ -143,16 +108,14 @@ where
     }
 }
 
-/// Compile and check a source program with a **cell store** (shipping
-/// vocabulary): a `cache`d binding whose cell is clean is lowered to a read of its
-/// frozen artifact — its body is not lowered, checked or evaluated — and a marked
-/// binding that *is* compiled is frozen into `registry` and recorded under its
-/// occurrence path.
+/// Compile and check a source program with a **cell store**.
 ///
-/// `source_id` names the file the cells belong to; it is what
-/// [`CellStore::invalidate`] drops, so the caller names the edit.  The registry is
-/// the caller's because a cell's artifact must outlive the build that made it,
-/// exactly as a package's artifact does for an import.
+/// # Invariant
+///
+/// A clean cell's body is not lowered, checked or evaluated; a marked binding
+/// that is compiled is frozen into `registry` and recorded under its path.
+/// `source_id` names the file, and [`CellStore::invalidate_source`] drops it.
+/// See docs/notes/incremental-update.md §6.1.
 pub fn compile_with_cells(
     source_id: &str,
     source: &str,
@@ -173,19 +136,13 @@ pub fn compile_with_cells(
     )
 }
 
-/// Freeze the marked bindings a build compiled, and record each under its
-/// occurrence path.
+/// Freeze the marked bindings a build compiled, and record each under its path.
 ///
-/// Only a **solved** pair is retained: an undecided one has no answer to
-/// keep, so filing it would record an artifact that says nothing — the cell is
-/// left out and the next build compiles the binding again, which is the honest
-/// answer rather than a silent freeze of nothing.
+/// # Invariant
 ///
-/// And only from a **clean** build.  A cell is read back by skipping its body —
-/// its lowering, its check and its evaluation — so a cell frozen from a build
-/// that failed would carry that failure's silence: the error would be reported
-/// once, and then disappear the moment the cell is read.  A failed build has no
-/// answer to keep, so nothing is filed and every binding is compiled again.
+/// Only a solved pair of a clean build is retained: an undecided one has no
+/// answer to keep, and a cell frozen from a failed build would carry that
+/// failure's silence once its body is skipped on the read back.
 fn freeze_cells<P>(
     build: &Build<P>,
     cells: &mut CellStore,
@@ -209,8 +166,7 @@ fn freeze_cells<P>(
             continue;
         }
         let key = registry.allocate_cell_key();
-        // The hash is a placeholder on this path: a cell's reuse is decided by its
-        // **path**, never by content (`docs/notes/incremental-update.md` §4.3).
+        // The hash is a placeholder: reuse is decided by path, never content.
         let freeze = registry.freeze_closure_mapped(&build.module, key, &[pair], [0; 32]);
         let index = freeze.node_map[&pair];
         cells.record(path, source_id, StaticNodeId { module: key, index });
@@ -228,10 +184,7 @@ pub fn compile_with_imports(source: &str, imports: &[ResolvedImport]) -> Report<
     compile_with_imports_in(source, imports, None)
 }
 
-/// [`compile_with_imports`] with an optional shared registry (shipping
-/// vocabulary).  `None` uses a fresh private registry; `Some` binds the
-/// importer module to the package store's registry so `ExprKind::Static` refs
-/// resolve in place.
+/// [`compile_with_imports`] with an optional shared registry.
 pub fn compile_with_imports_in(
     source: &str,
     imports: &[ResolvedImport],
@@ -248,12 +201,12 @@ pub fn compile_with_imports_in(
     )
 }
 
-/// Compile and check a program over any program `P` (the associated-type
-/// collector; the language's attribute set is fixed to [`program::LangAttr`]).
-/// The program is a slice of a larger source starting at byte `base`, whose line
-/// starts are `line_starts`.  Token spans are absolute positions in that
-/// larger source, so diagnostics point at the real file even when `code` is
-/// only a suffix of it (the code after a stripped `---...---` block).
+/// Compile and check a program over any `P`, as a slice of a larger source.
+///
+/// # Invariant
+///
+/// Token spans are absolute positions in the larger source, so diagnostics
+/// point at the real file even when `code` is only a suffix.
 pub fn compile_with_imports_at<P>(
     code: &str,
     imports: &[ResolvedImport],
@@ -280,10 +233,12 @@ where
     )
 }
 
-/// [`compile_with_imports_at`] with a **cell store**: `cache`d bindings whose cell
-/// is clean are lowered to a read of their frozen artifact instead of being
-/// compiled, and the marked bindings that *were* compiled are frozen into
-/// `registry` and recorded under their occurrence paths, owned by `source_id`.
+/// [`compile_with_imports_at`] with a **cell store**.
+///
+/// # Invariant
+///
+/// A clean cell is lowered to a read of its frozen artifact; compiled marked
+/// bindings are frozen into `registry` under `source_id`.
 pub fn compile_with_imports_at_with_cells<P>(
     code: &str,
     imports: &[ResolvedImport],
@@ -313,8 +268,7 @@ where
         span_index,
         diagnostics,
     } = frontend;
-    // The frontend diagnostics carry no checker build (they are program-blind),
-    // so re-type them onto the caller's program marker before the report.
+    // The frontend diagnostics are program-blind, so re-type them onto `P`.
     let diagnostics: Vec<Diag<P>> = diagnostics.into_iter().map(|d| d.retype()).collect();
     build_report(
         ir,
@@ -328,11 +282,12 @@ where
     )
 }
 
-/// The shared tail of the pipeline: run the checker on an [`IR`] (if the
-/// frontend resolved one) and render the checker's diagnostics (only when the
-/// build fails).  [`compile_with_imports_at`] and the incremental
-/// [`BufferSession`] both end here — the session reuses this for its cached
-/// rebuild path, so the rendering is centralized.
+/// The shared tail of the pipeline: check an [`IR`] and render its diagnostics.
+///
+/// # Invariant
+///
+/// The checker only runs when the frontend resolved an IR, and diagnostics are
+/// rendered only when the build fails.
 pub fn build_report<P>(
     ir: Option<IR<program::LangAttr>>,
     span_index: Option<compile::SpanIndex>,
@@ -358,34 +313,27 @@ where
     let registry = registry.unwrap_or_else(|| Arc::new(RwLock::new(Registry::new())));
     let build =
         Checker::<P>::build_in_attr_native(ir, registry.clone(), lang_attr_ext::<P>(), native_ops);
-    // The cells this build compiled: frozen now, because the build is solved (the
-    // definition pass ran) and a frozen artifact must be complete.
+    // Freeze now: the build is solved, so a frozen artifact is complete.
     if let Some(cells) = cells {
         freeze_cells(&build, cells, &registry, compiled_cells, source_id);
     }
-    // The pretty rendering is shared across the whole report: one type
-    // printer, so a class keeps one `?a` name across diagnostics.  The
-    // message carries no `?a` journey — the user inspects an expression's
-    // type directly rather than reading a source trace.
-    // Only render diagnostics when the build actually failed.  For a clean
-    // build this is empty; skipping it also avoids descending into static
-    // refs that a successful import may contain.
+    // One type printer for the whole report, so a class keeps one `?a` name
+    // across diagnostics.
+
+    // Rendering is skipped for a clean build: a successful import may hold
+    // static refs that must not be descended.
     if !build.ok {
         let mut printer =
             crate::render::TypePrinter::new_with_arrows(&build.module, Some(&build.arrows));
-        // The diagnostic printer shows a struct's nominal id (`struct<…>#n`) so
-        // two structs with the same field shape stay distinguishable in a
-        // conflict; the value/type output printer leaves it off.
+        // The diagnostic printer shows a struct's nominal id so two structs with
+        // the same field shape stay distinguishable.
         printer.show_struct_ids();
         diagnostics.extend(
             build
                 .diagnostics()
                 .into_iter()
                 .filter_map(|d| {
-                    // PROBE (LICHEN_DIAG_TRACE=1): the diagnostic's origin, so a
-                    // message with no span can still be located — which unify
-                    // error it is, whether a diary entry owns it, and the two
-                    // node ids it names.
+                    // PROBE (LICHEN_DIAG_TRACE=1): the diagnostic's origin.
                     if std::env::var_os("LICHEN_DIAG_TRACE").is_some() {
                         eprintln!(
                             "PROBE diag: kind={:?} error_index={:?} loc={:?} a={:?} b={:?} field={:?} msg={}",
@@ -404,10 +352,8 @@ where
                             ),
                         );
                     }
-                    // The highlevel is source-blind: a diagnostic carries a
-                    // structured `Loc` (an IR expression + position), and the
-                    // frontend maps that back to a source span through its own
-                    // `span_index` (highlevel nodes carry none).
+                    // The highlevel is source-blind: a structured `Loc` maps back
+                    // to a source span through the frontend's `span_index`.
                     let loc = d.loc().cloned();
                     let span = loc
                         .as_ref()
@@ -416,21 +362,11 @@ where
                                 .as_ref()
                                 .and_then(|s| s.get(loc.expr.0 as usize).copied().flatten())
                         })
-                        // A unify error recorded **outside** the checker's own
-                        // checks carries no `Loc` — the lowlevel records it, and
-                        // the node it names may be a per-apply clone the checker
-                        // never saw.  The tables that do hold such a node are the
-                        // build's own: `node_edges` (the runtime-attribution
-                        // edges) and, more completely, `state`, which maps every
-                        // IR expression to the nodes it compiled to.  Resolve a
-                        // clone through the node it was instantiated from
-                        // (`Module::node_origin`), then take the position of the
-                        // expression that owns either side.
+                        // A unify error recorded outside the checker's checks
+                        // carries no `Loc`: resolve it through `node_edges`/`state`.
                         .or_else(|| {
-                            // A node the GC released is absent from the module's
-                            // table; `node_origin`'s contract is that the caller
-                            // checks liveness first (the origin is not a
-                            // keep-alive edge).
+                            // A node the GC released is absent; `node_origin`'s
+                            // contract is that the caller checks liveness first.
                             let origin = |node: lichen_lowlevel::NodeId| {
                                 build
                                     .module
@@ -482,14 +418,8 @@ where
                             }
                             span
                         });
-                    // A failure whose condition was cloned out of a **static**
-                    // module — a built-in package's contract, which every program
-                    // now carries — is a property of *that* module's source, not
-                    // of this one.  Its kept source record is what turns the static
-                    // ref into a position in the file the user can open; a module
-                    // with no kept source (an ordinary imported package, whose own
-                    // build reported the failure when it compiled) has none, and
-                    // the diagnostic drops here.
+                    // A failure cloned out of a **static** module belongs to that
+                    // module's source; no kept source, no diagnostic.
                     let (span, file) = match d.static_template {
                         Some(sref) => {
                             let source = registry
@@ -512,27 +442,16 @@ where
                 })
                 .collect::<Vec<_>>(),
         );
-        // Refusals a layer above the lowlevel recorded on its general channel
-        // while the check ran — a `$jit` whose body is outside the kernel-safe
-        // subset, say.  The channel carries the layer's **own rendered text**,
-        // because the lowlevel has no vocabulary for it, so this is the host
-        // doing the rendering the channel's contract leaves to it
-        // (`docs/notes/compiler-plugin.md`).  No span: the entry names a
-        // lowlevel node, not an IR expression, so there is nothing to point at.
+        // A layer above the lowlevel renders its own refusals here; no span.
+        // See docs/notes/compiler-plugin.md.
         diagnostics.extend(build.module.extension_diagnostics.iter().map(|entry| {
             Diag::unattributed(
                 Stage::Check,
                 format!("{}: {}", entry.category, entry.message),
             )
         }));
-        // The invariant every consumer of a `Report` relies on: a failed build
-        // carries at least one diagnostic.  `Build::diagnostics` skips a
-        // recorded failure it cannot attribute to an expression — an assert
-        // cloned out of an imported module has no entry in this build's node
-        // tables — so without this the state `!ok && diagnostics.is_empty()`
-        // reaches `Err(report.diagnostics)` as an error rendering *nothing at
-        // all*.  Synthesise exactly one, here, so `run`, the package store and
-        // the editor all inherit it instead of each inventing their own.
+        // A failed build carries at least one diagnostic: synthesise one here so
+        // `Err` never renders nothing.
         if diagnostics.is_empty() {
             let unattributed = lichen_highlevel::diagnostic::Diag::unattributed_failure();
             diagnostics.push(Diag {
@@ -552,15 +471,13 @@ where
     }
 }
 
-/// The frontend only: text → IR (lex, parse, resolve).  The checker does not
-/// run.  The frontend recovers from every frontend error — lex, parse, *and*
-/// resolve: an unresolved name lowers to the same inert `ErrorBlock` the parse
-/// layer uses, so `ir` is always `Some` and `diagnostics` carries every lex,
-/// parse, and resolve error encountered.
+/// The frontend only: text → IR. The checker does not run.
 ///
-/// The frontend is concrete over [`LangProgram`]: its diagnostics carry no
-/// checker build (so they are program-blind) and it feeds the shipping
-/// compiler unchanged.
+/// # Invariant
+///
+/// `ir` is always `Some`: an unresolved name lowers to the same inert
+/// `ErrorBlock` a parse error uses, and every lex, parse and resolve error
+/// rides in `diagnostics`.
 pub struct Frontend {
     pub ir: Option<IR<program::LangAttr>>,
     /// The `ExprId → span` index built during lowering (highlevel is span-free).
@@ -580,9 +497,7 @@ pub fn frontend_with_imports(source: &str, imports: &[ResolvedImport]) -> Fronte
     frontend_at(source, 0, &line_starts, imports)
 }
 
-/// The frontend over a slice of a larger source: `code` starts at byte `base`
-/// in the source whose line starts are `line_starts`.  Token spans are
-/// absolute positions in the larger source.
+/// The frontend over a slice of a larger source: `code` starts at byte `base`.
 pub fn frontend_at(
     code: &str,
     base: u32,
@@ -592,10 +507,12 @@ pub fn frontend_at(
     frontend_at_with_cells(code, base, line_starts, imports, None, Vec::new()).0
 }
 
-/// [`frontend_at`] with a cell store: a marked binding whose cell is clean lowers
-/// to a static read of its frozen pair, and the marked bindings that *were*
-/// compiled come back with their paths — together with whatever the caller had
-/// already collected, so a pipeline can thread one list through several stages.
+/// [`frontend_at`] with a cell store: clean cells lower to a static read.
+///
+/// # Invariant
+///
+/// The returned list carries the caller's already-collected paths too, so a
+/// pipeline threads one list through several stages.
 pub fn frontend_at_with_cells(
     code: &str,
     base: u32,
@@ -615,9 +532,7 @@ pub fn frontend_at_with_cells(
         errors: parse_errors,
     } = parse::parse(&tokens);
     diagnostics.extend(parse_errors.into_iter().map(Diag::from_parse));
-    // The lowering is total: an unresolved name lowers to the same inert
-    // `ErrorBlock` the parse layer uses, so the frontend always produces an IR
-    // and the resolve errors ride in `diagnostics`.
+    // The lowering is total, so the frontend always produces an IR.
     let (ir, span_index, resolve_errors, compiled) =
         compile::compile_with_imports_with_cells(&mut program, imports, cells);
     compiled_cells.extend(compiled);

@@ -1,5 +1,5 @@
-//! The artifact container: the writer, the reader, and the shape encoders they
-//! share.  The byte format itself is documented on the parent module.
+//! The artifact container: the writer, the reader, and the shape encoders.
+//! See docs/notes/artifact-cache.md.
 
 use super::*;
 
@@ -13,13 +13,12 @@ use lichen_lowlevel::{
 
 use crate::program::{LangProgram, ProgramCodec};
 
-/// Serialize `module` (and the arenas its refs point into, via `modules`)
-/// into the portable artifact format.  `hash` and `export` are the package
-/// metadata the store records alongside the module data.
+/// Serialize `module`, and the arenas its refs point into, into the artifact.
 ///
-/// Fallible only for the vocabulary's own encodability: a leaf name the
-/// one-byte discriminator cannot hold is refused (`Writer::leaf`) rather than
-/// truncated.
+/// # Invariant
+///
+/// Fallible only for the vocabulary's encodability: a leaf name the one-byte
+/// discriminator cannot hold is refused, not truncated.
 pub fn serialize_artifact(
     module: &StaticModule<LangProgram>,
     modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
@@ -29,8 +28,7 @@ pub fn serialize_artifact(
     serialize_artifact_with(module, modules, hash, export, ProgramCodec)
 }
 
-/// [`Self::serialize_artifact`] with an explicit [`ArtifactCodec`], for
-/// downstream vocabularies that need custom value/operator tags.
+/// [`serialize_artifact`] with an explicit [`ArtifactCodec`].
 pub fn serialize_artifact_with<P, C>(
     module: &StaticModule<P>,
     modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
@@ -42,8 +40,7 @@ where
     P: Program,
     C: ArtifactCodec<P>,
 {
-    // The body is assembled first, because its digest goes in the header
-    // ahead of it — there is no seeking backwards in a `Writer`.
+    // The body first: its digest goes in the header ahead of it.
     let mut w = Writer::new();
     w.u64(export.index as u64);
     w.u64(module.arena.len() as u64);
@@ -93,11 +90,8 @@ where
             }
         }
         w.u32(node.equality.size());
-        // The two axes of a frozen node's slot, stored as themselves rather
-        // than as the collapsed [`StaticNode::undecided`] read of them: the
-        // materialize pass's carry rule needs `runned` and the deep verdict
-        // apart.  `undecided` is a pure function of the latter, so storing it
-        // beside them would be a second representation of one fact.
+        // Store the two axes rather than the collapsed `undecided` read: the
+        // materialize pass's carry rule needs them apart.
         w.u8(node.runned as u8);
         match node.evaluated_deep {
             None => w.u8(0),
@@ -113,9 +107,7 @@ where
         w.u64(function.parameter.index as u64);
         w.u64(function.r#return.index as u64);
         w.u64(function.return_type.index as u64);
-        // The re-export origin — the real original this function is a copy of,
-        // when it is one.  A raw module key + function index, absolute like the
-        // static refs the values carry.
+        // The re-export origin: a raw module key + function index.
         match function.origin {
             None => w.u8(0),
             Some(origin) => {
@@ -157,10 +149,8 @@ fn write_low_shape_opt(w: &mut Writer, shape: &Option<LowShape>) {
     }
 }
 
-/// The tags are the compatibility contract with already-persisted artifacts:
-/// `0`–`4` are the decided shapes and never change, and a new shape takes the
-/// next unused tag (`5` is `Unknown`, the lattice's bottom; `6` is `Float`, a
-/// decided shape added after the tag space was fixed).
+/// The compatibility contract: a shape's tag never changes, and a new shape
+/// takes the next unused one.
 fn write_low_shape(w: &mut Writer, shape: &LowShape) {
     match shape {
         LowShape::USize => w.u8(0),
@@ -201,17 +191,18 @@ fn read_low_shape_opt(r: &mut Reader<'_>) -> Result<Option<LowShape>, String> {
 
 /// The deepest [`LowShape`] nesting a node's shape marker may declare.
 ///
-/// The wire form spends one byte per level, so without a cap a megabyte of
-/// crafted bytes is a million frames of native stack.  A real shape's depth is
-/// bounded by the nesting of the program's own types — the compute layer builds
-/// one from a kernel's domain shape, and a tuple shape is its element types
-/// recursed — so this cap exists to bound hostile input, not to limit programs.
+/// # Invariant
+///
+/// The wire form spends one byte per level, so the cap bounds hostile input;
+/// a real shape's depth is bounded by the program's own type nesting.
 const MAX_LOW_SHAPE_DEPTH: usize = 256;
 
 /// Read one shape marker, `depth` levels below the node that carries it.
 ///
-/// Every nesting variant passes `depth + 1`, and the cap is checked before the
-/// match, so the recursion cannot outgrow the native stack.
+/// # Invariant
+///
+/// The cap is checked before the match, so the recursion cannot outgrow the
+/// native stack.
 fn read_low_shape(r: &mut Reader<'_>, depth: usize) -> Result<LowShape, String> {
     if depth > MAX_LOW_SHAPE_DEPTH {
         return Err(format!(
@@ -249,12 +240,11 @@ fn read_low_shape(r: &mut Reader<'_>, depth: usize) -> Result<LowShape, String> 
 
 /// Reserve a vector for a list whose `count` was read out of the stream.
 ///
-/// **Contract:** every element of a length-prefixed list costs at least one
-/// byte on the wire, so a `count` past the reader's remaining byte count is
-/// impossible for any artifact a writer produced.  Preallocating from `count`
-/// on faith is what lets a 64-byte file request a 2^60-element allocation and
-/// abort the process; the preallocation itself is still wanted, because for a
-/// real artifact `count` is the list's exact size.
+/// # Invariant
+///
+/// Every element of a length-prefixed list costs at least one byte, so a
+/// `count` past the reader's remaining bytes is refused rather than trusted —
+/// a 64-byte file must not request a 2^60-element allocation.
 fn reserve<T>(r: &Reader<'_>, count: usize, what: &str) -> Result<Vec<T>, String> {
     let remaining = r.remaining();
     if count > remaining {
@@ -267,10 +257,10 @@ fn reserve<T>(r: &Reader<'_>, count: usize, what: &str) -> Result<Vec<T>, String
 
 /// Reject a node index the module being loaded does not have.
 ///
-/// Every node id in the body is an index into that module's node list, so an
-/// index at or past the declared count names a node that does not exist:
-/// accepted on faith it loads "successfully" and panics much later, far from
-/// the artifact that caused it.
+/// # Invariant
+///
+/// Every node id is an index into the module's node list; accepted on faith, an
+/// out-of-range one panics much later, far from the artifact that caused it.
 fn check_node_index(index: usize, node_count: usize, what: &str) -> Result<(), String> {
     if index >= node_count {
         return Err(format!(
@@ -287,12 +277,12 @@ fn read_node_id(r: &mut Reader<'_>, node_count: usize, what: &str) -> Result<Loc
     Ok(LocalNodeId { index })
 }
 
-/// Deserialize an artifact.  `key` and `hash` are the expected identity of
-/// the file (verified against the header); `modules` supplies the arenas of
-/// the artifact's dependencies, which must already be registered — foreign
-/// refs resolve through their keys, absolute from birth.  The header's body
-/// digest is verified before any body field is read.  Returns the module and
-/// the exported root's local index.
+/// Deserialize an artifact, verifying `key` and `hash` against the header.
+///
+/// # Invariant
+///
+/// `modules` supplies the already-registered dependency arenas, and the header's
+/// body digest is verified before any body field is read.
 pub fn deserialize_artifact(
     bytes: &[u8],
     key: ModuleKey,
@@ -302,8 +292,7 @@ pub fn deserialize_artifact(
     deserialize_artifact_with(bytes, key, hash, modules, ProgramCodec)
 }
 
-/// [`Self::deserialize_artifact`] with an explicit [`ArtifactCodec`], for
-/// downstream vocabularies that need custom value/operator tags.
+/// [`deserialize_artifact`] with an explicit [`ArtifactCodec`].
 pub fn deserialize_artifact_with<P, C>(
     bytes: &[u8],
     key: ModuleKey,
@@ -333,9 +322,8 @@ where
         return Err("artifact payload alignment mismatch".into());
     }
     let expected_digest: Hash = r.take(32)?.try_into().expect("32 bytes");
-    // The header ends here; the digest covers exactly the bytes after it.  It
-    // is checked before the first body field is read, so a corrupted body is
-    // rejected here rather than loaded and misinterpreted field by field.
+    // The digest covers exactly the bytes after the header and is checked
+    // before the first body field is read.
     let body_start = r.position();
     if sha256(&bytes[body_start..]) != expected_digest {
         return Err("artifact body digest does not match the file".into());
@@ -438,10 +426,8 @@ where
             origin,
             asserts,
             nodes: scope,
-            // Filled below, from the loaded tables: the open-capture verdict is
-            // not serialized — it is a function of the graph, recomputed from
-            // the same walk the freeze runs, so an artifact cannot carry a
-            // verdict that disagrees with the graph it ships.
+            // Not serialized: recomputed from the loaded tables, so an artifact
+            // cannot disagree with its graph.
             open_captures: false,
         });
     }
@@ -457,8 +443,7 @@ where
         // is process-local and cannot be in the bytes.
         releases: Vec::new(),
     };
-    // The open-capture verdict, recomputed from the loaded tables — the
-    // freeze's walk over the same two tables (see `StaticFunction::open_captures`).
+    // Recompute the verdict from the loaded tables, as the freeze's walk does.
     module.fill_open_captures();
     Ok((module, export))
 }

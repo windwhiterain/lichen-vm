@@ -13,8 +13,7 @@ fn compile_ok(source: &str) -> IR<LangAttr> {
 fn compile_err(source: &str) -> crate::diag::Diag<crate::program::LangProgram> {
     let tokens = lex(source).tokens;
     let mut ast = parse(&tokens).program;
-    // The lowering is total but collects its resolve errors; the tests check
-    // the first one (an unresolved-name program yields exactly one).
+    // The lowering is total but collects resolve errors; the tests take the first.
     compile(&mut ast)
         .2
         .into_iter()
@@ -26,9 +25,7 @@ fn kind(ir: &IR<LangAttr>, id: ExprId) -> ExprKind<HighProgramLiteral> {
     ir[id].kind
 }
 
-/// The node the statement wrapper selects: the root is either the final
-/// expression's own node (no wrap) or `Field(Tuple([…, final]), n)`,
-/// which unwraps to the final expression.
+/// The node the statement wrapper selects: the final expression's own node.
 fn wrapped(ir: &IR<LangAttr>) -> ExprId {
     match ir[ir.root].kind {
         ExprKind::Field {
@@ -121,8 +118,7 @@ fn an_unresolved_name_is_a_resolve_diagnostic() {
 
 #[test]
 fn an_unresolved_name_near_an_in_scope_name_suggests_it() {
-    // `unknown` is a block-wide binding, so it is in scope when the typo `unkown`
-    // is compiled — the resolve diagnostic names it via a did-you-mean clause.
+    // `unknown` is a block-wide binding, so it is in scope for the typo `unkown`.
     let err = compile_err("unknown = 1\nunkown");
     assert_eq!(err.stage, Stage::Resolve);
     assert_eq!(
@@ -192,17 +188,15 @@ fn a_block_compiles_to_its_final_expression() {
 
 #[test]
 fn a_block_scopes_its_bindings() {
-    // a = 2; {a = 1; a} — inside the block the name is the inner
-    // binding.  The program's own binding (the `2`) is wrapped into the
-    // root; the block unwraps to the `1` node.
+    // Inside the block the name is the inner binding; the program's own `2` is
+    // wrapped into the root.
     let ir = compile_ok("a = 2; {a = 1; a}");
     assert!(matches!(
         kind(&ir, wrapped(&ir)),
         ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
     ));
-    // After the `}`, the block's bindings are gone and the outer name
-    // resolves again: `{a = 1; a} a` applies the block (the `1` node) to
-    // the outer `a` (the `2` node).
+    // After the `}`, the block's bindings are gone: `{a = 1; a} a` applies the
+    // block to the outer `a`.
     let ir = compile_ok("a = 2; {a = 1; a} a");
     let ExprKind::Apply { function, argument } = kind(&ir, wrapped(&ir)) else {
         panic!("expected an apply")
@@ -219,9 +213,7 @@ fn a_block_scopes_its_bindings() {
 
 #[test]
 fn a_statement_expression_is_a_statement_root() {
-    // Option B: the top-level program has no tuple cascade.  The bare
-    // statement is recorded as a *statement root* (so the checker evaluates
-    // it) and the final expression is the program root directly.
+    // The top level has no tuple cascade: a bare statement is a statement root.
     let ir = compile_ok("5; 7");
     assert!(matches!(
         kind(&ir, ir.root),
@@ -232,8 +224,7 @@ fn a_statement_expression_is_a_statement_root() {
         kind(&ir, ir.stmt_roots[0]),
         ExprKind::Literal(HighProgramLiteral::Int(IntLit(5)))
     ));
-    // A trailing statement identical to the final expression is not wrapped:
-    // `a = 1; a` stays the `1` node, with the binding as a statement root.
+    // A trailing statement identical to the final expression is not wrapped.
     let ir = compile_ok("a = 1; a");
     assert!(matches!(
         kind(&ir, ir.root),
@@ -251,8 +242,7 @@ fn a_statement_expression_is_a_statement_root() {
 
 #[test]
 fn an_annotated_parameter_rides_the_function() {
-    // x : Int => x — the annotation is the parameter's in-scope type on
-    // the `Function` itself, not an outer annotation of the lambda.
+    // x : Int => x — the annotation is the parameter's in-scope type.
     let ir = compile_ok("x : Int => x");
     let ExprKind::Function {
         parameter,
@@ -289,9 +279,7 @@ fn an_unresolved_name_inside_a_block_is_a_resolve_diagnostic() {
 
 #[test]
 fn type_of_is_an_ordinary_binding() {
-    // There is no `type_of` form: the standard library defines it as a plain
-    // lambda (`x => {t = _; x: t; t}`), so a use of the name is the binder's
-    // own node and nothing about it is special.
+    // No `type_of` form: the standard library defines it as a plain lambda.
     let ir = compile_ok("type_of = x => {t = _; x: t; t}\ntype_of");
     let ExprKind::Function { parameter_type, .. } = kind(&ir, ir.root) else {
         panic!("the standard library's type_of is an ordinary lambda")
@@ -301,9 +289,7 @@ fn type_of_is_an_ordinary_binding() {
 
 #[test]
 fn a_type_of_use_is_an_ordinary_application() {
-    // `type_of (1)` — parsed by the plain juxtaposition rule (a spaced paren
-    // is an argument); the callee is the bound lambda.  The adjacent spelling
-    // `type_of(1)` is a positional slot read, exactly as after any name.
+    // A spaced paren is an argument; the adjacent `type_of(1)` is a slot read.
     let source = "type_of = x => {t = _; x: t; t}\n";
     let ir = compile_ok(&format!("{source}type_of (1)"));
     let ExprKind::Apply { function, argument } = kind(&ir, ir.root) else {

@@ -1,5 +1,4 @@
-//! The artifact codec: the vocabulary-specific half of value and operator
-//! encoding, and the marker for a program that is compiled in memory only.
+//! The artifact codec: value/operator encoding, and the in-memory-only marker.
 
 use super::*;
 
@@ -11,32 +10,26 @@ use lichen_lowlevel::{Program, StaticModule};
 
 /// The vocabulary-specific half of the artifact format.
 ///
-/// The artifact header, node/function frames, arena layout and equality data
-/// are generic.  The only vocabulary-dependent parts are the value encoding
-/// and the operator encoding; this trait isolates them so a downstream
-/// program with extra value/operator variants can reuse the same artifact
-/// container by implementing a codec.
+/// # Invariant
 ///
-/// **Codec contract:** `write_value`/`read_value` (and `write_operator`/
-/// `read_operator`) must be exact inverses — every tag the writer emits, the
-/// reader must decode to the equal value, and nothing else.  Adding a variant
-/// to one side and not the other compiles but silently breaks every cache
-/// load (a stored artifact fails to deserialize and is recompiled).  This is
-/// enforced by the `codec_roundtrip` test below, which round-trips every
-/// value and operator variant; keep the two sides in sync with it.
+/// `write_value`/`read_value` (and `write_operator`/`read_operator`) must be
+/// exact inverses; an asymmetry loads nothing and makes every stored artifact
+/// underivable. See docs/notes/artifact-cache.md.
 pub trait ArtifactCodec<P: Program> {
-    /// Whether this codec actually persists to a device cache directory.  A
-    /// codec that is in-memory only (`NoPersist`) sets this to `false` so the
-    /// CLI drives the package store without a cache directory (and so never
-    /// reaches a serialize/deserialize path that would panic).
+    /// Whether this codec persists to a device cache directory.
+    ///
+    /// # Invariant
+    ///
+    /// `false` (`NoPersist`) means the store has no cache directory and never
+    /// reaches the serialize/deserialize paths, which would panic.
     const PERSISTENT: bool = true;
 
     /// Write one node value.
     ///
-    /// Fallible for the same reason [`ArtifactCodec::read_value`] is: the
-    /// leaf-name discriminator has a fixed-width length field, and a
-    /// vocabulary leaf whose name does not fit it is refused rather than
-    /// truncated (`Writer::leaf`).
+    /// # Invariant
+    ///
+    /// Fallible: a leaf name that does not fit the fixed-width discriminator is
+    /// refused rather than truncated.
     fn write_value(
         w: &mut Writer,
         value: P::Value,
@@ -60,30 +53,23 @@ pub trait ArtifactCodec<P: Program> {
     fn read_operator(r: &mut Reader<'_>) -> Result<P::Operator, String>;
 }
 
-/// A compiled program that carries its own artifact codec, so the language
-/// tooling is generic over a single program type `P` (the associated-type
-/// collector) rather than the value/operator leaves plus a separate `C` codec.
+/// A compiled program that carries its own artifact codec.
 ///
-/// A codec is not an associated type of the lowlevel [`Program`] trait — it is a
-/// serialization concern layered on top by `lichen-language` — so this trait is
-/// the seam that folds the codec into the collector.  The
-/// [`lang_compose_vocabulary!`](crate::lang_compose_vocabulary) macro implements
-/// it for every composed program, binding `Codec` to the
-/// [`crate::program::ProgramCodec`] that vocabulary emits; a program that never
-/// persists uses [`NoPersist`].
+/// # Invariant
+///
+/// The codec seam folds the codec into the single `P` associated-type
+/// collector, which the lowlevel [`Program`] trait does not name.
 pub trait ProgramCodecOf: HighProgram {
-    /// The artifact codec for this program (a composed program's
-    /// [`crate::program::ProgramCodec`], or [`NoPersist`] for one that never
-    /// serializes).
+    /// The artifact codec for this program.
     type Codec: ArtifactCodec<Self> + Default;
 }
 
-/// A marker codec for a program that is compiled in memory only and never
-/// serialized to the device cache (the package store's in-memory path, and a
-/// plugin program whose artifact codec has not been generated yet).  Every
-/// method is unreachable — the codec is only ever selected when the store has
-/// no cache directory, so `try_reuse`/`build_package` never reach the
-/// serialize/deserialize path.
+/// A marker codec for a program that is never serialized to the device cache.
+///
+/// # Invariant
+///
+/// Every method is `unreachable!`: the codec is selected only when the store
+/// has no cache directory.
 pub struct NoPersist;
 
 impl<P: Program> ArtifactCodec<P> for NoPersist {
@@ -122,18 +108,10 @@ impl Default for NoPersist {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Codec-round-trip tests: enforce the write/read bijection contract.
-//
-// `write_value`/`read_value` and `write_operator`/`read_operator` are two
-// independent exhaustive `match`es — one over the value/operator *type*, one
-// over the *tag byte*.  The compiler can check each side is total, but it
-// cannot check that they name the same tag.  A variant added to the write
-// side but not the read side (exactly the `TypeString` asymmetry) compiles
-// and silently makes every stored artifact underivable.  These tests drive
-// every (arena-free) value and every operator through the codec and assert
-// the round trip is the identity, so an asymmetry fails the build.
-// ---------------------------------------------------------------------------
+// --- Codec-round-trip tests: enforce the write/read bijection contract -------
+
+// The compiler checks each side is total, not that they name the same tag, so
+// every value and operator round-trips here.
 #[cfg(test)]
 mod codec_roundtrip {
     use super::*;
@@ -141,9 +119,7 @@ mod codec_roundtrip {
     use lichen_highlevel::program::{TypeOperator, TypeValue};
     use lichen_lowlevel::{LowOperator, LowValue};
 
-    /// Encode `v`, then decode it back and return the deserialized value.
-    /// Arena-free variants never touch the module map or the (dummy) self
-    /// arena/base, so the map is empty and the base is null.
+    /// Encode `v`, decode it back, and return the deserialized value.
     fn roundtrip_value(v: LangValue) -> LangValue {
         let modules: HashMap<ModuleKey, Arc<StaticModule<LangProgram>>> = HashMap::new();
         let mut w = Writer::new();
@@ -162,15 +138,14 @@ mod codec_roundtrip {
         out
     }
 
-    /// Every `LangValue` variant that round-trips without a module arena.  The
-    /// handle/function-ref variants (array/table/function tags) need a real
-    /// frozen module and are exercised at the artifact level by the `persist`
-    /// integration tests; this covers every scalar/type/string variant.  The
-    /// `TypeValue`/`TypeOperator` coverage iterates the leaf enums' own
-    /// registry-derived variant lists ([`TypeValue::KIND_MARKERS`],
-    /// [`TypeOperator::ALL`]), so a variant added to the single-source list
-    /// is covered here automatically — the hand-written part of this list
-    /// only spells the leaves that have no such registry.
+    /// Every arena-free `LangValue` variant round-trips.
+    ///
+    /// # Invariant
+    ///
+    /// The `TypeValue`/`TypeOperator` coverage iterates the leaves' own
+    /// registry-derived variant lists, so a variant added there is covered here
+    /// automatically; the handle/function-ref variants need a real frozen module
+    /// and are exercised by the persist integration tests.
     #[test]
     fn every_arena_free_value_round_trips() {
         let values: &[LangValue] = &[

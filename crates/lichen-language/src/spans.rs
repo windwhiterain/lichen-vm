@@ -1,21 +1,10 @@
 //! Shifting the spans of a statement the splice cloned instead of re-parsing.
 //!
-//! The session's window splice re-parses only the statements an edit touched and
-//! **clones** the untouched ones around it (see `session::splice_program`).  A
-//! clone's bytes are unchanged, but its *position* is not: an edit that adds or
-//! removes a line moves every statement after it, and a `Span` is a `(line, col)`
-//! pair, not a byte offset.  So a cloned statement after the edit carries a stale
-//! span — a diagnostic in it renders on the wrong line — and this is where the
-//! shift is applied.
+//! # Invariant
 //!
-//! The shift is exact rather than approximate: `offset_of_span` locates the span's
-//! byte in the **old** source, the edit's byte delta moves it, and `line_col`
-//! renders it back into the **new** one.  A `\r\n` file needs no special case —
-//! both conversions use the same line model.
-//!
-//! Only a cloned statement needs this.  A *prefix* statement sits before the edit,
-//! so its bytes and its position are both unchanged; a *window* statement was
-//! re-parsed from the new token stream, so its spans are already the new ones.
+//! A clone's bytes are unchanged but its `(line, col)` position may not be, so
+//! a cloned statement after the edit has its spans shifted. Only a clone needs
+//! it: a prefix is before the edit, a window statement was re-parsed.
 
 use lichen_language_lex::{Span, line_col, offset_of_span};
 use stacksafe::stacksafe;
@@ -23,9 +12,6 @@ use stacksafe::stacksafe;
 use crate::ast::{Expr, RecordField, Stmt};
 
 /// Shift every span in `expr` by the edit's byte `delta`.
-///
-/// `old_starts`/`new_starts` are the line starts of the source the statement was
-/// parsed from and of the source it now sits in.
 pub(crate) fn shift_expr(
     expr: &mut Expr,
     old_starts: &[usize],
@@ -261,15 +247,12 @@ fn moved(byte: u32, delta: isize) -> u32 {
     moved_from(byte as isize + delta)
 }
 
-/// Move a byte offset through an edit that replaced `[a, b_old)` of the old
-/// source with new text, shifting by `delta = new.len() - old.len()`.
+/// Move a byte offset through an edit that replaced `[a, b_old)` by `delta`.
 ///
-/// `None` when the offset is **inside** the replaced region: those bytes are
-/// gone, so no position in the new source is the one it named, and a caller that
-/// needs a position there (a rendered diagnostic pointing into the text an edit
-/// rewrote) must re-derive it rather than be handed a plausible-looking one.
-/// This is what makes a *reuse* of a retained build safe when an edit moved text
-/// without changing the resolved structure (`session::Cache`).
+/// # Invariant
+///
+/// `None` when the offset is inside the replaced region: no position in the new
+/// source names it, so a caller that needs one must re-derive it.
 pub(crate) fn moved_offset(byte: u32, a: u32, b_old: u32, delta: isize) -> Option<u32> {
     if byte < a {
         Some(byte)
@@ -280,9 +263,7 @@ pub(crate) fn moved_offset(byte: u32, a: u32, b_old: u32, delta: isize) -> Optio
     }
 }
 
-/// A byte offset clamped to a position the source has (an edit never moves a
-/// cloned statement before the start of the file, so the clamp is a floor for a
-/// degenerate `delta`, not a policy).
+/// A byte offset clamped to a floor of zero for a degenerate `delta`.
 fn moved_from(byte: isize) -> u32 {
     byte.max(0) as u32
 }

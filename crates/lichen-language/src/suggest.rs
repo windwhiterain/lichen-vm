@@ -1,19 +1,12 @@
-//! Did-you-mean suggestions for an unresolved name, shared by the lowering
-//! compiler ([`crate::compile`]) and the incremental session ([`crate::session`]).
+//! Did-you-mean suggestions for an unresolved name, shared by both resolvers.
 //!
-//! Both resolver paths report an *unresolved name* as a `Resolve` diagnostic.
-//! When the typo is close to a name that is actually in scope, the diagnostic
-//! names the candidate(s) so the editor can suggest a fix and power completion.
-//! The heuristic is deliberately conservative: it only suggests a name that is
-//! close by edit distance, and it refuses to suggest for a one-character typo
-//! (where any one-character name would be "a match") unless the two share a
-//! first character.
+//! # Invariant
+//!
+//! Conservative on purpose: only a close edit distance suggests, and a
+//! one-character typo also needs a shared first character.
 
-/// Damerau–Levenshtein (optimal-string-alignment) edit distance between `a` and
-/// `b`: the minimum number of insertions, deletions, substitutions, and
-/// *adjacent transpositions* to turn `a` into `b`.  The transposition rule is
-/// what makes a common typo like `unkown` → `unknown` distance 1, which plain
-/// Levenshtein would report as 2.
+/// Damerau–Levenshtein edit distance: insertions, deletions, substitutions and
+/// adjacent transpositions.
 pub fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
@@ -49,10 +42,10 @@ pub fn edit_distance(a: &str, b: &str) -> usize {
 
 /// Whether `cand` is close enough to the typo `name` to be worth suggesting.
 ///
-/// The distance threshold scales with the typo's length (so a long name allows
-/// a couple of edits), and a very short typo must share its first character
-/// with the candidate — otherwise every one-character name would match an
-/// arbitrary one-character typo and the suggestions would be noise.
+/// # Invariant
+///
+/// The threshold scales with `name`'s length, and a name shorter than three
+/// characters must share its first character with the candidate.
 fn close(name: &str, cand: &str) -> bool {
     let dist = edit_distance(name, cand);
     if dist == 0 {
@@ -69,11 +62,12 @@ fn close(name: &str, cand: &str) -> bool {
     true
 }
 
-/// The in-scope names closest to the unresolved `name`, best-first and capped
-/// at 3.  `in_scope` may contain duplicates (a name visible in several frames);
-/// the result is deduplicated and ordered deterministically (by edit distance,
-/// then by name) so a test and the message are stable.  Returns `None` when no
-/// name is close enough.
+/// The in-scope names closest to the unresolved `name`, best-first, capped at 3.
+///
+/// # Invariant
+///
+/// Deduplicated and ordered by (distance, name), so a test and the message are
+/// stable.
 pub fn suggest_names<'a>(
     name: &str,
     in_scope: impl IntoIterator<Item = &'a str>,
@@ -93,10 +87,12 @@ pub fn suggest_names<'a>(
     Some(hits.into_iter().map(|(_, cand)| cand).collect())
 }
 
-/// The did-you-mean clause for a name typed against a set of valid names, or
-/// `None` when nothing is close.  The clause is `, did you mean 'y'?` (one
-/// candidate) or `, did you mean one of 'a', 'b'?` (several).  Shared by the
-/// unresolved-name and the field-access messages so both read identically.
+/// The did-you-mean clause for `name`, or `None` when nothing is close.
+///
+/// # Invariant
+///
+/// Shared by the unresolved-name and field-access messages, so both read
+/// identically.
 pub fn did_you_mean<'a>(name: &str, in_scope: impl IntoIterator<Item = &'a str>) -> Option<String> {
     let cands = suggest_names(name, in_scope)?;
     Some(if cands.len() == 1 {
@@ -111,11 +107,12 @@ pub fn did_you_mean<'a>(name: &str, in_scope: impl IntoIterator<Item = &'a str>)
     })
 }
 
-/// Render the full `unresolved name` diagnostic message for `name`, appending a
-/// did-you-mean clause when a close in-scope name exists.  `in_scope` yields the
-/// names visible at the use site (duplicates are fine).  No candidate → the
-/// plain `unresolved name 'x'` message (so an error with nothing to suggest is
-/// unchanged).
+/// The full `unresolved name` message, with a did-you-mean clause when close.
+///
+/// # Invariant
+///
+/// No candidate leaves the plain message, so an error with nothing to suggest
+/// is unchanged.
 pub fn unresolved_message<'a>(name: &str, in_scope: impl IntoIterator<Item = &'a str>) -> String {
     let base = format!("unresolved name '{name}'");
     match did_you_mean(name, in_scope) {

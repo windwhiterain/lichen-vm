@@ -1,40 +1,27 @@
-//! The resolved content key: an exact, digest-free serialization of the
-//! name-resolved program — see [`content_key`].  It lives apart from the scope
-//! machine it reads the annotations of.
+//! The resolved content key of the resolved program.
+//! See docs/notes/incremental-update.md §6.1.
 
 use super::*;
 /// The content-key format version — written as the key's **first** element.
 ///
-/// Adding an [`Expr`] variant, or changing any tag or field encoding in
-/// [`KeyWriter`], **bumps** this constant.  There is no compatibility path: the
-/// bump invalidates every cached key, so every [`crate::session::BufferSession`]
-/// rebuilds on its next compile.  That is the intended answer — a stale key
-/// must never be silently reusable.
+/// # Invariant
 ///
-/// `5` → `6`: the built-in **prelude** is seeded into every source
-/// (`docs/notes/core-prelude.md`), so a program's resolved *binders* — which the
-/// key encodes by [`BinderId`] — are numbered after the prelude's.  The key stays
-/// injective; the bump is the honest signal that the same source no longer
-/// resolves to the same ids.
+/// Adding an [`Expr`] variant or changing any tag bumps this constant; there is
+/// no compatibility path, so the bump invalidates every cached key. `6` seeded
+/// the prelude, which renumbers every program's binders.
+/// See docs/notes/incremental-update.md §6.1.
 const KEY_FORMAT_VERSION: u64 = 6;
 
-/// The **resolved content key** of a resolved program: an exact, digest-free
-/// serialization of the name-resolved, beyond-error structure that the lowering
-/// consumes — names encoded by their [`BinderId`] (never their spelling), error
-/// blocks opaque, spans dropped, literals and field/operator names kept (they
-/// become IR nodes), `pub`/field identity kept for record programs, and the
-/// `cache` mark kept (the lowering consumes it too: a marked binding is the one
-/// the cell store may lower to a static read instead of its body).  Two
-/// programs with equal keys have literally identical lowering-visible content:
-/// every [`Expr`] variant writes its own tag and every list writes its length,
-/// so the serialization is injective, not merely self-delimiting.  The
-/// incremental session therefore reuses the established IR+Build exactly when
-/// the key is unchanged (a rename, an error-block growth, an unresolved-name
-/// extension all leave it unchanged).  Built purely from the resolver's
-/// annotations, so it needs no scope walk of its own.
+/// The **resolved content key** of a resolved program.
 ///
-/// The key begins with [`KEY_FORMAT_VERSION`]; see that constant for the bump
-/// rule that keeps a changed encoding from reusing a stale build.
+/// # Invariant
+///
+/// An exact, injective serialization of what the lowering consumes:
+/// names by [`BinderId`], error blocks opaque, spans dropped, literals and
+/// field/operator names kept, `pub`/field identity kept for record programs,
+/// and the `cache` mark kept. Equal keys mean identical lowering-visible
+/// content, which is when the session reuses the build.
+/// See docs/notes/incremental-update.md §6.1.
 pub fn content_key(program: &Program) -> Vec<u64> {
     let mut k = KeyWriter { key: Vec::new() };
     k.u(KEY_FORMAT_VERSION);
@@ -61,10 +48,8 @@ impl KeyWriter {
         self.u(binder.map(|b| b as u64).unwrap_or(UNRESOLVED));
     }
 
-    /// The program shape and its top level.  A record program (a module) is
-    /// signed as fields (`pub`/field-identity significant), a tail program as
-    /// plain statements (the compiler folds `pub` away).  The statement count
-    /// makes the top-level list self-delimiting.
+    /// The program shape and its top level: fields for a record program, plain
+    /// statements for a tail program.
     fn program(&mut self, program: &Program) {
         let module = program.expr.is_none();
         self.b(module);
@@ -82,7 +67,7 @@ impl KeyWriter {
         }
     }
 
-    /// A statement (a tail program's — `pub` dropped).
+    /// A statement of a tail program — `pub` dropped.
     fn stmt(&mut self, stmt: &Stmt) {
         match stmt {
             Stmt::Binding(b) => {
@@ -99,8 +84,7 @@ impl KeyWriter {
         }
     }
 
-    /// A record program's statement — a field (named or positional, `pub`
-    /// significant), exactly how `compile_record_fields` lowers it.
+    /// A record program's statement — a field, as `compile_record_fields` lowers it.
     fn record_field(&mut self, bs: &crate::ast::BlockStmt) {
         let (name, field) = match &bs.stmt {
             Stmt::Binding(b) => (Some(b.name.as_str()), !b.restrictive),
@@ -123,14 +107,14 @@ impl KeyWriter {
         }
     }
 
-    /// One expression: its own tag, then its fields.  Tags are unique across
-    /// [`Expr`] variants and every list writes its length, so the encoding is
-    /// injective; adding a variant or changing a tag bumps
-    /// [`KEY_FORMAT_VERSION`].
+    /// One expression: its own unique tag, then its fields.
     ///
-    /// `#[stacksafe]`: this walk recurses one frame per nested expression
-    /// (through [`Self::opt_expr`] and [`Self::stmt`] and back here) on the
-    /// caller's thread, so it grows the stack instead of overflowing it.
+    /// # Invariant
+    ///
+    /// Tags are unique across [`Expr`] variants and every list writes its
+    /// length, so the encoding is injective; adding a variant or changing a tag
+    /// bumps [`KEY_FORMAT_VERSION`]. `#[stacksafe]`: one stack frame per nested
+    /// expression.
     #[stacksafe]
     fn expr(&mut self, e: &Expr) {
         match e {
@@ -138,11 +122,8 @@ impl KeyWriter {
                 self.u(0);
                 self.u(*n as u64);
             }
-            // A float enters the key as its 32 bits, never as the number: the
-            // value identity `LowValue`'s hand-written `PartialEq` fixes
-            // (`f32::to_bits`, `lichen-lowlevel`) is the one this key must
-            // agree with, so `0.0` and `-0.0` are distinct keys and two equal
-            // `NaN` bit patterns are one.
+            // A float enters as its bits, per `LowValue`'s equality: `0.0` and
+            // `-0.0` differ, two equal `NaN` patterns do not.
             Expr::Float(n, _) => {
                 self.u(33);
                 self.u(n.to_bits() as u64);
@@ -232,10 +213,8 @@ impl KeyWriter {
                 self.u(11);
                 self.expr(value);
             }
-            // The direction is content, not decoration: `int2float x` and
-            // `float2int x` are different computations of the same operand, so
-            // a key that hashed only the operand would reuse one build for the
-            // other.
+            // The direction is content: `int2float x` and `float2int x` are
+            // different computations of the same operand.
             Expr::Convert {
                 operator, value, ..
             } => {

@@ -1,24 +1,4 @@
-//! The language's concrete program: the highlevel's value vocabulary and
-//! attribute/operator extension, composed into one [`LangProgram`].
-//!
-//! The highlevel is attribute-agnostic — it names only the *shape* of "an
-//! attribute combines over children" — so the concrete pieces are composed
-//! here from the plugin set.  The **perspective compiler plugin**
-//! (`lichen-perspective`) supplies the [`Perspective`] attribute (a
-//! divisibility lattice) and its combine operator [`GcdOp::Gcd`] (an n-ary gcd
-//! meet); the **doc compiler plugin** (`lichen-doc`) supplies the [`Doc`]
-//! attribute (a label that attaches struct metadata); the **`lichen-compute`
-//! native plugin** supplies the `ComputeValue`/`ComputeOperator` leaves.  This
-//! module re-exports those leaves and composes them with the highlevel's
-//! `LowValue`/`TypeValue`/`LowOperator`/`TypeOperator` leaves into one flat
-//! vocabulary via the [`lang_compose_vocabulary!`] manifest.
-//!
-//! [`LangProgram`] is the program marker the whole frontend checks with — the
-//! `P` of `Module<P>`/`Registry<P>`/`Checker<P>`, with `Value = LangValue`,
-//! `Operator = LangOperator`, and `Attr = LangAttr` (`Perspective` + `Doc`).  It
-//! is a **local newtype** around [`ProgramImpl`], not a type alias, so the
-//! `Program`/`HighProgram`/`ProgramCodecOf` wiring attached to it stays
-//! orphan-legal from an external composition crate (a plugin-built compiler).
+//! The composed [`LangProgram`] marker. See docs/notes/plugin-taxonomy.md.
 
 use lichen_highlevel::program::{TypeOperator, TypeValue};
 use lichen_lowlevel::{LowOperator, LowValue};
@@ -30,11 +10,7 @@ pub use lichen_doc::doc_attr_ext;
 
 pub use lichen_highlevel::refinement::{Refinement, refinement_attr_ext};
 
-/// The position of the tokens counted so far, as a constant expression —
-/// `macro_rules!` cannot add a metavariable, so the index of a manifest entry
-/// is spelled as a sum of ones (the expansion is a literal expression, which
-/// the const evaluator folds).  Machinery for
-/// [`lang_compose_vocabulary!`], not a public API.
+/// The index of a manifest entry as a const expression; macro machinery.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! lang_attr_position {
@@ -42,11 +18,7 @@ macro_rules! lang_attr_position {
     ($head:tt $($rest:tt)*) => { 1usize + $crate::lang_attr_position!($($rest)*) };
 }
 
-/// The canonical-order index of `$value` over the manifest's attribute list,
-/// as one `if let` level per entry (macro expansion cannot produce match arms,
-/// so the chain is built as nested `if let`s and the innermost position — which
-/// no entry can reach — diverges).  Machinery for
-/// [`lang_compose_vocabulary!`], not a public API.
+/// The canonical-order index of `$value`, as nested `if let`s; macro machinery.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! lang_attr_order_index {
@@ -60,39 +32,17 @@ macro_rules! lang_attr_order_index {
     };
 }
 
-/// Compose the language's concrete program marker from a manifest of its
-/// vocabulary leaves and attribute set.
+/// Compose the program marker and its attribute order from one manifest.
+/// See docs/notes/plugin-taxonomy.md.
 ///
-/// This is the single place the plugin set is declared: the value and operator
-/// leaves list each plugin's contribution (a compiler plugin's attribute
-/// operator like [`GcdOp`], a native plugin's operators/values —
-/// [`lichen_compute::ComputeOperator`]/[`lichen_compute::ComputeValue`] —
-/// alongside the core lowlevel/highlevel leaves), and `attrs` names the
-/// language's attributes **in the canonical attribute order** — the one
-/// declaration that fixes the pair-slot layout (the attribute at position `i`
-/// occupies pair slot `attr_slot(i)`).  Each attribute is a compiler plugin: a
-/// marker implementing [`lichen_highlevel::attr::AttrSpec`] plus an
-/// [`lichen_highlevel::attr::AttrExt`] impl, listed here as
-/// `<Marker> as <VariantName>`.  The trailing `[ … ]` holds any extra
-/// where-clause bounds the composed [`lang_attr_ext`] registry needs to
-/// instantiate the attributes' `AttrExt`s (e.g. `P::Operator: From<GcdOp>` for
-/// a `Perspective` that emits a `Gcd` operator).  A package manager that
-/// assembles a new compiler re-invokes this macro with a different plugin set;
-/// the impls below (the checker/VM wiring) and the frontend are unchanged.
+/// # Invariant
 ///
-/// **Adding an attribute is a one-list edit**: append its marker to `attrs`.
-/// The order index, the `LANG_ATTR_ORDER` data, the build-time slot check and
-/// (through them) the frontend tail order and the checker's slot merge are all
-/// derived from that list, and the marker itself never names a slot number.
+/// The `attrs` list is the single authority for the canonical attribute order:
+/// the order index, `LANG_ATTR_ORDER` and the build-time slot check derive from
+/// it, and no marker names a slot number. See docs/notes/attributes.md.
 #[macro_export]
 macro_rules! lang_compose_vocabulary {
-    // With a plugin set (the package-manager-generated compiler): the shipping
-    // leaves are spelled inline and each plugin contributes its own leaves via a
-    // `[#macro_export] macro_rules! liche_leaves` the plugin crate exports.  The
-    // `plugins = [<crate> as <leaves>; ...]` spells each plugin's crate path AND
-    // the (uniquely-named) leaf macro it exports — a fixed name like
-    // `liche_leaves` across several plugins collides in the extern prelude, so
-    // each plugin's leaf macro has a distinct name.
+    // With a plugin set: each plugin contributes leaves via its own exported macro.
     (
         attrs = [ $( $attr:path as $attr_name:ident ; )* ] [ $( $bound:tt )* ];
         values = [ $( $value:path as $value_name:ident ; )* ];
@@ -119,15 +69,7 @@ macro_rules! lang_compose_vocabulary {
         }
     };
 
-    // Terminal: every plugin's leaves have been absorbed; emit the program.
-    //
-    // The operator and value lists are decomposed positionally: the first two
-    // operator leaves must be the structural [`lichen_lowlevel::LowOperator`]
-    // and the highlevel `TypeOperator` (named `LowOperator`/`TypeOperator`),
-    // and the first two value leaves the structural [`lichen_lowlevel::LowValue`]
-    // and the highlevel `TypeValue` (named `LowValue`/`TypeValue`).  These are
-    // the language's core leaves, present in every composition; the generated
-    // `ValueType`/`OperatorExt` impls reference them.
+    // Terminal: the first two operator and value leaves are the structural ones.
     (
         @run
         [ $lowop:path as $lowop_name:ident ; $tyop:path as $tyop_name:ident ; $( $extra_op:path as $extra_op_name:ident ; )* ]
@@ -136,10 +78,7 @@ macro_rules! lang_compose_vocabulary {
         [ ] ;
     ) => {
         ::lichen_utils::enum_ext! {
-            /// The language program's operator vocabulary: a flat union of the
-            /// structural [`lichen_lowlevel::LowOperator`], the highlevel's
-            /// `TypeOperator`, and each plugin's operators — one carry variant
-            /// per extension.
+            /// The operator vocabulary: one variant per composed leaf.
             #[derive(Debug, Clone, Copy, PartialEq)]
             pub enum LangOperator {
             }
@@ -149,9 +88,7 @@ macro_rules! lang_compose_vocabulary {
         }
 
         ::lichen_utils::enum_ext! {
-            /// The language program's value vocabulary: a flat union of the
-            /// lowlevel structural values, the highlevel type values, and each
-            /// plugin's values.
+            /// The value vocabulary: one variant per composed leaf.
             #[derive(Debug, Clone, Copy, PartialEq)]
             pub enum LangValue {
             }
@@ -160,15 +97,12 @@ macro_rules! lang_compose_vocabulary {
             $( + $extra_v as $extra_v_name ; )*
         }
 
-        /// The language's compile-time attributes, composed from the manifest:
-        /// one variant per plugin marker, so a single program can carry any of
-        /// them (an expression's schema tail holds one entry per attached
-        /// attribute).  Each marker's behaviour lives in its own
-        /// [`lichen_highlevel::attr::AttrExt`].
+        /// The language's compile-time attributes, one variant per marker.
         ///
-        /// The declaration order below **is** the canonical attribute order
-        /// (see [`LANG_ATTR_ORDER`]): it is the single authority for the
-        /// pair-slot layout, so nothing downstream keeps a second list.
+        /// # Invariant
+        ///
+        /// The declaration order is the canonical attribute order and the single
+        /// authority for the pair-slot layout. See docs/notes/attributes.md.
         #[derive(Clone, Copy, PartialEq, Eq, Debug)]
         pub enum LangAttr {
             $( $attr_name($attr) ),*
@@ -177,10 +111,7 @@ macro_rules! lang_compose_vocabulary {
         impl ::lichen_highlevel::attr::AttrSpec for LangAttr {}
 
         impl LangAttr {
-            /// This attribute's position in the canonical order, as a constant
-            /// expression (each manifest entry owns exactly the index its
-            /// position gives it, so the order is dense and collision-free by
-            /// construction).
+            /// This attribute's position in the canonical order, as a constant.
             pub const fn order_index_of(self) -> usize {
                 $crate::lang_attr_order_index!(self, LangAttr; [] $( $attr_name ; )*)
             }
@@ -190,25 +121,16 @@ macro_rules! lang_compose_vocabulary {
             /// The canonical order as data — the pair layout itself.
             const ORDER: &'static [Self] = LANG_ATTR_ORDER;
 
-            /// The attribute's index in the canonical order — the single
-            /// authority for the pair-slot layout, so the pair slot of the
-            /// `i`-th attribute is `attr_slot(i)`.
+            /// The attribute's index in the canonical order — its pair slot.
             fn order_index(&self) -> usize {
                 self.order_index_of()
             }
         }
 
-        /// The canonical attribute order: every composed attribute, in the
-        /// order its pair slot follows (the attribute at index `i` occupies
-        /// pair slot `attr_slot(i)`).  The frontend lays an annotation's
-        /// schema tail out in this order and the checker sorts a merged tail
-        /// into it, so the two can never disagree.
+        /// The canonical attribute order as data: the pair-slot layout itself.
         pub const LANG_ATTR_ORDER: &[LangAttr] = &[ $( LangAttr::$attr_name($attr) ),* ];
 
-        // The build-time slot check: every attribute's canonical index is its
-        // position in the canonical order.  The assertion is what makes that
-        // a *checked* property — a hand-edited index fails the build here
-        // instead of silently mis-pairing a pair at runtime.
+        // A hand-edited index fails the build here, not a runtime mis-pairing.
         const _: () = {
             let mut i = 0;
             while i < LANG_ATTR_ORDER.len() {
@@ -220,9 +142,7 @@ macro_rules! lang_compose_vocabulary {
             }
         };
 
-        /// The attribute-extension registry for the language's [`LangAttr`]:
-        /// maps each composed marker to its behaviour, so the checker
-        /// dispatches each attribute through its own semantics.
+        /// The attribute-extension registry: each marker to its behaviour.
         pub fn lang_attr_ext<P>() -> Box<dyn Fn(&LangAttr) -> &'static dyn ::lichen_highlevel::attr::AttrExt<P>>
         where
             P: ::lichen_highlevel::program::HighProgram,
@@ -236,33 +156,19 @@ macro_rules! lang_compose_vocabulary {
             })
         }
 
-        /// The language's concrete program marker: `Value = LangValue`,
-        /// `Operator = LangOperator`, `Attr = LangAttr`.
+        /// The concrete program marker: value, operator and attribute unions.
         ///
-        /// This is a **local newtype** around the highlevel's
-        /// [`::lichen_highlevel::program::ProgramImpl`] marker, not a type
-        /// alias.  A composition site *inside* `lichen_language` may implement
-        /// any trait for an alias of its own types, but an **external**
-        /// composition site (a plugin-built compiler crate; `std_native.rs`'s
-        /// `HostProgram`) cannot: writing `impl ProgramCodecOf for
-        /// <alias-of-ProgramImpl>` is E0117, because the alias unwraps to a
-        /// foreign `ProgramImpl` and the trait is foreign.  Making the marker
-        /// a fresh nominal type fixes that — the `Program`/`HighProgram`/
-        /// `ProgramCodecOf`/`OperatorExt` impls below are then orphan-legal
-        /// from any crate that composes this vocabulary.
+        /// # Invariant
+        ///
+        /// A fresh nominal type, not an alias of `ProgramImpl`, so the wiring
+        /// impls stay orphan-legal from an external composition crate.
         #[repr(transparent)]
         #[derive(Clone, Copy, Debug, PartialEq)]
         pub struct LangProgram(
             ::lichen_highlevel::program::ProgramImpl<LangValue, LangOperator, $crate::program::LangAttr>,
         );
 
-        // The marker's `Program`/`HighProgram` wiring, delegating the
-        // associated types to the inner [`::lichen_highlevel::program::ProgramImpl`]
-        // it wraps.  They are spelled out rather than read through
-        // `<Inner as Program>::…`, so this marker never requires the inner
-        // `ProgramImpl` to itself be a `Program` (which would need a
-        // `LangOperator: OperatorExt<Inner>` impl the composed vocabulary no
-        // longer carries).
+        // Spelled out so the inner `ProgramImpl` need not itself be a `Program`.
         impl ::lichen_lowlevel::Program for LangProgram {
             type Value = LangValue;
             type Operator = LangOperator;
@@ -271,32 +177,14 @@ macro_rules! lang_compose_vocabulary {
         }
 
         impl ::lichen_highlevel::program::HighProgram for LangProgram {
-            // The attribute set is fixed by the language design (Perspective +
-            // Doc), not by the composition — so every composed program reuses
-            // the language crate's own `LangAttr`.  That is what lets a
-            // plugin-built program satisfy `LangProgramShape`/the frontend's
-            // `IR<program::LangAttr>` and drive the shared `cli`/`server`.
+            // Every composed program reuses the language crate's own `LangAttr`.
             type Attr = $crate::program::LangAttr;
             type Literal = ::lichen_highlevel::program::HighProgramLiteral;
         }
 
-        // ── The runtime-wiring impls the composed program needs to be a
-        //    `Program`/`HighProgram`: the structural value traits on the value
-        //    union and the operator dispatch on the operator union.  These are
-        //    what make a plugin-built compiler's vocabulary executable.
+        // ── The runtime wiring: `ValueExt` on the union, `OperatorExt` on operators.
 
-        // A composed value's payload belongs to whichever leaf carries it, so
-        // the four payload methods **dispatch** to the leaves rather than
-        // declaring the union inert.  That matters because the lowlevel's copy
-        // path ([`copy_ext`](::lichen_lowlevel)) routes a program-specific value
-        // here: a leaf that owns an arena payload and is not relocated would
-        // leave a handle pointing into a block that may be released.
-        //
-        // The carries that carry nothing structural are the lowlevel's own
-        // (`LowValue`'s array/table payloads are relocated by *variant* in those
-        // copy paths, not through this trait) and the type markers, both of
-        // which answer `false`; `compute`'s `Buffer` is the live example of a
-        // leaf that answers `true`.
+        // Payload methods dispatch to the leaves, so an arena payload is relocated.
         impl ::lichen_lowlevel::ValueExt for LangValue {
             fn is_handle(&self) -> bool {
                 match self {
@@ -322,11 +210,7 @@ macro_rules! lang_compose_vocabulary {
                 }
             }
 
-            /// The composition decides whether any leaf carries a handle: with
-            /// none, the repetition below expands to nothing and the argument is
-            /// unused, and the `unreachable!` arm is the only body.  A composition
-            /// that adds one uses it, so the allowance is the honest spelling of
-            /// "the list may be empty".
+            /// The leaf list may be empty, so the payload may be unused.
             #[allow(unused_variables)]
             fn set_handle(&mut self, payload: ::lichen_lowlevel::AnyHandle<[u8]>) {
                 match self {
@@ -342,23 +226,12 @@ macro_rules! lang_compose_vocabulary {
             }
 
             fn alignment() -> usize {
-                // The strictest leaf alignment: the freeze layout and the copy
-                // path derive one alignment for the whole vocabulary
-                // (`codec::arena_align`), so a leaf needing more than another
-                // must raise it for all.
+                // One alignment serves the whole vocabulary: the strictest leaf.
                 1 $( .max(<$extra_v as ::lichen_lowlevel::ValueExt>::alignment()) )*
             }
 
-            // The two **accumulating** value methods: every leaf is asked, and
-            // each appends to the caller's buffer.  A leaf that answers nothing
-            // (the default) contributes nothing, so a composed vocabulary pays
-            // only for the leaves that have something to say.
-            //
-            // `traced` matters even though nothing in this tree overrides it yet:
-            // it is the *only* way the GC can see a node a value holds outside the
-            // operand and item edges, so a leaf that implements it while the
-            // composition does not forward it would have its report silently
-            // swallowed — sound alone, unsound together.
+            // Every leaf is asked. `traced` must be forwarded, or a leaf's
+            // report is lost.
             fn traced(
                 &self,
                 context: &dyn ::lichen_lowlevel::TraceContext,
@@ -393,16 +266,7 @@ macro_rules! lang_compose_vocabulary {
             }
         }
 
-        // The type-constant markers all live in the core `TypeValue` leaf, so
-        // the trait's registry-derived default bodies
-        // (`Self::from(TypeValue::$variant)`, over the composed `From` impl)
-        // already provide every core marker — the impl spells only the two
-        // nominal-id methods plus the **open** marker predicate: the core
-        // `TypeValue` markers (every variant but `TypeId`) and, for each
-        // extension leaf, the leaf's own `LeafKindMarkers` (a plugin's type
-        // constants, if it has any).  The
-        // `<path>::Variant` qualified path bypasses the macro_rules rule that
-        // a `$path:path` fragment cannot be followed directly by `::`.
+        // Only the nominal-id methods and the open marker predicate are spelled out.
         impl ::lichen_highlevel::program::ValueType for LangValue {
             fn type_id(&self) -> Option<usize> {
                 match self {
@@ -428,23 +292,8 @@ macro_rules! lang_compose_vocabulary {
             }
         }
 
-        // The operator union's `run` is a uniform dispatch: each leaf handles
-        // itself (the structural lowlevel operator is unreachable — the VM
-        // routes it through `AsEnum` first; the type operators run through
-        // their program-generic [`::lichen_lowlevel::OperatorExt`] impl in the
-        // highlevel; each plugin operator runs its own).  This is the arm that
-        // lets a composed program's operators actually execute.
-        //
-        // `low_type` is the same uniform dispatch for the low-type pass: each
-        // leaf states what its own computation produces, so a composed
-        // program inherits its plugin's transfer without the lowlevel knowing
-        // the vocabulary.
-        //
-        // `is_callable` is the composed applicability policy: the OR of the
-        // extension leaves' policies, so a compute kernel — which only the
-        // compute leaf can recognise inside its struct array — keeps its
-        // cross-kernel apply lazy.  The two structural leaves name no
-        // applicable value, so only the extension list is consulted.
+        // Each leaf dispatches to itself; `is_callable` is the OR of the
+        // extension leaves' policies.
         impl ::lichen_lowlevel::OperatorExt<LangProgram> for LangOperator {
             fn run(
                 &self,
@@ -462,10 +311,7 @@ macro_rules! lang_compose_vocabulary {
                 &self,
                 arguments: &[Option<::lichen_lowlevel::LowShape>],
             ) -> Option<::lichen_lowlevel::LowShape> {
-                // Every leaf's transfer is a method of the program-generic
-                // `OperatorExt` impl, and it mentions no `P`-typed argument, so
-                // an unqualified call cannot infer *which* program's impl is
-                // meant — the impl is named, once, as `LangProgram`.
+                // The impl is named: no `P`-typed argument fixes which program.
                 match self {
                     // The structural leaves' transfers are owned by the pass
                     // itself, so the hook is never consulted for them.
@@ -487,21 +333,11 @@ macro_rules! lang_compose_vocabulary {
             }
         }
 
-        // ── The per-leaf artifact codec for the composed vocabulary.
-        //
-        // `ProgramCodec` implements [`$crate::persist::ArtifactCodec`] by
-        // dispatching each carry variant to its leaf's [`ValueCodec`]/
-        // [`OperatorCodec`]: a length-prefixed leaf-name tag (the carry
-        // variant's name, written by `Writer::leaf`), then the leaf's own
-        // payload.  Self-consistent per
-        // compiler; a plugin-built compiler's `cli` uses it for a real
-        // `~/.lichen` device cache.
+        // ── The per-leaf artifact codec: a leaf-name tag, then the payload.
         #[derive(Default)]
         pub struct ProgramCodec;
 
-        // Bind the program's codec into the associated-type collector, so the
-        // tooling is generic over a single `P` and reads `P::Codec` rather than
-        // threading the codec as a separate generic.
+        // Bind the codec so tooling reads `P::Codec`, not a second generic.
         impl $crate::persist::ProgramCodecOf for LangProgram {
             type Codec = ProgramCodec;
         }
@@ -681,21 +517,14 @@ macro_rules! lang_compose_vocabulary {
 
 }
 
-// The language program's value/operator vocabulary and program marker: a flat
-// union of the structural [`LowOperator`]/[`LowValue`], the highlevel's
-// [`TypeOperator`]/[`TypeValue`], the perspective compiler plugin's [`GcdOp`],
-// and the `lichen-compute` native plugin's
-// [`ComputeOperator`]/[`ComputeValue`].  This is the one manifest that fixes
-// the compiler's plugin set.
+// The shipping compiler's plugin set: the one manifest that fixes it.
 crate::lang_compose_vocabulary! {
     attrs = [
         Perspective as Perspective;
         Doc as Doc;
         Refinement as Refinement;
     ]
-    // A `Perspective` emits a `Gcd` operator, so its `AttrExt` needs the
-    // operator bound; a `Doc` label needs none; a `Refinement` builds the
-    // `Apply` that enforces it, so it needs the core operator.
+    // Each attribute's `AttrExt` lists the operator bounds it needs.
     [ P::Operator: From<GcdOp> + From<LowOperator> ];
     values = [
         LowValue as LowValue;
@@ -714,9 +543,7 @@ crate::lang_compose_vocabulary! {
 #[path = "tests/program_tests.rs"]
 mod tests;
 
-/// A probe plugin, used to exercise the `plugins = [...]` arm: it contributes
-/// no leaves (its `liche_leaves!` hands back empty lists) but threads the
-/// composition's accumulator, proving the tt-muncher composes a plugin set.
+/// A probe plugin for the `plugins = [...]` arm: no leaves, threads the accumulator.
 #[cfg(test)]
 #[macro_export]
 macro_rules! ic_probe_leaves {
@@ -762,11 +589,7 @@ mod plugins_arm_tests {
 
     #[test]
     fn the_plugins_arm_threads_a_plugin_set() {
-        // The `plugins = [...]` arm absorbed both probe plugins (threading the
-        // tt-muncher accumulator): the composed enums exist.  The runtime
-        // `ValueType`/`OperatorExt` impls for a composed set are the follow-up
-        // tooling generalization, so this pins the composition at the type
-        // level only.
+        // Both probe plugins were absorbed: the composed enums exist.
         let _ = std::any::type_name::<LangValue>();
         let _ = std::any::type_name::<LangOperator>();
     }
@@ -774,11 +597,7 @@ mod plugins_arm_tests {
 
 #[cfg(test)]
 mod sort_op_tests {
-    //! Compose a program over the `lichen-std-native` native plugin and run its
-    //! `SortOp` leaf end-to-end: the composition macro now generates the
-    //! `ValueType`/`ValueExt`/`OperatorExt` impls, so a plugin vocabulary is a
-    //! real, executable `Program` — this pins that a plugin-built compiler can
-    //! actually *run* a plugin operator, not just type-check its composition.
+    //! A composed plugin vocabulary is executable: run `SortOp` end-to-end.
     #![allow(dead_code)]
     use lichen_lowlevel::{AnyNodeId, ArrayItem, BlockId, LowValue, Module, OperatorExt};
     use lichen_std_native::SortOp;
@@ -820,8 +639,8 @@ mod sort_op_tests {
         let Some(LowValue::Array(array)) = out.as_enum() else {
             panic!("Sort must yield a USize array");
         };
-        // SAFETY: `array` is the payload of the value the sort extension just
-        // returned, allocated in a live block of this module.
+        // SAFETY: `array` is the payload of the value the sort extension returned,
+        // allocated in a live block of this module.
         let sorted: Vec<usize> = unsafe { array.items() }
             .iter()
             .map(|item| {

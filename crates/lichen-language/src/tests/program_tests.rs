@@ -4,15 +4,12 @@ use lichen_highlevel::shape;
 use lichen_lowlevel::{AnyNodeId, ArrayItem, BlockId, LowValue, Module, OperatorExt};
 use lichen_utils::extend::AsEnum;
 
-/// The canonical attribute order is the pair layout, and the layout is what
-/// an already-compiled artifact encodes — so the order is a compatibility
-/// contract, like the codec tags: reordering the manifest silently renumbers
-/// every persisted pair.  This pins it (the composition's build-time check
-/// pins the *mechanism*: index == position).
+/// The canonical attribute order is the pair layout a compiled artifact encodes.
 ///
-/// The refinement was **appended**, which is what the contract permits: the
-/// slots below `4` keep their numbers, so no persisted pair is renumbered —
-/// a pair either predates the refinement (and has no slot `4`) or carries it.
+/// # Invariant
+///
+/// The refinement was appended, so the slots below `4` keep their numbers and
+/// no persisted pair is renumbered. See docs/notes/attributes.md.
 #[test]
 fn the_canonical_order_is_the_persisted_pair_layout() {
     assert_eq!(
@@ -78,15 +75,13 @@ fn gcd_op_folds_the_operand_array() {
 
 #[test]
 fn divides_is_the_subtype_order() {
-    // uniform-`sup` implies uniform-`sub` iff sub | sup.  `0` is the top
-    // ("uniform over all threads", the `∞` fold): only `0` satisfies a
-    // `0` requirement, but a `0` value satisfies any requirement.
-    assert!(divides(0, 0)); // uniform-over-all vs uniform-over-all
-    assert!(!divides(0, 4)); // a `# 4` value is not uniform over all threads
-    assert!(divides(4, 0)); // a uniform-over-all value is uniform over 4
-    assert!(divides(4, 4)); // equal
-    assert!(divides(2, 4)); // uniform-4 implies uniform-2
-    assert!(divides(1, 4)); // uniform-4 implies uniform-1 (trivially)
-    assert!(!divides(4, 2)); // uniform-2 does not imply uniform-4
-    assert!(!divides(5, 2)); // incomparable
+    // `0` is the top: `divides(sub, sup)` is uniform-`sup` implying uniform-`sub`.
+    assert!(divides(0, 0));
+    assert!(!divides(0, 4));
+    assert!(divides(4, 0));
+    assert!(divides(4, 4));
+    assert!(divides(2, 4));
+    assert!(divides(1, 4));
+    assert!(!divides(4, 2));
+    assert!(!divides(5, 2));
 }

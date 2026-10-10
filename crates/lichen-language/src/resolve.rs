@@ -1,23 +1,10 @@
 //! Name resolution as a single, explicit stage: `parse → AST → resolve → compile`.
 //!
-//! [`Resolver`] walks an [`ast::Program`] and assigns each binder a [`BinderId`],
-//! writing the resolved id into the AST's resolve fields (a [`Name`](ast::Expr::Name)
-//! use carries the binder it resolves to; a [`Binding`](ast::Binding), a lambda
-//! parameter, and a record field carry their own id).  It is the *only* authority
-//! for the frontend's scope rules — the same rules the compiler's IR emission
-//! previously implemented inline (block-wide bindings pre-entered before any
-//! value, restrictive `let` bindings entered after their value, a lambda's
-//! parameter in scope for its body, blocks pushing/popping a scope frame,
-//! innermost-last shadowing, and an unresolved name lowering to the same inert
-//! `ErrorBlock` as a parse error plus a `Resolve` diagnostic).
+//! # Invariant
 //!
-//! The lowering (`compile`) reads these fields instead of re-resolving: it keeps a
-//! `BinderId → ExprId` map (one IR node per binder) so the IR's graph-sharing
-//! invariant ("a use is the binder's own id") holds by construction.  The
-//! incremental session likewise compares the resolved fields for reuse rather
-//! than hashing the tree.
-//!
-//! The content key lives in the sibling module `content_key`.
+//! The resolver is the only authority for the frontend's scope rules; the
+//! lowering reads its `BinderId` fields instead of re-resolving.
+//! See docs/notes/language-toolchain.md.
 
 use std::collections::HashMap;
 
@@ -33,40 +20,31 @@ mod content_key;
 
 pub use content_key::content_key;
 
-/// One imported (or direct-export) name bound as a base-scope binder: its
-/// [`BinderId`] and the static export it lowers to.  The resolver hands these to
-/// the compiler so it can emit the corresponding [`ExprKind::Static`] node for
-/// a use that resolves to an import.
+/// One imported name bound as a base-scope binder: its id and static export.
 pub struct ImportBinder {
     pub binder: BinderId,
     pub export: lichen_lowlevel::StaticNodeId,
     pub span: (u32, u32),
 }
 
-/// The outcome of a resolution pass: the `BinderId`-annotated program (resolved
-/// in place) plus the import binders and the resolve diagnostics.
+/// The outcome of a resolution pass: import binders, prelude names and diagnostics.
 pub struct Resolved {
-    /// The import (and direct-export) binders in `BinderId` order — the compiler
-    /// emits a `Static` node for each, keyed by its id.
+    /// The import binders in `BinderId` order, for `Static` emission.
     pub import_binders: Vec<ImportBinder>,
-    /// The **prelude**'s bindings, by name: the base-scope binders the built-in
-    /// `core` module was seeded under ([core-prelude](../docs/notes/core-prelude.md)).
-    /// The compiler routes the surface operators (`+`, `-`, `*`, `/` and the four
-    /// order comparisons) onto these binders, so the contract a program meets is
-    /// the module's rather than a built-in's
-    /// ([operator-polymorphism](../docs/notes/operator-polymorphism.md) §7).
+    /// The **prelude**'s bindings, by name, seeded from the built-in `core`
+    /// module; empty when the source has no prelude.
     ///
-    /// Empty when the source has no prelude — which is exactly the built-in
-    /// module's own compilation, and what keeps the module's body on the machine
-    /// operators.
+    /// # Invariant
+    ///
+    /// The compiler routes the surface operators onto these binders, so the
+    /// contract a program meets is the module's, not a built-in's.
+    /// See docs/notes/operator-polymorphism.md §7.
     pub prelude: Vec<(String, BinderId)>,
     /// The resolve-layer diagnostics (unresolved names).
     pub diagnostics: Vec<Diag<LangProgram>>,
 }
 
-/// Resolve `program` (with `imports` seeded into the base scope), mutating its
-/// `BinderId`/resolve fields in place.  Returns the import binders and
-/// diagnostics.
+/// Resolve `program` in place, with `imports` seeded into the base scope.
 pub fn resolve(program: &mut Program, imports: &[ResolvedImport]) -> Resolved {
     let mut resolver = Resolver {
         scopes: Vec::new(),
@@ -75,10 +53,8 @@ pub fn resolve(program: &mut Program, imports: &[ResolvedImport]) -> Resolved {
         prelude: Vec::new(),
     };
     let import_binders = resolver.seed_imports(imports);
-    // The whole program is one scope: block-wide bindings are entered before any
-    // value compiles, restrictive `let` bindings are entered as they're seen; the
-    // scope is never popped, so later statements (and the tail) see every earlier
-    // binding.  A record program (a module) is the same scope with no tail.
+    // The program is one scope, never popped, so every later statement (and the
+    // tail) sees every earlier binding.
     resolver.resolve_scope(&mut stmt_refs(&mut program.statements));
     if let Some(final_expr) = program.expr.as_mut() {
         resolver.resolve_expr(final_expr);
@@ -101,8 +77,7 @@ fn stmt_list_refs(statements: &mut [Stmt]) -> Vec<&mut Stmt> {
     statements.iter_mut().collect()
 }
 
-/// The name-resolution scope machine and its single pass.  Its scope semantics
-/// mirror the (now removed) resolution the compiler used to do inline.
+/// The name-resolution scope machine and its single pass.
 struct Resolver {
     scopes: Vec<HashMap<String, BinderId>>,
     next_binder: BinderId,
@@ -120,9 +95,7 @@ impl Resolver {
             .find_map(|frame| frame.get(name).copied())
     }
 
-    /// Seed the base scope frame with the imports (and their direct exports) as
-    /// binders, returning the import binders (in `BinderId` order, so the
-    /// compiler can `Static`-emit them contiguously from id 0).
+    /// Seed the base scope with the imports and their direct exports.
     fn seed_imports(&mut self, imports: &[ResolvedImport]) -> Vec<ImportBinder> {
         let mut out = Vec::new();
         if imports.is_empty() {
@@ -140,9 +113,7 @@ impl Resolver {
                 export: import.export,
                 span: import.span,
             });
-            // The prelude's names are recorded as well as seeded: the compiler
-            // routes the surface operators onto them
-            // ([`Resolved::prelude`]).
+            // Record the prelude's names as they are seeded ([`Resolved::prelude`]).
             let prelude = crate::package::is_prelude_import(import);
             for (name, export) in &import.direct {
                 let id = self.next_binder;
@@ -162,12 +133,8 @@ impl Resolver {
         out
     }
 
-    /// A statement scope (a program's top level or a `{ … }` block): pre-enter
-    /// every block-wide binding in one frame (recording its `BinderId` on the
-    /// binding), then resolve the statements in order (a restrictive `let`
-    /// resolves its value first, then pushes a fresh frame).  The frames are
-    /// *not* popped — the caller truncates for a block; the program's top level
-    /// keeps them for its tail.
+    /// A statement scope: pre-enter the block-wide bindings in one frame, then
+    /// resolve the statements in order.
     fn resolve_scope(&mut self, refs: &mut [&mut Stmt]) {
         let mut frame = HashMap::new();
         for s in refs.iter_mut() {
@@ -205,10 +172,7 @@ impl Resolver {
         }
     }
 
-    /// Resolve a record block's fields, mirroring the compiler's
-    /// `compile_record_fields`: named, non-`let` fields are block-wide bindings
-    /// (pre-entered), `let` fields are restrictive, positional fields are bare
-    /// expressions.
+    /// Resolve a record block's fields: named non-`let` fields are block-wide.
     fn resolve_record_fields(&mut self, fields: &mut [RecordField]) {
         let mut frame = HashMap::new();
         for f in fields.iter_mut() {
@@ -240,11 +204,12 @@ impl Resolver {
         }
     }
 
-    /// The resolver's recursion: one frame per nested expression (through
-    /// [`Self::resolve_stmt`]/[`Self::resolve_scope`] and
-    /// [`Self::resolve_record_fields`] for a block, and back here), so a deep
-    /// program overflows the caller's stack.  `#[stacksafe]`: the recursion
-    /// grows the stack instead of overflowing the process.
+    /// The resolver's recursion: one frame per nested expression.
+    ///
+    /// # Invariant
+    ///
+    /// `#[stacksafe]`: the recursion grows the stack instead of overflowing the
+    /// process.
     #[stacksafe]
     fn resolve_expr(&mut self, e: &mut Expr) {
         match e {

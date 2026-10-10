@@ -1,26 +1,5 @@
-//! Rendering: the program's output and the diagnostics share one printer.
-//!
-//! The printer core — [`TypePrinter`], [`ValuePrinter`], and the free
-//! [`print_value`] / [`print_type`] / [`render_attributes`] /
-//! [`render_struct_fields_named`] — is program-generic and lives in
-//! [`lichen_render`]; this module re-exports it and layers the host-specific
-//! shells on top:
-//!
-//! - [`checker_message`] re-renders the highlevel's raw facts in the CLI's
-//!   vocabulary (the wording per [`DiagKind`]) with the shared [`TypePrinter`],
-//!   and
-//! - the caret shell [`render`]/[`render_all`] wraps either message with its
-//!   source line and a caret.
-//!
-//! ```text
-//! error: unresolved name 'y'
-//!   --> 1:6
-//!    |
-//!  1 | x => y
-//!    |      ^
-//! ```
-//!
-
+//! Rendering: the output value and the diagnostics share one pretty printer.
+//! See docs/notes/raw-rendering-mark.md.
 use lichen_highlevel::diagnostic::{AssertSpelling, Diag as CheckerDiag, DiagKind};
 use lichen_highlevel::program::{HighProgram, ValueType};
 use lichen_lowlevel::{BudgetExhausted, LowValue, Module, NodeId};
@@ -36,16 +15,11 @@ pub use lichen_render::{
 };
 
 // --- the extension-vocabulary render hooks ---------------------------------
-//
-// The shared `lichen_render` printer is generic over the value vocabulary, so
-// it cannot know the compute plugin's own value variants.  The base renderer
-// spells an unknown extension value `?`; these hooks spell the compute leaves a
-// kernel carries so the editor/CLI renders them by name.
 
-/// The compute plugin's value-variant spelling: a bare kernel artifact and a
-/// buffer both read by name (`Kernel`/`ParKernel`/`Buffer`) — a kernel value is
-/// an opaque compiled artifact (its *signature* rides in the struct's `.I`/`.O`
-/// fields, not in a marker), so one name suffices.
+// The shared printer cannot know the compute values, so these
+// hooks spell them by name instead of `?`.
+
+/// The compute plugin's value-variant spelling: `Kernel`/`ParKernel`/`Buffer`.
 fn lang_value_render<P>(value: &P::Value) -> Option<String>
 where
     P: HighProgram,
@@ -53,17 +27,14 @@ where
 {
     match value.as_enum() {
         Some(ComputeValue::Kernel(_)) => Some("Kernel".to_string()),
-        // The backend is not rendered: a value's *name* is its kind, and which
-        // backend a run is dispatched to is a property of the program rather
-        // than something a reader of one value needs.
+        // A value's name is its kind, not the backend it is dispatched to.
         Some(ComputeValue::ParKernel(..)) => Some("ParKernel".to_string()),
         Some(ComputeValue::Buffer(..)) => Some("Buffer".to_string()),
         _ => None,
     }
 }
 
-/// The `&'static` extension-vocabulary render hook, injected into the shared
-/// printers so a kernel's value/type spell correctly instead of degrading to `?`.
+/// The `&'static` hook injected into the shared printers for this vocabulary.
 pub fn lang_render_ext<P>() -> &'static dyn Fn(&P::Value) -> Option<String>
 where
     P: HighProgram + 'static,
@@ -72,10 +43,7 @@ where
     &lang_value_render::<P>
 }
 
-/// [`print_type`] with the language's extension vocabulary: a kernel value's
-/// signature rides in its struct's `.I`/`.O` fields, so its type renders as the
-/// struct `struct<.native _, .I in, .O out>` and the artifact value
-/// (`Kernel`/`ParKernel`/`Buffer`) by name.
+/// [`print_type`] with the language's extension vocabulary.
 pub fn print_type_lang<P>(module: &Module<P>, root: NodeId) -> String
 where
     P: HighProgram + 'static,
@@ -84,8 +52,7 @@ where
     TypePrinter::new_with_ext(module, Some(lang_render_ext::<P>())).node(root)
 }
 
-/// [`print_value`] with the language's extension vocabulary: a `Kernel` value
-/// renders as `Kernel` instead of the raw-layout `?`.
+/// [`print_value`] with the language's extension vocabulary.
 pub fn print_value_lang<P>(module: &Module<P>, value: P::Value, ty: NodeId) -> String
 where
     P: HighProgram + 'static,
@@ -98,16 +65,9 @@ where
 
 /// Render a diagnostic with its source line and a caret.
 ///
-/// ```text
-/// error: unresolved name 'y'
-///   --> 1:6
-///    |
-///  1 | x => y
-///    |      ^
-/// ```
+/// # Invariant
 ///
-/// A diagnostic with no span (an I/O or package-resolution failure — see
-/// [`Diag::unattributed`]) prints its message alone, with no position and no
+/// A diagnostic with no span prints its message alone, with no position and no
 /// caret.
 pub fn render<P: lichen_lowlevel::Program>(source: &str, diag: &Diag<P>) -> String {
     let starts = crate::lex::line_starts(source);
@@ -115,7 +75,7 @@ pub fn render<P: lichen_lowlevel::Program>(source: &str, diag: &Diag<P>) -> Stri
 }
 
 /// [`render`] against an already-computed line model, so a whole report costs
-/// one scan of the source instead of one per diagnostic.
+/// one scan of the source.
 fn render_with_line_starts<P: lichen_lowlevel::Program>(
     source: &str,
     starts: &[usize],
@@ -125,12 +85,8 @@ fn render_with_line_starts<P: lichen_lowlevel::Program>(
     let Some((line, col)) = diag.span else {
         return out;
     };
-    // A position in another file — a built-in package's own source, where the
-    // condition that failed was written — carries that path, and its line and
-    // caret come from *that* file's text ([core-prelude](../docs/notes/core-prelude.md)).
-    // The line the caret sits on comes from the shared line model
-    // (`line_starts`), not from a second scan of the source — so the text and the
-    // `(line, col)` name the same line.
+    // A foreign position carries that file's path and its own line model, so
+    // text and `(line, col)` agree.
     let foreign_starts = diag
         .file
         .as_ref()
@@ -153,15 +109,13 @@ fn render_with_line_starts<P: lichen_lowlevel::Program>(
     out
 }
 
-/// A **class domain** — a set's *value*, its member type values — spelled
+/// A **class domain** — a set's value, its member type values — spelled
 /// `{Int, Float}`.
 ///
-/// The domain is read as the member list it is ([`lichen_highlevel::set`]): a
-/// set's value carries no tag, and the *node* alone cannot say whether it is a
-/// domain or some array of type values, so the caller that holds it as a domain
-/// (the refinement's own registration) is the one that spells it.  A node that
-/// is not a member list falls back to the type printer, which is what the
-/// message read before the set existed.
+/// # Invariant
+///
+/// The domain is read as the member list it is; a node that is not a member
+/// list falls back to the type printer.
 fn class_domain<P>(printer: &mut TypePrinter<'_, P>, domain: NodeId) -> String
 where
     P: HighProgram,
@@ -184,8 +138,7 @@ where
     }
 }
 
-/// Render a whole diagnostic list back to back, exactly as the CLI prints
-/// them: one caret block per diagnostic, no separator.
+/// Render a whole diagnostic list back to back: one caret block each.
 pub fn render_all<P: lichen_lowlevel::Program>(source: &str, diags: &[Diag<P>]) -> String {
     let starts = crate::lex::line_starts(source);
     diags
@@ -195,16 +148,15 @@ pub fn render_all<P: lichen_lowlevel::Program>(source: &str, diags: &[Diag<P>]) 
 }
 
 // --- the pretty checker message ----------------------------------------------
-// Re-renders the highlevel's raw facts in the CLI's vocabulary: the wording
-// per kind.  One TypePrinter drives the whole message (and a whole report),
-// so a class keeps a single `?a` name; it must carry the checker's arrow
-// registry.  The `?a` journey is gone — every expression's type is queryable,
-// so the user inspects an expr's type instead of reading a source trace.
 
-/// Re-render a checker diagnostic's message with the shared pretty printer,
-/// from the highlevel's structured facts, in the language's own type syntax.
-/// `printer` is shared across a whole report, so a class keeps a single `?a`
-/// name across diagnostics.
+// Re-render the highlevel's facts in the CLI's vocabulary, through one shared
+// printer so a class keeps one `?a` name.
+
+/// Re-render a checker diagnostic's message from the highlevel's facts.
+///
+/// # Invariant
+///
+/// `printer` is shared across a whole report, so a class keeps one `?a` name.
 pub fn checker_message<P>(printer: &mut TypePrinter<'_, P>, d: &CheckerDiag<P>) -> String
 where
     P: HighProgram,
@@ -252,11 +204,7 @@ where
                 "no field with this name in the struct type {}",
                 printer.node(d.a)
             );
-            // Append a did-you-mean clause naming the struct's actual fields,
-            // so the editor can suggest a fix and power field completion.  The
-            // accessed field name rides in `d.field`; the candidate field names
-            // come from the container's struct type.  No name / no concrete
-            // struct (an undecided container) → the plain message.
+            // Append a did-you-mean clause naming the struct's actual fields.
             let Some(name) = d.field.as_deref() else {
                 return base;
             };
@@ -294,11 +242,8 @@ where
             "the callee of an instantiation must be a struct type, found {}",
             printer.node(d.a)
         ),
-        // A binary operator's expected side is the class the operation
-        // computes over — `Int` for the `Int`-only operators and the default
-        // class, `Float` when an operand selected it — so the expected half is
-        // read from the report rather than spelled here.  A conversion reads it
-        // the same way: its expected side is the direction's source class.
+        // The expected side is the class the operation computes over, read from
+        // the report rather than spelled here.
         DiagKind::BinOp | DiagKind::Conv => format!(
             "expected {}, found {}",
             printer.node(d.b),
@@ -318,9 +263,8 @@ where
             format!("index {index} out of bounds (array length {length})")
         }
         DiagKind::TableMiss => "table lookup missed — no entry for this key".to_string(),
-        // The report invariant's last resort (see `crate::build_report`): the
-        // build failed, but no failure could be pinned to an expression in this
-        // source, so there is no caret and the message names the whole build.
+        // The report invariant's last resort: the build failed with nothing to
+        // attribute it to.
         DiagKind::UnattributedFailure => {
             "the build failed, but the failing check could not be attributed to an expression in this source".to_string()
         }
@@ -347,25 +291,18 @@ where
                 .to_string()
         }
         DiagKind::Assert => match d.assert_spelling {
-            // A *refinement* the contract declared: the value is outside the set
-            // of classes the contract admits, and naming that set is what a
-            // reader needs (`docs/notes/operator-polymorphism.md` §8.5).  The
-            // domain is a set's value, so it is spelled member by member
-            // (`{Int, Float}`) by [`class_domain`].
+            // A refinement: the value is outside the admitted class set.
+            // See docs/notes/operator-polymorphism.md §8.5.
             Some(AssertSpelling::Refinement { domain }) => {
                 format!("does not satisfy {}", class_domain(printer, domain))
             }
-            // A **named read's container-kind requirement** — the deferred half
-            // of the same statement the decided container is refused with
-            // (`expected TypeStruct, found …`), named here in the read's own
-            // vocabulary.  The found side is the container's type, which a
-            // per-apply failure resolves to the argument's type.
+            // The deferred half of the container-kind requirement, in the read's
+            // own vocabulary.
             Some(AssertSpelling::StructKind { container }) => format!(
                 "expected a struct type, found {}",
                 printer.node(container)
             ),
-            // An explicit `@assert e`: the condition's own failed value, rendered
-            // generically through the structural `LowValue` view.
+            // An explicit `@assert e`: the condition's own failed value.
             _ => {
                 let value = match d.assert_value.as_ref().and_then(|v| v.as_enum()) {
                     Some(LowValue::USize(n)) => n.to_string(),
@@ -377,10 +314,7 @@ where
             }
         },
         DiagKind::NonTerminating => match d.budget {
-            // The lowlevel recorded which guard refused and what it was
-            // bounded by, so the diagnostic names them instead of guessing:
-            // each of the three bounds means a different runaway shape, and
-            // the limit is what the user can raise.
+            // The recorded guard and its limit name the runaway shape exactly.
             Some(BudgetExhausted::ApplyDepth { limit }) => format!(
                 "this binding never terminates — nested applications exceeded {limit} levels (non-terminating recursion)"
             ),
@@ -393,12 +327,8 @@ where
             None => "this binding never terminates (non-terminating recursion)".to_string(),
         },
         DiagKind::LoopNotRecorded => {
-            // The whole point of the marker is that the program *said* this is a
-            // loop, so the wording names what it said, what could not be
-            // decided, and what is missing — the three facts a reader needs to
-            // know it is a refusal rather than a miscompile. The shape rule
-            // rides `field` (the conversion's own name for the refusal), so the
-            // reader is told *why* the shape is not a loop.
+            // The wording names what the program said and what is missing, so a
+            // refusal is not read as a miscompile.
             match &d.field {
                 Some(rule) => format!(
                     "this call is a recursion of a `@loop`-marked binding whose trip \
@@ -413,10 +343,8 @@ where
             }
         }
         DiagKind::LoopNotEmitted => {
-            // The other half: the shape *is* a loop and the conversion exists,
-            // so the missing piece is the backend that would consume it. Saying
-            // so is the difference between "your program is wrong" and "the
-            // compiler cannot do this yet".
+            // The shape is a loop but no backend consumes it yet: the compiler
+            // cannot do this yet, not the program being wrong.
             "this call is a recursion of a `@loop`-marked binding whose trip count is \
              not decided before the body is lowered; its shape converts to a loop, but \
              no backend emits one yet, so the call is refused rather than expanded"

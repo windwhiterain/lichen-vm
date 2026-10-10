@@ -1,31 +1,10 @@
 //! Dirty propagation: which retained cells an edit invalidates.
 //!
-//! The design is `docs/notes/incremental-update.md` §4.  A cell's identity is
-//! its occurrence path, and nothing decides its reuse but dirtiness: an edit
-//! dirties the positions it re-parsed and, transitively, every position that
-//! **reads** a dirtied one.  No content key takes part in this path — the graph
-//! is the resolver's own `BinderId` edges, so the propagation is exact and
-//! needs no recorded read set.
+//! # Invariant
 //!
-//! The graph's node is the **top-level statement**: a statement declares the
-//! binders its subtree binds and reads the binders its `Name` uses resolve to.
-//! A nested binder (a lambda parameter, a block local) is visible only inside
-//! its own statement, so it can never carry an edge *between* two statements —
-//! which is why the statement is the right node, and why a cell anywhere inside
-//! a statement is dirtied exactly when its statement is.
-//!
-//! Two propagations run and their union is the answer, because an edit is the
-//! only thing that can move a resolution and the two programs disagree about
-//! what a name reads:
-//!
-//! - the **previous** program, seeded by the statements the edit re-parsed in
-//!   it — this catches a read that *disappeared* (a name the edit deleted, or
-//!   moved out of scope), which the current program no longer records as a read;
-//! - the **current** program, seeded by the same statements in its own index
-//!   space — this catches a read that *appeared* (a name the edit brought into
-//!   scope), which the previous program did not record as a read.
-//!
-//! Either propagation alone is unsound, and neither is a superset of the other.
+//! A statement is dirty iff the edit re-parsed it or it reads a binder a dirty
+//! statement declares, propagated over both the previous and the current
+//! program. See docs/notes/incremental-update.md §4.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -38,11 +17,10 @@ use crate::compile::cached_bindings;
 
 /// The marked bindings an edit invalidates, by occurrence path.
 ///
-/// `previous` and `current` are both **resolved** programs (the previous
-/// build's and the one about to be lowered); `previous_window` and
-/// `current_window` are the top-level statement indices the edit re-parsed in
-/// each — [`crate::session`] derives them from the splice it already performed.
-/// A window past the end of a program simply contributes nothing.
+/// # Invariant
+///
+/// A window is a top-level statement index range in its own program; a window
+/// past the end of a program contributes nothing.
 pub(crate) fn dirty_marked_paths(
     previous: &Program,
     current: &Program,
@@ -73,9 +51,7 @@ struct Deps {
     reads: Vec<BinderId>,
 }
 
-/// The dependency contribution of each logical statement — one per
-/// [`Program::statements`] entry, plus one for the tail expression when there
-/// is one (the same index space as [`Program::stmt_ranges`]).
+/// One entry per [`Program::statements`], plus the tail when there is one.
 fn dependencies(program: &Program) -> Vec<Deps> {
     let mut out =
         Vec::with_capacity(program.statements.len() + usize::from(program.expr.is_some()));
@@ -92,8 +68,7 @@ fn dependencies(program: &Program) -> Vec<Deps> {
     out
 }
 
-/// The statements the edit reaches: those it re-parsed, plus every statement
-/// that reads a binder a reached statement declares (transitively).
+/// The statements the edit reaches: re-parsed, plus transitive readers.
 fn dirty_statements(deps: &[Deps], window: Range<usize>) -> Vec<usize> {
     let mut dirty = vec![false; deps.len()];
     let mut reached: Vec<usize> = Vec::new();
@@ -103,8 +78,7 @@ fn dirty_statements(deps: &[Deps], window: Range<usize>) -> Vec<usize> {
             reached.push(statement);
         }
     }
-    // Binder → the statements that read it, so the fixpoint walks edges instead
-    // of rescanning every statement for every newly dirty one.
+    // Binder → readers, so the fixpoint walks edges instead of rescanning.
     let mut readers: HashMap<BinderId, Vec<usize>> = HashMap::new();
     for (statement, deps) in deps.iter().enumerate() {
         for binder in &deps.reads {
@@ -141,9 +115,10 @@ fn collect(statement: &Stmt, deps: &mut Deps) {
 
 /// Accumulate the declared and read binders of `expr`'s subtree.
 ///
-/// Exhaustive over [`Expr`] on purpose: this walk decides whether a retained
-/// cell is still valid, so a new expression form must be classified here rather
-/// than silently contribute no edges.
+/// # Invariant
+///
+/// Exhaustive over [`Expr`] on purpose: a new form must be classified here
+/// rather than silently contribute no edges.
 #[stacksafe]
 fn walk(expr: &Expr, deps: &mut Deps) {
     match expr {

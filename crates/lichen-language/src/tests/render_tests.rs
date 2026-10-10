@@ -41,11 +41,7 @@ fn a_spanless_diagnostic_has_no_caret() {
 
 #[test]
 fn a_node_the_module_no_longer_holds_renders_without_panicking() {
-    // A released node is a documented state: `Module::node_value` reads a
-    // dynamic ref that names one as `None` ("safe for a node the executor may
-    // have dropped").  A malformed or unexpectedly shaped module can hand the
-    // printer such an id, so the class walk must answer "no answer" — not index
-    // a node table that no longer holds it.
+    // A released node is a documented state: answer "no answer", don't index it.
     let report = crate::compile("x => x");
     let mut build = report.build.expect("the program checks");
     let stale = build.root_ty;
@@ -59,10 +55,7 @@ fn a_node_the_module_no_longer_holds_renders_without_panicking() {
 
 #[test]
 fn a_checker_message_uses_the_cli_type_syntax() {
-    // 5 : Int -> Int — the found type is Int, the expected the arrow
-    // type: the same spellings the CLI prints for a program's output,
-    // not the raw `TypeInt → TypeInt`.  No `?a` journey line — the user
-    // inspects the expression's type directly.
+    // The message uses the CLI's type spellings, not the raw `TypeInt → TypeInt`.
     let report = crate::compile("5 : Int -> Int");
     assert_eq!(
         report.diagnostics[0].message,
@@ -72,8 +65,7 @@ fn a_checker_message_uses_the_cli_type_syntax() {
 
 #[test]
 fn an_array_element_conflict_renders_undecided_arrow_cells() {
-    // [1, x => x] — the found side is the lambda's arrow shape with its
-    // two undecided cells sharing one name.  No `?a` journey line.
+    // The found side is the lambda's arrow shape, its two cells sharing one name.
     let report = crate::compile("[1, x => x]");
     assert_eq!(
         report.diagnostics[0].message,
@@ -83,10 +75,8 @@ fn an_array_element_conflict_renders_undecided_arrow_cells() {
 
 #[test]
 fn a_struct_conflict_keeps_the_nominal_ids() {
-    // Two source occurrences are different nominal types.  The message
-    // renders each side's full struct type *with its nominal id*
-    // (`struct<.f Int, .g Int>#0` vs `#1`), so the two structs stay
-    // distinguishable even though their field shapes match.
+    // Two source occurrences are different nominal types, so the message keeps
+    // each side's nominal id.
     let report = crate::compile(
         "s1 = struct<.f Int, .g Int>; s2 = struct<.f Int, .g Int>; [s1(1, 2), s2(1, 2)]",
     );
@@ -96,8 +86,7 @@ fn a_struct_conflict_keeps_the_nominal_ids() {
 
 #[test]
 fn a_failed_assert_renders_its_message() {
-    // `@assert (1 == 2)` — the condition resolves to 0, a failed assert (a runtime
-    // evaluation failure, not a unify): the message and the caret at the `!`.
+    // The condition resolves to 0: a failed assert, not a unify.
     let report = crate::compile("@assert (1 == 2)");
     assert_eq!(report.diagnostics.len(), 1);
     let d = &report.diagnostics[0];
@@ -117,9 +106,7 @@ fn output(source: &str) -> String {
 
 #[test]
 fn a_struct_type_value_renders_in_type_syntax() {
-    // A struct type's value is the raw shape `[Int, Type]` — the positional
-    // field-type list, the lowlevel data layout.  Read against its kind, it
-    // prints as the code that produced it.
+    // The raw shape is `[Int, Type]`; read against its kind it prints as source.
     assert_eq!(
         output("A = struct<.f Int, .t Type>\nA"),
         "struct<.f Int, .t Type>: TypeStruct"
@@ -136,8 +123,7 @@ fn a_struct_instance_renders_its_field_tuple() {
 
 #[test]
 fn a_single_field_struct_instance_keeps_the_tuple_comma() {
-    // A single field needs no extra comma in the source (`B(1)`); the
-    // rendered value still shows the one-element tuple's comma `(1,)`.
+    // A one-element tuple's comma `(1,)` shows even though the source `B(1)` has none.
     assert_eq!(
         output("B = struct<.f Int>\nb = B(1,)\n(B, b)"),
         "(struct<.f Int>, (1,)): <TypeStruct, struct<.f Int>>"
@@ -158,29 +144,20 @@ fn an_array_value_keeps_brackets() {
 
 #[test]
 fn a_compound_type_value_renders_in_type_syntax() {
-    // A tuple or array type expression is a value whose value *is* the type,
-    // so the value reads in type syntax and its own type is the kind.
-    // A written arrow is not in this test any more: it is a function
-    // (see `a_written_arrow_is_a_function`).
+    // A type expression's value is the type, so it reads in type syntax.
     assert_eq!(output("<Int, Type>"), "<Int, Type>: TypeTuple");
     assert_eq!(output("array<Int, 3>"), "array<Int, 3>: TypeArray");
 }
 
 #[test]
 fn a_written_arrow_is_a_function() {
-    // `Int -> Int` in a type position lowers to a real function, so what the
-    // program evaluates is that function — not a compound type value with the
-    // function kind as its type.  Its own type is its signature, which reads
-    // back as the arrow it was written with.
+    // A type-position arrow lowers to a real function whose type is its signature.
     assert_eq!(output("Int -> Int"), "Function: Int -> Int");
 }
 
 #[test]
 fn a_raw_index_reads_a_type_component() {
-    // `X<e>` reads component `e` of a **tuple type value**'s component list,
-    // yielding that component type: the container's kind must be the tuple kind
-    // (`TypeTuple`), refused here when it is not.  A struct type value reads by
-    // name instead (`X::a`, the sibling test below).
+    // `X<e>` reads component `e` of a tuple type value, refused for another kind.
     assert_eq!(output("<Int, string><0>"), "Int: Type");
     assert_eq!(output("<Int, string><1>"), "string: Type");
     assert_eq!(output("<Int, string, Type><0>"), "Int: Type");
@@ -188,9 +165,7 @@ fn a_raw_index_reads_a_type_component() {
 
 #[test]
 fn a_raw_named_read_yields_the_field_type() {
-    // `X::a` reads the named field's *type* from a TypeStruct value (the name
-    // table lies at container_ty[0][1]); `.a` reads the field *value* from a
-    // struct instance.
+    // `X::a` reads the named field's type; `.a` reads the instance's field value.
     assert_eq!(output("S = struct<.a Int, .b string>\nS::a"), "Int: Type");
     assert_eq!(
         output("S = struct<.a Int, .b string>\nS::b"),
@@ -204,10 +179,7 @@ fn a_raw_named_read_yields_the_field_type() {
 
 #[test]
 fn a_type_second_slot_does_not_collapse_an_array() {
-    // The raw layout's `[head, K]` heuristic reads a two-element array
-    // whose second element is the universe as an atomic type pair and
-    // drops the head.  The type chain says what the value really is: a
-    // tuple keeps both elements.
+    // The raw `[head, K]` heuristic would drop the head; the type chain keeps both.
     assert_eq!(output("(1, Type)"), "(1, Type): <Int, Type>");
 }
 
@@ -219,12 +191,8 @@ fn a_function_value_prints_function() {
 
 // --- `type_of` as an ordinary lichen function ----------------------------
 
-// `type_of` is no longer a language form: it is the standard library's
-// `x => {t = _; x: t; t}` (`lichen-std/_.lichen`) — the placeholder binds the
-// cell, the annotation unifies it with the argument's type, and the body
-// returns it, so a type read is an ordinary application.  The definition is
-// spelled locally because `output` compiles a bare source with no package
-// store to import from.
+// `type_of` is the standard library's lambda, spelled locally because `output`
+// has no package store to import from.
 
 /// `source` with the standard library's `type_of` bound ahead of it.
 fn with_type_of(source: &str) -> String {
@@ -259,19 +227,15 @@ fn type_of_reads_compound_types() {
 
 #[test]
 fn a_value_annotates_against_its_own_type_of() {
-    // `type_of e` in a type position IS the operand's type expression, so
-    // the annotation unifies exactly as the spelled-out type would.
+    // `type_of e` in a type position IS the operand's type expression.
     assert_eq!(with_type_of("5 : type_of (5)"), "5: Int");
     assert_eq!(with_type_of("type_of (1) : Type"), "Int: Type");
 }
 
 // --- the extended vocabulary --------------------------------------------
 
-// A probe extension: a type constant beyond the highlevel's vocabulary,
-// composed in one `enum_ext!` invocation that lists every layer's enum
-// directly — the path a language crate takes to add its own value
-// variants.  The renderers are generic over the vocabulary; the
-// extension's own variant renders through the hook both printers carry.
+// A probe extension: a type constant beyond the highlevel's vocabulary, added
+// through the `enum_ext!` path.
 lichen_utils::enum_ext! {
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum ProbeValue {
@@ -323,8 +287,7 @@ impl ValueType for ProbeValue {
     }
 }
 
-// The probe literal vocabulary, mirroring the value-vocabulary extension: the
-// highlevel's built-in literal structs compose with a downstream's own.
+// The probe's literal vocabulary, mirroring the value-vocabulary extension.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FloatLit;
 
@@ -370,10 +333,8 @@ impl LiteralExt<ProbeProgram> for ProbeLiteral {
 
 #[test]
 fn an_extended_value_renders_through_the_hook() {
-    // `FloatType : Type` — the extension's type constant, paired with the
-    // universe like `Int` is.  The value printer (generic over the
-    // vocabulary) reads it as an atomic type constant; the extension's
-    // own spelling comes from the render hook.
+    // The extension's type constant, paired with the universe like `Int`; the hook
+    // spells it.
     let mut ir: IR<NoAttr, ProbeLiteral> = IR::new();
     let float_ty = ir.alloc(ExprKind::Literal(ProbeLiteral::Float(FloatLit)));
     ir.set_root(float_ty);

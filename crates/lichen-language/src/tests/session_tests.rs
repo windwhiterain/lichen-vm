@@ -1,6 +1,4 @@
-//! Tests for the incremental [`BufferSession`] and the error-block machinery
-//! it relies on (`Expr::Err` byte ranges, [`ExprKind::ErrorBlock`] lowering, the
-//! checker's skip path).
+//! Tests for the incremental [`BufferSession`] and the error-block machinery.
 
 use lichen_highlevel::ir::ExprKind;
 
@@ -28,10 +26,8 @@ fn content_key_of(source: &str) -> Vec<u64> {
 
 #[test]
 fn a_recovered_error_block_carries_a_byte_range() {
-    // `a = )` — a stray `)` is not an atom, so the binding's *value* is one
-    // recovered error block whose byte range masks the broken `)` token.  The
-    // parser previously kept only the (line, col); now it carries the byte
-    // mask too, so a diff can exclude the region.
+    // A recovered error block's byte range masks the broken `)` token, so a diff
+    // can exclude the region.
     let source = "a = ); b = 2; b";
     let Parsed { program, errors } = parsed(source);
     assert!(!errors.is_empty(), "the stray ')' is a parse error");
@@ -65,9 +61,7 @@ fn a_recovered_error_block_carries_a_byte_range() {
 
 #[test]
 fn an_error_block_lowers_to_errorblock_not_placeholder() {
-    // A recovered parse error must NOT become the same highlevel construct as
-    // an intentional `_` — that conflation is the leak the design fixes.  The
-    // broken value lowers to a distinct `ExprKind::ErrorBlock`.
+    // A recovered parse error must lower to a distinct `ErrorBlock`, not `_`.
     let source = "a = ); b = 2; b";
     let tokens = lex::lex(source).tokens;
     let Parsed { mut program, .. } = parse::parse(&tokens);
@@ -81,8 +75,7 @@ fn an_error_block_lowers_to_errorblock_not_placeholder() {
         error_blocks >= 1,
         "the error region lowers to an ErrorBlock"
     );
-    // The intentional-placeholder test in compile_tests covers `_`; here we
-    // assert the *broken* region is never a Placeholder.
+    // Here `_` is covered elsewhere; the broken region must not be a Placeholder.
     let placeholder_at_error = ir
         .expr
         .iter()
@@ -96,9 +89,7 @@ fn an_error_block_lowers_to_errorblock_not_placeholder() {
 
 #[test]
 fn the_checker_skips_an_error_block_no_type_error() {
-    // The whole pipeline: a stray `)` is a *parse* diagnostic, but the
-    // checker must not report a type-level "expected X, found Y" from inside
-    // the masked region (it is skipped).
+    // The masked region is skipped, so no type-level diagnostic comes from it.
     let report = crate::compile("a = ); b = 2; b");
     assert!(report.build.is_some(), "the partial program still builds");
     assert_eq!(
@@ -115,20 +106,14 @@ fn the_checker_skips_an_error_block_no_type_error() {
 
 #[test]
 fn growing_an_error_block_reuses_the_established_build() {
-    // The user's busy-typing case: typing an unfinished trailing piece first
-    // changes the clean content (a new binding appears), so the first compile
-    // is fresh; growing that *error block* changes only the mask — the clean
-    // (beyond-error) content is unchanged, so the established build is reused.
-    // The clean program ends in a bare expression, which is its value: a
-    // statement that is not a field (a block's record is its bindings).
+    // Busy typing: growing the error block changes only the mask, so the build
+    // is reused.
     let mut sess = BufferSession::<LangProgram>::new("a = 1\nf = x => a + x\nf 2\n");
     let r0 = sess.compile();
     assert!(!r0.reused, "the first compile is a fresh build");
     assert!(r0.ok(), "the clean program checks");
 
-    // An unfinished trailing binding: `fix1 = (2` (unclosed paren → an error
-    // block for the value).  The clean content gains `fix1 = `, so this is a
-    // fresh build.
+    // `fix1 = (2` adds a binding, so the clean content changed: a fresh build.
     sess.push("fix1 = (2");
     let r1 = sess.compile();
     assert!(!r1.reused, "a new binding is a clean-content change");
@@ -138,8 +123,7 @@ fn growing_an_error_block_reuses_the_established_build() {
         "the established program still checks; the broken value is skipped"
     );
 
-    // Grow the broken region: `(2` → `(22` — only the masked error block grew.
-    // The beyond-error content is unchanged, so the build is reused.
+    // `(2` -> `(22` grows only the masked error block: the build is reused.
     let before = r1.key;
     sess.push("2");
     let r2 = sess.compile();
@@ -150,8 +134,7 @@ fn growing_an_error_block_reuses_the_established_build() {
         Some(true),
         "the reused build is still the (correct) established build"
     );
-    // The established statements survived: `a`, `f`, and the `f 2` application
-    // are still in the IR, just the trailing broken binding was skipped.
+    // The established statements survived; the trailing broken binding was skipped.
     assert!(
         r2.diagnostics.iter().any(|d| d.stage == Stage::Parse),
         "the parse error for the still-unclosed paren is re-reported"
@@ -174,12 +157,8 @@ fn changing_clean_content_invalidates_the_cache() {
 
 #[test]
 fn typing_inside_an_unclosed_region_reuses_every_keystroke() {
-    // The editor's per-char case that DOES stay incremental: while a construct
-    // is a single masked error block (an unclosed paren), every keystroke
-    // grows only the mask — the clean structure is unchanged, so the
-    // established program is reused per char.
-    // A block's record is its bindings (see the sibling test); the mask grows
-    // under `fix1 = (1` keystroke by keystroke.
+    // Every keystroke inside a single masked error block grows only the mask, so
+    // the established program is reused.
     let mut sess = BufferSession::<LangProgram>::new("a = 1\nf = x => a + x\nf 2\n");
     let _ = sess.compile();
     sess.push("fix1 = (1");
@@ -200,11 +179,8 @@ fn typing_inside_an_unclosed_region_reuses_every_keystroke() {
 
 #[test]
 fn typing_a_long_unresolved_name_reuses_after_the_first_character() {
-    // The real editor case with a long identifier: a name that does not yet
-    // resolve is a *name-resolution-only* delta — the structure is one `Name`
-    // leaf, and its resolution stays the unresolved sentinel — so extending it
-    // changes nothing the lowering/check consume, and only the resolve
-    // diagnostic updates.
+    // A long unresolved name is a name-resolution-only delta: extending it
+    // changes nothing the lowering or check consume.
     let mut sess = BufferSession::<LangProgram>::new("a = 1\nf = x => a + x\nf 2\n");
     let _ = sess.compile();
     sess.push("v"); // first character: a new (unresolved) name leaf appears.
@@ -238,10 +214,8 @@ fn typing_a_long_unresolved_name_reuses_after_the_first_character() {
 
 #[test]
 fn renaming_a_binding_consistently_reuses() {
-    // The sound form of "exclude the name from the hash": the signature signs
-    // the resolution (which binding each use resolves to), not the spelling, so
-    // a *consistent* rename — same bindings, same uses, different names — reuses
-    // the established build.  The name-free IR is genuinely identical.
+    // The signature signs the resolution, not the spelling, so a consistent
+    // rename reuses the established build.
     let mut sess = BufferSession::<LangProgram>::new("f = x => x + 1\nf 2\n");
     let r0 = sess.compile();
     assert!(!r0.reused);
@@ -271,11 +245,12 @@ fn diag_set(report: &crate::session::SessionReport<crate::program::LangProgram>)
     v
 }
 
-/// A report and its key observable fields, in a comparable form.  The `reused`
-/// flag is intentionally excluded: it depends on the session's *history* (a
-/// fresh session's first compile is never reused), not on the source, so it is
-/// not comparable across differently-warmed sessions.  What must match is the
-/// resolved structure (content key), the check outcome, and the diagnostics.
+/// A report's key observable fields, in a comparable form.
+///
+/// # Invariant
+///
+/// `reused` is excluded: it depends on the session's history, not the source.
+/// What must match is the content key, the check outcome and the diagnostics.
 #[derive(PartialEq, Debug)]
 struct ReportShape {
     key: Vec<u64>,
@@ -293,23 +268,15 @@ fn shape(report: &crate::session::SessionReport<crate::program::LangProgram>) ->
 
 #[test]
 fn an_edited_session_compiles_identically_to_a_fresh_one() {
-    // The incremental re-lex must never change what the compile *produces*.
-    // After each edit, the session's report must equal a brand-new session over
-    // the same source — identical signature, build outcome, and diagnostics.
-    // (The established-build reuse still applies; what this guards is that the
-    // incremental *lex* path is indistinguishable from a whole-buffer re-lex.)
+    // The incremental re-lex must never change the output: the report equals a
+    // fresh session's after each edit.
     let cases: &[&[&str]] = &[
         // The source after each successive edit of the base program.
         &["a = 1\nz = 3\nf = x => a + x\nf 2\n"],
         &["a = 1\nf = x => a + x\nf 2\nzzz"],
         &["a = 99\nf = x => a + x\nf 2\n"],
-        // A *valid* trailing binding: the top level is a block, so a program
-        // ending in a binding is a record program (a module) — the splice must
-        // reproduce the whole-program parse.  (The unclosed-paren-at-EOF case
-        // `ner = (2` is exercised by `a_splice_ending_in_a_binding_is_a_record_program`,
-        // which checks the splice *program*; its error-column differs from the
-        // whole-program parser by the region parser's Eof handling, which is a
-        // pre-existing region-parser detail, not this feature's.)
+        // A trailing binding makes the program a record program (a module): the
+        // splice must reproduce the whole-program parse.
         &["a = 1\nf = x => a + x\nf 2\nner = 2"],
         &["a = 1\nf = x => a + x\nf 2"],
         &["a = 1\nf = x => a\nf 2\n"],
@@ -332,12 +299,8 @@ fn an_edited_session_compiles_identically_to_a_fresh_one() {
 
 #[test]
 fn a_bracket_swap_between_forms_rebuilds_instead_of_reusing() {
-    // `[a, b]`, `(a, b)` and `<a, b>` are distinct lowering-visible forms:
-    // `compile` lowers Array, Tuple and TypeTuple through different
-    // `ExprKind`s.  Swapping the brackets is therefore a resolved-content
-    // change — the session must rebuild, and its report must equal a fresh
-    // session's over the same source.  A shared tag left the key byte-equal
-    // and reused the previous form's build.
+    // `[a, b]`, `(a, b)` and `<a, b>` lower differently, so a bracket swap
+    // rebuilds.
     let forms = ["z = [1, 2]\nz\n", "z = (1, 2)\nz\n", "z = <1, 2>\nz\n"];
     for (i, target) in forms.iter().enumerate() {
         let previous = forms[(i + forms.len() - 1) % forms.len()];
@@ -357,8 +320,7 @@ fn a_bracket_swap_between_forms_rebuilds_instead_of_reusing() {
     }
 }
 
-/// Assert the window splice of `old` → `new` is actually taken (`Some`) and
-/// reproduces exactly a whole-buffer parse of the new source.
+/// Assert the window splice of `old` → `new` equals a whole-buffer parse.
 fn assert_splice_equals_full_parse(old: &str, new: &str) {
     let old_starts = lex::line_starts(old);
     let old_tokens = lex::lex(old).tokens;
@@ -403,11 +365,7 @@ fn assert_splice_equals_full_parse(old: &str, new: &str) {
 
 #[test]
 fn the_window_splice_reproduces_a_full_parse() {
-    // Edits the incremental parser must handle *without* falling back to a
-    // whole-buffer parse: a mid-statement insertion, a change inside a binding's
-    // value, an edit in the trailing expression, an append of a new trailing
-    // expression, a binding-name edit, and a mid-buffer statement insertion.
-    // For each, the spliced frontend is identical to a fresh parse.
+    // Edits the splice must handle without a whole-buffer fallback.
     let base = "a = 1\nf = x => a + x\nf 2\n";
     assert_splice_equals_full_parse(base, "a = 1\nf = x => a + x\nf 22\n");
     assert_splice_equals_full_parse(base, "a = 1\nf = x => a + 1\nf 2\n");
@@ -419,10 +377,7 @@ fn the_window_splice_reproduces_a_full_parse() {
 
 #[test]
 fn a_splice_ending_in_a_binding_is_a_record_program() {
-    // The top level is now a block: a program whose last statement is a
-    // binding has no tail — it is a record program (a module), not an error.
-    // The window splice must reproduce exactly a whole-buffer parse of the new
-    // source (which is a record program with a broken binding value here).
+    // A program whose last statement is a binding is a record program (a module).
     let old = "a = 1\nf = x => a + x\nf 2\n";
     let new = "a = 1\nf = x => a + x\nner = (2";
     assert_splice_equals_full_parse(old, new);
@@ -434,9 +389,7 @@ fn a_splice_ending_in_a_binding_is_a_record_program() {
 
 #[test]
 fn the_resolved_content_key_tracks_resolution_not_spelling() {
-    // The resolver's `content_key` is name-free and exact: a consistent rename
-    // leaves it unchanged (so the session reuses), while a literal or
-    // structural change moves it (so the session rebuilds).
+    // The key is name-free and exact: a rename leaves it, a value change moves it.
     let base = content_key_of("f = x => x + 1\nf 2\n");
     assert_eq!(
         content_key_of("g = x => x + 1\ng 2\n"),
@@ -452,10 +405,8 @@ fn the_resolved_content_key_tracks_resolution_not_spelling() {
 
 #[test]
 fn the_content_key_distinguishes_list_arities_around_an_apply() {
-    // `Apply` concatenates two expression encodings with no separator, so a
-    // count-less list lets a nest boundary move without changing the key:
-    // `(1,) (2, 3)` and `(1, (2,)) 3` are different trees with the same
-    // expression sequence.  Writing each list's length makes them distinct.
+    // `Apply` concatenates two encodings with no separator, so list lengths keep
+    // nested arities distinct.
     let split = "(1,) (2, 3)\n";
     let nested = "(1, (2,)) 3\n";
     assert!(
@@ -471,10 +422,8 @@ fn the_content_key_distinguishes_list_arities_around_an_apply() {
 
 #[test]
 fn the_content_key_distinguishes_a_string_from_a_named_field_read() {
-    // `Str` and `NamedFieldRead` previously shared tag 24, and a string's raw
-    // bytes occupy the element space, so `Str("\u{2}ab")` and `_.ab` (a
-    // `NamedFieldRead` over the placeholder) encoded to the same key.  Their
-    // tags are now distinct.
+    // `Str` and `NamedFieldRead` once shared tag 24, encoding to the same key;
+    // the tags are now distinct.
     let literal = format!("\"{}\"\n", "\u{2}ab");
     let named_field_read = "_.ab\n";
     assert!(
