@@ -863,6 +863,28 @@ cleared the CPU side but nothing turns on it yet, because 1c is not:**
    backends: `a_kernel_loop_nest_carries_a_runtime_state`). The refusal is a
    `String` from the lowering, recorded as a `compute.parallel` diagnostic — it
    is **not** the old checker-side `LoopNotEmitted`, which is gone (§8.6).
+
+   **The residual is the class value, and the class is the reader's only
+   channel.** `wire_apply_result` writes the operator's body as the apply's
+   *class* value, and `defining_member` is what finds it; walking the apply's
+   clone subtree instead is not an alternative, because the deep pass collapses a
+   value to a bare cell unified into its defining computation, so a chain walk
+   terminates at the cell. Measured: with a constant trip count the host loop's
+   own instantiation evaluates the argument, the operator body runs, and the
+   reader builds the nest (a 300-trip version answers `30` on the cpu backend);
+   with a run-time count nothing evaluates and the class holds only the apply
+   itself. **Materialising the operator against placeholder operand cells does
+   put the body in the class** — the step's first slot then carries a
+   `TypeOperator(Sub)` member — but the acceptance program's second slot is a
+   `read` whose own routed apply still does not materialise, so the shape is
+   still refused.
+
+   **Blocker 1 is general, not loop-specific.** The argument walk recurses only
+   where the *pattern* position is an `Array`; when a template's parameter value
+   cell is bare and the argument is a structured apply, the argument's elements
+   are never evaluated and the applies inside them never get an operation member.
+   A loop is only where that is fatal today, because an unexpanded call has no
+   other route; it belongs on the known-gaps list beside this item.
 5. **Run the reduction on both backends**, past the 2000-apply budget and the 512
    level ceiling, at more than one length so the count is demonstrably not a
    compile-time constant. **Blocked on item 4's step**, above.
@@ -1053,6 +1075,16 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
      **That caller is gone** — the checker no longer asks whether a loop is
      emitted at all (§8.6's relocation below) — and the callers are now the two
      readers: `loop_run.rs` (host) and `Lower::lower_loop` (`lichen-compute`).
+   - **A nested routed operator does not materialise with the one it sits inside.**
+     §8.5's item 4 records the mechanism: the reader resolves an operator through
+     the apply's *class*, and `wire_apply_result` writes there only when the
+     operator's own argument is decidable. Materialising a step against
+     placeholder operand cells therefore settles `s(0) - 1` (the class gains a
+     `TypeOperator(Sub)` member) but not the `read` in the next slot, whose buffer
+     operand is a parameter read the kernel never has a value for. The host loop
+     does not hit this because it **evaluates**: a concrete argument forces every
+     operand, which is a channel the reader does not have.
+
    - **The wasm side could *not* lower the body this item builds, and the claim
      that it could was wrong.** `lower.rs` created a waffle block per kernel-IR
      block and typed a non-entry block's parameters from the values bound when
