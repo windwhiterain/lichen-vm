@@ -302,6 +302,59 @@ parameter's value, and the test is the **equality class** (`class_root`), which 
 the same thing `define_in` matches a parameter against — two tests that could
 disagree would be two answers to "is this the parameter's own value".
 
+### A scalar leaf of `.in`, which the body could not read
+
+`k.in.a` — `a` an `Int` field of the input struct — was refused as
+"a kernel body's index cannot be placed". **This was pre-existing**, measured on
+`dev` at `c99d8c9` before any change here, and it reproduces on a bare
+`compute.P` parameter with no annotation tricks.
+
+The body's own walk reads each step of an `Index` chain with `usize_value`,
+which answers a **positional constant** and nothing else. A struct field read
+arrives as a **name** — `TableGet(name-table, "a")` — so `k.in.a` was a step the
+walk could not place, and the read fell through to the refusal. It is worth being
+exact about which reads this defeated, because it is **only** this one: in the
+same program, `compute.range k.n`, `k.out.z` and the buffer leaves all arrive
+already **folded to positions** by the checker, and place without help.
+
+```
+node 217   sel_name = Some("a")   sel_pos = None     // k.in.a     -- the only named selector
+node 520   name = None            pos = 2 -> 0        // k.out.z
+node 508   name = None            pos = 1 -> 0        // a buffer leaf under .in
+```
+
+So `k.n` was never "handled structurally as the index"; it was a position before
+the walk saw it.
+
+Two defects were behind the one refusal, and fixing either alone still refuses:
+
+1. **The walk had no name resolution.** A named step now goes to
+   `param_read_offset`, which is `param_path`'s own two-pass resolution — the
+   one that already collects `IndexStep::Named` and looks a name up in the
+   parameter type's field list. No second field-position reader was added; the
+   hand-rolled `struct_type_names` was **deleted** in favour of
+   `struct_fields_of_slot`/`field_names`, the encoding authority the role table
+   is itself read with, so a name can no longer resolve against a different
+   layout than the roles did.
+2. **The pair's value-half peel was counted as a field.** `param_path` pushed
+   `Index(param_pair, 0)` as a path step, so every field after it was shifted by
+   one: `k.in.a` collected as `[#0, "in", "a"]`, which resolves `in` against
+   `.n`'s type and then cannot find it. The pair's value half *is* the parameter,
+   not one of its fields, so the peel contributes no step — the path is counted
+   from the parameter's first field, which is what `KernelRoles`' paths and the
+   slot's scalar shape are both written against.
+
+A name that is **not** a field of that struct is refused by name, not answered
+with a wrong number: `resolve_steps` says so and names the fields it did find.
+
+The shape now runs end to end on the wasm backend
+(`a_body_reads_a_scalar_leaf_of_its_input_struct`, four lanes of `a + i`). It is
+**not** a two-backend test: a fragment carrying a runtime scalar is refused by
+the `"gpu"` dispatch, which pushes the launch extent alone
+(`RunError::ScalarsNotPushed`, `crates/lichen-compute-gpu/src/dispatch.rs`).
+That refusal is the GPU crate's own and pre-existing; this change makes the shape
+reachable for the first time, which is what exposes it.
+
 ### A placeholder under a `Buf` wrapper
 
 A graph's placeholder reaches an operator **wrapped**: an operator that reads a
@@ -442,7 +495,7 @@ Two things the author still writes, and one defect the empty group exposed:
 |---|---|
 | The type lambdas and the wrappers | `crates/lichen-compute/src/compute.lichen` |
 | The named-parameter walk and the prelude algebra | `parallel_roles`, `param_path`, `buf_payload`, `is_buf_shape`, `compute.rs` |
-| Position resolution | `parallel_buffer_pos`, `peeled_argument`, `is_param_value`, `usize_value`, `struct_type_names`, `param_value_shape`, `compute.rs` |
+| Position resolution | `parallel_buffer_pos`, `peeled_argument`, `is_param_value`, `usize_value`, `field_name`, `param_read_offset`/`param_path`/`resolve_steps`, `compute.rs` |
 | Parallel lowering | `compile_parallel_fragment`, `compute.rs` |
 | Instruction emitter (read/write arms) | `emit_node`, `compute.rs` |
 | Launch walk (count and buffers) | `ComputeOperator::ParLaunch`, `compute.rs` |

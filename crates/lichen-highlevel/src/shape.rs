@@ -694,10 +694,7 @@ where
 /// `[Type, ↺]` cycle — because the callers that need this (a lowering, which has
 /// no universe handle to pass) are below the checker.  That is the test the
 /// renderer and [`class_holds_type`] already use, not a new guess.
-pub fn field_names<P: Program>(
-    module: &mut Module<P>,
-    ty: TypeRef,
-) -> Option<Vec<Option<&'static str>>>
+pub fn field_names<P: Program>(module: &Module<P>, ty: TypeRef) -> Option<Vec<Option<&'static str>>>
 where
     P::Value: ValueType,
 {

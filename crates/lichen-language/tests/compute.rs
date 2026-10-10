@@ -2232,3 +2232,32 @@ compute.read ((compute.Read _)(.from out.z, .at {last}))
         );
     }
 }
+
+/// A body reading a **scalar leaf of its own `.in` struct** (`compute-buffer-wrapper.md`).
+#[test]
+fn a_body_reads_a_scalar_leaf_of_its_input_struct() {
+    // The `"gpu"` dispatch refuses a runtime scalar, so this shape is cpu-only.
+    let (module, value, _root) = run(&format!(
+        r#"
+--- compute = import "compute.lichen" ---
+In  = struct<.a Int>
+Out = struct<.z (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {{
+  i = compute.range k.n
+  a = k.in.a
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value a + i))
+}}
+k = compute.parallel f "cpu"
+out = (compute.plrun k ((compute.A In)(.n {ELEMENT_COUNT}, .I In(.a 7))) : Out)
+compute.collect out.z
+"#,
+    ));
+    assert_eq!(
+        common::usize_array(&module, &value),
+        (0..ELEMENT_COUNT)
+            .map(|offset| 7 + offset)
+            .collect::<Vec<usize>>(),
+        "every lane took the input's scalar leaf, not the index"
+    );
+}

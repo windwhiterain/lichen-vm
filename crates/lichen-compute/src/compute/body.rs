@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 
+use lichen_highlevel::program::ValueType;
 use lichen_kernel_ir::{
     Br, KernelBin, KernelBody, KernelInstr, KernelShape, ScalarClass, Terminator, ValueId,
 };
@@ -124,7 +125,7 @@ const MAX_KERNEL_BODY_DEPTH: usize = 512;
 
 impl<'a, P: Program> Lower<'a, P>
 where
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     /// Lower `codomain` — the value the function returns — into a body.
@@ -259,7 +260,7 @@ where
         self.defining = node;
         // **A read of the domain at a path is matched structurally**, from the `Index`
         // chain: see [`Lower::parameter_path`].
-        let value = match self.parameter_path(node) {
+        let value = match self.parameter_path(node)? {
             Some(slot) => {
                 // **A parameter's class is the ABI's**, recorded so an operator learns it
                 // without the fragment.
@@ -349,15 +350,24 @@ where
     /// A call's argument arrives wrapped where a body's read does not, so the same
     /// path walk is tried on the node, on what one peel takes off it, and on its
     /// view, and the first that lands on a slot wins.
-    fn parameter_path_of(&self, node: NodeId) -> Option<usize> {
+    fn parameter_path_of(&self, node: NodeId) -> Result<Option<usize>, String> {
         let peeled = self.module.pair_value_half(node);
         let viewed = match self.module.selection_of(node) {
             Some(lichen_lowlevel::Selection::Views(view)) => Some(view),
             _ => None,
         };
-        self.parameter_path(node)
-            .or_else(|| peeled.and_then(|peeled| self.parameter_path(peeled)))
-            .or_else(|| viewed.and_then(|viewed| self.parameter_path(viewed)))
+        if let Some(slot) = self.parameter_path(node)? {
+            return Ok(Some(slot));
+        }
+        if let Some(peeled) = peeled
+            && let Some(slot) = self.parameter_path(peeled)?
+        {
+            return Ok(Some(slot));
+        }
+        Ok(viewed
+            .map(|viewed| self.parameter_path(viewed))
+            .transpose()?
+            .flatten())
     }
 
     /// The entry parameter a read of the domain at a path names, if that is what
@@ -369,7 +379,7 @@ where
     /// is matched against the slots themselves — each slot's pair and its value — or
     /// against one of the domain's leaves, because a struct parameter, a tuple domain
     /// and a scalar each reach the walk through a different node.
-    fn parameter_path(&self, node: NodeId) -> Option<usize> {
+    fn parameter_path(&self, node: NodeId) -> Result<Option<usize>, String> {
         let mut positions: Vec<usize> = Vec::new();
         let mut cursor = node;
         loop {
@@ -384,16 +394,19 @@ where
                 break;
             }
             let Some(arguments) = self.arguments(cursor).ok() else {
-                return None;
+                return Ok(None);
             };
             let (Some(target), Some(index)) = (arguments.first(), arguments.get(1)) else {
-                return None;
+                return Ok(None);
             };
             let Some(step) = self.module.usize_value(*index) else {
-                return None;
+                // **A named step is answered by the parameter's own type**, which is
+                // `param_read_offset`'s walk, not this one's.
+                return Ok(super::param_read_offset(self.module, self.params, node)?
+                    .map(|offset| offset as usize));
             };
             let AnyNodeId::Dynamic(target) = target else {
-                return None;
+                return Ok(None);
             };
             // **`Index(param_pair, k)` is the pair's value half, not a path step**, and the
             // cursor stops on the pair.
@@ -423,7 +436,7 @@ where
             })
             .unwrap_or(false);
         if !(on_a_slot || on_a_leaf) {
-            return None;
+            return Ok(None);
         }
         // **The slot is the path flattened**, summing each skipped element's arity;
         // the steps are reversed first.
@@ -431,21 +444,21 @@ where
         let mut offset = 0usize;
         let mut shape = match self.params.first() {
             Some(slot) => slot.shape.clone(),
-            None => return None,
+            None => return Ok(None),
         };
         for position in &positions {
             let lichen_lowlevel::LowShape::Tuple(items) = &shape else {
-                return None;
+                return Ok(None);
             };
             let Some(element) = items.get(*position) else {
-                return None;
+                return Ok(None);
             };
             for skipped in &items[..*position] {
                 offset += super::flat_arity(skipped);
             }
             shape = element.clone();
         }
-        Some(offset)
+        Ok(Some(offset))
     }
 
     /// The domain's leaves, flattened — the ABI's argument list.
@@ -1162,7 +1175,7 @@ where
         }
         // **A read at a path is a parameter read** even where `define_in` said
         // `Computed`; see [`Lower::parameter_path`].
-        if let Some(slot) = self.parameter_path(node) {
+        if let Some(slot) = self.parameter_path(node)? {
             return self.parameter(slot);
         }
         // Anything else that is a view was resolved by `define_in`, so this index
@@ -1426,7 +1439,7 @@ where
             return Ok(vec![self.value(arg)?]);
         };
         // (1) A read of the domain, passed through.
-        if let Some(base) = self.parameter_path_of(arg)
+        if let Some(base) = self.parameter_path_of(arg)?
             && base + arity <= self.body.parameters().len()
         {
             let mut args = Vec::with_capacity(arity);

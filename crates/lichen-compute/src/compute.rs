@@ -72,9 +72,8 @@ use lichen_highlevel::program::{
     Ctx, HighProgram, LeafKindMarkers, TypeOperator, TypeValue, ValueType,
 };
 use lichen_highlevel::shape::{
-    KIND_MARKER_SLOT, PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, STRUCT_MARKER_NAMES_SLOT,
-    STRUCT_MARKER_PAYLOAD_SLOT, TYPE_KIND_SLOT, TYPE_SHAPE_SLOT, TypeRef,
-    array_items as array_items_any, field_list, field_names, field_type, low_type_of_slot,
+    PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, TypeRef, array_items as array_items_any,
+    field_list, field_names, field_type, low_type_of_slot,
 };
 use lichen_kernel_ir::{
     BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelRoles, KernelShape,
@@ -2015,7 +2014,7 @@ where
 /// The decode is the **strong** one — [`field_names`], whose name-table walk a
 /// node that is not a named struct type term fails — so every reader of the
 /// parameter's field list makes the same choice about which node it is reading.
-fn parameter_type_ref<P>(module: &mut Module<P>, slot: AnyNodeId) -> Option<TypeRef>
+fn parameter_type_ref<P>(module: &Module<P>, slot: AnyNodeId) -> Option<TypeRef>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
@@ -2028,7 +2027,7 @@ where
 
 /// The named fields and field-type list of the type a **type slot** names.
 fn struct_fields_of_slot<P>(
-    module: &mut Module<P>,
+    module: &Module<P>,
     slot: AnyNodeId,
 ) -> Option<(Vec<Option<&'static str>>, AnyNodeId)>
 where
@@ -2342,7 +2341,7 @@ fn param_read_offset<P>(
 ) -> Result<Option<u32>, String>
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     for slot in params {
@@ -3773,7 +3772,7 @@ fn node_class_in<P>(
 ) -> ScalarClass
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let node = node.into();
@@ -4060,7 +4059,7 @@ fn parallel_buffer_pos<P>(
 ) -> Result<Option<usize>, String>
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let Some(slot) = params.first() else {
@@ -4305,7 +4304,7 @@ pub(crate) fn param_path<P>(
 ) -> Result<Option<Vec<usize>>, String>
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     // **Two passes, and the first is why the second can be right.**  A named
@@ -4341,15 +4340,10 @@ where
             return Ok(None);
         };
         if target == AnyNodeId::Dynamic(param_pair) {
-            // **Step into the pair's value and keep walking**: a struct parameter's fields
-            // live inside the value half.
-            match field_name(module, selector)? {
-                Some(name) => steps.push(IndexStep::Named(name)),
-                None => match usize_value(module, selector) {
-                    Some(position) => steps.push(IndexStep::Position(position)),
-                    None => return Ok(None),
-                },
-            }
+            // **The pair's value half is the parameter itself, not one of its
+            // fields**, so the peel contributes no step: a path is counted from
+            // the parameter's own first field, which is what the role table and
+            // the slot's scalar shape are both written against.
             match pair_value_half(module, param_pair) {
                 Some(value) => {
                     current = value;
@@ -4394,10 +4388,12 @@ fn resolve_steps<P>(
 ) -> Result<Option<Vec<usize>>, String>
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let Some(fields) = param_value_shape(module, param_pair) else {
+    let Some(type_slot) = (unsafe { module.array_items(param_pair) })
+        .and_then(|items| items.get(PAIR_TYPE_SLOT).map(|item| item.node))
+    else {
         // A scalar parameter has no field list, and a read of it is the value
         // itself: the empty path.  It only needs the constant selectors it was
         // handed, never a name lookup.
@@ -4406,13 +4402,13 @@ where
     // The walk descends one level per step, and every level carries **two**
     // parallel lists: the value's field *types* (what the next step indexes
     // into) and the same value's field *names* (what a named step is looked up
-    // in).  They are read from different places — the types from the shape, the
-    // names from the type term's name table — so keeping them together here is
-    // what stops a name being looked for in the wrong list.
-    let mut types = Some(fields);
-    let mut names = unsafe { module.array_items(param_pair) }
-        .and_then(|items| items.get(PAIR_TYPE_SLOT).map(|item| item.node))
-        .and_then(|type_slot| struct_type_names(module, type_slot));
+    // in).  Keeping them together here is what stops a name being looked for in
+    // the wrong list, and reading the outer level through the one decode that
+    // states which node is the type is what keeps it the same struct the roles
+    // were read from.
+    let (mut names, mut types) = struct_fields_of_slot(module, type_slot)
+        .map(|(names, shape)| (Some(names), Some(shape)))
+        .unwrap_or_default();
     let mut path = Vec::with_capacity(steps.len());
     for step in steps {
         let at = match step {
@@ -4441,7 +4437,9 @@ where
             .and_then(|entries| entries.get(at))
             .map(|entry| entry.node);
         types = entry;
-        names = entry.and_then(|entry| struct_type_names(module, entry));
+        names = entry
+            .and_then(|entry| parameter_type_ref(module, entry))
+            .and_then(|ty| field_names(module, ty));
     }
     Ok(Some(path))
 }
@@ -4464,92 +4462,6 @@ fn resolve_without_type(steps: &[IndexStep]) -> Result<Option<Vec<usize>>, Strin
         }
     }
     Ok(Some(path))
-}
-
-/// A struct **type term**'s name→index table, in field order — the named-read
-/// resolution's read of the encoding, at the one site that needs only the names
-/// and no field types.
-///
-/// It walks the type/kind/marker/names chain one `array_items` at a time,
-/// exactly as `shape::struct_term_parts` does, so the two cannot disagree about
-/// the layout.  `None` when the term is not a named struct type: a positional
-/// struct's names slot is `Error`, and a term whose chain is not yet decided is
-/// a type this resolution has nothing to read.
-///
-/// **The marker's `TypeStruct` tag is not checked here.**  This vocabulary's
-/// bound carries no [`ValueType`], so the tag atom cannot be named without
-/// rippling that bound through the lowering's callers; the names slot being a
-/// `Table` is the structural signal instead (see the closing report).
-fn struct_type_names<P>(module: &Module<P>, term: AnyNodeId) -> Option<Vec<Option<&'static str>>>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    let shape = type_term_slot(module, term, TYPE_SHAPE_SLOT)?;
-    let kind = type_term_slot(module, term, TYPE_KIND_SLOT)?;
-    let marker = type_term_slot(module, kind, KIND_MARKER_SLOT)?;
-    // The marker is the `[payload, TypeStruct]` pair; the name table rides in
-    // the payload's names slot.
-    let payload = type_term_slot(module, marker, STRUCT_MARKER_PAYLOAD_SLOT)?;
-    let names_at = type_term_slot(module, payload, STRUCT_MARKER_NAMES_SLOT)?;
-    let field_count = unsafe { array_items_any(module, shape) }?.len();
-    let mut names: Vec<Option<&'static str>> = vec![None; field_count];
-    let Some(LowValue::Table(table)) = module
-        .node_value(names_at)
-        .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-    else {
-        return None;
-    };
-    // SAFETY: `table` is the payload of the value read from the live node
-    // `names_at`, so its home block is alive.
-    for item in unsafe { table.items() } {
-        let name = module
-            .node_value(item.key)
-            .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-            .and_then(|v| match v {
-                LowValue::Str(name) => Some(name),
-                _ => None,
-            });
-        let index = module
-            .node_value(item.value)
-            .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-            .and_then(|v| match v {
-                LowValue::USize(n) => Some(n),
-                _ => None,
-            });
-        if let (Some(name), Some(index)) = (name, index)
-            && index < field_count
-        {
-            names[index] = Some(name);
-        }
-    }
-    Some(names)
-}
-
-/// One slot of a type term.
-///
-/// **The encoding mixes the two node homes freely within one term** — a struct
-/// term's shape is a module node while its kind is a frozen (static) one — so a
-/// reader that only accepted [`NodeId`] would decode half a type and fail on the
-/// other half.  This reads through [`AnyNodeId`] from end to end and never
-/// materializes: the value a static slot holds is already the answer, so copying
-/// it into the module would add graph for nothing.  `shape::array_items` is the
-/// same reader the type predicates in `lichen_highlevel::shape` use, so the walk
-/// cannot drift from the encoding authority.
-///
-/// `None` when the term is not an array with that slot, or the slot is undecided.
-fn type_term_slot<P>(module: &Module<P>, term: AnyNodeId, at: usize) -> Option<AnyNodeId>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    // SAFETY: `term` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    unsafe { array_items_any(module, term) }?
-        .get(at)
-        .map(|item| item.node)
 }
 
 /// Follow a `value_of` extraction — `Index(pair, 0)`, where `pair` is a
@@ -4700,25 +4612,6 @@ where
 /// The **field-type list** of a parameter's value: the shape slot of the
 /// parameter's type expression.
 ///
-/// A parameter's type expression states the value's *type*, so a struct
-/// parameter's shape is literally its list of field types — one entry per
-/// position, in declaration order.  That list is what a read of the parameter
-/// value indexes into, and what this walk descends one level per read.
-///
-/// `None` for a parameter whose type is not a struct — a scalar `jit` domain
-/// states no field list, and a read of it needs no name resolved.
-fn param_value_shape<P>(module: &Module<P>, param_pair: NodeId) -> Option<AnyNodeId>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    let type_slot = unsafe { module.array_items(param_pair) }?
-        .get(PAIR_TYPE_SLOT)
-        .map(|item| item.node)?;
-    type_term_slot(module, type_slot, TYPE_SHAPE_SLOT)
-}
-
 /// The field positions a read's own chain names, walking **down from the read**.
 ///
 /// # Invariant
