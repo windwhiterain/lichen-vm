@@ -4408,8 +4408,8 @@ where
     let arity = graph::MAX_GRAPH_INPUTS;
     let placeholders = match roles {
         Some(roles) => {
-            // A buffer role's cell is a `Buf` wrapper around the placeholder, since
-            // that is the field's type; a scalar role stays bare.
+            // A buffer role's cell is a `Buf` wrapper around the placeholder;
+            // a scalar role stays bare.
             let mut paths: Vec<(&Vec<usize>, bool)> = roles
                 .scalars
                 .iter()
@@ -4658,11 +4658,8 @@ where
     // The items of a result are nodes, so each is read back through the module
     // rather than matched in place.
     let place_of = |node: AnyNodeId| place_of_node::<P>(module, node);
-    // One lichen value read as the references it names: a bare placeholder is
-    // one, and a **materialized tuple** is one per element — the multi-value
-    // form, a function that genuinely returns `(a, b)`. Anything else is not
-    // something a graph's value table can name, which is the `None` this whole
-    // function reports.
+    // One value read as the references it names: a placeholder, or a tuple with
+    // one per element.
     let placed_of = |value: &P::Value| -> Option<Vec<Placed>> {
         if let Some(ComputeValue::GraphValue(id)) = AsEnum::<ComputeValue>::as_enum(value) {
             return Some(vec![Placed::Value(id)]);
@@ -4696,12 +4693,10 @@ where
 
 /// Run a graph over the values its source function took.
 ///
-/// **The arguments are sorted into roles here rather than by the operator's
-/// caller**, and that is the whole contract of a value table: a buffer becomes
-/// the slot a dispatch records against, a number becomes the extent a dispatch
-/// runs over, and anything else is refused by name. A jit'd function may take
-/// arbitrary lichen values, and this is where they are asked what role they
-/// have.
+/// # Invariant
+/// The arguments are sorted into roles here, not by the operator's caller: a buffer
+/// becomes the slot a dispatch records against, a number the extent it runs over,
+/// and anything else is refused by name.
 fn run_graph<P>(
     module: &mut Module<P>,
     block: BlockId,
@@ -4729,10 +4724,8 @@ where
             return None;
         }
     };
-    // **The argument is walked the way the recording numbered its slots**: leaves
-    // in depth-first field order, with a wrapper's type slot skipped.  The flat
-    // tuple a positional body reads is a structure too — one level, in order — so
-    // one walk serves both shapes.
+    // The argument is walked the way the recording numbered its slots: leaves in
+    // depth-first order, a type slot skipped.
     let mut argument_leaves: Vec<AnyNodeId> = Vec::new();
     match arguments.map(|node| dyn_node(node)).transpose() {
         Ok(Some(node)) => flatten_leaves(module, AnyNodeId::Dynamic(node), &mut argument_leaves),
@@ -4748,10 +4741,8 @@ where
             .node_value(*node)
             .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
         else {
-            // Not a compute value at all, so it is a number — the only other role
-            // a dispatch can read. Asked on its own terms rather than through the
-            // compute vocabulary, because a count is a lichen `Int` and not a
-            // compute leaf.
+            // Not a compute value, so it is a number — the only other role a
+            // dispatch can read.
             match module
                 .node_value(*node)
                 .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
@@ -4817,10 +4808,8 @@ where
         }
     };
     let produced = values;
-    // **Left where they are.** A value the device wrote stays a resident id and
-    // crosses the bus when the language asks for host data, which is the same
-    // discipline a single launch follows; a run that fetched everything on the
-    // way out would put a download on the path of every result.
+    // Left where they are: a device result stays resident until the language asks
+    // for host data.
     let value = if produced.len() == 1 {
         match &produced[0] {
             RunResult::Buffer { class, data } => <P::Value as From<ComputeValue>>::from(
@@ -4877,50 +4866,28 @@ where
     )
 }
 
-/// The compiled **module cache** — the launch paths' derived-data cache: an
-/// assembled, validated wasm module per launch, so a repeated launch of the
-/// same kernel does not re-assemble and re-validate it.
+/// The compiled module cache: an assembled, validated wasm module per launch.
 ///
-/// The key is everything the module depends on: the launch mode (which owns
-/// the *fragment set* — [`run_kernel`] assembles the root's relative launch
-/// set, [`run_parallel_kernel`] one parallel fragment) and the root
-/// [`KernelId`].  The id alone is sufficient because a registered fragment is
-/// immutable and an id is never reused, so a key's assembly is fixed for the
-/// process's life; it is also process-unique, so two different programs can
-/// never share an entry — only a repeated launch of one kernel hits.  Both
-/// facts are the kernel registry's contract (see its doc): the day an entry
-/// can be removed or replaced there, this cache must be keyed on the fragments
-/// themselves or cleared with it.
-///
-/// An entry here is *derived*: it can always be rebuilt from the fragment, so
-/// eviction cannot lose anything a value refers to — unlike the kernel and
-/// buffer registries, whose entries **are** the referents of `Kernel`/
-/// `ParKernel`/`Buffer` values.  That is why a bound with eviction is sound
-/// here and not there.
-///
-/// The [`wasmi::Engine`] is cached **with** its module and deliberately not
-/// shared process-wide: wasmi's default `CompilationMode::LazyTranslation`
-/// validates eagerly and translates each function on first use into the
-/// **engine's** code map, which is append-only and freed only with the engine.
-/// Dropping an evicted entry's engine is therefore what frees its translated
-/// code, and one shared engine would turn this cache into a second unbounded
-/// accumulator — the defect it exists to avoid.
+/// # Invariant
+/// The key is the launch mode and the root [`KernelId`], which suffices because a
+/// registered fragment is immutable and an id is never reused. An entry is *derived*,
+/// so eviction loses nothing a value refers to; the [`wasmi::Engine`] is cached with
+/// its module on purpose, since it owns the translated code and a shared one would
+/// be a second unbounded accumulator.
 static MODULES: OnceLock<Mutex<ModuleCache>> = OnceLock::new();
 fn modules() -> &'static Mutex<ModuleCache> {
     MODULES.get_or_init(Default::default)
 }
 
-/// How many compiled modules stay resident.  The entries are rebuildable, so
-/// this only trades recompiles against memory; it is a bound, not a policy.
+/// How many compiled modules stay resident: a bound, not a policy.
 const MAX_CACHED_MODULES: usize = 64;
 
 /// Compiled modules this process built rather than served from [`MODULES`].
 ///
-/// Test- and measurement-visible on purpose, in the same spirit as the package
-/// store's `compiled`/`loaded_from_cache`: the value of content-addressed
-/// kernel ids (`D15`) is precisely that this stops growing when the same
-/// function is compiled again, and a counter is the only way to see that
-/// without timing a wasm compile.
+/// # Invariant
+/// Test- and measurement-visible on purpose: the value of content-addressed ids
+/// (`D15`) is that this stops growing when the same function is compiled again, and a
+/// counter is the only way to see that without timing a compile.
 static MODULE_CACHE_MISSES: AtomicUsize = AtomicUsize::new(0);
 
 /// See [`MODULE_CACHE_MISSES`].
@@ -4954,9 +4921,8 @@ impl ModuleCache {
             .map(|cached| (cached.engine.clone(), cached.module.clone()))
     }
 
-    /// Insert a freshly compiled module, evicting the oldest entry once the
-    /// bound is reached.  Replacing a resident key evicts nothing: the assembly
-    /// for a key is deterministic, so the entry is the same module.
+    /// Insert a freshly compiled module, evicting the oldest at the bound.
+    /// Replacing a resident key evicts nothing.
     fn insert(&mut self, key: KernelId, engine: wasmi::Engine, module: wasmi::Module) {
         if self.entries.len() >= MAX_CACHED_MODULES
             && !self.entries.contains_key(&key)
@@ -4983,10 +4949,9 @@ impl ModuleCache {
 
 /// The compiled module for `root`, assembling and compiling it on a miss.
 ///
-/// **One entry per kernel id, and no mode beside it.** Both launch paths assemble
-/// the root's relative launch set — a parallel fragment cross-calls exactly as a
-/// scalar one does — so the id decides the module and a second key component
-/// would only be a second way to reach one assembly.
+/// # Invariant
+/// One entry per kernel id, and no mode beside it: both launch paths assemble the
+/// root's relative launch set, so the id decides the module.
 fn cached_module(
     root: KernelId,
     assemble: impl FnOnce() -> Result<Vec<u8>, String>,
@@ -5006,45 +4971,17 @@ fn cached_module(
     Ok((engine, module))
 }
 
-/// Execute a compiled kernel on an argument vector with wasmi, returning its
-/// results — one [`ScalarValue`] per value the fragment declares
-/// ([`KernelFragment::results`]).  The dynamic [`wasmi::Func::call`] API accepts
-/// any number of values, so a tuple-domain kernel (arity N) launches with N
-/// arguments and a scalar kernel (arity 1) with one, each of the class its
-/// parameter leaf is.
+/// Execute a compiled kernel on an argument vector with wasmi, returning its results.
 ///
-/// **Both the argument count and the output buffer are decided here, not by
-/// `wasmi`.**  All three numbers are facts compute already holds — the callee's
-/// registered domain flattened by [`flat_arity`], its registered result arity,
-/// and the vector built from the argument — so the refusals can state them,
-/// where a mismatch left to `wasmi::Func::call` reports only that a count was
-/// wrong.  The **argument** check is the *only* place it happens for a
-/// `compute.call`, whose `CallOp` gate deliberately leaves the argument's shape
-/// unconstrained (a fresh domain cell), so this message is the only account of a
-/// wrong-arity call.  The **output** buffer is sized from the fragment because a
-/// too-small one would make wasmi report a type error against a signature this
-/// crate itself emitted.  A registered fragment's `param_shape` is a decided
-/// scalar or tuple of them ([`kernel_domain`]), which is what makes
-/// [`flat_arity`] an exact parameter count here rather than its filler.
-///
-/// **The argument classes are checked here too**, and this is the one place they
-/// can be: the callee's leaf classes and the vector built from the argument are
-/// both in hand, and a mis-classed argument is otherwise an `i64` a float
-/// parameter would silently read as its bits.  `launch`'s checker gate catches
-/// the mismatch for an annotated kernel; `call`'s fresh domain cell does not, so
-/// this is its only account of it
-/// (`docs/notes/floating-point.md` §4.2).
-///
-/// The kernel's **relative launch set** — the kernel itself plus every kernel
-/// it (transitively) cross-calls, discovered by scanning each fragment's
-/// cross-kernel instructions — is assembled into one wasm module (launch-time
-/// assembly, the deferred linker), the root exported as `main`.  The module is
-/// fetched through [`cached_module`], so a repeat launch of the same kernel
-/// reuses it (`P1-18`).
+/// # Invariant
+/// The argument count and the output buffer are decided here, not by `wasmi`: all
+/// three numbers are facts compute holds, so a refusal can state them. The argument
+/// check and the class check are the *only* account of a wrong-arity or mis-classed
+/// call, because `compute.call`'s gate leaves the argument unconstrained. The module
+/// is fetched through [`cached_module`], so a repeat launch reuses it.
 fn run_kernel(id: KernelId, args: &[ScalarValue]) -> Result<Vec<ScalarValue>, String> {
-    // The leaf classes, the result arity and the fragment's class are read
-    // under one lock and released before assembly, which locks the same registry
-    // again through [`assemble_launch_set`].
+    // These are read under one lock, released before assembly locks the registry
+    // again.
     let (expected, results, class) = {
         let fragments = kernels().lock().unwrap();
         let fragment = fragments
@@ -5077,9 +5014,8 @@ fn run_kernel(id: KernelId, args: &[ScalarValue]) -> Result<Vec<ScalarValue>, St
             ));
         }
     }
-    // A fragment's result arity is at least one (a body always leaves a value),
-    // so the buffer is never empty; the guard keeps the invariant stated here
-    // rather than resting on the emitter alone.
+    // A fragment's result arity is at least one: the guard states that rather than
+    // resting on the emitter.
     let outputs = results.max(1);
     let (engine, module) = cached_module(id, || assemble_launch_set(id))?;
     let mut store = wasmi::Store::new(&engine, ());
@@ -5110,18 +5046,14 @@ fn run_kernel(id: KernelId, args: &[ScalarValue]) -> Result<Vec<ScalarValue>, St
         .collect()
 }
 
-/// The fragments of a kernel's **relative launch set**, in BFS order, and where
-/// each kernel id sits in that order.
+/// The fragments of a kernel's relative launch set, in BFS order, and where each
+/// id sits.
 ///
-/// The set is the root plus every kernel it (transitively) cross-calls, so
-/// `ordered[i]` is position `i` and `index` maps a callee kernel-id to that
-/// position. **The fragments are cloned and the registry lock released before
-/// this returns**, because every consumer emits from the set and an emitter that
-/// reaches the registry again would deadlock on a lock that is not reentrant.
-///
-/// One derivation, and both consumers take it: [`assemble_launch_set`] links it
-/// into wasm and [`run_on_installed_backend`] hands it to an installed backend,
-/// so the two cannot enumerate a call graph differently.
+/// # Invariant
+/// The set is the root plus every kernel it transitively cross-calls, and the
+/// fragments are cloned with the registry lock released before this returns — an
+/// emitter that reached the registry again would deadlock. One derivation, both
+/// consumers: the wasm assembly and an installed backend.
 fn ordered_launch_set(id: KernelId) -> Result<OrderedLaunchSet, String> {
     let mut ordered: Vec<KernelFragment> = Vec::new();
     let mut index: HashMap<KernelId, u32> = HashMap::new();
@@ -5161,12 +5093,11 @@ struct OrderedLaunchSet {
     index: HashMap<KernelId, u32>,
 }
 
-/// Assemble the wasm bytes of the root kernel's **relative launch set** — the
-/// root plus every kernel it (transitively) cross-calls.
+/// Assemble the wasm bytes of the root kernel's relative launch set.
 ///
-/// The result is a function of the root id alone (the registry's fragments are
-/// immutable and ids are never reused), which is what makes the id a sufficient
-/// cache key for [`cached_module`].
+/// # Invariant
+/// The result is a function of the root id alone — the registry's fragments are
+/// immutable and ids are never reused — which makes the id a sufficient cache key.
 fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
     let OrderedLaunchSet { ordered, index } = ordered_launch_set(id)?;
     assemble_module(&ordered, &index)
