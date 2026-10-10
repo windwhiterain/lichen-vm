@@ -1,4 +1,4 @@
-> **Status:** current — the rule is enforced in CI; the tree is not yet compliant
+> **Status:** current — the rule is enforced in CI, and the tree satisfies it
 
 # The comment policy
 
@@ -65,30 +65,20 @@ Rust comment checker.
 
 ## The state of the tree
 
-The gate covers the whole tree, which is the honest scope, and the tree does not
-yet satisfy it. Measured at `af6f6f2` on `dev`, the check reports **4,158**
-violations across 222 files read — 4,058 `section-too-long` and 100
-`heading-not-allowed`, of which 879 sit in `tests/` directories.
+The gate covers the whole tree, which is the honest scope, and it passes: run at
+the CI step's own settings, `comments-check --config comments-test.toml` reports
+no violations. The remediation that brought it there is the body of work that
+also produced these notes — the prose a comment budget could not hold was moved
+here, where it can be read rather than skimmed.
 
-That is a deliberate position, not an oversight: the rule is stated once and
-enforced everywhere, and the remediation is a separate piece of work from landing
-the rule. Three consequences follow for anyone working on the tree meanwhile:
+The check runs **first** in the `gate` job, above `Check formatting`. Nothing
+about a comment depends on the code compiling, and a comment that breaks the
+policy is the cheapest thing in the job to find out about.
 
-- The comment check runs **last** in the `gate` job, after formatting, lint and
-  tests. Checking it first would hide the other three until the tree is
-  compliant.
-- `ci` is red on this rule alone until the backlog is cleared. Everything else
-  still reports.
-- The count moves whenever the tree does, so re-run the command for a current
-  number rather than trusting the one above.
-
-Both are worth revisiting when the backlog reaches zero; the workflow comment at
-the step says where to move it.
-
-## Working through the backlog
+## Reading a report
 
 `comments-check` prints **10 violations** by default and folds the rest, because
-a full report on this tree is about six megabytes of JSON — enough to fill a
+a full report on a tree this size is megabytes of JSON — enough to fill a
 reader's context on its own, and the reason an agent would re-read it and get
 less out each time. Pass `--max-violations N` to print more, or `--max-violations
 0` for every one.
