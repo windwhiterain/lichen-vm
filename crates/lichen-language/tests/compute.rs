@@ -621,17 +621,22 @@ compute.launch k 5
 #[test]
 fn a_kernel_value_and_type_render_by_name() {
     // A `jit` result's value is a kernel struct `[.native, .I, .O]`: the `.native`
-    // artifact renders by name (via the compute vocabulary hook), the `.I`/`.O`
-    // fields carry the signature, so the type renders as the struct
-    // `struct<.native <_>, .I Int, .O Int>`.  Dropping `TypeKernel` means no
+    // artifact renders by name (via the compute vocabulary hook), and the
+    // `.I`/`.O` fields carry the signature.  Dropping `TypeKernel` means no
     // renderer special-case — the struct's own fields carry the signature.
     // **The parameter states its class, and it has to**: a kernel is lowered for
     // one class and compiled before any apply, so an open body (`y => y + y`) is
     // refused by name rather than lowered in a class the compiler picked.
-    // Both fields are **dumps**, and say so: the struct's type names no class
-    // for either slot (`.native`'s is an undecided pair), so each renders as its
-    // own name under the mark — `raw Kernel`, `raw undecided` — rather than
-    // spelling itself like a field the chain explained.
+    // Each signature field's **type** is `Type`, not `Int`: the field holds a
+    // *type value* — the domain, the codomain — and the universe is the type of
+    // one.  Its *value* is that type, so the value half reads `Int`.
+    // `raw Kernel` is the artifact's own dump: the struct's type names no class
+    // for `.native`, whose cell is an undecided pair.  The two field cells are
+    // **not** dumps, and that is the fix this expectation was re-pinned for: a
+    // frozen node now mirrors the ordinary node's fields, so the answer the
+    // frozen `compute` module solved is carried across the boundary instead of
+    // being re-minted as holes the call-time constraints never reach
+    // (`docs/notes/kernel-parameter-class.md`).
     let out = render(
         r#"
 --- compute = import "compute.lichen" ---
@@ -640,8 +645,7 @@ k
 "#,
     );
     assert_eq!(
-        out,
-        "(raw Kernel, raw Int, raw Int): struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>",
+        out, "(raw Kernel, Int, Int): struct<.native raw[?a, ?b], .I Type, .O Type>",
         "kernel value/type: {out:?}"
     );
 }
