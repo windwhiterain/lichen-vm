@@ -722,6 +722,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "lichen-fusion"
+version = "0.1.0"
+
+[[package]]
 name = "lichen-graph-ir"
 version = "0.1.0"
 dependencies = [

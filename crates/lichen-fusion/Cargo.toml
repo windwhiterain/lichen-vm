@@ -1,0 +1,13 @@
+[package]
+name = "lichen-fusion"
+version.workspace = true
+edition.workspace = true
+
+# No dependencies, and that is an invariant rather than an accident of the current
+# tree: this crate is the symbolic core of reduction fusion, and every obligation it
+# discharges — abstraction, inversion, distributivity — is discharged on expression
+# trees of its own.  Anything it named would be named by every backend that reads a
+# fused kernel, so the same argument as `lichen-kernel-ir` applies here: a backend
+# that depends on it inherits nothing it did not choose.  The bridge that reads
+# `KernelFragment` is a later step, and it is the side that will pay for the IR.
+[dependencies]
