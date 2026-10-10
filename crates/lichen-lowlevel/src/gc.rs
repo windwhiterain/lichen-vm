@@ -34,12 +34,8 @@ impl<P: Program> Module<P> {
         self.blocks[target].nodes.push(node);
         let current = self.nodes[node].value;
         let operation = self.nodes[node].operation;
-        // An unevaluated operation still depends on its operand: the
-        // subtree behind it may be referenced when the node is evaluated
-        // later, so enter it through the operand edge — the same
-        // unevaluated-op rule as the apply clone set.  A cached value
-        // means the node is memoized and its operand is dead; it is not
-        // followed, so evaluated intermediate chains still compact away.
+        // An unevaluated operation still depends on its operand, which may
+        // be referenced later; a cached value means it is dead.
         if current.is_none()
             && let Some(operand) = operation.and_then(|operation| operation.operand)
         {
@@ -47,19 +43,13 @@ impl<P: Program> Module<P> {
         }
         let value = current.map(|value| match value.as_enum() {
             Some(LowValue::Array(AnyHandle::Static(_))) => {
-                // A static payload lives in the plugged module's shared
-                // arena — no block to vacate, nothing to move.  The value is
-                // kept verbatim; its item refs are all static (nothing to
-                // trace), and identity with every other reader of the
-                // payload is preserved.
+                // A static payload lives in the frozen module's arena: no
+                // block to vacate, its item refs all static.
                 value
             }
             Some(LowValue::Array(array)) => {
-                // SAFETY: `array` is the payload of `node`, a live node of
-                // this module.  `garbage_collect` releases `source` only after
-                // this walk returns, so both the source and target arenas stay
-                // alive for the whole loop; the note covers both `items()`
-                // calls in this arm.
+                // SAFETY: `array` is a live node's payload, and `source` is
+                // released only after this walk returns.
                 for item in unsafe { array.items() } {
                     // A static item lives in the static module — nothing to
                     // move (its value stays, referenced in place).
@@ -67,28 +57,20 @@ impl<P: Program> Module<P> {
                         self.garbage_collect_node(node, source, target);
                     }
                 }
-                // The whole payload — element nodes and their shallow flags
-                // together — moves into the target arena, so a compacted
-                // array keeps its markers (static item refs are absolute and
-                // copy verbatim).
+                // The whole payload moves into the target arena, so a
+                // compacted array keeps its markers.
                 P::Value::from(LowValue::Array(
                     self.alloc_array(unsafe { array.items() }, target),
                 ))
             }
             Some(LowValue::Table(AnyHandle::Static(_))) => {
-                // A static payload lives in the plugged module's shared
-                // arena — no block to vacate, nothing to move.  The value is
-                // kept verbatim; its entry refs are all static (nothing to
-                // trace), and identity with every other reader of the
-                // payload is preserved.
+                // A static payload lives in the frozen module's arena: no
+                // block to vacate, its entry refs all static.
                 value
             }
             Some(LowValue::Table(table)) => {
-                // SAFETY: `table` is the payload of `node`, a live node of
-                // this module.  `garbage_collect` releases `source` only after
-                // this walk returns, so both the source and target arenas stay
-                // alive for the whole loop; the note covers both `items()`
-                // calls in this arm.
+                // SAFETY: `table` is a live node's payload, and `source` is
+                // released only after this walk returns.
                 for item in unsafe { table.items() } {
                     // A static entry lives in the static module — nothing
                     // to move (its value stays, referenced in place).
@@ -99,10 +81,8 @@ impl<P: Program> Module<P> {
                         self.garbage_collect_node(node, source, target);
                     }
                 }
-                // The whole payload — entry nodes and their stored hashes
-                // together — moves into the target arena, so a compacted
-                // table keeps its sorted order and per-entry hashes (static
-                // entry refs are absolute and copy verbatim).
+                // The whole payload moves into the target arena, so a
+                // compacted table keeps its order and hashes.
                 P::Value::from(LowValue::Table(
                     self.alloc_table(unsafe { table.items() }, target),
                 ))
@@ -111,15 +91,8 @@ impl<P: Program> Module<P> {
             // scope to walk, no home block to re-point.
             Some(LowValue::Function(AnyFunctionId::Static(_))) => value,
             Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => {
-                // The template's nodes must outlive the closing block, so
-                // the scope is mapped like an array slice: each member
-                // homed in the vacated subtree moves into the target.  The
-                // function itself is homed like a node — if it lives in
-                // the vacated subtree it is re-pointed to the target and
-                // registered there, so release skips it and it stays
-                // callable.  The body's asserts are edges like the scope:
-                // a condition the check pass may still deep-evaluate must
-                // move with the function.
+                // The template's nodes and asserts must outlive the closing
+                // block, so each is mapped like an array element.
                 let ids = self.functions[function].nodes.clone();
                 for &id in &ids {
                     self.garbage_collect_node(id, source, target);
@@ -134,23 +107,14 @@ impl<P: Program> Module<P> {
                 }
                 P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(function)))
             }
-            // A program-specific value may carry a handle into an arena, and
-            // may carry nodes the lowlevel cannot see on its own: an operator's
-            // result is cached, and a cached node's operand is not followed, so a
-            // value holding a node has to name it or the node dies with the block
-            // this walk is vacating.
-            //
-            // The value looks through a shared `TraceContext` and the walk then
-            // mutates, so the two never hold a borrow of the module at once, and
-            // collecting into a scratch the GC owns means a value never has to
-            // hold its references as one contiguous run of its own.
+            // A program-specific value may carry nodes the lowlevel cannot
+            // see: the traced ones must move or die with the block.
             None => {
                 let mut traced = Vec::new();
                 value.traced(self, &mut traced);
                 for node in traced {
-                    // The walked value is discarded, exactly as the array and
-                    // table arms discard theirs: a node keeps its id across the
-                    // move, so only its block changes, and a value holds the id.
+                    // The walked value is discarded, like the array and
+                    // table arms': only the node's block changes.
                     self.garbage_collect_node(node, source, target);
                 }
                 Self::copy_ext(self, value, target)
@@ -162,14 +126,15 @@ impl<P: Program> Module<P> {
     }
 
     /// Splice every member homed in `dropped` out of the class rooted at
-    /// `rep`, re-elect a representative among the survivors, and re-point
-    /// every survivor's parent at it, flattening the tree so no live
-    /// member's chain passes through a removed node.  The class value needs
-    /// no migration: [`Module::bind`] already replicated it to every member.
-    /// A class whose members all die with the block is left alone.
+    /// `rep` and re-elect a representative.
     ///
-    /// Must run before the block's nodes are removed — the walk reads the
-    /// `next` pointers of the members being removed.
+    /// # Invariant
+    ///
+    /// No live member's chain passes through a removed node. The class value
+    /// needs no migration: [`Module::bind`] already replicated it to every
+    /// member, and a class whose members all die with the block is left
+    /// alone. This runs before the block's nodes are removed, because the
+    /// walk reads the `next` pointers of the members being removed.
     fn flatten_class(&mut self, rep: NodeId, dropped: BlockId) {
         let mut survivors = Vec::new();
         let mut current = Some(rep);
@@ -181,12 +146,8 @@ impl<P: Program> Module<P> {
             survivors.push(member);
         }
         disjoint::rebuild(&mut self.nodes, &survivors);
-        // `rebuild` re-elected a representative among the survivors, and the
-        // class's value slot is now that representative's own slot.  The member
-        // that carried the value may be the one being dropped, so the value the
-        // survivors carry is re-distributed from the new representative —
-        // without this, a class whose value outlived the drop would read as
-        // undecided.
+        // `rebuild` re-elected a representative, so the class's value slot
+        // is its own; re-distribute the value from it.
         let Some((&representative, _)) = survivors.split_first() else {
             return;
         };
@@ -198,15 +159,16 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Drops `block` and everything homed in it (children, functions,
-    /// nodes, arena) without moving anything. The caller guarantees no
-    /// live node outside the block still references one inside it —
+    /// Drops `block` and everything homed in it — children, functions, nodes,
+    /// arena — without moving anything.
+    ///
+    /// # Invariant
+    ///
+    /// No live node outside the block still references one inside it:
     /// evaluating a surviving reference to a released block panics.
     ///
-    /// Public so a host can reap per-run frame blocks (a kernel bridge
-    /// spawns one block per call and drops it once the result is extracted;
-    /// [`Self::garbage_collect`] would hoist the subtree into the parent
-    /// instead, growing it forever).
+    /// Public so a host can reap per-run frame blocks, which
+    /// [`Self::garbage_collect`] would hoist into the parent and grow forever.
     #[stacksafe]
     pub fn drop_block(&mut self, block: BlockId) {
         let children = std::mem::take(&mut self.blocks[block].children);
@@ -217,10 +179,8 @@ impl<P: Program> Module<P> {
         }
         let functions = std::mem::take(&mut self.blocks[block].functions);
         for function in functions {
-            // A function homed in this block is dropped with it: removing it
-            // releases the function's scope.  Functions re-pointed to the
-            // parent by compaction stay, still callable — the stale id in
-            // this list is skipped, like a moved node's.
+            // A function homed here is dropped with it: removing it
+            // releases the scope. One re-pointed to the parent stays.
             if self
                 .functions
                 .get(function)
@@ -230,11 +190,8 @@ impl<P: Program> Module<P> {
             }
         }
         let nodes = std::mem::take(&mut self.blocks[block].nodes);
-        // Splice classes touched by this block out of their member lists
-        // and re-elect representatives among the survivors, so surviving
-        // members keep working parent chains and member lists after the
-        // removal below.  Runs before any node is removed, while the
-        // dropped nodes' `next` pointers are still readable.
+        // Splice this block's classes before removing any node, while
+        // their `next` pointers are still readable.
         let mut touched = std::collections::HashSet::new();
         for &node in &nodes {
             if self.nodes.get(node).is_some_and(|node| node.block == block) {
@@ -249,8 +206,8 @@ impl<P: Program> Module<P> {
                 self.nodes.remove(node);
             }
         }
-        // Drop the assert points that died with this block: the check pass
-        // walks the registry by id, so a dangling entry would panic there.
+        // Drop the assert points that died with this block: the check
+        // pass walks the registry by id, so a dangling entry panics.
         self.asserts
             .retain(|entry| self.nodes.contains_key(entry.condition));
         self.blocks.remove(block);
