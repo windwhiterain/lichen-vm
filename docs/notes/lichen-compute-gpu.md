@@ -1,9 +1,11 @@
 # The GPU backend for the lowered-kernel IR
 
 > Status: current — the arithmetic/select subset of a kernel runs on a real
-> device, and a `jit`/`plrun` chain can be **recorded and submitted once**
-> (`run_chain`, and the `compute.graph`/`compute.graphrun` surface). What is
-> *not* here is listed under [Not yet](#not-yet) rather than left implied.
+> device, a `jit`/`plrun` chain can be **recorded and submitted once**
+> (`run_chain`, and the `compute.graph`/`compute.graphrun` surface), and a
+> fragment may **cross-call another kernel** — the module holds one function per
+> fragment in the caller's launch set. What is *not* here is listed under
+> [Not yet](#not-yet) rather than left implied.
 >
 > What this note is: the second consumer of the lowered-kernel IR. It exists
 > because that IR is target-neutral, so a backend other than the wasm one can
@@ -13,7 +15,7 @@
 > Points at: `crates/lichen-compute-gpu/src/spirv.rs` (the emitter and its
 > refusals), `crates/lichen-compute-gpu/src/dispatch.rs` (the context, the pool
 > of submission slots, staging), `crates/lichen-kernel-ir/src/lib.rs`
-> (`ParallelBackend`, `Pending`, `KernelFragment`), and
+> (`ParallelBackend`, `LaunchSet`, `Pending`, `KernelFragment`), and
 > `crates/lichen-graph-ir/` (the executor).
 >
 > Companions: [compute-graph-jit](compute-graph-jit.md) (the recorded path and
@@ -66,7 +68,7 @@ therefore live in the emitter rather than in the IR, and both are the *same*
 fact — that the language says a comparison is the `0`/`1` scalar, which is not
 what this target's comparisons produce:
 
-- **A `bool` reaching a scalar position is materialised** (`as_scalar`:
+- **A `bool` reaching a scalar position is materialised** (`as_class`:
   `OpSelect` over the class's `1` and `0`), and a **scalar condition is
   converted** (`as_condition`: `OpINotEqual` against zero — non-zero is true,
   which is what wasm's `select` means by its `i32`). Each slot on the emitter's
@@ -172,6 +174,11 @@ when the tool is not on `PATH` — with the caveat that the fragment in the test
 a copy of the one in `examples/emit-spv.rs`, so a change to the example must be
 mirrored there.
 
+Three module shapes are validated beside it, each because it is a shape the module
+*contract* rather than an opcode list decides: a fragment whose buffers are of two
+classes (the id-range collision above), a body with structured control flow, and a
+launch set holding a cross-kernel call (two functions, one `OpFunctionCall`).
+
 The errors that shape actually produced, each named by the validator or the
 device, are the module contract in list form:
 
@@ -184,6 +191,231 @@ device, are the module contract in list form:
   struct's member, the element, *and* the element struct's member, because the
   element is itself a struct. This one the validator could not see; the device
   caught it.
+
+## Two passes, because a module's sections are ordered
+
+SPIR-V requires instructions in a fixed section order, and the entry point —
+which must name the function and list the globals that function reaches — comes
+*before* the types, variables and body it names. Ids are therefore **all
+pre-allocated** before anything is emitted, the body is walked first to learn
+which buffers it touches, and only then is the module written in section order.
+Emitting in one pass would mean either forward-referencing the entry point or
+emitting it twice. `assemble`'s numbered sections are that order made explicit:
+capabilities, memory model and entry point, annotations, types and constants,
+variables, then the functions.
+
+The emitter keeps **one id per `ValueId`** — SPIR-V is SSA and this emitter does
+not pretend otherwise.
+
+**Every module-scope id comes from one cursor, and that is not a style choice.**
+The constants used to sit at a hand-written range `16..21`, which stayed correct
+only while a module declared one buffer class: a second chain reached into that
+range, and `spirv-val` answered `Id 16 is defined more than once` for a module
+whose two buffers were of two classes. The device accepted it, which is the
+worse half — the emitter's output is checked offline precisely because a driver
+is not the authority on the specification.
+
+**Function-local ids come from the same cursor and are never reused.** SPIR-V
+scopes an id to the function that defines it, so reuse is legal; what it is not
+is *free*, because a module-scope constant and a local would then be one id
+inside the function that reused it. Handing out from one cursor that only moves
+forward makes that inexpressible rather than merely avoided.
+
+## The SSA emitter: how a body becomes structured SPIR-V
+
+`plan_body` lays the body's blocks out as structured control flow, and everything
+it decides is a structural fact rather than a target preference:
+
+- **A loop header is recognised, not marked.** SSA has no `While`: a block is a
+  loop header when an edge on the active depth-first path returns to it, and that
+  is the same rule that makes it the dominator of everything the loop holds. A
+  `CondBr` that is not a loop header is a selection, whose merge block is the
+  immediate post-dominator of its arms.
+- **Which arm stays in the loop is the one that can reach the header again**, so
+  the exit is decided by the same edge the header was. `OpLoopMerge`'s continue
+  target must differ from the header and be dominated by it, and a header with no
+  exit or with both arms reaching back is a `ControlFlow` refusal naming which.
+- **A selection's merge block must be dominated by the selection.** A join the
+  selection is inside — a loop header, an outer join — is not, so the selection
+  gets a pass-through block of its own and branches the join from there.
+  `redirect` resolves a declared target through those pass-throughs, taking the
+  **innermost** enclosing selection (a header that dominates the one already
+  chosen is deeper).
+- **Depth-first pre-order is what makes a definition precede its uses**: a
+  dominator is an ancestor in the depth-first tree, so it is written first. The
+  immediate post-dominators are computed over the graph with one virtual exit
+  every return reaches; that exit is the fallback answer only when no real block
+  is a strict post-dominator.
+
+On top of that plan:
+
+- **One `OpPhi` per block parameter**, filled in as the edges that reach the block
+  are emitted — a predecessor's terminator is emitted before the block it enters.
+- **The index parameter is the one entry-block parameter this target can place**:
+  it is the invocation id rather than a value of the fragment's domain, so it is a
+  *binding* rather than an instruction to interpret, and any other parameter is
+  refused where it is read (`SpirvRefusal::NonIndexParameter`) rather than
+  silently given some id. `index_local` finds it as the last leaf of the flattened
+  parameters, recognised structurally so a caller cannot disagree with a fragment
+  about which parameter it is.
+- **An `OpPhi` has one type however its edges were written**, so `resolved` fixes a
+  literal's kind to the module's class. A constant is emitted once per
+  (class, value) — SPIR-V requires every id to be defined exactly once — and since
+  `OpConstant` is module-scope the body's literals are collected in pass 1. The
+  same `Const(0)` is a buffer position in one place and a float's bit pattern in
+  another, so the payload rides in a `Literals` pool until a position reads it and
+  is materialised per class on demand.
+- **The returned values are the terminator's list**, so the result arity is a fact
+  of the body rather than of whatever happened to be left over.
+
+Three class facts the walk carries:
+
+- **A comparison's operands and result need not be scalars** — `(a < b) == c`
+  compares the scalar a comparison means — so both are materialised where the
+  position demands it. A comparison itself yields a `bool`, which is what `Select`
+  consumes and needs no widening.
+- **Float `==`/`!=` compares bit patterns.** The language routes both through
+  `ValueExt::value_eq`, which for a float compares `to_bits`, so `0.0 == -0.0` is
+  `0` and `NaN == NaN` is `1`. `OpFOrdEqual` is the trap here — right for IEEE and
+  wrong for this language — so a float equality reinterprets both operands in their
+  32-bit reading and compares the integers, which is `to_bits` exactly.
+- **A crossing is representable in both module classes**, because both element
+  types are declared (below). The operand is the class the conversion is *from*,
+  and a crossing of one class to itself is a reclassification that emits nothing:
+  `Int → Float` is `OpConvertUToF` and `Float → Int` is `OpConvertFToU`. An access
+  chain's index is an integer, so a float in that position is refused by name
+  rather than converted.
+
+`OpFDiv` is emitted plainly with no zero-divisor guard: a zero divisor is
+undefined here and IEEE on wasm, the recorded price of admitting floats
+([floating-point](floating-point.md) §4.4).
+
+One position rule: a buffer operation's *position* selects **which**
+storage-buffer variable to reach, so it is read as a number rather than as an id.
+A position is a `Const` computed immediately before the call — a value that was
+*computed* is not an ordinal however constant its value happens to be, and
+reading one as a position would address a buffer the caller never named.
+
+## Several functions in one module
+
+A `KernelInstr::CallKernel` names **another compiled kernel** rather than an
+inlined body, so no backend can resolve one from the calling fragment: the
+callee's *position* and the callee's *own domain* are facts the caller holds and
+the fragment does not. Both backends therefore take the same thing —
+`LaunchSet`, the fragments in the order the module lays them out plus each kernel
+id's position in them (`crates/lichen-kernel-ir/src/lib.rs`) — and
+`lichen-compute` discovers it in one place (`ordered_launch_set`) for the wasm
+link and for `ParallelBackend::run` alike. **That is what a caller owes the
+emitter**: assemble the callees into the set, or the call is refused by name.
+
+The emitter takes `&LaunchSet` and a `Binding` — this is the one signature the
+single-fragment form could not keep — and `dispatch`'s pipeline cache is keyed on
+the **whole set's** digests rather than the root's, because two sets that share a
+root and differ in a callee are two modules.
+
+What the module then holds:
+
+- **One `OpFunction` per fragment**, in the set's order, position `0` being the
+  entry point the pipeline names `main`. Every function id is allocated before any
+  body is walked, so a call may name a function the module declares later.
+- **`OpFunctionCall` names the callee's function id**, and is typed by that
+  callee's own `result_classes` — which is the other half of why the callee's
+  fragment, not merely its position, has to reach the emitter.
+- **A callee's arity is its own domain**, read off `param_shape.flat_arity()`.
+  `KernelInstr::arity` answers `None` for a call because the IR does not carry it,
+  so a call whose argument count disagrees with the callee is refused by name
+  (`CrossKernelArity`, naming both counts) rather than emitted.
+- **A callee takes its whole domain as `OpFunctionParameter`s and ends with
+  `OpReturnValue`**, in the class its `result_classes` names. Only the entry point
+  reads the invocation id and ends with a bare `OpReturn`, because a compute
+  shader communicates through its bound buffers. So `NonIndexParameter` is about
+  the *entry point* alone: a callee's parameters are ordinary parameters, which is
+  the one place the two kinds of function genuinely differ.
+- **A call to a kernel the set does not hold is refused by name**
+  (`CalleeNotInLaunchSet`), naming which kernel: the set is the caller's to
+  assemble, so that is where the fix is.
+- **The buffer variables are the module's, not a function's.** A called function
+  reaches the same bound buffers through the same descriptor set, so a slot's
+  element class is read through the **root** fragment — a slot is one variable and
+  a variable has the one class the host binds, which is what `dispatch` stages it
+  at. A callee that wants the other class crosses inside its own body, the same
+  `Conv` path any mixed body uses.
+- **`needs_int64` asks the whole set**, because a callee is a function in this
+  module: an integer buffer it reads is an integer chain this module declares.
+
+Transitivity is the set's, not the emitter's: `k1` calling `k2` calling `k3` is
+one module with three functions as soon as the caller assembles the closure, and
+the closure is breadth-first over `CallKernel` so a callee is always at a position
+above its caller.
+
+What this does **not** admit is a *parallel* callee. A parallel fragment's
+parameter is `(config, index)`, and only the index is a value a body can name — the
+`config` group is not reachable from inside a kernel — so a call to one has no
+argument list to write and is refused as a non-index parameter read. A parallel
+body may call a `jit` kernel, which is the shape the language produces and the one
+the cross-backend test runs.
+
+
+A module's *arithmetic* class and a buffer's *element* class are two different
+facts, and a mixed fragment is the case that separates them.
+
+- **`module_class` is the arithmetic class.** Buffer element classes are read
+  first — they are what the body reads and writes, and the positions data crosses
+  the ABI at — then the parameter leaves **except the index**, since a parallel
+  fragment's `param_shape` is `(config, index)` and both leaves are integers
+  whatever its buffers hold. A fragment with neither is an integer module. It no
+  longer refuses a fragment whose buffers disagree: it is one module's arithmetic
+  class, and the first buffer class wins.
+- **`buffer_classes` is the set of classes the module declares a chain for.** A
+  class no buffer holds is not declared: an unused `OpTypeStruct` is legal but it
+  would be a second copy of a rule nobody asked for, and a fragment that declared
+  it would have no way to say which of its chains a given binding means.
+- **The chain itself** (`BufferTypes`) is the element struct, the runtime array
+  over it, the block struct that wraps the array, and the two pointers the body
+  reaches through. Two of the module-contract errors above are why it has that
+  shape: a `StorageBuffer` variable must be typed as a struct (or an array of
+  one), and a runtime array may only be a struct's final member, so the buffer
+  takes two struct levels. `ptr_elem` points at one element *in the
+  storage-buffer storage class*, and its pointee is the class's own scalar.
+- **One chain per class in use**, keyed by `ScalarClass::index`, five ids each in
+  `ScalarClass::ALL` order, allocated with every other module-scope id before the
+  bodies are walked; `chain_of` is only ever read for a class `buffer_classes`
+  reported. An id nothing defines is legal — the id bound is an upper limit, not a
+  count — so a float module reserves `ulong` and leaves it undefined. The
+  function-local ids come from the same cursor, continuing above the last
+  module-scope id, and the module's id bound is where it stopped.
+- **`buffer_class_of(slot, fallback)`** reads slots inputs-first-then-outputs, the
+  order a `Binding` and every `Buffer{Read,Write}Call` position use. It falls back
+  to `module_class` for a slot the fragment's lists do not reach, and it is
+  `pub(crate)` because the **dispatch path asks the same question**: the bytes
+  staged for a buffer are that buffer's class's `byte_width()`, so a caller and the
+  module it binds cannot disagree about how wide a buffer is. **In a module with
+  several functions it is read through the launch set's root**, because the slots
+  are the root's: a callee reaches the same bound buffers and does not bind any of
+  its own.
+- **A buffer's variable is typed with its own class's block struct**, which is what
+  makes a mixed module bindable: a dispatch binds a descriptor against the type the
+  shader declares for that binding, so the `Int` variable must be the `Int` chain
+  and the `Float` variable the `Float` one.
+- **Both scalar types are declared in every module**, because a body may hold
+  values of either class and cross between them through `Conv`. `Float32` is core
+  SPIR-V and carries no capability, so it is unconditional; the 64-bit integer is
+  what costs `Int64`, declared whenever **anything** in the fragment is 64-bit —
+  an integer buffer counts, which is the difference a mixed fragment makes
+  (`needs_int64` asks the same question). A float fragment therefore needs no
+  device capability at all: its index is 32-bit and no value in it is a 64-bit
+  integer.
+- **The element struct's only member is that buffer's own scalar**, which is where
+  "does this buffer hold floats" is decided — per buffer, not per module. The
+  `ArrayStride` decoration is that same width — eight bytes for the integer ABI's
+  `i64`, four for an `f32` — and it is the *only* place the module states it: the
+  runtime array it decorates is the buffer a dispatch binds, and a dispatch reads
+  the stride off the buffer it is binding rather than off the module, so one
+  stride per class in use is enough.
+- **A storage-buffer access chain needs three indices**, not two: the block
+  struct's member, the element within the runtime array, and the element struct's
+  member. A read yields that buffer's element class; a write stores that buffer's
+  element class, whichever class the body computed the value in.
 
 ## Two position spaces, and the silent bug they caused
 
@@ -215,10 +447,14 @@ guard indices the host already knows.
 Instead every buffer is allocated rounded up to a whole number of workgroups and
 the padding is zeroed — inputs so the surplus lanes' reads are in bounds and
 return `0`, outputs so their writes land in padding rather than past the end.
-Only the first `count` elements are read back. Out-of-range access is impossible
-by construction rather than by a runtime test, and the shader stays branch-free.
-The tests pin **both** ends of that: a count that is not a multiple of 64 (so the
-padding is exercised) and one that is exactly a multiple (so it is not).
+Inputs are zeroed **on the device**, by a `cmdFillBuffer` recorded next to the
+upload: only the `count` real elements cross the bus, and the tail is cleared
+where it already lives rather than uploaded as zeroes the host had copies of
+anyway. Only the first `count` elements are read back. Out-of-range access is
+impossible by construction rather than by a runtime test, and the shader stays
+branch-free. The tests pin **both** ends of that: a count that is not a multiple
+of 64 (so the padding is exercised) and one that is exactly a multiple (so it is
+not).
 
 **An uninitialised output buffer is safe only because a write is reached by every
 invocation.** `dispatch` allocates output buffers and does not initialise them, so
@@ -267,6 +503,30 @@ put the backend back where it started, with nothing in the output to say so. Thi
 is the same rule the rest of the crate follows: no silent fallback onto a path
 that changes what the numbers mean.
 
+## What a host-side run refuses, and what it assumes
+
+- **A parameter the body *reads* is refused by name** (`RunError::ScalarsNotPushed`):
+  the device path pushes no leaf at all — the extent and the index and nothing
+  else — so a read parameter would have no value to arrive, and every lane would
+  compute from the wrong value
+  ([compute-runtime-scalars](compute-runtime-scalars.md) §3). **A declared leaf the
+  body never reads is not missing**, and that is the whole of the condition: a
+  parameter declares its leaves whether or not the body names one, so an input
+  group's filler is a leaf nothing demands
+  ([compute-buffer-wrapper](compute-buffer-wrapper.md)). `spirv` draws the same
+  line at `SpirvRefusal::NonIndexParameter`; this side's test is "is this operand a
+  *different* entry-block parameter", since a parameter read is an operand naming a
+  block parameter.
+- **A host input shorter than the run's count is refused**, each against its own
+  class's width rather than one module-wide answer. Only a host slot can be too
+  short: a resident buffer already holds what an earlier run put there, and its
+  length is that run's business.
+- **The outputs are not initialised.** They are what the caller keeps, so they
+  become resident, and they go into the same descriptor list as the inputs — the
+  binding layout is inputs-then-outputs in one set, so a run's outputs occupy the
+  slots after its inputs rather than a second set. Each is allocated and recorded
+  at its own class, the width a fetch reads it back at.
+
 ## What the GPU actually costs, and where the crossover is
 
 Two numbers decide the design, and both are measured on the development machine:
@@ -299,7 +559,11 @@ Three design facts the measurement bought, all of them load-bearing:
 - **A recycled buffer needs no clearing**, because every consumer writes all of
   it: an output is written across `[0, padded)` by the shader's straight-line
   body, and an input is uploaded across `[0, count)` with the tail cleared on the
-  device.
+  device. The pool is keyed by exact element count **and class**, so a chain at a
+  fixed size and class is served from it forever, while a different size — or the
+  same size in the other class, whose elements are half as wide — simply
+  allocates. A cap keeps that from turning a release into a permanent VRAM
+  reservation.
 - **Allocating one output buffer per link is not merely bigger, it is three times
   slower than not fusing at all.** A link reads the buffer the link before it
   wrote, so two buffers ping-ponged round a chain are enough; a pool that has to
@@ -340,12 +604,9 @@ the data width does.
 
 Named rather than implied, because each is a decision rather than a gap:
 
-- **Cross-kernel calls.** `SpirvRefusal::CrossKernelCall`. Needs several
-  functions in one module and a call graph; the refusal names the callee and the
-  instruction position.
 - **More than one result.** A compute shader communicates through its storage
   buffers, so a fragment whose body leaves one value is required here
-  (`ResultArity`).
+  (`ResultArity`). A callee is held to the same rule, by name.
 - **A non-index parameter read.** A buffer is *bound*, not passed, so there is no
   value for it to hold (`NonIndexParameter`).
 - **A runtime scalar.** A dispatch pushes the extent alone, so a fragment with a
@@ -434,6 +695,22 @@ Stated here because they are silent-wrong-answer rules rather than slow ones:
   `SHADER_WRITE → SHADER_READ | TRANSFER_READ`. It over-covers the
   single-dispatch case, which is a cost — measured as not measurable, but not
   free.
+
+  A **third** case made the destination wide rather than naming a third reader: a
+  chain that hands the same buffer round again — `run_chain` ping-pongs two
+  buffers rather than allocating one per link — has this dispatch **reading** a
+  buffer a later dispatch **writes**, a write-after-read hazard the other two
+  scopes do not order at all. Each of the three is a case where leaving it out
+  does not slow anything down, it makes the chain read undefined data: not stale
+  data, and not a crash. The widening was measured rather than assumed: 16 links
+  at 1 048 576 elements cost 7.79 ms before it and 7.17 ms after, and an empty
+  dispatch 0.046 against 0.048, both inside the run-to-run spread. That is "not
+  measurable", not "free". **The write-after-read half is not measured that way**:
+  only a chain that reuses a buffer needs it, nothing on the `run` path depends on
+  it, and it is paid on the strength of the specification. What does *not* imply
+  this barrier is needed is `spirv`'s write-reachability invariant: that says
+  every invocation reaches its write, and nothing about ordering between
+  dispatches.
 - **A slot is not released until its fence signals.** A recorded-but-unsubmitted
   command buffer is clobbered by the next recording into it, and a command buffer
   whose submission is still in flight cannot be recorded into at all. This is the

@@ -464,18 +464,28 @@ instantiate its signature per call.
 
 ### 7.1 Measured: the routing's three costs
 
-The routing carried three costs. Each is either refused by name and pinned, or
-asserted as the property it was always about. **No test on `dev` is red for any of
-them.**
+The three costs, and what closed each.  **No test on `dev` is red for any of
+them**: each is either refused by name and pinned, or asserted as the property it
+was always about.
 
-1. **A kernel body cannot call the binding in an argument position.** `y + y`
-   lowers to `Apply(Static(<the prelude's add>), [y, y])`, which has no machine
-   node behind it, so an operator inside a cross-kernel call's argument
-   (`k0 (x + 1)`) and one inside `compute.launch`'s argument are **refused by
-   name** and stay refused. Everything else a kernel body needs works and is
-   pinned green: the operator as the body's own result, one applied to a call's
-   *result* (`k0 x + 1`), a helper's inlined body, and cross-kernel calls whose
-   argument is read directly. Widening this is the kernel workstream's
+1. **A kernel body cannot call the binding.**  `y + y` lowers to
+   `Apply(Static(<the prelude's add>), [y, y])`, which has no machine node behind
+   it, so the shapes that need one *in an argument position* used to be refused by
+   name.  **`k0 (x + 1)` is emitted now**: the identity of the operator is a
+   *static* fact of the frozen callee, so `Lower::apply` reads it out of that
+   callee's body (`Module::static_function_compute_operator`) when the residual is
+   missing — pinned green by
+   `jit_an_operator_inside_a_cross_kernel_argument_is_emitted`
+   (`crates/lichen-language/tests/compute.rs`), and see
+   [loop-conversion §8.5](loop-conversion.md) item 4 for the measurement and for
+   what it did not fix.  One inside `compute.launch`'s argument is still refused,
+   and this note does not claim a test for it — no such test exists on `dev`.
+   Everything else a kernel body
+   needs works and is pinned green: the operator as the body's own result, one
+   applied to a call's *result* (`k0 x + 1`), a helper's inlined body, and
+   cross-kernel calls whose argument is read directly (`k0 x`, `k0 (x, 1)`,
+   `k0 q`).  `examples/compute_jit.lichen` launches through the wrapper with the
+   parameter read directly.  Widening this is the kernel workstream's
    specialize-before-JIT pass, and this apply is the shape that pass specializes:
    its inlined form (`operands = [y, y]; operands[0] + operands[1]`) was measured
    kernel-clean.

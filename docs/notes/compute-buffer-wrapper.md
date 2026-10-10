@@ -225,6 +225,153 @@ carries no host-side role table. A parameter that interleaves scalars with `.in`
 would need one, so the lowering should refuse an interleaved parameter by name
 rather than mis-decode it.
 
+### The chain walk, what it measures, and what it cannot answer
+
+A named read reaches the emitter in **two** shapes, and a function reading only
+the first returns every struct field read nameless: unspecialised it is
+`TableGet(name-table, "name")` with the name as the second operand, and
+specialised — which is what the evaluator hands the emitter — it is
+`Index(target, "name")`, whose selector *is* the string and carries no operation.
+
+Three measurements, because two rounds went the other way.
+
+**A struct field read is read by the path on its own chain, not from the
+parameter.** Walking *up* from the parameter cannot answer it: the parameter's
+value half is an alias with no operation, and the link between it and a read is the
+equality class rather than the shape. Walking **down** from a read can, because the
+chain *is* the read. Measured on `a_struct_parameter_..._carrying_wrapper`:
+
+```
+chain[0] Index(921, 952)      // 952 is a *static* selector — a name
+chain[1] Index(923, 926)      // 926 likewise
+chain[2] 923: no operation     // the alias carries the field's class
+param_pair: 22                 // never reached
+```
+
+so the caller searches the role table's own paths for the one whose node is
+class-equal to the read — see `parallel_buffer_pos`. And the head of the chain and
+the head of the role path disagree by one:
+
+```
+positions on the read's chain = [0, 0]
+roles.inputs                   = [[1, 0]]
+```
+
+`.in` is field **1** of the parameter struct and the chain says 0, so either the
+chain indexes the value's own fields rather than the struct's, or the role table
+counts the struct's. **Which of the two is right is the next thing to read**, and it
+is a fact about the checker's parameter layout rather than a rule the walk can
+decide.
+
+**The chain is the role path's tail, so the relation is a suffix.** Two levels of
+the chain are not levels of the path. The first is the wrapper's slot-read
+destructuring — the step `peeled_argument` resolves, which is why the path is read
+from the *unpeeled* operand. The second is `.in`, which the alias consumed:
+
+```
+1103: Index(0) -> 1105: Index(0) -> 1107: bare cell
+roles.inputs[0] = [1, 0]
+```
+
+1107 is the aliased `.in` cell, so no `Index` states it. What remains is `[0]`, and
+`[1, 0]` ends with `[0]`; comparing `[0, 0]` against `[1, 0]` matches nothing, and
+comparing `[0]` matches exactly one input.
+
+**A bare value cell ends the chain; it does not void it.** Two different things
+stop there: a whole-parameter read, matched by comparing the cell's class against
+the slot's, and a **struct field read**, whose `TableGet` the evaluator *aliased* to
+the field it resolved (`Module::alias_read`) — so the node is a bare cell carrying
+the field's class rather than an operation. Returning "not a parameter path" threw
+both away for a node that plainly is one; the steps collected so far are kept, and
+whether they name the field is the caller's question, which it has the role table
+to ask it with.
+
+Two consequences of that shape, both of them reasons the code reads as it does.
+Stepping **into the pair's value** is required for a struct parameter's fields,
+because they live inside the value half and the `roles` path is made of field
+positions with no step for the peel — so `cfg.I.a` is two steps in, not a
+whole-parameter read. That step is **known not to reach the answer**: the value
+half is an alias with no operation, so the descent stops immediately. What is kept
+is the step record, because `resolve_steps` is right about what a *positional* path
+means and wrong only about where a named one can be resolved.
+
+Finally, the chain walk is the **fallback, not the answer**: it resolves a
+*positional* parameter read — the `[n, (buffers…)]` shape — where the role table is
+empty and there is nothing to compare against. The innermost read's target is the
+parameter's value, and the test is the **equality class** (`class_root`), which is
+the same thing `define_in` matches a parameter against — two tests that could
+disagree would be two answers to "is this the parameter's own value".
+
+### A scalar leaf of `.in`, which the body could not read
+
+`k.in.a` — `a` an `Int` field of the input struct — was refused as
+"a kernel body's index cannot be placed". **This was pre-existing**, measured on
+`dev` at `c99d8c9` before any change here, and it reproduces on a bare
+`compute.P` parameter with no annotation tricks.
+
+The body's own walk reads each step of an `Index` chain with `usize_value`,
+which answers a **positional constant** and nothing else. A struct field read
+arrives as a **name** — `TableGet(name-table, "a")` — so `k.in.a` was a step the
+walk could not place, and the read fell through to the refusal. It is worth being
+exact about which reads this defeated, because it is **only** this one: in the
+same program, `compute.range k.n`, `k.out.z` and the buffer leaves all arrive
+already **folded to positions** by the checker, and place without help.
+
+```
+node 217   sel_name = Some("a")   sel_pos = None     // k.in.a     -- the only named selector
+node 520   name = None            pos = 2 -> 0        // k.out.z
+node 508   name = None            pos = 1 -> 0        // a buffer leaf under .in
+```
+
+So `k.n` was never "handled structurally as the index"; it was a position before
+the walk saw it.
+
+Two defects were behind the one refusal, and fixing either alone still refuses:
+
+1. **The walk had no name resolution.** A named step now goes to
+   `param_read_offset`, which is `param_path`'s own two-pass resolution — the
+   one that already collects `IndexStep::Named` and looks a name up in the
+   parameter type's field list. No second field-position reader was added; the
+   hand-rolled `struct_type_names` was **deleted** in favour of
+   `struct_fields_of_slot`/`field_names`, the encoding authority the role table
+   is itself read with, so a name can no longer resolve against a different
+   layout than the roles did.
+2. **The pair's value-half peel was counted as a field.** `param_path` pushed
+   `Index(param_pair, 0)` as a path step, so every field after it was shifted by
+   one: `k.in.a` collected as `[#0, "in", "a"]`, which resolves `in` against
+   `.n`'s type and then cannot find it. The pair's value half *is* the parameter,
+   not one of its fields, so the peel contributes no step — the path is counted
+   from the parameter's first field, which is what `KernelRoles`' paths and the
+   slot's scalar shape are both written against.
+
+A name that is **not** a field of that struct is refused by name, not answered
+with a wrong number: `resolve_steps` says so and names the fields it did find.
+
+The shape now runs end to end on the wasm backend
+(`a_body_reads_a_scalar_leaf_of_its_input_struct`, four lanes of `a + i`). It is
+**not** a two-backend test: a fragment carrying a runtime scalar is refused by
+the `"gpu"` dispatch, which pushes the launch extent alone
+(`RunError::ScalarsNotPushed`, `crates/lichen-compute-gpu/src/dispatch.rs`).
+That refusal is the GPU crate's own and pre-existing; this change makes the shape
+reachable for the first time, which is what exposes it.
+
+### A placeholder under a `Buf` wrapper
+
+A graph's placeholder reaches an operator **wrapped**: an operator that reads a
+buffer names the wrapper, and the recorder puts the placeholder in `.native`, so
+asking only whether an operand *is* a placeholder answers `false` for the case the
+rule exists to catch. The wrapper is recognised by `buf_value`'s own construction —
+two items, the second an element **type**.
+
+The scan that asks whether any operand of an operator is a placeholder reads **one
+level, and one level is enough**: every operator that reads a dispatch's output
+takes it as a direct item of its operand array — `collect [b]`, `read [b, i]`,
+`call [k, a]` — so a graph's value is never buried inside a structure the scan would
+have to walk to find. A `plrun`'s argument *is* the placeholder structure (the
+parameter's own shape, a leaf per cell), which is why the question is asked about
+operators other than a parallel launch. The one level of wrapping it looks through
+is the `Buf` wrapper above.
+
 ## The kernel may compile before its parameter's annotation resolves
 
 A parallel kernel is compiled by `$parallel`'s own run, and at that moment the
@@ -348,7 +495,7 @@ Two things the author still writes, and one defect the empty group exposed:
 |---|---|
 | The type lambdas and the wrappers | `crates/lichen-compute/src/compute.lichen` |
 | The named-parameter walk and the prelude algebra | `parallel_roles`, `param_path`, `buf_payload`, `is_buf_shape`, `compute.rs` |
-| Position resolution | `parallel_buffer_pos`, `peeled_argument`, `is_param_value`, `usize_value`, `struct_type_names`, `param_value_shape`, `compute.rs` |
+| Position resolution | `parallel_buffer_pos`, `peeled_argument`, `is_param_value`, `usize_value`, `field_name`, `param_read_offset`/`param_path`/`resolve_steps`, `compute.rs` |
 | Parallel lowering | `compile_parallel_fragment`, `compute.rs` |
 | Instruction emitter (read/write arms) | `emit_node`, `compute.rs` |
 | Launch walk (count and buffers) | `ComputeOperator::ParLaunch`, `compute.rs` |

@@ -60,6 +60,45 @@ What stays refused, and the refusal names the instruction position:
 `from == to` in a `Conv` is a **reclassification, not a no-op**: it is what the
 lowering writes for a value that already holds its result's representation.
 
+**Why the instruction carries the pair rather than a single class.** Which of the
+two crossing directions a `Conv` is *cannot* be read off its operand: `Int → Float`
+and `Float → Int` are the same shape to an operand, and the direction is the
+language's decision rather than a target's. A backend that re-derived it would be
+guessing, and the two could guess differently — the exact failure
+[floating-point §5.1](floating-point.md#51-the-permission-and-what-it-still-refuses)
+records the wasm backend producing. It is the same reason every other instruction
+names its own class rather than leaving one inferred: a fact the language decided
+is stated, not reconstructed. And a conversion is the **one** instruction whose
+operand and result are different classes, so naming "the class" would name one of
+them and leave the other guessed.
+
+**What the pair does not say is the representation.** It says what the language
+asked for, not what the value's representation is, and the two differ at the ABI: a
+float fragment's index and count arrive in `f32` locals (the fragment's class is
+what the parameter list is typed by) while the language's number is an `Int`, so
+`int2float` of the index is a conversion whose operand already holds its result's
+representation. That is a fact about the target and the ABI rather than about the
+program, so it is not in the instruction and no backend may assume it: each tracks
+the representation it is actually building and lowers a crossing between a class
+and itself to nothing.
+
+Neither opcode is named in the IR, because the two targets hold the same number in
+genuinely different places:
+
+- wasm's locals are typed per class, so the conversion is the opcode that crosses
+  them (`f32.convert_i64_u`, `i64.trunc_f32_u`) — and **nothing at all** when the
+  value on the stack already holds a `to`.
+- SPIR-V's index is the invocation id — a 32-bit integer in every module, float
+  included — so `Int → Float` there is always `OpConvertUToF`, and a module that
+  has not declared the other class's type refuses the direction by name rather than
+  declaring a type it did not need.
+
+`Float → Int` **truncates toward zero in neither backend's promise**: the
+interpreter refuses what it cannot represent ([operators](operators.md)), wasm
+traps, and SPIR-V is undefined. A kernel is the intersection of what the backends
+compute *the same way*, and this conversion is in it only for the values both
+answer identically.
+
 ## Every SPIR-V module declares both element types
 
 The price of the crossing is that a module's arithmetic class and a buffer's

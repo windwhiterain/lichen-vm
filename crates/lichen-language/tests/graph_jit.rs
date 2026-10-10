@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use lichen_kernel_ir::{
-    BufferSlot, KernelFragment, ParallelBackend, Pending, ResidentId, ScalarData,
+    BufferSlot, LaunchSet, ParallelBackend, Pending, ResidentId, ScalarData,
     install_parallel_backend,
 };
 use lichen_language::package::PackageStore;
@@ -53,17 +53,17 @@ impl ParallelBackend for Stub {
 
     fn run(
         &self,
-        fragment: &KernelFragment,
+        launch: &LaunchSet<'_>,
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<Vec<ResidentId>, String> {
-        let submission = self.submit(fragment, inputs, count)?;
+        let submission = self.submit(launch, inputs, count)?;
         Ok(submission.outputs().to_vec())
     }
 
     fn submit<'backend>(
         &'backend self,
-        _fragment: &KernelFragment,
+        _launch: &LaunchSet<'_>,
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<Box<dyn Pending + 'backend>, String> {

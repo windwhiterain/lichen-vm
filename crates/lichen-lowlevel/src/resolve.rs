@@ -5,7 +5,10 @@ use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
 
 use crate::ArrayItem;
-use crate::{AnyNodeId, FunctionId, LowOperator, LowValue, Module, NodeId, Program};
+use crate::{
+    AnyFunctionId, AnyNodeId, FunctionId, LowOperator, LowValue, Module, NodeId, Program,
+    StaticFunctionRef,
+};
 
 /// What an `Index` node turned out to be. See [`Module::selection_of`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,6 +280,41 @@ impl<P: Program> Module<P> {
         match items.get(k)?.node {
             AnyNodeId::Dynamic(node) => Some(node),
             AnyNodeId::Static(_) => None,
+        }
+    }
+
+    /// The **frozen function a callee names**, through the projection an
+    /// imported binding arrives as.
+    ///
+    /// # Invariant
+    /// The callee is `Index(<a frozen module's export array>, k)` at a constant
+    /// `k`, and element `k` is a frozen function — a binding nothing evaluated
+    /// still names the function it is (`docs/notes/loop-conversion.md` §8.5).
+    pub fn static_function_of_callee(&self, callee: NodeId) -> Option<StaticFunctionRef> {
+        let operation = self.node_operation(callee)?;
+        if !matches!(
+            AsEnum::<LowOperator>::as_enum(&operation.operator),
+            Some(LowOperator::Index)
+        ) {
+            return None;
+        }
+        let operands = self.operand_items(operation.operand?).ok()?;
+        let (Some(target), Some(index)) = (operands.first(), operands.get(1)) else {
+            return None;
+        };
+        let position = self.usize_value(index.node)?;
+        // SAFETY: the target is live, and a frozen array's element is read
+        // through a module the reference outlives.
+        let items = unsafe { self.array_items_of(target.node) }?;
+        let AnyNodeId::Static(function) = items.get(position)?.node else {
+            return None;
+        };
+        match self
+            .static_read(function)
+            .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+        {
+            Some(LowValue::Function(AnyFunctionId::Static(function))) => Some(function),
+            _ => None,
         }
     }
 

@@ -351,17 +351,20 @@ The three, all confirmed on both backends:
 
 | program | result |
 |---|---|
-| a `compute.call` inside a **parallel** body — the identical call in a *scalar* body runs and answers `5 : Int` | refused |
+| a `compute.call` inside a **parallel** body — the identical call in a *scalar* body runs and answers `5 : Int` | **runs**, on both backends |
 | a module-level helper called with a **body-local alias** fed by a buffer read | refused |
 | a helper **defined in the body** and called there | refused |
 
-The first is the one that matters, for a reason the message does not change:
+The first is the one that mattered, for a reason the message does not change:
 **only `parallel` names a backend**, so a device cross-kernel call is reachable
-*only* from a parallel body, and that path fails in the compiler before any
-backend sees it. `SpirvRefusal::CrossKernelCall` is therefore a refusal no
-lichen program can currently provoke.
+*only* from a parallel body, and that path failed in the compiler before any
+backend saw it. `SpirvRefusal::CrossKernelCall` **was** therefore a refusal no
+lichen program could provoke — and it is gone: both backends now resolve a
+cross-kernel call from a launch set the caller supplies, so the first row runs on
+the CPU and on a device
+([lichen-compute-gpu § Several functions in one module](lichen-compute-gpu.md#several-functions-in-one-module)).
 
-**What is left is the three cases, and all three are one missing *apply* — see
+**What is left is the two remaining cases, and both are one missing *apply* — see
 [gpu-algorithm-roadmap §4.1](gpu-algorithm-roadmap.md#41-axis-b-already-in-the-language-and-what-it-does-not-reach).
 Naming them was the cheap half.
 

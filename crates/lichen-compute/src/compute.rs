@@ -72,9 +72,8 @@ use lichen_highlevel::program::{
     Ctx, HighProgram, LeafKindMarkers, TypeOperator, TypeValue, ValueType,
 };
 use lichen_highlevel::shape::{
-    KIND_MARKER_SLOT, PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, STRUCT_MARKER_NAMES_SLOT,
-    STRUCT_MARKER_PAYLOAD_SLOT, TYPE_KIND_SLOT, TYPE_SHAPE_SLOT, TypeRef,
-    array_items as array_items_any, field_list, field_names, field_type, low_type_of_slot,
+    PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, TypeRef, array_items as array_items_any,
+    field_list, field_names, field_type, low_type_of_slot,
 };
 use lichen_kernel_ir::{
     BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelRoles, KernelShape,
@@ -197,8 +196,8 @@ fn alloc_kernel_id() -> KernelId {
 /// **Kernel ids are content-addressed** (`D15`).  A compiled fragment is a pure
 /// function of the function it came from, so the same source recompiled — which
 /// an editor does on every keystroke — must produce the *same* id, or nothing
-/// downstream can be reused: the derived-module cache is keyed on
-/// `(LaunchMode, KernelId)`, so a fresh id per compile means it can never hit
+/// downstream can be reused: the derived-module cache is keyed on the
+/// `KernelId`, so a fresh id per compile means it can never hit
 /// and every keystroke re-assembles and re-runs `wasmi::Module::new`.
 ///
 /// A digest is not an identity, so the index is an **intern table and nothing
@@ -258,20 +257,18 @@ mod kernel_intern_tests {
         }
     }
 
-    /// A counting loop, in the shape the IR can express: a header that receives the
-    /// carried state, a body that computes the next one, and an exit that takes
-    /// what the header has at that point.
+    /// A counting loop, in the shape the IR can express.
     ///
-    /// **The loop's state is the header block's `params`**, so the body's read of
-    /// it is an ordinary read of a named value — which is what the loop-carried
-    /// value needed and what `KernelInstr::LocalGet` could not say.
+    /// # Invariant
+    /// The loop's state is the header block's `params`, so a body's read of it is an
+    /// ordinary read of a named value — a header that receives the carried state, a body
+    /// computing the next one, and an exit taking what the header has.
     fn counting_loop(backedge: bool) -> KernelBody {
         let mut body = KernelBody::new();
         let entry = body.add_block();
         let one = body.add_const(entry, ScalarClass::Int, 1);
-        // **A branch hands the target its parameters, so entering the header hands
-        // it the state it starts from.** An empty handover is a malformed branch,
-        // not an entry that happens to carry nothing.
+        // **A branch hands the target its parameters**, so entering the header hands it
+        // the state it starts from.
         body.set_terminator(
             entry,
             Terminator::Br(Br {
@@ -289,8 +286,7 @@ mod kernel_intern_tests {
             vec![ScalarClass::Int],
         );
         // **A backedge *is* a branch back to the header**, handing over the next
-        // iteration's state — so "has a backedge" is a question about whether any
-        // branch names the header, and it is answered by reading the body.
+        // iteration's state.
         body.set_terminator(
             header,
             if backedge {
@@ -317,13 +313,7 @@ mod kernel_intern_tests {
         body
     }
 
-    /// A loop is a branch back to the header, handing over the next iteration's
-    /// state — so **a backedge is not a special form to be checked for; it is a
-    /// `Br` naming the current block.** The old IR had a rule refusing a loop
-    /// whose body never returned to its header, because its only expressible loop
-    /// body was a bare jump; a body that computes its next state did not fit, so
-    /// "no backedge" was the only thing to say. That limitation is gone, and what
-    /// remains to refuse is a branch to a block this body does not have.
+    /// A backedge is not a special form: it is a `Br` naming the current block.
     #[test]
     fn a_backedge_is_a_branch_to_the_header_and_a_branch_nowhere_is_refused() {
         counting_loop(true)
@@ -366,8 +356,8 @@ mod kernel_intern_tests {
 
     /// The point of content addressing: the same function compiled twice — which
     /// an editor does on every keystroke — must intern to **one** id, because
-    /// everything downstream is keyed on it (the derived-module cache on
-    /// `(LaunchMode, KernelId)`).  A fresh id per compile is what made that
+    /// everything downstream is keyed on it (the derived-module cache on the
+    /// `KernelId`).  A fresh id per compile is what made that
     /// cache unable to hit.
     #[test]
     fn the_same_fragment_interns_to_one_id() {
@@ -392,10 +382,8 @@ mod kernel_intern_tests {
         assert!(registry.contains_key(&a) && registry.contains_key(&b));
     }
 
-    /// A branch that hands a block more values than it takes has no source for
-    /// them, so it is refused **before** a backend reads it rather than emitted
-    /// with a phi that cannot be built. The exit's state is the header's `params`,
-    /// so the bound is exactly that.
+    /// A branch handing a block more values than it takes is refused before a backend
+    /// reads it.
     #[test]
     fn a_branch_handing_over_more_than_its_target_takes_is_refused() {
         let mut body = KernelBody::new();
@@ -574,11 +562,11 @@ fn float_bits(value: f32) -> i64 {
 
 /// Whether a value is a graph placeholder, **or a `Buf` wrapper around one**.
 ///
-/// An operator that reads a buffer names the **wrapper**, and the recorder puts
-/// the placeholder in `.native`, so asking only whether an operand *is* a
-/// placeholder answers `false` for the case the rule exists to catch. The
-/// wrapper is recognised by [`buf_value`]'s own construction — two items, the
-/// second an element **type**.
+/// # Invariant
+/// An operator that reads a buffer names the **wrapper**, and the recorder puts the
+/// placeholder in `.native`, so asking only whether an operand *is* a placeholder
+/// answers `false` for the case the rule exists to catch. The wrapper is recognised by
+/// [`buf_value`]'s own construction — two items, the second an element **type**.
 fn is_a_graph_placeholder<P>(module: &Module<P>, node: AnyNodeId) -> bool
 where
     P: Program,
@@ -596,8 +584,8 @@ where
     let Some(LowValue::Array(wrapper)) = AsEnum::<LowValue>::as_enum(&value) else {
         return false;
     };
-    // SAFETY: `wrapper` is a live array of `module` on this borrow, and this reads
-    // only the two slots the `Buf` wrapper is built from.
+    // SAFETY: `wrapper` is a live array of `module`, and this reads only the `Buf`
+    // wrapper's two slots.
     let wrapper = unsafe { wrapper.items() };
     let [payload, element] = wrapper else {
         return false;
@@ -616,14 +604,12 @@ where
 
 /// Whether any operand of `operator` is one of a graph's placeholders.
 ///
-/// **One level, and one level is enough.** Every operator that reads a dispatch's
-/// output takes it as a direct item of its operand array — `collect [b]`, `read
-/// [b, i]`, `call [k, a]` — so a graph's value is never buried inside a structure
-/// the scan would have to walk to find. A `plrun`'s argument *is* the
-/// placeholder structure (the parameter's own shape, a leaf per cell), which is
-/// why this is asked about operators other than a parallel launch. The one level
-/// of wrapping it looks through is the `Buf` wrapper — see
-/// [`is_a_graph_placeholder`].
+/// # Invariant
+/// One level, and one level is enough: every operator that reads a dispatch's output takes
+/// it as a direct item of its operand array, so a graph's value is never buried in a
+/// structure the scan would walk. A `plrun`'s argument *is* the placeholder structure, which
+/// is why this is asked about operators other than a parallel launch; the one level it looks
+/// through is the `Buf` wrapper.
 fn handed_a_placeholder<P>(module: &Module<P>, operand: &P::Value) -> bool
 where
     P: Program,
@@ -1442,11 +1428,11 @@ where
                     match compile_parallel_fragment(module, function) {
                         Ok(fragment) => {
                             // Content-addressed like `jit`'s, and for the same
-                            // reason: the parallel launch path keys the module cache
-                            // on `(LaunchMode::Parallel, KernelId)`, so a fresh id
-                            // per compile is a re-assembly per compile.  The backend
-                            // is *not* part of the fragment, so the same body
-                            // compiled for either backend shares this one id.
+                            // reason: the module cache is keyed on the `KernelId`,
+                            // so a fresh id per compile is a re-assembly per
+                            // compile.  The backend is *not* part of the
+                            // fragment, so the same body compiled for either
+                            // backend shares this one id.
                             let id = intern_kernel(fragment);
                             Some(<P::Value as From<ComputeValue>>::from(
                                 ComputeValue::ParKernel(id, backend),
@@ -2028,7 +2014,7 @@ where
 /// The decode is the **strong** one — [`field_names`], whose name-table walk a
 /// node that is not a named struct type term fails — so every reader of the
 /// parameter's field list makes the same choice about which node it is reading.
-fn parameter_type_ref<P>(module: &mut Module<P>, slot: AnyNodeId) -> Option<TypeRef>
+fn parameter_type_ref<P>(module: &Module<P>, slot: AnyNodeId) -> Option<TypeRef>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
@@ -2041,7 +2027,7 @@ where
 
 /// The named fields and field-type list of the type a **type slot** names.
 fn struct_fields_of_slot<P>(
-    module: &mut Module<P>,
+    module: &Module<P>,
     slot: AnyNodeId,
 ) -> Option<(Vec<Option<&'static str>>, AnyNodeId)>
 where
@@ -2355,7 +2341,7 @@ fn param_read_offset<P>(
 ) -> Result<Option<u32>, String>
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     for slot in params {
@@ -2525,10 +2511,8 @@ where
     let class = result_classes.first().copied().unwrap_or(ScalarClass::Int);
     // The class a buffer read is declared in; see [`Positions::element_class`].
     tally.element_class = Some(class);
-    // **One walk of the graph into one SSA body.** The lowering resolves what each
-    // node names through the lowlevel and emits a value per definition, so a
-    // shared subexpression is emitted once and no consumer re-derives the
-    // operand order.
+    // **One walk of the graph into one SSA body**, so a shared subexpression is emitted
+    // once.
     let body = Lower::lower(module, &params, param_value, fid, ret_value, &mut tally)?;
 
     Ok(KernelFragment {
@@ -2723,28 +2707,13 @@ where
         })
         .next()
         .unwrap_or(ScalarClass::Int);
-    // **The outputs are the codomain's, for both shapes.**  A `compute.write` is
-    // a *value*, so a body that writes several outputs returns a tuple of them
-    // and one that writes one returns it directly; the graph is lazy, so a write
-    // whose result nothing uses is never emitted at all.  A struct parameter's
-    // `.out` therefore declares how many there are and what class each holds, and
-    // the check below is what keeps the declaration and the body agreeing.
-    //
-    // One `compute.write` per codomain position, in position order, so write `k`
-    // takes `out_pos = k`.  The whole index function is **one body**: emitting the
-    // outputs one at a time was only ever a way to count them, and the count is
-    // what the check below reads.  A write reached nested inside a position's
-    // value still consumes an ordinal of its own, so a total that exceeds the
-    // declared count catches it.
+    // **The outputs are the codomain's**, one `compute.write` per position in position
+    // order.
     let mut tally = Positions::default();
     // The class a buffer read is declared in; see [`Positions::element_class`].
     tally.element_class = Some(class);
-    // **A conditional is left to the walk**, whether the write is the output itself
-    // or sits inside a branch. A write behind a condition is not reduced, so the
-    // refusal belongs to the walk, which knows *why* it did not reduce — and a
-    // conditional write is precisely the case where the cause matters
-    // (`docs/notes/loop-conversion.md` §6).  Answering here would replace a
-    // specific cause with a generic one.
+    // **A conditional is left to the walk**, which knows *why* it did not reduce the
+    // write.
     for (position, output) in outputs.iter().enumerate() {
         let conditional = match module.define_in(fid, *output) {
             lichen_lowlevel::Define::Computed(definition) => matches!(
@@ -3803,7 +3772,7 @@ fn node_class_in<P>(
 ) -> ScalarClass
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let node = node.into();
@@ -4090,7 +4059,7 @@ fn parallel_buffer_pos<P>(
 ) -> Result<Option<usize>, String>
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let Some(slot) = params.first() else {
@@ -4102,49 +4071,15 @@ where
         return Ok(None);
     };
     if let Some(roles) = &slot.roles {
-        // **A struct field read is read by the path on its own chain.**
-        //
-        // Walking from the *parameter* cannot answer this: the parameter's value
-        // half is an alias with no operation, and the link between it and a read is
-        // the equality class rather than the shape. Walking from the read can,
-        // because the chain *is* the read — and `TableGet(names, "in")` arrives
-        // already specialised to `Index`, so the selectors are **positions**.
-        //
-        // **Measured, and the two disagree by one at the head**:
-        //
-        //     positions on the read's chain = [0, 0]
-        //     roles.inputs                   = [[1, 0]]
-        //
-        // `.in` is field **1** of the parameter struct and the chain says 0, so
-        // either the chain indexes the value's own fields rather than the
-        // struct's, or the role table counts the struct's. **Which of the two is
-        // right is the next thing to read**, and it is a fact about the checker's
-        // parameter layout, not a rule this function can decide.
-        //
-        // **`positions` is read from the *unpeeled* operand.** The peel resolves
-        // the wrapper's slot-read destructuring and takes one `Index` off the
-        // front, so a path read after it is missing its head.
+        // **A struct field read is read by the path on its own chain**, from the *unpeeled*
+        // operand.
         let positions = unpeeled
             .dynamic()
             .and_then(|unpeeled| named_path(module, unpeeled));
         if let Some(positions) = positions.as_deref() {
             for (position, candidate) in roles.inputs.iter().enumerate() {
-                // **The chain is the role path's tail, below the wrapper's slot-read
-                // and below whatever the alias folded away.** Measured:
-                //
-                //     1103: Index(0) -> 1105: Index(0) -> 1107: bare cell
-                //     roles.inputs[0] = [1, 0]
-                //
-                // Two levels of the chain are not levels of the path. The first is
-                // the wrapper's slot-read destructuring — the step `peeled_argument`
-                // resolves, which is why the path is read from the *unpeeled*
-                // operand. The second is `.in`, **which the alias consumed**: 1107
-                // is the aliased `.in` cell, so no `Index` states it. What remains
-                // is `[0]`, and `[1, 0]` ends with `[0]`.
-                //
-                // So the relation is a suffix, and the chain's own head is dropped
-                // first: comparing `[0, 0]` against `[1, 0]` matches nothing, and
-                // comparing `[0]` matches exactly one input.
+                // **The chain is the role path's tail**: the relation is a suffix, with the
+                // chain's own head dropped.
                 let Some(tail) = positions.get(1..).filter(|tail| !tail.is_empty()) else {
                     continue;
                 };
@@ -4153,9 +4088,8 @@ where
                 }
             }
         }
-        // **The chain walk is the fallback, not the answer.** It resolves a
-        // *positional* parameter read — the `[n, (buffers…)]` shape — where the
-        // role table is empty and there is nothing to compare against.
+        // **The chain walk is the fallback**, for a positional parameter read where the role
+        // table is empty.
         let path = param_path(module, slot.pair, node)?;
         if let Some(path) = path {
             let mut as_field = vec![0];
@@ -4293,9 +4227,6 @@ where
 }
 
 /// A `[value, type]` pair's value half, or the node itself when it is not a pair.
-///
-/// **The pair width is the lowlevel's** (`Module::pair_value_half`), so the
-/// caller never re-derives it.
 fn param_value_of<P>(module: &Module<P>, pair: NodeId) -> Result<NodeId, String>
 where
     P: Program,
@@ -4327,12 +4258,8 @@ where
     let Some(selector) = selector.dynamic() else {
         return Ok(None);
     };
-    // **A named read reaches a lowering in one of two shapes, and this function
-    // must answer both.** Unspecialised it is `TableGet(name-table, "name")`, and
-    // the name is the second operand. Specialised — which is what the evaluator
-    // hands the emitter — it is `Index(target, "name")`, where the selector *is*
-    // the string and carries no operation at all. Reading only the first shape is
-    // why every struct field read came back nameless.
+    // **A named read arrives in two shapes**: `TableGet(names, "name")`, or `Index`
+    // carrying the name as its selector.
     let key = match module.node_operation(selector) {
         Some(operation) => match AsEnum::<LowOperator>::as_enum(&operation.operator) {
             Some(LowOperator::TableGet) => operand_pair(module, operation.operand)?.1,
@@ -4377,7 +4304,7 @@ pub(crate) fn param_path<P>(
 ) -> Result<Option<Vec<usize>>, String>
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     // **Two passes, and the first is why the second can be right.**  A named
@@ -4390,35 +4317,12 @@ where
     // does not state it.
     let mut steps: Vec<IndexStep> = Vec::new();
     let mut current = node;
-    // **This walk cannot answer a struct field read, and the reason is worth
-    // stating because two rounds went the other way.** Measured on
-    // `a_struct_parameter_..._carrying_wrapper`:
-    //
-    //     chain[0] Index(921, 952)      // 952 is a *static* selector — a name
-    //     chain[1] Index(923, 926)      // 926 likewise
-    //     chain[2] 923: no operation     // the alias carries the field's class
-    //     param_pair: 22                 // never reached
-    //
-    // Walking **down** from a read finds the field it read and stops; the
-    // parameter is *above* it and the two are joined only by the equality class,
-    // which is what `alias_read` set. So the caller must search the role table's
-    // own paths for the one whose node is class-equal to the read — see
-    // `parallel_buffer_pos`.
-    //
+    // **This walk cannot answer a struct field read**: the parameter is joined to the read
+    // only by the equality class.
     for _ in 0..MAX_PARAMETER_DEPTH {
         let Some(operation) = module.node_operation(current) else {
-            // **A bare value cell ends the chain; it does not void it.** Two
-            // things stop here and they are different: a whole-parameter read,
-            // which `emit_node` matched by comparing the cell's class against
-            // the slot's, and a **struct field read**, whose `TableGet` the
-            // evaluator *aliased* to the field it resolved
-            // (`Module::alias_read`) — so the node is a bare cell carrying the
-            // field's class, not an operation at all.
-            //
-            // Returning `None` here threw both away and said "this is not a
-            // parameter path" for a node that plainly is one. The steps
-            // collected so far are kept; whether they name the field is the
-            // caller's question, and it has the role table to ask it with.
+            // **A bare value cell ends the chain, it does not void it**: a whole-parameter
+            // read stops there too.
             break;
         };
         if !matches!(
@@ -4436,23 +4340,10 @@ where
             return Ok(None);
         };
         if target == AnyNodeId::Dynamic(param_pair) {
-            // **Step into the pair's value and keep walking.** A struct
-            // parameter's fields live *inside* the value half, and the path
-            // `roles` holds is made of field positions with no step for the peel
-            // itself — so `cfg.I.a` is two steps in, not a whole-parameter read.
-            //
-            // **This is known not to reach the answer** — see the measured note in
-            // `node_at_named_path`: the value half is an alias with no operation,
-            // so the descent it drives stops immediately. What is kept is the step
-            // record, because `resolve_steps` is right about what a *positional*
-            // path means and wrong only about where a named one can be resolved.
-            match field_name(module, selector)? {
-                Some(name) => steps.push(IndexStep::Named(name)),
-                None => match usize_value(module, selector) {
-                    Some(position) => steps.push(IndexStep::Position(position)),
-                    None => return Ok(None),
-                },
-            }
+            // **The pair's value half is the parameter itself, not one of its
+            // fields**, so the peel contributes no step: a path is counted from
+            // the parameter's own first field, which is what the role table and
+            // the slot's scalar shape are both written against.
             match pair_value_half(module, param_pair) {
                 Some(value) => {
                     current = value;
@@ -4472,11 +4363,8 @@ where
                 None => return Ok(None),
             },
         }
-        // The innermost read: its target is the parameter's value, so the chain
-        // ends here.  **The test is the equality class**, which is what the
-        // lowlevel's `class_root` reads and what `define_in` matches a parameter
-        // against — two tests that could disagree were two answers to "is this the
-        // parameter's own value".
+        // The innermost read's target is the parameter's value; **the test is the equality
+        // class**.
         if module.class_root(target_node) == module.class_root(param_value_of(module, param_pair)?)
         {
             break;
@@ -4500,10 +4388,12 @@ fn resolve_steps<P>(
 ) -> Result<Option<Vec<usize>>, String>
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let Some(fields) = param_value_shape(module, param_pair) else {
+    let Some(type_slot) = (unsafe { module.array_items(param_pair) })
+        .and_then(|items| items.get(PAIR_TYPE_SLOT).map(|item| item.node))
+    else {
         // A scalar parameter has no field list, and a read of it is the value
         // itself: the empty path.  It only needs the constant selectors it was
         // handed, never a name lookup.
@@ -4512,13 +4402,13 @@ where
     // The walk descends one level per step, and every level carries **two**
     // parallel lists: the value's field *types* (what the next step indexes
     // into) and the same value's field *names* (what a named step is looked up
-    // in).  They are read from different places — the types from the shape, the
-    // names from the type term's name table — so keeping them together here is
-    // what stops a name being looked for in the wrong list.
-    let mut types = Some(fields);
-    let mut names = unsafe { module.array_items(param_pair) }
-        .and_then(|items| items.get(PAIR_TYPE_SLOT).map(|item| item.node))
-        .and_then(|type_slot| struct_type_names(module, type_slot));
+    // in).  Keeping them together here is what stops a name being looked for in
+    // the wrong list, and reading the outer level through the one decode that
+    // states which node is the type is what keeps it the same struct the roles
+    // were read from.
+    let (mut names, mut types) = struct_fields_of_slot(module, type_slot)
+        .map(|(names, shape)| (Some(names), Some(shape)))
+        .unwrap_or_default();
     let mut path = Vec::with_capacity(steps.len());
     for step in steps {
         let at = match step {
@@ -4547,7 +4437,9 @@ where
             .and_then(|entries| entries.get(at))
             .map(|entry| entry.node);
         types = entry;
-        names = entry.and_then(|entry| struct_type_names(module, entry));
+        names = entry
+            .and_then(|entry| parameter_type_ref(module, entry))
+            .and_then(|ty| field_names(module, ty));
     }
     Ok(Some(path))
 }
@@ -4570,92 +4462,6 @@ fn resolve_without_type(steps: &[IndexStep]) -> Result<Option<Vec<usize>>, Strin
         }
     }
     Ok(Some(path))
-}
-
-/// A struct **type term**'s name→index table, in field order — the named-read
-/// resolution's read of the encoding, at the one site that needs only the names
-/// and no field types.
-///
-/// It walks the type/kind/marker/names chain one `array_items` at a time,
-/// exactly as `shape::struct_term_parts` does, so the two cannot disagree about
-/// the layout.  `None` when the term is not a named struct type: a positional
-/// struct's names slot is `Error`, and a term whose chain is not yet decided is
-/// a type this resolution has nothing to read.
-///
-/// **The marker's `TypeStruct` tag is not checked here.**  This vocabulary's
-/// bound carries no [`ValueType`], so the tag atom cannot be named without
-/// rippling that bound through the lowering's callers; the names slot being a
-/// `Table` is the structural signal instead (see the closing report).
-fn struct_type_names<P>(module: &Module<P>, term: AnyNodeId) -> Option<Vec<Option<&'static str>>>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    let shape = type_term_slot(module, term, TYPE_SHAPE_SLOT)?;
-    let kind = type_term_slot(module, term, TYPE_KIND_SLOT)?;
-    let marker = type_term_slot(module, kind, KIND_MARKER_SLOT)?;
-    // The marker is the `[payload, TypeStruct]` pair; the name table rides in
-    // the payload's names slot.
-    let payload = type_term_slot(module, marker, STRUCT_MARKER_PAYLOAD_SLOT)?;
-    let names_at = type_term_slot(module, payload, STRUCT_MARKER_NAMES_SLOT)?;
-    let field_count = unsafe { array_items_any(module, shape) }?.len();
-    let mut names: Vec<Option<&'static str>> = vec![None; field_count];
-    let Some(LowValue::Table(table)) = module
-        .node_value(names_at)
-        .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-    else {
-        return None;
-    };
-    // SAFETY: `table` is the payload of the value read from the live node
-    // `names_at`, so its home block is alive.
-    for item in unsafe { table.items() } {
-        let name = module
-            .node_value(item.key)
-            .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-            .and_then(|v| match v {
-                LowValue::Str(name) => Some(name),
-                _ => None,
-            });
-        let index = module
-            .node_value(item.value)
-            .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-            .and_then(|v| match v {
-                LowValue::USize(n) => Some(n),
-                _ => None,
-            });
-        if let (Some(name), Some(index)) = (name, index)
-            && index < field_count
-        {
-            names[index] = Some(name);
-        }
-    }
-    Some(names)
-}
-
-/// One slot of a type term.
-///
-/// **The encoding mixes the two node homes freely within one term** — a struct
-/// term's shape is a module node while its kind is a frozen (static) one — so a
-/// reader that only accepted [`NodeId`] would decode half a type and fail on the
-/// other half.  This reads through [`AnyNodeId`] from end to end and never
-/// materializes: the value a static slot holds is already the answer, so copying
-/// it into the module would add graph for nothing.  `shape::array_items` is the
-/// same reader the type predicates in `lichen_highlevel::shape` use, so the walk
-/// cannot drift from the encoding authority.
-///
-/// `None` when the term is not an array with that slot, or the slot is undecided.
-fn type_term_slot<P>(module: &Module<P>, term: AnyNodeId, at: usize) -> Option<AnyNodeId>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    // SAFETY: `term` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
-    unsafe { array_items_any(module, term) }?
-        .get(at)
-        .map(|item| item.node)
 }
 
 /// Follow a `value_of` extraction — `Index(pair, 0)`, where `pair` is a
@@ -4806,37 +4612,13 @@ where
 /// The **field-type list** of a parameter's value: the shape slot of the
 /// parameter's type expression.
 ///
-/// A parameter's type expression states the value's *type*, so a struct
-/// parameter's shape is literally its list of field types — one entry per
-/// position, in declaration order.  That list is what a read of the parameter
-/// value indexes into, and what this walk descends one level per read.
-///
-/// `None` for a parameter whose type is not a struct — a scalar `jit` domain
-/// states no field list, and a read of it needs no name resolved.
-fn param_value_shape<P>(module: &Module<P>, param_pair: NodeId) -> Option<AnyNodeId>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    let type_slot = unsafe { module.array_items(param_pair) }?
-        .get(PAIR_TYPE_SLOT)
-        .map(|item| item.node)?;
-    type_term_slot(module, type_slot, TYPE_SHAPE_SLOT)
-}
-
 /// The field positions a read's own chain names, walking **down from the read**.
 ///
-/// **A named read reaches a lowering already resolved.** `TableGet(names, "in")`
-/// is specialised into `Index(field, 0)`, so the chain a body actually holds
-/// carries **positions**, not names — which is why matching against the name table
-/// found nothing. The positions are the role table's own, so the comparison is
-/// exact.
-///
-/// Walking from the *parameter* cannot answer this: the parameter's value half is
-/// an alias with no operation, and the link between it and a read is the equality
-/// class rather than the shape. Walking from the read can, because the chain is
-/// the read.
+/// # Invariant
+/// A named read reaches a lowering already resolved: `TableGet(names, "in")` is specialised
+/// into `Index(field, 0)`, so the chain carries **positions** rather than names, and the
+/// positions are the role table's own. Walking from the parameter cannot answer this: its
+/// value half is an alias with no operation, and the link to a read is the equality class.
 fn named_path<P>(module: &Module<P>, node: NodeId) -> Option<Vec<usize>>
 where
     P: Program,
@@ -6154,16 +5936,6 @@ pub fn module_cache_misses() -> usize {
     MODULE_CACHE_MISSES.load(Ordering::Relaxed)
 }
 
-/// Which launch assembled a cached module.  The fragment set is the mode's, so
-/// the mode is part of the cache key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum LaunchMode {
-    /// [`run_kernel`]: the root's relative launch set.
-    Kernel,
-    /// [`run_parallel_kernel`]: the single parallel fragment.
-    Parallel,
-}
-
 /// One cached module and the engine that compiled it.
 struct CachedModule {
     /// The engine the module was compiled by — see [`MODULES`] for why it is
@@ -6177,14 +5949,14 @@ struct CachedModule {
 /// The bounded map behind [`MODULES`].
 #[derive(Default)]
 struct ModuleCache {
-    entries: HashMap<(LaunchMode, KernelId), CachedModule>,
+    entries: HashMap<KernelId, CachedModule>,
     next_stamp: u64,
 }
 
 impl ModuleCache {
     /// A resident module, cloned out (both are `Arc` handles) so the caller
     /// does not hold the lock while instantiating.
-    fn get(&self, key: (LaunchMode, KernelId)) -> Option<(wasmi::Engine, wasmi::Module)> {
+    fn get(&self, key: KernelId) -> Option<(wasmi::Engine, wasmi::Module)> {
         self.entries
             .get(&key)
             .map(|cached| (cached.engine.clone(), cached.module.clone()))
@@ -6193,12 +5965,7 @@ impl ModuleCache {
     /// Insert a freshly compiled module, evicting the oldest entry once the
     /// bound is reached.  Replacing a resident key evicts nothing: the assembly
     /// for a key is deterministic, so the entry is the same module.
-    fn insert(
-        &mut self,
-        key: (LaunchMode, KernelId),
-        engine: wasmi::Engine,
-        module: wasmi::Module,
-    ) {
+    fn insert(&mut self, key: KernelId, engine: wasmi::Engine, module: wasmi::Module) {
         if self.entries.len() >= MAX_CACHED_MODULES
             && !self.entries.contains_key(&key)
             && let Some(oldest) = self
@@ -6222,14 +5989,17 @@ impl ModuleCache {
     }
 }
 
-/// The compiled module for `(mode, root)`, assembling and compiling it on a
-/// miss.  `assemble` is the one half the launch paths do differently.
+/// The compiled module for `root`, assembling and compiling it on a miss.
+///
+/// **One entry per kernel id, and no mode beside it.** Both launch paths assemble
+/// the root's relative launch set — a parallel fragment cross-calls exactly as a
+/// scalar one does — so the id decides the module and a second key component
+/// would only be a second way to reach one assembly.
 fn cached_module(
-    mode: LaunchMode,
     root: KernelId,
     assemble: impl FnOnce() -> Result<Vec<u8>, String>,
 ) -> Result<(wasmi::Engine, wasmi::Module), String> {
-    let key = (mode, root);
+    let key = root;
     if let Some(cached) = modules().lock().unwrap().get(key) {
         return Ok(cached);
     }
@@ -6319,7 +6089,7 @@ fn run_kernel(id: KernelId, args: &[ScalarValue]) -> Result<Vec<ScalarValue>, St
     // so the buffer is never empty; the guard keeps the invariant stated here
     // rather than resting on the emitter alone.
     let outputs = results.max(1);
-    let (engine, module) = cached_module(LaunchMode::Kernel, id, || assemble_launch_set(id))?;
+    let (engine, module) = cached_module(id, || assemble_launch_set(id))?;
     let mut store = wasmi::Store::new(&engine, ());
     let linker = wasmi::Linker::new(&engine);
     let instance = linker
@@ -6348,15 +6118,19 @@ fn run_kernel(id: KernelId, args: &[ScalarValue]) -> Result<Vec<ScalarValue>, St
         .collect()
 }
 
-/// Assemble the wasm bytes of the root kernel's **relative launch set** — the
-/// root plus every kernel it (transitively) cross-calls.
+/// The fragments of a kernel's **relative launch set**, in BFS order, and where
+/// each kernel id sits in that order.
 ///
-/// The set is discovered in BFS order: `ordered[i]` becomes wasm function
-/// index `i`; `index` maps a callee kernel-id to that index.  The result is a
-/// function of the root id alone (the registry's fragments are immutable and
-/// ids are never reused), which is what makes the id a sufficient cache key
-/// for [`cached_module`].
-fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
+/// The set is the root plus every kernel it (transitively) cross-calls, so
+/// `ordered[i]` is position `i` and `index` maps a callee kernel-id to that
+/// position. **The fragments are cloned and the registry lock released before
+/// this returns**, because every consumer emits from the set and an emitter that
+/// reaches the registry again would deadlock on a lock that is not reentrant.
+///
+/// One derivation, and both consumers take it: [`assemble_launch_set`] links it
+/// into wasm and [`run_on_installed_backend`] hands it to an installed backend,
+/// so the two cannot enumerate a call graph differently.
+fn ordered_launch_set(id: KernelId) -> Result<OrderedLaunchSet, String> {
     let mut ordered: Vec<KernelFragment> = Vec::new();
     let mut index: HashMap<KernelId, u32> = HashMap::new();
     let mut seen: HashSet<KernelId> = HashSet::new();
@@ -6385,7 +6159,24 @@ fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
         ordered.push(frag);
     }
     drop(fragments);
+    Ok(OrderedLaunchSet { ordered, index })
+}
 
+/// The two halves of a launch set, owned so the registry lock is gone before
+/// anything is emitted from them.
+struct OrderedLaunchSet {
+    ordered: Vec<KernelFragment>,
+    index: HashMap<KernelId, u32>,
+}
+
+/// Assemble the wasm bytes of the root kernel's **relative launch set** — the
+/// root plus every kernel it (transitively) cross-calls.
+///
+/// The result is a function of the root id alone (the registry's fragments are
+/// immutable and ids are never reused), which is what makes the id a sufficient
+/// cache key for [`cached_module`].
+fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
+    let OrderedLaunchSet { ordered, index } = ordered_launch_set(id)?;
     assemble_module(&ordered, &index)
 }
 
@@ -6447,9 +6238,10 @@ struct ParallelState<'a> {
 /// author's, and overriding it here would be the one place the language's
 /// explicit dataflow quietly stopped being explicit.
 ///
-/// The fragment is cloned out of the registry and the lock released before the
-/// call, because a backend that emitted a cross-kernel call would reach the
-/// registry again — the lock is not reentrant.
+/// The fragment is cloned out of the registry — as is every fragment it
+/// cross-calls, into one launch set — and the lock released before the call,
+/// because a backend that emits a cross-kernel call reads the set again, and the
+/// lock is not reentrant.
 fn run_on_installed_backend(
     id: KernelId,
     count: usize,
@@ -6463,19 +6255,17 @@ fn run_on_installed_backend(
              device"
         ));
     };
-    let fragment = {
-        let fragments = kernels().lock().unwrap();
-        fragments
-            .get(&id)
-            .cloned()
-            .ok_or_else(|| format!("parallel kernel {id} is not registered"))?
-    };
+    let OrderedLaunchSet { ordered, index } = ordered_launch_set(id)?;
+    let fragment = ordered
+        .first()
+        .expect("a launch set is built from a root, so it holds at least one fragment");
     if fragment.outputs != outputs {
         return Err(format!(
             "parallel kernel {id} declares {} output(s) here and {} in the fragment it names",
             outputs, fragment.outputs
         ));
     }
+    let launch = lichen_kernel_ir::LaunchSet::new(&ordered, &index);
     // The class check runs before the dispatch: a host slot is a raw bit
     // payload, so a buffer of the wrong class would reach the device as the
     // right shape and the wrong numbers.
@@ -6510,7 +6300,7 @@ fn run_on_installed_backend(
             RunInput::Resident(resident) => BufferSlot::Resident(resident.id),
         })
         .collect();
-    let resident = backend.run(&fragment, &slots, count).map_err(|reason| {
+    let resident = backend.run(&launch, &slots, count).map_err(|reason| {
         format!(
             "the {:?} backend declined this run: {reason}",
             backend.name()
@@ -6541,22 +6331,6 @@ fn run_on_installed_backend(
             })
             .collect(),
     ))
-}
-
-/// Assemble the wasm bytes of one **parallel** fragment — the degenerate
-/// single-fragment link (`assemble_module`, which `run_kernel` uses for a whole
-/// relative launch set).  Like [`assemble_launch_set`] this is a function of
-/// the kernel id alone, and it is the other half of [`cached_module`]'s key:
-/// the two modes assemble different fragment sets for one id.
-fn assemble_parallel_fragment(id: KernelId) -> Result<Vec<u8>, String> {
-    let fragment = kernels()
-        .lock()
-        .unwrap()
-        .get(&id)
-        .cloned()
-        .ok_or_else(|| format!("parallel kernel {id} is not registered"))?;
-    let index: HashMap<KernelId, u32> = [(id, 0)].into();
-    assemble_module(&[fragment], &index)
 }
 
 /// The most elements one `plrun` may collect — the bound on the count the
@@ -6763,8 +6537,7 @@ fn run_parallel_kernel(
         }
     }
     let inputs = host_inputs;
-    let (engine, module) =
-        cached_module(LaunchMode::Parallel, id, || assemble_parallel_fragment(id))?;
+    let (engine, module) = cached_module(id, || assemble_launch_set(id))?;
     let mut outputs: Vec<Vec<i64>> = (0..outputs).map(|_| vec![0i64; count]).collect();
     let workers = parallel_worker_count(count);
     PARALLEL_LAUNCH_WORKERS.set(workers);
@@ -6842,11 +6615,7 @@ fn run_parallel_kernel(
         outputs
             .into_iter()
             .enumerate()
-            // **Each output is tagged with its own declared class**, at its write
-            // ordinal. One class for all of them was a one-fragment-one-class
-            // assumption, and a fragment whose outputs are of different classes
-            // hands an `f32` back labelled `Int` — the same bits, the wrong type,
-            // which the next launch refuses as a class conflict.
+            // **Each output is tagged with its own declared class**, at its write ordinal.
             .map(|(ordinal, words)| BufferWords {
                 class: output_classes.get(ordinal).copied().unwrap_or(class),
                 words,
@@ -7159,10 +6928,8 @@ fn word_value(class: ScalarClass, word: i64) -> wasmi::Val {
 #[cfg(test)]
 mod parallel_launch_tests {
     use super::*;
-    // **`KernelBody` and `FlatOp` reach a hand-written body, and nothing else in
-    // this file does.** `from_flat` is the one construction a test — or a
-    // fixture — has, since it has no graph to lower; keeping them out of the
-    // crate's imports is what says the SSA walk does not build bodies this way.
+    // **`KernelBody` and `FlatOp` reach a hand-written body**, which is the test's own
+    // construction.
     use lichen_kernel_ir::{FlatOp, KernelBody, ResidentId};
 
     /// A two-output parallel fragment over `(n, i)`: `out0[i] = i + 1` and
@@ -7239,7 +7006,7 @@ mod parallel_launch_tests {
             }
             fn run(
                 &self,
-                _fragment: &KernelFragment,
+                _launch: &lichen_kernel_ir::LaunchSet<'_>,
                 _inputs: &[BufferSlot],
                 _count: usize,
             ) -> Result<Vec<ResidentId>, String> {
@@ -7318,7 +7085,7 @@ mod parallel_launch_tests {
         }
         fn run(
             &self,
-            _fragment: &KernelFragment,
+            _launch: &lichen_kernel_ir::LaunchSet<'_>,
             inputs: &[BufferSlot],
             _count: usize,
         ) -> Result<Vec<ResidentId>, String> {
@@ -7456,7 +7223,7 @@ mod parallel_launch_tests {
             }
             fn run(
                 &self,
-                _fragment: &KernelFragment,
+                _launch: &lichen_kernel_ir::LaunchSet<'_>,
                 _inputs: &[BufferSlot],
                 _count: usize,
             ) -> Result<Vec<ResidentId>, String> {

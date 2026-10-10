@@ -380,7 +380,7 @@ compute.launch k ((2, 3), 4)
 
 #[test]
 fn jit_cross_kernel_call() {
-    // Launch assembles k1 and k0 into one wasm module, so the call is in-module.
+    // Style 2: k1's body calls k0, so both are in one module:   launch k1 6 = k0(6) = 7.
     let (_module, value, _root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
@@ -392,36 +392,30 @@ compute.launch k1 6
     assert_eq!(common::usize_of(&value), 7, "cross-kernel call produced 7");
 }
 
-/// The third shape a cross-kernel argument can take: an operator applied
-/// **inside** the argument.
+/// The third shape a cross-kernel argument can take: an operator applied inside the
+/// argument.
+///
+/// # Invariant
+/// A routed operator's identity is read out of its **frozen callee's body**, so `k0 (x +
+/// 1)` is emitted; it was refused by name while the class channel was the only route
+/// (`docs/notes/operator-polymorphism.md` §7.1, cost 1).
 #[test]
-fn jit_an_operator_inside_a_cross_kernel_argument_is_refused() {
-    let messages = fail(
-        r#"
+fn jit_an_operator_inside_a_cross_kernel_argument_is_emitted() {
+    let (_module, value, _root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
 k0 = compute.jit ((y : Int) => y + 1)
 k1 = compute.jit ((x : Int) => k0 (x + 1))
 compute.launch k1 5
-"#,
-    );
-    assert_eq!(messages.len(), 1, "one refusal: {messages:?}");
-    let message = &messages[0];
-    assert!(
-        message.contains("applies a prelude operator"),
-        "the refusal must name its own cause: {message:?}"
-    );
-    assert!(
-        message.contains("no node for"),
-        "the refusal must say what the emitter is missing: {message:?}"
-    );
+"#);
+    assert_eq!(common::usize_of(&value), 7, "k0 (x + 1) with x = 5");
 }
 
 #[test]
 fn jit_cross_kernel_subexpr() {
-    // The JIT looks through the `Index(apply, 0)` peel the checker leaves; both
-    // parameters must be annotated.
+    // A call result as a sub-expression; the JIT looks through the peel and emits the
+    // call:   launch k1 5 = k0(5) + 1 = 7.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k0 = compute.jit (y : Int => y + 1)
@@ -508,8 +502,8 @@ compute.launch k1 (100, ((9, 4), 5))
 
 #[test]
 fn jit_cross_kernel_tuple_argument_through_the_wrapper() {
-    // The wrapper's argument is an undecided cell, so the tuple is reached through
-    // the cell's equality class.
+    // Style 3, a tuple argument reached through the cell's equality class:
+    //   launch k1 5 = k0(5, 1) = 6.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k0 = compute.jit (p : <Int, Int> => p(0) + p(1))
@@ -661,8 +655,7 @@ compute.launch k1 (5, 3)
 
 #[test]
 fn a_tuple_domain_kernel_type_renders_as_a_function() {
-    // The `.I` field's type is `TypeTuple`: a tuple of element types is itself a
-    // tuple.
+    // A tuple-domain kernel's signature is `[<Int, Int>, Int]`, carried in `.I`.
     let out = render(
         r#"
 --- compute = import "compute.lichen" ---
@@ -1192,8 +1185,11 @@ compute.read ((compute.Read _)(.from out.w, .at 1))
 
 #[test]
 fn a_write_inside_a_conditional_is_refused() {
-    // Every output ordinal must be written on *every* index, so a conditional
-    // write is refused.
+    // Every output ordinal must be written on *every* index; a
+    // conditional write is refused, never quietly reduced.
+
+    // The guard fires after the arm lowers: a `Select` would emit
+    // both arms on every lane. (compute-buffer-wrapper.md)
     let messages = fail(
         r#"
 --- compute = import "compute.lichen" ---
@@ -1216,7 +1212,7 @@ compute.read ((compute.Read _)(.from outs.x, .at 2))
     );
     let message = &messages[0];
     assert!(
-        message.contains("compute.parallel") && message.contains("not yet supported"),
+        message.contains("compute.parallel") && message.contains("inside a conditional's arm"),
         "the refusal must name its own cause: {message:?}"
     );
 }
@@ -1807,8 +1803,8 @@ out = (compute.plrun k2 ((compute.A In2)(.n {ELEMENT_COUNT}, .I In2(.b inbuf.z))
         "the two backends answered the integer output differently"
     );
 
-    // **Read as the typed value, not as element bits**: the CPU backend tags each
-    // output with its ordinal's class.
+    // Read as the typed value: outputs are tagged with their ordinal's
+    // class, so this one reads back `Float`.
     let floats = common::float_array(&cpu_module, &cpu_buffers[1]);
     assert_eq!(floats.len(), ELEMENT_COUNT, "the float output's length");
     assert_eq!(floats[0], 10.5, "the first float element");
@@ -1824,8 +1820,62 @@ out = (compute.plrun k2 ((compute.A In2)(.n {ELEMENT_COUNT}, .I In2(.b inbuf.z))
     );
 }
 
-/// A `@loop` inside a kernel, lowered as a **nest**: the header's `params` are
-/// the carried state.
+/// A **cross-kernel call inside a parallel body**, through both backends.
+///
+/// # Invariant
+/// The callee is a separate kernel, so neither backend resolves the call from
+/// the calling fragment: both need the callee's set and position, derived once
+/// as the shared `LaunchSet` — comparing the two backends' answers is what
+/// asserts it. Only the index is a value a parallel body can name, so `k0` is
+/// called with it.
+#[test]
+fn a_cross_kernel_call_agrees_across_the_two_backends() {
+    let source = format!(
+        r#"
+--- compute = import "compute.lichen" ---
+k0 = compute.jit ((y : Int) => y + 1)
+In  = struct<.a Int>
+Out = struct<.z (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {{
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value (compute.launch k0 i)))
+}}
+k = compute.parallel f "{BACKEND}"
+out = (compute.plrun k ((compute.A In)(.n {ELEMENT_COUNT}, .I In(.a 0))) : Out)
+(compute.read ((compute.Read _)(.from out.z, .at 0)), compute.read ((compute.Read _)(.from out.z, .at 1)), compute.read ((compute.Read _)(.from out.z, .at {last})), compute.collect out.z)
+"#,
+        last = ELEMENT_COUNT - 1,
+    );
+    let Some(((cpu_module, cpu), (gpu_module, gpu))) = answer_from_each_backend(&source) else {
+        return;
+    };
+    let elements = common::array_values(&cpu_module, &cpu);
+    assert_eq!(common::usize_of(&elements[0]), 1, "k0(0)");
+    assert_eq!(common::usize_of(&elements[1]), 2, "k0(1)");
+    assert_eq!(
+        common::usize_of(&elements[2]),
+        ELEMENT_COUNT,
+        "k0 of the last index, past the workgroup multiple"
+    );
+    assert_eq!(
+        common::usize_array(&cpu_module, &elements[3]),
+        (1..=ELEMENT_COUNT).collect::<Vec<usize>>(),
+        "every element is its own index plus one"
+    );
+    assert!(
+        common::values_eq((&cpu_module, &cpu), (&gpu_module, &gpu)),
+        "the two backends answered a cross-kernel call differently"
+    );
+}
+
+/// A `@loop` inside a kernel, lowered as a **nest**, on both backends.
+///
+/// # Invariant
+/// The carried state is a run-time value, so the checker cannot expand the
+/// recursion: the kernel reader builds the nest — the header's `params` are
+/// the state, the base test branches out, the exit hands the value on
+/// (`docs/notes/loop-conversion.md` §8.6).
 #[test]
 fn a_kernel_loop_nest_carries_a_runtime_state() {
     let source = format!(
@@ -1866,5 +1916,98 @@ compute.read ((compute.Read _)(.from out.z, .at 0))
     assert!(
         common::values_eq((&cpu_module, &cpu), (&gpu_module, &gpu)),
         "the two backends answered one loop nest differently"
+    );
+}
+
+/// A dynamic reduction on both backends at three lengths: the triangle numbers.
+///
+/// # Invariant
+/// Lane `i` reads its trip count from `data[i]`, so the last lane's count is
+/// the buffer's length; the seed fills `data[i] = i + 1`, and the answer is
+/// `length(length + 1)/2`. The continue arm is first because `spirv.rs`
+/// branches on `if_true` whichever arm leaves the loop
+/// (`docs/notes/loop-conversion.md` §8.6 item 6).
+#[test]
+fn a_kernel_loop_reduces_a_runtime_buffer_length() {
+    for length in [4_usize, 7, 600] {
+        let source = format!(
+            r#"
+---
+  compute = import "compute.lichen"
+---
+In0  = struct<.a Int>
+Out0 = struct<.z (compute.Buf _)>
+Par0 = compute.P (compute.KT _)(.I In0, .O Out0)
+seed = (k : Par0) => {{
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 1))
+}}
+kseed = compute.parallel seed "{BACKEND}"
+data = (compute.plrun kseed ((compute.A In0)(.n {length}, .I In0(.a 0))) : Out0)
+In  = struct<.b (compute.Buf _)>
+Out = struct<.z (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {{
+  @loop sum_to = s => if s(0) != 0 then sum_to (s(0) - 1, s(1) + compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1))) else s(1)
+  i = compute.range k.n
+  count = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value sum_to (count, 0)))
+}}
+p = compute.parallel f "{BACKEND}"
+out = (compute.plrun p ((compute.A In)(.n {length}, .I In(.b data.z))) : Out)
+compute.read ((compute.Read _)(.from out.z, .at {last}))
+"#,
+            last = length - 1
+        );
+        let Some(((cpu_module, cpu), (gpu_module, gpu))) = answer_from_each_backend(&source) else {
+            return;
+        };
+        let expected = length * (length + 1) / 2;
+        assert_eq!(
+            common::usize_of(&cpu),
+            expected,
+            "the cpu backend's reduction over {} element(s)",
+            length
+        );
+        assert_eq!(
+            common::usize_of(&gpu),
+            expected,
+            "the gpu backend's reduction over {} element(s)",
+            length
+        );
+        assert!(
+            common::values_eq((&cpu_module, &cpu), (&gpu_module, &gpu)),
+            "the two backends answered one reduction over {} element(s) differently",
+            length
+        );
+    }
+}
+
+/// A body reading a **scalar leaf of its own `.in` struct** (`compute-buffer-wrapper.md`).
+#[test]
+fn a_body_reads_a_scalar_leaf_of_its_input_struct() {
+    // The `"gpu"` dispatch refuses a runtime scalar, so this shape is cpu-only.
+    let (module, value, _root) = run(&format!(
+        r#"
+--- compute = import "compute.lichen" ---
+In  = struct<.a Int>
+Out = struct<.z (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {{
+  i = compute.range k.n
+  a = k.in.a
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value a + i))
+}}
+k = compute.parallel f "cpu"
+out = (compute.plrun k ((compute.A In)(.n {ELEMENT_COUNT}, .I In(.a 7))) : Out)
+compute.collect out.z
+"#,
+    ));
+    assert_eq!(
+        common::usize_array(&module, &value),
+        (0..ELEMENT_COUNT)
+            .map(|offset| 7 + offset)
+            .collect::<Vec<usize>>(),
+        "every lane took the input's scalar leaf, not the index"
     );
 }

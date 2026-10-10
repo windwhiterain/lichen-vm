@@ -1,47 +1,21 @@
-//! A kernel body, lowered: **a graph walk that emits SSA**.
+//! A kernel body, lowered: a graph walk that emits SSA.
 //!
-//! # What this replaced, and why the shape changed
+//! Background: `docs/notes/lichen-compute.md` §4.
 //!
-//! This was `emit_node`: a recursive walk that pushed [`KernelInstr`]s onto a
-//! `Vec`. Instructions named no values, so the walk's *recursion* was its
-//! ordering, and three things followed that were properties of the IR rather
-//! than of any kernel:
-//!
-//! - **a shared subexpression was emitted once per use**, because nothing could
-//!   name it after the first;
-//! - **every consumer reconstructed the operand stack**, each deriving the form
-//!   it wanted — `waffle` derives a stack from SSA, `spirv.rs` derives SSA ids
-//!   from a stack;
-//! - **the walk recursed over the graph**, so it needed a depth budget and
-//!   `#[stacksafe]` to survive a deeply expanded body.
-//!
-//! Here the walk emits into a [`KernelBody`] — SSA values, blocks with
-//! parameters — and the memo [`Lower::values`] is what makes a node emit **once**.
-//!
-//! # Resolution is the lowlevel's, not this file's
-//!
-//! Which value a node names — a parameter leaf, a computation, nothing — is
-//! answered by `define_in` and `selection_of` (`lichen_lowlevel::resolve`),
-//! because it is a fact about cells and equality classes. This file used to
-//! re-derive it on every bare cell it reached, through `equality_rep` and
-//! `class_computation_node`; both moved down and neither exists here.
-//!
-//! # The one thing that is still a count
-//!
-//! [`Positions`] — the buffer ordinals a parallel body reads and writes. **It is
-//! filled by this walk rather than by a consumer**, because it is a *shared*
-//! fact: the fragment's `input_classes` and `output_classes` and the refusal
-//! wording a backend uses have to agree, and two counters that disagreed is the
-//! defect `mixed_classes`'s contract exists to prevent.
+//! # Invariant
+//! A node emits once and is named afterwards through [`Lower::values`]; the
+//! buffer ordinals a backend reads are [`Positions`], filled by this walk so
+//! that the fragment's input and output classes cannot disagree.
 
 use std::collections::HashMap;
 
+use lichen_highlevel::program::ValueType;
 use lichen_kernel_ir::{
     Br, KernelBin, KernelBody, KernelInstr, KernelShape, ScalarClass, Terminator, ValueId,
 };
 use lichen_lowlevel::{
-    AnyNodeId, Define, FunctionId, LoopArm, LoopConversion, LowOperator, LowValue, Module, NodeId,
-    Program,
+    AnyFunctionId, AnyNodeId, Define, FunctionId, LoopArm, LoopConversion, LowOperator, LowValue,
+    Module, NodeId, Program,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -51,8 +25,7 @@ use super::{
     node_class_in, parallel_buffer_pos, param_classes, peeled_argument, scalar_literal,
 };
 
-/// The parameter slots' classes in flattening order — **the ABI's own list**,
-/// since a leaf's class is the parameter's and not the body's.
+/// The parameter slots' classes in flattening order — the ABI's own list, not the body's.
 fn param_classes_of(params: &[ParamSlot]) -> Vec<ScalarClass> {
     params
         .iter()
@@ -60,13 +33,13 @@ fn param_classes_of(params: &[ParamSlot]) -> Vec<ScalarClass> {
         .collect()
 }
 
-/// How many parameter leaves the body's entry block receives — **the declared
-/// shape's arity**, which is the ABI's count and not the domain node's.
+/// How many parameter leaves the body's entry block receives — the declared
+/// shape's arity, not the domain node's.
 ///
-/// A kernel's parameter is a struct carrying a native wrapper and a signature, so
-/// the node a caller hands over is the wrapper's cell rather than the tuple the
-/// domain declares. Reading the count off the node gave one leaf for a two-leaf
-/// domain, and every tuple read then failed to place.
+/// # Invariant
+/// The count is the slots' [`flat_arity`] summed: a kernel's parameter is a
+/// struct carrying a native wrapper and a signature, so the node a caller hands
+/// over is the wrapper's cell rather than the tuple the domain declares.
 fn domain_arity(params: &[ParamSlot]) -> usize {
     params
         .iter()
@@ -75,34 +48,27 @@ fn domain_arity(params: &[ParamSlot]) -> usize {
 }
 
 /// One function's lowering: the body being built, and everything the walk needs
-/// One function's lowering: the body being built, and everything the walk needs
 /// to place a value in it.
 pub struct Lower<'a, P: Program> {
     module: &'a Module<P>,
     /// The parameter slots, for the class and path reads the buffer arms need.
     params: &'a [ParamSlot],
-    /// The domain's **value** node — its leaves are this body's parameters, and
-    /// the caller states it rather than this file decoding a pair out of
-    /// `Function::parameter`.
+    /// The domain's **value** node — its leaves are this body's parameters, stated by the caller.
     domain: NodeId,
-    /// **The function the domain belongs to.** `Module::define_in` takes the
-    /// function and derives the domain itself, so that the value half is decoded
-    /// in one place rather than by every caller — the same fact, read the same
-    /// way, whichever side asks.
+    /// The function the domain belongs to, so `Module::define_in` derives the domain once.
     function: FunctionId,
     tally: &'a mut Positions,
     body: KernelBody,
-    /// A node to the value it produced. **This is what makes emission happen
-    /// once**, so a shared subexpression is computed once.
+    /// A node to the value it produced — **emission happens once**, so a shared
+    /// subexpression is computed once.
     values: HashMap<NodeId, ValueId>,
     /// How many definitions deep the walk is — the guard that replaced a
     /// hand-rolled operand stack's failure mode.
     depth: usize,
-    /// The class each emitted value was declared in, keyed by the node it came
-    /// from — what an operator consults to learn what class its operands are.
+    /// The class each emitted value was declared in, keyed by the node it came from.
     classes: HashMap<NodeId, ScalarClass>,
-    /// The entry block's parameters' classes, in flattening order — **the ABI's
-    /// own list**, since a leaf's class is the parameter's and not the body's.
+    /// The entry block's parameters' classes in flattening order; [`param_classes_of`]
+    /// states whose list that is.
     leaf_classes: Vec<ScalarClass>,
     /// The node whose definition is being emitted, so [`Lower::emit`] can record
     /// the class it declared against it.
@@ -142,24 +108,29 @@ struct ActiveLoop {
     merge: usize,
 }
 
-/// A cross-kernel callee must return exactly one value, and it must be the
-/// caller's own class: a cross-kernel call is an ordinary wasm `call`, so a float
-/// caller passing an `f32` to an integer callee — or reading an `i64` back into a
-/// float body — would be a module that does not validate.
+/// A `write` in a conditional's arm is refused (see §6 of the loop-conversion note).
+const CONDITIONAL_WRITE: &str = "a `compute.write` inside a conditional's arm is refused: a kernel body's conditional is a `Select`, which emits both arms on every lane, so the arm's write would run on every lane and overwrite the selected arm's own. A real branch is what makes it legal (`docs/notes/loop-conversion.md` §6)";
+
+/// Refusal: a cross-kernel callee returns exactly one value, in the caller's class.
+///
+/// # Invariant
+/// A cross-kernel call is an ordinary wasm `call`, so a float caller passing an
+/// `f32` to an integer callee — or reading an `i64` back into a float body —
+/// would be a module that does not validate.
 const CROSS_KERNEL_RESULT_ARITY: &str = "a cross-kernel call to a kernel that returns more than one value is not supported: a kernel body reads a callee result as a single value, and re-materialising a tuple result needs local slots the kernel instruction set does not yet have";
 
-/// The walk''s depth ceiling. **A refusal, not a panic**: this is the condition a
-/// program can be written against, and it is what a deeply *expanded* recursion
-/// runs into.
+/// The walk's depth ceiling: a refusal, not a panic, and what a deeply **expanded**
+/// recursion runs into.
 const MAX_KERNEL_BODY_DEPTH: usize = 512;
 
 impl<'a, P: Program> Lower<'a, P>
 where
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     /// Lower `codomain` — the value the function returns — into a body.
     ///
+    /// # Invariant
     /// The entry block's parameters are the domain's leaves **in the ABI's
     /// order**, which is what makes an old `LocalGet(k)` and a loop's carried
     /// value the same read.
@@ -173,11 +144,7 @@ where
     ) -> Result<KernelBody, String> {
         let mut body = KernelBody::new();
         let entry = body.add_block();
-        // **The parameter count is the shape's, not the domain node's.** A kernel's
-        // parameter is a struct carrying a native wrapper and a signature, so the
-        // node the caller hands over is the wrapper's cell rather than the tuple the
-        // domain declares — reading the count off the node gave one leaf for a
-        // two-leaf domain, and every tuple read then failed to place.
+        // The count is the shape's, not the domain node's: see [`domain_arity`].
         for _ in 0..domain_arity(params) {
             body.add_param(entry);
         }
@@ -200,29 +167,19 @@ where
         for node in lower.leaves_of(codomain)? {
             values.push(lower.value(node)?);
         }
-        // **The return belongs where the walk ended**, which is the entry block
-        // for a straight-line body and the loop nest's merge block for a body
-        // that contains one.
+        // **The return belongs where the walk ended** — the entry block, or a nest's merge block.
         lower
             .body
             .set_terminator(lower.block, Terminator::Return { values });
         Ok(lower.body)
     }
 
-    /// A parallel index function, lowered: **each output is a `compute.write`**.
+    /// A parallel index function, lowered: each output is a `compute.write`.
     ///
-    /// The outputs are emitted **in position order**, so write `k` takes the
-    /// ordinal `k` — the ordinal is a fact of the codomain's order, not of when
-    /// the walk happened to reach it.
-    ///
-    /// **The writes produce nothing** (`KernelInstr::produces` is `0` for a
-    /// write), so the body has no value to return from them. A parallel kernel's
-    /// results *are* its output buffers, read out of what the `write` import
-    /// filled, so the signature still declares one result and the terminator
-    /// returns a value of the fragment's class to match it. That is a dummy, and
-    /// it is stated here rather than left implicit: a body whose returned value
-    /// was supposed to mean something would be indistinguishable from one where
-    /// it does not.
+    /// # Invariant
+    /// The outputs are emitted in position order, so write `k` takes the ordinal
+    /// `k`. The writes produce nothing, so the terminator returns a dummy of the
+    /// fragment's class to match the result the signature declares.
     pub fn lower_index_function(
         module: &'a Module<P>,
         params: &'a [ParamSlot],
@@ -237,11 +194,8 @@ where
         for _ in 0..domain_arity(params) {
             body.add_param(entry);
         }
-        // **A parallel fragment's domain is its config's leaves *plus* the
-        // invocation index**, which is the one value `compute.range` reads. The
-        // index is not part of the config parameter's own shape — it is this
-        // target's way of naming "which lane am I" — so it is added here rather
-        // than counted from a shape that does not contain it.
+        // **The fragment's domain is the config's leaves plus the invocation index**,
+        // which no shape contains.
         body.add_param(entry);
         let mut lower = Lower {
             module,
@@ -277,11 +231,8 @@ where
     /// The value `node` names, emitting its definition the first time it is asked
     /// for.
     fn value(&mut self, node: NodeId) -> Result<ValueId, String> {
-        // **Inside a `@loop` nest, the roles are the binding.** A node of the
-        // marked function's own template is either a read of its carried state —
-        // the conversion's paths say which slot — or a computation over such
-        // reads, which is the same role the host loop resolves through
-        // `Instantiation::node_of` (`loop_run.rs`).
+        // **Inside a `@loop` nest the roles are the binding**: a marked function's read
+        // resolves to its block's parameters.
         if let Some(index) = self.loop_owner(node)
             && let Some(value) = self.loop_value(index, node)?
         {
@@ -293,9 +244,8 @@ where
         if self.depth > MAX_KERNEL_BODY_DEPTH {
             return Err(super::kernel_body_too_deep());
         }
-        // A role of an active nest is emitted in that nest's current block; a
-        // value the nest reaches but does not own is emitted where the nest
-        // starts, which is the one block that dominates all of it.
+        // A nest's role is emitted in its current block; one it does not own, at the
+        // nest's entry.
         let enclosing = self.block;
         let target = match self.loop_owner(node) {
             Some(index) => Some(self.loops[index].block),
@@ -305,22 +255,15 @@ where
             self.block = target;
         }
         self.depth += 1;
-        // **Every emission for this node records its class against this node.**
-        // A literal is emitted straight from here rather than from `definition`, so
-        // setting it once here covers both — and recording it against the wrong
-        // node is how a float constant ended up unrecorded and its operator fell
-        // back to the node's own class.
+        // **Every emission records its class against this node**, so `defining` is set
+        // here and not in `definition`.
         self.defining = node;
-        // **A read of the domain at a path, matched structurally.** `x(0)` on a
-        // tuple domain is a chain of `Index` nodes ending at the parameter, and the
-        // walk recognises it from the chain rather than from the class — which
-        // matters because the deep pass may have unified the parameter with the
-        // argument it was passed, so the node the read names is a *computation* and
-        // only the chain says where it came from.
-        let value = match self.parameter_path(node) {
+        // **A read of the domain at a path is matched structurally**, from the `Index`
+        // chain: see [`Lower::parameter_path`].
+        let value = match self.parameter_path(node)? {
             Some(slot) => {
-                // **A parameter's class is the ABI's**, recorded here so an operator
-                // that reads one learns what class it is without the fragment.
+                // **A parameter's class is the ABI's**, recorded so an operator learns it
+                // without the fragment.
                 let class = self
                     .leaf_classes
                     .get(slot)
@@ -329,11 +272,8 @@ where
                 self.classes.insert(node, class);
                 self.parameter(slot)?
             }
-            // **A literal is a value, answered before anything else** — before the
-            // operation test and before the class walk. A node can hold a decided
-            // literal *and* have no operation and no class member that computes it,
-            // and answering it as opaque refuses a constant the graph already
-            // decided.
+            // **A literal is answered first**: a decided literal may have no operation
+            // that computes it.
             None => match self.literal(node) {
                 Some(value) => value,
                 None => match self.module.define_in(self.function, node) {
@@ -345,7 +285,7 @@ where
         };
         self.depth -= 1;
         // Only the frame that moved the cursor puts it back: a nest's move to its
-        // merge block has to stand, because the caller's code belongs there.
+        // merge block stands.
         if target.is_some() {
             self.block = enclosing;
         }
@@ -404,45 +344,46 @@ where
         Ok(Some(value))
     }
 
-    /// The parameter read `node` names, through the wrappers it may arrive wrapped in.
+    /// The parameter read `node` names, through the wrappers it may arrive in.
     ///
-    /// **A call's argument arrives wrapped**, where a body's read does not: a bare
-    /// kernel apply carries a fresh `[value, type]` pair whose value half is the
-    /// argument, and that half is the parameter — while the pair itself is a node
-    /// this body's slots do not name. So the same path walk is tried on the node and
-    /// on what one peel takes off it, and the first that lands on a slot wins.
-    fn parameter_path_of(&self, node: NodeId) -> Option<usize> {
+    /// # Invariant
+    /// A call's argument arrives wrapped where a body's read does not, so the same
+    /// path walk is tried on the node, on what one peel takes off it, and on its
+    /// view, and the first that lands on a slot wins.
+    fn parameter_path_of(&self, node: NodeId) -> Result<Option<usize>, String> {
         let peeled = self.module.pair_value_half(node);
         let viewed = match self.module.selection_of(node) {
             Some(lichen_lowlevel::Selection::Views(view)) => Some(view),
             _ => None,
         };
-        self.parameter_path(node)
-            .or_else(|| peeled.and_then(|peeled| self.parameter_path(peeled)))
-            .or_else(|| viewed.and_then(|viewed| self.parameter_path(viewed)))
+        if let Some(slot) = self.parameter_path(node)? {
+            return Ok(Some(slot));
+        }
+        if let Some(peeled) = peeled
+            && let Some(slot) = self.parameter_path(peeled)?
+        {
+            return Ok(Some(slot));
+        }
+        Ok(viewed
+            .map(|viewed| self.parameter_path(viewed))
+            .transpose()?
+            .flatten())
     }
 
     /// The entry parameter a read of the domain at a path names, if that is what
     /// `node` is.
     ///
-    /// **Matched from the chain, not from the class of the base.** A parameter the
-    /// deep pass unified with an argument is *a computation* by the time codegen
-    /// sees it, and a class walk finds nothing there; the chain of `Index` nodes
-    /// is what says `x(1)` is a read of the domain rather than of anything else.
-    ///
-    /// **The base is matched against the parameter slots themselves** — each
-    /// slot's pair and its value — rather than against one domain node the caller
-    /// happened to hand over. That is the old walk's test, and it is the robust
-    /// one: a struct parameter, a tuple domain and a scalar all reach the walk
-    /// through a different node, and the slots are what all three share.
-    ///
-    fn parameter_path(&self, node: NodeId) -> Option<usize> {
+    /// # Invariant
+    /// The chain of `Index` nodes is the test, not the base's class: a parameter the
+    /// deep pass unified with its argument is a computation by codegen time. The base
+    /// is matched against the slots themselves — each slot's pair and its value — or
+    /// against one of the domain's leaves, because a struct parameter, a tuple domain
+    /// and a scalar each reach the walk through a different node.
+    fn parameter_path(&self, node: NodeId) -> Result<Option<usize>, String> {
         let mut positions: Vec<usize> = Vec::new();
         let mut cursor = node;
         loop {
-            // **The base has no operation, and that is the end of the chain** —
-            // not a failure to answer. `?` here would return from the whole walk
-            // on the ordinary case.
+            // **A base with no operation ends the chain**, rather than failing to answer.
             let Some(operation) = self.module.node_operation(cursor) else {
                 break;
             };
@@ -453,26 +394,22 @@ where
                 break;
             }
             let Some(arguments) = self.arguments(cursor).ok() else {
-                return None;
+                return Ok(None);
             };
             let (Some(target), Some(index)) = (arguments.first(), arguments.get(1)) else {
-                return None;
+                return Ok(None);
             };
             let Some(step) = self.module.usize_value(*index) else {
-                return None;
+                // **A named step is answered by the parameter's own type**, which is
+                // `param_read_offset`'s walk, not this one's.
+                return Ok(super::param_read_offset(self.module, self.params, node)?
+                    .map(|offset| offset as usize));
             };
             let AnyNodeId::Dynamic(target) = target else {
-                return None;
+                return Ok(None);
             };
-            // **`Index(param_pair, k)` is the pair's value half, not a step of the
-            // domain's path.** It is how a read reaches the parameter at all, and
-            // counting it would descend the parameter's *wrapper* struct as though
-            // it were the domain's shape.
-            //
-            // **The cursor still moves onto the pair** before the walk stops: the
-            // pair is where the read ended up, and it is the base the check below
-            // has to see. Stopping one node short of it left the base unmatched and
-            // the whole-parameter read unplaced.
+            // **`Index(param_pair, k)` is the pair's value half, not a path step**, and the
+            // cursor stops on the pair.
             if self
                 .params
                 .iter()
@@ -488,11 +425,8 @@ where
         let on_a_slot = self.params.iter().any(|slot| {
             root == self.module.class_root(slot.pair) || root == self.module.class_root(slot.value)
         });
-        // **Or one of the domain's leaves.** A kernel's parameter is a struct
-        // carrying a native wrapper and a signature, and a read of `p` reaches the
-        // wrapper's field first — so the chain ends at a *leaf* of the domain
-        // rather than at the domain, which is why matching the slots alone placed
-        // six tuple-domain reads nowhere.
+        // **Or one of the domain's leaves**: a read of `p` reaches the wrapper's field
+        // first, so the chain ends at a leaf.
         let on_a_leaf = self
             .domain_leaves()
             .map(|leaves| {
@@ -502,37 +436,29 @@ where
             })
             .unwrap_or(false);
         if !(on_a_slot || on_a_leaf) {
-            return None;
+            return Ok(None);
         }
-        // **The slot is the path *flattened*, and the difference matters at one
-        // level of nesting.** A flat tuple's positions sum, because every element
-        // before the one named holds exactly one leaf. A nested tuple's do not: in
-        // `<<Int, Int>, Int>`, `p(1)` names the outer element at position 1, which
-        // starts after the inner tuple's **two** leaves — offset **2**, not 1.
-        // Summing read the wrong parameter and the fragment answered `2 + 3 + 3`.
-        //
-        // **The steps come out innermost-first** — the walk descends from the read
-        // — so they are reversed before flattening, or the descent enters the
-        // inner tuple at the outer position.
+        // **The slot is the path flattened**, summing each skipped element's arity;
+        // the steps are reversed first.
         positions.reverse();
         let mut offset = 0usize;
         let mut shape = match self.params.first() {
             Some(slot) => slot.shape.clone(),
-            None => return None,
+            None => return Ok(None),
         };
         for position in &positions {
             let lichen_lowlevel::LowShape::Tuple(items) = &shape else {
-                return None;
+                return Ok(None);
             };
             let Some(element) = items.get(*position) else {
-                return None;
+                return Ok(None);
             };
             for skipped in &items[..*position] {
                 offset += super::flat_arity(skipped);
             }
             shape = element.clone();
         }
-        Some(offset)
+        Ok(Some(offset))
     }
 
     /// The domain's leaves, flattened — the ABI's argument list.
@@ -540,18 +466,17 @@ where
         self.module.value_leaves(self.domain)
     }
 
-    /// A value's leaves: itself, or an array's items. **A codomain is at most a
-    /// tuple of scalars**, so one level is the whole of it.
+    /// A value's leaves: itself, or an array's items. A codomain is at most a tuple of scalars.
     fn leaves_of(&self, value: NodeId) -> Result<Vec<NodeId>, String> {
         self.module.value_leaves(value)
     }
 
     /// The ABI slot the domain's `leaf`-th leaf takes.
     ///
-    /// **A struct domain's whole value is a parameter too**, and its fields are
-    /// the ones that take slots — so a body reading the parameter itself and a
-    /// body reading one of its fields are both parameter reads, and only the
-    /// field names an index.
+    /// # Invariant
+    /// A struct domain's whole value is a parameter too, and its fields are the ones
+    /// that take slots, so a body reading the parameter and a body reading one of
+    /// its fields are both parameter reads.
     fn slot_of(&self, leaf: NodeId) -> Result<usize, String> {
         let root = self.module.class_root(leaf);
         let domain = self.domain;
@@ -567,10 +492,8 @@ where
             })
     }
 
-    /// The body's `k`-th parameter.
-    ///
-    /// **This is what `KernelInstr::LocalGet(k)` was, and it is now a read of a
-    /// named value.** That is the whole of what a loop's carried state needs.
+    /// The body's `k`-th parameter — what `KernelInstr::LocalGet(k)` was, now a
+    /// named read.
     fn parameter(&self, k: usize) -> Result<ValueId, String> {
         self.body.parameters().get(k).copied().ok_or_else(|| {
             format!(
@@ -589,8 +512,7 @@ where
         };
         let value = self.body.add_op(self.block, instr, args, declared);
         if instr.produces() > 0 {
-            // **Recorded against the node being defined**, which is what an
-            // operator consults to learn what class its operands are.
+            // **Recorded against the node being defined**, which an operator consults.
             self.classes.insert(self.defining, class);
         }
         value
@@ -630,8 +552,7 @@ where
     /// Emit `node`'s definition and return the value it leaves.
     fn definition(&mut self, node: NodeId) -> Result<ValueId, String> {
         let class = node_class(self.module, node);
-        // A literal is a value, not a computation, and it is the cheapest thing a
-        // node can be.
+        // A literal is the cheapest thing a node can be, and it is not a computation.
         if let Some(value) = self.literal(node) {
             return Ok(value);
         }
@@ -668,100 +589,192 @@ where
             && let Some(bin) = kernel_bin(ty_op)
         {
             let arguments = self.arguments(node)?;
-            let Some(rhs) = arguments.get(1) else {
+            let (Some(lhs), Some(rhs)) = (arguments.first().copied(), arguments.get(1).copied())
+            else {
                 return Err(format!("{ty_op:?} is missing an operand"));
             };
-            let Some(lhs) = arguments.first() else {
-                return Err(format!("{ty_op:?} is missing an operand"));
-            };
-            // **The operator's class is its operands' class**, read off them and
-            // falling back to the node's. The node's own class is a hint, not the
-            // answer: a float body's index and count are `Int` positions, so an
-            // operator that adds two floats computes in `Float` whatever the node
-            // the checker hung them on says. Trusting the node here made a float
-            // kernel declare `Bin(Int, Add)` over two float values, and the class
-            // check refused it — correctly, and for the wrong reason.
-            // **The operands first**: the class below is read off what they
-            // emitted, and asking before they exist reads nothing and falls back
-            // to the node's own.
-            let left = self.value_item(*lhs)?;
-            let right = self.value_item(*rhs)?;
-            let operand_class = self
-                .emitted_class(*lhs)
-                .or_else(|| self.emitted_class(*rhs))
-                .unwrap_or(class);
-            let class = operand_class;
-            // **A float has no `%` or bitwise form**, and the refusal is here at
-            // the operand because the class is still visible.
-            if class == ScalarClass::Float
-                && matches!(
-                    bin,
-                    KernelBin::Rem | KernelBin::BitAnd | KernelBin::BitOr | KernelBin::BitXor
-                )
-            {
-                return Err(format!(
-                    "`{ty_op:?}` has no float form: a kernel's float operators are `+ - * /` and \
-                     the four order comparisons, not `%` or the bitwise operators"
-                ));
-            }
-            return Ok(self.emit(KernelInstr::Bin(class, bin), vec![left, right], class));
+            return self.arithmetic(ty_op, bin, lhs, rhs, class);
         }
 
         // The compute plugin's own operators.
         if let Some(compute_op) = AsEnum::<ComputeOperator>::as_enum(op) {
-            return match compute_op {
-                ComputeOperator::Launch | ComputeOperator::Call => {
-                    // **A program's own operator reads its operand array's
-                    // elements**, not the array: `operands_of` answers "which
-                    // nodes does this definition depend on", and for a program
-                    // operator that is the array itself — one node, built before
-                    // the operator that indexes it.
-                    let operands = self.arguments(node)?;
-                    let Some(kernel) = operands.first() else {
-                        return Err(format!(
-                            "cross-kernel call's operand array is empty, and a call reads [callee, \
-                             argument]"
-                        ));
-                    };
-                    let Some(arg) = operands.get(1) else {
-                        return Err(format!(
-                            "cross-kernel call's operand array holds {} element(s), and a call \
-                             reads [callee, argument]",
-                            operands.len()
-                        ));
-                    };
-                    self.cross_kernel_call(*kernel, *arg)
-                }
-                // The loop index of the current parallel invocation: the
-                // parameter immediately after the cfg scalar params.
-                ComputeOperator::Range => {
-                    let index: usize = self.params.iter().map(|p| flat_arity(&p.shape)).sum();
-                    self.parameter(index)
-                }
-                ComputeOperator::Read => self.buffer_read(operand),
-                ComputeOperator::Write => self.buffer_write(operand),
-                other => Err(format!(
-                    "unsupported compute operator in kernel body: {other:?}"
-                )),
-            };
+            return self.compute_operator(node, compute_op, operand);
         }
         Err(format!(
             "unsupported operation in kernel body: {op:?} (kernel-safe subset is scalar arith)"
         ))
     }
 
-    /// An `Apply`: a `@loop` recursion, a call of a routed operator, or a
-    /// cross-kernel call.
+    /// One compute operator over its own operand array, wherever the walk meets it.
     ///
-    /// **Four cases, and the third is the one that is not yet.** The routing
-    /// lowers `x + 1` to a call of the prelude's binding, so the frozen callee is
-    /// a body this module cannot walk and the **residual** the lowlevel's clone
-    /// wrote for the call is what gets emitted. A callee that is a *kernel value*
-    /// is a cross-kernel call. A callee that is a **marked recursion** whose shape
-    /// converts is the loop nest ([`Lower::lower_loop`]) — the roles
-    /// `Module::loop_conversion` names, emitted instead of interpreted. An
-    /// ordinary lichen-function call is Style 1 — inlining its body — and is
-    /// refused by name.
+    /// # Invariant
+    /// Shared by an operator node and by a routed apply whose frozen callee's body
+    /// names one, so the two routes cannot drift.
+    fn compute_operator(
+        &mut self,
+        node: NodeId,
+        compute_op: ComputeOperator,
+        operand: NodeId,
+    ) -> Result<ValueId, String> {
+        match compute_op {
+            ComputeOperator::Launch | ComputeOperator::Call => {
+                // **A program's operator reads its operand array's elements**, not the
+                // array `operands_of` names.
+                let operands = self.arguments(node)?;
+                let Some(kernel) = operands.first() else {
+                    return Err(format!(
+                        "cross-kernel call's operand array is empty, and a call reads [callee, \
+                         argument]"
+                    ));
+                };
+                let Some(arg) = operands.get(1) else {
+                    return Err(format!(
+                        "cross-kernel call's operand array holds {} element(s), and a call \
+                         reads [callee, argument]",
+                        operands.len()
+                    ));
+                };
+                self.cross_kernel_call(*kernel, *arg)
+            }
+            // The loop index of the current parallel invocation, after the cfg params.
+            ComputeOperator::Range => {
+                let index: usize = self.params.iter().map(|p| flat_arity(&p.shape)).sum();
+                self.parameter(index)
+            }
+            ComputeOperator::Read => self.buffer_read(operand),
+            ComputeOperator::Write => self.buffer_write(operand),
+            other => Err(format!(
+                "unsupported compute operator in kernel body: {other:?}"
+            )),
+        }
+    }
+
+    /// One arithmetic or comparison operator over two operands, at `fallback_class`
+    /// when their classes say nothing.
+    ///
+    /// # Invariant
+    /// **The operator's class is its operands' class**, not the node's: a float
+    /// body's index and count are `Int` positions, so an operator adding two floats
+    /// computes in `Float` whatever node the checker hung them on.
+    fn arithmetic(
+        &mut self,
+        ty_op: TypeOperator,
+        bin: KernelBin,
+        left_operand: AnyNodeId,
+        right_operand: AnyNodeId,
+        fallback_class: ScalarClass,
+    ) -> Result<ValueId, String> {
+        // **The operands first**: the class is read off what they emitted, so asking
+        // earlier reads nothing.
+        let left = self.value_item(left_operand)?;
+        let right = self.value_item(right_operand)?;
+        let class = self
+            .emitted_class(left_operand)
+            .or_else(|| self.emitted_class(right_operand))
+            .unwrap_or(fallback_class);
+        // **A float has no `%` or bitwise form**, and the refusal is here at the
+        // operand because the class is still visible.
+        if class == ScalarClass::Float
+            && matches!(
+                bin,
+                KernelBin::Rem | KernelBin::BitAnd | KernelBin::BitOr | KernelBin::BitXor
+            )
+        {
+            return Err(format!(
+                "`{ty_op:?}` has no float form: a kernel's float operators are `+ - * /` and the \
+                 four order comparisons, not `%` or the bitwise operators"
+            ));
+        }
+        Ok(self.emit(KernelInstr::Bin(class, bin), vec![left, right], class))
+    }
+
+    /// The operator a routed apply names, read from its frozen callee body, or `None`.
+    ///
+    /// # Invariant
+    /// The operator is read from the artifact's structure, never from a value:
+    /// the callee is reachable by `FunctionId` whether or not anything evaluated,
+    /// which is why this answers where the class channel cannot — the argument is
+    /// a read the kernel emits and the host never decides.
+    fn routed_operator(
+        &mut self,
+        node: NodeId,
+        callee: NodeId,
+        operand: NodeId,
+    ) -> Result<Option<ValueId>, String> {
+        let function = match self
+            .module
+            .node_value(AnyNodeId::Dynamic(callee))
+            .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+        {
+            Some(LowValue::Function(AnyFunctionId::Static(function))) => function,
+            // The cell's value, or the projection into the frozen module's own
+            // export array.
+            _ => match self.module.static_function_of_callee(callee) {
+                Some(function) => function,
+                None => return Ok(None),
+            },
+        };
+        let Some((operator, _)) = self.module.static_function_compute_operator(function) else {
+            return Ok(None);
+        };
+        // The operator's operands are the call site's argument's value half.
+        let Some(argument) = self
+            .module
+            .operand_items(operand)
+            .ok()
+            .and_then(|items| items.get(1))
+            .map(|item| item.node)
+            .and_then(|item| item.dynamic())
+        else {
+            return Ok(None);
+        };
+        let value = self.module.pair_value_half(argument).unwrap_or(argument);
+        if let Some(compute_op) = AsEnum::<ComputeOperator>::as_enum(&operator) {
+            return self.compute_operator(node, compute_op, value).map(Some);
+        }
+        if let Some(ty_op) = AsEnum::<TypeOperator>::as_enum(&operator)
+            && let Some(bin) = kernel_bin(ty_op)
+        {
+            let Some(argument) = self
+                .module
+                .operand_items(operand)
+                .ok()
+                .and_then(|items| items.get(1))
+                .map(|item| item.node)
+                .and_then(|item| item.dynamic())
+            else {
+                return Ok(None);
+            };
+            let value = self.module.pair_value_half(argument).unwrap_or(argument);
+            let elements = self
+                .module
+                .value_leaves(value)
+                .map_err(|reason| format!("{ty_op:?}'s argument is not readable: {reason}"))?;
+            let (Some(lhs), Some(rhs)) = (elements.first().copied(), elements.get(1).copied())
+            else {
+                return Err(format!("{ty_op:?} is missing an operand"));
+            };
+            return self
+                .arithmetic(
+                    ty_op,
+                    bin,
+                    AnyNodeId::Dynamic(lhs),
+                    AnyNodeId::Dynamic(rhs),
+                    ScalarClass::Int,
+                )
+                .map(Some);
+        }
+        Ok(None)
+    }
+
+    /// An `Apply`: a `@loop` recursion, a routed operator's call, or a cross-kernel call.
+    ///
+    /// # Invariant
+    /// The routing lowers `x + 1` to a call of the prelude's binding, so the frozen
+    /// callee is a body this module cannot walk and the residual the lowlevel's clone
+    /// wrote is emitted instead; a callee that is a kernel value is a cross-kernel
+    /// call, and a marked recursion whose shape converts is the loop nest. A plain
+    /// lichen-function call is refused by name.
     fn apply(&mut self, node: NodeId, operand: NodeId) -> Result<ValueId, String> {
         let Some(operands) = self.module.operand_items(operand).ok() else {
             return Err("Apply operand is missing".into());
@@ -773,7 +786,8 @@ where
                 .unwrap_or(operands[0].node),
         )?;
         // The routing case: emit the residual the clone wrote.
-        if is_static_function(self.module, callee) {
+        let frozen = is_static_function(self.module, callee);
+        if frozen {
             let residual = (unsafe { self.module.array_items(node) })
                 .and_then(|items| items.first())
                 .map(|item| item.node)
@@ -781,23 +795,27 @@ where
                     AnyNodeId::Dynamic(node) => Some(node),
                     AnyNodeId::Static(_) => None,
                 });
-            let Some(residual) = residual else {
-                return Err(
-                    "this kernel body applies a prelude operator where the kernel cannot reach the \
-                     body it lowered to: the operator is a call of the prelude's binding, the call \
-                     sits in the function's own template (which the compiler never evaluates), and \
-                     an operator applied *inside a call's argument* is not materialised the way one \
-                     that is the body's own result is. A kernel body can cross-call a kernel with \
-                     an argument it reads directly (`k0 x`), and it can apply an operator to a \
-                     call's result (`k0 x + 1`); this shape (`k0 (x + 1)`) is the one the emitter \
-                     has no node for yet"
-                        .into(),
-                );
-            };
-            return self.value(residual);
+            if let Some(residual) = residual {
+                return self.value(residual);
+            }
         }
-        // **A marked recursion**: what a self-apply converts to is a loop, and
-        // the shape that decides it is the callee's own template.
+// The operator's identity is a static fact of its callee, residual or not,
+        // so the frozen body is read by `FunctionId`.
+        if let Some(value) = self.routed_operator(node, callee, operand)? {
+            return Ok(value);
+        }
+        if frozen {
+            return Err(
+                "this kernel body applies a prelude operator where the kernel cannot reach the \
+                 body it lowered to, and its callee names no compute operator: the operator is \
+                 a call of the prelude's binding, the call sits in the function's own template \
+                 (which the compiler never evaluates), and an operator applied *inside a call's \
+                 argument* has no residual to read (`docs/notes/loop-conversion.md` §8.5)"
+                    .into(),
+            );
+        }
+        // **A marked recursion** converts to a loop; the callee's own template decides
+        // the shape.
         if let Some(function) = self.module.callee_function(node)
             && self.module.functions[function].looping
         {
@@ -823,9 +841,7 @@ where
             };
             return self.cross_kernel_call(AnyNodeId::Dynamic(callee), arg);
         }
-        // Style 1: an ordinary lichen-function call. **This is where a marked
-        // recursion reaches the emitter today** — refused by name rather than
-        // inlined, because a cycle cannot be inlined.
+        // **Style 1, an ordinary lichen-function call, is refused by name**.
         let _ = node;
         Err(
             "kernel body Apply is supported only for a cross-kernel (kernel-value) callee v1; \
@@ -836,9 +852,7 @@ where
 
     // ------------------------------------------------------------ loop nesting
 
-    /// The entering call lowered to a `@loop` **nest**, over the conversion's
-    /// roles — the same roles `loop_run.rs` interprets
-    /// (`docs/notes/loop-conversion.md` §8.6).
+    /// The entering call lowered to a `@loop` nest over the conversion's roles.
     ///
     /// # Invariant
     /// Every block of the nest receives the whole carried state as its `params`,
@@ -858,8 +872,6 @@ where
         for _ in 0..slots.len() {
             self.body.add_param(header);
         }
-        // The outermost test *is* the header: SPIR-V joins a merge block from the
-        // header, so the header must be the block whose branch chooses.
         let tests: Vec<usize> = (0..conversion.tests.len())
             .map(|position| {
                 if position == 0 {
@@ -926,8 +938,8 @@ where
         Ok(result)
     }
 
-    /// The carried state the entering call binds: one value per slot, from the
-    /// argument's elements in the conversion's slot order.
+    /// The carried state the entering call binds, one value per slot, in the
+    /// conversion's order.
     ///
     /// # Invariant
     /// The addressing is [`LoopConversion::state`], so a one-slot empty path is
@@ -1056,8 +1068,7 @@ where
         })
     }
 
-    /// Set the nest's current block: roles emitted from here go into it, and a
-    /// state read resolves to that block's own parameters.
+    /// Set the nest's current block; a state read resolves to that block's parameters.
     fn enter_loop_block(&mut self, index: usize, block: usize) {
         self.block = block;
         self.loops[index].block = block;
@@ -1077,8 +1088,7 @@ where
         ))
     }
 
-    /// Where one arm goes, handing the current state on unchanged: a step
-    /// recomputes the next state in its own block and branches back itself.
+    /// Where one arm goes, handing the current state on unchanged.
     fn loop_arm(&mut self, index: usize, arm: LoopArm) -> Result<Br, String> {
         let active = &self.loops[index];
         let target = match arm {
@@ -1093,14 +1103,12 @@ where
     }
 
     /// The class a value this walk has already emitted was declared in.
-    /// **Read from what was emitted, not from the node.** An operator's operands
-    /// are emitted before the operator, so by the time the operator asks what
-    /// class its operands are, this walk knows — and that is the *whole* reason
-    /// the class belongs here: a float body's index and count are `Int` positions,
-    /// so an operator adding two floats computes in `Float` whatever the node the
-    /// checker hung them on says. Trusting the node made a float kernel declare
-    /// `Bin(Int, Add)` over two float values, and the class check refused it —
-    /// correctly, and for the wrong reason.
+    ///
+    /// # Invariant
+    /// Read from what was emitted, not from the node: an operator's operands are
+    /// emitted before it, and a float body's index and count are `Int` positions —
+    /// so an operator adding two floats computes in `Float` whatever class the
+    /// checker's node carries.
     fn emitted_class(&self, value: AnyNodeId) -> Option<ScalarClass> {
         let AnyNodeId::Dynamic(value) = value else {
             return None;
@@ -1108,17 +1116,13 @@ where
         self.classes.get(&value).copied()
     }
 
-    /// The values a **program's own** operator reads — its operand array's elements.
+    /// The values a program's own operator reads — its operand array's elements.
     ///
-    /// This is the other half of [`Module::operands_of`], and the two are different
-    /// questions: that one answers *which nodes a definition depends on* (so a
-    /// program operator's whole array is one dependency, the array being built before
-    /// the operator that indexes it), while this answers *what the operator reads*,
-    /// which for a program's operator is whatever its array holds — two operands for
-    /// an arithmetic operator, three for a write.
-    ///
-    /// **Which is which is the lowlevel's to answer** because `LowOperator`'s enum
-    /// documents the structural shapes and says nothing about a program's own.
+    /// # Invariant
+    /// This is the other half of [`Module::operands_of`]: that answers which nodes a
+    /// definition depends on — for a program operator, the whole array, built before
+    /// the operator that indexes it — while this answers what the operator reads,
+    /// which is whatever the array holds.
     fn arguments(&self, node: NodeId) -> Result<Vec<AnyNodeId>, String> {
         let Some(operation) = self.module.node_operation(node) else {
             return Ok(Vec::new());
@@ -1136,11 +1140,12 @@ where
 
     /// The value an operand node names, frozen or not.
     ///
-    /// **A static operand is a constant the apply clone carried across**, not a
-    /// value this graph computes: a routed operator''s arguments include the
-    /// frozen residual of the call it was lowered from, and the only part of a
-    /// static module a kernel can carry is a scalar. So it becomes a `Const` of
-    /// what it holds, and anything else is refused by name rather than skipped.
+    /// # Invariant
+    /// A static operand is a constant the apply clone carried across, not a value
+    /// this graph computes: a routed operator's arguments include the frozen
+    /// residual of the call it was lowered from, and the only part of a static
+    /// module a kernel can carry is a scalar. It becomes a `Const` of what it holds,
+    /// and anything else is refused by name rather than skipped.
     fn value_item(&mut self, item: AnyNodeId) -> Result<ValueId, String> {
         let AnyNodeId::Dynamic(node) = item else {
             let held = self
@@ -1164,31 +1169,24 @@ where
 
     /// An `Index`: a view, a parameter read, or the language's conditional.
     fn index(&mut self, node: NodeId) -> Result<ValueId, String> {
-        // **The conditional first**, because a view never computes and the two
-        // can only be told apart by the index.
+        // **The conditional first**: a view never computes, so only the index tells them apart.
         if let Some(lichen_lowlevel::Selection::Computed) = self.module.selection_of(node) {
             return self.conditional(node);
         }
-        // **A read of the domain at a path is a parameter read**, even where
-        // `define_in` answered `Computed` for it: the node the read names may be a
-        // computation — the parameter unified with its argument — and only the
-        // chain says where it came from. Checked here as well as in `value`,
-        // because a definition is reached from whatever used it, not from itself.
-        if let Some(slot) = self.parameter_path(node) {
+        // **A read at a path is a parameter read** even where `define_in` said
+        // `Computed`; see [`Lower::parameter_path`].
+        if let Some(slot) = self.parameter_path(node)? {
             return self.parameter(slot);
         }
-        // Anything else that is a view has already been resolved by
-        // `define_in`, so reaching it here means the index named nothing this
-        // body can place.
+        // Anything else that is a view was resolved by `define_in`, so this index
+        // names nothing this body can place.
         let arguments = self.arguments(node)?;
         let Some(target) = arguments.first() else {
             return Err("an index read is missing its target".into());
         };
         let index = arguments.get(1);
-        // **What it saw, in the terms the graph has.** A refusal that says only
-        // "cannot place" leaves the reader guessing between a target that is not an
-        // array, an index that is not a constant, and an arm count that is not two
-        // — and those are three different defects.
+        // **What it saw, in the graph's terms**: the refusal names the target, the index
+        // and the chain.
         let target_kind = match target {
             AnyNodeId::Dynamic(node) => {
                 let items = unsafe { self.module.array_items_of(AnyNodeId::Dynamic(*node)) };
@@ -1211,9 +1209,8 @@ where
             },
             None => "no index at all".to_string(),
         };
-        // **The base the chain reaches**, so a reader can see whether this is the
-        // domain, a pair, or something else entirely — which is the whole question
-        // when a read should have placed and did not.
+        // **The base the chain reaches**, which is the question when a read should
+        // have placed.
         let mut base = Some(node);
         let mut walked = 0usize;
         while let Some(cursor) = base {
@@ -1281,13 +1278,10 @@ where
 
     /// `if c then a else b` — a selection over an undecided index.
     ///
-    /// **Both arms are emitted before the select**, and they are separate values:
-    /// the walk emits the arms because the graph holds them, not because a target
-    /// needs two arms. That is what leaves a real branch available to build.
-    ///
-    /// The language's conditional is `[else, then][condition]` — an ordinary lazy
-    /// index — so the arms come off **the target array**, not off the index's own
-    /// operand array, and they are in that order.
+    /// # Invariant
+    /// The language's conditional is `[else, then][condition]`, so the arms come off
+    /// the target array in that order and both are emitted before the select —
+    /// which is what leaves a real branch available to build.
     fn conditional(&mut self, node: NodeId) -> Result<ValueId, String> {
         let arguments = self.arguments(node)?;
         let Some((target, selector)) = arguments.first().zip(arguments.get(1)) else {
@@ -1302,16 +1296,21 @@ where
                 arms.len()
             ));
         }
-        // **`[else, then]`**, so element 0 is the arm that runs when the condition
-        // is false.
+// **`[else, then]`**, so element 0 runs when the condition is false.
         let (otherwise, then) = (arms[0].node, arms[1].node);
+        let emitted = self.tally.writes;
         let otherwise = self.value_item(otherwise)?;
+        if self.tally.writes != emitted {
+            return Err(CONDITIONAL_WRITE.into());
+        }
+        let emitted = self.tally.writes;
         let then = self.value_item(then)?;
+        if self.tally.writes != emitted {
+            return Err(CONDITIONAL_WRITE.into());
+        }
         let selector = self.value_item(*selector)?;
-        // The selector is the language's `0`/`1` scalar; a consumer whose own
-        // condition is narrower narrows it here. **`I32WrapI64` is that
-        // narrowing, as an instruction, because it is a target-width fact the
-        // consumer must not have to re-derive.**
+        // **`I32WrapI64` is the narrowing**, a target-width fact the consumer must not
+        // re-derive.
         let narrow = self.emit(KernelInstr::I32WrapI64, vec![selector], ScalarClass::Int);
         Ok(self.emit(
             KernelInstr::Select,
@@ -1335,20 +1334,15 @@ where
             ));
         }
         let operand = dynamic(items[0].node)?;
-        // **A literal converts here, in the language's own classes.** The
-        // conversion is the one instruction whose operand and result differ, so a
-        // literal the checker already decided folds rather than being emitted as
-        // a constant of the operand's class and converted at run time.
+        // **A literal converts here, in the language's own classes**, rather than at
+        // run time.
         if let Some(literal) = scalar_literal(self.module, operand) {
             let (held, number) = match literal {
                 LowValue::USize(n) => (ScalarClass::Int, n as i64),
                 LowValue::Float(f) => {
                     let truncated = f.trunc();
-                    // The range rule the interpreter answers with
-                    // `operator.out_of_range`. A kernel has no channel to record
-                    // a diagnostic — wasm traps and SPIR-V is undefined — so a
-                    // literal this layer can see is refused by name, where the
-                    // answer is the same for both backends.
+                    // A kernel has no channel to record a diagnostic, so an out-of-range
+                    // literal is refused by name.
                     if !f.is_finite()
                         || truncated < 0.0
                         || (truncated as f64) >= (usize::MAX as f64)
@@ -1364,8 +1358,8 @@ where
                 }
                 _ => unreachable!("`scalar_literal` answers only the two scalar classes"),
             };
-            // The direction is the operator's, and a literal of the class it does
-            // not name means the graph and the word disagree.
+            // The direction is the operator's, so a literal of the other class means the
+            // graph and the word disagree.
             if held != from {
                 return Err(format!(
                     "`{name}` converts a {from:?} and its operand is a {held:?} literal — the two \
@@ -1385,10 +1379,8 @@ where
         let arg = dynamic(arg)?;
         let kid = kernel_id_of(self.module, kernel)
             .ok_or_else(|| "cross-kernel call target is not a kernel value".to_string())?;
-        // The callee's domain, its result arity **and its class** are facts of
-        // the *callee's* registration, read here and released before any
-        // emission: emitting can reach a further call, which locks the same
-        // registry again, and the lock is not reentrant.
+        // The callee's shape, arity and class are read and the registry released before
+        // any emission.
         let (shape, callee_params, results) = {
             let fragments = kernels().lock().unwrap();
             let fragment = fragments
@@ -1406,8 +1398,8 @@ where
                  {CROSS_KERNEL_RESULT_ARITY}"
             ));
         }
-        // **The argument's class must be the callee's parameter class**,
-        // because a wasm `call` types its operand by the callee's signature.
+        // **The argument's class must be the callee's**: a wasm `call` types its operand
+        // by the signature.
         let peeled = self.module.pair_value_half(arg).unwrap_or(arg);
         let arg_class = node_class(self.module, peeled);
         if let Some(expected) = callee_params.first()
@@ -1423,25 +1415,15 @@ where
         Ok(self.emit(KernelInstr::CallKernel(kid), args, arg_class))
     }
 
-    /// A call's argument as the callee domain's scalar leaves, in callee
-    /// parameter order.
+    /// A call's argument as the callee domain's scalar leaves, in callee parameter
+    /// order.
     ///
-    /// **Three shapes, tried in the order the graph can rule them out** — and this
-    /// is not the encoding-guessing loop it replaced. The order is:
-    ///
-    /// 1. **a read of the domain at a path** — `k x` and `k x(0)` are the caller's
-    ///    own parameters, contiguous in the flattened layout, so they pass through.
-    ///    Matched by [`Lower::parameter_path`], which walks the chain; the earlier
-    ///    version compared against the domain's leaves, which is the wrong shape
-    ///    for a parameter that is a struct wrapper.
-    /// 2. **the `[value, type]` pair's value** — a bare kernel apply carries the
-    ///    pair and the argument is its element 0.
-    /// 3. **a concrete tuple value**, element by element, recursing for a nested
-    ///    domain.
-    ///
-    /// The old walk tried four encodings in a loop and kept the first that worked.
-    /// That is a guess that happens to be checked; the three above are shapes, and
-    /// each is ruled out by a fact rather than by a later one failing.
+    /// # Invariant
+    /// Three shapes, tried in the order the graph can rule them out: a read of the
+    /// domain at a path ([`Lower::parameter_path`]), which passes through as the
+    /// caller's own contiguous parameters; the `[value, type]` pair's value; and a
+    /// concrete tuple value, element by element, recursing for a nested domain. Each
+    /// is ruled out by a fact rather than by a later one failing.
     fn callee_args(&mut self, arg: NodeId, shape: &KernelShape) -> Result<Vec<ValueId>, String> {
         let arity = shape.flat_arity();
         if arity == 0 {
@@ -1456,7 +1438,7 @@ where
             return Ok(vec![self.value(arg)?]);
         };
         // (1) A read of the domain, passed through.
-        if let Some(base) = self.parameter_path_of(arg)
+        if let Some(base) = self.parameter_path_of(arg)?
             && base + arity <= self.body.parameters().len()
         {
             let mut args = Vec::with_capacity(arity);
@@ -1467,13 +1449,8 @@ where
         }
         // (2) and (3): the pair's value half, read as a concrete tuple.
         let array = self.module.pair_value_half(arg).unwrap_or(arg);
-        // **A wrapper's `launch` argument is a bare `Parameterized` cell** —
-        // concrete only at run time — so the tuple it stands for is not an array
-        // value here and never will be. **The argument's class is where it is**:
-        // measured on `jit_cross_kernel_tuple_argument_through_the_wrapper`,
-        // `array` (the pair's value half) is its own singleton class and holds no
-        // array, while `class_root(arg)` holds one. The peel loses the link, not
-        // the cell.
+        // **The read may be at the wrapper's class**: the pair's value half is its own
+        // singleton cell.
         if let Ok(args) = self.tuple_leaves(array, items) {
             return Ok(args);
         }
@@ -1531,8 +1508,8 @@ where
                 "read's buffer argument is not an input buffer of the parallel parameter ({seen})"
             )
         })?;
-        // **A read's element class is declared, not inferred** — the buffer is
-        // bound by the host rather than computed by the body.
+        // **A read's element class is declared, not inferred**: the host binds the
+        // buffer.
         let element = self.tally.element_class.unwrap_or(ScalarClass::Int);
         self.tally.reads = self.tally.reads.max(pos + 1);
         self.tally.read_classes.push(element);
@@ -1549,9 +1526,10 @@ where
 
     /// Write a buffer element: `write [buffer, idx, val]`.
     ///
-    /// **The ordinal is taken before the operands are emitted**, so a write nested
-    /// inside another write's value still consumes an ordinal of its own — which
-    /// is what the codomain count check refuses.
+    /// # Invariant
+    /// The ordinal is taken before the operands are emitted, so a write nested inside
+    /// another write's value still consumes an ordinal of its own — which the
+    /// codomain count check refuses.
     fn buffer_write(&mut self, operand: NodeId) -> Result<ValueId, String> {
         let items = self.module.operand_items(operand)?;
         if items.len() < 3 {
@@ -1578,10 +1556,12 @@ where
     }
 }
 
-/// A cross-kernel call's tuple argument that is neither a whole-parameter read
-/// nor a concrete tuple value, under any encoding. **The flattened layout is
-/// what makes the other cases work**, so a wrong one would read a parameter the
-/// argument does not own.
+/// Refusal: a cross-kernel call's argument is neither a whole-parameter read nor a
+/// concrete tuple value.
+///
+/// # Invariant
+/// The flattened layout is what makes the other cases work, so a wrong one would read
+/// a parameter the argument does not own.
 pub(super) const CALLEE_ARGUMENT: &str = "a cross-kernel call's argument must be a concrete tuple value or a whole parameter read; \
      build the argument from its elements (or pass the parameter through)";
 

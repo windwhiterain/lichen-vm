@@ -530,14 +530,11 @@ where
 ///
 /// # Invariant
 /// The universe is recognised by [`Module::is_self_referential`] — the
-/// `[Type, ↺]` cycle — because this reader's callers are below the checker and
-/// have no universe handle to pass. The field count is the shape's own length,
-/// so a name whose index maps outside the field list is dropped rather than
-/// growing it.
-pub fn field_names<P: Program>(
-    module: &mut Module<P>,
-    ty: TypeRef,
-) -> Option<Vec<Option<&'static str>>>
+/// `[Type, ↺]` cycle — because the callers that need this (a lowering, which
+/// has no universe handle to pass) are below the checker. The field count is
+/// the shape's own length, so a name whose index maps outside the field list
+/// is dropped rather than growing it.
+pub fn field_names<P: Program>(module: &Module<P>, ty: TypeRef) -> Option<Vec<Option<&'static str>>>
 where
     P::Value: ValueType,
 {

@@ -8,8 +8,17 @@
 > is the pre-SSA shape and §8.4/§8.6 are current. **The JIT's kernel reader has
 > landed** ([§8.5](#85-the-critical-path-to-the-acceptance-case) item 4):
 > `Lower::lower_loop` builds a nest for a marked recursion inside a kernel body,
-> and a non-straight-line `KernelBody` is now produced in production. Its step's
-> routed operators are the remaining gap, and §8.6 item 6 names it and its fix.
+> and a non-straight-line `KernelBody` is now produced in production. **The
+> acceptance case runs on both backends** ([§8.5](#85-the-critical-path-to-the-acceptance-case)
+> item 5): a dynamic reduction whose trip count is a run-time buffer read, `10`,
+> `28` and `180_300` at four, seven and six hundred elements — the last past the
+> emitter's 512-level walk, with a `2001`-element run past the VM's apply budget
+> measured beside it. **Two device-side defects were measured on
+> the way and are reported, not worked around**: `spirv.rs` branches a loop
+> header on the plan's body/exit order rather than on the terminator's arm order,
+> so the base-first spelling of the nest is mis-compiled on the device; and a
+> device dispatch pushes the launch extent alone, so a count cannot come from
+> `k.n`.
 > Three of
 > [§8.3](#83-known-broken-and-by-whom)'s items are now
 > **closed** — the `passed_out` contract, a loop body that can compute its state and
@@ -612,7 +621,10 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   - **Three `lichen-compute-gpu` refusal expectations went stale**, because
     the SSA `validate()` now catches them before the emitter does. They fail
     identically on the branch itself. `CrossKernelCall`'s `at` is an
-    instruction index rather than an operand-stack slot (5 → 3);
+    instruction index rather than an operand-stack slot (5 → 3) — that variant
+    has since been deleted altogether, because a cross-kernel call is now
+    emitted rather than refused
+    ([lichen-compute-gpu § Several functions in one module](lichen-compute-gpu.md#several-functions-in-one-module));
     `BufferPositionOutOfRange`'s `at` is the position's `ValueId` (3 → 2),
     and its fixture declared a one-leaf domain while reading parameter 1, so
     validate refused it structurally before a position was ever read. The
@@ -779,54 +791,53 @@ missing operator in [gpu-algorithm-roadmap §4.1](gpu-algorithm-roadmap.md), and
 is the shape a `T -> T` `loop` cannot express at all — the second reason §7 does
 not ship one.
 
+The program, **as it runs today** (the `.Read` struct form is the surface — the
+brief's `compute.read [buf, …]` spelling predates it — the trip count is a
+**buffer read** because a device dispatch pushes the launch extent alone, and the
+test is **continue-first** because of the emitter defect item 5 records):
+
 ```lichen
 ---
   compute = import "compute.lichen"
 ---
-@loop sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + compute.read [buf, s(0) - 1])
-p = compute.parallel (cfg => { ... sum_to (cfg(0), 0) ... }) "BACKEND"
+@loop sum_to = s => if s(0) != 0 then sum_to (s(0) - 1, s(1) + compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1))) else s(1)
+p = compute.parallel (k => { … count = compute.read ((compute.Read _)(.from k.in.b, .at i)) … sum_to (count, 0) … }) "BACKEND"
 ```
 
-In order, and the order is forced. **Item 1 is done; 1b is half; 2a has
-cleared the CPU side but nothing turns on it yet, because 1c is not:**
+In order, and the order is forced. **Items 1, 1b, 1c, 2, 2a, 3, 4 and 5 are
+done** — the acceptance case at item 5 runs on both backends:
 
 1. ~~**Settle `passed_out`** (§8.3 item 2) in the IR's doc and, if it needs more than a
    count, in the type.~~ **Done** — the exit reads the header's own top `passed_out`
    values, it is stated in `body.rs`'s `Terminator::While`, and `validate()` refuses
    `passed_out > carried` by name.
-1b. **Make a loop body expressible** (§8.3 item 4) — **half done**. The
-   *transfer* is: `Terminator::Jump` exists and `validate_flow` lets a body name the
-   loop's header or its exit. The *carried read* is not, and the body model in
-   [compute-kernel-struct](compute-kernel-struct.md) still leaves that true:
-   a body can arrive at the header but cannot carry anything new.
-1c. **Give the IR an instruction that reads the carried tuple.** `LocalGet` names a
-   **parameter leaf**, and nothing names element `k` of the loop's current state —
-   so a body can only forward the header's own values, and every loop the IR can
-   build runs zero trips or forever. **This is what a lowering discovers on its way
-   past**: `Flow::While` lowers through `waffle` and the thing it lowers cannot run,
-   and `compute.rs`'s two loop fixtures are the forwarding shape, which is why they
-   validate and cannot execute. The shape has one real question — a new
-   `KernelInstr` beside `LocalGet`, or a second domain for `LocalGet` — and it
-   belongs here, ahead of every remaining item, because nothing downstream can be
-   demonstrated until a loop terminates.
+1b. **Make a loop body expressible** (§8.3 item 4) — **done**. The *transfer*
+   is: `Terminator::Jump` exists and `validate_flow` lets a body name the
+   loop's header or its exit. The *carried read* is `BasicBlock::params`: a body
+   computes the next state and hands it to the backedge's `Br { args }`, which is
+   the target's parameters. [compute-kernel-struct](compute-kernel-struct.md)
+   records the body model as it stands.
+1c. ~~**Give the IR an instruction that reads the carried tuple.**~~ **Done, and it
+   was **not** an instruction.** `KernelInstr::LocalGet` no longer exists: the
+   body is SSA, a header declares the values it receives in `BasicBlock::params`,
+   and a backedge's `Br { args }` *is* the next iteration's state, checked against
+   the target's `params` by `KernelBody::validate` (§8.6's item 1c, answered at
+   `af6f6f2`). A loop that terminates at run time is the acceptance case below.
 2. ~~**Fix the wasm `While`** (§8.3 item 1).~~ **Done, by way of `waffle`.** Four
    defects, one cause (hand-tracked operand-stack height) took the hand-written
    reorder out of the picture; the backend lowers the whole body through `waffle`
    ([wasm-control-flow](wasm-control-flow.md) §5).
-2a. ~~**Lower `If`/`Jump`/`While` through `waffle`.**~~ **Done — the CPU-side
-    blocker is cleared.** The hand-written slot-based emitter this step called for
-    was **not written** — `waffle` owns the slot-first pipeline
+2a. ~~**Lower `If`/`Jump`/`While` through `waffle`.**~~ **Done, and item 5's case
+    is what runs it.** The hand-written slot-based emitter this step called for was
+    **not written** — `waffle` owns the slot-first pipeline
     ([wasm-control-flow](wasm-control-flow.md) §5), so the step was its
-    control-flow mapping. All three transfers land in
-    `crates/lichen-compute/src/compute/wasm/flow.rs`: the header's carried tuple as
-    blockparams, `CondBr` at the test, `Br` at the backedge, and a selection's arms
-    as blocks of their own. 62 kernel-execution tests green on all of it; the
-    type-section ordering bug §2 found was fixed earlier. **What it does not clear
-    is the backend's own gap**: no repository test builds a loop body, so the
-    backedge is verified by structure rather than by a run, and the IR still has no
-    instruction that reads the carried tuple into a body — so a loop may be
-    *expressible* now without any loop that reaches the backend being able to
-    terminate. That instruction is **item 1c**, and it is what this list turns on.
+    control-flow mapping, and the SSA rewrite folded that mapping into the single
+    walk in `crates/lichen-compute/src/compute/wasm/lower.rs`: the header's carried
+    tuple is the block's parameters, `CondBr` is the test, `Br` the backedge.
+    `type_values` then made a **carried state the entry block computes** — a
+    buffer read, a call's constants — typeable from the entry edge instead of
+    waiting for a cycle to close, which turned the backedge from a shape verified
+    by structure into one verified by a run.
     See [wasm-backend-handoff](wasm-backend-handoff.md) §3.2.
 3. ~~**Port `feature/spirv-loop-emitter` onto the SSA body**~~ — **done**, at
    `0a1c9f4`, exactly as §8.4 states it. The `Vec<Slot>` walk over
@@ -851,21 +862,129 @@ cleared the CPU side but nothing turns on it yet, because 1c is not:**
    The entering call's argument elements bind the state slots directly, which is
    what `Lower::loop_state` does with `LoopConversion::state`'s paths.
 
-   **What is still refused, by name.** A marked recursion whose shape does not
+   **What is refused, by name.** A marked recursion whose shape does not
    convert is refused with the conversion's own rule (`LoopRefusal::name`), as
    before. A **step whose next state applies a routed operator to a carried
-   read** — `sum_to (s(0) - 1, …)`, the acceptance reduction's step — is refused
-   today, and the reason is measured in §8.6 item 6: those applies live inside a
-   recursive call's argument and are never expanded, so `Lower::definition` finds
-   no operator node in their class and `Lower::apply`'s routing path needs a
-   residual that was never written. A nest whose step is a plain state read, or
-   whose condition/exit is a state read, is emitted and runs (measured on both
-   backends: `a_kernel_loop_nest_carries_a_runtime_state`). The refusal is a
-   `String` from the lowering, recorded as a `compute.parallel` diagnostic — it
-   is **not** the old checker-side `LoopNotEmitted`, which is gone (§8.6).
+   read** — `sum_to (s(0) - 1, …)`, the acceptance reduction's step — used to be
+   refused, and is **not any more**: both halves of it are now answered. The
+   **operator's identity** comes from the **frozen callee's body**, which
+   `static_function_compute_operator` walks by `FunctionId` whether or not
+   anything evaluated. The **callee itself** comes from
+   `Module::static_function_of_callee`: a binding imported from a frozen module is
+   not a value in this graph at all, but a projection of that module's own
+   export array at a constant position. Measured on the acceptance program, the
+   refused callee was `NodeId(618v1)`, `value=None`, `callee_function=None`, its
+   class root holding only itself — and its operation was `LowOperator::Index`
+   over `NodeId(34v1)`, a `Static(StaticHandle { module: ModuleKey(1), … })`
+   array of the **19** exports of `compute.lichen`, at the constant `14`. Element
+   `14` is `Static(StaticNodeId { module: 1, index: 867 })`, whose value is
+   `Function(Static(StaticFunctionRef { module: 1, index: StaticFunctionId(22) }))`
+   — the frozen body of `read` — and `static_function_compute_operator` on it
+   answers `(ComputeOperator::Read, StaticNodeId { module: 1, index: 917 })`.
+   **So the callee was not a runtime closure**: it was the qualified name
+   `compute.read`, one projection and one frozen ref from a body the kernel can
+   enter, and the stopping condition for this item was not met.
+
+   **Nothing here is curried, and that is why the route terminates.** `read` is
+   written `read = (x : (Read _)) => $read(x.from, x.at): x.from.element`
+   (`crates/lichen-compute/src/compute.lichen:16`) — one parameter, one
+   application, and the `ComputeOperator::Read` lives in the **frozen body of
+   `read` itself**, not at the call site: the call site holds only the projection
+   and the `Read` struct. The two curried bindings in that module are `launch` and
+   `call` (`launch = k: (K _) => a: k.I => …`), and a kernel body cannot apply
+   either — they are the host's — so an intermediate closure is never what a
+   kernel lowering meets. `write` and `range` are the same one-parameter wrapper
+   shape and are routed the same way; `collect` is that shape too, and a kernel
+   body does not reach it (it yields an array).
+
+   **The operator's operands are the call site's own argument** — the argument's
+   value half, once, for both the arithmetic and the compute operators. That is
+   what makes `ComputeOperator::Read` emitable at this site: the frozen body
+   names projections of its *parameter* (`$read(x.from, x.at)`), and the argument
+   is a `[value, type]` pair whose value half holds `[.from, .at]` as its two
+   elements, which `buffer_read` already reads as the operand pair it is written
+   against. The compute arm used to pass the apply's own `[callee, argument,
+   result]` array, which no operator reads that way.
+
+   What the reader still refuses by name is the **Style 1** call of an ordinary
+   lichen function, the conversion's own shape rules, and a `write` in a
+   conditional's arm. A refusal is a `String` from the lowering, recorded as a
+   `compute.parallel` diagnostic — **not** the old checker-side
+   `LoopNotEmitted`, which is gone (§8.6).
+
+   **The class channel is the reader's only channel, and the subtree is not an
+   alternative.** `wire_apply_result` writes the operator's body as the apply's
+   *class* value, and `defining_member` is what finds it; walking the apply's
+   clone subtree instead is not an alternative, because the deep pass collapses a
+   value to a bare cell unified into its defining computation, so a chain walk
+   terminates at the cell. Measured: with a constant trip count the host loop's
+   own instantiation evaluates the argument, the operator body runs, and the
+   reader builds the nest (a 300-trip version answers `30` on the cpu backend);
+   with a run-time count nothing evaluates and the class holds only the apply
+   itself. **Materialising the operator against placeholder operand cells does
+   put the body in the class** — the step's first slot then carries a
+   `TypeOperator(Sub)` member — but a placeholder can stand in for a *state*
+   value and not for an operand the kernel emits, which is what makes that route
+   fail in the same place the next time. The one that works reads the
+   **identity**, not the value, and an identity is a static fact of the artifact.
+
+   **A `write` in a conditional's arm is refused again, and that is here
+   because of the callee.** Resolving the callee means a `compute.write` inside
+   an `if` arm now lowers where it used to be refused by the inline-call limit, so
+   the arm's write reached the output-count check instead of the rule that names
+   its cause. The rule was lost with the flat emitter, and `Lower::conditional`
+   now refuses when **emitting an arm emitted a write** — the SSA reading of the
+   old `then_body.contains(&BufferWriteCall) || else_body.contains(&BufferWriteCall)`
+   ([§6](#6-why-a-loop-body-may-not-write)). It is not cosmetic: a conditional
+   write whose two arms write two *declared* outputs balances the count and would
+   otherwise be emitted twice and mis-compiled.
+
+   **Blocker 1 is general, not loop-specific.** The argument walk recurses only
+   where the *pattern* position is an `Array`; when a template's parameter value
+   cell is bare and the argument is a structured apply, the argument's elements
+   are never evaluated and the applies inside them never get an operation member.
+   A loop is only where that is fatal today, because an unexpanded call has no
+   other route; it belongs on the known-gaps list beside this item.
 5. **Run the reduction on both backends**, past the 2000-apply budget and the 512
    level ceiling, at more than one length so the count is demonstrably not a
-   compile-time constant. **Blocked on item 4's step**, above.
+   compile-time constant. **Landed: `a_kernel_loop_reduces_a_runtime_buffer_length`**
+   (`crates/lichen-language/tests/compute.rs`) answers `10` at a length of four,
+   `28` at seven and `180_300` at six hundred, on **both** backends, against the
+   hand-derived triangle number `length(length + 1)/2`.
+
+   **The expected value is derived by hand, not off a second implementation of
+   the same reading.** The seed fills `data[i]` with `i + 1`; lane `i` reads its
+   trip count from `data[i]`, so it runs `i + 1` times and folds `data[i]` down
+   to `data[0]` into an accumulator that starts at `0`; lane `length - 1` folds
+   all `length` of them, so the value at the last index is `1 + 2 + … + length`.
+   `4` gives `10`, `7` gives `28` and `600` gives `180_300`, and the same source
+   runs at all three with no compile-time constant anywhere in it.
+
+   **The length of six hundred is the one that answers the ceiling.** The
+   emitter's walk is budgeted at `MAX_KERNEL_BODY_DEPTH` = 512 and costs about
+   three levels per expanded copy, so an *expansion* runs out in the low hundreds;
+   the committed case crosses that and answers, because the nest is a device loop
+   whose compile cost does not move with the count. **A length of `2001` was
+   measured too** — past the VM's 2000-apply budget, answering `2_003_001` on both
+   backends — and it is deliberately not committed: a per-lane prefix costs
+   `length²/2` iterations on the cpu path, so that single length takes about
+   twenty seconds where all three committed ones together add none.
+
+   **Three measurements are what the case needed to say, and each is a refusal
+   the source had to be written around:**
+
+   | what | measured | why the case looks as it does |
+   |---|---|---|
+   | **the launch extent cannot carry the count** | `sum_to (k.n, 0)` answers `10`/`28` on the **cpu** and is refused on the device twice: `a kernel body's index cannot be placed …`, and `the "gpu" backend declined this run: this fragment's parameter declares 2 leaf/leaves (the launch extent, any runtime scalar, and the index), and a dispatch pushes the extent alone` (`RunError::ScalarsNotPushed`) | the count is a **buffer read**, so it is a run-time value on both backends, and the last lane's count is the buffer's length |
+   | **the device branches the nest's test the wrong way round** | the same program written base-first — `if s(0) == 0 then s(1) else sum_to (…)`, the spelling this section sketches — answers `10` on the cpu and **`0`** on the device. `spirv-dis` on the emitted module reads `OpIEqual %bool %35 %ulong_0_0`, `OpLoopMerge %31 %28 None`, `OpBranchConditional %37 %28 %31`: true goes to the **step** (%28), false to the **exit** (%31) | `spirv.rs`'s `plan_body` decides which arm leaves the loop from the graph while `terminator` emits `OpBranchConditional cond body exit` **whichever arm `if_true` names**, so the base-first spelling is **silently mis-compiled on the device**. The case is therefore spelled continue-first, which both backends answer. This is a defect in `crates/lichen-compute-gpu`, reported rather than worked around |
+   | **a `@loop` entered with a body-local argument is refused by the checker** | `sum_to (i, 0)` with `i = compute.range k.n` reports `a struct parameter field read names 'in', which is not a field of the type it is read from — that type's fields are None` for the loop's own `k.in.b` | the count is passed through a **buffer read**, which is what avoids a marked recursion losing its captured environment's types |
+
+   **Both ceilings are answered at a length rather than only by construction**:
+   `600` crosses the emitter's 512-level walk and `2001` crosses the VM's
+   2000-apply budget, and both answer the hand-derived number on both backends.
+   What the reader never does is expand the recursion — the count is undecided
+   before the first iteration is looked for, so a nest is built whatever the count
+   turns out to be.
 
 **Do not start 3 before 1** — **and this is now satisfied, and 3 has landed.**
 Doing SPIR-V first against a contract that is already known to be wrong is how the
@@ -1034,7 +1153,9 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
    state, the exit taking what the header has at that point, the backedge handing
    the next iteration's state — and emit it. **This is the item the feature turns
    on**: the IR can express a loop and a backend can lower one, and nothing yet
-   connects the two.
+   connects the two. **Landed** (`Lower::lower_loop`), and the **acceptance case
+   runs on both backends** — the reader's own measurement and the two device-side
+   defects that shaped its source are the bullets below.
 
    **Measured on `dev` before this work, kept because the next reader needs it
    and corrected where it was wrong:**
@@ -1053,6 +1174,42 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
      **That caller is gone** — the checker no longer asks whether a loop is
      emitted at all (§8.6's relocation below) — and the callers are now the two
      readers: `loop_run.rs` (host) and `Lower::lower_loop` (`lichen-compute`).
+   - **A routed operator's identity comes from its frozen callee, not from a
+     value, and so does the *name* of that callee.** §8.5's item 4 records both
+     mechanisms and the measurement: `wire_apply_result` writes an operator's body
+     as the apply's class value and only when the argument is decidable, which a
+     loop's step never is — so `Lower::apply` reads the **frozen callee's own
+     body** (`static_function_compute_operator`) when the residual is missing,
+     which is what closed `k0 (x + 1)`. That left the acceptance reduction
+     refused at an apply whose callee cell holds no value at all, and the
+     measurement says what that cell is: `Index(<the frozen module's export
+     array>, 14)`, the qualified name `compute.read`, whose element is a frozen
+     function whose body computes `ComputeOperator::Read`.
+     `Module::static_function_of_callee` reads it through the export array, so
+     **the callee of an imported binding is a static fact of the artifact and not
+     a runtime closure**, and the reduction now runs.
+   - **The device inverts the nest's test, and the evidence is a disassembly.**
+     The base-first spelling — `if s(0) == 0 then s(1) else sum_to (…)` — answers
+     `10` on the cpu and **`0`** on the device. `spirv-dis` on the emitted module
+     reads `OpIEqual %bool %35 %ulong_0_0`, `OpLoopMerge %31 %28 None`,
+     `OpBranchConditional %37 %28 %31`: true goes to the **step** (%28) and false
+     to the **exit** (%31), while the condition *is* `s(0) == 0`. Everything else
+     in the module is right — one `OpPhi` pair per incoming edge, the continue
+     target the step, the merge the exit. The cause is that `plan_body` decides
+     which arm leaves the loop from the graph, while `terminator` emits
+     `OpBranchConditional cond body exit` for a header **whichever arm `if_true`
+     names**: the branch order is taken from the plan and not from the
+     terminator. **It is a defect in `crates/lichen-compute-gpu`, not in the
+     reader**, and it is why the acceptance case is spelled continue-first — a
+     spelling, not a mechanism.
+   - **The launch extent cannot carry a count into a device body.** `sum_to
+     (k.n, 0)` is refused on the device by `RunError::ScalarsNotPushed` — a
+     dispatch pushes the extent alone — and one layer earlier by `a kernel body's
+     index cannot be placed`. The count the acceptance case uses is therefore a
+     **buffer read**: the seed fills `data[i]` with `i + 1` and lane `i` reads its
+     count from `data[i]`, so the last lane's count is the buffer's length and no
+     lane depends on a scalar the device cannot carry.
+
    - **The wasm side could *not* lower the body this item builds, and the claim
      that it could was wrong.** `lower.rs` created a waffle block per kernel-IR
      block and typed a non-entry block's parameters from the values bound when
@@ -1078,26 +1235,33 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
    See [wasm-backend-handoff](wasm-backend-handoff.md) §3.2.
 
    **What the reader still refuses, measured, and where the fix goes.** A step
-   whose next state applies a **routed prelude operator to a carried read** —
-   `sum_to (s(0) - 1, s(1) + read …)`, the acceptance reduction's step — is
+   whose next state applies a **routed prelude operator to a carried read** was
    refused with "a prelude operator where the kernel cannot reach the body it
-   lowered to". `Lower::definition` emits a kernel-safe operator directly when
-   `define_in` finds the operator node in the apply's class, and that member exists
-   only if the static apply was **expanded**; a step's applies are not, because
-   `Module::apply_parameter_check` → `evaluate_pattern_argument_inner` stops
-   descending the moment a *pattern* position is not an `Array`, and for a tuple
-   state the pattern's value cell is bare — so the argument's elements, where the
-   step's `s(0) - 1` lives, are never evaluated. The condition and the exit are,
-   because the return spine evaluates its selector.
+   lowered to", and **is not any more** — the reader reaches the operator through
+   the callee, whether the callee's cell was forced or not, and the operands
+   through this call's own argument (§8.5's item 4). What the reader **does**
+   still refuse, by name, is the **Style 1** call of an ordinary lichen function
+   ("kernel body Apply is supported only for a cross-kernel (kernel-value) callee
+   v1; inline lichen-function calls are not yet supported"), the conversion's own
+   shape rules, and a `write` inside a conditional's arm.
 
-   **The fix, decided and not yet written:** instantiate the marked template
-   **once against placeholder per-slot cells** and read the roles through that
-   instantiation — the host loop's own mechanism, once instead of per iteration.
-   It must not rely on `belongs_to` (a materialized clone is re-tagged to the
-   caller, `static_module/apply.rs` `ctx.tag`), so the slot map is **by class root
-   against the placeholders**, and its invariant is that the slots stay in
-   **distinct classes**: two slots that unify make that map ambiguous, which is a
-   wrong number rather than a refusal, so a program that unifies two slots must be
+   **A `@loop` whose entering argument names a body-local binding is refused by
+   the checker, not by a reader**, and it is the one shape measured here that no
+   lowering would fix: `sum_to (i, 0)` with `i = compute.range k.n` reports
+   *"a struct parameter field read names `in`, which is not a field of the type
+   it is read from — that type's fields are None"* for the loop's own `k.in.b`,
+   so a marked recursion entered with a body-local argument loses the types of
+   its captured environment. A count that is a **buffer read** avoids it, which
+   is what the acceptance case passes.
+
+   **The fix decided here and still not written** — for the other reader, the host
+   loop — is to instantiate the marked template **once against placeholder
+   per-slot cells** and read the roles through that instantiation. It must not
+   rely on `belongs_to` (a materialized clone is re-tagged to the caller,
+   `static_module/apply.rs` `ctx.tag`), so the slot map is **by class root against
+   the placeholders**, and its invariant is that the slots stay in **distinct
+   classes**: two slots that unify make that map ambiguous, which is a wrong
+   number rather than a refusal, so a program that unifies two slots must be
    refused by name.
 
 **Stage 0 — the `loop` keyword and the evaluator's choice.** The surface lands
@@ -1156,20 +1320,26 @@ accumulator, and the one a GPU algorithm wants is a fold over a **buffer** whose
 trip count is the buffer's length"), and it is the shape a `T -> T` `loop` cannot
 express at all, which is the second reason §7 does not ship one.
 
-The reduction to be written and run on **both** backends, against a buffer filled
-by a seed kernel, at more than one length so that the trip count is demonstrably
-not a compile-time constant:
+The reduction, **now written and run on both backends** (`a_kernel_loop_reduces_a_runtime_buffer_length`),
+against a buffer filled by a seed kernel, at more than one length so that the trip
+count is demonstrably not a compile-time constant:
 
 ```lichen
 --- compute = import "compute.lichen" ---
-loop sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + compute.read ((compute.Read _)(.from buf, .at s(0) - 1)))
-p = compute.parallel (cfg => { ... sum_to (cfg(0), 0) ... }) "BACKEND"
+@loop sum_to = s => if s(0) != 0 then sum_to (s(0) - 1, s(1) + compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1))) else s(1)
+p = compute.parallel (k => { … sum_to (compute.read ((compute.Read _)(.from k.in.b, .at i)), 0) … }) "BACKEND"
 ```
 
 Three things must be true of it, and each is a rule above being exercised: it runs
-at a length **past the 2000-apply budget** (rule set by Stage 1 removing the
-ceiling), its accumulator is a **carried value** (Stage 1's `phi`), and its
-trip count is **per-lane** (the performance model of §9, not a correctness one).
+at a length **past the 512-level walk** and, measured separately, past the
+**2000-apply budget**, its accumulator is a **carried value** (Stage 1's `phi`),
+and its trip count is **per-lane** (the performance model of §9, not a
+correctness one). **Measured**: `10`, `28` and `180_300` at four, seven and six
+hundred elements, both backends, against the hand-derived
+`length(length + 1)/2` — and the count is a **buffer read** rather than the launch
+extent because a device dispatch pushes the extent alone. §8.5's item 5 has the
+source as it runs, the `2001`-element measurement, and the two device-side defects
+the spelling had to work around.
 
 **Stage 2 — the conversion.** Cycle extraction, defunctionalisation, nest
 construction, and rules 1, 2, 3, 5, 6. The probe grows two cases:

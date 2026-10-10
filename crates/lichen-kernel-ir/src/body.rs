@@ -1,44 +1,9 @@
-//! A fragment's body: **SSA over named values, with blocks and terminators**.
+//! A fragment's body: SSA over named values, with blocks and terminators.
 //!
-//! # What changed, and why it was the wrong shape before
-//!
-//! This was a **stack machine**. An instruction named no values — `Bin` said "pop
-//! the top two" — and every backend walked an operand stack and *derived* the
-//! form it wanted: `waffle` derives a stack from SSA, `spirv.rs` derives SSA ids
-//! from a stack. Both paid to undo the omission, and the omission was not
-//! cosmetic:
-//!
-//! - **a loop-carried value had no representation at all.** [`KernelInstr`]'s
-//!   `LocalGet` named a *parameter leaf*, and nothing named element `k` of a
-//!   loop's state, so a body could arrive at a loop header but could not carry
-//!   anything new. Every loop the IR could build ran zero trips or forever.
-//! - **a shared subexpression had to be emitted once per use**, because nothing
-//!   could name it after the first.
-//!
-//! Here a value is a [`ValueId`] and an operand *is* one, so both are ordinary:
-//!
-//! ```text
-//!   entry(p0, p1) ──▶ block { params: [p0, p1], instrs: [...], terminator }
-//!                       │
-//!                       └──▶ header(carry) ──┐ backedge, carrying carry
-//! ```
-//!
-//! **A block's `params` are the values it receives, and that is one rule for a
-//! function's parameters and for a loop's carried state.** That is the whole of
-//! it: "read the loop's state" stops being an instruction that exists only inside
-//! a loop and becomes an ordinary read of a value the block has.
-//!
-//! It is also the form both backends already want — a blockparam *is* wasm's
-//! loop-carried value and SPIR-V's `OpPhi` is the same thing — so neither has to
-//! derive names the IR should have carried.
-//!
-//! # The lowering is a graph walk, not a stack discipline
-//!
-//! A lowering builds this with [`KernelBody::add_op`] in dependency order and
-//! [`KernelBody::set_terminator`] at the end of each block. **What defines a
-//! value is the lowering's question, not this crate's** — the graph it walks
-//! resolves names through an equality class, and that rule belongs beside the
-//! cells (`lichen_lowlevel::resolve`).
+//! # Invariant
+//! A block's `params` are the values it receives — one rule for a function's
+//! parameters and for a loop's carried state — and a `Br`'s `args` are exactly its
+//! target's `params`. What this replaced is `docs/notes/lichen-compute.md` §4.
 
 use crate::{KernelInstr, ScalarClass};
 
@@ -49,20 +14,19 @@ pub struct ValueId(pub u32);
 /// What a value is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueDef {
-    /// A value a block **receives**. The entry block's are the function's
-    /// parameter leaves; a loop header's are the loop's carried state.
+    /// A value a block **receives**: a function's parameter or a loop's carried state.
     ///
-    /// **This is where a carried value lives**, and it is the same place a
-    /// parameter lives — which is the point. A phi is not a second mechanism; it
-    /// is a block's parameters.
+    /// # Invariant
+    /// A carried value lives in the same place a parameter does, which is the point:
+    /// a phi is not a second mechanism, it is a block's parameters.
     BlockParam { block: usize, index: u32 },
-    /// A computation: the operator, the values it reads, and what it leaves
-    /// behind.
+    /// A computation: the operator, the values it reads, and what it leaves behind.
     ///
-    /// **`classes` is per result and may be empty.** A `BufferWriteCall` leaves
-    /// nothing, a call to another kernel leaves its callee's result class, and a
-    /// comparison leaves one scalar. The list is what the definition produces and
-    /// a consumer reads; it is never inferred backwards.
+    /// # Invariant
+    /// `classes` is per result and may be empty: a `BufferWriteCall` leaves nothing, a
+    /// call to another kernel leaves its callee's result class, and a comparison
+    /// leaves one scalar. The list is what the definition produces and a consumer
+    /// reads; it is never inferred backwards.
     Instr {
         op: KernelInstr,
         args: Vec<ValueId>,
@@ -85,16 +49,15 @@ pub struct BasicBlock {
 pub enum Terminator {
     /// Leave the function, carrying these values.
     ///
-    /// **A list, because a codomain is.** A kernel returns one leaf or a tuple of
-    /// them, and a tuple codomain's values are one `Return` — wasm's multi-value
-    /// result and SPIR-V's `OpReturn` are each one instruction.
+    /// # Invariant
+    /// A list, because a codomain is: a kernel returns one leaf or a tuple of them,
+    /// and a tuple codomain's values are one `Return` — wasm's multi-value result and
+    /// SPIR-V's `OpReturn` are each one instruction.
     Return { values: Vec<ValueId> },
     /// Arrive at `target`, handing it `args` as its parameters.
     Br(Br),
-    /// Two-way branch on `cond`, an `i64` `0`/`1` scalar like every other
-    /// condition in this IR. **A consumer that needs a narrower one narrows it
-    /// here** — wasm's `br_if` takes an `i32` — and that is a fact about the
-    /// consumer, not about this terminator.
+    /// Two-way branch on `cond`, an `i64` `0`/`1` scalar; a consumer needing narrower
+    /// narrows it.
     CondBr {
         cond: ValueId,
         if_true: Br,
@@ -104,8 +67,9 @@ pub enum Terminator {
 
 /// A branch and the values it hands over.
 ///
-/// **`args` is the whole of a block's incoming state**, which is what makes a
-/// backedge's arguments the next iteration's carried tuple.
+/// # Invariant
+/// `args` is the whole of a block's incoming state, which is what makes a backedge's
+/// arguments the next iteration's carried tuple.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Br {
     pub target: usize,
@@ -183,27 +147,21 @@ pub enum FlatOp {
     Instr(KernelInstr),
     /// Read the entry block's `index`-th parameter, and push it.
     ///
-    /// **This is what `KernelInstr::LocalGet(k)` was** — a way to name a parameter
-    /// — and it is a step of *writing* a body rather than an instruction *in* one.
-    /// A body whose operands are named does not need an instruction to fetch one;
-    /// it needs the name, and here the name is the step.
+    /// # Invariant
+    /// What `KernelInstr::LocalGet(k)` was: a step of *writing* a body rather than an
+    /// instruction *in* one. A body whose operands are named needs the name, not an
+    /// instruction to fetch it, and here the name is the step.
     Read(usize),
 }
 
 /// A one-block body written by hand, from a list of steps.
 ///
-/// **The steps consume and produce a running list of values, which is a stack
-/// discipline, and that is deliberate and local.** This is a way of *writing* a
-/// body for something with no graph to walk — a fixture, an example, a probe.
-/// A lowering does not use it and cannot: it walks the graph, resolves what each
-/// node names through `lichen_lowlevel::resolve`, and names every operand, which
-/// is what makes a shared subexpression emit once instead of once per use.
-///
-/// `domain` is the number of parameter leaves the entry block receives. An
-/// operation's declared class comes from the instruction itself where it states one
-/// ([`KernelInstr::own_class`]) and is the ABI's integer default otherwise,
-/// because a hand-written body is saying what it computes rather than deriving it
-/// from a node.
+/// # Invariant
+/// The steps consume and produce a running list of values — a stack discipline that
+/// is deliberate and *local*, for something with no graph to walk. `domain` is the
+/// number of parameter leaves the entry block receives; an operation's declared
+/// class comes from the instruction itself where it states one
+/// ([`KernelInstr::own_class`]) and is the ABI's integer default otherwise.
 pub fn from_flat(domain: usize, ops: &[FlatOp]) -> KernelBody {
     let mut body = KernelBody::new();
     let entry = body.add_block();
@@ -211,9 +169,8 @@ pub fn from_flat(domain: usize, ops: &[FlatOp]) -> KernelBody {
         body.add_param(entry);
     }
     let parameters = body.blocks[entry].params.clone();
-    // **The stack starts empty.** A parameter is reached by `Read(k)`, which is a
-    // step of *writing* a body — seeding the stack with them would leave every
-    // parameter on it, and the return below would hand them back as results.
+    // **The stack starts empty**: seeding it with the parameters would return them as
+    // results.
     let mut values: Vec<ValueId> = Vec::new();
     for op in ops {
         match *op {
@@ -239,14 +196,8 @@ pub fn from_flat(domain: usize, ops: &[FlatOp]) -> KernelBody {
             }
         }
     }
-    // **The return hands out the top of the stack and nothing else.** A body that
-    // computes several values in sequence returns the last one, which is what the
-    // stack's own convention was; handing back every intermediate would make the
-    // arity depend on how the body was written.
-    //
-    // **A body that produces nothing returns nothing** — a write-only fragment's
-    // results are its output buffers, not its wasm results, and `compile_parallel_fragment`
-    // appends the constant that gives it one.
+    // **The return hands out the top of the stack and nothing else**, and a body that
+    // produces nothing returns nothing.
     body.set_terminator(
         entry,
         Terminator::Return {
@@ -263,25 +214,26 @@ impl KernelBody {
         from_flat(domain, ops)
     }
 
-    /// Whether this body is one block that returns — the fast path a consumer
-    /// keeps for every fragment that needs no structure.
+    /// Whether this body is one block that returns: the fast path for a fragment with
+    /// no structure.
     pub fn is_straight_line(&self) -> bool {
         self.blocks.len() == 1 && matches!(self.blocks[0].terminator, Terminator::Return { .. })
     }
 
     /// The entry block's parameters: the function's domain leaves, flattened.
     ///
-    /// **This is the ABI**, and it is the only place the body's shape and a call's
-    /// argument list have to agree.
+    /// # Invariant
+    /// This is the ABI, and the only place the body's shape and a call's argument list
+    /// have to agree.
     pub fn parameters(&self) -> &[ValueId] {
         &self.blocks[self.entry].params
     }
 
     /// Every instruction this body defines, in walk order.
     ///
-    /// **A block parameter is not an instruction**, so a consumer that needs the
-    /// body's inputs reads [`Self::parameters`] — that is the whole difference between
-    /// a named value and a fetched one.
+    /// # Invariant
+    /// A block parameter is not an instruction, so a consumer that needs the body's
+    /// inputs reads [`Self::parameters`].
     pub fn instrs(&self) -> Vec<&KernelInstr> {
         self.blocks
             .iter()
@@ -294,8 +246,11 @@ impl KernelBody {
     }
 
     /// Every value this body **reads**: each instruction's operands, and every
-    /// transfer's. A body's inputs are among them, because an operand may be a
-    /// block parameter — so this is the whole of what a caller must supply.
+    /// transfer's.
+    ///
+    /// # Invariant
+    /// A body's inputs are among them, because an operand may be a block parameter — so
+    /// this is the whole of what a caller must supply.
     pub fn operands(&self) -> Vec<ValueId> {
         let mut operands: Vec<ValueId> = self
             .blocks
@@ -320,8 +275,7 @@ impl KernelBody {
         operands
     }
 
-    /// Whether `value` is one of the entry block's parameters — the domain leaves,
-    /// which is what an ABI lays out and a caller passes.
+    /// Whether `value` is one of the entry block's parameters — the domain leaves.
     pub fn is_a_parameter(&self, value: ValueId) -> bool {
         matches!(
             self.values.get(value.0 as usize),
@@ -329,25 +283,14 @@ impl KernelBody {
         )
     }
 
-    /// The gate a consumer calls **before it reads a body**.
+    /// The gate a consumer calls **before it reads a body**: a failure is refused by
+    /// name, never partially emitted.
     ///
-    /// Four rules, and each is a fact about the structure rather than about a
-    /// target:
-    ///
-    /// 1. the entry block exists, and so does every block a transfer names;
-    /// 2. **every value a block reads is available there** — an operand is
-    ///    computed earlier in the same block, or is one of that block's
-    ///    parameters, or was computed in a block that dominates it. The last
-    ///    clause is checked by walk order, which is the cheap and sufficient
-    ///    condition for a body built by [`KernelBody::add_op`] in order;
-    /// 3. **a branch's `args` are exactly its target's `params`**, which is what
-    ///    makes a target's phi complete without it inventing a default;
-    /// 4. an instruction's `classes` matches what it produces — zero for a write,
-    ///    one for everything else.
-    ///
-    /// A body that fails any of these is **refused by name**, never partially
-    /// emitted: a silently dropped branch or a mismatched phi is a fragment that
-    /// computes a different program than it was lowered from.
+    /// # Invariant
+    /// (1) The entry block exists, and so does every block a transfer names; (2) every
+    /// value a block reads is available there, checked by walk order; (3) a branch's
+    /// `args` are exactly its target's `params`; (4) an instruction's `classes` matches
+    /// what it produces — zero for a write, one for everything else.
     pub fn validate(&self) -> Result<(), String> {
         if self.blocks.is_empty() {
             return Err("a body must have at least its entry block".into());
@@ -394,8 +337,8 @@ impl KernelBody {
                         classes.len()
                     ));
                 }
-                // **A call's arity is the callee's**, which this crate does not know, so the
-                // check is the one instruction's exemption from the rule.
+                // **A call's arity is the callee's**, which this crate does not know: the
+                // one exemption.
                 if op.arity().is_some_and(|arity| args.len() != arity) {
                     return Err(format!(
                         "{op:?} reads {} value(s) but is given {}",
