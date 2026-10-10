@@ -130,13 +130,39 @@ at the mirror inverted that claim (`runned` set where the items' slots were
 rule states it — `runned = mapped.is_some_and(|value| !undecided(value))` — it
 moved.  The claim follows `mapped`, not `carried`: that was the whole of it.
 
-**The static type-value gap is a different mechanism**, measured separately: a
-*reader* cannot name a static ref — `low_type_of`'s new arm is gated on
-`AnyNodeId::Dynamic` (`shape.rs:851`) and `pair_type_half` answers `None` for a
-static type half (`resolve.rs:324`) — so a frozen function type decodes as
-`Function(Unknown, Unknown)` while the same node local decodes fully.  It is not a
-clone walk dropping an edge, neither causes the other, and the program that shows
-it (`w.mk Int`'s neighbour, `w.wrap`) renders correctly.
+**The static type-value gap was a different mechanism, and it is fixed.**  A
+*reader* could not name a static ref — `low_type_of`'s arm was gated on
+`AnyNodeId::Dynamic` — so a frozen function type decoded as
+`Function(Unknown, Unknown)` while the same node local decoded as
+`Function(Function(Unknown, Unknown), Unknown)`.  It was not a clone walk dropping
+an edge, and neither caused the other.
+
+Two things were needed, and the second was only found by measuring the first:
+
+1. **Ask with the node the decode was handed.**  `Module::function_type_signature`
+   now takes `AnyNodeId`, and `AnyNodeId::Static` goes to
+   `static_function_type_function` — the static mirror of the dynamic recogniser,
+   reading the frozen node and its slot 0's `LowValue::Function`.
+2. **Ask the cycle by class, not by identity.**  A frozen class may keep the
+   self-cycle on a *member* rather than on the node asked, so the identity test
+   `is_static_universe_id` missed the case: with only (1) the frozen pair decoded
+   as `Function(Unknown, Unknown)` and its *signature halves* stayed `Unknown`.
+   Comparing `static_find(tail) == static_find(sref)` — `static_find` made
+   `pub(crate)` — is the mirror of the dynamic `class_root(item) == carrier`.
+
+Measured, the frozen decode is now **identical to its local control**:
+`Function(Function(Unknown, Unknown), Unknown)`, with the same domain
+(`Function(Unknown, Unknown)`) and codomain (`Unknown`); the function *leaf* still
+answers `Unknown`, which is right — a leaf is not a type expression.  Unchanged:
+`lichen-lowlevel --test basic` 155/0, `checker` 87/0, `compute` 57/0/3,
+`frozen_function_type` 1/0, `graph_jit` 8/0/1, `graph_structure` 4/0,
+`examples` 1/0, `persist` 15/0, `artifact_transitivity` 1/0, `cargo check
+--workspace` clean.
+
+`pair_type_half` still answers `None` for a **static type half of a dynamic
+pair**, which would make such a signature unreadable; it was not on the path this
+measurement needed and no caller is known to reach it.  Unmeasured, and recorded
+as open rather than fixed.
 
 ### What it means for the parked test
 
@@ -293,19 +319,16 @@ compiles and runs, and `compute` is 57 passed / 0 failed / 3 ignored.
 
 ## What is still open, and who decides
 
-1. **The static type-value reader gap.**  `low_type_of`'s arm is gated on
-   `AnyNodeId::Dynamic` and `pair_type_half` answers `None` for a static type
-   half, so a frozen function type decodes as `Function(Unknown, Unknown)` while
-   the same node local decodes fully.  It is a *reader* that cannot name a static
-   ref — a different mechanism from Defect I, neither causing the other — and no
-   caller is known to need it; widening it is a separate change.
-2. **The empty `.in` group's coverage.**  The capability is measured end to end on
+1. **The empty `.in` group's coverage.**  The capability is measured end to end on
    both backends, and the graph-placeholder hole it exposed is fixed (`7643a37`),
    but no test exercises either one; whether the fillers the tests and examples
    carry should migrate to the empty group is a maintainer's decision.
-3. **The split's own coverage.**  The three refusals above are measured by probe,
+2. **The split's own coverage.**  The three domain refusals are measured by probe,
    not by a test: a test for the struct-domain and the open-position texts is a
-   maintainer's decision, like (2).
+   maintainer's decision, like (1).
+3. **`pair_type_half` over a static type half of a *dynamic* pair** — the one
+   corner of the reader gap the fix above did not need.  Unmeasured; no caller is
+   known to reach it.
 4. Two silent compute failures recorded elsewhere are **not** this note's and are
    still open: a bare `plrun` whose body reads a runtime scalar on a device answers
    `none` with no diagnostic, and the `graph` chain's `flat_arity` guard was read
@@ -315,5 +338,7 @@ Resolved here, and no longer open: Defect I's requirement (the type **must** car
 the signature), where the fill was owed (the static materialize walk's carry rule,
 which needed the frozen node's mirrored fields), whether a class write may cross
 the frozen boundary (**it must**, and it does), the sibling expectation that
-conflicted with the model (it pinned the defect and is re-pinned above), and the
-`UNDECIDED_DOMAIN` conflation (split into the three facts it covered).
+conflicted with the model (it pinned the defect and is re-pinned above), the
+`UNDECIDED_DOMAIN` conflation (split into the three facts it covered), and the
+static type-value reader gap (fixed, with the class-not-identity correction it
+needed).
