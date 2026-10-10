@@ -1,39 +1,11 @@
-//! A [`KernelBody`] onto `waffle`'s SSA — **one walk, no operand stack**.
+//! The wasm lowering: one fragment's SSA body onto `waffle` values.
 //!
-//! # What this replaced
-//!
-//! Two files and about 1,300 lines: `lower.rs`, which mapped one [`KernelInstr`]
-//! onto operators while consuming and producing an operand `Vec<Slot>`, and
-//! `flow.rs`, which turned the old `Flow`/`Terminator` tree into waffle blocks.
-//! Both worked on the same body in two passes, and the stack between them was the
-//! thing being rebuilt at every step.
-//!
-//! The body is SSA, so the walk is a **map from `ValueId` to what waffle made of
-//! it** — no stack, no heights, no pop, and a shared subexpression emitted once
-//! rather than once per use.
-//!
-//! # Three passes, and why there are three
-//!
-//! 1. **Create the blocks and their blockparams.** waffle's entry block's
-//!    blockparams are built from the signature and may not be added to
-//!    (`docs/notes/wasm-backend-handoff.md` §3.2), so those come from
-//!    [`ModuleCtx`] rather than being added here.
-//! 2. **Type the non-entry blockparams.** A block's parameter type is the type of
-//!    what its predecessors hand it, and a predecessor's arguments may themselves
-//!    be computed — so this is a **fixed point**, seeded from the entry block and
-//!    iterated until nothing changes. Two incoming edges that disagree on a
-//!    parameter's type are refused by name, not merged.
-//! 3. **Emit the instructions, then the terminators.** Every operand is already
-//!    mapped, so an instruction is a direct translation with nothing to discover.
-//!
-//! # The representation is tracked, and it is not the class
-//!
-//! Every value carries a wasm [`Type`], because [`KernelInstr::Conv`] names the
-//! classes the *language* asked for while the value was built by whatever produced
-//! it — and at the ABI the two disagree: a float fragment's index and count arrive
-//! in `f32` parameters while the language's number is an [`ScalarClass::Int`].
-//! The body's declared class says which *operator* to emit; the tracked type says
-//! what the value actually holds.
+//! # Invariant
+//! The body is SSA, so the walk is a map from value to what waffle made of it: no operand
+//! stack, and a shared subexpression emitted once. Three passes — create blocks and blockparams,
+//! type the non-entry blockparams to a fixed point, then emit instructions and terminators. Every
+//! value also carries a wasm `Type`, because [`KernelInstr::Conv`] names the class the language
+//! asked for while the value was built by whatever produced it.
 
 use std::collections::HashMap;
 
@@ -45,13 +17,12 @@ use waffle::{Block, BlockTarget, Func, FunctionBody, Operator, Type, Value};
 
 use super::assemble::BufferImports;
 
-/// What one fragment's lowering needs from the rest of the assembly, and nothing
-/// about the fragment it is lowering.
+/// What one fragment's lowering needs from the rest of the assembly.
 ///
-/// **Read-only, and shared**, because these are facts of the launch set rather
-/// than of one body: a cross-kernel call is typed by its callee's own
-/// `result_classes`, and a parameter leaf's class by the ABI's flattened
-/// `param_shape`.
+/// # Invariant
+/// Read-only and shared, because these are facts of the launch set rather than of one body: a
+/// cross-kernel call is typed by its callee's own `result_classes`, a parameter leaf's class by
+/// the ABI's flattened `param_shape`.
 pub(super) struct ModuleCtx<'a> {
     /// The launch set, so a cross-kernel call can be typed by its callee's own
     /// result list rather than left unnamed.
@@ -59,18 +30,13 @@ pub(super) struct ModuleCtx<'a> {
     /// Each callee [`KernelId`]'s position in `callees`.
     pub(super) index: &'a HashMap<KernelId, u32>,
     pub(super) imports: &'a BufferImports,
-    /// The parameter leaves' classes, in flattening order — the ABI types of the
-    /// entry block's blockparams.
-    ///
-    /// **A leaf's class is its own, not the fragment's**: a float fragment's count
-    /// and index are `f32` parameters whatever the body computes.
+    /// The parameter leaves' classes, in flattening order.
     pub(super) leaves: &'a [ScalarClass],
-    /// The entry block's blockparams, which **are** the function's parameters, in
-    /// the ABI's flattened leaf order.
+    /// The entry block's blockparams, which are the function's parameters.
     ///
-    /// **A blockparam and not a local**, because the entry block has no predecessors
-    /// to hand a local to: `FunctionBody::new` builds these from the signature, and
-    /// nothing may add to them.
+    /// # Invariant
+    /// A blockparam and not a local: `FunctionBody::new` builds these from the signature, and
+    /// nothing may add to them, because the entry block has no predecessors.
     pub(super) params: &'a [Value],
 }
 
@@ -83,8 +49,7 @@ struct Walk<'a, 'b> {
     body: &'a KernelBody,
     builder: &'a mut FunctionBody,
     context: &'a ModuleCtx<'b>,
-    /// **The map that replaces the operand stack.** Every value the body defines is
-    /// here once it has been emitted, so an operand is a lookup rather than a pop.
+    /// The map that replaces the operand stack: every value the body defines.
     values: HashMap<ValueId, Slot>,
     /// Each kernel-IR block's waffle block, and its blockparams in order.
     blocks: Vec<(Block, Vec<Value>)>,
@@ -116,8 +81,7 @@ pub(super) fn lower_body(
     builder: &mut FunctionBody,
     context: &ModuleCtx<'_>,
 ) -> Result<(), String> {
-    // `validate` is the gate, and it runs **before** anything is read: a body that
-    // fails it would otherwise be emitted with a branch silently dropped.
+    // `validate` is the gate, and it runs before anything is read.
     body.validate()?;
     if body.blocks.is_empty() {
         return Err("compute.wasm: a body must have at least its entry block".into());
@@ -132,10 +96,8 @@ pub(super) fn lower_body(
         current: 0,
     };
 
-    // Pass 1: bind the blocks. **waffle's entry block already exists** — it is the
-    // one the signature built its blockparams on — so it is *used* rather than
-    // added again; every other block is new. Leaving that entry block
-    // unterminated is what puts an `unreachable` at the top of the function.
+    // Pass 1: bind the blocks. waffle's entry block already exists, so it is used rather
+    // than added.
     let entry = walk.builder.entry;
     let mut bound = vec![(entry, Vec::new())];
     for _ in 1..body.blocks.len() {
@@ -185,34 +147,19 @@ pub(super) fn lower_body(
     Ok(())
 }
 
-/// Decide the wasm type of **every value the body defines**, then bind each
-/// non-entry block's `params` to waffle blockparams.
+/// Decide the wasm type of every value the body defines, then bind each non-entry block's
+/// params.
 ///
-/// **The type of a value is a fact about the whole body, and it has to be
-/// computed before anything is emitted.** waffle needs a block parameter's type
-/// at the moment the parameter is added, and a parameter's type is the type of
-/// what its predecessors hand it — which may be an *instruction the entry block
-/// computes*, not an entry parameter.  Every loop's carried state is exactly
-/// that (a buffer read, the argument's leaves), so deciding parameters from
-/// block to block over the already-known values can never decide them: the
-/// entry block's own instructions are not among what is known.
-///
-/// So the fixed point runs over **values**, in three rules that mirror
-/// [`lower_instr`]'s own:
-///
-/// 1. an instruction's type follows from its operator and its operands'
-///    types — a comparison widens to `i64`, `I32WrapI64` narrows, a conversion
-///    is its target class, a call is its callee's result class;
-/// 2. a block parameter's type is the type its incoming branches hand it, and
-///    two incoming edges that disagree are a refusal rather than a merge;
-/// 3. nothing is guessed: a rule whose operands are not typed yet waits for the
-///    next sweep, and a body where no sweep changes anything with values still
-///    untyped is refused by name.
+/// # Invariant
+/// A value's type is a fact about the whole body and must be known before anything is emitted:
+/// waffle needs a block parameter's type when it is added, and what its predecessors hand it
+/// may be an instruction the entry block computes — every loop's carried state is that — so a
+/// block-to-block decision can never decide them. The fixed point therefore runs over values,
+/// not over blocks.
 fn type_values(walk: &mut Walk<'_, '_>) -> Result<(), String> {
     let body = walk.body;
     let count = body.values.len();
-    // What each value's type is, once a rule has decided it.  The entry block's
-    // parameters are decided by the ABI before anything runs.
+    // What each value's type is, once a rule has decided it.
     let mut types: Vec<Option<Type>> = vec![None; count];
     for (offset, &value) in body.blocks[body.entry].params.iter().enumerate() {
         types[value.0 as usize] = Some(
@@ -234,15 +181,13 @@ fn type_values(walk: &mut Walk<'_, '_>) -> Result<(), String> {
         }
     }
 
-    // **A value's definition is what decides it**, so the sweep reads the body's
-    // own value table rather than the walk order: an instruction in a later
-    // block may be what an earlier block's parameter receives.
+    // A value's definition decides it, so the sweep reads the body's value table rather
+    // than the walk order.
     loop {
         let mut changed = false;
         for (index, definition) in body.values.iter().enumerate() {
-            // A decided **instruction** is done.  A decided **block parameter**
-            // is not: a later sweep may type an edge the earlier one could not
-            // name, and that edge still has to agree.
+            // A decided instruction is done; a decided parameter is not, since a later
+            // sweep may type an edge.
             if types[index].is_some() && matches!(definition, ValueDef::Instr { .. }) {
                 continue;
             }
@@ -259,13 +204,11 @@ fn type_values(walk: &mut Walk<'_, '_>) -> Result<(), String> {
                     types[index] = Some(ty);
                     changed = true;
                 }
-                // **A block parameter is typed by the first edge that can name
-                // its argument's type, and every later edge is checked against
-                // it.** A loop header has two incoming edges and one of them is
-                // its own body's backedge, so "wait until every edge is typed"
-                // waits forever: the entry edge is the fact that seeds the
-                // cycle, and a disagreement between the two is what the
-                // refusal below is for.
+                // A parameter is typed by the first edge that names its argument, and
+                // later edges are checked against it.
+
+                // Waiting for every edge to be typed waits forever on a loop header,
+                // whose backedge is one of its two.
                 ValueDef::BlockParam {
                     block,
                     index: position,
@@ -304,11 +247,8 @@ fn type_values(walk: &mut Walk<'_, '_>) -> Result<(), String> {
         }
     }
 
-    // Every value the body reads has to have a type before anything is emitted:
-    // an untyped one is a body whose definitions do not reach it, and waffle
-    // would be handed an operator over a value that has none.  A value that
-    // **produces nothing** — a write — is not read by anything and has no type
-    // to decide.
+    // Every value the body reads must have a type before emission; a write produces
+    // nothing and is read by nothing.
     for (index, ty) in types.iter().enumerate() {
         if ty.is_some() {
             continue;
@@ -348,12 +288,12 @@ fn type_values(walk: &mut Walk<'_, '_>) -> Result<(), String> {
     Ok(())
 }
 
-/// The wasm type `op` leaves when its operands are `operands`, or [`None`] for
-/// an operation that produces nothing (a write) — and for an operation whose
-/// result this walk cannot name.
+/// The wasm type `op` leaves when its operands are `operands`, or `None` for an operation
+/// that produces nothing.
 ///
-/// **This is the typing half of [`lower_instr`], and the two must agree**:
-/// every arm here states the type that arm there emits, from the same facts.
+/// # Invariant
+/// The typing half of [`lower_instr`], and the two must agree: every arm here states the type
+/// that arm there emits, from the same facts.
 fn instruction_type(context: &ModuleCtx<'_>, op: KernelInstr, operands: &[Type]) -> Option<Type> {
     match op {
         KernelInstr::Const(class, _) => Some(super::assemble::value_type(class)),
@@ -380,8 +320,7 @@ fn instruction_type(context: &ModuleCtx<'_>, op: KernelInstr, operands: &[Type])
     }
 }
 
-/// Lower one instruction. **No stack**: its operands are named by its definition,
-/// and its result is a value this walk records.
+/// Lower one instruction: its operands are named and its result is recorded.
 fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
     let Some(ValueDef::Instr { op, args, .. }) = walk.body.values.get(instr.0 as usize) else {
         return Err(format!(
@@ -414,11 +353,8 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
                 walk.values.insert(instr, (value, result));
                 return Ok(());
             }
-            // **A comparison is two operators.** The language's comparison yields an
-            // `i64` `0`/`1` scalar; wasm's yields an `i32`. The widening is a named
-            // step rather than a comment beside each comparison
-            // (`docs/notes/wasm-control-flow.md` §2), and the converse narrowing is
-            // [`KernelInstr::I32WrapI64`].
+            // A comparison is two operators: the language's yields an `i64` `0`/`1`, wasm's
+            // an `i32`.
             let narrow = walk.add(native, &[lhs, rhs], &[Type::I32]);
             let value = walk.add(Operator::I64ExtendI32U, &[narrow], &[Type::I64]);
             walk.values.insert(instr, (value, Type::I64));
@@ -429,9 +365,7 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
             walk.values.insert(instr, (value, Type::I32));
         }
         KernelInstr::Select => {
-            // **The arms are the value, so either one's type is the result's**: they
-            // are one class by construction, and `refuse_mixed_classes` refuses
-            // otherwise.
+            // The arms are the value, so either one's type is the result's.
             let (then, then_ty) = operands[0];
             let (otherwise, otherwise_ty) = operands[1];
             let (selector, _) = operands[2];
@@ -444,9 +378,8 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
             let value = walk.add(Operator::Select, &[then, otherwise, selector], &[then_ty]);
             walk.values.insert(instr, (value, then_ty));
         }
-        // The crossing. `from` and `to` are what the **language** asked for; what
-        // wasm holds is the value's actual representation, and the two are different
-        // questions.
+        // The crossing: `from` and `to` are what the language asked for, while what wasm
+        // holds is the value's representation.
         KernelInstr::Conv { from, to } => {
             let (operand, seen) = operands[0];
             match (seen, to) {
@@ -490,8 +423,7 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
                 .map(super::assemble::value_type)
                 .collect();
             if results.len() > 1 {
-                // The frontend refuses this before a fragment is built, so reaching
-                // it means the fragment was assembled by something other than `jit`.
+                // The frontend refuses this before a fragment is built.
                 return Err(format!(
                     "compute.wasm: kernel {callee} returns {} values, and a cross-kernel call here \
                      leaves one value — a multi-value call is refused by `jit` before it reaches a \
@@ -575,9 +507,7 @@ fn lower_terminator(walk: &mut Walk<'_, '_>, index: usize) -> Result<(), String>
             if_false,
         } => {
             let (condition, ty) = walk.operand(*cond)?;
-            // **A branch's condition is wasm's `i32`.** The language's is an `i64`
-            // `0`/`1` scalar, so the narrowing is a named step here rather than a
-            // re-derivation every consumer would otherwise make.
+            // A branch's condition is wasm's `i32`, so the narrowing is a named step.
             let condition = match ty {
                 Type::I32 => condition,
                 Type::I64 => walk.add(Operator::I32WrapI64, &[condition], &[Type::I32]),
@@ -631,13 +561,11 @@ fn callee_arity(context: &ModuleCtx<'_>, callee: KernelId) -> Result<usize, Stri
     Ok(target.param_shape.flat_arity())
 }
 
-/// The one wasm operator a binary operator lowers to, **before** a comparison's
-/// widening.
+/// The one wasm operator a binary operator lowers to, before a comparison's widening.
 ///
-/// **`Rem` and the bitwise trio have no float form**, and the refusal is here
-/// rather than at the site: `refuse_mixed_classes` already rejects a float operand
-/// for them before any module exists, so a float reaching this is a walk that
-/// disagreed with the emitter.
+/// # Invariant
+/// `Rem` and the bitwise trio have no float form, and the refusal is here rather than at the
+/// site: `refuse_mixed_classes` rejects a float operand for them before any module exists.
 fn binary_operator(class: ScalarClass, operator: KernelBin) -> Result<Operator, String> {
     use KernelBin as Bin;
     use ScalarClass::{Float, Int};
@@ -645,9 +573,8 @@ fn binary_operator(class: ScalarClass, operator: KernelBin) -> Result<Operator, 
         (Int, Bin::Add) => Operator::I64Add,
         (Int, Bin::Sub) => Operator::I64Sub,
         (Int, Bin::Mul) => Operator::I64Mul,
-        // An `Int` is unsigned, so these are the unsigned division and remainder
-        // (`DivS` would agree below 2^63 and differ above). A **float division is
-        // IEEE and unguarded** (`docs/notes/floating-point.md` §4.4).
+        // An `Int` is unsigned, so these are the unsigned division and remainder; a float
+        // division is IEEE and unguarded.
         (Int, Bin::Div) => Operator::I64DivU,
         (Int, Bin::Rem) => Operator::I64RemU,
         (Int, Bin::BitAnd) => Operator::I64And,
