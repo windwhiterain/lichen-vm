@@ -1,16 +1,4 @@
 //! Could recursion expansion stand in for a loop as the unroll's surface?
-//!
-//! Three questions, in the order they have to be answered:
-//!
-//! 1. **Is recursion in a kernel expressible today at all?** Inline applies are
-//!    refused by name and a cross-kernel call needs a `KernelId` that must exist
-//!    before the body that names it is compiled — so a cycle may not be writable.
-//! 2. **What does a cross-kernel call cost?** If `CallKernel` is a runtime call in
-//!    the assembled module rather than an inline, then expansion is not only about
-//!    expressibility: a hand-written chain is the *non-expanded* version of what
-//!    B1 would do automatically, so timing it measures what expansion saves.
-//! 3. **Does the GPU refuse it?** `SpirvRefusal::CrossKernelCall` says so on
-//!    paper; this confirms it from the program side.
 
 use std::time::Instant;
 
@@ -65,8 +53,7 @@ out = (compute.plrun p (Host(.n 8)) : Out)
 compute.read ((compute.Read _)(.from out.z, .at 3))
 "#;
 
-/// A **module-level** helper called from inside a parallel body — the
-/// composition case, and the one a library would actually be written in.
+/// A **module-level** helper called from inside a parallel body.
 const MODULE_HELPER: &str = r#"
 --- compute = import "compute.lichen" ---
 square = x => x * x
@@ -91,9 +78,8 @@ out = (compute.plrun p ((compute.A In1)(.n 8, .I In1(.b s.z))) : Out)
 compute.collect out.z
 "#;
 
-/// A single-parameter recursive helper whose trip count is a **literal** at the
-/// call site. Expansion only terminates if the conditional's selector folds to a
-/// constant, so this is the program that says whether it does.
+/// A recursion with a **literal** trip count: expansion terminates only if the
+/// selector folds to a constant.
 const RECURSIVE_LITERAL: &str = r#"
 --- compute = import "compute.lichen" ---
 steps = k => if k == 0 then 0 else steps (k - 1) + 1
@@ -109,9 +95,7 @@ out = (compute.plrun p (Host(.n 8)) : Out)
 compute.read ((compute.Read _)(.from out.z, .at 3))
 "#;
 
-/// A **body-local alias** and no call at all. This is the control for the two
-/// probes above: if it fails, the alias — not the inlining — is what cannot be
-/// resolved in an unapplied template.
+/// A **body-local alias** and no call: the control for the probes above.
 const BODY_LOCAL_ALIAS: &str = r#"
 --- compute = import "compute.lichen" ---
 Out   = struct<.z (compute.Buf _)>
@@ -135,9 +119,8 @@ out = (compute.plrun p ((compute.A In1)(.n 8, .I In1(.b s.z))) : Out)
 compute.collect out.z
 "#;
 
-/// The helper called with a **literal** argument, so nothing but the callee is
-/// unresolved. This separates "the callee cannot be found" from "the argument
-/// cannot be re-emitted".
+/// The helper called with a **literal** argument, so only the callee is
+/// unresolved.
 const HELPER_LITERAL_ARG: &str = r#"
 --- compute = import "compute.lichen" ---
 square = x => x * x
@@ -153,9 +136,7 @@ out = (compute.plrun p (Host(.n 4)) : Out)
 compute.collect out.z
 "#;
 
-/// The same helper, called with an argument the **host cannot reduce** —
-/// `i + 1` depends on the loop index, so the call survives to the kernel
-/// compiler. This is the case static expansion exists for.
+/// The same helper, called with an argument the **host cannot reduce**.
 const HELPER_INDEX_ARG: &str = r#"
 --- compute = import "compute.lichen" ---
 square = x => x * x
@@ -171,16 +152,8 @@ out = (compute.plrun p (Host(.n 4)) : Out)
 compute.collect out.z
 "#;
 
-/// **A `loop` operator written in pure lichen — no Rust, no new operator.** It is
-/// the proposal as a one-line library function, using the recursion the
-/// interpreter already has:
-///
-/// ```lichen
-/// loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
-/// ```
-///
-/// If this works in a kernel body, the whole feature is free and the roadmap
-/// item is a library function rather than a codegen task.
+/// **A `loop` operator written in pure lichen**, using the recursion the
+/// interpreter already has.
 const LOOP_IN_LICHEN: &str = r#"
 --- compute = import "compute.lichen" ---
 loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
@@ -197,10 +170,8 @@ out = (compute.plrun p (Host(.n 4)) : Out)
 compute.collect out.z
 "#;
 
-/// The same, with the trip count the **kernel's own count** — a runtime value.
-/// This is the case §4.1 says is refused, and `loop` is supposed to be worse,
-/// not better: `n` is not decided when the body is lowered.  The `@loop` mark
-/// is what makes the refusal name itself.
+/// The same, with the trip count the **kernel's own count**: `n` is not decided
+/// when the body is lowered.
 const LOOP_RUNTIME_COUNT: &str = r#"
 --- compute = import "compute.lichen" ---
 @loop loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
@@ -217,10 +188,8 @@ out = (compute.plrun p (Host(.n 4)) : Out)
 compute.read ((compute.Read _)(.from out.z, .at 3))
 "#;
 
-/// The same, `@loop`-marked, with the trip count a **literal** — the marker as
-/// permission rather than a command.  This is the control for the row above:
-/// the marker must not turn a recursion the unroll already handles into a
-/// refusal.
+/// The same, `@loop`-marked, with a **literal** trip count: the marker is
+/// permission, not a command.
 const LOOP_RUNTIME_COUNT_MARKED_DECIDABLE: &str = r#"
 --- compute = import "compute.lichen" ---
 @loop loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
@@ -237,10 +206,7 @@ out = (compute.plrun p (Host(.n 4)) : Out)
 compute.read ((compute.Read _)(.from out.z, .at 3))
 "#;
 
-/// A `@loop`-marked recursion whose trip count is **decided** and whose whole
-/// state is decided too — the shape the unroll handles, marked.  This is the
-/// row that must keep answering, and the proof that the marker is permission
-/// and not a command.
+/// A `@loop`-marked recursion with a **decided** count and a decided state.
 const RECURSIVE_LITERAL_MARKED: &str = r#"
 --- compute = import "compute.lichen" ---
 @loop steps = k => if k == 0 then 0 else steps (k - 1) + 1
@@ -256,9 +222,8 @@ out = (compute.plrun p (Host(.n 8)) : Out)
 compute.read ((compute.Read _)(.from out.z, .at 3))
 "#;
 
-/// Two-stage **curried** recursion — `sum_to (n - 1) (x + 1)` is *two*
-/// applications, where `fib`'s single application works. If this is what the
-/// `loop` combinator's type error is, the fix is a one-argument shape.
+/// Two-stage **curried** recursion: `sum_to (n - 1) (x + 1)` is two
+/// applications.
 const TWO_STAGE_CURRIED: &str = r#"
 --- compute = import "compute.lichen" ---
 sum_to = n => x => if n == 0 then x else sum_to (n - 1) (x + 1)
@@ -291,8 +256,8 @@ out = (compute.plrun p (Host(.n 4)) : Out)
 compute.collect out.z
 "#;
 
-/// The proposed operator, written over a **tuple** state instead of a curried
-/// pair, so the recursive call is a single application.
+/// The proposed operator over a **tuple** state, so the recursive call is one
+/// application.
 const LOOP_TUPLE: &str = r#"
 --- compute = import "compute.lichen" ---
 loop = f => s => if s(0) == 0 then s(1) else loop f (s(0) - 1, f s(1))
@@ -309,10 +274,7 @@ out = (compute.plrun p (Host(.n 4)) : Out)
 compute.collect out.z
 "#;
 
-/// `loop` in the shape that **does** check: the step is baked into the binding
-/// and the recursive call is a single application of one tuple argument. This is
-/// what a trip count is measured against — the expansion is `n` copies of the
-/// step's body, so the interesting number is how that grows.
+/// `loop` in the shape that **does** check: the step is baked into the binding.
 fn loop_program(trip: usize) -> String {
     format!(
         r#"--- compute = import "compute.lichen" ---
@@ -331,9 +293,8 @@ compute.read ((compute.Read _)(.from out.z, .at 3))
     )
 }
 
-/// The same expansion with **no kernel at all** — a plain host recursion. If this
-/// overflows too, the depth is in the graph the host builds, not in the emitter
-/// that lowers it, and the two need different fixes.
+/// The same expansion with **no kernel**: the depth is then in the host's graph,
+/// not the emitter's.
 fn host_program(trip: usize) -> String {
     format!(
         "sum_to = s => if s(0) == 0 then s(1) else sum_to (s(0) - 1, s(1) + 1)\n\
@@ -341,11 +302,8 @@ fn host_program(trip: usize) -> String {
     )
 }
 
-/// A kernel body carrying a **marked recursion whose trip count is the
-/// kernel's own count** — a run-time value, so the definition pass cannot
-/// expand it and the checker has to say what it is instead. What comes back is
-/// the conversion's verdict: the shape rule that refused it, or the missing
-/// backend for a shape that converts.
+/// A **marked recursion whose trip count is the kernel's own count**: what comes
+/// back is the conversion's verdict.
 fn runtime_count_probe(recursion: &str, call: &str) -> String {
     format!(
         "--- compute = import \"compute.lichen\" ---\n\
@@ -360,10 +318,7 @@ fn runtime_count_probe(recursion: &str, call: &str) -> String {
     )
 }
 
-/// The marked recursions the verdict is read from, one per shape: the two
-/// convertible ones (a scalar state and a tuple state) and the three refusals
-/// (a call outside tail position, a mutual recursion, the curried combinator
-/// whose call hides in nested lambdas).
+/// The marked recursions the verdict is read from, one per shape.
 const VERDICT_ROWS: &[(&str, &str, &str)] = &[
     (
         "tail recursion, scalar state",
@@ -394,10 +349,8 @@ const VERDICT_ROWS: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// The acceptance case's shape in a **host** program: a marked reduction over a
-/// tuple state whose count is a literal, so the evaluator can decide the whole
-/// state — and the only thing between it and a value is *how the recursion is
-/// run*. `marked` is the whole difference between the two rows the probe prints.
+/// The acceptance case's shape in a **host** program: `marked` is the whole
+/// difference between the two rows.
 fn host_reduction(marked: bool, count: usize) -> String {
     let marker = if marked { "@loop " } else { "" };
     format!(
@@ -406,8 +359,7 @@ fn host_reduction(marked: bool, count: usize) -> String {
     )
 }
 
-/// The proposed operator **with its type written out** — the escape P1-33 names
-/// as "the whole difference" for the two-argument curried self-reference.
+/// The proposed operator **with its type written out** — the escape P1-33 names.
 const LOOP_ANNOTATED: &str = r#"
 --- compute = import "compute.lichen" ---
 loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x)) : (Int -> Int) -> Int -> Int -> Int
@@ -424,16 +376,14 @@ out = (compute.plrun p (Host(.n 4)) : Out)
 compute.collect out.z
 "#;
 
-/// The annotated operator, with **no kernel** — which separates "the annotation
-/// fixed the type" from "the annotation plus a kernel works".
+/// The annotated operator, with **no kernel**: does the annotation alone fix it?
 const LOOP_ANNOTATED_HOST: &str = r#"
 loop = (f => n => x => if n == 0 then x else loop f (n - 1) (f x)) : (Int -> Int) -> Int -> Int -> Int
 inc = x => x + 1
 (loop inc 3 0, loop inc 10 5, loop inc 0 7)
 "#;
 
-/// A `jit` chain `k0 → k1 → … → k{N-1}`, each adding one, plus a parallel kernel
-/// that calls the last. **The hand-written, un-expanded form of a loop.**
+/// A `jit` chain, each level adding one: the hand-written, un-expanded loop.
 fn chain(depth: usize) -> String {
     let mut source = String::from(HEADER);
     source.push_str("k0 = compute.jit (v : Int => v + 1)\n");
@@ -617,9 +567,7 @@ fn main() {
             );
         }
         println!("  -- the host loop: a literal count, run rather than expanded --");
-        // Host rows are backend-independent, so the counts stay small: the
-        // point is where the two shapes part company, and each loop iteration
-        // instantiates the body (the cost M3 exists to remove).
+        // Host rows are backend-independent, so the counts stay small.
         for count in [400usize, 1_000] {
             for marked in [true, false] {
                 let shape = if marked { "loop  " } else { "unroll" };

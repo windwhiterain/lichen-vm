@@ -1,9 +1,5 @@
-//! Phase 0, fourth round trip: a `cache` cell holding a float.
-//!
-//! A float is a `Copy` payload with no arena handle, so the freeze path is the
-//! one place it has to survive being filed under an occurrence path and read back
-//! by a later build that skipped its body
-//! (`docs/notes/incremental-update.md` §7.1, `docs/notes/floating-point.md` §3.1).
+//! A float is a `Copy` payload with no arena handle, so freezing must carry it.
+//! See floating-point.md §3.1.
 
 use lichen_language::program::LangProgram as P;
 use lichen_language::session::BufferSession;
@@ -12,8 +8,8 @@ use lichen_utils::extend::AsEnum;
 
 #[test]
 fn a_cached_float_is_reused_and_reads_back_intact() {
-    // The marked binding is the root; the edit below is inside the unmarked
-    // binding before it, so dirty propagation never reaches the cell.
+    // The root is marked; the edit is in the unmarked binding before it, so dirty
+    // propagation never reaches the cell.
     let source = "cache x = 1.5\nother = 1\nx\n";
     let mut session = BufferSession::<P>::with_source_id(source, "a.lichen");
 

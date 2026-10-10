@@ -1,14 +1,5 @@
-//! Phase 0, third round trip: an artifact written and read back.
-//!
-//! A float's value encoding is tag `8` plus its 32 bits
-//! (`crates/lichen-lowlevel/src/codec.rs`), and the artifact format version is
-//! the current `ARTIFACT_FORMAT_VERSION` (now `10`;
-//! `crates/lichen-language/src/persist.rs`).  The round trip must be
-//! bit-identical, and it must keep `LowValue`'s hand-written identity: `0.0` and
-//! `-0.0` come back as two distinct values while two equal `NaN` bit patterns
-//! come back as one — the asymmetry that lets a reuse decision accept a
-//! bit-identical artifact and never accept one of two distinct ones
-//! (`docs/notes/floating-point.md` §3.1, §3.6).
+//! The artifact must round-trip a float bit for bit, keeping `LowValue`'s
+//! identity. See floating-point.md §3.1, §3.6.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -79,8 +70,8 @@ fn a_float_artifact_round_trips_bit_identically_and_keeps_its_bitwise_identity()
     assert_eq!(bits(&read(nan)), f32::NAN.to_bits());
 
     // §3.1's identity: the two zeros are two values, the two equal NaNs are one.
-    // The two NaNs are distinct *nodes*, so the equality below is a value
-    // equality and not one node compared with itself.
+
+    // The NaNs are distinct nodes, so that equality compares two of them.
     assert_ne!(freeze.node_map[&nan], freeze.node_map[&same_nan]);
     assert_ne!(
         read(zero),

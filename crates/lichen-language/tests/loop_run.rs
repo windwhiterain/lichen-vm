@@ -1,20 +1,5 @@
-//! The host loop on **real programs**: a marked recursion in a plain lichen
-//! program is run as a loop by the evaluator, so a trip count the *expansion*
-//! cannot afford is answered — and the answers are the unroll's, which is the
-//! half that must not be assumed.
-//!
-//! The shape is the acceptance case's, minus the buffer read: a `@loop`
-//! reduction over a tuple state with a **literal** count, so the host can see
-//! the whole state and the only thing between it and a value is how the
-//! recursion is run.
-//!
-//! **The separation is nesting.** A node records the number of apply levels it
-//! was created under (`Module::node_depth`), which is a fact of the graph and
-//! not of the pass that built it, so an expansion reaches the nesting bound at
-//! its trip count even though the lazy deep pass walks it at depth one. A loop
-//! instantiates the *same* entering apply node every iteration, so it never
-//! deepens and is bounded by work alone. Measured here, under the default
-//! budgets: the expansion answers counts up to 499, the loop up to 1_998.
+//! A marked recursion runs as a loop, so a trip count the expansion cannot
+//! afford is answered. See loop-conversion.md.
 
 mod common;
 
@@ -50,9 +35,8 @@ fn refusal(source: &str) -> BudgetExhausted {
 
 #[test]
 fn the_loop_and_the_unroll_answer_the_same_value() {
-    // Both paths run at a count they can both afford, so this compares the
-    // loop's values with the expansion's rather than with the loop's own idea
-    // of the answer.
+    // This compares the loop's values with the expansion's, not with the loop's own
+    // idea of the answer.
     for count in [0usize, 1, 2, 7, 64, 200] {
         let (_module, looped, _ty) = evaluate(&sum_to_source(true, count));
         let (_module, unrolled, _ty) = evaluate(&sum_to_source(false, count));
@@ -67,9 +51,8 @@ fn the_loop_and_the_unroll_answer_the_same_value() {
 
 #[test]
 fn a_marked_reduction_runs_a_count_the_expansion_cannot_afford() {
-    // 600 is past the checker's nesting bound (500) and well inside its work
-    // bound (2_000), so it is exactly the window the conversion opens: the
-    // expansion deepens once per count, the loop does not deepen at all.
+    // 600 is past the nesting bound and inside the work bound: the expansion
+    // deepens once per count, the loop never does.
     let (_module, value, _ty) = evaluate(&sum_to_source(true, 600));
     assert_eq!(
         usize_of(&value),
@@ -85,9 +68,7 @@ fn a_marked_reduction_runs_a_count_the_expansion_cannot_afford() {
 
 #[test]
 fn a_marked_reduction_past_the_work_bound_is_refused_too() {
-    // The loop is not exempt from work: an iteration is one application, so a
-    // trip count past the work bound is refused for it as well — by that
-    // bound, never by nesting.
+    // The loop is not exempt from work: an iteration is one application.
     assert_eq!(
         refusal(&sum_to_source(true, 3_000)),
         BudgetExhausted::ApplyTotal { limit: 2_000 },

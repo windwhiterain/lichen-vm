@@ -1,17 +1,5 @@
-//! The `Doc` attribute (`? expr`): a **label** that attaches a metadata
-//! value — a plain struct instance — to any expression.  There is no builtin
-//! `doc` keyword or prelude; the user defines/imports a `Doc` struct and
-//! constructs an instance by hand.  A doc never constrains type-checking —
-//! it is metadata, so an expression annotated with a doc checks and runs
-//! exactly as it would without one, and two differing docs never conflict.
-//!
-//! These tests exercise the reachable surface of the mechanism: the doc
-//! annotation parses and lowers, a doc'd value flows through an apply without a
-//! diagnostic (the apply runs the doc's `unify_slots` through the checker's
-//! relaxed-unify path, where `is_subtype` is `true`, so differing values are
-//! suppressed), a later `? b` overrides an earlier `? a` (the `check_ann` label
-//! branch), and a doc rides a struct definition.  The renderer reads a doc's
-//! field *names* from the value's type chain (never a hardcoded shape).
+//! The `Doc` attribute (`? expr`): user-made metadata, never a constraint.
+//! See attributes.md.
 
 mod common;
 
@@ -19,11 +7,10 @@ use lichen_language::compile;
 use lichen_language::run::evaluate;
 
 /// `Doc = struct<.name string, .description string>` — a user-made 2-field
-/// struct, the conventional doc shape.
+/// struct.
 const DOC: &str = "Doc = struct<.name string, .description string>\n";
 
-/// A program with a doc annotation evaluates to the annotated value; the doc
-/// rides the expression's attribute slot without changing the value.
+/// The doc rides the expression's attribute slot, not its value.
 #[test]
 fn a_doc_annotation_evaluates_cleanly() {
     let (_, value, _) = common::evaluate(&format!(
@@ -32,8 +19,7 @@ fn a_doc_annotation_evaluates_cleanly() {
     assert_eq!(common::usize_of(&value), 5);
 }
 
-/// A doc'd value passed as an argument to a plain function is accepted — the
-/// apply runs the doc's `unify_slots`, which never reports a mismatch.
+/// The apply runs the doc's `unify_slots`, which never reports a mismatch.
 #[test]
 fn a_doc_argument_to_a_plain_function_is_accepted() {
     let (_, value, _) = common::evaluate(&format!(
@@ -51,8 +37,7 @@ fn a_doc_annotation_never_reports_a_diagnostic() {
     .ok());
 }
 
-/// A later `? b` overrides an earlier `? a` on the same expression (the
-/// checker's label branch: `b` replaces `a`), and never errors.
+/// The checker's label branch: `b` replaces `a`.
 #[test]
 fn a_doc_annotation_overrides_a_prior_one() {
     assert!(
@@ -64,8 +49,7 @@ fn a_doc_annotation_overrides_a_prior_one() {
     );
 }
 
-/// A doc rides a struct definition (the original motivation): the definition
-/// carries metadata, and the struct type and an instance still check.
+/// A doc rides a struct definition; the type and an instance still check.
 #[test]
 fn a_doc_rides_a_struct_definition() {
     let src = format!(
@@ -77,8 +61,7 @@ fn a_doc_rides_a_struct_definition() {
     );
 }
 
-/// Two differing docs on the elements of one array do not conflict (array
-/// homogeneity concerns the element *types*, and a label never constrains).
+/// Array homogeneity concerns the element *types*; a label never constrains.
 #[test]
 fn two_differing_docs_in_one_array_do_not_conflict() {
     let (_, value, _) = common::evaluate(&format!(
@@ -87,9 +70,8 @@ fn two_differing_docs_in_one_array_do_not_conflict() {
     assert_eq!(common::usize_of(&value), 1);
 }
 
-/// A perspective constraint and a doc label coexist on one expression
-/// (`# p ? doc` → `[value, type, persp, doc]`): the perspective is a
-/// constraint (enforced at apply), the doc is metadata (never a constraint).
+/// `# p ? doc` is `[value, type, persp, doc]`: the perspective constrains, the
+/// doc does not.
 #[test]
 fn a_perspective_and_a_doc_coexist_on_one_expression() {
     assert!(
@@ -101,10 +83,7 @@ fn a_perspective_and_a_doc_coexist_on_one_expression() {
     );
 }
 
-/// An annotation replaces only the slot it spells: re-annotating the
-/// perspective (`# 4` over a `# 8 ? doc` value) *replaces* the perspective
-/// with the requirement `4` (validated as a subtype of the provider `8`, since
-/// `4 | 8`) and **preserves the doc**.
+/// `# 4` over a `# 8 ? doc` replaces the perspective and preserves the doc.
 #[test]
 fn reinterpret_the_perspective_replaces_it_and_preserves_the_doc() {
     let (_, value, _) = common::evaluate(&format!(
@@ -132,9 +111,8 @@ fn a_perspective_added_to_a_doc_value_keeps_the_doc() {
     assert_eq!(common::usize_of(&value), 5);
 }
 
-/// A perspective mismatch still fails when re-annotating over an existing
-/// perspective even with a doc attached — a label never weakens a constraint,
-/// and the requirement is checked against the provider.
+/// A label never weakens a constraint; the requirement is checked against the
+/// provider.
 #[test]
 fn a_broader_perspective_requirement_does_not_weaken_a_doc() {
     assert!(
@@ -159,8 +137,7 @@ fn a_doc_does_not_weaken_a_perspective_mismatch() {
     );
 }
 
-/// A doc that drops a field is a struct-instantiation arity error (the
-/// struct forces all its fields), not a doc-specific check.
+/// A struct forces all its fields, so a dropped one is an arity error.
 #[test]
 fn a_partial_doc_is_a_struct_arity_error() {
     assert!(
@@ -169,10 +146,8 @@ fn a_partial_doc_is_a_struct_arity_error() {
     );
 }
 
-/// The output renderer shows an expression's attributes **only when the
-/// expression actually carries them** — an un-annotated expression spells
-/// exactly as before, and a perspective/doc that is present is spelled.
-/// A doc's field names come from its value's type chain.
+/// Attributes are spelled only when present; a doc's field names come from its
+/// value's type chain.
 #[test]
 fn attributes_render_only_when_present() {
     assert_eq!(evaluate("5").unwrap(), "5: Int");

@@ -1,17 +1,5 @@
-//! A package whose top level holds a **runtime-only** value must still run.
-//!
-//! This is the `P1-29` reproduction, and it is the reason the fix is "refuse the
-//! cache" rather than "refuse the compile": a kernel is a process-local registry
-//! handle with no on-disk form, so a package that `jit`s at its top level cannot
-//! be *cached* — but the program is ordinary, valid lichen and must evaluate.
-//!
-//! The shape is deliberately the imported one. A top-level `jit` in a *single*
-//! file never reaches the artifact codec, because only packages are frozen and
-//! serialized while the main program is not; the codec only meets a kernel when
-//! an importer freezes the package that holds one. An in-memory store therefore
-//! exercises nothing here, which is why `readme::program_output` — and so the
-//! whole examples suite — never caught the panic: the test has to go through a
-//! **cache-backed** store, exactly as the CLI does.
+//! A package holding a live kernel must still run: the refusal is the cache, not
+//! the compile. See artifact-cache.md.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -56,9 +44,9 @@ fn an_imported_package_that_jits_at_its_top_level_still_runs() {
          compute.launch kernels.k_double 3\n",
     );
 
-    // A cache directory is what puts the artifact codec on the path: with an
-    // in-memory store nothing is ever serialized, and the refusal under test is
-    // never reached.
+    // A cache directory puts the codec on the path: nothing is ever serialized.
+
+    // ...so the refusal under test is never reached.
     let mut store = PackageStore::<LangProgram>::with_cache_dir(dir.join("cache"));
     let source = fs::read_to_string(&main).unwrap();
     let (_, value, _) = common::run_at(&source, Some(main.as_path()), &mut store);
@@ -68,10 +56,8 @@ fn an_imported_package_that_jits_at_its_top_level_still_runs() {
         "the program must still evaluate to its declared output"
     );
 
-    // ...and it ran *because the refusal was taken*, not because serialization
-    // happened to succeed. `kernels.lichen` is the only package in the program,
-    // so a cache that holds any artifact at all means this test stopped
-    // exercising the refusal.
+    // Any cached artifact means the refusal went unexercised: `kernels.lichen` is
+    // the program's only package.
     let artifacts = dir.join("cache").join("artifacts");
     let cached: Vec<PathBuf> = match fs::read_dir(&artifacts) {
         Ok(entries) => entries.filter_map(|e| e.ok()).map(|e| e.path()).collect(),

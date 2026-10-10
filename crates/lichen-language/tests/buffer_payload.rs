@@ -1,19 +1,5 @@
-//! A compute buffer's payload lives in the **block arena**, and this is the
-//! contract that makes that safe (`D15`).
-//!
-//! A `Buffer` value is a `Copy` handle, like the lowlevel's own array and table
-//! payloads. The crate's copy path re-homes a payload whenever the value moves
-//! to another block — an apply clone, a garbage collect — and it can only do
-//! that for a value whose [`ValueExt::is_handle`] answers `true`, which the
-//! *composed* union must dispatch to its leaves. So this pins the three links
-//! the design rests on at once: the leaf answers, the composition dispatches,
-//! and the relocation actually moves the payload rather than leaving a handle
-//! pointing into a block that is about to be released.
-//!
-//! It is a pointer comparison, not a content read, on purpose: reading through
-//! a dangling handle is undefined behaviour that frequently *appears* to work
-//! (freed bump memory is still mapped), so a test that only checked the values
-//! would pass while the payload was dangling.
+//! A `Buffer` is a `Copy` handle into the block arena, re-homed on every move
+//! (`D15`). See compute-buffer-wrapper.md.
 
 use lichen_compute::ComputeValue;
 use lichen_kernel_ir::ScalarClass;
@@ -32,12 +18,8 @@ fn payload_address(value: &LangValue) -> usize {
     }
 }
 
-/// The payload's elements.
-///
-/// The payload is packed bytes — [`ScalarClass::byte_width`] per element, which
-/// is four for a float — so the elements are decoded at the class the value
-/// carries rather than read through an `i64` view the payload no longer has the
-/// alignment or the length for.
+/// The payload's elements: packed bytes, [`ScalarClass::byte_width`] per
+/// element, decoded at the class carried.
 fn payload_items(value: &LangValue) -> Vec<i64> {
     let compute = AsEnum::<ComputeValue>::as_enum(value).expect("the node holds a compute value");
     match compute {
@@ -65,8 +47,7 @@ fn a_collected_payload_is_relocated_when_its_block_is_released() {
     let root = module.add_block(None);
     let child = module.add_block(Some(root));
 
-    // A buffer value in the child block, its payload in the child's arena — the
-    // class's packed elements, which for an `Int` buffer is eight bytes each.
+    // A buffer value in the child block, its payload in that block's arena.
     let words: Vec<u8> = [10_i64, 20, 30]
         .into_iter()
         .flat_map(i64::to_le_bytes)
@@ -91,9 +72,8 @@ fn a_collected_payload_is_relocated_when_its_block_is_released() {
     let address_before = payload_address(&before);
     assert_eq!(payload_items(&before), vec![10, 20, 30]);
 
-    // Vacate the child: its reachable subtree moves to the parent and the
-    // child's `Bump` is released, so every payload homed there must be
-    // re-allocated — or the handle now points at freed arena memory.
+    // Vacate the child: its subtree moves up and the `Bump` is released, so every
+    // payload homed there must move.
     let moved = module.garbage_collect(node).expect("the node moves");
     assert_eq!(
         module.node_block(node),

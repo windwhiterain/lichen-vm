@@ -1,10 +1,5 @@
-//! Phase 0, first round trip: a float literal's pair.
-//!
-//! `1.5` builds the pair `[Float(1.5), [float, Type]]`, and `1.0` must never
-//! build an `Int`-shaped pair.  The second half is the point: `1.0` read back as
-//! `1` would be a different `LowValue` and therefore a different *type*, so the
-//! round trip would change what the program means rather than lose a digit
-//! (`docs/notes/floating-point.md` §3.4, §3.5).
+//! `1.5` builds `[Float(1.5), [float, Type]]`; `1.0` must never build an `Int`
+//! pair. See floating-point.md §3.4.
 
 use lichen_language::compile;
 use lichen_language::program::LangProgram as P;
@@ -33,8 +28,7 @@ fn a_float_literal_builds_a_float_pair_and_never_an_int_shaped_one() {
         "the type slot is the shared `[float, Type]` expression"
     );
 
-    // `1.0` must not build an `Int`-shaped pair: `USize(1)` is a different
-    // value, and the `[int, Type]` expression a different type.
+    // `1.0` must not build an `Int`-shaped pair.
     let report = compile("1.0");
     assert!(report.ok(), "1.0 must check: {:?}", report.diagnostics);
     let build = report.build.expect("a build");

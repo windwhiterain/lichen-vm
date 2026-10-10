@@ -1,11 +1,5 @@
-//! What an algorithm actually costs on each backend: one element-wise kernel at
-//! several counts, and a chain of sixteen, since the note's claim is that a
-//! single dispatch never repays itself and a chain does.
-//!
-//! The number reported is the whole program — building the input, the kernels
-//! and the read-back — because that is what a lichen program pays; the note's
-//! tables measure a dispatch and a fetch separately, which is a different
-//! question.
+//! What an algorithm costs on each backend: one element-wise kernel at several
+//! counts, and a chain of sixteen.
 
 use std::time::Instant;
 
@@ -18,8 +12,8 @@ fn run(source: &str) -> Result<String, Vec<String>> {
         .map_err(|diags| diags.into_iter().map(|d| d.message).collect())
 }
 
-/// `mk` fills a buffer; `axpy` is one `y = 3x + y` dispatch and the answer is
-/// read back, so a run pays an upload, a dispatch and a download.
+/// `mk` fills a buffer and `axpy` is one dispatch, so a run pays an upload, a
+/// dispatch and a download.
 const ONE: &str = r#"
 --- compute = import "compute.lichen" ---
 In1  = struct<.a Int>

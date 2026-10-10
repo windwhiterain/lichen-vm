@@ -1,17 +1,5 @@
-//! The typed-perspective acceptance tests — the plan's §5.2 table.
-//!
-//! Each program is compiled and checked; `ok()` asserts the accept/reject
-//! outcome, and the perspective *value* of a successful annotated expression
-//! is read from the builder's attribute slot (the schema-driven slot the
-//! checker lowers to the runtime pair's tail).  The error cases assert the
-//! rendered "expected X, found Y" message.
-//!
-//! A note on precedence: annotations (`:` / `#`) are the *loosest* operators
-//! (they wrap the whole expression to the right), so a compound whose
-//! operands are individually perspective-annotated is written with explicit
-//! parens — `((1 # 4) + (2 # 6)) # 2` — to express the plan's intent
-//! (`(1#4) + (2#6)` grouped, then `# 2` over the `+`).  The plan's bare
-//! `1 # 4 + 2 # 6` string is the same semantics under that reading.
+//! Typed-perspective acceptance: annotations are the loosest operators.
+//! See attributes.md.
 
 use lichen_language::compile;
 use lichen_lowlevel::{AnyNodeId, LowValue};
@@ -27,10 +15,8 @@ fn message(source: &str) -> String {
     compile(source).diagnostics[0].message.clone()
 }
 
-/// The root expression's static perspective slot, evaluated to its value.
-/// Only meaningful for a program whose root is itself `# p`-annotated
-/// (`build.state[root].attr` is the checker's lowered slot — a `[value, type]` term
-/// pair, whose lattice value is element 0).
+/// The root's static perspective slot. It is a `[value, type]` pair whose
+/// lattice value is element 0.
 fn root_persp(source: &str) -> usize {
     let build = compile(source)
         .build
@@ -44,8 +30,8 @@ fn root_persp(source: &str) -> usize {
     // A slot is a `[value, type]` term pair; the lattice value is element 0.
     let value = match value.as_enum() {
         Some(LowValue::Array(items)) => {
-            // SAFETY: `items` is the payload of the value just evaluated from
-            // the build under test, whose block has not been dropped.
+            // SAFETY: `items` is the payload of the value just evaluated, whose block
+            // is not dropped.
             let node = match unsafe { items.items() }.first().map(|item| item.node) {
                 Some(AnyNodeId::Dynamic(n)) => n,
                 _ => panic!("expected a dynamic perspective value"),
@@ -123,18 +109,14 @@ fn an_annotated_parameter_accepts_a_matching_perspective() {
 
 #[test]
 fn an_annotated_parameter_accepts_a_uniform_argument() {
-    // `f = x # 4 => x; f 5` — the arg has NO perspective.  In GPU code that
-    // is "not expressed per-thread" = uniform over all threads = the lattice
-    // top, encoded `0` (the `∞` fold, since Rust integers have no infinity).
-    // A uniform-over-all value is uniform over 4 too, so it is usable where
-    // `# 4` is declared (`4 | 0`) ✓.
+    // No perspective is the lattice top, encoded `0`; it is usable where `# 4`
+    // is declared.
     assert!(ok("f = x # 4 => x; f 5"));
 }
 
 #[test]
 fn a_return_annotation_applies_to_the_result() {
-    // `g = x => (x # 4); g 5` — the apply's perspective check runs 0 ≡ 0 ✓,
-    // and the result is `5 # 4` (the body's annotation).
+    // The result is `5 # 4` — the body's annotation.
     assert!(ok("g = x => (x # 4); g 5"));
 }
 
@@ -145,60 +127,40 @@ fn mixed_type_and_perspective_annotations() {
     assert_eq!(root_persp("1 : Int # 4"), 4);
 }
 
-// --- the subtype (⊑) relaxation — stage 2 --------------------------------
-//
-// Perspective `n` means "uniform over `n` aligned threads."  A value is
-// usable where `q` is required iff uniform-`n` implies uniform-`q`, which
-// holds exactly when `q | n` (an aligned `n`-group partitions into
-// `q`-groups).  So the check is `declared | value`; `0` ("no perspective")
-// is a distinct kind that matches only `0`.
+// Usable where `q` is required exactly when `q | n`; `0` matches only `0`.
 
 #[test]
 fn an_annotated_parameter_accepts_a_broader_perspective() {
-    // `f = x # 2 => x; f (5 # 4)` — the arg is uniform over 4 threads, the
-    // param declares uniform over 2.  2 | 4, so uniform-4 implies uniform-2 ✓.
+    // The arg is uniform over 4, the param over 2, and 2 | 4.
     assert!(ok("f = x # 2 => x; f (5 # 4)"));
 }
 
 #[test]
 fn an_annotated_parameter_rejects_an_incomparable_perspective() {
-    // `f = x # 4 => x; f (5 # 2)` — the arg is uniform over 2 threads, the
-    // param declares uniform over 4.  4 ∤ 2, and uniform-2 does not imply
-    // uniform-4 → the value does not fit the requirement ✗.
+    // The arg is uniform over 2, the param over 4, and 4 ∤ 2.
     assert!(!ok("f = x # 4 => x; f (5 # 2)"));
     assert_eq!(message("f = x # 4 => x; f (5 # 2)"), "expected 4, found 2");
 }
 
 #[test]
 fn a_compound_annotation_accepts_a_broader_derived_perspective() {
-    // `((1 # 8) + (2 # 4)) # 2` — the derived provider is gcd(8, 4) = 4
-    // (uniform over 4); `# 2` is the requirement, and 2 | 4 so it checks ✓.
-    // The annotation *replaces* the slot, so the value's perspective is 2.
+    // The derived provider is gcd(8, 4) = 4, and 2 | 4, so `# 2` checks.
     assert!(ok("((1 # 8) + (2 # 4)) # 2"));
     assert_eq!(root_persp("((1 # 8) + (2 # 4)) # 2"), 2);
 }
 
 #[test]
 fn a_compound_annotation_rejects_a_narrower_declared_perspective() {
-    // `((1 # 2) + (2 # 2)) # 4` — the derived slot is gcd(2, 2) = 2 (uniform
-    // over 2); `# 4` declares uniform over 4, and 4 ∤ 2, so the assertion
-    // fails ✗.
+    // The derived slot is gcd(2, 2) = 2, and 4 ∤ 2.
     assert!(!ok("((1 # 2) + (2 # 2)) # 4"));
     assert_eq!(message("((1 # 2) + (2 # 2)) # 4"), "expected 4, found 2");
 }
 
-// --- annotation over an existing attribute (the provider/requirement order) --
-//
-// The annotation (`expr2`) is the *requirement* and **replaces** the slot; the
-// value's own/existing attribute is the *provider* it is validated against as a
-// subtype.  `(x # 8) # 4` is legal (uniform-8 entails uniform-4), so the value
-// becomes `# 4`; `(x # 4) # 8` is not (uniform-4 does not entail uniform-8).
+// The annotation is the requirement; the existing attribute is the provider.
 
 #[test]
 fn a_failed_read_in_an_attribute_renders_as_none() {
-    // The argument's perspective is a failed read — an empty value, a
-    // concrete value.  The mismatch spells it `none`, never a fresh `?a`
-    // class variable.
+    // A failed read is a concrete empty value, spelled `none` and never `?a`.
     let source = "f = x # 4 => x\nf (5 # [1,2][3])";
     assert!(!ok(source));
     assert_eq!(message(source), "expected 4, found none");
@@ -206,25 +168,21 @@ fn a_failed_read_in_an_attribute_renders_as_none() {
 
 #[test]
 fn a_requirement_subtype_annotation_replaces_the_provider() {
-    // `(5 # 8) # 4` — the provider is 8 (the value is uniform over 8 threads);
-    // `# 4` requires uniform over 4, and 4 | 8, so it checks.  The annotation
-    // replaces the slot, so the value becomes `# 4`.
+    // The provider is 8, the requirement 4, and 4 | 8.
     assert!(ok("(5 # 8) # 4"));
     assert_eq!(root_persp("(5 # 8) # 4"), 4);
 }
 
 #[test]
 fn a_narrower_provider_rejects_a_broader_requirement() {
-    // `(5 # 4) # 8` — the provider is 4 (uniform over 4); `# 8` requires
-    // uniform over 8, and 8 ∤ 4, so the value does not satisfy it ✗.
+    // The provider is 4, the requirement 8, and 8 ∤ 4.
     assert!(!ok("(5 # 4) # 8"));
     assert_eq!(message("(5 # 4) # 8"), "expected 8, found 4");
 }
 
 #[test]
 fn an_annotation_over_a_bound_perspective_replaces_the_provider() {
-    // `x = 1 # 8` then `x # 4` — the name reference provides 8; `# 4` requires
-    // 4, and 4 | 8, so it checks and the annotation replaces the slot with 4.
+    // The name reference provides 8, and 4 | 8.
     assert!(ok("x = 1 # 8\nx # 4"));
     assert_eq!(root_persp("x = 1 # 8\nx # 4"), 4);
 }

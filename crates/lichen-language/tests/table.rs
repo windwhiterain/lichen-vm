@@ -1,8 +1,5 @@
-//! End-to-end table tests: the `table { k ==> v, … }` literal, deep-content
-//! keys, the `t{k}` lookup (compiled straight to the lowlevel `TableGet` —
-//! the container's type is pinned to a table, so the operator comes from
-//! the syntax, never a runtime kind dispatch), and the recorded failures
-//! (a miss, an undecided key dropped at build, key/value type mismatches).
+//! The `table { k ==> v }` literal and the `t{k}` lookup, which compiles
+//! straight to `TableGet`. See record-program.md.
 
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_lowlevel::LowValue;
@@ -46,9 +43,7 @@ fn has_check_kind(source: &str, kind: DiagKind) -> bool {
 
 #[test]
 fn a_table_literal_checks_and_reads_by_deep_key() {
-    // The query key `[1, 2]` is a *separate* node group from the stored
-    // key — the deep-content key semantics make them the same key.  The
-    // lookup syntax `t{...}` compiles straight to `TableGet`.
+    // The query key is a separate node group; deep-content keys make them equal.
     assert_eq!(
         usize_of(&evaluate(
             "t = table { [1, 2] ==> 3, [4, 5] ==> 6 }; t{[1, 2]}"
@@ -79,9 +74,7 @@ fn a_miss_is_a_recorded_error() {
 
 #[test]
 fn an_undecided_key_is_dropped_with_an_error() {
-    // A table literal inside a function body whose key reads the parameter
-    // cannot be forced concrete at build time — the entry is dropped and
-    // the failure recorded.
+    // A key reading the parameter cannot be forced concrete at build time.
     assert!(has_check_kind(
         "f = x => table{ x ==> 1 }; f 5",
         DiagKind::TableKeyUndecided
@@ -106,16 +99,13 @@ fn table_values_share_one_type() {
 
 #[test]
 fn a_find_on_a_concretely_non_table_container_is_a_guard_error() {
-    // The lookup pins the container's type to a table, so `1{2}` fails the
-    // check (an undecided container, by contrast, resolves at the call).
+    // The lookup pins the container's type to a table, so `1{2}` fails the check.
     assert!(has_check_kind("1{2}", DiagKind::Guard));
 }
 
 #[test]
 fn a_table_flows_through_a_function() {
-    // A table literal inside a function body: the key is concrete at build,
-    // the value stays a lazy reference to the parameter, and the apply
-    // clones the table (entries re-pointed at the call's clones).
+    // The apply clones the table, re-pointing its entries at the call's clones.
     assert_eq!(
         usize_of(&evaluate("f = x => table{ 1 ==> x }; (f 5){1}")),
         5
@@ -124,9 +114,7 @@ fn a_table_flows_through_a_function() {
 
 #[test]
 fn a_table_behind_a_parameter_reads_through_tableget() {
-    // `t`'s type is undecided at the read site — the lookup's pin fixes it
-    // to a table type, and the argument unify binds the pinned key/value
-    // cells when the call resolves.
+    // The lookup's pin fixes `t`'s undecided type; the argument unify binds its cells.
     assert_eq!(
         usize_of(&evaluate("get = t => t{1}; t = table { 1 ==> 7 }; get t")),
         7
@@ -135,9 +123,7 @@ fn a_table_behind_a_parameter_reads_through_tableget() {
 
 #[test]
 fn a_failed_read_key_never_phantom_matches() {
-    // Both keys are failed reads (empty `Error` residues): the
-    // build drops its entry, and the lookup *misses* — two failed reads
-    // must never collide into a phantom hit.
+    // Both keys are failed reads: the build drops its entry and the lookup misses.
     let source = "t = table{[1,2][5] ==> 3}\nt{[9][7]}";
     assert!(has_check_kind(source, DiagKind::TableKeyUndecided));
     assert!(has_check_kind(source, DiagKind::TableMiss));

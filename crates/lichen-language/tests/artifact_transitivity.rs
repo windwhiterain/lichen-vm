@@ -1,14 +1,5 @@
-//! The artifact cache must be transitive: an importer's frozen artifact is only
-//! safe to serve while every dependency it was compiled against still holds the
-//! same content.
-//!
-//! The hazard is that a **recompile reuses the device key** (`DeviceRegistry::alloc`
-//! — the key names the cache slot, not the content behind it), so a dependency's
-//! key survives its own change.  An importer's identity therefore has to fold in
-//! each dependency's *identity*, not its key: its frozen artifact is full of
-//! cross-module node references written as `(dependency key, index)`, and serving
-//! it after a dependency changed resolves those against the dependency's new node
-//! layout.
+//! An importer's identity folds in its dependencies' identities, not their keys.
+//! See artifact-cache.md.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -36,24 +27,16 @@ fn write(dir: &Path, name: &str, contents: &str) -> PathBuf {
     path
 }
 
-/// Load the package `path` through a fresh store backed by `cache` and report
-/// `(compiled, loaded from the artifact cache)`.
-///
-/// The pair is what identifies one package: loading an importer also loads its
-/// dependency, so a bare "was anything cached" answer is the wrong question.
-/// `geometry` importing `math` makes the two counts distinguishable — the
-/// dependency is a hit on every line below, so `compiled == 1` is `geometry`
-/// itself.
+/// Load `path` through a fresh store, reporting `(compiled, loaded)`; loading
+/// an importer loads its dependency too.
 fn load(cache: &Path, path: &Path) -> (usize, usize) {
     let mut store = PackageStore::<P>::with_cache_dir(cache.to_path_buf());
     store.load_package(path).expect("the package loads");
     (store.compiled, store.loaded_from_cache)
 }
 
-/// The importer's frozen artifact holds node references *into its dependency's
-/// module*, written as `(dependency key, index)`.  When the dependency's content
-/// changes but its key is reused, those indices name different nodes — the
-/// importer's own bytes never changed, so only the identity can catch it.
+/// The importer's artifact holds refs written as `(dependency key, index)`; a
+/// reused key makes them name other nodes.
 #[test]
 fn a_dependency_change_rekeys_its_importer() {
     let root = temp_dir("rekey");
@@ -89,8 +72,8 @@ fn a_dependency_change_rekeys_its_importer() {
         "the importer and its dependency are both cache hits"
     );
 
-    // The dependency's content changes.  Its own bytes differ, so it recompiles
-    // — under the *same* key, because a recompile overwrites one slot.
+    // Its bytes change, so it recompiles — under the *same* key, because a
+    // recompile overwrites one slot.
     write(
         &pkg,
         "math.lichen",

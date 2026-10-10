@@ -1,17 +1,5 @@
-//! The two checks `docs/notes/eval-before-unify.md` §2.2/§2.4 closed, pinned:
-//! the positional read `a(k)` is the **tuple** read — its requirement is a
-//! *unify* against a tuple type, so a container that is not a tuple is refused
-//! at check time or at the application that binds it, never skipped — and
-//! **every struct field is named**, so a struct instance reads by name.
-//!
-//! Both are read *kinds*, which is why they live together: `a(k)` over a
-//! struct, `a.name` over a tuple, and an unnamed field are one rule seen from
-//! three sides (`docs/language-spec.md` §Indexing, §Structs).  The last section
-//! pins the same rule for the two **raw** reads, which now state their accepted
-//! container kind too: `X<e>` takes a tuple type value, `X::a` a struct type
-//! value, and `.a`/`::a` over an array are the two named sides of the refusal.
-//! The final section pins the named read's **deferred** half, whose requirement
-//! is a condition on the assert channel rather than a unify.
+//! `a(k)` is the tuple read and every struct field is named.
+//! See eval-before-unify.md §2.2.
 
 use lichen_highlevel::diagnostic::DiagKind;
 
@@ -19,8 +7,7 @@ use lichen_language::compile;
 use lichen_language::diag::Stage;
 use lichen_language::run::evaluate;
 
-/// The single checker diagnostic of a program that must be refused, with the
-/// rendered output and the diagnostic's own kind.
+/// The single checker diagnostic of a refused program, and its kind.
 fn refused(source: &str) -> (String, DiagKind) {
     let report = compile(source);
     assert!(!report.ok(), "expected {source:?} to be refused");
@@ -37,12 +24,8 @@ fn output(source: &str) -> String {
 
 // --- `a(k)` is the tuple read --------------------------------------------
 
-/// The §2.2 repro's read-first order: the container is a parameter, so its type
-/// is a cell at check time.  The pin is what refuses it — the application that
-/// supplies the array meets the pinned tuple type — where the guard this
-/// replaced was asked once and never again (the read used to be *accepted*).
-/// The refusal is the apply's own parameter check (`Runtime`, the tier every
-/// pin is enforced at), not a check-time `Guard`.
+/// A parameter container: the apply that supplies it reconciles the pin —
+/// the `Runtime` tier, not a `Guard`.
 #[test]
 fn a_paren_read_of_a_deferred_array_is_refused_at_the_application() {
     let (message, kind) = refused("f = x => x(0)\nf [10, 20]");
@@ -53,8 +36,7 @@ fn a_paren_read_of_a_deferred_array_is_refused_at_the_application() {
     );
 }
 
-/// A container the graph has already decided is refused where it stands, and
-/// the expected side is the same open tuple spelling.
+/// A decided container is refused where it stands.
 #[test]
 fn a_paren_read_of_a_decided_array_is_refused() {
     let (message, kind) = refused("l = [10, 20]\nl(0)");
@@ -65,8 +47,7 @@ fn a_paren_read_of_a_decided_array_is_refused() {
     );
 }
 
-/// A struct instance is not a tuple: the read that used to reach its field list
-/// is refused, and the instance's fields are read by name instead.
+/// A struct instance is not a tuple, and its fields are read by name.
 #[test]
 fn a_paren_read_of_a_struct_instance_is_refused() {
     let (message, kind) = refused("S = struct<.x Int, .y Type>\ns = S(.x 1, .y Int)\ns(0)");
@@ -84,8 +65,7 @@ fn a_paren_read_of_a_tuple_resolves() {
     assert_eq!(output("l = (10, 20, 30)\nl(2)"), "30: Int");
 }
 
-/// The array read is the mirror, and it is refused on a tuple — the pair §2.4
-/// measured (`expected array<…>, found <Int, Int>`), still true after the fix.
+/// The array read is the mirror, refused on a tuple.
 #[test]
 fn a_bracket_read_of_a_tuple_is_refused() {
     let (message, kind) = refused("f = x => x[0]\nf (10, 20)");
@@ -102,8 +82,7 @@ fn a_bracket_read_of_a_tuple_is_refused() {
 
 // --- every struct field is named -----------------------------------------
 
-/// `struct<Int, Type>` — an unnamed field has no read (a struct instance reads
-/// by name), so the definition is refused, with the caret on that field.
+/// An unnamed field has no read, so the definition is refused.
 #[test]
 fn an_unnamed_struct_field_is_refused() {
     let report = compile("A = struct<Int, Type>\nA");
@@ -116,9 +95,7 @@ fn an_unnamed_struct_field_is_refused() {
     assert_eq!(first.span, Some((1, 12)), "the caret is the unnamed field");
 }
 
-/// A block's fields are its **bindings**: a bare expression is an ordinary
-/// statement — checked, its value discarded — so it is not a field, and the
-/// record holds the named one alone.
+/// A block's fields are its bindings; a bare expression is an ordinary statement.
 #[test]
 fn a_bare_expression_in_a_block_is_not_a_field() {
     assert_eq!(output("a = { 1; x = 2 }\na"), "(2,): struct<.x Int>");
@@ -140,9 +117,7 @@ fn a_named_struct_and_a_named_block_read_by_name() {
 
 // --- the raw reads state their kind too -----------------------------------
 
-/// `X<e>` reads a component of a **tuple type value**: the container's type is
-/// unified against the tuple kind, so a *struct* type value — whose kind is
-/// `TypeStruct` (it reads by name, `X::a`) — is refused where it stands.
+/// `X<e>` reads a tuple type value, so a `TypeStruct` container is refused.
 #[test]
 fn a_raw_index_of_a_struct_type_value_is_refused() {
     let (message, kind) = refused("struct<.a Int, .b string><0>");
@@ -150,9 +125,7 @@ fn a_raw_index_of_a_struct_type_value_is_refused() {
     assert_eq!(message, "expected TypeTuple, found TypeStruct");
 }
 
-/// A tuple *value* is not a tuple *type* value: `(1, 2)`'s type is the tuple
-/// shape `<Int, Int>`, not the type-value kind `TypeTuple`, so the read is
-/// refused.  It used to answer `none: none` with no diagnostic.
+/// A tuple *value*'s type is the tuple shape, not the kind `TypeTuple`.
 #[test]
 fn a_raw_index_of_a_tuple_value_is_refused() {
     let (message, kind) = refused("(1, 2)<0>");
@@ -160,9 +133,8 @@ fn a_raw_index_of_a_tuple_value_is_refused() {
     assert_eq!(message, "expected TypeTuple, found <Int, Int>");
 }
 
-/// The named forms over an array: `.a` states the container's *kind*
-/// (`TypeArray`), `::a` the container's whole type — the same refusal, because
-/// an array is neither a struct instance nor a struct type value.
+/// `.a` states the container's kind, `::a` its whole type; an array is
+/// neither.
 #[test]
 fn a_named_read_of_an_array_is_refused() {
     let (message, kind) = refused("l = [10, 20]\nl.a");
@@ -173,11 +145,8 @@ fn a_named_read_of_an_array_is_refused() {
     assert_eq!(message, "expected TypeStruct, found array<Int, 2>");
 }
 
-/// A deferred container reaches `::a` the same way as `a(k)` reaches its tuple
-/// read: the unify is stated at the read and reconciled by the apply that binds
-/// the container, so the array is refused at the argument.  This used to be an
-/// internal panic at the apply (`unreachable!("TableGet target must be a
-/// table")`), not a refusal.
+/// A deferred container is refused at the argument; this used to panic inside
+/// the apply.
 #[test]
 fn a_raw_named_read_of_a_deferred_array_is_refused_at_the_application() {
     let (message, kind) = refused("f = x => x::a\nf [10, 20]");
@@ -187,16 +156,8 @@ fn a_raw_named_read_of_a_deferred_array_is_refused_at_the_application() {
 
 // --- the deferred `.a`: a registered condition, not a pin ------------------
 
-/// The **deferred** named read.  `x.a`'s container is a parameter, so its
-/// requirement cannot be judged where it stands and is registered as a
-/// **condition on the assert channel** instead of a unify: the apply clone
-/// re-checks it per call, and the array argument is refused by a check
-/// diagnostic naming the requirement
-/// (`docs/notes/eval-before-unify.md` §6.2 option 1).  The read used to fail
-/// through two runtime table messages and nothing else; those are still
-/// recorded (the refused apply still evaluates the body), so this pins the
-/// requirement's own diagnostic among them — its kind, its text, and the caret
-/// on the container.
+/// The requirement is an assert-channel condition, re-checked per apply.
+/// See eval-before-unify.md §6.2.
 #[test]
 fn a_named_read_of_a_deferred_array_is_refused_by_its_condition() {
     let report = compile("f = x => x.a\nf [10, 20]");
@@ -211,12 +172,8 @@ fn a_named_read_of_a_deferred_array_is_refused_by_its_condition() {
     assert_eq!(diag.span, Some((1, 5)), "the caret is the container");
 }
 
-/// The condition admits what it must.  A **struct** reaching the parameter —
-/// a named instance or a block's record — passes the requirement, through the
-/// same apply clone the refusal above comes from, so nothing is refused that
-/// the decided tier accepts.  (A *decided* container registers no condition at
-/// all: `a_named_struct_and_a_named_block_read_by_name` and
-/// `a_named_read_of_an_array_is_refused` cover that tier.)
+/// A decided container registers no condition at all, so nothing the decided
+/// tier accepts is refused here.
 #[test]
 fn a_named_read_of_a_deferred_struct_is_accepted() {
     assert_eq!(
@@ -229,9 +186,8 @@ fn a_named_read_of_a_deferred_struct_is_accepted() {
     );
 }
 
-/// The condition's other refusal shapes: a deferred tuple and a deferred
-/// atomic type are the same requirement failing, and each names the type that
-/// was found.
+/// A deferred tuple and a deferred atomic type are the same requirement
+/// failing.
 #[test]
 fn a_named_read_of_a_deferred_non_struct_is_refused() {
     for (source, found) in [

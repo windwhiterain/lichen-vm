@@ -1,13 +1,5 @@
-//! Phase 0, second round trip: the printer's spelling, re-lexed and re-checked.
-//!
-//! `lichen-render`'s public printer spells a float; the printed text is lexed
-//! and compiled again, and the value and its type must come back
-//! (`docs/notes/floating-point.md` §3.5).
-//!
-//! **Non-negative values only, and that restriction is real rather than a
-//! shortcut**: this language has no prefix minus — `Minus` appears once, as the
-//! binary `BinOp::Sub` — so a printed `-1.5` does not parse and there is nothing
-//! for a negative case to re-check.
+//! The printer's spelling must re-lex as the same float and the same class.
+//! See floating-point.md §3.5.
 
 use lichen_language::compile;
 use lichen_language::program::LangValue;
@@ -56,15 +48,12 @@ fn value_of(text: &str) -> (f32, String) {
 #[test]
 fn a_printed_float_re_lexes_and_re_checks_as_the_same_float() {
     for (source, expected) in [
-        // Rust's own `to_string` spells these as a bare integer; without the
-        // forced decimal point the printed text would read back as an `Int`.
+        // Rust's own `to_string` would spell these as a bare integer.
         ("1.0", 1.0f32),
         ("2.0", 2.0f32),
         // The shortest decimal that is not an integer.
         ("0.1", 0.1f32),
-        // An overflowing literal is an infinity (§3.3), which is what the
-        // printer's magnitude-past-the-round-to-infinity-threshold spelling
-        // must read back as.
+        // An overflowing literal is an infinity (§3.3); the printer must spell it so.
         ("9999999999999999999999999999999999999999.0", f32::INFINITY),
     ] {
         let printed = print_float(source);
@@ -81,10 +70,9 @@ fn a_printed_float_re_lexes_and_re_checks_as_the_same_float() {
         assert_eq!(ty, "Float", "{source} printed as {printed}");
     }
 
-    // The deliberate refusal: `NaN` keeps Rust's spelling and therefore does not
-    // read back — a reader fails rather than silently acquiring a different
-    // float.  The value is handed to the printer directly, because the literal
-    // syntax has no NaN to compile from.
+    // The deliberate refusal: `NaN` keeps Rust's spelling and does not read back.
+
+    // The literal syntax has no `NaN`, so the value is handed to the printer.
     let report = compile("1.5");
     let build = report.build.expect("a build");
     let nan = print_value(

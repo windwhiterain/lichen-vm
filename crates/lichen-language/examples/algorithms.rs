@@ -1,8 +1,5 @@
-//! A ladder of GPU algorithms, run against whichever backend is named.
-//!
-//! This is exploration tooling, not a test: it prints what each program answers
-//! and prints the refusal when it cannot run, so a gap in the language shows up
-//! as a named refusal rather than as a failing assertion somewhere else.
+//! A ladder of GPU algorithms on whichever backend is named: exploration
+//! tooling, not a test.
 
 use lichen_language::package::PackageStore;
 use lichen_language::program::LangProgram;

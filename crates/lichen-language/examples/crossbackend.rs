@@ -1,9 +1,5 @@
-//! Is a `"cpu"` run able to poison a later `"gpu"` one in the same process?
-//!
-//! The design says the backend lives on the value and is deliberately *not*
-//! hashed into `fragment_digest`, so two programs that compile the same body
-//! for different backends share one fragment id. This probes whether sharing an
-//! id also shares the answer.
+//! The backend rides the value, not `fragment_digest`, so one fragment id is
+//! shared across backends.
 
 use lichen_language::package::PackageStore;
 use lichen_language::program::LangProgram;

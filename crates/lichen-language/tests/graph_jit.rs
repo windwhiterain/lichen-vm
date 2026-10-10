@@ -1,33 +1,5 @@
-//! A function that dispatches, recorded into a graph and run — against a stub.
-//!
-//! # What this file checks and what it deliberately does not
-//!
-//! The backend here is a **stub that computes `sum(inputs) + 1` whatever the
-//! fragment's body says**. That is on purpose, and it is a real limit: the
-//! arithmetic of a fragment belongs to
-//! [`graph_jit_device`](../lichen-compute-gpu)'s business on real hardware. What
-//! this file is about is the **plumbing** — that a body which dispatched nothing
-//! becomes a graph with no nodes, that a body which dispatched twice becomes a
-//! chain whose second node records against the first's output, and that a count
-//! read from the parameter is read at *run* time rather than frozen while the
-//! graph was built. A stub that ignores the body is exactly right for that: it
-//! makes the numbers a function of *which values reached which node*, so a graph
-//! that wired them wrongly answers with different numbers rather than the same
-//! ones by luck.
-//!
-//! # Why this is its own test binary
-//!
-//! The backend lives in a **process-wide slot**, so a test that installs one
-//! changes what every other test in the same binary sees. A second test that
-//! needed *no* backend, or a real device, would therefore race this one — and the
-//! failure would be a number rather than an error, which is the worst shape a
-//! test failure can have. Each of those lives in its own binary instead, and this
-//! one owns the stub outright.
-//!
-//! The tests here all want the *same* stub, so they share one instance and take
-//! a lock for their length — see [`stub`]. Sharing is what makes the dispatch
-//! log readable at all; the lock is what makes it a fact about one test rather
-//! than about which tests the scheduler ran first.
+//! A dispatching function recorded into a graph and run against a stub backend.
+//! See compute-graph-jit.md.
 
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
@@ -61,12 +33,8 @@ impl Stub {
         self.saw.lock().unwrap().clear();
     }
 
-    /// The elements of a slot, decoded.
-    ///
-    /// A host slot is packed bytes at the class's width
-    /// ([`lichen_kernel_ir::ScalarClass::byte_width`]) rather than a word per
-    /// element, so an `i64` column is that payload decoded — and every fragment
-    /// this stub is handed is an `Int` one.
+    /// A host slot is packed bytes at the class's width; every fragment this stub
+    /// is handed is an `Int` one.
     fn column(&self, slot: &BufferSlot<'_>) -> Vec<i64> {
         match slot {
             BufferSlot::Host(data) => data
@@ -100,8 +68,7 @@ impl ParallelBackend for Stub {
         count: usize,
     ) -> Result<Box<dyn Pending + 'backend>, String> {
         let columns: Vec<Vec<i64>> = inputs.iter().map(|slot| self.column(slot)).collect();
-        // The line records **which** values reached this node, so a chain that
-        // mis-wired itself is visible in the log and not only in the answer.
+        // The line records which values reached this node, so a mis-wired chain shows.
         self.saw.lock().unwrap().push(format!(
             "over [0, {count}) with {} input(s) of length {}",
             columns.len(),
@@ -145,18 +112,8 @@ impl Pending for StubPending {
 /// Taken for the length of a test, so no two of them are inside the slot at once.
 static BACKEND: Mutex<()> = Mutex::new(());
 
-/// Install the stub **once for this binary**, and take the lock for the caller's
-/// test.
-///
-/// Two problems have the same cause and the same answer. The slot is
-/// process-wide, so a second stub would silently take every dispatch away from
-/// the first — which is why the tests here that need *no* backend, or a real
-/// device, live in their own binaries instead. And a log that outlives one test
-/// cannot be read back while another writes to it, so `saw()` would report a
-/// number that depended on which tests happened to run first.
-///
-/// Serializing costs a few microseconds and buys a number that is a fact about
-/// the program under test rather than about the scheduler.
+/// Install the stub once and lock it for the caller's test: a shared log
+/// reports the scheduler's order, not the test's.
 fn stub() -> (MutexGuard<'static, ()>, Stub) {
     static STUB: OnceLock<Stub> = OnceLock::new();
     let stub = STUB.get_or_init(|| {
@@ -187,9 +144,8 @@ fn fail(source: &str) -> Vec<String> {
         .collect()
 }
 
-/// Two kernels, one with no inputs and one with one, so **which node a value
-/// reached is visible in the numbers**: a chain that mis-wired itself would give
-/// the second kernel the first kernel's input instead of its output.
+/// Two kernels, one with no inputs and one with one, so which node a value
+/// reached is visible in the numbers.
 const KERNELS: &str = r#"
 In1  = struct<.a Int>
 Out1 = struct<.z (compute.Buf _)>
@@ -211,11 +167,6 @@ k2 = compute.parallel f2 "gpu"
 "#;
 
 /// A body that dispatches twice, the second over the first's output.
-///
-/// The recorded body's parameter is the named struct too, with both reserved
-/// names: a graph's inputs arrive through it (the extent at `.n`, the buffers
-/// under `.in`), and the dispatch's own result is the `.out` structure the run
-/// hands back.
 const CHAIN: &str = r#"
 InS  = struct<.a Int>
 OutS = struct<.unused (compute.Buf _)>
@@ -267,11 +218,7 @@ compute.collect (compute.graphrun built 3)
 #[test]
 fn a_graph_runs_at_whichever_extent_its_argument_names() {
     let (_guard, _stub) = stub();
-    // **The same graph, two extents.** The count reaches the graph as a value
-    // rather than as something the build decided, which is the whole reason a
-    // count is a value: a graph that could only be given a build-time count would
-    // have to be rebuilt per run, and rebuilding a graph per run is the same as
-    // not having one.
+    // The count is a value the run supplies, not one the build decided.
     for count in [3, 5] {
         let (module, out, _) = run(&format!(
             r#"---
@@ -282,12 +229,7 @@ fn a_graph_runs_at_whichever_extent_its_argument_names() {
 compute.collect (compute.graphrun built ({count},))
 "#
         ));
-        // **All twos, and only the length changes.** The stub sums the inputs and
-        // adds one, so `k1` — which reads no buffer at all — answers every index
-        // with `0 + 1`, and `k2`, reading that, answers `1 + 1`. So the values
-        // are a property of the *wiring* and the length is the property of the
-        // extent: a graph that reused a count from build time, or built a fresh
-        // graph per run, would answer a different length for the same program.
+        // The values are a property of the wiring; only the length is the extent's.
         assert_eq!(
             common::usize_array(&module, &out),
             vec![2; count],
@@ -299,10 +241,7 @@ compute.collect (compute.graphrun built ({count},))
 #[test]
 fn a_buffer_the_body_closed_over_is_refused_by_the_capture() {
     let (_guard, _stub) = stub();
-    // `held` is a live buffer the body reaches as a free variable, so recording
-    // it would mean the graph had to **hold** a node with a block's lifetime. The
-    // refusal names the capture, because "a graph cannot hold a buffer" is the
-    // reason, and a caller who does not hear it will try the next thing.
+    // `held` is a live buffer the body reaches as a free variable.
     let messages = fail(&format!(
         r#"---
   compute = import "compute.lichen"
@@ -338,15 +277,7 @@ compute.collect (compute.graphrun built 3)
 #[test]
 fn a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one() {
     let (_guard, _stub) = stub();
-    // **One dispatch with both roles in it, and only the count one wrong.**
-    // `k2`'s buffer is `(first,)` — a value the parameter supplied, so the buffer
-    // filter has nothing to say — while its count is `held`, a free variable the
-    // body closed over. The two roles are read by two separate filters, and this
-    // is the case that shows it: a filter that refused both would pass here too,
-    // and a body that swapped the two roles would be told the wrong thing.
-    //
-    // The count is also read *first*, before the buffer tuple, so a refusal from
-    // the count filter is the one that answers.
+    // Only the count role is wrong, and the count filter is read first.
     let messages = fail(&format!(
         r#"---
   compute = import "compute.lichen"
@@ -384,41 +315,13 @@ compute.collect (compute.graphrun built (3,))
     );
 }
 
-/// The three operators a recorded body may not reach for, and why each one is a
-/// separate answer rather than one "unsupported" message.
-///
-/// **All three used to fall through to a bare hole with no diagnostic at all**,
-/// and a hole is the worst of the three outcomes rather than the smallest: a body
-/// that collected a dispatch's result mid-chain recorded a graph that was quietly
-/// missing the collect, and the chain's own numbers looked right anyway, so
-/// nothing in the program's answer said the collect had not happened.
-///
-/// **Whether an unread dispatch belongs in the graph was measured, and the answer
-/// is that it does not** — see
-/// [`a_graph_dispatches_exactly_what_the_program_dispatches`], which runs the same
-/// body with and without a graph and compares the two traces. There is no separate
-/// test here for a gap that measurement closed.
-///
-/// **The programs are spelled in the named-parameter form, and the spelling was
-/// part of the fix rather than a transcription.** A dispatch returns the
-/// parameter's `.out` group, so under `struct<.n Int, .in In1>` the offending
-/// operator has to name the **buffer inside** it (`first.z`) — handing it the
-/// dispatch's result says "this is an array", which is true and is the
-/// `compute.parallel` refusal, not this test's three. Reaching the rule also
-/// needed `handed_a_placeholder` to see through the `Buf` wrapper the recorder
-/// builds around an output path: the operator names the wrapper, so asking only
-/// whether an operand *is* a placeholder answered `false` for exactly the case
-/// the rule exists to catch.
+/// The three operators a recorded body may not reach for, each with its own
+/// sentence.
 #[test]
 fn what_a_recorded_body_may_not_reach_for_is_refused_by_name() {
     let (_guard, _stub) = stub();
-    // **Each case puts the offending operator where it cannot be skipped.** A
-    // block's value is the tuple of its statements' values, and a statement whose
-    // value nobody reads is not demanded — so an unused `collect` is never reached
-    // at all and no refusal can speak for it. Nesting the operator inside the
-    // statement that *is* the body's value forces it. That is worth stating
-    // because it is the other half of the boundary: the recording sees what the
-    // walk forces, and what the walk does not force is not in the graph.
+    // A statement nobody reads is never demanded, so the operator is nested in the
+    // statement that is the body's value.
     let collect = fail(&format!(
         r#"---
   compute = import "compute.lichen"
@@ -443,8 +346,7 @@ compute.collect (compute.graphrun built 3)
         "and it names the cause and the way out: {joined}"
     );
 
-    // A host read of a dispatch's own result, which is the same boundary at a
-    // different size: one number instead of a whole buffer.
+    // A host read of a dispatch's result: the same boundary at one number's size.
     let read = fail(&format!(
         r#"---
   compute = import "compute.lichen"
@@ -468,8 +370,7 @@ compute.collect (compute.graphrun built 3)
          because the repair is different: {joined}"
     );
 
-    // A scalar kernel, refused outright rather than only when it is handed a
-    // placeholder — it has no node to be, so no shape of it can go in.
+    // A scalar kernel has no node to be, so no shape of it can go in.
     let scalar = fail(&format!(
         r#"---
   compute = import "compute.lichen"
@@ -510,10 +411,8 @@ compute.collect (compute.graphrun built (3,))
 #[test]
 fn a_function_that_dispatches_nothing_has_no_backend_to_run_on() {
     let (_guard, _stub) = stub();
-    // A graph is run by a runner against a backend, and a body that dispatches
-    // nothing names none. **Refused rather than defaulted**: there is no third
-    // backend to fall back to, and picking one would be the host overriding a
-    // program that did not say.
+    // A body that dispatches nothing names no backend, and there is no third one
+    // to default to.
     let messages = fail(
         r#"---
   compute = import "compute.lichen"
@@ -535,9 +434,8 @@ compute.graphrun built (3,)
 #[test]
 fn one_backend_for_the_whole_graph_is_checked_while_it_is_built() {
     let (_guard, _stub) = stub();
-    // Two dispatches, two backends, one graph. Resolved while the graph is built
-    // rather than at run time, where dropping one would silently change what the
-    // program asked for.
+    // Resolved while the graph is built: dropping one at run time would silently
+    // change what the program asked for.
     let messages = fail(
         r#"---
   compute = import "compute.lichen"
@@ -577,31 +475,8 @@ compute.graphrun built 3
     );
 }
 
-/// **A graph performs what its function performs — the same dispatches, in the
-/// same order, with the same wiring.** The trace is compared rather than a count,
-/// because a count is satisfied by a graph that dispatched the right things in
-/// the wrong order or against the wrong inputs, and that graph answers with
-/// numbers a reader has no way to distrust.
-///
-/// **This is the invariant, and it is stronger than the one it replaces.** The
-/// earlier claim was that the graph had to be *what its function wrote*, measured
-/// as three dispatches written and two recorded — and it was wrong in a way worth
-/// keeping: **the program does not perform the third dispatch either.** `dead` is
-/// bound to a name the body never reads, so the VM's laziness eliminates it, and
-/// running `step (3,)` without any graph in the program dispatches twice. There is
-/// no expression-level CSE in this compiler to explain the absence, so the
-/// elimination is the one every other unread binding already gets.
-///
-/// A graph is therefore not a transcript of the source; it is a transcript of the
-/// run. Requiring more of it would have meant forcing a walk that *adds* a dispatch
-/// the program never makes — and the second deep walk tried for that (it forced
-/// operand edges and descended past the shallow mask in those days; both knobs and
-/// the entry point itself have since been deleted, `code-audit.md`, the operand-arm
-/// follow-up) emptied the function's return slot as well, refusing every
-/// recording including bodies with no unread statement at all. **Laziness is the
-/// semantics here, not a compromise with it.** The two `plrun k2` lines below are
-/// both written and one is never reached, so the trace is the shorter one by
-/// exactly the binding nobody reads.
+/// A graph performs what its function performs: the same dispatches, in the
+/// same order, with the same wiring.
 #[test]
 fn a_graph_dispatches_exactly_what_the_program_dispatches() {
     let (_guard, stub) = stub();
@@ -622,9 +497,7 @@ out = step ((GArg)(.n 3, .in InS(.a 0)))
 "#
     ));
     let plain = stub.saw();
-    // The log is one stub for the whole binary, so the plain run's two lines are
-    // still in it; forgetting here is what makes the second trace the graph's own
-    // rather than the two runs stacked.
+    // The log is one stub for the binary, so the plain run's lines are still in it.
     stub.forget();
     run(&format!(
         r#"---
@@ -655,20 +528,8 @@ out = compute.collect (compute.graphrun built 3)
     );
 }
 
-/// The registry must not answer "which backend" for a graph it did not record.
-///
-/// **The two graphs below are the same shape, and that is the point.** A graph is
-/// content-addressed on its shape and the backend is deliberately not part of
-/// that — it is a property of the *run*, not of what the graph computes. So the
-/// cpu recording and the gpu recording intern to one id, and it is the registry
-/// entry that must not then carry the first one's backend: a `"gpu"` program
-/// would be refused with a message naming `"cpu"`, for a program that never says
-/// it. The registries are process-global, so this crossed program boundaries
-/// before the fix — a process that had ever built a cpu graph of a shape could
-/// never run a gpu graph of it.
-///
-/// The stub is what makes this observable without a device: the refusal arrives
-/// *before* any dispatch, so a run that reaches the stub at all is the proof.
+/// A graph is content-addressed on its shape, so the registry entry must not
+/// carry the first recording's backend.
 #[test]
 fn a_graph_recorded_for_one_backend_runs_on_another() {
     let (_guard, stub) = stub();
@@ -705,8 +566,7 @@ compute.collect (compute.graphrun built 3)
         )
     };
 
-    // The cpu recording first, and it reaches no backend — a cpu graph is
-    // refused by the contract, which is a separate refusal and says so.
+    // The cpu recording first; a cpu graph is refused by its own contract.
     let cpu = fail(&program("cpu"));
     assert!(
         cpu.iter()
@@ -714,10 +574,8 @@ compute.collect (compute.graphrun built 3)
         "the cpu graph is refused on its own terms, and that is not what this test is about: {cpu:?}"
     );
 
-    // The same shape, now for "gpu". This is the run the fix is about, and the
-    // numbers are the stub's rather than the kernels': `k1` reads no buffer, so
-    // the stub answers `0 + 1` at every index, and `k2` reading that answers
-    // `1 + 1`. What is being checked is that a run happened at all.
+    // The same shape for "gpu": `k1` reads no buffer, so the stub answers `0 + 1`
+    // and `k2` answers `1 + 1`.
     let (module, gpu, _) = run(&program("gpu"));
     assert_eq!(
         common::usize_array(&module, &gpu),

@@ -1,14 +1,5 @@
-//! End-to-end tests for the `lichen-std-native` plugin, exercised **the way a
-//! package manager pulls a native plugin into a compiler**: compose the host
-//! vocabulary over the plugin (`lang_compose_vocabulary!`), register the
-//! plugin's embedded `std.lichen` wrapper as a native virtual package, then
-//! import it and run.  This pins that a plugin-built compiler can serve the
-//! plugin's typed wrapper source (a real `[Int, len] -> [Int, len]` sort, not
-//! the opaque native application) and that `std.sort` really sorts.
-//!
-//! The plugin is **not** wired into the shipping compiler's vocabulary: this
-//! composition is test-local, exactly as a package-manager-generated compiler
-//! would substitute the plugin set into the manifest.
+//! The `lichen-std-native` plugin, composed into a host and served as a native
+//! virtual package.
 
 use lichen_language::package::PackageStore;
 use lichen_language::persist::{NoPersist, ProgramCodecOf};
@@ -16,11 +7,7 @@ use lichen_lowlevel::{AnyNodeId, LowValue, Module, NodeId};
 use lichen_utils::extend::AsEnum;
 
 /// The plugin-built compiler's vocabulary: the language's leaves plus the
-/// `lichen-std-native` plugin (its leaves come in via the `plugins` arm).
-///
-/// The composition's own `LangProgram` (carrying the test-local `host::LangAttr`)
-/// is unused here — the test rebinds the host vocabulary under the shipping
-/// `program::LangAttr` below, which is what the frontend/checker speak in.
+/// `lichen-std-native` plugin.
 mod host {
     #![allow(dead_code)] // the composition's own LangProgram/ProgramCodec are
     // unused — see the module doc.
@@ -47,19 +34,8 @@ mod host {
 
 use host::{LangOperator, LangValue};
 
-/// The program marker the frontend/checker drive over the composed vocabulary.
-///
-/// [`lichen_language::program::LangAttr`] fixes the attribute set to the
-/// language's shipping `LangAttr`, so the composed operator vocabulary must
-/// implement [`lichen_lowlevel::OperatorExt`] for *that* program — the
-/// `lang_compose_vocabulary!` macro generates it only for its own
-/// `host::LangProgram`, which carries the test-local `host::LangAttr`.  A
-/// package-manager-built compiler reuses the same shipping `LangAttr`, so this
-/// impl belongs to the plugin-built host, not the plugin.  A **local newtype**
-/// (rather than an alias to the foreign
-/// [`lichen_highlevel::program::ProgramImpl`]) is what makes the
-/// `Program`/`HighProgram`/`OperatorExt`/`ProgramCodecOf` impls below
-/// orphan-legal from this crate.
+/// The frontend/checker's program marker. A local newtype, not an alias, makes
+/// the impls below orphan-legal.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct HostProgram(
@@ -99,19 +75,15 @@ impl lichen_lowlevel::OperatorExt<HostProgram> for LangOperator {
     }
 }
 
-// The store is generic over a single program `P` that carries its own codec;
-// `HostProgram` (the shipping `LangAttr`) is the plugin-built compiler's
-// marker, so it binds `NoPersist` (an in-memory store) as its codec.
+// The store's program carries its own codec, so `HostProgram` binds `NoPersist`.
 impl ProgramCodecOf for HostProgram {
     type Codec = NoPersist;
 }
 
 type DStore = PackageStore<HostProgram>;
 
-/// A fresh in-memory store with the plugin's embedded wrapper registered as the
-/// `std.lichen` native virtual package — the package-manager plug: compile the
-/// wrapper source against the plugin's private native registry and serve it by
-/// name, with no disk file.
+/// A fresh in-memory store with the plugin's wrapper registered as the
+/// `std.lichen` native virtual package.
 fn new_store() -> DStore {
     let mut store = PackageStore::<HostProgram>::new();
     store
@@ -207,9 +179,8 @@ std.sort [3, 1, 2]
 
 #[test]
 fn std_sort_is_reusable_and_length_preserving() {
-    // The wrapper's `sort` is an ordinary typed function: applying it several
-    // times over arrays of different lengths is fine (the length is a fresh
-    // cell bound at each apply), and the result keeps the length.
+    // `sort` is an ordinary typed function: the length is a fresh cell bound at
+    // each apply.
     let (module, value, _) = run(r#"
 ---
   std = import "std.lichen"

@@ -1,10 +1,5 @@
-//! Shared helpers for the language end-to-end tests: run a program to its
-//! evaluated value and type without going through the value printer, and read
-//! structural values back out of the module.  Every assertion built on these
-//! is a VM-level value/type comparison, never a rendered string.
-//!
-//! Each `tests/*.rs` file is its own crate and uses only the helpers it needs,
-//! so a helper unused by one file must not warn for that file.
+//! Shared end-to-end helpers: run a program to its value and type without the
+//! printer.  See tests-do-not-render.md.
 
 #![allow(dead_code)]
 
@@ -31,15 +26,13 @@ pub fn evaluate(source: &str) -> (Module<LangProgram>, LangValue, NodeId) {
     finish(report.build.unwrap())
 }
 
-/// Compile and run `source` through a fresh package store, returning the
-/// module, the evaluated root value, and the root type node.
+/// Compile and run `source` through a fresh package store.
 pub fn run(source: &str) -> (Module<LangProgram>, LangValue, NodeId) {
     let mut store = PackageStore::<LangProgram>::new();
     run_at(source, None, &mut store)
 }
 
-/// Compile and run `source` through a caller-owned store, returning the
-/// module, the evaluated root value, and the root type node.
+/// Compile and run `source` through a caller-owned store.
 pub fn run_at(
     source: &str,
     base: Option<&Path>,
@@ -70,9 +63,8 @@ fn finish(
     let mut module = build.module;
     let value = module.evaluate_node_deep(build.root_val, None);
     let _ = module.evaluate_node_deep(build.root_ty, None);
-    // Mirror `run::render_build`'s refusal gate: a runtime refusal explains a
-    // value that never arrived, so a program that produced nothing while a
-    // refusal was recorded is a failure, not an empty answer.
+    // Mirror `run::render_build`'s refusal gate: a recorded refusal means the
+    // value never arrived.
     let produced_nothing = match value {
         None => true,
         Some(value) => matches!(value.as_enum(), Some(LowValue::Error)),
@@ -133,10 +125,8 @@ pub fn float_array(module: &Module<LangProgram>, value: &LangValue) -> Vec<f32> 
     array_values(module, value).iter().map(float_of).collect()
 }
 
-/// Structural equality of two evaluated values, possibly from different
-/// modules: scalars compare field-wise (floats by their bits), arrays compare
-/// element by element.  This is the value-level equality the printer used to
-/// spell out as a string; it never compares rendered text.
+/// Structural equality of two values: scalars field-wise, floats by bits,
+/// arrays element by element.
 pub fn values_eq(
     a: (&Module<LangProgram>, &LangValue),
     b: (&Module<LangProgram>, &LangValue),
@@ -152,10 +142,8 @@ pub fn values_eq(
             let ys = unsafe { y.items() };
             xs.len() == ys.len()
                 && xs.iter().zip(ys).all(|(xi, yi)| {
-                    // **An element with no value is a refusal, not a `false`.**  A
-                    // value that was never evaluated (a lazy read nothing forced)
-                    // has no answer to compare — and silently calling two of them
-                    // equal is what would make a comparison of backends vacuous.
+                    // No value is a refusal, not a `false`: two unevaluated values must
+                    // never compare equal.
                     let xv =
                         a.0.node_value(xi.node)
                             .unwrap_or_else(|| panic!("left element {:?} has no value", xi.node));
@@ -169,9 +157,8 @@ pub fn values_eq(
     }
 }
 
-/// The head marker of an atomic type node — the marker an atomic `[head, K]`
-/// type pair renders as (`Int`, `Float`, …).  A node that is not an atomic
-/// type (an undecided cell, a compound type, or no value) answers `None`.
+/// The head marker of an atomic type node. A node that is not an atomic type
+/// answers `None`.
 pub fn type_head(module: &Module<LangProgram>, node: NodeId) -> Option<LangValue> {
     let value = module.node_value(AnyNodeId::Dynamic(node))?;
     match value.as_enum() {
@@ -199,8 +186,7 @@ pub fn type_is_float(module: &Module<LangProgram>, node: NodeId) -> bool {
     type_head(module, node) == Some(LangValue::TypeValue(TypeValue::TypeFloat))
 }
 
-/// Whether a type node is an undecided cell (what the printer spells `?` or a
-/// named `?a`): it holds nothing at all — an empty slot.
+/// Whether a type node is an undecided cell: it holds nothing at all.
 pub fn type_is_undecided(module: &Module<LangProgram>, node: NodeId) -> bool {
     module.node_value(AnyNodeId::Dynamic(node)).is_none()
 }

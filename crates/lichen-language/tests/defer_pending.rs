@@ -1,9 +1,5 @@
-//! End-to-end tests for the deferred unification a type read goes through
-//! when a struct type is built from a partially applied type function
-//! (docs/notes/defer-pending-type-forms.md).  Every assertion is a VM-level
-//! value comparison: the pinned field type is read back as a value
-//! (`T::I`) and compared against the type constant the deferral merged it
-//! with — no rendered type string is inspected.
+//! Deferred unification of a struct type built from a partially applied type
+//! function. See eval-before-unify.md §3.
 
 use lichen_highlevel::program::TypeValue;
 use lichen_lowlevel::{LowValue, Module, NodeId};
@@ -11,9 +7,7 @@ use lichen_lowlevel::{LowValue, Module, NodeId};
 use lichen_language::compile;
 use lichen_language::program::{LangProgram, LangValue};
 
-/// The standard library's `type_of` (`lichen-std/_.lichen`), bound ahead of
-/// every probed program: `compile` takes a bare source with no package store
-/// to import from.
+/// `type_of` from the standard library, bound ahead of every probed program.
 const TYPE_OF: &str = "type_of = x => {t = _; x: t; t}\n";
 
 /// Compile and run a program, asserting it checks; returns the module and the
@@ -43,10 +37,8 @@ fn usize_of(value: &LangValue) -> usize {
     *n
 }
 
-/// A single field read (the silent half of the defect): the field type used
-/// to merge against the argument's type and stay undecided, reading back as
-/// a raw layout.  The pin commits the type value, so the field type *is*
-/// `Type` (the argument field holds the `Int` type constant).
+/// The silent half: the field type used to merge against the argument and stay
+/// undecided, reading back as a raw layout.
 #[test]
 fn a_deferred_field_read_binds_the_type_value() {
     assert_eq!(
@@ -63,8 +55,8 @@ T::I == Type
     );
 }
 
-/// Two reads of one undecided placeholder (the error half of the defect): both
-/// used to fail the struct construction; both field types decide now.
+/// The error half: both reads of one undecided placeholder used to fail the
+/// construction.
 #[test]
 fn two_deferred_field_reads_both_bind() {
     let source = |field: &str| {
@@ -81,10 +73,8 @@ T::{field} == Type
     assert_eq!(usize_of(&evaluate(&source("O"))), 1);
 }
 
-/// A struct type value in the slot: its kind carries a names table, so the
-/// class is never a skeleton — this row used to reach the spurious
-/// `expected [?a], found TypeStruct` error at every arity.  The pinned field
-/// type is exactly `type_of S1`, the kind of the struct type constant.
+/// A struct type value in the slot: its kind carries a names table, never a
+/// skeleton.
 #[test]
 fn a_deferred_field_read_binds_a_struct_type_value() {
     assert_eq!(
@@ -102,10 +92,8 @@ T::I == type_of S1
     );
 }
 
-/// The `type_of` spelling: `type_of` is the standard library's ordinary
-/// lambda, so the pending side of the stall is a lazy Apply, not an Index
-/// read — the deferral gate must cover calls too.  Same pinned type as the
-/// read spelling.
+/// `type_of` is a lambda, so the stall's pending side is a lazy Apply, not an
+/// Index read: the gate must cover calls too.
 #[test]
 fn a_deferred_type_of_call_binds_the_type_value() {
     assert_eq!(
@@ -123,9 +111,8 @@ T::I == type_of S1
     );
 }
 
-/// The comparison constants above are `Type`-typed values; this test only
-/// documents that the marker vocabulary used across this file is the one the
-/// assertions assume (`Type` is the universe marker).
+/// `Type` is the universe marker, the vocabulary every comparison above
+/// assumes.
 #[test]
 fn the_type_constant_is_the_universe_marker() {
     assert_eq!(evaluate("Type"), LangValue::TypeValue(TypeValue::TypeType));

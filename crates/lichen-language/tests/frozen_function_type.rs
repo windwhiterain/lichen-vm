@@ -1,24 +1,5 @@
-//! A **written arrow in a frozen module** stays the function type it names.
-//!
-//! `A -> B` compiles to a real lambda (a function), and a function's type is
-//! the function itself (`f : f`, the self-referential `[Function(fid), ↺]`).
-//! Annotating a parameter with one therefore unifies the parameter's *type
-//! cell* with that function type — the two are one class, and the cell's value
-//! is the function type.
-//!
-//! A frozen module flattens the class into its one value, so the materialized
-//! cell carries the function type **as a value**: `[Function(fid), t]` where
-//! `t` is the frozen node that *is* the cycle, not the cell.  Reading that as
-//! "a function type" is the same relation as reading it by class — the type
-//! level says the cell and the function type are one — and this test is where
-//! that reading is pinned, in the language layer, with no compute and no
-//! operator involved.
-//!
-//! Measured before: the wrapper printed
-//! `Function: raw[Function, raw[?a, ?b] -> raw[?c, ?d]] -> ?b` — the parameter's
-//! type dumped as its two items because the printer asked whether slot 1 was
-//! the *cell* rather than whether it is a function type.
-//! `docs/notes/function-type-merge.md` has the reproduction and the search.
+//! A written arrow in a frozen module stays the function type it names.
+//! See function-type-merge.md.
 
 mod common;
 
