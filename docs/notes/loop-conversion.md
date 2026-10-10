@@ -635,6 +635,60 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   emitted modules can be validated rather than eyeballed — which is what
   makes this landable in one piece rather than in halves.
 
+  #### The mapping is settled, and the SSA side is *smaller*
+
+  Read against `dev` rather than against the branch's own code, the port is not
+  a translation — **the SSA IR deletes most of what the stack version had to
+  carry.** Three facts make it smaller:
+
+  - **Instruction emission is already done.** `spirv.rs`'s body loop reads
+    `ValueDef::Instr { op, args, .. }` and resolves each operand through
+    `slots: HashMap<ValueId, Slot>`. There is no `Vec<Slot>` anywhere in it. The
+    branch's `emit_instrs` has **nothing to port** — only the terminator is
+    still single-block.
+  - **A block's parameters are declared, so the phi bookkeeping is read, not
+    derived.** The branch's `Block { arity, below, edges, parameters, kinds }`
+    exists because a stack has to *work out* how many values a block receives and
+    what sits underneath them, and refuse when two edges disagree. Under SSA
+    `BasicBlock::params` **is** that list and `KernelBody::validate` has already
+    checked that every `Br { args }` matches its target's `params` — so
+    `edge()` reduces to recording `(predecessor, args)` and allocating one
+    `OpPhi` per declared parameter.
+  - **A carried value and a parameter are the same read**, so the branch's
+    separate `carried`/`passed_out` counts, its `body_below`/`merge_below`
+    splits and its "a header has to be the block holding the loop" workaround all
+    fall out: a header's `params` are the state, a backedge's `args` are the next
+    iteration's, and an exit block is an ordinary block reached by an ordinary
+    edge.
+
+  **The one genuinely new decision is how a loop is recognised, because SSA has
+  no `While` variant.** `CondBr` covers both a selection and a loop's exit test,
+  and the two look identical: a loop's header does
+  `CondBr { cond, if_true: body, if_false: exit }` and a selection branches to two
+  *different* blocks. They are told apart **structurally**, by a backedge: a
+  block is a loop header iff some block it (transitively) reaches branches back
+  to it. That is a DFS over the block graph with the active path as the stack,
+  and it is the same rule that makes the header the merge block's dominator —
+  so recognising the loop and emitting it correctly are the *same* question
+  rather than two.
+
+  | branch (`Flow`/`Terminator`) | SSA (`BasicBlock`)                       |
+  |------------------------------|------------------------------------------|
+  | `Terminator::If { on_one, on_zero, join, passes }` | `CondBr` to two distinct blocks; the join is a block reached by ordinary edges |
+  | `Terminator::While { header, body, exit, carried, passed_out }` | a `CondBr` in a block that some reachable block branches back to |
+  | `Flow::Jump { target, passes }` | `Br { target, args }` — the args **are** the target's `params` |
+  | a loop's `carried`/`passed_out` | the header block's own `params`, and an exit block's |
+  | the pass-through block for a join inside a selection | still needed: a merge block must be dominated by its header |
+  | `is_straight_line` | goes — a `Br`/`CondBr` is what this emitter now emits |
+
+  **`OpLoopMerge`'s two operands follow from the backedge.** The *merge* block is
+  the header's false-edge target (the loop's exit — it is dominated by the
+  header, which the backedge rule already guarantees). The *continue* target must
+  be post-dominated by the backedge and must differ from the header, so it is
+  **the block the backedge branches from**, not the header — which is the case
+  the branch had to refuse when a body was nothing but the transfer, because
+  under SSA that body is a real block by construction.
+
 ### 8.5 The critical path to the acceptance case
 
 The acceptance case is a **dynamic reduction** — the one shape with an
