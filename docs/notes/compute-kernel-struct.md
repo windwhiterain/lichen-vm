@@ -100,7 +100,7 @@ resolve correctly:
 
 ## Runtime / codegen
 
-`kernel_id_of` now walks a kernel **struct value** `[native, I, O]` (by value, and through an
+`kernel_id_of` walks a kernel **struct value** `[native, I, O]` (by value, and through an
 `Index(struct,0)` field read) to its `KernelId`, so a kernel body that refers to another
 kernel by value lowers its call to a `CallKernel`, assembled at launch time.
 
@@ -117,17 +117,62 @@ kernel by value lowers its call to a `CallKernel`, assembled at launch time.
 
 ## Consequences
 
-- `tests/compute.rs` renders a kernel as the raw struct
-  `struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>` and `launch` results resolve
+- `tests/compute.rs` renders a **generic** kernel struct as
+  `struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>` — the frozen wrapper's
+  fields are undecided cells, so each carries the raw mark — and `launch` results resolve
   their codomain lazily (`6 : Int`, `12 : Int`).
-- A kernel binding's render is pinned by `tests/compute.rs:644` as
-  `(raw Kernel, raw Int, raw Int) : struct<.native raw[?a, ?b], .I raw[?c, ?d], .O raw[?e, ?f]>`
-  (all three fields are raw readings, so each carries the mark — the `.native` artifact's own
-  pair likewise — and the generic `compute.jit`/`compute.launch` wrappers as plain
-  `Function` types.  An earlier version of this line claimed `.I Int, .O Int`, which contradicts
-  line 38 above (the fields are raw) and predates `LowValue::Parameterized`'s deletion; and where
-  a frozen boundary leaves a field cell empty rather than decided, the mark **nests** — see
-  [the kernel parameter's class](kernel-parameter-class.md).
+- An **applied** kernel binding renders its `value: type` by name
+  (`a_kernel_value_and_type_render_by_name`):
+  `(raw Kernel, Int, Int): struct<.native raw[?a, ?b], .I Type, .O Type>`. Each signature
+  field's **type** is `Type`, not `Int`: the field holds a *type value* — the domain, the
+  codomain — and the universe is the type of one, so its **value** half reads as that same
+  `Int`. `.native` is the artifact's own dump (`raw Kernel`), because the struct's type names
+  no class for it. The two field cells are **decided**, and that is the property a frozen
+  boundary has to carry — see
+  [the kernel parameter's class](kernel-parameter-class.md), which records the defect where
+  they arrived empty instead.
+- A **tuple** domain renders `(raw Kernel, <Int, Int>, Int): struct<.native raw[?a, ?b], .I
+  TypeTuple, .O Type>`: a tuple of element types is itself a tuple, so its type is the tuple
+  universe. Only a *tuple* codomain dumps nested.
+
+## Kernel bodies are SSA, and a body may compute its own state and branch back
+
+The body of a kernel is `lichen-kernel-ir`'s SSA form: a value is a `ValueId`, an
+instruction names its operands, and control is blocks with terminators —
+`Br { target, args }`, `CondBr`, and `Return { values }`. **A block's `params`
+are the values it receives**, and that one rule serves a function's arguments and
+a loop's carried state alike: a header's carried values *are* its block
+parameters, reading one is an ordinary read of a named value, and a backedge's
+arguments *are* the next iteration's state. `KernelBody::validate` requires a
+branch's `args` to match its target's `params` exactly, so a phi cannot be built
+incompletely. The entry block's parameters are the fragment's own domain leaves,
+in flattening order — "read the function's argument" and "read the loop's
+carried state" are the same operation, because a parameter *is* a value the
+block received.
+
+That expressiveness is the capability a loop conversion needs: **a body may
+compute its next state and reach the loop's backedge.** The earlier stack-machine
+IR could not express it — `LocalGet` named a parameter leaf and nothing named
+element `k` of a loop's state, so a body could arrive at a header but could not
+carry anything new, and every loop the IR could build ran zero trips or forever.
+The SSA rewrite is what closed it, not a terminator variant added to the old
+form.
+
+The **`passed_out` contract** that goes with a loop header is what the loop
+conversion must satisfy, and the IR's own doc states it: the loop's whole state
+is the tuple of carried values the header's block parameters are, and **the exit
+receives the header's own top `passed_out` values** rather than the body's. That
+is what gives a zero-trip loop a defined result — a trip count of zero never runs
+the body, so a `passed_out` the body had to compute would have no source on that
+path. `passed_out ≤ carried` therefore holds, and the conversion refuses a loop
+that breaks it by name.
+
+**A `@loop`-marked recursion is lowered to this nest** (`compute/body.rs`'s
+`lower_loop`, over the roles `Module::loop_conversion` names in
+`lichen-lowlevel`), so a non-straight-line `KernelBody` is produced in production
+and both backends emit it. What remains open is the recursions whose steps apply
+routed operators, which the kernel body has no node for
+([loop-conversion](loop-conversion.md) §8.5 item 4, §8.6 item 6).
 
 ## The parallel parameter struct
 
@@ -143,10 +188,13 @@ are read from the parameter's type by `parallel_roles` and travel in the fragmen
 identity is the occurrence it is written at
 ([applied-struct-nominal-id](applied-struct-nominal-id.md)).
 
-**It runs** — both blockers were diagnosed and fixed. The current state, the two
-blockers as they were diagnosed, the reproduction and the orientation map are in
-[compute-param-struct-handoff](compute-param-struct-handoff.md) — that note is the
-one to read; this section is the pointer.
+The two blockers this shape was diagnosed through are **fixed**: a named read resolves through
+the parameter's type by the two-pass `param_path` walk, and a nested static closure keeps its
+captures' bindings (`StaticNode` mirrors the dynamic node's carry rule). So the shape runs, and
+what remains open about it — the result type not reaching a host read's container cell, an
+interleaved parameter the ABI cannot express — is recorded in
+[compute-buffer-wrapper](compute-buffer-wrapper.md); that note is the model, and this section
+is the kernel-struct side of it.
 
 _Footnote: the earlier proposal split the invocation into `call`/`launch`/`run` (a `.kernel`
 field-based 3-field struct). The shipped v1 keeps `launch`/`plrun` two-step and uses the

@@ -87,13 +87,9 @@ mismatch the launch arg count.
 
 ## What the emitter still does by hand
 
-> **This section was rewritten at `af6f6f2` and again at `4a4fc63`.** The body is
-> no longer a stack of `KernelInstr`s: it is **SSA over `ValueId`s**, built by
-> `compute/body.rs`'s `Lower`, and the backend reads that rather than an operand
-> stack. What is below is the state after both.
-
-The domain is a low type; the *body* is still a graph walk, and that is where
-the remaining coupling lives (see
+The body is **SSA over `ValueId`s**, built by `compute/body.rs`'s `Lower`, and a
+backend reads that rather than an operand stack. The domain is a low type; the
+*body* is still a graph walk, and that is where the remaining coupling lives (see
 [checker-encoding-instability](checker-encoding-instability.md)):
 
 - `flat_arity` counts the scalar leaves for the wasm signature, so a nested

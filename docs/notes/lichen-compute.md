@@ -131,8 +131,8 @@ emits the operator via `ctx.op_node(...)`, and returns the `[value, type]` pair.
   the parameter type's `.out` group (`I::out`) rather than to the body's own
   (unconstrained) codomain.  The host binds the result with its codomain type once
   and then reads the fields by name — see
-  [compute-buffer-wrapper](compute-buffer-wrapper.md), [multi-output](#multi-output)
-  and [compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md).
+  [compute-buffer-wrapper](compute-buffer-wrapper.md) and
+  [multi-output](#multi-output).
 - **`CallOp::build`** (`$call(k.native, a)`) — only gates the argument against a fresh
   domain cell and types the result as a fresh codomain cell (the callee signature is read at
   launch-time assembly by `kernel_id_of`).
@@ -188,7 +188,7 @@ arm:
   the index count), each owning a disjoint span of every output buffer and
   running the one cached module in its own store; below
   `SEQUENTIAL_PARALLEL_ELEMENTS` indices the whole run stays on the calling
-  thread.  See [the parallel run](compute-parallel-buffer-read-write.md#the-run-is-parallel).
+  thread.  See [the parallel ABI](compute-buffer-wrapper.md#the-parallel-abi).
 - **`Read`** / **`BufferCollect`** — read one element / collect the whole buffer.
 
 A kernel body that calls another kernel is a **cross-kernel call**: `kernel_id_of` walks a
@@ -461,49 +461,16 @@ tuple value or passed through from the caller's own parameter (see
 inside the compiled region, and a `GlobalExt`-based compute global (the kernel registry is
 currently process-global).
 
-### Multi-output
+### The every-field-written invariant
 
-A parallel kernel's parameter declares its outputs under `.out`, so one `plrun` yields
-several output buffers from a single pass: the `k`-th output field a `compute.write`
-targets is emitted with the compile-time constant `out_pos = k` (the same treatment
-`read`'s input position gets), the output count is `.out`'s field count read at compile
-time and carried on the fragment as
-`KernelFragment::outputs`, and the launch allocates exactly that many buffers and places
-them in the parameter's `.out` structure. The **every-field-written invariant** — output
-field `k` is written on every
-index — holds structurally: the lowered body is straight-line, and the subset's only
-conditional is a value `select`, which a write (a side effect with no value) cannot sit in.
+A parallel body dispatches writes and produces no value, so output field `k` is written on every
+index. That holds **structurally**: the lowered body is straight-line, and the subset's only
+conditional is a value `select`, which a write — a side effect with no value — cannot sit in.
 The emitter refuses the constructs that could break it, each naming its own cause: a write
-inside a conditional, and an `.out` position that is not a write. See
-[compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md).
-
-`plrun`'s result type is that `.out` structure (`k.O`), so a host binds it with its
-codomain type once — `out = (compute.plrun k (…) : Out)` — and then reads each `Buf`
-field by name (`out.z`). The annotation is the migration recipe
-[compute-buffer-wrapper](compute-buffer-wrapper.md) records: it states what the kernel's
-`.O` already means.
-
-### The parallel run
-
-A `plrun` is **data-parallel for real**: the index range is cut into one contiguous
-chunk per worker, and each worker runs the one cached module in its own `Store`/
-`Linker`/instance and writes only its own **disjoint span of every output buffer** —
-a partition built with `split_at_mut`, so there is no lock on the write path.  The
-kernel is handed a *global* index either way and the `write` import rebases it by
-the worker's base, so the emitted wasm does not know it was split.  Inputs are never
-partitioned (a read is by a global index).
-
-Two bounds keep it from being a pessimisation: the worker count is
-`min(available_parallelism(), count)`, and a run below `SEQUENTIAL_PARALLEL_ELEMENTS`
-indices stays sequential, because a spawn plus a store per worker is only repaid once
-a worker owns enough indices for the interpreted calls to dominate it.
-
-The result is **bit-identical to the sequential loop's**: the partition depends only on the
-count and the worker count (never on a schedule or a timing), no slot is written by two
-workers, and there is no reduction to reorder — so regrouping the indices across a
-different number of workers cannot change what is computed.  A worker that fails is
-joined and reported with its cause rather than dropped for a partial result.  See
-[compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md#the-run-is-parallel).
+inside a conditional (`CONDITIONAL_WRITE`), and an `.out` position that is not a write (refused
+*by position*). Nothing is ever defaulted to `0` and nothing is silently reduced to a single
+output. The parameter shape, the output ordinals and the run's result structure are
+[compute-buffer-wrapper](compute-buffer-wrapper.md)'s model.
 
 ### Multi-arity cross-kernel calls
 
