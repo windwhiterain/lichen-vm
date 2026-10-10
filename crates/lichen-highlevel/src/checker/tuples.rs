@@ -44,21 +44,14 @@ where
         pair
     }
 
-    /// The type an expression contributes in a type position — a struct
-    /// field, a tuple-type element, a function-type side.  There is no
-    /// term/type distinction: the expression is used as-is, its pair being
-    /// the type it denotes.  A genuine type (a value whose own type is a
-    /// kind, or an undecided cell) contributes its pair directly; a *term*
-    /// put in a type position contributes its own value pair too, and the
-    /// subsequent unification fails (a term's value pair does not unify
-    /// with its own type) — `struct<.f Int, .g b>` with `b : B` fails, while
-    /// `struct<.f Int, .g B>` works.
-    /// An expression that **carries attributes** denotes the annotated value's
-    /// term instead, not the `[type, …, attribute]` group the attribute lives in:
-    /// a refinement may be written on a type inside a compound
-    /// (`<(T ! in_num), U>`), and the attribute's own registration is what
-    /// enforces it ([`Checker::type_denotation`],
-    /// `docs/notes/operator-polymorphism.md` §3).
+    /// The type an expression contributes in a type position — a struct field, a
+    /// tuple-type element, a function-type side.
+    ///
+    /// # Invariant
+    /// A term put in a type position unifies as its own value pair, which never
+    /// unifies with its type: `struct<.f Int, .g b>` fails, `struct<.f Int, .g B>`
+    /// works. An expression that carries attributes denotes the annotated value's
+    /// term instead; see `docs/notes/operator-polymorphism.md` §3.
     pub(super) fn check_type_element(&mut self, el: ExprId) -> NodeId {
         self.check_expr(el);
         self.type_denotation(el, None)

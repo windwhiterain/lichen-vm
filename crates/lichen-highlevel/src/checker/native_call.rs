@@ -7,15 +7,15 @@ where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
-    /// A `$name(args…)` call: compile each argument, look `name` up in this
-    /// module's private [`NativeOps`] registry, and adopt the value node the
-    /// plugin's [`NativeOp`] builder returns, typed by a fresh cell.  The
-    /// checker has no knowledge of what the operator does — the plugin's
-    /// registration owns the lowering, and the types live in the lichen
-    /// wrapper that calls `$name` (the private contract with its own source).
-    /// An unregistered `name` is refused with a diagnostic rather
-    /// than a panic (the frontend compiles `$name` blind, so the checker is the
-    /// first layer that can see the registry).
+    /// A `$name(args…)` call: look the name up in this module's private
+    /// [`NativeOps`] registry and adopt its value node.
+    ///
+    /// # Invariant
+    /// The checker knows nothing of what the operator does: the plugin's
+    /// registration owns the lowering, and the wrapper around `$name` owns the
+    /// types. The call's type is the checker's, a fresh cell per call. An
+    /// unregistered name is a diagnostic, never a panic: the frontend compiles
+    /// `$name` blind, so the checker is the first layer that sees the registry.
     pub(super) fn check_native_call(
         &mut self,
         e: ExprId,
@@ -43,12 +43,11 @@ where
         {
             Some(operator) => operator.build(self, e, &native_args, loc.clone()),
             None => {
-                // An unregistered name is an ordinary check-time refusal, not
-                // a broken invariant: only the checker can see the registry,
-                // so this is the one place it can be reported.  The guard
-                // leaves the expression uncompiled, which `check_failed` picks
-                // up — the definition pass is skipped, so nothing ever
-                // evaluates the hole.
+                // An unregistered name is a check-time refusal, not a broken
+                // invariant: only the checker sees the registry.
+
+                // The guard leaves the expression uncompiled, so the definition
+                // pass is skipped and nothing evaluates the hole.
                 self.record_guard(
                     self.type_expr,
                     self.type_expr,
@@ -63,13 +62,8 @@ where
                 return pair;
             }
         };
-        // The builder states the operator's **value**; the checker states the
-        // call's **type**.  A native operator is an operator — raw operands in,
-        // one raw result node out — so the type is not the plugin's to give:
-        // the boundary mints a fresh cell for every call, unconditionally, and
-        // the `[value, type]` pair is built through its one construction site
-        // ([`Checker::pair_of`]).  Whatever the wrapper around `$name` knows
-        // about the result's type, it states as an ordinary annotation.
+        // The type is not the plugin's to give: the boundary mints a fresh
+        // cell per call, through [`Checker::pair_of`].
         let ty = self.fresh_cell();
         let pair = self.pair_of(built.value, ty);
         self.state[e].term = Some(pair);

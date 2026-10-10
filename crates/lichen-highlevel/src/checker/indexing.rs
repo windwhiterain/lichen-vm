@@ -1,7 +1,5 @@
-//! Arrays, tables, and indexing: the container rules — an array instance and
-//! its type, a shallow array, a table literal and a table lookup, the array
-//! element read with its bounds constraint, and the raw structural reads that
-//! bypass type validation by design.
+//! Arrays, tables, and indexing: the array instance and type, the element
+//! read with its bounds, and the raw reads.
 
 use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
 
@@ -17,26 +15,15 @@ where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
-    /// An array-element read `a[i]`.  The container's type is *pinned* to a
-    /// fresh array type — the same pin [`Self::check_binop`] applies to its
-    /// operands and [`Self::check_table_find`] to its container — so a
-    /// concretely non-array container (a tuple, a struct, a function, a
-    /// table) fails here with a diagnostic, and an undecided container (a
-    /// parameter, a call result) resolves at the call site's argument
-    /// unify: only an array can flow in.  Tuple and struct slots are read
-    /// with the dedicated positional form `a(k)` ([`Self::check_field`]),
-    /// table entries with `t{k}` — the operator and the type extraction
-    /// are chosen by syntax, never by a runtime kind dispatch.
+    /// An array-element read `a[i]`. See `docs/notes/raw-index.md`.
     ///
-    /// The value is the structural `Index` over the array's value; the type
-    /// is the pinned shape's element cell, which lands in the concrete
-    /// element type's class when the container type binds.  The read also
-    /// registers a *bounds constraint* on the module's assert worklist:
-    /// `i < length` as `length <= i == 0`, the comparison ops the value
-    /// language already has.  A concrete out-of-range index fails the
-    /// assert pass; a lazy length (an annotated parameter) keeps the assert
-    /// pending, and the apply clone re-checks it against each argument's
-    /// actual array.
+    /// # Invariant
+    /// The container's type is pinned to a fresh array type, so a non-array
+    /// fails here and an undecided one resolves at the call site's argument
+    /// unify. Its type is the pinned shape's element cell. It registers the
+    /// bounds assert `length <= i == 0`: a concrete index out of range fails
+    /// the assert pass, a lazy length keeps it pending for the apply clone to
+    /// re-check per argument.
     pub(super) fn check_index(&mut self, e: ExprId, array: ExprId, index: ExprId) -> NodeId {
         self.check_expr(array);
         self.check_expr(index);
@@ -80,42 +67,14 @@ where
         pair
     }
 
-    /// A **raw** positional read `X<e>` (the glued `<` postfix) — element
-    /// `index` of the container's **value**, read structurally through the
-    /// lowlevel `Index`.  The container must be a **tuple type value**: `X<e>`
-    /// reads a component of a type-as-value (`` `<Int, string><0>` `` is `Int`)
-    /// and a component list is a tuple's, so the requirement is stated as a
-    /// unify against the tuple **kind** — `[TypeTuple, K]`, which *is* a type
-    /// value's type — pinned when the container is undecided and refused here
-    /// when it is decided and different.  A struct type value reads its fields
-    /// by name (`X::a`, [`Self::check_raw_named_field`]), and an ordinary value
-    /// (a tuple, an array, a scalar) is not readable this way at all.
+    /// A **raw** positional read `X<e>` — element `index` of the container's
+    /// value. See `docs/notes/raw-index.md`.
     ///
-    /// Beyond the container-kind check the read validates nothing: an undecided
-    /// container (a parameter, a call result) stays lazy — the lowlevel `Index`
-    /// defers — and resolves at the apply, exactly the laziness the wrapper
-    /// field reads rely on.
-    ///
-    /// The result is **the element's own pair**: the element is
-    /// `Index(container_value, index)`, the value is its slot 0 and the type its
-    /// slot 1 (computed, see [`Self::element_read`]).  The *term* is therefore
-    /// that `[value, type]` pair, not the bare element: every expression's term
-    /// is a pair, and a raw read that stored the element instead left the build
-    /// evaluating only the element — so a failure in either slot read landed
-    /// after the build had decided `ok`, and a container whose elements are not
-    /// pairs printed a silent `none` where the value should be.  See the
-    /// item's Outcome in [code-audit.md].
-    ///
-    /// With the container kind stated above, the remaining failures are
-    /// evaluation errors — an out-of-bounds subscript, recorded during the
-    /// definition pass, so the build is rejected.  The element case keeps its
-    /// own wording ([`DiagKind::RuntimeRawElement`]) because the generic one
-    /// blames the container the user wrote rather than the element the read
-    /// produced; it sits behind the kind check, since every component of a
-    /// tuple type value is a pair and the read is only built once that check
-    /// has passed — no container reaching the element read today can hold a
-    /// non-pair element, so the wording is kept for the contract, not for a
-    /// program.
+    /// # Invariant
+    /// The container must be a tuple type value, stated once as a unify against
+    /// the tuple kind: pinned when undecided, refused where it is decided and
+    /// different. Beyond that the read validates nothing. Its term is the
+    /// element's own `[value, type]` pair, never the bare element.
     pub(super) fn check_raw_index(
         &mut self,
         e: ExprId,
@@ -124,19 +83,12 @@ where
     ) -> NodeId {
         self.check_expr(container);
         self.check_expr(index);
-        // The tuple-kind requirement, on the container's own kind — a type
-        // value's type *is* its kind, so this is the corresponding slot — as a
-        // unify: a decided container is judged where it is, an undecided one
-        // defers and is reconciled by the apply that binds it, per call.
+        // The tuple-kind requirement, a unify on the container's kind: decided
+        // here, deferred to the apply otherwise.
         let container_ty = self.state[container].ty.unwrap();
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        // A **decided** container of another kind is refused here, and the read
-        // it refuted is not built: the element pair below is the *component
-        // list* of a type value, and over anything else its slot reads land on
-        // whatever the container's own type happens to hold — the element's
-        // type slot on a runtime array is the array's length, which the lowlevel
-        // refuses to index as an element (`RuntimeRawElement`), a second
-        // diagnostic for a program the guard above already rejected.
+        // A decided container of another kind is refused and not read:
+        // its element's type slot would be the container's type.
         if !self.check_unify(container_ty, kind, self.loc(container, 1), DiagKind::Guard) {
             return self.refused_pair(e);
         }
@@ -144,49 +96,25 @@ where
         let index_value = self.value_of(index);
         self.node_edges.insert(index_value, self.loc(index, 0));
         let (pair, element, ty_node) = self.element_read(container_value, index_value);
-        // The element is the target of both slot reads, so this edge is what
-        // gives a failed one a span — and what tells the diagnostics builder
-        // that a non-container there is the element, not the container.
+        // Both slot reads target the element, so this edge gives a failed one
+        // a span and names it the element.
         self.node_edges.insert(element, self.loc(e, 1));
         self.state[e].term = Some(pair);
-        // Left to [`Super::value_of`], which reads the pair's value slot — the
-        // same node [`Self::element_read`] built, memoized here.
+        // Left to `value_of`: it reads the same node `element_read` built.
         self.state[e].val = None;
         self.state[e].ty = Some(ty_node);
         pair
     }
 
-    /// The element read shared by the raw positional form `X<e>` and the raw
-    /// named form `X::a`: `element = Index(container_value, subscript)`, then
-    /// the element's own pair — `Index(element, 0)` for the value and
-    /// `Index(element, 1)` for the type.  `subscript` is already the resolved
-    /// slot: the caller's index value, or a name table's read.
+    /// The element read shared by `X<e>` and `X::a`; see
+    /// `docs/notes/raw-index.md`. Returns `(pair, element, type)`.
     ///
-    /// The element's type slot *is* the read's type, and that is not a
-    /// convenience: both callers require their container to be a **type
-    /// value** (the tuple kind for `X<e>`, the struct kind for `X::a`), whose
-    /// component list holds `[component type value, its kind]` pairs, so the
-    /// read yields a type value and its type is that value's *kind* — the
-    /// universe for a scalar (`S::a` on `.a Int` is `Int : Type`) and a
-    /// `TypeStruct` kind for a struct-typed field (`S::a` on
-    /// `.a struct<.b Int>` is `struct<.b Int>: TypeStruct`, measured).  There
-    /// is no other handle on it: the field's kind is nowhere in the container's
-    /// own type, only in this slot.
-    ///
-    /// **The slot read is computed here**, so the read's type is decided by the
-    /// time any check asks about it.  An operation node nothing has run holds
-    /// no class value, and an undecided operand is the one unification arm that
-    /// **writes** rather than compares: measured, `S::a : Int` and `S::a == 1`
-    /// were both accepted where `5 : Type` and `5 == Int` are refused, and
-    /// `S::a == Int` passed for the same reason rather than because it is
-    /// right (`docs/notes/raw-index.md`).  An **undecided** container's read
-    /// computes nothing and stays lazy, which is what the per-apply re-check
-    /// relies on.
-    ///
-    /// Returns the read's `(pair, element, type)`: the pair is the term, the
-    /// element is what a failed slot read is attributed to, and the type slot
-    /// read is the expression's own type.  The value slot read is left to
-    /// [`Super::value_of`], which derives the same node from the pair.
+    /// # Invariant
+    /// Both callers require a **type value** container, whose components hold
+    /// `[type value, kind]` pairs — so the read's type is the component's
+    /// *kind*, the only handle on it. The slot read is computed here, so the
+    /// type is decided before any check asks; an undecided container's read
+    /// stays lazy, which is what the per-apply re-check relies on.
     pub(super) fn element_read(
         &mut self,
         container_value: NodeId,
@@ -210,31 +138,19 @@ where
             P::Operator::from(LowOperator::Index),
             Some(ty_ops),
         );
-        // Run the slot read now, so the type it names is a **decided** class
-        // value by the time a check asks (see the doc above).  This is the
-        // single-node run, not the deep pass: the chain it needs — the element,
-        // the name table's `TableGet`, the container's own value — is followed
-        // through the operand edges `evaluate_node` walks anyway, and the deep
-        // pass would additionally descend the *whole container type value* (every
-        // field pair and every field's type expression) for every raw read.
+        // Run the slot read now, so its type is decided before any check asks.
+        // `evaluate_node` follows the edges it needs.
         self.module.evaluate_node(AnyNodeId::Dynamic(ty_node), None);
         (self.pair_of(value_node, ty_node), element, ty_node)
     }
 
     /// A table lookup `t{k}`: the lowlevel `TableGet` reads the entry whose
-    /// stored key is deep-content-equal to `k`.  The frontend emits this
-    /// form for the *adjacent* brace — the syntactic distinction from
-    /// positional [`Self::check_index`] — so the operator is chosen by
-    /// syntax, never by a runtime kind dispatch.
+    /// stored key is deep-content-equal to `k`.
     ///
-    /// The container's type is *pinned* to a fresh table type — the same
-    /// pin [`Self::check_binop`] applies to its operands — so a concretely
-    /// non-table container fails here with a diagnostic, and an undecided
-    /// container (a parameter, a call result) resolves at the call site's
-    /// argument unify: only a table can flow in.  The value is the
-    /// `TableGet` op node itself; the type is the pinned shape's value-type
-    /// cell, which lands in the concrete value type's class when the
-    /// container type binds.
+    /// # Invariant
+    /// The container's type is pinned to a fresh table type, so a non-table
+    /// fails here and an undecided one resolves at the call site's argument
+    /// unify. The read's type is the pinned shape's value-type cell.
     pub(super) fn check_table_find(&mut self, e: ExprId, container: ExprId, key: ExprId) -> NodeId {
         self.check_expr(container);
         self.check_expr(key);
@@ -265,12 +181,13 @@ where
         pair
     }
 
-    /// An array instance `[v1, ..., vn]` — every element shares one type:
-    /// `[values, [[element type, length], [ArrayType, Type]]]`.  The element
-    /// type is a fresh cell unified with each element's type (a
-    /// heterogeneous literal is an error — the array's type would otherwise
-    /// claim one type for elements that differ), and the length slot holds
-    /// the element count.
+    /// An array instance `[v1, …, vn]`:
+    /// `[values, [[element type, length], [ArrayType, Type]]]`.
+    ///
+    /// # Invariant
+    /// The element type is a fresh cell unified with each element's type, so a
+    /// heterogeneous literal is an error rather than a type claiming one class
+    /// for elements that differ. The length slot holds the element count.
     pub(super) fn check_array_term(&mut self, e: ExprId) -> NodeId {
         let elements = self.range_children(e);
         let mut vals = Vec::new();
@@ -278,9 +195,8 @@ where
         for &el in &elements {
             self.check_expr(el);
             vals.push(self.value_of(el));
-            // Found = this element's type, expected = the shared cell: the
-            // first element binds the cell, a later one that differs
-            // conflicts against it.
+            // Found = the element's type, expected = the shared cell: the first
+            // binds it, a later one that differs conflicts.
             self.check_unify(
                 self.state[el].ty.unwrap(),
                 element_ty,
@@ -304,19 +220,12 @@ where
         pair
     }
 
-    /// A set `set{a, b, …}` — every member shares one type, like an array's
-    /// elements, but the instance is typed by the **set kind**
-    /// (`[members, [[element type], [TypeSet, Type]]]`), not by
-    /// `array<T, n>`.
+    /// A set `set{a, b, …}` typed by the **set kind**, not by `array<T, n>`.
     ///
-    /// The value *is* the members, so a set needs no value-level tag; what the
-    /// separate kind buys is that a set is not an array — [`Self::check_index`]
-    /// refuses `s[i]` (it pins its container to an array type), and a set can
-    /// never flow into an `array<T, n>` parameter.  See [`crate::set`].
-    ///
-    /// The shape is the element type alone: a set has no length, so `set{a}`
-    /// and `set{a, b}` are one type, which is what separates this kind from
-    /// `array<T, n>`.
+    /// # Invariant
+    /// The shape is the element type alone, so `set{a}` and `set{a, b}` are one
+    /// type; the separate kind keeps a set from flowing into an `array<T, n>`
+    /// and makes `s[i]` a refusal. See [`crate::set`].
     pub(super) fn check_set_term(&mut self, e: ExprId) -> NodeId {
         let members = self.range_children(e);
         let mut vals = Vec::new();
@@ -324,9 +233,8 @@ where
         for &member in &members {
             self.check_expr(member);
             vals.push(self.value_of(member));
-            // Found = this member's type, expected = the shared cell: the
-            // first member binds the cell, a later one that differs conflicts
-            // against it (a set is homogeneous, exactly like an array).
+            // Found = the member's type, expected = the shared cell: a set is
+            // homogeneous, exactly like an array.
             self.check_unify(
                 self.state[member].ty.unwrap(),
                 element_ty,
@@ -345,16 +253,14 @@ where
         pair
     }
 
-    /// A constant table literal `table { k1 ==> v1, k2 ==> v2, … }` — the
-    /// entries (interleaved key/value ids in the children arena) are checked
-    /// like an array's elements, against a shared key-type cell and a shared
-    /// value-type cell, and the value is built eagerly by the lowlevel
-    /// [`Module::build_table`](lichen_lowlevel::Module::build_table): every key
-    /// is deep-evaluated and
-    /// deep-content-hashed, an entry whose key is not concrete is dropped
-    /// with a recorded [`EvalError::TableKeyUndecided`], and the survivors are
-    /// stored sorted by hash.  The type is the kinded pair
+    /// A constant table literal `table { k1 ==> v1, … }`, typed by
     /// `[[key type, value type], [TypeTable, Type]]`.
+    ///
+    /// # Invariant
+    /// Entries are checked against one shared key-type cell and one shared
+    /// value-type cell. The value is built eagerly by [`Module::build_table`],
+    /// which drops an entry whose key is not concrete and records
+    /// [`EvalError::TableKeyUndecided`] instead.
     pub(super) fn check_table_term(&mut self, e: ExprId) -> NodeId {
         let entries = self.range_children(e);
         let key_ty = self.fresh_cell();
@@ -399,13 +305,14 @@ where
         pair
     }
 
-    /// A shallow array `[v1, ~ v2, ~2 v3]` — typed like a tuple (per-element
-    /// type slots: a homogeneous `Array` type would reject `[x, ~ f(x+1)]`
-    /// with an `Int` head and a `Stream` tail).  The value array carries the
-    /// per-position mask: a bare-`~` position's whole subtree stays lazy in
-    /// the deep pass (a read forces the single element on demand), and a
-    /// `~n` position is wrapped so the value slot at each of the first `n`
-    /// levels of its type spine stays shallow.
+    /// A shallow array `[v1, ~ v2, ~2 v3]`: per-element type slots, as a
+    /// tuple's.
+    ///
+    /// # Invariant
+    /// The value array carries a per-position mask: a bare `~` position's whole
+    /// subtree stays lazy in the deep pass, and a `~n` position is wrapped so
+    /// the value slot at each of the first `n` levels of its type spine stays
+    /// shallow.
     pub(super) fn check_shallow_array_term(&mut self, e: ExprId) -> NodeId {
         let elements = self.range_children(e);
         let depths = self.range_depths(e);
@@ -424,21 +331,16 @@ where
                     tys.push(self.state[el].ty.unwrap());
                 }
                 n => {
-                    // The wrapped term is a lazy region: its value is the
-                    // pair chain `[s, [s, … [s, d]]]`, whose structure does
-                    // not match the element's own type.  Its reads are
-                    // therefore underdetermined — a fresh cell — never a
-                    // concrete type that would silently mismatch the
-                    // wrapped value.
+                    // The wrapped term is a lazy region: its pair chain does not match
+                    // the element's type, so its reads get a fresh cell.
                     vals.push(self.wrap_shallow(el, n));
                     tys.push(self.fresh_cell());
                 }
             }
             mask.push(depths[i] == usize::MAX);
         }
-        // `[values, [[element types], [TupleType, Type]]]` — the same shape
-        // as a tuple, so reads dispatch on the tuple kind and select the
-        // per-element type slot.
+        // `[values, [[element types], [TupleType, Type]]]` — a tuple's shape, so
+        // a read selects the per-element type slot.
         let value = self.array_node_masked(self.current_block, &vals, &mask);
         let shape = self.array_node(self.current_block, &tys);
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
@@ -450,21 +352,19 @@ where
         pair
     }
 
-    /// Wrap `e`'s checked term so the value slot at each of the first
-    /// `depth` levels of its type spine stays shallow.  Each level is a
-    /// fresh pair `[slot0, slot1]` carrying the `shallow=[true, false]`
-    /// mask: slot 0 (the value slot) is marked, slot 1 is the next level
-    /// down the type spine (the pair's own type slot).  The descent follows
-    /// position 1 while the spine is a concrete pair at check time; an
-    /// undecided slot ends the descent (the wraps above the stop still apply).
-    /// The layers are fresh nodes, so a shared subexpression (a kind
-    /// expression reused by every occurrence) is never itself marked.
+    /// Wrap `e`'s checked term so the value slot at each of the first `depth`
+    /// levels of its type spine stays shallow.
+    ///
+    /// # Invariant
+    /// Each level is a fresh pair carrying the `shallow=[true, false]` mask, so
+    /// a shared subexpression is never itself marked. The descent follows slot
+    /// 1 only while the spine is a concrete pair at check time; an undecided
+    /// slot ends it, and the wraps above the stop still apply.
     fn wrap_shallow(&mut self, e: ExprId, depth: usize) -> NodeId {
-        // Level 1 is the element's own `[value, type]` pair.  For a static
-        // element that is its stored term; for a call the term is the apply
-        // operation node (its pair is virtual), so level 1 is built from
-        // the extracted value and type.  Each deeper level is the previous
-        // level's type slot's own `[shape, kind]` pair.
+        // Level 1 is the element's own pair; a call's is built from the
+        // extracted value and type, the apply pair being virtual.
+
+        // Each deeper level is the previous level's type slot.
         let mut levels: Vec<(NodeId, NodeId)> = Vec::new();
         let mut current = self.state[e].term.unwrap();
         if self.module.node_operation(current).is_some() {
@@ -492,8 +392,7 @@ where
                 current = slot1;
             }
         }
-        // Rebuild from the innermost level out: each level is a fresh pair
-        // [value slot, next] with the shallow mask [true, false].
+        // Rebuild from the innermost level out, each a fresh masked pair.
         let mut wrapped = None;
         for &(slot0, slot1) in levels.iter().rev() {
             let next = wrapped.unwrap_or(slot1);
@@ -503,14 +402,12 @@ where
         wrapped.unwrap_or(self.state[e].term.unwrap())
     }
 
-    /// The real array type `{ element_type, length }` — the instance is the
-    /// 2-element shape `[element_type, length]` (element 0: the type shared
-    /// by all elements, element 1: the length), kinded as an array.  The
-    /// element type is checked in type position (it must be a type), the
-    /// length in term position (it is a value — e.g. `3` or, dependently,
-    /// a parameter holding the length).  Both roles compile identically: a
-    /// type expression is a first-class value, so the array type *is* its
-    /// pair.
+    /// The array type `{ element_type, length }`, kinded as an array.
+    ///
+    /// # Invariant
+    /// The element type is checked in type position and the length in term
+    /// position; both compile identically, because a type expression is a
+    /// first-class value and the array type *is* its pair.
     pub(super) fn check_array_type(
         &mut self,
         e: ExprId,
@@ -520,11 +417,8 @@ where
         self.check_expr(element_type);
         self.check_expr(length);
         let length_value = self.value_of(length);
-        // The element's **denotation**, like every other type position: an element
-        // that carries attributes (`array<(_ ! in_num), 2>`) names the annotated
-        // value's term, not the `[type, …, attribute]` group whose registration
-        // enforces the attribute ([`Checker::type_denotation`],
-        // `docs/notes/operator-polymorphism.md` §3).
+        // The element's denotation (operator-polymorphism.md §3): an element
+        // with attributes names the annotated value's term.
         let element = self.type_denotation(element_type, None);
         let shape = self.array_node(self.current_block, &[element, length_value]);
         let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);

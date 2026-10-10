@@ -1,7 +1,5 @@
-//! Lambda and apply checking: the rules that compile a function expression —
-//! its parameter pair, its function shell, its arrow type — and wire an
-//! application: the slot-aligned argument pair the lowlevel apply unifies, the
-//! function-ness guard, and the apply-time parameter-attribute check.
+//! Lambda and apply checking: the function shell, argument pair,
+//! function-ness guard and the apply-time attribute check.
 
 use std::collections::HashMap;
 
@@ -31,41 +29,26 @@ where
         let return_block = self.module.add_block(None);
         let saved = self.current_block;
         self.current_block = return_block;
-        // The function shell exists *before* any of its nodes, and the stack
-        // entry goes in with it: the allocation helper tags and registers
-        // every node against the function currently being built, so the
-        // parameter's cells and pair are this template's from the start —
-        // nothing has to be moved, re-tagged, or overwritten afterwards.
-        //
-        // `parent` is the enclosing function: a nested closure's nodes then
-        // read as members of the enclosing template too, while a sibling's do
-        // not (the mutual-recursion invariant).  The link itself is the
-        // frontend's [`ExprKind::Function::parent`], resolved here through
-        // [`Checker::function_of`] — which function that *is* is decided where
-        // the lambda's syntax was compiled, not here; see the frontend's
-        // `fn_parents` invariant for the sibling rule it encodes.
+        // The shell exists before its nodes, so the parameter's cells are
+        // this template's from the start.
+
+        // `parent` is the enclosing function, so a nested closure's nodes read
+        // as its members and a sibling's do not.
         let parent = parent_expr.and_then(|p| self.function_of.get(&p).copied());
         let function = self.module.begin_function(return_block, parent);
         self.function_of.insert(e, function);
         self.function_stack.push((function, Some(e)));
-        // **The `@loop` mark crosses into the graph here**, where the shell
-        // exists and the body has not been compiled yet. It rides on
-        // [`Function::looping`] rather than staying in the IR because the cycle
-        // it marks is a fact about *this* graph — the templates are the only
-        // place the recursion is still a cycle, since every apply clones them
-        // away (`docs/notes/loop-conversion.md` §8.6).
+        // The `@loop` mark crosses into the graph here, where the shell exists and
+        // the body does not (loop-conversion.md §8.6).
         if looping {
             self.module.mark_looping(function);
         }
         let value_cell = self.fresh_cell();
         let type_cell = self.fresh_cell();
-        // The parameter *is* the pair `[value, type]`; the cells live in the
-        // function's scope so the apply's clone yields fresh cells per call
-        // (that is what makes a polymorphic value usable at several types).
-        // A `x # n` parameter carries a third attribute slot — itself a
-        // `[value, type]` term pair (two fresh cells), the uniform slot shape
-        // — so the pair becomes the schema-shaped
-        // `[value, type, [attribute value, attribute type]]`.
+        // The parameter *is* the pair `[value, type]`, its cells in scope so the
+        // clone yields fresh ones per call.
+
+        // A `x # n` parameter adds a third slot, itself a `[value, type]` pair.
         let attr_cell = parameter_attribute.is_some().then(|| {
             let value_cell = self.fresh_cell();
             let type_cell = self.fresh_cell();
@@ -82,21 +65,16 @@ where
             }
             None => self.array_node(return_block, &[value_cell, type_cell]),
         };
-        // The return and parameter slots are named once the pair exists; both
-        // are already registered in this function's own scope by the helper
-        // that allocated them (the apply clone walk requires `parameter` to be
-        // a member, and `finish_function` asserts it).
+        // Both entry points are already registered in this function's scope;
+        // the clone walk requires `parameter` to be one.
         self.module.finish_function(function, param, param);
         self.state[parameter].term = Some(param);
         self.state[parameter].ty = Some(type_cell);
-        // A self- or mutually-recursive binding (`fib = n => e`): the IR is a
-        // cycle — the body references the function's own `ExprId`.  Register
-        // the function's pair *before* the body compiles, so the reference
-        // resolves to the pre-registered pair (whose value node is the
-        // function's own) instead of re-entering this check.  Every lambda
-        // takes this path (a non-referencing lambda's pre-registration is
-        // overwritten identically below); the pair's type slot is a cell,
-        // bound to the arrow below once the return type is known.
+        // The pair is registered before the body, so a self-reference
+        // resolves to it instead of re-entering this check.
+
+        // Every lambda takes this path: a non-referencing lambda's
+        // pre-registration is overwritten identically below.
         let func_node = self.alloc_node(return_block, None, None);
         let ty_cell = self.fresh_cell();
         let pair = self.array_node(return_block, &[func_node, ty_cell]);
@@ -110,24 +88,12 @@ where
                 ty: type_cell,
             },
         )]));
-        // The annotated parameter's type is compiled in scope — it may
-        // reference the parameter itself (`x : x -> Int`) — and unified
-        // against the parameter's type slot *before* the body compiles, so
-        // in-body readers see the annotated kind statically (an array
-        // annotation's length, a function annotation's arrow) and the
-        // generated constraints fire at normalize.  At each apply the
-        // argument still checks against the very same slot — the unify
-        // differs from the outer `(x => e) : (T -> _)` annotation only in
-        // when it happens, not in what it binds.
+        // The parameter's annotated type is unified into its type slot
+        // before the body, so an in-body reader sees it.
         if let Some(parameter_type) = parameter_type {
             self.check_expr(parameter_type);
-            // The type the annotation **names**: a type expression's term is the
-            // type value itself, unless the expression carries attributes — a
-            // refinement written *on a type*, `x : (_ ! in_num) => e` — in which
-            // case the term is the `[type, …, attribute]` pair the attribute
-            // lives in and the parameter's slot takes the *denotation*
-            // ([`Checker::type_denotation`]).  The attribute is enforced where it
-            // was written (the type expression's own assert, on this function).
+            // The type the annotation names: a type expression's term,
+            // unless it carries attributes — then its denotation.
             let denotation = self.type_denotation(parameter_type, Some(parameter));
             self.check_unify(
                 type_cell,
@@ -136,38 +102,22 @@ where
                 DiagKind::Annotation,
             );
         }
-        // The annotated parameter's attribute `x # n`, compiled in body scope
-        // like the type so `n` may reference the parameter itself.  The
-        // declared perspective is a *template* constraint: the apply's check
-        // compares each argument's attribute against this declared value node
-        // (via [`Checker::function_param_attr`], then the attribute's
-        // [`AttrExt::unify_slots`]).  The live attribute cell in the parameter
-        // pair is deliberately left **undecided** — binding it to the declared
-        // value here would let the deep pass *bake* it (it is a concrete
-        // value), so the per-apply clone would reference the template's cell
-        // instead of resetting it, and the lowlevel apply's positional unify
-        // would then enforce the declared perspective (equality) against the
-        // argument, defeating the attribute's subtype relaxation.  Kept
-        // undecided, it is a fresh per-apply clone that binds the argument's
-        // actual perspective, exactly like the value/type cells — so the
-        // body's return reads the caller's perspective and `f (5 # 4)` yields
-        // `5 # 4`.  The declared value itself stays only in
-        // [`Checker::function_param_attr`].
+        // Invariant: the attribute cell stays undecided — a bound declared
+        // value would be baked by the deep pass.
         if let Some(parameter_attribute) = parameter_attribute {
+            // The attribute is compiled in body scope, like the type, so `n` may
+            // reference the parameter itself.
             self.check_expr(parameter_attribute);
-            // The declared value is the annotation expression's `[value, type]`
-            // term pair — the uniform slot shape the apply's check compares
-            // against the argument's slot.
+            // The declared value: the annotation expression's `[value, type]`
+            // term pair.
             let declared = self.state[parameter_attribute]
                 .term
                 .expect("an attribute expr is compiled");
             // The parameter's schema tail[0] names the attribute; the apply's
             // check resolves its `AttrExt` from this marker.
             let marker = self.ir.schema(parameter).tail[0];
-            // A parameter annotation is the other site that reads an
-            // attribute: a build with no attribute extension reports it here,
-            // so the apply's check can simply decline to run (the guard has
-            // already failed the build).
+            // A parameter annotation reads an attribute too: a build with no
+            // extension reports it here, so the apply declines.
             if self.attribute_extension(&marker).is_none() {
                 self.no_attr_ext_guard(self.loc(e, 2));
             }
@@ -176,23 +126,15 @@ where
         let ret = self.check_expr(r#return);
         self.scopes.pop();
         self.current_block = saved;
-        // The shell fills in: the return and parameter entry points.  The
-        // body's asserts were registered into [`Function::asserts`] as they
-        // were compiled, and the scope grew node by node.  The value node
-        // pre-exists (the self-reference applied it during the body); it
-        // fills in now with the function id.
+        // The value node pre-exists — the self-reference applied it during the
+        // body — and fills in now with the function id.
         self.module.functions[function].r#return = ret;
         self.module.functions[function].parameter = param;
-        // The return's type cell, stored on the function so the type-level
-        // clone-on-unify can read the signature's codomain without forcing
-        // `r#return` (which may be an unevaluated operation node — a
-        // native-call return — whose own slots do not name the type).
+        // The return's type cell, stored so a type-level clone-on-unify reads
+        // the codomain without forcing `r#return`.
         self.module.functions[function].return_type = self.state[r#return].ty.unwrap();
-        // The return may live in another function's scope — a body ending
-        // in a variable reference to a nested closure's pair (owned by that
-        // closure, its chain reaching here through the parent link).  The
-        // entry point still belongs to this function's scope: the apply
-        // walk starts from it.
+        // The return may belong to a nested closure's scope, but the entry
+        // point must be this function's member.
         if !self.module.functions[function].nodes.contains(&ret) {
             self.module.functions[function].nodes.push(ret);
         }
@@ -203,21 +145,11 @@ where
             )))),
         );
         self.lambda_value_nodes.push(func_node);
-        // The function's term becomes its own type (`f : f`): mutate the
-        // pre-body pair — whose type slot held the placeholder `ty_cell` so
-        // the function-ness guard skipped during checking — in place into the
-        // self-referential `[Function(fid), ↺]`, the same shape as the
-        // universe `K = [Type, ↺]`: slot 0 the function's own value node,
-        // slot 1 the pair itself, so the type chain cycles at the function
-        // (`f : f : f …`).
-        //
-        // One node, not a separate type node beside the pair: a distinct
-        // `[Function(fid), ftype]` would be value-equal to the pair
-        // `[Function(fid), ftype]` and collide with it under the apply clone's
-        // topology re-establishment. The signature (parameter and return) lives
-        // in the function template, reached through `fid`; unifying this type
-        // descends into those two cells directly. See
-        // `docs/notes/function-type-merge.md`.
+        // The term becomes its own type (`f : f : f …`): the pre-body pair is
+        // mutated in place into `[Function(fid), ↺]`.
+
+        // One node, not a type node beside the pair: a distinct one collides
+        // under the clone's topology re-establishment.
         let items = [
             ArrayItem::new(AnyNodeId::Dynamic(func_node)),
             ArrayItem::new(AnyNodeId::Dynamic(pair)), // the self-reference
@@ -228,9 +160,8 @@ where
                 self.module.alloc_array(&items, return_block),
             ))),
         );
-        // The placeholder type cell joins the pair's class, so any reference
-        // that resolved to `ty_cell` during the body now reads the
-        // function-type node.
+        // The placeholder type cell joins the pair's class, so a body reference
+        // to it now reads the function type.
         self.module.unify(ty_cell, pair);
         self.function_stack.pop();
         self.state[e].term = Some(pair);
@@ -239,28 +170,13 @@ where
         pair
     }
 
-    /// The **signature** a type-position `A -> B` lowers to: a real function
-    /// whose parameter is annotated `domain` and whose return is annotated
-    /// `codomain`.  Returns the function-type node — the self-referential
-    /// `[Function(fid), ↺]` — which is the term the arrow *was*.
+    /// The **signature** a type-position `A -> B` lowers to: a real
+    /// function; see `docs/notes/function-type-merge.md`.
     ///
-    /// The lowering is the whole point.  `A -> B` used to compile to an arrow
-    /// **term** `[[dom, cod], [FunctionType, K]]`, a second representation of a
-    /// function's type beside the function's own — and a `[dom, cod]` shape
-    /// has nowhere to hang an attribute, which is why `attributes.md` records
-    /// "attributes do not flow through a function" as a non-goal.  Here the two
-    /// sides are the parameter's `[value, type, attrs…]` pair and the return's
-    /// term, so `?a: Int => ?a: Int` puts one cell in both positions and
-    /// constrains the **values** passing through, not merely their types.
-    ///
-    /// `domain` and `codomain` are compiled **before** the shell opens, so the
-    /// two type expressions' nodes belong to the *enclosing* template and are
-    /// cloned per call like any other node in scope; the shell's own parent is
-    /// that enclosing function, which is what keeps a signature written inside
-    /// a lambda body re-instantiated per call rather than shared.
-    ///
-    /// A signature is never applied — it exists to be unified against — so its
-    /// body is the bare return pair: no assert, no capture, nothing to run.
+    /// # Invariant
+    /// `domain` and `codomain` compile before the shell opens, so their nodes
+    /// belong to the enclosing template and are cloned per call. A signature is
+    /// never applied, only unified against, so its body is the bare return pair.
     pub(super) fn check_signature(
         &mut self,
         e: ExprId,
@@ -274,16 +190,13 @@ where
         pair
     }
 
-    /// The graph half of [`Self::check_signature`]: see its own doc.  Factored
-    /// out because the apply's function-ness guard needs a signature
-    /// **pattern** as well — the two cells it binds a callee's type against,
-    /// and nothing else.  The pattern is a real function because a function
-    /// type is the only function type there is: there is no second shape left
-    /// for a pattern to wear.
+    /// The graph half of [`Self::check_signature`]; the apply's
+    /// function-ness guard needs a signature **pattern** too.
     ///
-    /// `e` is the source expression the signature is, or `None` for a pattern;
-    /// a pattern has no expression to record, so it registers no
-    /// `function_of` entry and nothing reads one back.
+    /// # Invariant
+    /// The pattern is a real function: a function type is the only function
+    /// type there is, so there is no second shape for a pattern to wear. A
+    /// pattern has no expression, so it registers no `function_of` entry.
     fn signature_node(
         &mut self,
         e: Option<ExprId>,
@@ -302,11 +215,8 @@ where
         let parameter_value = self.fresh_cell();
         let parameter_type = self.fresh_cell();
         let parameter = self.array_node(return_block, &[parameter_value, parameter_type]);
-        // The domain is *unified into* the parameter's type slot rather than
-        // written there, so an open class stays open exactly as a source
-        // lambda's `x : ?a` annotation leaves it — and so unifying a function
-        // against this signature binds the two, instead of this signature
-        // binding itself.
+        // The domain is unified *into* the parameter's type slot, so a function
+        // unified against it binds the two.
         self.module.unify(parameter_type, domain);
         let return_value = self.fresh_cell();
         let body = self.array_node(return_block, &[return_value, codomain]);
@@ -340,19 +250,14 @@ where
     pub(super) fn check_app(&mut self, e: ExprId, function: ExprId, argument: ExprId) -> NodeId {
         self.check_expr(function);
         self.check_expr(argument);
-        // The function slot is the function's *value* (the runtime apply
-        // needs a `HighProgramValue::Function`, not the pair); the argument slot is the
-        // full pair, so the apply's unify compares type cell to type cell.
+        // The function slot is its *value*, not the pair; the argument slot
+        // is the pair, so the apply compares type to type.
         let function_value = self.value_of(function);
-        // The apply's argument operand is normalized to the function's
-        // declared *parameter* arity, slot-aligned: value@0, type@1, and — for
-        // a parameter carrying the attribute — the argument's attribute@2
-        // (the `[value, type]` slot; read the missing `[0, int]` when absent).
-        // The lowlevel apply's positional unify then compares value-to-value
-        // and type-to-type, matching the parameter pair's shape.  The attribute
-        // equality is checked separately below (the per-apply parameter clone
-        // resets its own attribute cells, so it cannot enforce the template's
-        // declared value).
+        // The argument operand matches the parameter's arity: value@0, type@1,
+        // and attribute@2 for an attributed parameter.
+
+        // The positional unify compares slot to slot; attribute equality is
+        // checked below, the clone resetting its own cells.
         let param_persp = self.function_param_attr.get(&function).copied();
         let argument_value = self.value_of(argument);
         let argument_type = self.state[argument].ty.unwrap();
@@ -366,39 +271,23 @@ where
             }
             None => self.array_node(self.current_block, &[argument_value, argument_type]),
         };
-        // Function-ness guard: catch *concretely* non-function types
-        // statically (applying a literal is an error, not a runtime panic).
-        // A concrete function type is the self-referential `[Function(fid),
-        // ↺]` and is recognised by the two cells it has; undecided types
-        // (parameters, lambdas, call results) are left to the runtime apply —
-        // unifying the shared cell here would chain the type cells of every use
-        // of a polymorphic value.  A failed unify never merges classes, so this
-        // cannot chain either.
+        // Function-ness guard: catch concretely non-function types statically;
+        // undecided ones wait for the runtime apply.
         let function_ty = self.state[function].ty.unwrap();
         let concrete = self.type_is_concrete(function_ty);
         if concrete && !self.module.is_function_type(function_ty) {
             let d = self.fresh_cell();
             let c = self.fresh_cell();
-            // The pattern is a **function**, like every other function type:
-            // there is no second representation left for it to wear, so the
-            // guard binds the callee's type against two fresh cells of a real
-            // signature (`Checker::signature_node`).
+            // The guard binds the callee's type against two fresh cells of a
+            // real signature (`signature_node`).
             let (fn_ty, _) = self.signature_node(None, d, c);
             self.check_unify(function_ty, fn_ty, self.loc(e, 1), DiagKind::Guard);
         }
-        // The apply's attribute equality check: the function's declared
-        // parameter attribute (or its `missing` for an unannotated parameter)
-        // against the argument's attribute (or `missing`).  This is what
-        // rejects `id (5 # 4)` (declared missing vs `4`) and `f 5` for
-        // `f = x # 4 => x` (declared `4` vs missing).  Routed through the
-        // attribute's `AttrExt::unify_slots`; a program with no attribute
-        // extension reaches neither branch (no schema carries an attribute).
-        //
-        // A build with no attribute extension records the guard once, where
-        // the attribute is first read — an annotation or a parameter
-        // annotation — and it is the argument pair's own missing slot
-        // ([`Checker::missing_slot_of`]) that reports it when no other site
-        // has.  So this check is skipped, not re-reported.
+        // The apply's attribute equality: the declared parameter attribute (or
+        // its `missing`) against the argument's.
+
+        // A build with no extension already failed the guard where the
+        // attribute was first read, so this check is skipped.
         if let Some((param_marker, param_slot)) = param_persp {
             if let Some(ext) = self.attribute_extension(&param_marker) {
                 let arg_missing = self.attr_or_missing(argument, &param_marker);
@@ -410,19 +299,14 @@ where
             if let Some(ext) = self.attribute_extension(&marker) {
                 let found_attr = self.state[argument].attr.unwrap();
                 // The declared side of an unannotated parameter is the
-                // attribute's missing slot — a `[0, int]` term pair, the
-                // uniform slot shape.
+                // attribute's missing slot, a `[0, int]` term pair.
                 let missing = self.missing_slot_of(&marker, self.loc(e, 2));
                 let loc2 = self.loc(e, 2);
                 ext.unify_slots(self, found_attr, missing, loc2);
             }
         }
-        // The result's type cell: undecided unless the apply's evaluation
-        // syncs it.  The cell rides in the apply's operand; the runtime
-        // apply unifies the return pair with the apply node — the apply
-        // node *is* the return pair — and binds the cell to the return
-        // type: a concrete result syncs its type, a polymorphic template's
-        // lazy result leaves it undecided.
+        // The result's type cell rides in the apply's operand; the runtime
+        // apply binds it to the return pair.
         let c = self.fresh_cell();
         let operands = self.array_node(self.current_block, &[function_value, argument_pair, c]);
         let node = self.op_node(
@@ -430,13 +314,8 @@ where
             P::Operator::from(LowOperator::Apply),
             Some(operands),
         );
-        // Record the argument edge: the checker is the only place that knows
-        // this application's argument structure (its expression's source
-        // span), and the *edge* (this apply op node -> the argument) is unique
-        // per application even when the argument node itself is shared — so a
-        // runtime parameter-check failure can be attributed to the argument's
-        // span regardless of node sharing.  The lowlevel records only the
-        // apply node on failure; the diagnostics read this edge.
+        // The checker alone knows this application's argument span; the
+        // edge is per-application even when the node is shared.
         self.apply_edges.insert(
             node,
             ApplyEdge {
@@ -444,12 +323,8 @@ where
                 apply_expr: e,
             },
         );
-        // A marked recursion's site is **not classified here**.  Whether a loop
-        // is emitted for it is the reader's fact, and each reader reports the
-        // sites it declines at the point it meets them
-        // (`docs/notes/loop-conversion.md` §8.6); the checker used to infer it
-        // from an undecided state, which is a fact about the expansion rather
-        // than about any reader.
+        // A marked recursion's site is not classified here: emitting a loop
+        // is each reader's fact (loop-conversion.md §8.6).
         self.state[e].term = Some(node);
         self.state[e].val = None;
         self.state[e].ty = Some(c);
