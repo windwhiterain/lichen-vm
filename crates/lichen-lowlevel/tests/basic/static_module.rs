@@ -1,8 +1,5 @@
-//! Static module dependencies: a fully-solved [`StaticModule`] registered
-//! in the device's [`Registry`] and used in place.  The crisis demos of the
-//! feature note (`docs/notes/static-modules.md`): residual re-open,
-//! constant baking, the shared-arena rule, device-key resolution,
-//! recursion, parameter topology, per-call asserts, GC, and static closures.
+//! Static module dependencies seen from an importer. Design:
+//! `docs/notes/static-modules.md`.
 
 use super::*;
 use lichen_lowlevel::{
@@ -11,9 +8,7 @@ use lichen_lowlevel::{
 };
 use std::sync::{Arc, RwLock};
 
-/// Freeze `source` into `m`'s registry under a device key — the tests pick
-/// distinct compact indices (the device registry allocates them in
-/// production; the lowlevel only files under the caller-provided key).
+/// Freeze `source` into `m`'s registry under a caller-chosen device key.
 fn freeze(m: &mut Module<TestProgram>, source: &Module<TestProgram>, key: u64) -> ModuleKey {
     m.freeze(source, ModuleKey::from_raw(key), [0; 32])
 }
@@ -50,9 +45,7 @@ fn raw_items(value: impl Into<Option<TestValue>>) -> Vec<ArrayItem> {
 
 #[test]
 fn static_apply_reruns_the_residual_spine_against_the_argument() {
-    // Source: f(x) = x + 1.  At solve time the Add reads the marker
-    // parameter and freezes the empty cell with a dead residual operation;
-    // the materialize walk must clone that spine and re-run it per call.
+    // At solve time the Add freezes a dead residual; the walk clones it per call.
     let mut m = Module::new();
     let body = m.add_block(None);
     let param = m.add_node(body, None, None);
@@ -79,9 +72,8 @@ fn static_apply_reruns_the_residual_spine_against_the_argument() {
 
 #[test]
 fn static_apply_bakes_constants_in_place() {
-    // Source: f(x) = [x, 42] — the return pair's second element is a
-    // constant: the walk bakes it (an inline absolute static ref), so the
-    // result shares the module's payload instead of copying it.
+    // The walk bakes the constant as an inline absolute static ref, so the
+    // result shares the payload.
     let mut m = Module::new();
     let body = m.add_block(None);
     let ret = m.add_node(body, None, None);
@@ -143,11 +135,9 @@ fn static_apply_bakes_constants_in_place() {
 
 #[test]
 fn nested_index_over_a_static_array_reads_shared_values() {
-    // Source: f(x) = [[1,2],[3,4]] — a fully-baked constant.  The importer
-    // reads it through a nested index: the inner Index node caches the
-    // element array as the module's own static payload, and a later re-read
-    // of the same node must still resolve (every ref is keyed and absolute,
-    // so the cached value is unambiguous from any context).
+    // The inner Index node caches the element array as the module's own static payload.
+
+    // Every ref is keyed and absolute, so a cached value is unambiguous from any context.
     let mut m = Module::new();
     let body = m.add_block(None);
     let param = m.add_node(body, None, None);
@@ -199,11 +189,9 @@ fn nested_index_over_a_static_array_reads_shared_values() {
 
 #[test]
 fn registry_resolves_artifacts_by_device_key() {
-    // One freeze → one device key → one artifact: refs baked with the key
-    // resolve through the registry, and repeated `get`s return the same
-    // resident module.  Re-freezing the same source compiles a NEW artifact
-    // under a NEW key — both resolve independently, since a registration is
-    // per artifact, not per source.
+    // One freeze → one device key → one artifact; repeated `get`s return the same resident module.
+
+    // Re-freezing one source files a NEW artifact under a NEW key: registration is per artifact.
     let mut m = Module::new();
     let body = m.add_block(None);
     let ret = m.add_node(body, None, None);
@@ -243,10 +231,8 @@ fn registry_resolves_artifacts_by_device_key() {
 
 #[test]
 fn static_recursion_counts_down_through_a_lazy_branch() {
-    // Source: f(x) = if x == 0 then 0 else f(x - 1), with the branch lazy
-    // (`Index([f(x-1), 0], x == 0)`).  The self-reference is the baked
-    // static function value; each importer apply materializes one level and
-    // dispatches back to `static_function_apply` for the next.
+    // Each importer apply materializes one level and dispatches to
+    // `static_function_apply` for the next.
     let mut m = Module::new();
     let body = m.add_block(None);
     let param = m.add_node(body, None, None);
@@ -297,9 +283,7 @@ fn static_recursion_counts_down_through_a_lazy_branch() {
         Some(g_ops),
     );
     finish_function(&mut m, body, g_ret, param, g_func);
-    // No solve pass: an unconditional self-apply never terminates, so every
-    // node stays undecided (undecided) and materializes per call — the
-    // static depth guard bounds it.
+    // An unconditional self-apply never terminates, so every node materializes per call.
     let mut imp = Module::new();
     let root = imp.add_block(None);
     imp.apply_depth_limit = 20;
@@ -318,11 +302,8 @@ fn static_recursion_counts_down_through_a_lazy_branch() {
 
 #[test]
 fn static_parameter_topology_is_reestablished_among_clones() {
-    // Source: f([x0, x1]) = x0 with x0 and x1 unified at build (a
-    // homogeneous array pattern).  The materialize walk must re-unify the
-    // parameter's clones, so an argument whose elements differ fails the
-    // parameter check with an ApplyError — otherwise the mismatch would
-    // silently pass.
+    // The walk must re-unify the parameter's clones, or a mismatched argument
+    // passes silently.
     let mut m = Module::new();
     let body = m.add_block(None);
     let x0 = m.add_node(body, None, None);
@@ -367,9 +348,7 @@ fn static_parameter_topology_is_reestablished_among_clones() {
 
 #[test]
 fn static_assert_rechecks_per_call() {
-    // Source: f(x) = x with the body assert `x == 1` — undecided at
-    // solve, so it stays pending; the importer's materialize instantiates
-    // it per call, and check_asserts sees the argument.
+    // The assert is undecided at solve, so the importer instantiates it per call.
     let mut m = Module::new();
     let body = m.add_block(None);
     let ret = m.add_node(body, None, None);
@@ -412,8 +391,7 @@ fn static_assert_rechecks_per_call() {
 
 #[test]
 fn materialized_clones_survive_block_release() {
-    // The materialized clones land in the apply's block; compaction must
-    // move them with it, and a second apply must still work.
+    // The materialized clones land in the apply's block; compaction must move them.
     let mut m = Module::new();
     let body = m.add_block(None);
     let param = m.add_node(body, None, None);
@@ -449,9 +427,7 @@ fn materialized_clones_survive_block_release() {
 
 #[test]
 fn static_closure_value_applies_from_dynamic_context() {
-    // Source: g(x) = x + 1 and f(y) = [y, g] — the closure g rides inside
-    // f's return pair as a static function value (baked).  The importer
-    // extracts it and applies it.
+    // The closure g rides inside f's return pair as a baked static function value.
     let mut m = Module::new();
     // g(x) = x + 1
     let g_body = m.add_block(None);
@@ -527,10 +503,9 @@ fn from_module_dedupes_shared_payloads() {
 
 #[test]
 fn static_array_cache_survives_block_release_verbatim() {
-    // Source: f(x) = [[1,2],[3,4]].  An Index over the result caches the
-    // module's own [3,4] payload as the importer node's value; compaction
-    // must keep such a value verbatim (there is no block to move it out
-    // of), and the cached read must still resolve afterwards.
+    // An Index over the result caches the module's own payload as the importer node's value.
+
+    // Compaction must keep such a value verbatim: there is no block to move it out of.
     let mut m = Module::new();
     let body = m.add_block(None);
     let param = m.add_node(body, None, None);
@@ -569,8 +544,7 @@ fn static_array_cache_survives_block_release_verbatim() {
         panic!("the cached element must be the module's own static payload")
     };
 
-    // Compaction moves the Index node into the root and releases the child:
-    // the static value rides along verbatim and still resolves.
+    // The static value rides along verbatim and still resolves after compaction.
     imp.garbage_collect(inner)
         .expect("the evaluated index node");
     assert!(
@@ -618,19 +592,14 @@ fn freeze_mapped_returns_consistent_node_indices() {
     assert_eq!(u128_of(imp.evaluate_node(raw[1].node, None).unwrap()), 20);
 }
 
-/// A dependency module frozen into a shared registry, plus the static refs
-/// an importer may hold: the registry, A's key, and srefs to A's constant
-/// and array nodes.
+/// A frozen dependency module, its registry, and srefs to its constant and array nodes.
 fn frozen_dependency() -> (
     Arc<RwLock<Registry<TestProgram>>>,
     ModuleKey,
     StaticNodeId,
     StaticNodeId,
 ) {
-    // Single-threaded sharing: a filed value carries raw arena handles, so this
-    // `Arc` cannot cross a thread (see the `Registry` doc in this crate); `Rc`
-    // is not available — `AGENTS.md`'s code taste forbids it.  The `Arc` stays
-    // because `Registry::new_module` takes it by reference.
+    // A filed value carries raw arena handles, so this `Arc` cannot cross a thread.
     #[allow(clippy::arc_with_non_send_sync)]
     let registry = Arc::new(RwLock::new(Registry::new()));
     let mut a = Registry::new_module(&registry);
@@ -660,11 +629,9 @@ fn frozen_dependency() -> (
 
 #[test]
 fn freezing_keeps_dependency_refs_verbatim() {
-    // A transitive freeze: module B is bound to the registry that already
-    // holds A, and B's values reference A (an inline static item and a
-    // materialized A leaf).  Freezing B keeps every A ref verbatim — keyed
-    // by A, payload in A's shared arena — and B's artifact resolves through
-    // the shared registry from any importer.
+    // Freezing B keeps every A ref verbatim: keyed by A, payload in A's shared arena.
+
+    // B's artifact resolves through the shared registry from any importer.
     let (registry, key_a, const_sref, arr_sref) = frozen_dependency();
 
     let mut b = Registry::new_module(&registry);
@@ -719,8 +686,7 @@ fn freezing_keeps_dependency_refs_verbatim() {
     };
     assert_eq!(handle.module, key_a, "the baked payload stays in A's arena");
 
-    // An importer of B reads through both modules: B's local item, A's
-    // array item, and A's baked constant resolve through the one registry.
+    // B's local item and A's array item and constant resolve through the one registry.
     let mut imp = Registry::new_module(&registry);
     let iroot = imp.add_block(None);
     let holder_sref = StaticNodeId {
@@ -740,9 +706,7 @@ fn freezing_keeps_dependency_refs_verbatim() {
 #[test]
 #[should_panic(expected = "which is not registered here")]
 fn freeze_rejects_an_unregistered_dependency_key() {
-    // B is built against a registry holding A, so its values carry A-keyed
-    // refs; freezing B into a *different* registry would bake refs that
-    // cannot resolve there.  The freeze rejects the unregistered key.
+    // B carries A-keyed refs, so freezing it into a registry without A is rejected.
     let (registry, _key_a, _const_sref, arr_sref) = frozen_dependency();
 
     let mut b = Registry::new_module(&registry);
@@ -764,16 +728,11 @@ fn freeze_rejects_an_unregistered_dependency_key() {
 
 #[test]
 fn static_apply_keeps_foreign_items_in_place() {
-    // B's function template f(x) = [x, A-item]: the return's array holds a
-    // foreign (module A) static item alongside the parameter.  Applying f
-    // from an importer re-points the parameter item at its clone but must
-    // keep the foreign item in place — a foreign local index may never be
-    // looked up in B's node table (A's array sits at local index 62, far
-    // past B's node count, so the unguarded lookup would panic).
-    // Single-threaded sharing: a filed value carries raw arena handles, so this
-    // `Arc` cannot cross a thread (see the `Registry` doc in this crate); `Rc`
-    // is not available — `AGENTS.md`'s code taste forbids it.  The `Arc` stays
-    // because `Registry::new_module` takes it by reference.
+    // Applying f must keep the foreign item in place and only re-point the parameter item.
+
+    // A foreign local index may never be looked up in B's node table.
+
+    // A filed value carries raw arena handles, so this `Arc` cannot cross a thread.
     #[allow(clippy::arc_with_non_send_sync)]
     let registry = Arc::new(RwLock::new(Registry::new()));
     let mut a = Registry::new_module(&registry);

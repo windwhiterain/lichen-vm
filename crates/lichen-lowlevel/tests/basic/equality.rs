@@ -1,9 +1,5 @@
-//! Unification (`Module::unify`) and the DSU equivalence classes it binds
-//! through — the lowlevel half of what the highlevel checker builds on.
-//!
-//! The tests here moved from the standalone `tests/unify.rs` integration
-//! file: they exercise the lowlevel directly, so they live with the basic
-//! suite under `tests/basic/lowlevel/`.
+//! Unification (`Module::unify`) and the DSU classes it binds through.
+//! Rules: `docs/notes/lowlevel-vm.md`.
 
 use super::*;
 use lichen_utils::disjoint;
@@ -37,13 +33,9 @@ fn root_node_compresses_deep_paths() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let nodes: Vec<_> = (0..5).map(|i| u128_node(&mut m, root, i as u128)).collect();
-    // Build a parent chain through the union-find's own operation, so a
-    // class's root becomes a child of another class's root: merge the pair
-    // `1 <- 2`, grow the other class past it, then merge the two — `1`'s
-    // root is attached under `3` and leaves `2` two edges deep.  This is the
-    // deepest chain union-by-size produces at this size; a longer one would
-    // have to install a `parent` link by hand, outside the union-find's own
-    // operations — the bypass this API refuses.
+    // The chain is built through the union-find's own operations, never a hand-installed link.
+
+    // Union by size cannot make it deeper at this size: `1` ends under `3`, `2` two edges down.
     m.add_equality(nodes[1], nodes[2]);
     m.add_equality(nodes[3], nodes[4]);
     m.add_equality(nodes[3], nodes[0]);
@@ -79,10 +71,7 @@ fn cloned_function_nodes_start_in_their_own_equality_class() {
     let call = call_node(&mut m, root, func_node, arg);
     m.evaluate_node_deep(call, None);
 
-    // A clone is a fresh node, so it starts as a singleton class unrelated
-    // to the body's nodes: find the call's clone of ret (the Id op whose
-    // operand is the clone of the parameter, unified with the argument) in
-    // the call node's block.
+    // A clone is a fresh node: a singleton class unrelated to the body's nodes.
     let candidates: Vec<NodeId> = m.blocks[root]
         .nodes
         .iter()
@@ -104,10 +93,10 @@ fn cloned_function_nodes_start_in_their_own_equality_class() {
 }
 
 // --- unify -------------------------------------------------------------
-//
-// Structural unification over values: undecided classes bind, concrete values
-// merge by equality (arrays elementwise), conflicts collect in
-// `Module::unify_errors` without merging.
+
+// Structural unification over values: undecided classes bind, equal concretes merge.
+
+// Conflicts collect in `Module::unify_errors` without merging.
 
 fn is_undecided_value(value: Option<TestValue>) -> bool {
     value.is_none()
@@ -183,9 +172,7 @@ fn binding_one_member_binds_the_whole_class() {
 
 #[test]
 fn a_class_committed_value_matches_a_newcomers_value() {
-    // A read that will resolve to 5, in a class that already committed 5: the
-    // unify that brings a second 5 in is clean.  Nothing forces the read — its
-    // computation runs when something reads it, and reconciles then.
+    // Nothing forces the read: it reconciles only when something reads it.
     let mut m = Module::new();
     let root = m.add_block(None);
     let e0 = usize_node(&mut m, root, 5);
@@ -348,8 +335,7 @@ fn array_element_conflict_records_an_error_without_merging_the_arrays() {
         m.equality_representative(left),
         m.equality_representative(right)
     );
-    // The traced descent: root operands are the two arrays, and the failure
-    // is at element 1 (one vs `'s'`); element 0 (`x` vs `two`) bound instead.
+    // The descent is traced: the root operands are the two arrays, the failure at element 1.
     let error = m.unify_errors[0].clone();
     assert_eq!(error.root_a, left);
     assert_eq!(error.root_b, right);
@@ -503,9 +489,7 @@ fn a_newcomer_joining_a_bound_class_carries_the_value() {
 
 // --- garbage collection interplay --------------------------------------
 
-/// Collect a block whose member of a class is unreachable from the block
-/// root: the member dies, the class's survivor keeps the binding, and the
-/// member list stays clean (walkable, no stale ids).
+/// A collected block's dead class members are spliced out; the survivors keep the binding.
 #[test]
 fn garbage_collecting_a_block_splices_its_members_out_of_the_class() {
     let mut m = Module::new();
@@ -538,8 +522,7 @@ fn garbage_collecting_a_block_splices_its_members_out_of_the_class() {
     assert!(members.contains(&x) && members.contains(&int));
 }
 
-/// The class representative dies with the block: a survivor is re-elected,
-/// all survivors' parents re-point at it, and the binding is still readable.
+/// A dead representative is re-elected from the survivors, whose parents re-point at it.
 #[test]
 fn garbage_collect_re_elects_a_representative_when_the_old_one_dies() {
     let mut m = Module::new();
@@ -573,9 +556,8 @@ fn garbage_collect_re_elects_a_representative_when_the_old_one_dies() {
 }
 
 // --- application-time unification --------------------------------------
-//
-// The functions below have body `f(x) = x` — the return node IS the
-// parameter — so no operator is needed to exercise the apply-time unify.
+
+// These bodies are `f(x) = x`, so no operator is needed to exercise the apply-time unify.
 
 #[test]
 fn apply_unifies_the_cloned_parameter_with_the_argument() {
@@ -611,8 +593,7 @@ fn apply_with_an_undecided_argument_stays_lazy() {
 fn apply_unifies_array_parameters_elementwise() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // f(x) = x with x = [x0, x1]: the parameter's structure is an array,
-    // so the apply unifies it elementwise against the argument.
+    // An array parameter is unified elementwise against the argument.
     let x0 = undecided_node(&mut m, root);
     let x1 = undecided_node(&mut m, root);
     let param = array_node(&mut m, root, &[x0, x1], None);
@@ -640,9 +621,7 @@ fn apply_unifies_array_parameters_elementwise() {
 fn apply_time_conflict_records_an_error() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // The parameter is already bound to a concrete value — a defined
-    // signature like `x: int`.  Applying a conflicting argument is a
-    // runtime type error at the application site.
+    // A parameter already bound to a concrete value makes the conflict an application-site error.
     let param = undecided_node(&mut m, root);
     let f = m.add_function(root, param, param, [param], []);
     let one = usize_node(&mut m, root, 1);
@@ -691,10 +670,7 @@ fn apply_unify_binds_an_undecided_argument_into_the_param_class() {
 fn apply_reestablishes_the_parameter_patterns_internal_classes() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // f(x) = x with x = [x0, x1], where x0 ~ x1 are unified in the
-    // template — a homogeneous pattern: both elements must unify to the
-    // same value.  The apply re-establishes the class among the cloned
-    // elements, so the argument is forced to satisfy it.
+    // The apply re-establishes the template's class among the cloned elements.
     let x0 = undecided_node(&mut m, root);
     let x1 = undecided_node(&mut m, root);
     let param = array_node(&mut m, root, &[x0, x1], None);

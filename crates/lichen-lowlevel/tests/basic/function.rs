@@ -1,5 +1,4 @@
-//! Function values and `Apply`: clone-and-map call semantics, nested and
-//! higher-order functions, and functions interacting with compaction.
+//! Function values and `Apply`: clone-and-map calls, nesting, and compaction.
 
 use super::*;
 
@@ -70,8 +69,7 @@ fn function_call_operator_clones_array_body() {
     );
     let (func_node, _) = wrap_function(&mut m, f, ret, param);
 
-    // The array embeds the parameter, so the definition pass (evaluating
-    // the body with the empty parameter) flags it undecided.
+    // The array embeds the parameter, so the definition pass flags it undecided.
     m.evaluate_node_deep(ret, None);
     assert_eq!(
         m.node_evaluated_deep(ret),
@@ -83,10 +81,8 @@ fn function_call_operator_clones_array_body() {
     let value = m.evaluate_node_deep(call, None).unwrap();
 
     assert_u128_array(&m, value, &[10, 7]);
-    // The clone's array holds the cloned parameter — unified with the
-    // argument, so it carries the argument's value — and references the
-    // body's constant in place; the body's own array still references the
-    // parameter.
+    // The clone's array holds the parameter's clone, unified with the argument,
+    // and references the body's constant in place.
     let ids = array_ids(m.node_value(AnyNodeId::Dynamic(call)).unwrap());
     assert_eq!(ids.len(), 2);
     assert_eq!(
@@ -137,9 +133,7 @@ fn function_call_operator_preserves_undecided_operand_chain() {
     assert!(m.blocks.contains_key(m.node_block(ret)));
     assert_eq!(m.node_operation(mid).unwrap().operand, Some(param));
 
-    // Re-bind the argument node and re-evaluate the call: the cloned chain
-    // resolves through it.  The binding goes through `unify` so the whole
-    // class — the parameter clone included — carries the value.
+    // The binding goes through `unify`, so the parameter clone shares its class.
     let p = m.blocks[root].arena.alloc(99u128);
     let ninety_nine = m.add_node(
         root,
@@ -164,10 +158,8 @@ fn function_call_operator_recomputes_stale_definition_markers() {
         );
     });
 
-    // The definition pass evaluates the body with the parameter as a
-    // marker: the transient marker is not cached (a later binding must be
-    // observed on re-read), so the node keeps no value and is flagged
-    // undecided.
+    // The definition pass's transient marker is not cached, so a later binding
+    // is observed on re-read.
     m.evaluate_node_deep(ret, None);
     assert!(
         m.node_value(AnyNodeId::Dynamic(ret)).is_none(),
@@ -184,8 +176,7 @@ fn function_call_operator_recomputes_stale_definition_markers() {
     let call = call_node(&mut m, root, func_node, arg);
     assert_eq!(u128_of(m.evaluate_node_deep(call, None).unwrap()), 42);
 
-    // The body is untouched and stays callable: the parameter is still the
-    // empty cell the clone pass left it, not the argument's value.
+    // The clone pass leaves the body's parameter an empty cell.
     assert_eq!(m.node_operation(ret).unwrap().operand, Some(param));
     assert!(m.node_value(AnyNodeId::Dynamic(param)).is_none());
 }
@@ -283,9 +274,8 @@ fn function_scope_is_dropped_with_its_block() {
     let (func_node, func) = wrap_function(&mut m, child, ret, param);
     assert_eq!(m.functions.len(), 1);
 
-    // Evaluate a *different* node of the child: the block compacts only the
-    // return-reachable tree, then releases the rest — the function's home
-    // node included, dropping the function and its scope.
+    // Compaction keeps only the return-reachable tree, then releases the rest,
+    // the function's home node included.
     let x = u128_node(&mut m, child, 5);
     let root_node = op_node(&mut m, root, TestOperator::Id, Some(x));
     assert_eq!(u128_of(m.evaluate_node_deep(root_node, None).unwrap()), 5);
@@ -300,10 +290,10 @@ fn function_scope_is_dropped_with_its_block() {
 fn nested_function_is_called_by_the_outer_body() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // g(y) = Id(y) lives in its own block; f's template holds g's value node
-    // (so the body clone instantiates it) but not g's internals.  The
-    // parent link makes g's scope part of f's template, so the clone folds
-    // it in; f(x) = g(x) calls it with f's own parameter.
+    // The parent link makes g's scope part of f's template, so the clone folds
+    // it in.
+
+    // f's template holds g's value node but not g's internals.
     let g = m.add_block(None);
     let gret = m.add_node(g, None, None);
     let gparam = m.add_node(g, None, None);
@@ -374,9 +364,8 @@ fn outer_call_returns_a_nested_function_value() {
     let one = u128_node(&mut m, root, 1);
     let call = call_node(&mut m, root, f_node, one);
     let got = dyn_function(m.evaluate_node_deep(call, None).unwrap());
-    // A fresh closure per call: the concreteness proof of the value node
-    // cannot see a nested function's body, so it must never be referenced
-    // in place — its captures (if any) bind to this call's clones.
+    // The concreteness proof cannot see a nested body, so it is never
+    // referenced in place: each call gets a fresh closure.
     assert_ne!(got, g_id);
 
     // The returned function is callable from the outer block.
@@ -398,11 +387,10 @@ fn outer_call_returns_a_nested_function_value() {
 fn a_nested_function_value_captures_the_applied_outer_parameter() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // f(x) = g, where g(y) = Id(x): the nested g's body reads f's parameter
-    // directly, so applying f must bind the captured x inside the returned
-    // closure.  g lives in its own block; f's scope holds g's value node
-    // (so the body clone instantiates it) but not g's internals, so the
-    // clone folds g's own scope into the template to rewrite the capture.
+    // g lives in its own block, and f's template holds g's value node but not
+    // g's internals.
+
+    // The clone folds g's own scope into the template to rewrite the capture.
     let g = m.add_block(None);
     let gparam = m.add_node(g, None, None);
     let gret = m.add_node(g, None, None);
@@ -447,8 +435,7 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
 fn higher_order_function_passes_a_function_argument_through() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // apply(g) = g: the parameter is the return node's operand, so calling
-    // apply with a function argument hands that function back.
+    // apply(g) = g: the return node's operand is the parameter.
     let (apply_node, ret, _param) = function(&mut m, |m, ret, param| {
         m.close_operation_cycle(
             ret,
@@ -518,8 +505,7 @@ fn higher_order_function_calls_its_function_argument() {
 fn function_can_index_into_undecided_array() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // f(x) = [x, 7][0]: the array embeds the parameter, so the Index arm
-    // sees a marker element and stays lazy during the definition pass.
+    // f(x) = [x, 7][0]: the Index arm sees a marker element and stays lazy.
     let body = m.add_block(None);
     let ret = m.add_node(body, None, None);
     let param = m.add_node(body, None, None);
@@ -555,9 +541,7 @@ fn function_can_index_into_undecided_array() {
 fn manually_partially_evaluated_function_applies_correctly() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // f(x) = Add(Add(x, 1), 2).  The partial definition is built by hand:
-    // evaluate_node_deep is called on exactly the two constants, and
-    // nothing else — the parameter-dependent chain stays unevaluated.
+    // f(x) = Add(Add(x, 1), 2): only the two constants are defined by hand.
     let body = m.add_block(None);
     let ret = m.add_node(body, None, None);
     let param = m.add_node(body, None, None);
@@ -592,15 +576,13 @@ fn manually_partially_evaluated_function_applies_correctly() {
     assert_eq!(m.node_evaluated_deep(inner_ops), None);
     assert_eq!(m.node_evaluated_deep(ret_ops), None);
 
-    // The apply reuses the proven constants in place and clones + remaps
-    // the unevaluated chain: f(5) = (5 + 1) + 2 = 8, f(9) = 12.
+    // The apply reuses the proven constants in place and remaps the rest.
     let five = u128_node(&mut m, root, 5);
     let call = call_node(&mut m, root, f_node, five);
     assert_eq!(u128_of(m.evaluate_node_deep(call, None).unwrap()), 8);
 
-    // The clone of the inner operand array keeps the proven constant in
-    // place and maps the parameter onto a fresh clone unified with the
-    // argument.
+    // The cloned operand array keeps the constant and maps the parameter onto
+    // a clone unified with the argument.
     let candidates: Vec<NodeId> = m.blocks[root]
         .nodes
         .iter()
@@ -631,8 +613,7 @@ fn manually_partially_evaluated_function_applies_correctly() {
 fn unevaluated_function_applies_correctly() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // f(x) = Add(x, 1), with no evaluate_node / evaluate_node_deep call
-    // before applying: every body node keeps evaluated_deep = None.
+    // f(x) = Add(x, 1), defined by hand with no evaluation pass.
     let (f_node, ret, param) = function(&mut m, |m, ret, param| {
         let one = u128_node(m, m.node_block(ret), 1);
         let operands = array_node(m, m.node_block(ret), &[param, one], None);
@@ -683,8 +664,7 @@ fn mixed_blocks_and_functions_survive_compaction() {
     let call = call_node(&mut m, child, g_node, ten);
     assert_eq!(u128_of(m.evaluate_node_deep(call, None).unwrap()), 17);
 
-    // The root pulls g out of the child: compaction re-homes the function
-    // and moves its whole scope, then releases the rest of the block.
+    // Compaction re-homes the function and its whole scope into the root.
     let root_node = op_node(&mut m, root, TestOperator::Id, Some(g_node));
     let mapped = dyn_function(m.evaluate_node_deep(root_node, None).unwrap());
     assert_eq!(mapped, g_id);
@@ -701,9 +681,7 @@ fn mixed_blocks_and_functions_survive_compaction() {
 fn call_return_is_shallow_for_container_bodies() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // f(x) = [x, Id(x)] — the second element depends on the parameter, so
-    // the definition pass leaves it a marker and the call clones it
-    // unevaluated rather than forcing it.
+    // The call clones the unevaluated array rather than forcing it.
     let f = m.add_block(None);
     let ret = m.add_node(f, None, None); // RETURN_IDX
     let param = m.add_node(f, None, None); // PARAMETER_IDX
@@ -744,10 +722,9 @@ fn call_return_is_shallow_for_container_bodies() {
 fn apply_evaluates_argument_elements_to_match_the_parameter_pattern() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // f(x) = x with x = [x0, x1]: an array parameter pattern.  The
-    // argument's elements are unevaluated operations — the apply must
-    // evaluate them (to the pattern's depth) before the elementwise unify,
-    // or they would read as undecided and bind nothing.
+    // The apply evaluates the argument's elements to the pattern's depth first.
+
+    // An unevaluated element would read as undecided and bind nothing.
     let x0 = m.add_node(root, None, None);
     let x1 = m.add_node(root, None, None);
     let items = [item(x0), item(x1)];
@@ -778,9 +755,7 @@ fn apply_evaluates_argument_elements_to_match_the_parameter_pattern() {
 fn apply_clone_preserves_the_shallow_mask() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // f(x) = [x, Add(x, 1)] with position 1 marked shallow: the deep pass
-    // on the definition keeps the Add lazy, and the apply's clone must
-    // carry the mask so the marked element stays lazy in the call too.
+    // The apply's clone must carry the shallow mask onto the cloned array.
     let f = m.add_block(None);
     let param = m.add_node(f, None, None);
     let one = u128_node(&mut m, f, 1);
@@ -818,8 +793,7 @@ fn apply_clone_preserves_the_shallow_mask() {
 fn pattern_argument_evaluation_skips_shallow_positions() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // f(x) = x with x = [x0, x1]: the pattern's position 1 is shallow, so
-    // the apply must not force the argument's element there.
+    // f(x) = x with x = [x0, x1]: position 1 of the pattern is shallow.
     let x0 = m.add_node(root, None, None);
     let x1 = m.add_node(root, None, None);
     let param = array_node(&mut m, root, &[x0, x1], Some(&[false, true]));
@@ -841,9 +815,8 @@ fn pattern_argument_evaluation_skips_shallow_positions() {
         u128_of(m.node_value(AnyNodeId::Dynamic(ids[0])).unwrap()),
         7
     );
-    // The shallow pattern position stays lazy: the argument's element there
-    // (an unevaluated Add) is never forced by the apply, and the masked
-    // position itself is never walked.
+    // A shallow pattern position is never walked, so the argument's element
+    // there is never forced.
     assert!(
         m.node_value(AnyNodeId::Dynamic(add)).is_none(),
         "the shallow pattern position is not forced by the apply"

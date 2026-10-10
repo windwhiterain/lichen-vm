@@ -1,19 +1,4 @@
-//! The `lowlevel` layer of the `basic` test crate.  The category modules
-//! live in the same-name directory `tests/basic/lowlevel/` next to this
-//! file, so plain `mod` declarations resolve them without `#[path]`:
-//!
-//! - `compaction` — block compaction / GC: relocation, hoisting, release
-//! - `evaluation` — operators, the cycle guard, visiting/evaluated_deep markers
-//! - `function` — `Apply` semantics, nested and higher-order functions
-//! - `recursion` — lazy recursion, definition passes, depth guards
-//! - `equality` — `unify` and the DSU equivalence classes it binds through
-//! - `assert` — assert points, forced evaluation, clone-on-apply
-//! - `table` — constant table values, deep-content keys, `TableGet` reads
-//! - `verdict` — the deep pass's concreteness verdict and its two `None` cases
-//!
-//! The shared harness (the test `Program`/`Value`/`Operator` and the node
-//! and function builders) lives here; each category module pulls it in with
-//! `use super::*;`.
+//! The `lowlevel` layer of the `basic` test crate: one shared harness, one module per category.
 
 mod assert;
 mod compaction;
@@ -38,8 +23,7 @@ use std::collections::HashSet;
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct TestProgram;
 
-/// The test harness's global extension state — empty; the lowlevel's
-/// extension operators here (arithmetic, string ops) keep no state.
+/// The test harness's global extension state: the test operators keep none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct TestGlobalExt;
 
@@ -52,10 +36,9 @@ impl Program for TestProgram {
     type PackageMeta = ();
 }
 
-// The test value vocabulary: the handle-carrying extension values below,
-// with the lowlevel structural values carried whole as one variant.  The
-// arena machinery only deals in byte views, so `ValueExt` converts
-// between the typed pointer and a byte slice on the fly.
+// The test value vocabulary: handle-carrying extension values plus the structural ones.
+
+// `ValueExt` converts between the typed pointer and a byte view on the fly.
 lichen_utils::enum_ext! {
     #[derive(Debug, Clone, Copy, PartialEq)]
     enum TestValue {
@@ -63,16 +46,14 @@ lichen_utils::enum_ext! {
         U128(AnyHandle<u128>),
         /// A `char` payload, four bytes per char.
         String(AnyHandle<[char]>),
-        /// A value that keeps a node alive across its own evaluation, and says
-        /// so through [`ValueExt::traced`]. The reference is invisible to the
-        /// GC any other way: it is not an operand edge and not an array item.
+        /// Keeps a node alive across its own evaluation; [`ValueExt::traced`] is
+        /// the only edge the GC cannot already see.
         HoldsNode(NodeId),
     }
     + LowValue;
 }
 
-/// A dynamic (block-arena) handle — the kind every hand-built test value
-/// uses; static payloads appear only inside `StaticModule`s.
+/// A dynamic (block-arena) handle; static payloads appear only in `StaticModule`s.
 fn dyn_handle<T: ?Sized>(ptr: *const T) -> AnyHandle<T> {
     // SAFETY: every caller passes the address of a payload just allocated in
     // the block arena the value is stored in.
@@ -83,15 +64,13 @@ impl ValueExt for TestValue {
     fn is_handle(&self) -> bool {
         matches!(self, TestValue::U128(_) | TestValue::String(_))
     }
-    // `U128` requires 16-byte alignment; returning the strictest
-    // alignment keeps the `String` copies over-aligned, which is safe.
+    // `U128` needs 16-byte alignment; the over-aligned `String` copies are safe.
     fn alignment() -> usize {
         16
     }
     fn traced(&self, context: &dyn TraceContext, out: &mut Vec<NodeId>) {
-        // The context is what lets a set be *derived* rather than stored: this
-        // one happens to have a node on hand, but a holder that kept a block
-        // could ask `context.block_nodes` for everything in it instead.
+        // The context lets the set be derived: a holder keeping a block could
+        // ask `context.block_nodes` instead.
         let _ = context;
         if let TestValue::HoldsNode(node) = self {
             out.push(*node);
@@ -169,8 +148,7 @@ impl ValueExt for TestValue {
     }
 }
 
-// The test operator vocabulary: the test operators below, with the lowlevel
-// structural operators carried whole as one variant.
+// The test operator vocabulary: test operators plus the structural operators.
 lichen_utils::enum_ext! {
     #[derive(Debug, Clone, Copy, PartialEq)]
     enum TestOperator {
@@ -195,8 +173,7 @@ impl OperatorExt<TestProgram> for TestOperator {
         module: &mut Module<TestProgram>,
     ) -> Option<TestValue> {
         // The marker this operator produces *is* "cannot decide yet", which the
-        // trait states as `None`; the conversion at the end covers the early
-        // returns and the answer alike.
+        // trait states as `None`.
         let value = (|| {
             match self {
                 // The structural operators never reach `run`: the VM dispatches
@@ -220,10 +197,7 @@ impl OperatorExt<TestProgram> for TestOperator {
                     // SAFETY: the operand is the value of a live node of `module`,
                     // whose block has not been dropped.
                     let operands = unsafe { operands.items() };
-                    // Operands may be baked static refs (a constant operand of a
-                    // materialized static function) — resolve through the module
-                    // API, which reads a dynamic node's value or a static node's
-                    // solved value.
+                    // An operand may be a baked static ref: resolve through the module API.
                     let left = module.node_value(operands[0].node).unwrap();
                     let right = module.node_value(operands[1].node).unwrap();
                     match self {
@@ -352,9 +326,8 @@ fn usize_node(m: &mut Module<TestProgram>, block: BlockId, n: usize) -> NodeId {
     m.add_node(block, None, Some(TestValue::LowValue(LowValue::USize(n))))
 }
 
-/// An undecided cell — an **empty node slot**, which is undecided's only in-VM
-/// representation, so deep evaluation stays lazy instead of panicking on a
-/// missing operation.
+/// An undecided cell: an **empty node slot**, undecided's only in-VM form,
+/// so deep evaluation stays lazy.
 fn undecided_node(m: &mut Module<TestProgram>, block: BlockId) -> NodeId {
     m.add_node(block, None, None)
 }
@@ -416,8 +389,7 @@ fn assert_u128_array(
     }
 }
 
-/// Wrap `ret`/`param` — and every node built so far in `block` — into a
-/// function value node, returning the node and the function id.
+/// Wrap `ret`/`param` and every node built so far in `block` into a function.
 fn wrap_function(
     m: &mut Module<TestProgram>,
     block: BlockId,
@@ -448,24 +420,23 @@ fn wrap_function_asserts(
     (func_node, func)
 }
 
-/// The manual-insert mirror of [`Module::add_function`]'s registration:
-/// register `nodes` in `function`'s body scope (owner tag plus
-/// `Function::nodes`).  A function built by hand (the placeholder-value
-/// helpers below) must register its body, or the apply clone walk's chain
-/// membership test reads the body as outside the template and references it
-/// in place.
+/// The manual-insert mirror of [`Module::add_function`]'s registration.
+///
+/// # Invariant
+/// A hand-built function must register its body scope: without it the apply
+/// clone walk reads the body as outside the template and references it in place.
 fn tag_scope(m: &mut Module<TestProgram>, function: FunctionId, nodes: Vec<NodeId>) {
     for node in nodes {
         m.register_in_function(function, node);
     }
 }
 
-/// Create a function value in a fresh body block: the return node at
-/// `Block::RETURN_IDX` and the parameter at index 1 of the scope, wrapped
-/// by [`Module::add_function`]. `wire` fills in the return node given the
-/// parameter id.  Asserts registered during `wire` become the function's
-/// own (`Function::asserts`), so an apply re-checks them per call.  Returns
-/// the function value node plus the return and parameter node ids.
+/// Create a function value in a fresh body block, returning the value node
+/// plus the return and parameter ids.
+///
+/// # Invariant
+/// Asserts registered during `wire` become the function's own
+/// (`Function::asserts`), so an apply re-checks them per call.
 fn function(
     m: &mut Module<TestProgram>,
     wire: impl FnOnce(&mut Module<TestProgram>, NodeId, NodeId),
@@ -500,9 +471,7 @@ fn call_node(
     )
 }
 
-/// Register a function whose body lives in `block`: insert the `Function`
-/// (scope = the block's node list), register it on the block, and fill the
-/// placeholder `func_node` with its value.  Returns the function id.
+/// Register a hand-built function homed in `block`, returning its id.
 fn finish_function(
     m: &mut Module<TestProgram>,
     block: BlockId,
@@ -533,16 +502,13 @@ fn finish_function(
     function
 }
 
-/// Build a self-referential function `f(x) = [x, f(x)]` in its own body
-/// block: the Apply operand array references the function's own value node,
-/// so each application of `f` produces one recursion level.  Returns the
-/// function value node and id.
+/// Build the self-referential `f(x) = [x, f(x)]`; each application adds one
+/// recursion level.
 fn recursive_function(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     let body = m.add_block(None);
     let param = m.add_node(body, None, None);
-    // Placeholder for the function's own value node: the operand array must
-    // reference it before the function exists, so `add_function` (which
-    // creates the value node last) cannot be used here.
+    // `add_function` creates the value node last, so a self-reference needs a
+    // placeholder.
     let func_node = m.add_node(body, None, None);
     let operands = array_node(m, body, &[func_node, param], None);
     let apply = op_node(
@@ -574,9 +540,7 @@ fn recursive_function(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     (func_node, function)
 }
 
-/// Build two functions calling each other: `f(x) = [x, g(x)]` and
-/// `g(x) = [x, f(x)]`, sharing one body block.  Returns the two function
-/// value nodes.
+/// Build `f(x) = [x, g(x)]` and `g(x) = [x, f(x)]` in one shared body block.
 fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId) {
     let body = m.add_block(None);
     let f_param = m.add_node(body, None, None);
@@ -643,11 +607,11 @@ fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId)
     (f_func, g_func)
 }
 
-/// Build a Fibonacci function in its own body block:
-/// `fib(x) = if x < 2 then x else fib(x-1) + fib(x-2)`, with the
-/// `if/else` expressed as a lazy `Index` branch — `Index([else, then], c)`
-/// with `c` a `USize(0/1)` — so the untaken recursive branch is never
-/// forced.  Returns the function value node and id.
+/// Build `fib(x) = if x < 2 then x else fib(x-1) + fib(x-2)`.
+///
+/// # Invariant
+/// The `if/else` is a lazy `Index([else, then], USize(0/1))`, so the untaken
+/// recursive branch is never forced.
 fn fibonacci(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     let body = m.add_block(None);
     let param = m.add_node(body, None, None);
@@ -694,8 +658,7 @@ fn fibonacci(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     (fib_func, function)
 }
 
-/// Build `f(x) = Apply(f, x)` — an unconditional self-application with no
-/// base case, so any evaluation of a call never returns.
+/// Build `f(x) = Apply(f, x)`: an unconditional self-application, no base case.
 fn unconditional_self_apply(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     let body = m.add_block(None);
     let param = m.add_node(body, None, None);
@@ -711,11 +674,7 @@ fn unconditional_self_apply(m: &mut Module<TestProgram>) -> (NodeId, FunctionId)
     (func_node, function)
 }
 
-/// Build `count n = if n < 1 then n else count (n - 1)`, with the `@loop` mark
-/// set when `marked`: the convertible shape — one tail self-application, one
-/// base, a scalar state.  Returns the value node, the id, and the nodes the
-/// conversion names (the test's condition, the step's next state, the
-/// parameter).
+/// Build `count n = if n < 1 then n else count (n - 1)`, the convertible shape.
 fn countdown(
     m: &mut Module<TestProgram>,
     marked: bool,
@@ -751,10 +710,11 @@ fn countdown(
     (func_node, function, condition, decrement, param)
 }
 
-/// Build `stuck n = if n < 1 then n else stuck n` — a **convertible** recursion
-/// whose step never changes the state it tests, so it never reaches its base.
-/// The shape is what makes it a loop; an argument that fails the test is what
-/// makes that loop endless.
+/// Build `stuck n = if n < 1 then n else stuck n`, a **convertible** recursion
+/// whose step never changes its state.
+///
+/// # Invariant
+/// The shape makes it a loop; an argument that fails the test makes it endless.
 fn stuck_loop(m: &mut Module<TestProgram>, marked: bool) -> (NodeId, FunctionId) {
     let body = m.add_block(None);
     let param = m.add_node(body, None, None);

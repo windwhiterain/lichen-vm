@@ -1,5 +1,4 @@
-//! Node evaluation: operator execution, the cycle guard, and the
-//! visiting / `evaluated_deep` markers left behind by `evaluate_node_deep`.
+//! Node evaluation: operator execution, the cycle guard, and the `evaluated_deep` markers.
 
 use super::*;
 
@@ -128,8 +127,7 @@ fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let param = m.add_node(root, None, None);
-    // f(x) = [x, [10, 20][5]]: the OOB index sits in the return pair, so a
-    // deep evaluation of the return (the definition pass) hits it.
+    // The out-of-bounds index sits in the return pair, so the definition pass hits it.
     let a = u128_node(&mut m, root, 10);
     let b = u128_node(&mut m, root, 20);
     let arr = array_node(&mut m, root, &[a, b], None);
@@ -160,9 +158,7 @@ fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
 fn applying_a_non_function_records_an_eval_error() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // The target is a structural scalar — not a function, and not the
-    // program's own (possibly callable) value — so the apply is a user error
-    // rather than a lazy deferral.
+    // A structural scalar target makes the apply a user error, not a lazy deferral.
     let callee = usize_node(&mut m, root, 5);
     let argument = usize_node(&mut m, root, 1);
     let operands = array_node(&mut m, root, &[callee, argument], None);
@@ -190,10 +186,9 @@ fn applying_a_non_function_records_an_eval_error() {
 fn cyclic_operations_panic_instead_of_looping() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // Two-phase: `a`'s operation names `b`, which cannot exist when `a` is
-    // allocated, so `a` starts operation-free and the cycle is closed once
-    // `b` exists.  The evaluating state marks `b` as in-progress on re-entry
-    // and panics.
+    // `a` starts operation-free because its operand `b` does not exist yet.
+
+    // The cycle guard panics when `b` is re-entered while already evaluating.
     let a = m.add_node(root, None, None);
     let b = op_node(&mut m, root, TestOperator::Id, Some(a));
     m.close_operation_cycle(
@@ -208,11 +203,7 @@ fn cyclic_operations_panic_instead_of_looping() {
 
 #[test]
 fn deep_eval_cuts_a_self_referential_value_cycle() {
-    // A node whose array value contains itself (the `Type : Type` universe
-    // `K = [Type, K]` shape, which every type spine in the recursive-pair
-    // encoding reaches).  A value cycle is cut by the deep-evaluation guard
-    // — the cached value is re-read, not recomputed — while an *operation*
-    // cycle still panics (see above).
+    // A value cycle is cut by re-reading the cached value; an operation cycle panics.
     let mut m = Module::new();
     let root = m.add_block(None);
     let marker = u128_node(&mut m, root, 7);
@@ -288,9 +279,7 @@ fn evaluated_deep_marks_subtrees_with_parameters() {
 fn deep_eval_skips_shallow_positions_until_an_index_read() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // [3, Add(4, 5)] with position 1 marked shallow: the deep pass must
-    // skip the Add entirely (it stays unevaluated) while position 0 is
-    // walked normally.
+    // The deep pass skips the masked element entirely; position 0 is walked normally.
     let three = u128_node(&mut m, root, 3);
     let four = u128_node(&mut m, root, 4);
     let five = u128_node(&mut m, root, 5);
@@ -353,10 +342,11 @@ fn sub_eq_lt_operators_compute_concrete_results() {
 }
 #[test]
 fn deep_budget_refusal_under_an_extension_operator_records_without_panicking() {
-    // The extension-operator arm reads its operand's `evaluated_deep` after
-    // the deep pass, but the pass returns before writing that flag when it
-    // refuses on depth.  Three Id frames put the innermost operand one frame
-    // past the limit, so the arm reads a node the pass never flagged.
+    // The extension-operator arm reads its operand's `evaluated_deep` after the deep pass,
+
+    // which returns before writing that flag when it refuses on depth.
+
+    // Three Id frames put the innermost operand one frame past the limit.
     let mut m = Module::new();
     let root = m.add_block(None);
     let leaf = u128_node(&mut m, root, 7);
@@ -381,10 +371,9 @@ fn deep_budget_refusal_under_an_extension_operator_records_without_panicking() {
 }
 #[test]
 fn a_block_root_the_budget_refuses_yields_an_empty_value() {
-    // The delegation into a child block runs a fresh deep pass whose first
-    // frame is the child's root.  At the limit the pass refuses before it
-    // evaluates the root, so the root caches no value at all and the block's
-    // compaction has nothing to move.
+    // The child block's delegation runs a fresh pass whose first frame is the block root.
+
+    // At the limit it refuses before evaluating the root, so the root caches no value.
     let mut m = Module::new();
     let root = m.add_block(None);
     let child = m.add_block(Some(root));
@@ -404,9 +393,7 @@ fn a_block_root_the_budget_refuses_yields_an_empty_value() {
 }
 #[test]
 fn a_block_root_that_stays_lazy_is_not_an_internal_error() {
-    // An undecided answer is deliberately never cached (the postlude
-    // writes only a decided value), so a block whose root is still lazy also
-    // leaves the block's compaction with nothing to move.
+    // An undecided answer is never cached, so a still-lazy block root leaves compaction nothing to move.
     let mut m = Module::new();
     let root = m.add_block(None);
     let child = m.add_block(Some(root));

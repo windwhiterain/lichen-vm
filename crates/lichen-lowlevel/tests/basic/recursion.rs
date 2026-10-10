@@ -1,5 +1,4 @@
-//! Lazy recursion: self-applying and mutually recursive functions, the
-//! branch-lazy definition pass, and the recursion depth guards.
+//! Lazy recursion: self-application, the branch-lazy definition pass, and the depth guards.
 
 use super::*;
 
@@ -8,19 +7,14 @@ fn recursive_function_applies_itself_lazily() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let (f_node, f_id) = recursive_function(&mut m);
-    // The function's own value node is concrete (it never depends on the
-    // parameter), so the clone keeps the self-reference in place instead of
-    // copying the function per level.
+    // A concrete function value node is referenced in place, not cloned per level.
     m.evaluate_node_deep(f_node, None);
     assert_eq!(
         m.node_evaluated_deep(f_node),
         Some(EvaluatedDeep { undecided: false })
     );
 
-    // f(5) = [5, f(5)]: each forced application produces exactly one new
-    // level — a fresh, still-unevaluated apply clone referencing the same
-    // function value, while the parameter is a clone unified with the
-    // argument (so it carries the argument's value).
+    // Each forced application is one fresh, still-unevaluated apply clone of the same function.
     let five = u128_node(&mut m, root, 5);
     let call = call_node(&mut m, root, f_node, five);
     let level0 = m.evaluate_node(AnyNodeId::Dynamic(call), None).unwrap();
@@ -77,10 +71,7 @@ fn recursive_function_applies_itself_lazily() {
 fn undefined_recursive_function_clones_a_function_per_level() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // With no evaluation at all, the function value node's
-    // evaluated_deep stays None, so the clone rule copies it: each
-    // recursion level carries its own fresh function clone homed on the
-    // calling block.
+    // With `evaluated_deep` still `None`, the clone rule copies the function per level.
     let (f_node, f_id) = recursive_function(&mut m);
     assert_eq!(m.node_evaluated_deep(f_node), None);
 
@@ -118,9 +109,7 @@ fn mutually_recursive_functions_call_each_other() {
     let root = m.add_block(None);
     let (f_node, g_node) = mutually_recursive_functions(&mut m);
 
-    // f(5) = [5, g(5)]: g's value node is outside f's template scope, so
-    // the clone references it in place; the parameter is a clone unified
-    // with the argument.
+    // g's value node is outside f's template, so the clone references it in place.
     let five = u128_node(&mut m, root, 5);
     let call = call_node(&mut m, root, f_node, five);
     let level0 = m.evaluate_node(AnyNodeId::Dynamic(call), None).unwrap();
@@ -153,17 +142,14 @@ fn fibonacci_recurses_through_index_branches() {
     let root = m.add_block(None);
     let (fib_node, fib_id) = fibonacci(&mut m);
 
-    // The function's own value node is concrete, so the recursion reuses
-    // one FunctionId instead of cloning the function per level.
+    // A concrete value node means the recursion reuses one `FunctionId`.
     m.evaluate_node_deep(fib_node, None);
     assert_eq!(
         m.node_evaluated_deep(fib_node),
         Some(EvaluatedDeep { undecided: false })
     );
 
-    // The definition pass terminates: with a marker condition the Index
-    // arm stays lazy and never forces the recursive branch, so the body is
-    // definable even though it applies itself.
+    // A marker condition keeps the `Index` arm lazy, so the self-applying body is definable.
     m.evaluate_node_deep(m.functions[fib_id].r#return, None);
     assert_eq!(
         m.node_evaluated_deep(m.functions[fib_id].r#return),
@@ -186,9 +172,7 @@ fn fibonacci_recurses_through_index_branches() {
 fn countdown_definition_pass_terminates() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // f(x) = if x == 0 then 0 else Add(f(x-1), 1) — the recursion sits
-    // behind a lazy branch, so the definition pass completes even though
-    // the body applies itself.
+    // The recursion sits behind a lazy branch, so the self-applying body is definable.
     let body = m.add_block(None);
     let param = m.add_node(body, None, None);
     let func_node = m.add_node(body, None, None); // placeholder self-ref
@@ -399,8 +383,7 @@ fn definition_pass_on_non_terminating_body_records_the_depth_budget() {
     let mut m = Module::new();
     let (_, function) = unconditional_self_apply(&mut m);
     m.apply_depth_limit = 4;
-    // The unconditional self-apply is in the direct value path, so the
-    // definition pass nests applications forever instead of staying lazy.
+    // The direct value path nests applications forever instead of staying lazy.
     m.evaluate_node_deep(m.functions[function].r#return, None);
     assert_eq!(
         m.budget_exhausted,
@@ -411,8 +394,7 @@ fn definition_pass_on_non_terminating_body_records_the_depth_budget() {
 fn deep_evaluating_an_infinite_stream_records_the_deep_budget() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // f(x) = [x, f(x)]: each apply level terminates, but deep evaluation
-    // walks the infinitely growing value — the deep guard catches it.
+    // Each apply level terminates, but the value grows without bound.
     let (func_node, _) = recursive_function(&mut m);
     m.evaluate_depth_limit = 8;
     let arg = u128_node(&mut m, root, 1);
@@ -428,12 +410,9 @@ fn deep_evaluating_an_infinite_stream_records_the_deep_budget() {
 fn flattened_recursion_records_the_total_apply_budget() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // f(x) = [f(x), 0]: the return is a *cached pair* whose element is the
-    // recursion.  Each apply evaluates the pair to its cached value and
-    // returns, so the recursion is driven by the outer deep pass descending
-    // into the pair — the applies stay at depth 1, invisible to the
-    // nested-depth guard.  The total-application budget is the work bound
-    // that catches it.
+    // Each apply returns the cached pair, so applies stay at depth 1, invisible to the depth guard.
+
+    // The total-application budget is the work bound that catches it.
     let body = m.add_block(None);
     let param = m.add_node(body, None, None);
     let func_node = m.add_node(body, None, None);

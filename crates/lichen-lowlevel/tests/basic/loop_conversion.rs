@@ -1,7 +1,4 @@
-//! The `@loop` conversion's verdicts and the facts a convertible recursion
-//! yields (`lichen_lowlevel::loop_conversion`). The shapes here are hand-built
-//! so the verdict is the only thing under test; the checker-composed templates
-//! (and their tuple states) are pinned in `lichen-highlevel`'s `loop_marker`.
+//! The `@loop` conversion's verdicts over hand-built convertible recursions.
 
 use super::*;
 use lichen_lowlevel::{LoopArm, LoopRefusal};
@@ -28,8 +25,7 @@ fn a_marked_tail_recursion_converts() {
 
 #[test]
 fn a_recursion_whose_call_is_not_in_tail_position_refuses() {
-    // `fib(x) = if x < 2 then x else fib(x-1) + fib(x-2)`: both calls are
-    // operands of the `Add`, so neither is a branch of the spine.
+    // Both calls are operands of the `Add`, so neither is a branch of the spine.
     let mut m = Module::new();
     let (_func_node, function) = fibonacci(&mut m);
     m.mark_looping(function);
@@ -38,10 +34,7 @@ fn a_recursion_whose_call_is_not_in_tail_position_refuses() {
 
 #[test]
 fn a_recursion_in_a_tuple_element_refuses() {
-    // `f(x) = [x, f(x)]`: the self-application is one element of a
-    // tuple-bodied return, not a branch of it. The return states its
-    // `[value, type]` pair the way every compiled function does, so the
-    // tuple — not the pair's first element — is what the spine reads.
+    // The return's `[value, type]` pair makes the tuple, not its first element, the spine.
     let mut m: Module<TestProgram> = Module::new();
     let body = m.add_block(None);
     let param = m.add_node(body, None, None);

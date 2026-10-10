@@ -1,8 +1,5 @@
-//! Tables: the constant `LowValue::Table` — deep-content keys (the pure
-//! coinductive structural equality plus the matching content hash), the
-//! hash-sorted payload, and the `TableGet` read (a miss records an
-//! [`EvalError::TableMiss`] and yields `Error`; an unforceable key is
-//! dropped with a [`EvalError::TableKeyUndecided`] at build).
+//! Tables: deep-content keys, a hash-sorted payload, and the `TableGet` read.
+//! Design: `docs/notes/lowlevel-vm.md`.
 
 use super::*;
 use lichen_lowlevel::{Freeze, ModuleKey, StaticNodeId};
@@ -78,8 +75,7 @@ fn usize_keys_round_trip_and_misses_record_an_error() {
 fn keys_are_deep_content_distinct_but_equal_structures_match() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // Two *separately built* `[1, 2]` arrays: different nodes, identical
-    // content.  The deep-key semantics make them the same table key.
+    // Two separately built `[1, 2]` arrays: distinct nodes, identical content.
     let mk_key = |m: &mut Module<TestProgram>| -> NodeId {
         let a = usize_node(m, root, 1);
         let b = usize_node(m, root, 2);
@@ -137,10 +133,8 @@ fn an_undecided_key_is_dropped_with_a_recorded_error() {
     };
     assert_eq!(dropped, AnyNodeId::Dynamic(key));
 
-    // Reading with a still-undecided key does **not** miss: the key is undecided,
-    // not absent, so the lookup has not happened yet and the read stays lazy
-    // for a later pass, when the key is bound.  (A key that is *decided* and
-    // not key content — an `Error` — does miss; see the next test.)
+    // An undecided key does **not** miss: the lookup has not happened yet, so the
+    // read stays lazy for a later pass.
     let get = table_get(&mut m, root, t, key);
     let read = m.evaluate_node_deep(get, None);
     assert_eq!(read, None, "an undecided key leaves the read lazy");
@@ -153,9 +147,7 @@ fn an_undecided_key_is_dropped_with_a_recorded_error() {
 
 #[test]
 fn an_empty_key_is_never_a_phantom_hit() {
-    // Two *different* failed reads both evaluate to `Error`; neither may key
-    // a table entry, and the read must miss rather than the two residues
-    // colliding on a shared hash token.
+    // Two different failed reads must not collide on a shared hash token.
     let mut m = Module::new();
     let root = m.add_block(None);
     let oob_read = |m: &mut Module<TestProgram>| -> NodeId {
@@ -212,11 +204,9 @@ fn an_empty_key_is_never_a_phantom_hit() {
 
 #[test]
 fn an_undecided_read_leaves_no_cycle_for_the_next_pass() {
-    // A `TableGet` whose key is undecided answers nothing, and that
-    // answer is deliberately *not* cached — the next evaluation re-runs the
-    // read.  The attempt must therefore release the node's visiting mark:
-    // leaving it set makes the next evaluation see an ordinary re-read as a
-    // cycle and panic (`cycle detected: node ... is being evaluated`).
+    // An undecided `TableGet` answers nothing and is not cached, so the next pass re-runs the read.
+
+    // The attempt must release the node's visiting mark: a leaked one reads as a cycle.
     let mut m = Module::new();
     let root = m.add_block(None);
     let key = usize_node(&mut m, root, 1);
@@ -234,9 +224,7 @@ fn an_undecided_read_leaves_no_cycle_for_the_next_pass() {
     assert_eq!(read, None, "an undecided key leaves the read lazy");
     assert_eq!(m.eval_errors.len(), 0, "an undecided key records no miss");
 
-    // The second pass — the checker's statement pass then root pass, or a
-    // later forced read — re-evaluates the same node.  A visiting mark leaked
-    // by the first attempt panics here.
+    // A visiting mark leaked by the first attempt panics on this re-read.
     let again = m.evaluate_node_deep(get, None);
     assert_eq!(again, None, "the re-read is still undecided, not a cycle");
 }
@@ -245,9 +233,7 @@ fn an_undecided_read_leaves_no_cycle_for_the_next_pass() {
 fn cyclic_keys_hash_and_compare_equal() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // A self-referential `[1, ↺]` pair — the `[Type, ↺]` universe shape.
-    // Two distinct cyclic values are coinductively equal and must land in
-    // the same bucket.
+    // Two distinct cyclic values are coinductively equal and must share a bucket.
     let mk_cycle = |m: &mut Module<TestProgram>| -> NodeId {
         let node = m.add_node(root, None, None);
         let one = usize_node(m, root, 1);
@@ -411,9 +397,7 @@ fn tables_unify_by_identity_not_content() {
     let t1 = mk_table(&mut m);
     let t2 = mk_table(&mut m);
 
-    // Two distinct tables are distinct values — unification compares them by
-    // identity, exactly like two function values (there is no elementwise
-    // table arm; a table's entries are not a positional structure).
+    // Unification compares two tables by identity, like two function values.
     m.unify(t1, t2);
     assert_eq!(m.unify_errors.len(), 1, "distinct tables conflict");
 
@@ -424,17 +408,12 @@ fn tables_unify_by_identity_not_content() {
 }
 
 // --- the key hash across a freeze and across a cycle's depth ----------
-//
-// The stored hash is a *pre-filter*: a read binary-searches the payload for
-// the equal-hash run and verifies every candidate with `key_eq`, which is the
-// authority.  So the hash owes one direction only — equal keys must hash
-// equal — and a hash that cannot be recomputed after a reload is a permanent
-// `TableMiss` for a key that *is* there.
 
-/// Freeze `source` into a fresh importer and hand back the importer, its root
-/// block and the freeze map.  The byte round-trip of the artifact container
-/// lives in `lichen-language`; this is the lowlevel half of the same path —
-/// the static refs and the payloads a reload reads.
+// The stored hash is a *pre-filter*: `key_eq` is the authority on the equal-hash run.
+
+// So the hash owes one direction: equal keys must hash equal.
+
+/// Freeze `source` into a fresh importer, handing back the importer, root and map.
 fn reload_after_freeze(source: &Module<TestProgram>) -> (Module<TestProgram>, BlockId, Freeze) {
     let mut importer = Module::new();
     let root = importer.add_block(None);
@@ -468,9 +447,7 @@ fn cyclic_pair(m: &mut Module<TestProgram>, block: BlockId) -> NodeId {
 
 #[test]
 fn a_table_key_survives_a_freeze_and_a_reload() {
-    // A table used as a key: a dynamic handle's identity is its payload's
-    // address, which no longer exists after a reload, so the stored hash has
-    // to be a function of the table's content.
+    // A dynamic handle's identity is its address, which a reload invalidates.
     let mut m = Module::new();
     let root = m.add_block(None);
     let inner_key = usize_node(&mut m, root, 1);
@@ -516,11 +493,9 @@ fn a_table_key_survives_a_freeze_and_a_reload() {
 
 #[test]
 fn a_function_key_survives_a_freeze_and_a_reload() {
-    // A function used as a key: `FunctionId` is a slotmap key, so the id the
-    // hash was taken from is process-local; the template it names is the only
-    // thing a reload preserves.  The definition pass runs the body between the
-    // build and the freeze, so a hash that read the body's memoized result
-    // would drift too.
+    // `FunctionId` is a slotmap key, so a hash taken from the id is process-local; only the template survives.
+
+    // The definition pass runs the body between the build and the freeze, so the hash must not read it.
     let mut m = Module::new();
     let root = m.add_block(None);
     let (function, body, _) = function(&mut m, |m, r#return, parameter| {
@@ -575,12 +550,9 @@ fn a_function_key_survives_a_freeze_and_a_reload() {
 
 #[test]
 fn a_key_of_the_program_s_own_value_vocabulary_is_hashed_not_refused() {
-    // The program's own value variants are key content like any other: a
-    // vocabulary with handle-carrying values reaches this path from ordinary
-    // source (a type constant as a table key), and it used to be an
-    // `unreachable!`.  The lowlevel cannot unfold a variant it does not know,
-    // so equal values match through `key_eq` in the equal-hash run and a
-    // different one misses.
+    // The program's own value variants are key content like any other.
+
+    // The lowlevel cannot unfold an unknown variant, so equal values match through `key_eq`.
     let mut m = Module::new();
     let root = m.add_block(None);
     let five = u128_node(&mut m, root, 5);
@@ -617,9 +589,7 @@ fn a_key_of_the_program_s_own_value_vocabulary_is_hashed_not_refused() {
 
 #[test]
 fn coinductively_equal_cyclic_keys_hash_equal_across_depth() {
-    // `[1, ↺]` and `[1, [1, ↺]]` are the same infinite structure, so `key_eq`
-    // calls them equal; a cycle token that carries the revisit depth does not,
-    // and under a pre-filter that disagreement is a miss.
+    // The same infinite structure must hash equal, not just compare equal under `key_eq`.
     let mut m = Module::new();
     let root = m.add_block(None);
     let a = cyclic_pair(&mut m, root);
@@ -654,10 +624,7 @@ fn coinductively_equal_cyclic_keys_hash_equal_across_depth() {
 
 #[test]
 fn a_cyclic_key_is_found_across_the_static_boundary() {
-    // The stored key is a cycle inside a frozen module; the lookup key closes
-    // the same cycle one level deeper and through a static ref.  The two are
-    // equal under `key_eq` and — with a depth-bounded unfolding — under the
-    // hash as well.
+    // The lookup closes the stored cycle one level deeper, through a static ref.
     let mut m = Module::new();
     let root = m.add_block(None);
     let key = cyclic_pair(&mut m, root);

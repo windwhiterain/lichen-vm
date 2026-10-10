@@ -1,6 +1,4 @@
-//! The deep pass's concreteness verdict (`evaluated_deep`) and the two facts its
-//! `None` used to carry: "the pass never ran here" and "a cycle cut re-entered
-//! this node while its own frame was still computing it" (`P1-31`).
+//! The deep pass's verdict (`evaluated_deep`): the cycle-cut mark tells "in progress" from "never ran".
 
 use super::*;
 
@@ -11,11 +9,7 @@ fn usize_of(value: impl Into<Option<TestValue>>) -> usize {
     n
 }
 
-/// A cyclic value must still be **proven concrete**.  This is the behaviour the
-/// `P1-31` split has to preserve: a self-referential structure is only provable
-/// by assuming the re-entered node concrete at the cut, and if this fails the
-/// checker's canonical universe `[Type, ↺]` is cloned per apply instead of
-/// referenced in place (a unification conflict, not a slowdown).
+/// A cyclic value is provable only by assuming the re-entered node concrete at the cut.
 #[test]
 fn a_cyclic_value_is_proven_concrete() {
     let mut m = Module::new();
@@ -65,10 +59,7 @@ fn a_cyclic_value_is_proven_concrete() {
     assert_eq!(m.node_evaluated_deep(b), concrete, "a two-node cycle");
 }
 
-/// A subtree the pass **refused on** has no verdict, and a node no frame is
-/// computing must read undecided — not concrete.  The refusal leaves the verdict
-/// absent (`evaluate_node_deep_inner` returns before it writes), which is the
-/// case the cycle cut's assumption must not cover.
+/// A subtree the pass **refused on** has no verdict; a node no frame computes reads undecided.
 #[test]
 fn a_refused_subtree_leaves_its_parent_undecided() {
     let mut m = Module::new();
@@ -99,23 +90,16 @@ fn a_refused_subtree_leaves_its_parent_undecided() {
     );
 }
 
-/// The **operand exemption**, pinned.  A core operator's operand is the argument
-/// array a layer above synthesized, and the deep pass descends value-reachable
-/// edges only, so "the operand was never walked" is the normal case.  The node
-/// is therefore certified concrete from its own *value* — and reading the
-/// operand conservatively instead would flip every pair read in a template and
-/// clone them all per apply.
+/// The **operand exemption**: an unwalked operand is normal, so the node is certified
+/// from its own value.
 ///
-/// The second half is the harm probe `P1-31` left open: the exemption must not
-/// corrupt a second call, because the baked node's cached value has to be
-/// call-independent.
+/// # Invariant
+/// The baked read's cached value must be call-independent, or a second call is corrupted.
 #[test]
 fn an_operand_the_pass_never_walked_certifies_the_node() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // The body is `p => [1, p](0)`: the pair's element 1 depends on the
-    // parameter, and the indexed read only ever reads element 0, so the
-    // parameter-dependent sibling is never evaluated.
+    // The pair's element 1 depends on the parameter, and only element 0 is ever read.
     let mut pair_in_body = None;
     let (func_node, ret, _param) = function(&mut m, |m, ret, param| {
         let block = m.node_block(ret);
@@ -149,8 +133,7 @@ fn an_operand_the_pass_never_walked_certifies_the_node() {
         "the operand itself has no verdict — that is what makes this the exemption"
     );
 
-    // Two calls with different arguments must agree: the baked read's value is
-    // the literal, and nothing re-reads the parameter-dependent sibling.
+    // Two calls with different arguments must agree: the baked read's value is the literal.
     let eleven = usize_node(&mut m, root, 11);
     let twenty_two = usize_node(&mut m, root, 22);
     let first = call_node(&mut m, root, func_node, eleven);
