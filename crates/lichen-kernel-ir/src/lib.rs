@@ -726,7 +726,7 @@ impl KernelInstr {
     /// about any target**, and a lowering should not have to re-derive it to
     /// wire an instruction's operands.
     ///
-    /// [`Self::None`] — spelled `None`, meaning *not fixed by the instruction* — is
+    /// `None` — spelled `None`, meaning *not fixed by the instruction* — is
     /// [`Self::CallKernel`], whose arity is the **callee's own domain**. This
     /// crate does not know that arity, and neither does anything that would want to
     /// check it, so a body that calls another kernel states its arguments and the

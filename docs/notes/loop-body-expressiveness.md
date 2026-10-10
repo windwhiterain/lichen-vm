@@ -82,20 +82,24 @@ consequence has **two** halves, and only one of them is closed:
 - a body that cannot *reach* the header, and
 - a body that cannot *read* the state it would carry back.
 
-**This section closed the first.** What follows is both changes.
+**Both are closed, and by the SSA rewrite (`af6f6f2`) rather than by the two
+changes this section originally recorded.** Those two were:
 
-1. **`Terminator::Jump` exists**, so a `Seq` can end in the plain transfer its own
-   documentation names. §2's table had a row for `Terminator::If` "joining the
-   header", which was the reading that made this look unnecessary: a selection's
-   *join* is where arms meet, and a body that leaves the loop does not want its arms
-   to meet anywhere. With `Terminator::Jump` a body reaches the header directly.
-2. **`validate_flow` lets a loop body name the loop's landmarks.** A `While` body's
-   transfer may arrive at the loop's `header` (the backedge) or its `exit` (leaving),
-   and a body's `If` may join at either — both are the loop's own control flow, and
-   any other target is refused by name. The obligation is carried as
-   `FlagEnd::{Return, Loop { header, exit }}` rather than as "everything must reach
-   the header", which is what the old rule said and what made a loop with a body that
-   decides between continuing and leaving inexpressible.
+1. ~~**`Terminator::Jump` exists**, so a `Seq` can end in the plain transfer its
+   own documentation names. §2's table had a row for `Terminator::If` "joining
+   the header", which was the reading that made this look unnecessary: a
+   selection's *join* is where arms meet, and a body that leaves the loop does
+   not want its arms to meet anywhere.~~
+2. ~~**`validate_flow` lets a loop body name the loop's landmarks.** A `While`
+   body's transfer may arrive at the loop's `header` (the backedge) or its `exit`
+   (leaving), and a body's `If` may join at either.~~
+
+**Both spellings are gone** — `Flow`, `Terminator`, `Jump` and `validate_flow`
+were deleted with the stack machine, and a transfer is now `Br { target, args }`
+or `CondBr`. So the same two shapes are expressible, and *more*: reaching the
+header is an ordinary branch to a label, and landing anywhere the loop allows is
+a question about the block graph rather than about a transfer variant. §4.1
+below records what that bought, which is the half that was genuinely open.
 
 ### 4.1 Closed: the carried tuple is a block parameter, not an instruction
 
@@ -127,12 +131,17 @@ nothing uses it.
 The note that settles why it dissolved rather than becoming a new instruction is
 [loop-conversion](loop-conversion.md) §8.5 item 1c.
 
-`Terminator::Jump` does duplicate `Flow::Jump`, and that is deliberate: the two enums
-split transfers by **where they can appear**, not by what they mean. An `If` arm is a
-`Flow` (it may be a block or a bare jump, and has no instructions of its own, so a
-jump *is* its whole content); a `Seq`'s own transfer is a `Terminator`. Merging them
-would mean making `If` a `Flow` variant, which is a larger change to both emitters for
-no expressive gain.
+~~`Terminator::Jump` does duplicate `Flow::Jump`, and that is deliberate: the two
+enums split transfers by **where they can appear**, not by what they mean. An
+`If` arm is a `Flow` (it may be a block or a bare jump, and has no instructions
+of its own, so a jump *is* its whole content); a `Seq`'s own transfer is a
+`Terminator`. Merging them would mean making `If` a `Flow` variant, which is a
+larger change to both emitters for no expressive gain.~~
+
+**That duplication is gone with both enums**, so the decision it defended no
+longer has to be made: a transfer is `Br { target, args }` or `CondBr`, and a
+block's parameters *are* the values it receives, so there is no separate
+"bare jump" form to reconcile.
 
 ## 5. What this changes about [loop-conversion §8.5](loop-conversion.md)
 

@@ -87,28 +87,44 @@ mismatch the launch arg count.
 
 ## What the emitter still does by hand
 
+> **This section was rewritten at `af6f6f2` and again at `4a4fc63`.** The body is
+> no longer a stack of `KernelInstr`s: it is **SSA over `ValueId`s**, built by
+> `compute/body.rs`'s `Lower`, and the backend reads that rather than an operand
+> stack. What is below is the state after both.
+
 The domain is a low type; the *body* is still a graph walk, and that is where
 the remaining coupling lives (see
 [checker-encoding-instability](checker-encoding-instability.md)):
 
 - `flat_arity` counts the scalar leaves for the wasm signature, so a nested
-  tuple `((Int, Int), Int)` flattens to three `i64` parameters.
+  tuple `((Int, Int), Int)` flattens to three parameters.
 - The **result** side is deliberately *not* a low type: a tuple codomain's arity
   is counted by walking the body's own value into its leaves
   (`codomain_leaves`), because the low-type pass only ever sees the domain. So
   the wasm signature's two halves come from two different places — the domain
   from `flat_arity`, the results from the body walk — and `assemble_module`
   therefore keys its type index on the `(parameter arity, result arity)` pair.
-- `emit_node` reads a parameter at an index path (`param_path` +
-  `flatten_offset`) and maps it to its flattened wasm local — one mechanism for
-  scalar, flat-tuple, and nested-tuple reads. It also looks through the
-  checker's `value_of` extraction (`Index(pair, 0)`) to reach a value's actual
-  computation, and lowers an `if c then a else b` (a 2-element array indexed by
-  a computed selector) to a wasm `select`.
-- `run_kernel` uses the dynamic `wasmi::Func::call` over an `&[i64]` argument
-  vector; `Launch` flattens a (possibly nested) tuple argument into it.
+- `Lower::value` is the one placement mechanism, and it answers in three cases:
+  a **literal**, a **parameter read at an index path**, or a `define_in` that
+  names the definition. The parameter case matches the `Index` chain rather
+  than the class of its base, because the deep pass may have unified the
+  parameter with the argument it was passed — so the node a read names is a
+  *computation* and only the chain says where it came from. A path walk covers
+  scalar, flat-tuple and nested-tuple reads alike.
+- The lowering looks through the checker's `value_of` extraction (`Index(pair, 0)`)
+  to reach a value's actual computation, and lowers an `if c then a else b` (a
+  2-element array indexed by a computed selector) to a wasm `select`.
+- `run_kernel` calls the compiled function over an argument vector;
+  `Launch` flattens a (possibly nested) tuple argument into it.
 - A kernel body may close over a module-level constant (graph-shared `USize`,
-  lowered to `i64.const`).
+  lowered to a constant instruction).
+
+**What the SSA rewrite changed for a backend**, and it is the same list the two
+backends answer differently: a value is now named rather than **pushed**, so a
+block's `params` are what a transfer receives, a shared subexpression is emitted
+once rather than once per use, and there is no "unbalanced stack" any more —
+`KernelBody::validate` refuses an arity mismatch by naming the operator and both
+counts. See [loop-conversion](loop-conversion.md) §8.6.
 
 ## Out of scope
 
