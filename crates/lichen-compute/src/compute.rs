@@ -3671,10 +3671,9 @@ where
     {
         return Some(kid);
     }
-    // A kernel *struct value* `[.native, .I, .O]` reached by value (not through an
-    // `Index` op): its element 0 is the bare `.native` kernel artifact.
-    // SAFETY: `node` is a live node of `module`; the note covers this
-    // function's `items()` calls.
+    // A kernel struct value reached by value: element 0 is the bare artifact.
+
+    // SAFETY: `node` is a live node of `module`; the `items()` calls are safe.
     if let Some(items) = (unsafe { module.array_items(node) })
         && let Some(first) = items.first()
         && let Ok(first) = dyn_node(first.node)
@@ -3682,8 +3681,7 @@ where
     {
         return Some(kid);
     }
-    // A kernel struct `.native` field read: `Index(struct, 0)`, where the
-    // struct value's element 0 is the bare kernel artifact.
+    // A kernel struct `.native` read: `Index(struct, 0)`, the bare artifact.
     if let Some(operation) = module.node_operation(node)
         && let Some(LowOperator::Index) = AsEnum::<LowOperator>::as_enum(&operation.operator)
             && let Ok((target, index)) = operand_pair(module, operation.operand)
@@ -3698,23 +3696,21 @@ where
     None
 }
 
-/// Whether `node` is a kernel **in the making** — the undecided half of
-/// [`kernel_id_of`], for [`ComputeOperator::is_callable`], which the lowlevel
-/// consults in the middle of the deep pass, before the struct pair's value slot
-/// has been evaluated.  A `Jit` that has not run yet counts as the kernel it
-/// will produce, and the walk follows the same two value edges `kernel_id_of`
-/// follows ([`value_of_node`]'s `Index(pair, 0)` extraction and a struct
-/// pair's element 0).  The answer is therefore a superset of the JIT's: it can
-/// keep a callee lazy that later turns out not to be a kernel (the conservative
-/// direction), and never refuses one the JIT would lower.
+/// Whether `node` is a kernel in the making — the undecided half of
+/// [`kernel_id_of`].
+///
+/// # Invariant
+/// It follows the same two value edges `kernel_id_of` does, and its answer is a
+/// superset: it can keep a callee lazy that turns out not to be a kernel, and never
+/// refuses one the JIT would lower.
 fn pending_kernel<P>(module: &Module<P>, node: NodeId) -> bool
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    // The one operator that produces a `Kernel`; a value that is still lazy
-    // here is a function the definition pass has not run yet.
+    // The one operator that produces a `Kernel`; a lazy value here is a function
+    // the pass has not run yet.
     if module.node_operation(node).is_some_and(|operation| {
         matches!(
             AsEnum::<ComputeOperator>::as_enum(&operation.operator),
@@ -3739,11 +3735,12 @@ where
     false
 }
 
-/// The *value* node behind a `[value, type]` pair stored as a **concrete array
-/// value** — a node whose value is an array, its element 0 the value.  The
-/// checker stores some argument values as such pairs (whereas [`value_of_node`]
-/// handles the `Index(pair, 0)` extraction form); the JIT must look through to
-/// the value before emitting.  Returns `None` when `node` is not such a pair.
+/// The value node behind a `[value, type]` pair stored as a concrete array value.
+///
+/// # Invariant
+/// The checker stores some argument values as such pairs, where [`value_of_node`]
+/// handles the `Index(pair, 0)` form; the JIT must look through to the value before
+/// emitting.
 fn pair_value_half<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
 where
     P: Program,
@@ -3755,16 +3752,12 @@ where
     dyn_node(items.first()?.node).ok()
 }
 
-/// The **field-type list** of a parameter's value: the shape slot of the
-/// parameter's type expression.
-///
-/// The field positions a read's own chain names, walking **down from the read**.
+/// The field-type list of a parameter's value, and the positions a read's chain names.
 ///
 /// # Invariant
-/// A named read reaches a lowering already resolved: `TableGet(names, "in")` is specialised
-/// into `Index(field, 0)`, so the chain carries **positions** rather than names, and the
-/// positions are the role table's own. Walking from the parameter cannot answer this: its
-/// value half is an alias with no operation, and the link to a read is the equality class.
+/// A named read reaches a lowering already resolved — `TableGet(names, "in")` is
+/// specialised into `Index(field, 0)` — so a chain carries positions, and they are
+/// the role table's own.
 fn named_path<P>(module: &Module<P>, node: NodeId) -> Option<Vec<usize>>
 where
     P: Program,
@@ -3797,8 +3790,7 @@ where
 }
 
 /// Flatten a parameter index `path` to a wasm local index, using the domain
-/// `shape`: a tuple's element `i` starts at the sum of its `[..i]` elements'
-/// flattened arities.  A scalar domain (empty path) is `local 0`.
+/// `shape`.
 fn flatten_offset(domain: &LowShape, path: &[usize]) -> Result<usize, String> {
     let mut offset = 0;
     let mut cur = domain;
@@ -3814,9 +3806,8 @@ fn flatten_offset(domain: &LowShape, path: &[usize]) -> Result<usize, String> {
                 cur = &items[i];
             }
             LowShape::USize => {
-                // Descending into a scalar (a non-empty path) is a type error
-                // the checker should have caught; a scalar domain is only ever
-                // read as the empty path.
+                // Descending into a scalar is a type error the checker should have
+                // caught.
                 return Err("index into a scalar parameter".into());
             }
             _ => return Err("unsupported parameter domain shape".into()),
@@ -3825,13 +3816,12 @@ fn flatten_offset(domain: &LowShape, path: &[usize]) -> Result<usize, String> {
     Ok(offset)
 }
 
-/// One scalar crossing a kernel's ABI — a launch/call argument, or a value a run
-/// handed back: the class it is and the bits that class's wasm value takes.
+/// One scalar crossing a kernel's ABI: the class it is and the bits it takes.
 ///
+/// # Invariant
 /// The class travels with the value because the two are the same 64 bits to
-/// everything downstream — the argument vector, the wasm call, the result
-/// buffer — and only the class says whether an `i64` or an `f32` is meant
-/// (`docs/notes/floating-point.md` §4.2, §4.4).
+/// everything downstream, and only the class says whether an `i64` or an `f32` is
+/// meant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ScalarValue {
     class: ScalarClass,
@@ -3887,17 +3877,13 @@ impl ScalarValue {
     }
 }
 
-/// Flatten a kernel argument value (a scalar `Int`/`Float` leaf, or a possibly
-/// nested `Array` of them, as a tuple-of-tuples domain needs) into the wasm
-/// argument vector, each leaf with its own class.  Returns `Err` naming the
-/// first element that is not a scalar leaf — the definition pass reports the
-/// undecided result, but only this says *which* element was unusable.
+/// Flatten a kernel argument value into the wasm argument vector, each leaf with its
+/// own class.
 ///
-/// `path` is the offending element's position in the argument: `""` at the
-/// root, then `"1"`, `"1.0"`, …  It is built as the walk descends, because for
-/// a tuple-of-tuples argument a position is the only way to point at the one
-/// element that could not be lowered; an empty `path` is the root, whose
-/// refusal names the argument as a whole.
+/// # Invariant
+/// `Err` names the first element that is not a scalar leaf: the definition pass
+/// reports the undecided result, but only this says which element was unusable. The
+/// path is the offending element's position, built as the walk descends.
 fn collect_args<P>(
     module: &Module<P>,
     node: AnyNodeId,
@@ -3936,10 +3922,8 @@ where
         }
         value => {
             let kind = argument_kind(value.as_ref());
-            // At the root there is no position to name, and the caller has
-            // already established that a tuple argument is an `Array`, so this
-            // arm is the root itself — the whole argument, not one of its
-            // elements.
+            // At the root there is no position to name: this arm is the whole
+            // argument, not one of its elements.
             let refusal = if path.is_empty() {
                 format!("the argument is {kind}")
             } else {
@@ -3953,15 +3937,12 @@ where
     }
 }
 
-/// The wasm argument vector for a `launch`/`call`, or the refusal to record —
-/// the one place a kernel's argument is read out of the program, so both run
-/// operators say the same thing about the same argument.
+/// The wasm argument vector for a `launch`/`call`, or the refusal to record.
 ///
-/// A scalar argument is one value of its own class; a tuple argument is
-/// flattened ([`collect_args`]).  Anything else is named by what the user wrote:
-/// `launch`'s checker gate catches the shape for an annotated kernel, but
-/// `call`'s domain is a fresh cell, so this is where a string or a computed
-/// scalar becomes a diagnostic rather than a lazy marker.
+/// # Invariant
+/// The one place a kernel's argument is read out of the program, so both run
+/// operators say the same thing about the same argument: a scalar is one value, a
+/// tuple is flattened, and anything else is named by what the user wrote.
 fn kernel_arguments<P>(module: &Module<P>, node: AnyNodeId) -> Result<Vec<ScalarValue>, String>
 where
     P: Program,
@@ -3987,19 +3968,16 @@ where
     Ok(args)
 }
 
-/// What a launch argument that is not a kernel parameter vector at all looks
-/// like, in the terms a lichen program is written in: a refusal that names the
-/// runtime variant instead names the value the user wrote.  `USize` and
-/// `Array` are the two shapes a parameter vector may take and are recognised
-/// before this is asked, so the last arm covers a node that carries no value at
-/// all.
+/// What a launch argument that is not a parameter vector looks like, in the terms
+/// the user wrote.
+///
+/// # Invariant
+/// `USize` and `Array` are the two shapes a parameter vector may take and are
+/// recognised first, so the last arm covers a node that carries no value at all.
 fn argument_kind(value: Option<&LowValue>) -> &'static str {
     match value {
-        // A float is a concrete scalar, so it is named as one: the refusal this
-        // feeds has to say what the user actually wrote.  It is only *refused*
-        // where the parameter it is handed to is an `Int` — that check is the
-        // run's, where the callee's leaf classes are in hand
-        // (`docs/notes/floating-point.md` §4.2).
+        // A float is a concrete scalar, so it is named as one: the refusal has to
+        // say what the user wrote.
         Some(LowValue::Float(_)) => "a float",
         Some(LowValue::Str(_)) => "a string",
         Some(LowValue::Table(_)) => "a table",
