@@ -262,10 +262,14 @@ not pull the tokio/tower async stack.
   distinction and accepts more than the strict parser. It lives in this repo as
   a sub-directory so the extension can reference it via the grammar `path` field
   (`[grammars.lichen]` with `path = "tree-sitter-lichen"`), which Zed supports
-  for (mono)repos holding multiple grammars. `tree-sitter generate` was run and
-  `src/parser.c` is committed, so Zed builds it without the toolchain. Queries
-  live both in `tree-sitter-lichen/queries/` and (mirrored) in the extension's
-  `languages/lichen/`, because Zed reads queries from the extension directory.
+  for (mono)repos holding multiple grammars. The generated parser is **not**
+  committed: `src/parser.c` and the rest of `src/` are build outputs of
+  `grammar.js`, gitignored and regenerated in-tree by `bindings/rust/build.rs`
+  through the pinned `tree-sitter-cli`, which it requires on `PATH` (or under
+  `node_modules/.bin`) and panics with install instructions when it is missing.
+  Queries live both in `tree-sitter-lichen/queries/` and (mirrored) in the
+  extension's `languages/lichen/`, because Zed reads queries from the extension
+  directory.
 - **Grammar `rev`:** pinned to `d799ade` (a commit containing `tree-sitter-lichen/`
   and pushed to `origin/dev`), with `[grammars.lichen]` `repository` pointing at the
   public HTTPS remote (`https://github.com/windwhiterain/lichen-vm`). The pinned

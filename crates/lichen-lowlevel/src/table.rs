@@ -19,8 +19,8 @@ fn mix(h: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Content tokens: marker values, an operation edge, an undecided slot, a
-/// cut position, and the program's own variants.
+// Content tokens: marker values, an operation edge, an undecided slot, a
+// cut position, and the program's own variants.
 
 const NONE_TOKEN: u64 = 0x6e6f_6e65_0000_0001; // "none"
 
