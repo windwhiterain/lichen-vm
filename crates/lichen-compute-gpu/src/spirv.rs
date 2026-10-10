@@ -1406,12 +1406,15 @@ fn emit_function(
                                     at,
                                 });
                             };
-                            let mut operands = Vec::with_capacity(leaves.len());
+                            let result = next;
+                            next += 1;
+                            let mut call =
+                                vec![ids.type_of(result_class), result, ids.functions[position]];
                             for (offset, class) in leaves.iter().enumerate() {
                                 // **A leaf's class is its own**: the position
                                 // coerces the argument.
                                 let argument = operand(offset)?;
-                                operands.push(
+                                call.push(
                                     as_class(
                                         argument,
                                         *class,
@@ -1424,20 +1427,7 @@ fn emit_function(
                                     .id,
                                 );
                             }
-                            let result = next;
-                            next += 1;
-                            code.push(Inst::new(
-                                op::FUNCTION_CALL,
-                                [
-                                    vec![
-                                        ids.type_of(result_class),
-                                        result,
-                                        ids.functions[position],
-                                    ],
-                                    operands,
-                                ]
-                                .concat(),
-                            ));
+                            code.push(Inst::new(op::FUNCTION_CALL, call));
                             slots.insert(definition, scalar(result, result_class));
                         }
                     }
