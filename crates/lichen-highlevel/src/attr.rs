@@ -13,11 +13,11 @@ pub trait AttrSpec: Clone + Copy + PartialEq + Eq + std::fmt::Debug + 'static {}
 
 /// A composed attribute **set** — what a [`Schema`](crate::ir::Schema) tail
 /// holds — and its **canonical order**.
-    ///
-    /// # Invariant
-    /// The order is the single allocation authority for pair slots: the attribute
-    /// at order index `i` occupies pair slot `shape::attr_slot(i)`, so no
-    /// attribute can claim an index that is not its position.
+///
+/// # Invariant
+/// The order is the single allocation authority for pair slots: the attribute
+/// at order index `i` occupies pair slot `shape::attr_slot(i)`, so no
+/// attribute can claim an index that is not its position.
 pub trait AttrSet: AttrSpec {
     /// Every attribute this set can carry, in the canonical order — the pair
     /// layout. Checked by [`order_is_canonical`].
@@ -170,13 +170,13 @@ where
 
 /// The **name** `pair` reads as, when one of its attributes names it — the
 /// reader for a pair inside a slot.
-    ///
-    /// # Invariant
-    /// A pair's arity is in the graph but *which* attribute owns each tail slot is
-    /// not, so the search asks **every** attribute in canonical order and the first
-    /// answer wins. It is sound because an attribute answers only about content it
-    /// recognises as its own. A *static* slot is skipped: an attribute reads a
-    /// dynamic node.
+///
+/// # Invariant
+/// A pair's arity is in the graph but *which* attribute owns each tail slot is
+/// not, so the search asks **every** attribute in canonical order and the first
+/// answer wins. It is sound because an attribute answers only about content it
+/// recognises as its own. A *static* slot is skipped: an attribute reads a
+/// dynamic node.
 pub fn pair_label<P>(
     module: &Module<P>,
     pair: NodeId,
@@ -205,22 +205,22 @@ where
 
 /// The attribute-extension registry: a marker to the [`AttrExt`] holding its
 /// behaviour for a build's lifetime.
-    ///
-    /// # Invariant
-    /// The checker takes it as `Option<AttrExtRegistry<P, P::Attr>>`: `None` is a
-    /// build with no attribute extension, and a marker it cannot resolve is a
-    /// reported diagnostic, never a panic.
+///
+/// # Invariant
+/// The checker takes it as `Option<AttrExtRegistry<P, P::Attr>>`: `None` is a
+/// build with no attribute extension, and a marker it cannot resolve is a
+/// reported diagnostic, never a panic.
 pub type AttrExtRegistry<P, Attr> = Box<dyn Fn(&Attr) -> &'static dyn AttrExt<P>>;
 
 /// The **value node** of an attribute slot: a `[value, type]` pair's element
 /// 0, or the slot itself when already bare.
-    ///
-    /// # Invariant
-    /// Comparing two slots instead unifies a `[value, type]` pair against the
-    /// other side — for a refinement, the predicate's own self-referential
-    /// `[Function(fid), ↺]` type, whose positional descent walks into its cycle
-    /// and reports a conflict (`docs/notes/attributes.md` §"the gate must compute
-    /// its operands"). A slot whose value is not a pair is returned as it stands.
+///
+/// # Invariant
+/// Comparing two slots instead unifies a `[value, type]` pair against the
+/// other side — for a refinement, the predicate's own self-referential
+/// `[Function(fid), ↺]` type, whose positional descent walks into its cycle
+/// and reports a conflict (`docs/notes/attributes.md` §"the gate must compute
+/// its operands"). A slot whose value is not a pair is returned as it stands.
 pub fn slot_value_node<P: HighProgram>(ctx: &dyn Ctx<P>, slot: NodeId) -> NodeId
 where
     P::Value: ValueType + AsEnum<LowValue>,

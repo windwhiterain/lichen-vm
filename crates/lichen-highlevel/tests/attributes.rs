@@ -1,8 +1,5 @@
-//! An annotated program checked through an entry point that installs no
-//! attribute extension: the schema's attribute cannot be lowered, so it is a
-//! reported diagnostic plus a well-formed hole — never a panic inside the
-//! checker.  This is the `Checker::build` path a host reaches when it composes
-//! an attribute set but does not pass the matching extension.
+//! An annotated program checked with no attribute extension installed;
+//! see docs/notes/attributes.md.
 
 use lichen_highlevel::NoAttr;
 use lichen_highlevel::attr::{AttrExt, AttrExtRegistry, AttrSet, AttrSpec};
@@ -16,8 +13,7 @@ use lichen_highlevel::program::{
 use lichen_lowlevel::{LowValue, NodeId, Registry};
 use std::sync::{Arc, RwLock};
 
-/// A probe attribute: one member, so the composed set's canonical order is the
-/// single-element list and an expression's tail can carry it.
+/// A one-member attribute set: the canonical order is the single-element list.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Tag;
 
@@ -84,10 +80,8 @@ fn an_annotated_program_without_an_attribute_extension_reports_a_guard() {
 
 #[test]
 fn the_attribute_slot_of_an_unlowerable_schema_is_a_well_formed_hole() {
-    // The refused expression must still compile to a pair of the schema's
-    // width, so the rest of the check reads a slot rather than an absent
-    // element.  The slot is a fresh undecided pair — the same hole shape the
-    // other check-time guards leave.
+    // A refused annotation still compiles to the schema's full width; the
+    // attribute slot is a fresh undecided hole.
     let (annotation, ir) = annotated_int();
     let build = Checker::<TaggedProgram>::build(ir);
     let pair = build.state[annotation.0 as usize]
@@ -105,10 +99,8 @@ fn the_attribute_slot_of_an_unlowerable_schema_is_a_well_formed_hole() {
 
 #[test]
 fn an_annotated_parameter_without_an_attribute_extension_is_reported_once() {
-    // `f = x # tag => x; f 5` — the parameter annotation is where the
-    // attribute is read, and the apply's slot check is skipped rather than
-    // reported again: the build is missing one thing, so it reports one
-    // diagnostic however many sites read an attribute.
+    // One build, one missing extension, one diagnostic: the apply's slot
+    // check is skipped rather than reported again.
     let mut ir: IR<Tag, HighProgramLiteral> = IR::new();
     let f = ir.alloc(ExprKind::Placeholder);
     let x = ir.alloc(ExprKind::Parameter);
@@ -146,15 +138,9 @@ fn an_annotated_parameter_without_an_attribute_extension_is_reported_once() {
 
 #[test]
 fn an_attribute_aware_build_lowers_the_annotation() {
-    // The counterpart of the guard: the same annotated program through
-    // `build_in_attr`, where the extension is installed.  The annotation
-    // lowers, the slot is the annotation value's pair, and nothing is
-    // reported.
     let (_annotation, ir) = annotated_int();
-    // Single-threaded sharing: a filed value carries raw arena handles, so this
-    // `Arc` cannot cross a thread (see the `Registry` doc in `lichen-lowlevel`);
-    // `Rc` is not available — `AGENTS.md`'s code taste forbids it.  The `Arc`
-    // stays because `Checker::build_in_attr` takes it by value.
+    // Single-threaded: filed values hold raw arena handles, so this `Arc` is
+    // not `Send`; the builder takes it by value.
     #[allow(clippy::arc_with_non_send_sync)]
     let registry = Arc::new(RwLock::new(Registry::<TaggedProgram>::new()));
     let attr_ext: AttrExtRegistry<TaggedProgram, Tag> = Box::new(|_marker: &Tag| &Tag);
@@ -172,8 +158,6 @@ fn an_attribute_aware_build_lowers_the_annotation() {
 
 #[test]
 fn a_schema_without_an_attribute_is_unaffected_by_the_missing_extension() {
-    // The same entry point on a program whose schemas carry nothing: no
-    // extension is ever consulted, so the build checks as before.
     let mut ir: IR<NoAttr, HighProgramLiteral> = IR::new();
     let five = ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(5))));
     ir.set_root(five);

@@ -1,11 +1,4 @@
-//! The value and literal vocabularies are extension points: one `enum_ext!`
-//! invocation lists every layer's enum directly — the lowlevel structural
-//! values, the highlevel type values, the downstream's own variants — as
-//! sibling carry variants of one flat union, and the checker runs on it
-//! generically.  This proves the path a language crate would take to add its
-//! own value variants (via [`ValueType`]) and its own literal structs (via
-//! [`LiteralExt`]), composing the built-in int/type-constant literals with a
-//! downstream literal the same way an operator vocabulary composes.
+//! The value and literal vocabularies are extension points; see docs/notes/compiler-plugin.md.
 
 use lichen_highlevel::NoAttr;
 use lichen_highlevel::checker::Checker;
@@ -21,13 +14,10 @@ use lichen_lowlevel::{
 use lichen_utils::extend::AsEnum;
 
 // A probe extension: a type constant beyond the highlevel's vocabulary.
-// The composed union carries the lowlevel and highlevel layers as sibling
-// variants — flat, no nesting — and gains its own `FloatType`.
 lichen_utils::enum_ext! {
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum ProbeValue {
-        /// A type constant the highlevel doesn't know — a first-class type
-        /// that pairs with `Type`, exactly like `Int` or `Type` itself.
+        /// A type constant the highlevel does not know: a first-class type.
         FloatType,
     }
     + LowValue as LowValue;
@@ -84,11 +74,8 @@ impl ValueType for ProbeValue {
     }
 }
 
-// The probe literal vocabulary: the highlevel's built-in literal structs
-// compose with the downstream's own (here a `FloatLit` that stores nothing
-// and builds the `FloatType` marker paired with `Type`) — the same
-// composition a operator vocabulary uses.  A downstream composes via
-// `enum_ext!` and implements `LiteralExt` for the composed enum.
+// The probe literal vocabulary: built-in literal structs composed with the
+// downstream's own.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FloatLit;
 
@@ -109,9 +96,7 @@ where
     }
 }
 
-/// A probe literal that builds the `Type` marker through
-/// [`Ctx::value_node`] — the path a downstream type-constant extension takes
-/// when it encodes a kind marker as a plain value node.
+/// A probe literal that builds the `Type` marker through [`Ctx::value_node`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TypeMarkerLit;
 
@@ -161,12 +146,9 @@ impl LiteralExt<ProbeProgram> for ProbeLiteral {
 
 #[test]
 fn the_carry_variants_wrap_and_view() {
-    // Each layer's From wraps into its own branch; AsEnum reads it back.
     let v: ProbeValue = TypeValue::TypeInt.into();
     assert_eq!(v, ProbeValue::TypeValue(TypeValue::TypeInt));
     assert_eq!(AsEnum::<TypeValue>::as_enum(&v), Some(TypeValue::TypeInt));
-    // The lowlevel view reads only the LowValue branch: structural values
-    // round-trip, every other branch reads as None.
     let n: ProbeValue = LowValue::USize(3).into();
     assert_eq!(n, ProbeValue::LowValue(LowValue::USize(3)));
     assert_eq!(AsEnum::<LowValue>::as_enum(&n), Some(LowValue::USize(3)));
@@ -176,9 +158,8 @@ fn the_carry_variants_wrap_and_view() {
 
 #[test]
 fn the_checker_runs_on_an_extended_union() {
-    // `FloatType : Type` — the new type constant is a first-class type: its
-    // pair is a fresh `[FloatType, Type]` with the canonical universe as its
-    // type slot.  And `5 : Int` checks as usual on the extended vocabulary.
+    // The new type constant is first-class: `[FloatType, Type]`, with the
+    // canonical universe as its type slot.
     let mut ir: IR<NoAttr, ProbeLiteral> = IR::new();
     let float_ty = ir.alloc(ExprKind::Literal(ProbeLiteral::Float(FloatLit)));
     let five = ir.alloc(ExprKind::Literal(ProbeLiteral::Int(IntLit(5))));
@@ -213,10 +194,8 @@ fn the_checker_runs_on_an_extended_union() {
 
 #[test]
 fn value_node_shares_the_canonical_type_marker() {
-    // `Ctx::value_node(Type)` must return the checker's installed shared
-    // type-marker node, exactly like the other seven kind markers — a fresh
-    // node would fork the marker's identity (the canonical `Type : Type`
-    // universe references the installed one).
+    // `value_node(Type)` must return the installed marker; a fresh node
+    // forks the identity `Type : Type` references.
     let mut ir: IR<NoAttr, ProbeLiteral> = IR::new();
     let marker = ir.alloc(ExprKind::Literal(ProbeLiteral::TypeMarker(TypeMarkerLit)));
     ir.set_root(marker);
@@ -227,8 +206,7 @@ fn value_node_shares_the_canonical_type_marker() {
 
 #[test]
 fn an_extended_union_reports_type_conflicts() {
-    // `5 : Type` is an annotation conflict even on the extended union — the
-    // generic checker's diagnostics carry the extended value type.
+    // `5 : Type` conflicts even on the extended union.
     let mut ir: IR<NoAttr, ProbeLiteral> = IR::new();
     let five = ir.alloc(ExprKind::Literal(ProbeLiteral::Int(IntLit(5))));
     let ty = ir.alloc(ExprKind::Literal(ProbeLiteral::TypeType(TypeTypeLit)));
@@ -247,9 +225,8 @@ fn an_extended_union_reports_type_conflicts() {
             .any(|d| d.kind == DiagKind::Annotation)
     );
 }
-// A probe operator vocabulary: the same extension shape a downstream language
-
-// would use when it needs operators beyond the highlevel's own set.
+// A probe operator vocabulary: the same extension shape, beyond the
+// highlevel's own operator set.
 lichen_utils::enum_ext! {
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum ProbeOperator {
@@ -274,9 +251,7 @@ where
 
 #[test]
 fn the_program_marker_accepts_a_composed_operator_vocabulary() {
-    // A `Module` can be bound to the highlevel value vocabulary with a
-    // downstream operator union; the lowlevel runtime machinery no longer
-    // requires the operator set to be exactly `HighProgramOperator`.
+    // A `Module` takes a downstream operator union, not only `HighProgramOperator`.
     let _module = Module::<ProbeProgram>::new();
     assert!(
         HighProgramOperator::LowOperator(LowOperator::Apply)

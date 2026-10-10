@@ -1,9 +1,4 @@
-//! Downstream `GlobalExt` extension: a downstream composes its own global
-//! state by listing the upstream's components *flat* (by symbol) alongside
-//! its own — one `compose_ext!` invocation, no per-upstream wrapper.  Flat is
-//! load-bearing: per-type [`AsField`] access (including the highlevel's own
-//! operators reading `HighGlobal`, like `Fresh`) resolves only against a
-//! flat tuple, so nesting the upstream host would break them.
+//! Downstream `GlobalExt` composition; see docs/notes/compiler-plugin.md.
 
 use lichen_highlevel::program::{HighGlobal, HighProgramValue};
 use lichen_lowlevel::{BlockId, GlobalExt, Module, NodeId, Operation, OperatorExt, Program};
@@ -23,9 +18,6 @@ impl MyState {
     }
 }
 
-// The composed host: the upstream's `HighGlobal` listed flat, then the
-// downstream's own.  The downstream opts into the lowlevel contract with
-// the explicit `GlobalExt` impl.
 lichen_utils::compose_ext! {
     #[derive(Debug, Default)]
     struct MyGlobalExt(
@@ -45,8 +37,6 @@ impl Program for MyProgram {
     type PackageMeta = ();
 }
 
-// The downstream's own operator vocabulary: composed the same way as the
-// values — its own variant plus the structural operators carried flat.
 lichen_utils::enum_ext! {
     #[derive(Debug, Clone, Copy, PartialEq)]
     enum MyOperator {
@@ -116,10 +106,6 @@ fn a_downstream_global_ext_composes_flat_and_reaches_both_components() {
         ))
     );
 
-    // The operator's `Fresh`-style co-existence check never fired: the
-    // upstream component sat untouched in the shared host, and the type-id
-    // counter is exactly where `HighProgramOperator::TypeOperator(
-    // TypeOperator::Fresh)` would find it on the highlevel program.
     assert_eq!(AsField::<HighGlobal>::get(&m.global_ext).type_id_counter, 0);
     assert_eq!(AsField::<MyState>::get(&m.global_ext).count, 2);
 }

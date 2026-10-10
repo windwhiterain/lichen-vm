@@ -1,11 +1,4 @@
-//! A native operator's [`NativeApply`] is adopted by the checker.
-//!
-//! The extension point is a public API a host composes: a plugin implements
-//! [`NativeOp::build`] and returns the value node it emitted.  The call's
-//! `[value, type]` pair is the checker's to build — a builder that assembled a
-//! term by hand would be a second source of truth for the encoding, which is
-//! exactly the mistake that once put a value in a type slot.  This pins that a
-//! builder that emits through [`Ctx`] and returns the node is adopted.
+//! A native operator's [`NativeApply`] is adopted; see docs/notes/compiler-plugin.md.
 
 use lichen_highlevel::NoAttr;
 use lichen_highlevel::attr::AttrExt;
@@ -66,10 +59,8 @@ fn ops(operator: &'static dyn NativeOp<ProbeProgram>) -> NativeOps<ProbeProgram>
 }
 
 fn build(operator: &'static dyn NativeOp<ProbeProgram>) -> Build<ProbeProgram> {
-    // Single-threaded sharing: a filed value carries raw arena handles, so this
-    // `Arc` cannot cross a thread (see the `Registry` doc in `lichen-lowlevel`);
-    // `Rc` is not available — `AGENTS.md`'s code taste forbids it.  The `Arc`
-    // stays because `Checker::build_in_attr_native` takes it by value.
+    // Single-threaded: filed values hold raw arena handles, so this `Arc` is
+    // not `Send`; the builder takes it by value.
     #[allow(clippy::arc_with_non_send_sync)]
     let registry = Arc::new(RwLock::new(Registry::new()));
     Checker::<ProbeProgram>::build_in_attr_native(

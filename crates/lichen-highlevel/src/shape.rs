@@ -369,12 +369,12 @@ where
 }
 
 /// Whether a value is a struct marker: the pair `[payload, TypeStruct]`.
-    ///
-    /// # Invariant
-    /// The test is the **tag**, never the silhouette: the marker must be an
-    /// ordinary two-element `[value, type]` pair whose [`STRUCT_MARKER_TAG_SLOT`]
-    /// holds the `TypeStruct` atom. The payload is not inspected — its cells may
-    /// still be undecided while the marker is being built.
+///
+/// # Invariant
+/// The test is the **tag**, never the silhouette: the marker must be an
+/// ordinary two-element `[value, type]` pair whose [`STRUCT_MARKER_TAG_SLOT`]
+/// holds the `TypeStruct` atom. The payload is not inspected — its cells may
+/// still be undecided while the marker is being built.
 pub fn is_struct_marker_any<P: Program>(module: &Module<P>, marker: AnyNodeId) -> bool
 where
     P::Value: ValueType,
@@ -411,11 +411,11 @@ where
 
 /// The pieces of a struct **type term** every reader needs: the universe slot,
 /// the field list, and the name table.
-    ///
-    /// # Invariant
-    /// The universe *gate* is the caller's: `struct_names_any` recognises it by
-    /// class equality and `field_names` by its self-referential cycle, and the walk
-    /// lives here so the two cannot drift.
+///
+/// # Invariant
+/// The universe *gate* is the caller's: `struct_names_any` recognises it by
+/// class equality and `field_names` by its self-referential cycle, and the walk
+/// lives here so the two cannot drift.
 fn struct_term_parts<P: Program>(
     module: &Module<P>,
     ty: AnyNodeId,
@@ -453,10 +453,10 @@ where
 }
 
 /// The struct's name→index table from a struct type value, or `None`.
-    ///
-    /// # Invariant
-    /// The universe is supplied by the caller: a checker has one, a lowering does
-    /// not — [`field_names`] is this reader for that side.
+///
+/// # Invariant
+/// The universe is supplied by the caller: a checker has one, a lowering does
+/// not — [`field_names`] is this reader for that side.
 pub fn struct_names_any<P: Program>(
     module: &mut Module<P>,
     universe: NodeId,
@@ -473,10 +473,10 @@ where
 
 /// A type as the encoding holds it: the `[shape, kind]` term, or a node holding
 /// one at its value slot.
-    ///
-    /// # Invariant
-    /// Which one it is is stated, never guessed: a term and a holder are both
-    /// two-slot arrays, so only the caller's own knowledge separates them.
+///
+/// # Invariant
+/// Which one it is is stated, never guessed: a term and a holder are both
+/// two-slot arrays, so only the caller's own knowledge separates them.
 #[derive(Clone, Copy)]
 pub enum TypeRef {
     /// The `[shape, kind]` expression itself — its shape at slot 0, its kind at
@@ -527,13 +527,13 @@ where
 }
 
 /// The **named fields** of a struct type, in field order, or `None`.
-    ///
-    /// # Invariant
-    /// The universe is recognised by [`Module::is_self_referential`] — the
-    /// `[Type, ↺]` cycle — because this reader's callers are below the checker and
-    /// have no universe handle to pass. The field count is the shape's own length,
-    /// so a name whose index maps outside the field list is dropped rather than
-    /// growing it.
+///
+/// # Invariant
+/// The universe is recognised by [`Module::is_self_referential`] — the
+/// `[Type, ↺]` cycle — because this reader's callers are below the checker and
+/// have no universe handle to pass. The field count is the shape's own length,
+/// so a name whose index maps outside the field list is dropped rather than
+/// growing it.
 pub fn field_names<P: Program>(
     module: &mut Module<P>,
     ty: TypeRef,
@@ -561,10 +561,10 @@ where
 }
 
 /// Where `name` sits in a name→index table — the fold a named read performs.
-    ///
-    /// # Invariant
-    /// The stored position is returned as it stands: the table is the authority
-    /// here, and a caller holding a field list bounds it against that.
+///
+/// # Invariant
+/// The stored position is returned as it stands: the table is the authority
+/// here, and a caller holding a field list bounds it against that.
 pub fn name_table_index<P: Program>(
     module: &Module<P>,
     table: AnyHandle<[TableItem]>,
@@ -606,12 +606,12 @@ where
 
 /// The **low type** a kinded type expression denotes. See
 /// `docs/notes/lowlevel-low-types.md`.
-    ///
-    /// # Invariant
-    /// The decode is by **kind marker** and says [`LowShape::Unknown`] explicitly
-    /// rather than falling back to a scalar: a type the vocabulary has no shape for
-    /// states *nothing*, and a silent fallback would let a `jit` compile a domain it
-    /// invented.
+///
+/// # Invariant
+/// The decode is by **kind marker** and says [`LowShape::Unknown`] explicitly
+/// rather than falling back to a scalar: a type the vocabulary has no shape for
+/// states *nothing*, and a silent fallback would let a `jit` compile a domain it
+/// invented.
 pub fn low_type_of<P: Program>(module: &Module<P>, type_value: AnyNodeId) -> LowShape
 where
     P::Value: ValueType,
@@ -732,10 +732,10 @@ where
 
 /// A **function shape** built from its two halves — the one spelling of "read
 /// the two positions".
-    ///
-    /// # Invariant
-    /// Each half is read through [`low_type_of_slot`]: a half may be a type value or
-    /// a term's type cell, and that reader is the authority for telling them apart.
+///
+/// # Invariant
+/// Each half is read through [`low_type_of_slot`]: a half may be a type value or
+/// a term's type cell, and that reader is the authority for telling them apart.
 fn function_shape<P: Program>(
     module: &Module<P>,
     domain: AnyNodeId,
@@ -752,12 +752,12 @@ where
 
 /// The low type an expression's **type slot** names: a backend's seed for a
 /// template's parameter domain.
-    ///
-    /// # Invariant
-    /// The two are told apart by **whether the decode succeeds**, not by a
-    /// structural guess: a term pair and a type value have the same two-slot
-    /// silhouette. What separates them is the terminal marker — the `Type` marker,
-    /// the one kind [`low_type_of`] refuses — so a pair never decodes directly.
+///
+/// # Invariant
+/// The two are told apart by **whether the decode succeeds**, not by a
+/// structural guess: a term pair and a type value have the same two-slot
+/// silhouette. What separates them is the terminal marker — the `Type` marker,
+/// the one kind [`low_type_of`] refuses — so a pair never decodes directly.
 pub fn low_type_of_slot<P: Program>(module: &Module<P>, slot: AnyNodeId) -> LowShape
 where
     P::Value: ValueType,

@@ -1,8 +1,5 @@
-//! The highlevel checker: compiles an IR into a lowlevel Module where
-//! the runtime *is* the typechecker — values are recursive pairs
-//! `[value, type]` whose type slots are themselves pairs bottoming out at
-//! the self-referential `Type : Type` universe, and the apply-time unify is
-//! the parameter type check.
+//! The runtime is the typechecker; see docs/notes/lowlevel-vm.md and
+//! docs/language-spec.md.
 
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
@@ -41,13 +38,13 @@ fn param(ir: &mut IR) -> ExprId {
 fn lam(ir: &mut IR, b: ExprId, body: ExprId) -> ExprId {
     lam_at(ir, b, body, None)
 }
-/// A lambda whose enclosing function is `parent` — the explicit link the
-/// checker turns into [`Function::parent`](lichen_lowlevel::Function::parent).
-/// A nested closure joins the enclosing template; `None` is top level (or the
-/// mutual-recursion sibling case), which hangs under nothing.
+/// A lambda whose enclosing function is `parent`, the explicit link the checker
+/// turns into `Function::parent`.
 ///
-/// Note the allocation order: a nested lambda may be built *before* the
-/// lambda enclosing it (hence needing a reserved id, see `lam_in`).
+/// # Invariant
+/// A nested closure joins the enclosing template; `None` is top level (or the
+/// mutual-recursion sibling case), which hangs under nothing.  A nested lambda
+/// may be built *before* the lambda enclosing it, hence the reserved id.
 fn lam_at(ir: &mut IR, b: ExprId, body: ExprId, parent: Option<ExprId>) -> ExprId {
     lam_at_typed(ir, b, None, body, parent)
 }
@@ -68,10 +65,12 @@ fn lam_at_typed(
         looping: false,
     })
 }
-/// A lambda nested inside another that is **not allocated yet**: reserves the
-/// enclosing node's id first, so the inner lambda's parent link can name it,
-/// then fills the reserved node's kind in (the same reserve-then-stamp
-/// discipline the frontend's `fn_parents` uses).  Returns `(enclosing, inner)`.
+/// A lambda nested inside another that is not allocated yet: reserves the
+/// enclosing node's id, then fills its kind in.
+///
+/// # Invariant
+/// Returns `(enclosing, inner)`; the reserve-then-stamp order is what lets the
+/// inner lambda's parent link name the enclosing node.
 fn lam_nested(
     ir: &mut IR,
     inner_b: ExprId,
@@ -103,8 +102,7 @@ fn app(ir: &mut IR, f: ExprId, x: ExprId) -> ExprId {
 fn index(ir: &mut IR, a: ExprId, i: ExprId) -> ExprId {
     ir.alloc(ExprKind::Index { array: a, index: i })
 }
-/// `a(k)` — a positional slot read over a tuple element (a struct instance
-/// reads by name, `s.x`; a decided non-tuple container is refused).
+/// `a(k)` — a positional slot read over a tuple element.
 fn field(ir: &mut IR, c: ExprId, k: ExprId) -> ExprId {
     ir.alloc(ExprKind::Field {
         container: c,
@@ -135,8 +133,7 @@ fn tuple(ir: &mut IR, elements: &[ExprId]) -> ExprId {
 fn type_tuple(ir: &mut IR, elements: &[ExprId]) -> ExprId {
     ir.alloc_type_tuple(elements)
 }
-/// A struct type expression with field names: `struct<.a T1, .b T2>` — every
-/// struct field is named (an unnamed one is refused, `DiagKind::StructFieldName`).
+/// A struct type expression with named fields: `struct<.a T1, .b T2>`.
 fn named_type_struct(ir: &mut IR, fields: &[(ExprId, &'static str)]) -> ExprId {
     let fields: Vec<(ExprId, Option<&'static str>)> =
         fields.iter().map(|&(e, name)| (e, Some(name))).collect();
@@ -157,8 +154,7 @@ fn type_array(ir: &mut IR, element_type: ExprId, length: ExprId) -> ExprId {
 fn hole(ir: &mut IR) -> ExprId {
     ir.alloc(ExprKind::Placeholder)
 }
-/// A recovered-error region — an opaque leaf the checker must skip.  Distinct
-/// from [`hole`], so the frontend can identify it for a diff / mask.
+/// A recovered-error region — an opaque leaf the checker skips, distinct from [`hole`].
 fn err_block(ir: &mut IR) -> ExprId {
     ir.alloc(ExprKind::ErrorBlock)
 }
@@ -182,8 +178,7 @@ fn array_ids(
         .collect()
 }
 
-/// The `FunctionId` a function-type node `[Function(fid), ↺]` carries — the
-/// function's own type (`f : f`). Reads slot 0's value.
+/// The `FunctionId` a function-type node `[Function(fid), ↺]` carries (`f : f`).
 fn function_type_id(
     b: &lichen_highlevel::checker::Build<ProgramImpl>,
     ftype: lichen_lowlevel::NodeId,
@@ -195,8 +190,7 @@ fn function_type_id(
     }
 }
 
-/// The function template's parameter *type* cell — `Function::parameter`'s
-/// slot 1 — the signature's domain, read for inference checks.
+/// The function template's parameter type cell — `Function::parameter` slot 1.
 fn param_type_cell(
     b: &lichen_highlevel::checker::Build<ProgramImpl>,
     fid: lichen_lowlevel::FunctionId,
@@ -231,11 +225,13 @@ fn array_mask_from(value: HighProgramValue) -> Vec<bool> {
         .collect()
 }
 
-/// Whether the given ids form the int type — a `[int, Type]` pair.  The two
-/// slots are matched differently, on purpose: element 0 is the marker and is
+/// Whether the given ids form the int type — a `[int, Type]` pair.
+///
+/// # Invariant
+/// The two slots are matched differently on purpose: element 0 is the marker,
 /// matched by *content*, because a literal rebuilds its type per occurrence and
-/// so is never the shared `Build::int_type` node; element 1 is the universe and
-/// is compared by node identity against the canonical `b.type_expr`.
+/// so is never the shared `Build::int_type` node; element 1 is the universe,
+/// compared by node identity against the canonical `b.type_expr`.
 fn is_int_type_ids(b: &lichen_highlevel::checker::Build<ProgramImpl>, ids: &[NodeId]) -> bool {
     ids.len() == 2
         && matches!(
@@ -250,8 +246,7 @@ fn is_int_type(b: &lichen_highlevel::checker::Build<ProgramImpl>, node: NodeId) 
     is_int_type_ids(b, &array_ids(b, node))
 }
 
-/// Whether an evaluated value is the int type pair `[int, Type]` — the
-/// two-slot test `is_int_type_ids` states, on the evaluated ids.
+/// Whether an evaluated value is the int type pair `[int, Type]`.
 fn is_int_type_value(
     b: &lichen_highlevel::checker::Build<ProgramImpl>,
     value: HighProgramValue,
@@ -267,8 +262,7 @@ fn int_literal_checks() {
     let five = int(&mut ir, 5);
     let b = build(five, ir);
     assert!(b.ok, "5 should check");
-    // The type of 5 is the recursive pair [int, [Type, ↺]] — rebuilt fresh per
-    // occurrence (content-equal to the shared int_type, not node-identical).
+    // The type of 5 is [int, [Type, ↺]], rebuilt fresh per occurrence.
     assert!(is_int_type(&b, b.state[five].ty.unwrap()));
     let ids = array_ids(&b, b.state[five].ty.unwrap());
     assert_eq!(ids.len(), 2);
@@ -318,17 +312,13 @@ fn the_type_universe_is_self_referential() {
 
 #[test]
 fn an_error_block_is_skipped_and_never_cascades() {
-    // A recovered-error region lowers to `ExprKind::ErrorBlock` (distinct from
-    // a real `_` = Placeholder).  The checker's *skip* path compiles it to a
-    // pair of fresh, never-unified cells: the masked region carries no grammar,
-    // so it is not checked and cannot introduce a type-level "expected X, found
-    // Y" from inside a region the user is still typing.
+    // A recovered-error region is a pair of fresh cells: it carries no
+    // grammar, so nothing inside it is checked.
     let mut ir = IR::new();
     let e = err_block(&mut ir);
     let b = build(e, ir);
     assert!(b.ok, "a masked error region is not a check failure");
-    // The skip path still records the pair's three slots, so every downstream
-    // read (`value_of`, `ty`) works and the expression is "done" (recompiles).
+    // The skip path records the pair's slots, so downstream reads still work.
     assert!(b.state[e].term.is_some(), "the skip path records the pair");
     assert!(
         b.state[e].val.is_some(),
@@ -338,8 +328,7 @@ fn an_error_block_is_skipped_and_never_cascades() {
         b.state[e].ty.is_some(),
         "the skip path records the type slot"
     );
-    // The two slots are fresh (undecided) cells — never unified by the
-    // surrounding context, so they have no value and no type conflict.
+    // The two slots are fresh, undecided cells, never unified by the context.
     let ty_cell = b.state[e].ty.unwrap();
     assert!(
         b.module.node_value(AnyNodeId::Dynamic(ty_cell)).is_none(),
@@ -349,10 +338,8 @@ fn an_error_block_is_skipped_and_never_cascades() {
 
 #[test]
 fn an_error_block_as_a_child_does_not_cascade() {
-    // An error block embedded in real code must not poison it.  A homogeneous
-    // array unifies its element types; the error block's fresh type cell binds
-    // quietly to the int sibling instead of raising a conflict — the array
-    // still checks, and the masked region is never "expected X, found Y"ed.
+    // An error block in real code must not poison it: its fresh type cell
+    // binds quietly to the int sibling.
     let mut ir = IR::new();
     let five = int(&mut ir, 5);
     let e = err_block(&mut ir);
@@ -392,9 +379,8 @@ fn lambda_has_arrow_type() {
     let l = lam(&mut ir, x, x);
     let b = build(l, ir);
     assert!(b.ok, "\\x. x should check");
-    // The lambda's type is the function itself (`f : f`): a self-referential
-    // `[Function(fid), ↺]` — slot 0 the function's value node, slot 1 the node
-    // itself (the self-cycle, like the universe `[Type, ↺]`).
+    // The lambda's type is the function itself: a self-referential
+    // `[Function(fid), ↺]`, slot 1 being the node itself.
     let ftype = b.state[l].ty.unwrap();
     let ids = array_ids(&b, ftype);
     assert_eq!(ids.len(), 2, "a function-type node is a pair [func, self]");
@@ -469,8 +455,8 @@ fn typed_tuple_is_a_kinded_tuple() {
 
 #[test]
 fn real_array_type_is_type_and_length() {
-    // Array(int, 3) — the pair [[int, 3], [ArrayType, Type]]: instance[0] is
-    // the type shared by all elements, instance[1] the length.
+    // Array(int, 3) is [[int, 3], [ArrayType, Type]]: the element type and the
+    // length.
     let mut ir = IR::new();
     let t = int_t(&mut ir);
     let n = int(&mut ir, 3);
@@ -535,8 +521,7 @@ fn the_array_type_has_a_kind_not_a_type() {
 
 #[test]
 fn lambda_against_an_array_type_conflicts_on_the_length() {
-    // (\x. x) : Array(int, 3) — a function's type is not an array type, so the
-    // annotation conflicts (a function-type node against an array type).
+    // (\x. x) : Array(int, 3) — a function's type is not an array type.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let l = lam(&mut ir, x, x);
@@ -557,8 +542,8 @@ fn lambda_against_an_array_type_conflicts_on_the_length() {
 
 #[test]
 fn array_literal_is_homogeneous() {
-    // [1, 2] — the pair [[1, 2], [[int, 2], [ArrayType, Type]]]: one type
-    // slot shared by all elements, the length is the element count.
+    // [1, 2] — one type slot shared by all elements, the length the element
+    // count.
     let mut ir = IR::new();
     let e1 = int(&mut ir, 1);
     let e2 = int(&mut ir, 2);
@@ -663,10 +648,8 @@ fn heterogeneous_array_literal_fails() {
 
 #[test]
 fn let_bound_functions_are_polymorphic() {
-    // `let` is desugared by the frontend: `let id = \x. x in b` becomes
-    // `(\id. b) (\x. x)`, and the inner `let a = (id 5 : int) in ...`
-    // becomes `(\a. (id Type : Type)) (id 5 : int)`.  Both uses of id are
-    // the parameter's id itself — polymorphism via the apply's fresh clones.
+    // `let` is desugared by the frontend into an applied binding; polymorphism
+    // is the apply's fresh clones.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let id = lam(&mut ir, x, x);
@@ -682,8 +665,8 @@ fn let_bound_functions_are_polymorphic() {
     let body2 = ann(&mut ir, call2, t2);
     let (outer_lam, inner_lam) = lam_nested(&mut ir, b2, body2, b1);
     let inner = app(&mut ir, inner_lam, a);
-    // The enclosing lambda's own return is the applied inner one, so its
-    // reserved node's kind must be re-stamped after `inner` exists.
+    // The enclosing lambda's return is the applied inner one, so its kind is
+    // re-stamped.
     ir.set_kind(
         outer_lam,
         ExprKind::Function {
@@ -878,11 +861,8 @@ fn applying_a_non_function_reports_expected_function() {
         diags[0].value_a,
         Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
     );
-    // The expected side is the function the guard built — a real function, not
-    // an arrow term — so the first pair that fails to be the same value is the
-    // function itself against the callee's `int` marker.  That reads as
-    // "expected a function, found Int", which is what the guard means; under
-    // the arrow term the clash was one level out, on the term's shape array.
+    // The expected side is the function the guard built, not an arrow term:
+    // it clashes with the callee's `int` marker.
     assert!(matches!(
         diags[0].value_b,
         Some(HighProgramValue::LowValue(LowValue::Function(_)))
@@ -891,9 +871,7 @@ fn applying_a_non_function_reports_expected_function() {
 
 #[test]
 fn indexing_a_function_reports_expected_tuple_or_array() {
-    // (\x. x)[0] — the index-target guard, mirroring the apply guard: a
-    // concretely-known function type is not indexable, reported statically
-    // instead of a runtime panic.
+    // (\x. x)[0] — the index-target guard: a function type is not indexable.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let l = lam(&mut ir, x, x);
@@ -924,8 +902,7 @@ fn indexing_an_int_reports_expected_tuple_or_array() {
 
 #[test]
 fn runtime_apply_mismatch_is_attributed_to_the_argument() {
-    // (\x. (x : Type)) 5 — the parameter's type is Type, the argument's int:
-    // a runtime apply-time failure, attributed to the argument's span.
+    // (\x. (x : Type)) 5 — the parameter's type is Type, the argument's int.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let t = ty(&mut ir);
@@ -953,9 +930,7 @@ fn runtime_apply_mismatch_is_attributed_to_the_argument() {
 
 #[test]
 fn annotating_a_lambda_with_a_mixed_tuple_type_reports_expected_found() {
-    // (\x. x) : <Type, Int> — a function's type is not a tuple type, so the
-    // annotation conflicts at the top level (a function-type node against a
-    // tuple type), rather than element-wise as the old arrow shape did.
+    // (\x. x) : <Type, Int> — a function's type is not a tuple type.
     let mut ir = IR::new();
     let x = param(&mut ir);
     // The return expression uses the parameter's id directly.
@@ -973,8 +948,8 @@ fn annotating_a_lambda_with_a_mixed_tuple_type_reports_expected_found() {
 
 #[test]
 fn an_unannotated_lambda_has_an_undecided_arrow_type() {
-    // (\x. x) : Type — a function's type is not Type (nor any self-referential
-    // non-function type), so the annotation conflicts.
+    // (\x. x) : Type — a function's type is not Type, so the annotation
+    // conflicts.
     let mut ir = IR::new();
     let x = param(&mut ir);
     // The return expression uses the parameter's id directly.
@@ -995,10 +970,8 @@ fn an_unannotated_lambda_has_an_undecided_arrow_type() {
 
 #[test]
 fn an_unannotated_call_syncs_its_root_type_to_the_return_type() {
-    // (\id. id 5) (\x. x) — the call's result type cell is a lazy record
-    // (the runtime apply never fills it), so the apply's evaluation syncs
-    // the cell with the return pair: the program evaluates to 5, whose type
-    // is int.
+    // (\id. id 5) (\x. x) — the call's result cell is a lazy record, synced
+    // to the return pair by the apply's evaluation.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let id = lam(&mut ir, x, x);
@@ -1018,10 +991,8 @@ fn an_unannotated_call_syncs_its_root_type_to_the_return_type() {
 
 #[test]
 fn a_tuples_undecided_element_types_sync_from_the_return_types() {
-    // a = \x. (1, Int)[x]; (a 0, a 1) — the tuple's element types are the
-    // calls' lazy result cells.  Each apply's evaluation syncs its cell with
-    // its return pair: element 0's cell binds to int, element 1's to the
-    // universe (the `Int` constant's type is `Type`).
+    // a = \x. (1, Int)[x]; (a 0, a 1) — the element types are the calls'
+    // lazy result cells, synced with their return pairs.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let one = int(&mut ir, 1);
@@ -1064,28 +1035,23 @@ fn tuple_length_mismatch_reports_both_sides() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    // The length mismatch: `a`/`b` are the full type pairs — their *shapes*
-    // (element 0) are the positional element-type lists, two elements vs one.
+    // The length mismatch shows in the shapes: two element types against one.
     assert_eq!(array_ids(&b, array_ids(&b, diags[0].a)[0]).len(), 2);
     assert_eq!(array_ids(&b, array_ids(&b, diags[0].b)[0]).len(), 1);
 }
 
 // --- call result annotations are checked, not just bound --------------------
-// A call's result type cell is a lazy record (the runtime apply does not force
-// it), so an annotation on a call result only *binds* the cell at check time.
-// The check happens later and elsewhere: the apply's evaluation syncs that
-// cell with the callee's return pair, and a disagreement between the
-// annotation and the real return type is a reported failure.  The two tests
-// below pin it from both directions — a call through a parameter and a direct
-// apply — each as a `Runtime` diagnostic.
+
+// A call's result type cell is a lazy record, so an annotation on a call
+// result only *binds* the cell at check time.
+
+// The apply's evaluation later syncs the cell with the callee's return pair,
+// and a disagreement is a reported failure.
 
 #[test]
 fn a_call_result_annotation_is_checked_against_the_return_type() {
-    // (\f. (f 5 : int)) (\x. Type) — f actually returns Type.  The
-    // annotation binds the result cell at check time; the apply's runtime
-    // evaluation then syncs the return pair against the apply's pair, and
-    // the mismatch between the annotation's int and the real return type is
-    // a reported error — the annotation is checked, not silently bound.
+    // (\f. (f 5 : int)) (\x. Type) — f returns Type, so the annotation's int
+    // is refused when the apply syncs the cell.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let tval = ty(&mut ir);
@@ -1107,10 +1073,8 @@ fn a_call_result_annotation_is_checked_against_the_return_type() {
 
 #[test]
 fn a_direct_call_result_annotation_is_checked_against_the_return_type() {
-    // (\x. x) 5 : Type — the identity applied to 5 actually returns int.
-    // The apply's evaluation syncs the result cell with the return pair, so
-    // the annotation's Type conflicts with the real return type: the
-    // annotation is checked, not silently bound.
+    // (\x. x) 5 : Type — the identity returns int, so the annotation is
+    // refused when the apply syncs the result cell.
     let mut ir = IR::new();
     let x = param(&mut ir);
     // The return expression uses the parameter's id directly.
@@ -1132,9 +1096,8 @@ fn a_direct_call_result_annotation_is_checked_against_the_return_type() {
 
 #[test]
 fn a_nested_function_value_captures_the_applied_outer_parameter() {
-    // a = 1; f1 = x => { b = 2; f2 = y => [a, b, x, y]; f2 }; f1 3 4 — the
-    // returned closure captures f1's parameter: applying it to 4 yields
-    // [1, 2, 3, 4], not a leaked template parameter.
+    // A closure capturing its enclosing parameter: `f1 3 4` yields
+    // [1, 2, 3, 4], not the leaked template.
     let mut ir = IR::new();
     let a = int(&mut ir, 1);
     let b = int(&mut ir, 2);
@@ -1161,8 +1124,7 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
     }
 }
 
-/// The [`FunctionId`](lichen_lowlevel::FunctionId) this lambda expression
-/// compiled to — read off the expression's compiled value node.
+/// The `FunctionId` this lambda expression compiled to.
 fn function_of(b: &lichen_highlevel::checker::Build<ProgramImpl>, e: ExprId) -> FunctionId {
     let node = b.state[e].val.expect("the lambda compiled to a value node");
     let value = b
@@ -1177,9 +1139,8 @@ fn function_of(b: &lichen_highlevel::checker::Build<ProgramImpl>, e: ExprId) -> 
 
 #[test]
 fn a_nested_lambda_hangs_under_its_enclosing_function() {
-    // The nesting half of the parent rule: a closure in a lambda's body joins
-    // the enclosing template, so the outer function's own `nodes` include the
-    // inner closure's nodes and the apply clone copies them per call.
+    // The nesting half of the parent rule: a body closure joins the enclosing
+    // template and clones with it.
     let mut ir = IR::new();
     let a = int(&mut ir, 1);
     let x = param(&mut ir);
@@ -1198,10 +1159,8 @@ fn a_nested_lambda_hangs_under_its_enclosing_function() {
 
 #[test]
 fn a_sibling_lambda_hangs_under_nothing() {
-    // The mutual-recursion sibling half: two lambdas at the same level are
-    // siblings, not nested — each hangs under nothing, so neither template
-    // absorbs the other and the recursion re-applies the sibling's
-    // never-bound template (see `examples/mutual_recursion.lichen`).
+    // The sibling half: two same-level lambdas hang under nothing, so neither
+    // template absorbs the other.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let sibling = lam(&mut ir, x, x);
@@ -1224,8 +1183,7 @@ fn a_sibling_lambda_hangs_under_nothing() {
 
 #[test]
 fn tuple_index_selects_value_and_type() {
-    // (1, 2)[0] — value 1, type int.  The tuple's element-type list is
-    // structural, so the type evaluation is a plain Index over it.
+    // (1, 2)[0] — the tuple's element-type list is structural, a plain Index.
     let mut ir = IR::new();
     let one = int(&mut ir, 1);
     let two = int(&mut ir, 2);
@@ -1255,10 +1213,8 @@ fn tuple_index_selects_value_and_type() {
 
 #[test]
 fn array_index_selects_value_and_type() {
-    // [1, 2, 3][1] — value 2, type int.  The array type shape [int, 3]
-    // holds the length as data, so the type evaluation dispatches on the
-    // kind (a native `Index` subgraph keyed by `IndexTypeDispatch`'s code)
-    // and selects the element type at shape[0].
+    // [1, 2, 3][1] — the shape holds the length as data, so the type
+    // evaluation dispatches on the kind.
     let mut ir = IR::new();
     let e1 = int(&mut ir, 1);
     let e2 = int(&mut ir, 2);
@@ -1289,8 +1245,8 @@ fn array_index_selects_value_and_type() {
 
 #[test]
 fn tuple_index_out_of_bounds_renders_a_diagnostic() {
-    // (1, 2)[5] — the value and the type evaluation both hit the structural
-    // bounds check; the identical facts collapse to one diagnostic.
+    // (1, 2)[5] — both evaluations hit the bounds check, collapsing to one
+    // diagnostic.
     let mut ir = IR::new();
     let one = int(&mut ir, 1);
     let two = int(&mut ir, 2);
@@ -1346,9 +1302,7 @@ fn array_index_out_of_bounds_renders_a_diagnostic() {
 
 #[test]
 fn array_index_out_of_bounds_against_a_bound_length() {
-    // (\x. x[3])([1, 2]) — x's type is only known once the apply binds it;
-    // the definition pass forces the type evaluation against the applied
-    // array's length 2.
+    // (\x. x[3])([1, 2]) — the type is known only once the apply binds it.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let three = int(&mut ir, 3);
@@ -1368,16 +1322,10 @@ fn array_index_out_of_bounds_against_a_bound_length() {
 }
 
 // --- struct types ----------------------------------------------------------
-// A struct type is the pair [[field types], [marker, Type]]: like an array
-// type (shape [element type, length]), the shape is the *positional
-// field-type list*, and the kind slot holds the struct marker — the ordinary
-// `[payload, type]` pair whose payload is `[TypeId(n), names, names_in_order]`
-// (a *fresh nominal* id, the name→index table, and the same names in definition
-// order) and whose type slot is the `TypeStruct` atom.  Struct-ness is that
-// tag: a payload-shaped pair without it is not a struct.  Equal ids unify,
-// different ids never do, and a struct never unifies with a
-// same-shape tuple — nominal identity.  Every field is named, so a struct
-// instance reads by name.
+
+// A struct type is [[field types], [marker, Type]] with a nominal id.
+
+// The payload is [TypeId(n), names, names_in_order]; see `lichen_highlevel::shape`.
 
 #[test]
 fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
@@ -1396,9 +1344,7 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     let shape_ids = array_ids(&b, struct_shape);
     assert_eq!(shape_ids.len(), 2);
     assert!(is_int_type(&b, shape_ids[0]));
-    // the kind slot is a standard [marker, K] pair; its marker is the ordinary
-    // [payload, type] pair: the payload [id, names, names_in_order] in the
-    // value slot, the TypeStruct atom in the type slot.
+    // the kind slot is a standard [marker, K] pair; see `lichen_highlevel::shape`.
     let kind = b.state[s].ty.unwrap();
     let kind_ids = array_ids(&b, kind);
     assert_eq!(kind_ids.len(), 2);
@@ -1416,16 +1362,13 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
         b.module.node_value(AnyNodeId::Dynamic(payload_ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
     ));
-    // a named struct's payload carries a name table in its names slot (the
-    // `Error` marker is the no-names case, reachable only from hand-built IR:
-    // every source struct type now has named fields).
+    // a named struct's payload carries a name table in its names slot.
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(payload_ids[1])),
         Some(HighProgramValue::LowValue(LowValue::Table(_)))
     ));
-    // The tag is what makes it a struct marker: a pair with the same payload
-    // but the universe (not the `TypeStruct` atom) in its type slot is not one,
-    // and a type whose kind's marker is that pair is not a struct type.
+    // The tag is what makes it a struct marker: a same-payload pair whose
+    // type slot is the universe is not one.
     let block = b.module.node_block(marker);
     let tagless_items = b.module.alloc_array(
         &[
@@ -1484,10 +1427,7 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
 
 #[test]
 fn a_named_struct_carries_a_name_to_index_table() {
-    // struct<.a Int, .b Type> — the struct marker pair `[payload, TypeStruct]`
-    // (in the kind's marker slot) holds a payload `[id, names, names_in_order]`
-    // whose names slot maps each field name to its positional index, and the
-    // same names again in definition order.
+    // struct<.a Int, .b Type> — the names slot maps each name to its index.
     let mut ir = IR::new();
     let t1 = int_t(&mut ir);
     let t2 = ty(&mut ir);
@@ -1529,9 +1469,8 @@ fn a_named_struct_carries_a_name_to_index_table() {
         .collect();
     found.sort_by_key(|&(_, i)| i);
     assert_eq!(found, vec![("a", 0), ("b", 1)]);
-    // the definition-order field (the payload's slot 2) is an array of the
-    // names, one per definition position — the table's inverse, which the
-    // deferred named instantiation's reorder reads.
+    // the payload's slot 2 repeats the names in definition order (the table's
+    // inverse).
     let in_order = array_ids(&b, payload_ids[2]);
     let names: Vec<&str> = in_order
         .iter()
@@ -1558,8 +1497,7 @@ fn each_struct_type_occurrence_allocates_a_distinct_id() {
         AsField::<HighGlobal>::get(&b.module.global_ext).type_id_counter,
         2
     );
-    // the nominal id is the marker payload's slot 0: kind = [marker, K],
-    // marker = [payload, TypeStruct], payload = [id, names, names_in_order].
+    // the nominal id is the marker payload's slot 0; see `lichen_highlevel::shape`.
     let id1 = array_ids(
         &b,
         array_ids(&b, array_ids(&b, b.state[s1].ty.unwrap())[0])[0],
@@ -1614,11 +1552,8 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
     let mut module = b.module;
     module.unify(b.state[s].term.unwrap(), b.state[t].term.unwrap());
     assert_eq!(module.unify_errors.len(), 1);
-    // The struct and tuple shapes are both the field-type list (same arity),
-    // so the nominal distinction now lives at the kind's marker: a struct
-    // marker is the `[payload, TypeStruct]` pair, while a tuple
-    // marker is the `TupleType` type constant — they clash at the marker
-    // slot of the `[marker, K]` kind.
+    // The two shapes are the same field-type list, so the nominal distinction
+    // lives at the kind's marker slot.
     let err = module.unify_errors[0].clone();
     let (a, b) = (err.value_a, err.value_b);
     assert!(
@@ -1653,9 +1588,7 @@ fn a_struct_type_unifies_with_itself() {
 
 #[test]
 fn an_annotation_against_a_struct_type_reports_the_conflict() {
-    // 5 : struct<.f Int> — the literal's int type conflicts with the struct
-    // type; the struct pair (the diary's expected side) renders with its
-    // nominal id in the flow line.
+    // 5 : struct<.f Int> — the literal's int type conflicts with the struct type.
     let mut ir = IR::new();
     let five = int(&mut ir, 5);
     let f = int_t(&mut ir);
@@ -1670,9 +1603,8 @@ fn an_annotation_against_a_struct_type_reports_the_conflict() {
         diags[0].value_a,
         Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
     );
-    // The struct's shape is the structured expected side now; the wording
-    // ("expected [...]") is re-rendered by the language layer from the kind
-    // and the value_a/value_b facts.
+    // The struct's shape is the structured expected side; the language layer
+    // spells it.
     assert!(
         diags[0].loc().is_some(),
         "the annotation conflict is located"
@@ -1681,9 +1613,7 @@ fn an_annotation_against_a_struct_type_reports_the_conflict() {
 
 #[test]
 fn two_struct_types_conflict_reports_the_nominal_ids() {
-    // (\x. (x : struct<.f Int>)) (struct<.f Int>) — the argument's struct
-    // type has a different fresh id than the annotation's, so the apply-time
-    // unify fails on the ids.
+    // The argument's struct type has a different fresh id than the annotation's.
     let mut ir = IR::new();
     let f1 = int_t(&mut ir);
     let s1 = named_type_struct(&mut ir, &[(f1, "f")]);
@@ -1698,18 +1628,13 @@ fn two_struct_types_conflict_reports_the_nominal_ids() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Runtime);
-    // The two distinct struct types conflict on their nominal id.  That
-    // id-bearing wording ("TypeId(…)") is the language layer's job to
-    // re-render from the structured facts; the checker only guarantees the
-    // runtime apply-time kind and that the conflict is located.
+    // The conflict is on the nominal id; the wording is the language layer's job.
     assert!(diags[0].loc().is_some(), "the runtime conflict is located");
 }
 
 #[test]
 fn an_annotation_with_a_struct_type_rejects_a_literal_at_apply_time() {
-    // (\x. (x : struct<.f Int>)) 5 — the struct type sits directly in the
-    // annotation, so the apply-time unify checks the argument's type against
-    // it and fails.
+    // (\x. (x : struct<.f Int>)) 5 — the apply-time unify checks the argument.
     let mut ir = IR::new();
     let f = int_t(&mut ir);
     let s = named_type_struct(&mut ir, &[(f, "f")]);
@@ -1737,12 +1662,8 @@ fn an_annotation_with_a_struct_type_rejects_a_literal_at_apply_time() {
 
 #[test]
 fn a_shared_expression_compiles_once_with_one_nominal_id() {
-    // The IR is a graph: the same expression may be referenced from several
-    // parents (statement bindings pre-resolve every use of a name to the
-    // value's own id).  Compiling it once keeps the single fresh nominal id,
-    // so an array holding the same bound struct type twice is homogeneous —
-    // recompiling per use would allocate a second id and the element check
-    // would conflict.
+    // The IR is a graph: the same expression may have several parents, so it
+    // compiles once, keeping one nominal id.
     let mut ir = IR::new();
     let f = int_t(&mut ir);
     let s = named_type_struct(&mut ir, &[(f, "f")]);
@@ -1763,9 +1684,9 @@ fn instantiate(ir: &mut IR, type_expr: ExprId, value: ExprId) -> ExprId {
 }
 
 // --- struct instantiation ----------------------------------------------------
+
 // `s(1, 2)` wraps the positional tuple in the struct type: the element-type
-// list is checked against the field list, and the expression's type is the
-// struct type itself.
+// list is checked against the field list.
 
 #[test]
 fn a_tuple_instantiated_with_a_struct_type_is_an_instance() {
@@ -1828,9 +1749,7 @@ fn a_struct_instantiation_checks_its_fields() {
 
 #[test]
 fn instances_of_different_struct_occurrences_conflict() {
-    // [s1(1, 2), s2(1, 2)] — each instance carries its own nominal id, so
-    // the array element check reports the conflict (same fields, different
-    // types).
+    // [s1(1, 2), s2(1, 2)] — each instance carries its own nominal id.
     let mut ir = IR::new();
     let one = int(&mut ir, 1);
     let two = int(&mut ir, 2);
@@ -1867,10 +1786,8 @@ fn instances_of_different_struct_occurrences_conflict() {
 
 #[test]
 fn an_instantiation_through_a_call_result_callee_checks() {
-    // `(mk (Int))(1, 2)` with `mk = u => struct<.f Int, .g Int>` — the callee is
-    // an unevaluated apply node (not a statically readable array pair): the
-    // checker forces it, so the instantiation sees the concrete struct type.
-    // (Reading the callee's pair unconditionally was a panic before the fix.)
+    // `(mk (Int))(1, 2)` with `mk = u => struct<...>` — the callee is an
+    // unevaluated apply the checker forces first.
     let mut ir = IR::new();
     let p = param(&mut ir);
     let f1 = int_t(&mut ir);
@@ -1897,8 +1814,7 @@ fn an_instantiation_through_a_call_result_callee_checks() {
 
 #[test]
 fn a_call_result_callee_of_a_non_struct_type_is_a_nominal_error() {
-    // `(mk (Int))(1, 2)` with `mk = u => Int`: the forced callee is
-    // concretely not a struct type — a reported diagnostic, never a panic.
+    // `(mk (Int))(1, 2)` with `mk = u => Int`: the forced callee is not a struct.
     let mut ir = IR::new();
     let p = param(&mut ir);
     let intt = int_t(&mut ir);
@@ -1960,9 +1876,8 @@ fn an_instantiation_requires_a_struct_type_callee() {
 
 #[test]
 fn an_instantiation_through_a_parameter_pins_the_callee_to_a_struct_kind() {
-    // `f = s => s(1, 2); f (Int)` — the callee's type is undecided in the body,
-    // so the checker pins it to a struct kind; applying f to a non-struct
-    // fails the apply's parameter check (attributed to the argument).
+    // `f = s => s(1, 2); f (Int)` — the undecided callee is pinned to a struct
+    // kind; a non-struct argument fails the check.
     let mut ir = IR::new();
     let p = param(&mut ir);
     let one = int(&mut ir, 1);
@@ -2003,11 +1918,8 @@ fn an_instantiation_through_a_parameter_pins_the_callee_to_a_struct_kind() {
 
 #[test]
 fn a_named_instantiation_through_a_parameter_defers_its_reorder() {
-    // `f = s => s(.x 1, .y Int)` — the callee's name table is not statically
-    // known through a parameter, so the definition-order reorder is not
-    // computed here: the instantiation stays unresolved instead of being
-    // refused, and the reorder is a lazy read that resolves at the unification
-    // that binds the callee's struct type.
+    // `f = s => s(.x 1, .y Int)` — the name table is not known through a
+    // parameter, so the reorder stays a lazy read.
     let mut ir = IR::new();
     let p = param(&mut ir);
     let one = int(&mut ir, 1);
@@ -2021,15 +1933,11 @@ fn a_named_instantiation_through_a_parameter_defers_its_reorder() {
         "a named instantiation through a parameter is not refused: {:?}",
         b.diagnostics()
     );
-    // The instance's value is the deferred reorder — one element per
-    // argument, each a read of the argument supplying that definition
-    // position.
+    // The instance's value is the deferred reorder, one element per argument.
     let ids = array_ids(&b, b.state[inst].val.unwrap());
     assert_eq!(ids.len(), 2, "one instance position per named argument");
-    // Each element is `Index(call_values, TableGet(supply, key))` — the lazy
-    // gather whose key the diagnostics attribute through the template origin
-    // (the key node is cloned per apply, so its `node_edges` entry is the
-    // template's).
+    // Each element is `Index(call_values, TableGet(supply, key))`: the lazy
+    // gather, attributed through the template origin.
     for id in ids {
         let read = b
             .module
@@ -2079,11 +1987,8 @@ fn an_underscore_annotation_infers_the_type() {
 
 #[test]
 fn an_underscore_annotation_binds_a_function_type() {
-    // (\x. x) : _ — the placeholder binds to the function-type node (the
-    // function's own type, `f : f`). The clone-on-unify never fires for a
-    // placeholder (no signature on the placeholder side), so the placeholder's
-    // cell binds to the whole function-type node, and the template's parameter
-    // type stays undecided.
+    // (\x. x) : _ — the placeholder binds to the whole function-type node:
+    // clone-on-unify never fires without a signature.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let l = lam(&mut ir, x, x);
@@ -2109,12 +2014,11 @@ fn an_underscore_annotation_binds_a_function_type() {
 
 #[test]
 fn partial_inference_in_an_arrow_type() {
-    // (\x. x) : (Int -> _) — `Int -> _` is a real function, so the annotation
-    // binds the two functions' own cells: the identity's parameter type
-    // reaches the signature's `Int` and its return type reaches the
-    // placeholder.  Nothing is cloned, so the template is what the annotation
-    // touched — the identity is monomorphic at this type, and the cost is
-    // deliberate (`docs/notes/function-type-merge.md`).
+    // (\x. x) : (Int -> _) — the annotation binds the two functions' own
+    // cells; nothing is cloned.
+
+    // The identity is monomorphic at this type; the cost is deliberate
+    // (`docs/notes/function-type-merge.md`).
     let mut ir = IR::new();
     let x = param(&mut ir);
     let l = lam(&mut ir, x, x);
@@ -2190,9 +2094,8 @@ fn a_mismatch_against_a_partial_type_is_still_an_error() {
 
 #[test]
 fn shallow_array_is_masked_and_typed_like_a_tuple() {
-    // [1, ~2] — the bare `~` marks position 1 in the value array's mask,
-    // and the type is a tuple (per-element slots), not a homogeneous array
-    // type.
+    // [1, ~2] — the bare `~` marks position 1; the type is a tuple, not an
+    // array type.
     let mut ir = IR::new();
     let one = int(&mut ir, 1);
     let two = int(&mut ir, 2);
@@ -2240,9 +2143,8 @@ fn shallow_array_is_masked_and_typed_like_a_tuple() {
 
 #[test]
 fn shallow_marked_position_stays_lazy_until_a_read() {
-    // [1, ~(x => x + 1) 5] — the apply sits at the bare-`~` position: the
-    // deep pass must skip it (the apply never runs during the definition
-    // pass).
+    // [1, ~(x => x + 1) 5] — the apply sits at the bare-`~` position, so the
+    // deep pass skips it.
     let mut ir = IR::new();
     let one = int(&mut ir, 1);
     let five = int(&mut ir, 5);
@@ -2341,9 +2243,8 @@ fn top_level_assert_fails_when_the_condition_is_not_one() {
 
 #[test]
 fn in_function_assert_passes_for_a_satisfying_argument() {
-    // f = n => assert(n == 1); f 1 — the body's assert cannot resolve at
-    // normalize (n is undecided), so the apply clones it and the clone
-    // re-checks against the argument.
+    // f = n => assert(n == 1); f 1 — the apply clones the undecided assert and
+    // re-checks it.
     let mut ir = IR::new();
     let n = param(&mut ir);
     let one = int(&mut ir, 1);
@@ -2389,8 +2290,7 @@ fn in_function_assert_fails_for_a_violating_argument() {
 
 #[test]
 fn never_called_function_assert_is_not_triggered() {
-    // f = n => assert(n == 1) — never applied: the condition stays undecided,
-    // so the assert stays pending instead of failing.
+    // f = n => assert(n == 1), never applied: the assert stays pending.
     let mut ir = IR::new();
     let n = param(&mut ir);
     let one = int(&mut ir, 1);
@@ -2423,9 +2323,8 @@ fn assert_on_a_literal_checks_the_value_itself() {
 
 #[test]
 fn an_out_of_bounds_array_index_fails_a_generated_assert() {
-    // [1, 2, 3][3] — indexing a statically-array target also registers the
-    // generated `i < len` constraint; the read itself stays in-bounds for
-    // the runtime, so the failure is the assert's and only the assert's.
+    // [1, 2, 3][3] — the generated `i < len` constraint is what fails; the
+    // read stays in-bounds for the runtime.
     let mut ir = IR::new();
     let a = int(&mut ir, 1);
     let b2 = int(&mut ir, 2);
@@ -2449,8 +2348,8 @@ fn an_out_of_bounds_array_index_fails_a_generated_assert() {
 
 #[test]
 fn an_in_bounds_generated_constraint_is_drained() {
-    // [1, 2][1] — `1 < 2` holds: the generated constraint is consumed like
-    // a passing assert, so the worklist comes out empty.
+    // [1, 2][1] — `1 < 2` holds, so the constraint is consumed like a passing
+    // assert.
     let mut ir = IR::new();
     let a = int(&mut ir, 1);
     let b2 = int(&mut ir, 2);
@@ -2468,11 +2367,8 @@ fn an_in_bounds_generated_constraint_is_drained() {
 
 #[test]
 fn a_body_index_on_a_literal_stays_pending_and_rechecks_per_call() {
-    // f = i => [7, 8, 9][i] — the body's constraint `i < 3` is generated
-    // (the literal's type is statically an array) but stays pending at
-    // normalize (the index is the undecided parameter).  Each apply clones it
-    // and decides it against the argument: f 2 passes, the template alone
-    // remains on the worklist.
+    // f = i => [7, 8, 9][i] — the body's `i < 3` constraint stays pending; it
+    // is cloned and decided per apply.
     let mut ir = IR::new();
     let i = param(&mut ir);
     let a = int(&mut ir, 7);
@@ -2495,10 +2391,8 @@ fn a_body_index_on_a_literal_stays_pending_and_rechecks_per_call() {
 
 #[test]
 fn an_in_function_bounds_constraint_fails_for_a_violating_argument() {
-    // f = i => [7, 8, 9][i]; f 3 — the body's generated `i < 3` constraint
-    // is not reachable from the return (the return is the index result), so
-    // only the function's own assert list carries it; the apply clones it
-    // and the clone fails for the out-of-range argument.
+    // f = i => [7, 8, 9][i]; f 3 — the generated `i < 3` constraint is not
+    // reachable from the return; the clone fails.
     let mut ir = IR::new();
     let i = param(&mut ir);
     let a = int(&mut ir, 7);
@@ -2547,11 +2441,9 @@ fn a_body_index_fails_at_the_violating_argument() {
 }
 
 // --- a struct-domain function that reads a field ----------------------------
-//
-// The named field read (`a.name`) accepts a struct container and registers the
-// kind requirement as a re-checkable assert when the container is undecided
-// (`docs/notes/eval-before-unify.md` §5.2/§6.2), so a function whose parameter
-// is annotated with a struct type and whose body reads a named field checks:
+
+// A named field read registers a re-checkable kind assert when the container
+// is undecided.
 
 #[test]
 fn an_annotated_struct_parameter_function_reads_a_named_field() {
@@ -2573,10 +2465,12 @@ fn an_annotated_struct_parameter_function_reads_a_named_field() {
 }
 
 /// Two **separately written** occurrences of `struct<.x Int>` are two distinct
-/// nominal types — a struct type expression mints a fresh nominal id per source
-/// occurrence (`check_type_struct`), and unification compares that id.  Sharing
-/// one *named* type expression is what makes an annotation and an instance
-/// agree; writing the type twice does not.
+/// nominal types.
+///
+/// # Invariant
+/// A struct type expression mints a fresh nominal id per source occurrence
+/// (`check_type_struct`), and unification compares that id; sharing one *named*
+/// type expression is what makes an annotation and an instance agree.
 #[test]
 fn two_written_struct_types_are_distinct_nominal_types() {
     let mut ir = IR::new();
@@ -2604,20 +2498,19 @@ fn two_written_struct_types_are_distinct_nominal_types() {
 #[test]
 fn an_open_struct_annotation_lets_its_field_be_read() {
     // `F = T: KT T => T.I` with `KT = _x => struct<.I _, .O _>` — the
-    // annotation names the two fields but leaves their *types* open.
-    //
-    // The contract (`checker/lambda.rs`) is that the annotated parameter's type
-    // is compiled and unified into the parameter's type slot **before** the
-    // body compiles, so the body's reader sees the annotated kind statically.
-    // The body's `T.I` is therefore reading a field of a struct the annotation
-    // already named, and applying `F` to a concrete struct type closes that
-    // field — the read must resolve.
+    // annotation names the fields, leaving their types open.
+
+    // The annotated parameter's type is compiled and unified into its slot
+    // before the body compiles (`checker/lambda.rs`).
+
+    // So the body's `T.I` reads a field the annotation already named, and
+    // applying `F` to a struct type closes it.
     let mut ir = IR::new();
     let t = param(&mut ir);
     let open_i = hole(&mut ir);
     let open_o = hole(&mut ir);
-    // **One** named struct type, reused for the annotation and for the argument's
-    // instantiation: two written `struct<…>` are distinct nominal types.
+    // **One** named struct type for both sides: two written `struct<…>` are
+    // distinct.
     let open_struct = named_type_struct(&mut ir, &[(open_i, "I"), (open_o, "O")]);
     let read = named_field(&mut ir, t, "I");
     let f = lam_at_typed(&mut ir, t, Some(open_struct), read, None);
@@ -2629,8 +2522,7 @@ fn an_open_struct_annotation_lets_its_field_be_read() {
     let arg = instantiate(&mut ir, open_struct, fields);
     let call = app(&mut ir, f, arg);
     let b = build(call, ir);
-    // The checker's own per-expression view — set while checking, not mutated
-    // by the unify, so this is the pre-unify encoding of each expression.
+    // The checker's own per-expression view, not mutated by the unify.
     for (at, st) in b.state.iter().enumerate() {
         let e = ExprId(at as u32);
         eprintln!(
@@ -2641,8 +2533,7 @@ fn an_open_struct_annotation_lets_its_field_be_read() {
     for d in b.diagnostics() {
         eprintln!("PROBE open struct diag: {d:?}");
     }
-    // What each function's parameter type slot actually holds after the build:
-    // if the annotation ran before the body, this is the annotated struct type.
+    // What each function's parameter type slot holds after the build.
     for (fid, function) in b.module.functions.iter() {
         let cell = array_ids(&b, function.parameter)[1];
         eprintln!(
@@ -2661,10 +2552,8 @@ fn an_open_struct_annotation_lets_its_field_be_read() {
 
 #[test]
 fn an_annotated_tuple_parameter_function_reads_an_element() {
-    // The three-line regression, measured through the compiler:
-    //   `f = p : <Int, Int> => p(0)`; `f (1, 2)`
-    // resolves on the baseline and fails here with
-    //   `expected raw[?a, Int], found raw[?a, Int]`.
+    // The regression `f = p : <Int, Int> => p(0)`; `f (1, 2)` failed with
+    // `expected raw[?a, Int], found raw[?a, Int]`.
     let mut ir = IR::new();
     let p = param(&mut ir);
     let int1 = int_t(&mut ir);
@@ -2706,12 +2595,12 @@ fn common_value(value: &HighProgramValue) -> u64 {
 }
 
 // --- a wrapper's parameter type comes from the body call --------------------
-//
-// The regression target: `f`'s parameter type states the argument's type, so a
-// wrapper `g = (a => f a)` must have its parameter type cell filled by
-// normalizing `g` — no apply, no inference at run time.  This is the
-// language-level shape of the compute wrapper (`k1 = jit (x => launch k0 (x,1))`
-// fails with "the kernel parameter's class is not decided": the same cell).
+
+// The regression target: a wrapper `g = (a => f a)` gets its parameter type
+// cell from normalizing g.
+
+// This is the language-level shape of the compute wrapper: the kernel's
+// parameter class is undecided at the same cell.
 
 #[test]
 fn a_wrappers_parameter_type_is_inferred_from_a_body_call() {

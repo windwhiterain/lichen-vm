@@ -1,12 +1,8 @@
-//! The dependent-type feature: a type is a lazy computation over a value —
-//! `if x > 0 then int else float` is an unevaluated `Index` over the branch
-//! types with the parameter as its condition.  It stays lazy until forced,
-//! so the branch selection is only resolved once the argument binds: the
-//! same template yields a different type per argument.
+//! Dependent types are lazy computations; see docs/notes/eval-before-unify.md.
 //!
-//! The checker's expression IR cannot express conditionals yet, so these
-//! build lowlevel graphs directly and exercise the laziness + unification
-//! rules the highlevel layer will sit on.
+//! # Invariant
+//! Unify never evaluates a computation: it merges, and the computation's own
+//! result is what must agree with the merged value once something reads it.
 
 use lichen_highlevel::program::{HighProgramOperator, HighProgramValue, ProgramImpl};
 use lichen_lowlevel::{
@@ -47,9 +43,7 @@ fn array_node(m: &mut Module<ProgramImpl>, block: BlockId, ids: &[NodeId]) -> No
     )
 }
 
-/// An `Index` node over `[branches, condition]` — the dependent-codomain
-/// stand-in.  Like `if cond then a else b`, it stays lazy until its
-/// condition is bound and then selects one branch.
+/// An `Index` over `[branches, condition]`: the dependent-codomain stand-in.
 fn index_node(
     m: &mut Module<ProgramImpl>,
     block: BlockId,
@@ -96,11 +90,8 @@ fn array_ids(value: HighProgramValue) -> Vec<NodeId> {
 fn dependent_type_resolves_per_argument_via_laziness() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // f(x) = [x, if x > 0 then int else float]: the returned pair's second
-    // element is the dependent type — an unevaluated Index over [float, int]
-    // with the parameter as its condition.  The Index's operand array is
-    // part of the template's scope, so each apply's clone rewrites the
-    // condition to the fresh parameter clone.
+    // The codomain's condition is the parameter, so an apply's clone
+    // rewrites it to the fresh parameter clone.
     let x = undecided_node(&mut m, root);
     let float = usize_node(&mut m, root, 0);
     let int = usize_node(&mut m, root, 1);
@@ -123,8 +114,7 @@ fn dependent_type_resolves_per_argument_via_laziness() {
         [],
     );
 
-    // applied to 1: the cloned condition binds, and forcing the codomain
-    // selects the `int` branch
+    // applied to 1
     let one = usize_node(&mut m, root, 1);
     let call = apply_node(&mut m, root, f, one);
     let value = m.evaluate_node_deep(call, None).unwrap();
@@ -135,7 +125,7 @@ fn dependent_type_resolves_per_argument_via_laziness() {
         Some(HighProgramValue::LowValue(LowValue::USize(1)))
     ));
 
-    // applied to 0: the same template picks the `float` branch
+    // applied to 0
     let zero = usize_node(&mut m, root, 0);
     let call = apply_node(&mut m, root, f, zero);
     let value = m.evaluate_node_deep(call, None).unwrap();
@@ -151,19 +141,13 @@ fn dependent_type_resolves_per_argument_via_laziness() {
 fn a_concrete_type_is_never_bound_over_a_dependent_codomain() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // Boundary: a dependent function's codomain (`[0, 1][x]`) meets a concrete
-    // `1` while the parameter is still undecided (the function is passed as a
-    // value, not applied).  **Unify does not evaluate**, so it merges and the
-    // concrete value is what the class holds; the codomain's own computation is
-    // what has to agree with it, and that comparison happens when the codomain
-    // is read.  The two parameter values below are the two outcomes: the
-    // instance that resolves to `1` agrees, the one that resolves to `0` does
-    // not.
+    // The function is passed as a value, so its codomain meets a concrete
+    // value while the parameter is still undecided.
     let float = usize_node(&mut m, root, 0);
     let int = usize_node(&mut m, root, 1);
     let branches = array_node(&mut m, root, &[float, int]);
 
-    // x = 1: the codomain computes to `1`, which is what the class holds → clean.
+    // x = 1
     let x1 = undecided_node(&mut m, root);
     let codomain1 = index_node(&mut m, root, branches, x1);
     m.unify(int, codomain1);
@@ -180,8 +164,7 @@ fn a_concrete_type_is_never_bound_over_a_dependent_codomain() {
         m.equality_representative(codomain1)
     );
 
-    // x = 0: the same shape resolves to `0`, which conflicts with the `1` the
-    // class holds — reported when the computation runs.
+    // x = 0
     let x0 = undecided_node(&mut m, root);
     let codomain0 = index_node(&mut m, root, branches, x0);
     m.unify(int, codomain0);
@@ -200,18 +183,12 @@ fn a_concrete_type_is_never_bound_over_a_dependent_codomain() {
 fn a_resolvable_computation_is_forced_and_compared() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    // A concrete expectation meets a computation whose operands are already
-    // bound (a constant condition).  Unify does not evaluate it: the two
-    // classes merge and the expectation is what the class holds.  The
-    // computation runs when something reads it, and its result is compared
-    // against that value then.
     let four_v = usize_node(&mut m, root, 4);
     let five_v = usize_node(&mut m, root, 5);
     let branches = array_node(&mut m, root, &[four_v, five_v]);
     let cond = usize_node(&mut m, root, 1);
     let pick_five = index_node(&mut m, root, branches, cond);
 
-    // an equal expectation merges
     let five = usize_node(&mut m, root, 5);
     m.unify(five, pick_five);
     assert!(m.unify_errors.is_empty());
@@ -219,15 +196,12 @@ fn a_resolvable_computation_is_forced_and_compared() {
         m.equality_representative(five),
         m.equality_representative(pick_five)
     );
-    // Reading it runs the computation, which agrees with what the class holds.
     let _ = m.evaluate_node_deep(pick_five, None);
     assert!(
         m.unify_errors.is_empty(),
         "an equal expectation is not a conflict"
     );
 
-    // an unequal one conflicts against the value — the computation was not
-    // erased, and still reads 5
     let four = usize_node(&mut m, root, 4);
     m.unify(four, pick_five);
     assert_eq!(m.unify_errors.len(), 1);
@@ -243,13 +217,8 @@ fn a_resolvable_computation_is_forced_and_compared() {
 
 #[test]
 fn a_resolvable_index_read_pins_its_element() {
-    // A concrete expectation meets an `Index` read over an undecided element
-    // with a concrete index: the read resolves to a pure reference — the
-    // operator node is aliased to the element — and the concrete value is
-    // written onto it (pinning the element, the "monomorphized" trade).  The
-    // read keeps its operation — the operand edge stays live so an apply's
-    // clone can reach the element and enforce the pin — and a conflicting
-    // expectation fails against the pinned value.
+    // A resolvable read aliases its element and pins the value onto it; the
+    // operation edge stays for an apply's clone.
     let mut m = Module::new();
     let root = m.add_block(None);
     let cell = undecided_node(&mut m, root);
@@ -259,10 +228,8 @@ fn a_resolvable_index_read_pins_its_element() {
     let three = usize_node(&mut m, root, 3);
     m.unify(three, read);
     assert!(m.unify_errors.is_empty());
-    // The read's **subscript** is only known by evaluating it, so the equation
-    // "this read is that element" cannot be established at unify time: the
-    // evaluation establishes it (`alias_read`), and that unification is what
-    // carries the concrete value onto the element.
+    // The subscript is only known by evaluating the read, so the alias forms
+    // at evaluation, not at unify time.
     let _ = m.evaluate_node_deep(read, None);
     assert_eq!(
         m.equality_representative(three),
@@ -278,7 +245,6 @@ fn a_resolvable_index_read_pins_its_element() {
         "the pinned read keeps its operation (the operand edge must survive)"
     );
 
-    // a conflicting expectation now fails against the pinned value
     let five = usize_node(&mut m, root, 5);
     m.unify(five, read);
     assert_eq!(m.unify_errors.len(), 1);
@@ -300,8 +266,6 @@ fn two_resolvable_computations_are_compared_after_forcing() {
     let cond0 = usize_node(&mut m, root, 0);
     let pick4 = index_node(&mut m, root, branches, cond0);
 
-    // two different computations: each reads its own value, and the mismatch is
-    // detected by the unify that follows — unify itself never computes.
     let _ = m.evaluate_node_deep(pick5, None);
     let _ = m.evaluate_node_deep(pick4, None);
     m.unify(pick5, pick4);
@@ -310,7 +274,6 @@ fn two_resolvable_computations_are_compared_after_forcing() {
         m.equality_representative(pick5),
         m.equality_representative(pick4)
     );
-    // each kept its own computed value — neither was erased onto the other
     assert!(matches!(
         m.node_value(AnyNodeId::Dynamic(pick5)),
         Some(HighProgramValue::LowValue(LowValue::USize(5)))
@@ -325,7 +288,7 @@ fn two_resolvable_computations_are_compared_after_forcing() {
     let pick5b = index_node(&mut m, root, branches, cond1b);
     let _ = m.evaluate_node_deep(pick5b, None);
     m.unify(pick5, pick5b);
-    // the earlier mismatch error persists in the collection
+    // the earlier mismatch error persists: unify errors are permanent
     assert_eq!(m.unify_errors.len(), 1);
     assert_eq!(
         m.equality_representative(pick5),

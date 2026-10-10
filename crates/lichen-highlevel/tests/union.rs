@@ -1,10 +1,4 @@
-//! The value and operator unions: `HighProgramValue` is a flat union of the
-//! lowlevel `LowValue` and the highlevel `TypeValue` (each carried whole as
-//! one sibling variant), and `HighProgramOperator` the same for `LowOperator`
-//! and `TypeOperator`.  `From` builds a layer's value, `AsEnum` reads that
-//! layer's branch back, and every other branch reads as `None` — the two
-//! halves the lowlevel distinguishes through `as_enum`.  Both unions have
-//! several `AsEnum` impls, so the views are spelled `AsEnum::<..>::as_enum`.
+//! Value and operator unions; each layer's view is `AsEnum::<..>::as_enum`.
 
 use lichen_highlevel::program::{HighProgramOperator, HighProgramValue, TypeOperator, TypeValue};
 use lichen_lowlevel::{LowOperator, LowValue};

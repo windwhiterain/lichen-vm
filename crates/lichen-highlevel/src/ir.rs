@@ -31,7 +31,7 @@ impl<A> Default for Schema<A> {
 pub struct SchemaId(pub u32);
 
 /// A binary operation. Comparisons and `In` yield `USize(0/1)`, which drives
-    /// an `if`. See docs/language-spec.md.
+/// an `if`. See docs/language-spec.md.
 ///
 /// # Invariant
 /// Everything but `Eq`/`Neq`/`In` is `Int`-only and unsigned: `Eq`/`Neq` are the
@@ -82,7 +82,7 @@ impl From<BinOp> for TypeOperator {
 }
 
 /// A prefix **class conversion**: `int2float e` and `float2int e`. See
-    /// `docs/notes/floating-point.md` §4.2.
+/// `docs/notes/floating-point.md` §4.2.
 ///
 /// # Invariant
 /// These are the only place `Int` and `Float` meet: every other operator
@@ -105,7 +105,7 @@ impl From<ConvOp> for TypeOperator {
 }
 
 /// A dense index into [`IR::expr`].
-    ///
+///
 /// # Invariant
 /// References are pre-resolved: a use of a parameter *is* the
 /// [`ExprKind::Parameter`]'s own `ExprId`, so the IR carries no name strings.
@@ -134,7 +134,7 @@ fn push_opt(id: &Option<ExprId>, push: &mut impl FnMut(ExprId)) {
 }
 
 /// Append `values` to an arena and return the half-open [`ChildRange`] they
-    /// occupy.
+/// occupy.
 ///
 /// # Invariant
 /// Every variadic arena write goes through here, so a range and the push it
@@ -149,7 +149,7 @@ fn extend_range<T>(arena: &mut Vec<T>, values: impl IntoIterator<Item = T>) -> C
 }
 
 /// A source-blind diagnostic location: an IR expression and a **recursive**
-    /// path through its `[value, type, …]` spine.
+/// path through its `[value, type, …]` spine.
 ///
 /// # Invariant
 /// The highlevel never sees a source span, so a location is expressed purely
