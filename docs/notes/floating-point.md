@@ -652,6 +652,35 @@ can be the quietly permissive one. See
 [kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) for the three
 causes this took, and [operators](operators.md) §7.
 
+**One "one class" assumption is left, and it is about buffers rather than
+values.** A *value* may be any class, and crossing is representable in every
+module, but **a module still declares one storage-buffer element type and one
+`ArrayStride`**: `spirv::module_class` folds `input_classes` and
+`output_classes` into a single class, and `Ids`' `elem`/`array`/`buffer_struct`
+and the one `ARRAY_STRIDE` derive from it. So a kernel that reads an `Int`
+buffer and writes a `Float` buffer is refused by `MixedClasses` even though
+**every class it needs is already carried** — `input_classes` and
+`output_classes` are per-buffer vectors, and nothing about the IR forbids the
+mixture.
+
+The work is therefore a **layout** change and not a typing one, which is why
+it is its own item:
+
+| today                        | what a mixed-buffer module needs                    |
+|------------------------------|----------------------------------------------------|
+| one `elem` struct            | one per class present, `{ Int }` and `{ Float }`     |
+| one `array` + one `ArrayStride` | one per class, the stride being that class's `byte_width()` |
+| one `buffer_struct`          | one per class, each `Block`-decorated               |
+| one `ptr_in`/`ptr_array`/`ptr_elem` | one set per class                               |
+| a buffer variable typed with the module's class | typed with **its own** buffer's class, from `input_classes[k]` / `output_classes[k]` |
+| `dispatch.rs` derives one stride and one padding from `module_class` | derives each buffer's from **its own** class |
+
+`needs_int64` is the other half: it is `module_class(...) == Int` today, and
+becomes "does this fragment use a 64-bit integer anywhere", which a mixed
+fragment still can. The same-operation refusal (`x + 0.5` with no crossing) is
+**kept** — it is a different fact, it is already shared between both backends,
+and no layout change touches it.
+
 **A crossing is always representable on both targets, and the width is what it
 costs.** Both element types are declared in every SPIR-V module, so only the
 64-bit integer — and its `Int64` capability — stays conditional. That is what
