@@ -5,29 +5,13 @@
 //! reaches its write, so only the `count` real elements are ever read back. The
 //! tail-lane accounting, where the data lives, and the memory ordering:
 //! `docs/notes/lichen-compute-gpu.md`.
-//! # Where the data lives
+//! The Vulkan dispatch backend: device-local buffers, explicit ordering, host pools.
 //!
-//! Buffers are **device-local**: the shader reads and writes them where the
-//! shader runs. Data reaches them through a separate **staging** buffer that the
-//! host maps, and reaches the host back the same way — so a round trip is a
-//! `vkCmdCopyBuffer` against mapped system memory, not a per-element transfer
-//! on the shader's path.
-//!
-//! The staging buffer is `HOST_CACHED`, and that is required rather than
-//! preferred. A host-visible-but-uncached allocation on a discrete GPU is system
-//! RAM reached over PCIe with no cache behind it, and every host touch to it
-//! costs a round trip — which is a *correct* buffer and an appallingly slow one.
-//! Choosing it silently would put a backend on the same footing as the CPU it is
-//! meant to beat while reporting success, so a device with no cached host memory
-//! is refused by name instead.
-//!
-//! # Memory ordering is explicit
-//!
-//! Coherent memory is not *ordering*. Host writes to staging must be made
-//! readable by the transfer that uploads them, the upload must be visible to the
-//! shader, and the shader's writes must be visible to the download that reads
-//! them back — so the command buffer carries a barrier at each of those points
-//! rather than relying on the submit and the fence to imply it.
+//! # Invariant
+//! Buffers are device-local and data reaches them through a host-cached staging buffer: an
+//! uncached host-visible allocation is a correct but appallingly slow buffer, so a device with no
+//! cached host memory is refused by name. Coherent memory is not ordering, so each point carries
+//! its own barrier rather than relying on the submit and the fence.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -46,72 +30,51 @@ use crate::spirv::{self, Binding, LOCAL_SIZE_X, SpirvRefusal};
 pub enum RunError {
     /// No Vulkan physical device could be used.
     NoDevice { detail: String },
-    /// The device is present but cannot represent the fragment's integer width.
-    /// The IR declares the width, and this is the refusal that declaration exists
-    /// to make possible — the alternative would be narrowing, which is a semantic
-    /// change to a program nobody wrote.
+    /// The device cannot represent the fragment's declared integer width.
     MissingInt64 { device: String },
     /// The fragment is outside what this backend emits.
     Emit(SpirvRefusal),
-    /// An input buffer is shorter than the run's count, so a lane would read past
-    /// it.  Refused rather than zero-filled: a short input is a caller error, and
-    /// silently reading `0` would look like real data.
+    /// An input buffer is shorter than the run's count; refused rather than zero-filled.
     InputShorterThanCount {
         buffer: usize,
         len: usize,
         count: usize,
     },
-    /// A run over no indices at all.  The buffer such a run would need is a
-    /// zero-sized allocation, which Vulkan does not have; refused here so the
-    /// reason is the program's rather than the driver's.
+    /// A run over no indices: Vulkan has no zero-sized allocation to give it.
     EmptyRun,
-    /// A dispatch binds more storage buffers than the descriptor pool has room
-    /// for.  The pool is allocated once, so this is a limit of the backend
-    /// rather than of the device — refused by name instead of surfacing as pool
-    /// exhaustion.
+    /// More storage buffers than the pool has room for; the pool is allocated once.
     TooManyBindings { total: usize, max: usize },
-    /// A chain asked for a number of dispatches that one submission cannot
-    /// record. The range is one to `MAX_DISPATCHES_PER_SUBMISSION`, which is
-    /// what the descriptor pool has sets for; over it, the chain would exhaust
-    /// the pool on the device instead of being refused here. Zero is refused
-    /// too, and for a different reason worth stating: a submission with no
-    /// dispatch in it is not a shorter chain, it is a different request.
+    /// A chain asked for a dispatch count one submission cannot record.
+    ///
+    /// # Invariant
+    /// One to `MAX_DISPATCHES_PER_SUBMISSION`, which is what the pool has sets for; zero is
+    /// refused too, because a submission with no dispatch is a different request, not a shorter
+    /// chain.
     ChainLength { wanted: usize, max: usize },
-    /// A chain needs each link to have one input and one output, so that link
-    /// `n + 1` can be handed link `n`'s result without the caller naming
-    /// buffers. A wider shape is a real requirement and a real graph node, but
-    /// it is not a linear chain.
+    /// A chain needs each link to have one input and one output.
     ChainNotLinear { inputs: usize, outputs: usize },
     /// A chain whose fragment reads one class and writes the other, which a chain cannot carry.
     ChainCrossesClasses {
         input: ScalarClass,
         output: ScalarClass,
     },
-    /// A fragment whose body **reads** a parameter beside the extent: the
-    /// dispatch carries no leaf but the index, so a second read leaf has nowhere
-    /// to go.  Refused by name rather than dispatched with the argument missing,
-    /// which would compute every lane from the wrong value — the CPU path passes
-    /// the whole leaf list (`docs/notes/compute-runtime-scalars.md` §3).  A leaf
-    /// the body never reads is *not* this: nothing is missing from it.
+    /// A fragment whose body reads a parameter beside the extent.
+    ///
+    /// # Invariant
+    /// The dispatch carries no leaf but the index, so a second read leaf has nowhere to go; a leaf
+    /// the body never reads is not this, because nothing is missing from it.
     ScalarsNotPushed { leaves: usize },
-    /// A resident id this context is not holding — never issued, or already
-    /// released.  Refused rather than read as empty: an id is a handle, and using
-    /// a dead one means the host lost track of its own buffers, which reporting
-    /// `0`s would hide.
+    /// A resident id this context is not holding: never issued, or released.
     UnknownResident { id: u64 },
-    /// A pool depth of zero, which is not a smaller pool.  There is nothing to
-    /// acquire and therefore no submission any shape can be recorded into, so it
-    /// is refused here rather than as an empty acquire later.
+    /// A pool depth of zero, which is not a smaller pool.
     NoSlots { wanted: usize },
-    /// A token naming a slot this context does not have — issued by a different
-    /// context, or a number that was never a slot at all.  The same reasoning as
-    /// [`Self::UnknownResident`]: a handle that names nothing must say so, and
-    /// waiting on a slot this context does not own would block on someone else's
-    /// fence.
+    /// A token naming a slot this context does not have.
+    ///
+    /// # Invariant
+    /// A handle that names nothing must say so: waiting on a slot this context does not own would
+    /// block on someone else's fence.
     UnknownSlot { slot: u32 },
-    /// A fetch asked for more elements than the buffer was allocated for. The
-    /// buffer is sized to the run's padded count, so this means the host is
-    /// asking for a run that did not produce this buffer.
+    /// A fetch asked for more elements than the buffer was allocated for.
     FetchLongerThanBuffer { len: usize, count: usize },
     /// A Vulkan call failed.  `stage` names which one, because "Vulkan error" is
     /// not a cause.
@@ -208,51 +171,40 @@ fn check<T>(stage: &'static str, result: Result<T, vk::Result>) -> Result<T, Run
 
 /// A device, its compute queue, and the pipelines built on it.
 ///
-/// One context owns one device.  Pipelines are cached on the fragment's content
-/// digest, so a fragment that is run twice compiles once — the same identity the
-/// wasm backend's module cache keys on, which is why [`fragment_digest`] lives
-/// in the IR rather than in either backend.
+/// # Invariant
+/// One context owns one device; pipelines are cached on the fragment's content digest, so a
+/// fragment run twice compiles once — the same identity the wasm backend's module cache keys on.
 pub struct GpuContext {
     entry: ash::Entry,
     instance: ash::Instance,
     device: ash::Device,
     queue: vk::Queue,
-    /// Retained so memory-type queries can be answered; those live on the
-    /// instance, not the device, so the device alone is not enough.
+    /// Retained so memory-type queries can be answered.
     physical: vk::PhysicalDevice,
-    /// Retained so a pipeline cache key can be checked against what the device
-    /// actually accepted, and for the device name in a refusal.
+    /// Retained for the pipeline cache key and the device name in a refusal.
     name: String,
     /// Whether the device offers `shaderInt64`.
     ///
-    /// **A property of the fragment decides whether it matters**, not a property
-    /// of the device: an integer fragment's module declares a 64-bit integer and
-    /// needs the feature, while a float one's integers are 32-bit indices and
-    /// its scalar is core `Float32` ([`spirv::needs_int64`]). So the feature is
-    /// recorded here and checked where a fragment is compiled, rather than used
-    /// to reject the device at selection time — which would leave a float kernel
-    /// unable to run on a device for a reason that no longer applies.
+    /// # Invariant
+    /// A property of the fragment decides whether it matters, not of the device: an integer
+    /// fragment needs the feature, a float one's integers are 32-bit indices. So it is recorded
+    /// here and checked where a fragment is compiled, rather than rejecting the device.
     shader_int64: bool,
     /// The pipeline cache, keyed on the **whole set's** digests, not the root's:
     /// two sets sharing a root are two modules.
     pipelines: Mutex<HashMap<(Vec<u64>, usize, usize), vk::Pipeline>>,
-    /// Buffers handed out as [`ResidentId`]s and not yet released. The value is
-    /// the device-local allocation behind the id, so the id is the only handle
-    /// the host ever holds to device memory.
+    /// Buffers handed out as [`ResidentId`]s and not yet released.
     resident: Mutex<HashMap<ResidentId, DeviceBuffer>>,
     /// Hands out ids. Never reused: a stale id released twice must not name a
     /// live buffer, so ids only ever move forward.
     next_id: AtomicU64,
-    /// The submissions' own objects, one set per slot — see [`Slots`].
+    /// The submissions' own objects, one set per slot.
     ///
-    /// This is what makes more than one submission in flight possible at all. A
-    /// single command buffer cannot be recorded while a previous recording of it
-    /// is still running, so one command buffer means one submission at a time,
-    /// which is the batch strategy and not the overlapping one.
+    /// # Invariant
+    /// This is what makes more than one submission in flight possible: a single command buffer
+    /// cannot be recorded while a previous recording of it runs.
     slots: Mutex<Slots>,
-    /// The descriptor set layout and pipeline layout for a run with `n` buffers
-    /// in total. They are a function of `n` alone — the same two objects the old
-    /// per-run code built and dropped for every dispatch.
+    /// The descriptor set and pipeline layouts for a run with `n` buffers.
     layouts: Mutex<HashMap<usize, Layouts>>,
     /// Device buffers that have been given back, keyed by their element count and class.
     ///
@@ -265,29 +217,19 @@ pub struct GpuContext {
 
 /// How deep a pool is when nobody says otherwise.
 ///
-/// Two, and not one, because one is not a pool: with a single slot a submission
-/// must finish before the next can be recorded, so the host's work and the
-/// device's work never overlap. Two is the smallest depth that lets one
-/// submission be recording while the one before it is still running, which is
-/// the whole difference between the batch strategy and the overlapping one.
+/// # Invariant
+/// Two, and not one, because one is not a pool: with a single slot a submission must finish before
+/// the next is recorded, so host and device work never overlap.
 pub const DEFAULT_SLOT_DEPTH: usize = 2;
 
 /// What a caller may choose about a context.
 ///
-/// Rust-side only, and deliberately so. A pool depth is a scheduling budget
-/// rather than a semantic choice: a program that computed different answers at
-/// depth 1 and depth 2 would make it part of the language, and the depth would
-/// then need a surface, a spelling and a compatibility promise. Keeping it here
-/// means it can move without any of that.
+/// # Invariant
+/// Rust-side only: a pool depth is a scheduling budget, not a semantic choice, so a language
+/// surface for it would make a program's answers depend on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GpuConfig {
-    /// How many submissions may be in flight at once, each with a command
-    /// buffer, a fence, a staging buffer and a descriptor pool of its own.
-    ///
-    /// One means the device is never behind the host by more than one
-    /// submission. Larger values let the host record ahead of the device by that
-    /// many submissions, at the cost of that many command buffers, staging
-    /// buffers and descriptor pools resident in VRAM.
+    /// How many submissions may be in flight at once.
     pub slot_depth: usize,
 }
 
@@ -301,56 +243,34 @@ impl Default for GpuConfig {
 
 /// The objects one submission owns, and the claim on them.
 ///
-/// **Everything a submission reads or rewrites lives here, together, for one
-/// reason: they all go invalid or get rewritten when the submission ends.** A
-/// command buffer cannot be recorded while a previous recording of it is
-/// running. A staging mapping cannot be written while a copy out of it is still
-/// in flight. A descriptor pool cannot be reset while a dispatch bound to its
-/// sets is still executing. Splitting them across a context and a "one at a
-/// time" lock is how a second in-flight submission gets recorded into the first
-/// one's command buffer; keeping them in one struct makes that mistake
-/// unrepresentable instead of merely discouraged.
+/// # Invariant
+/// Everything a submission reads or rewrites lives here, because they all go invalid when it ends:
+/// a command buffer cannot be recorded while a previous recording runs, a staging mapping cannot
+/// be written while a copy from it is in flight, and a descriptor pool cannot be reset while a
+/// dispatch bound to its sets executes.
 struct Slot {
-    /// Set from the moment this slot is acquired until a wait has confirmed its
-    /// fence. While it is set, the slot's objects belong to the device.
+    /// Set from acquisition until a wait has confirmed this slot's fence.
     claimed: bool,
-    /// Retained so `Drop` can destroy it. It is not needed again while the slot
-    /// lives: a command buffer is freed by destroying the pool it came from, and
-    /// the pool has to outlive every buffer allocated from it.
+    /// Retained so `Drop` can destroy it: a command pool must outlive its buffers.
     command_pool: vk::CommandPool,
     command: vk::CommandBuffer,
     fence: vk::Fence,
     /// Mapped host memory this slot's uploads and downloads are staged through.
-    /// Per slot rather than per context precisely so that staging one submission
-    /// cannot land under a copy the device has not made yet.
     staging: Staging,
-    /// Descriptor sets for this slot's submission, reset when the slot is
-    /// acquired and at no point while it is held.
+    /// Descriptor sets for this slot's submission, reset when the slot is acquired.
     ///
-    /// The rule is not a preference. A set is read when the submission
-    /// *executes*, so one set cannot serve two dispatches — rewriting it between
-    /// them changes what the first one sees. The pool cannot be reset between
-    /// them either: a reset frees every set, including ones an earlier dispatch
-    /// in the same command buffer is still bound to, and that is undefined
-    /// rather than slow.
-    ///
-    /// **Per slot rather than one for the context** because "reset at the
-    /// submission boundary" stops being a boundary once there are two
-    /// submissions in flight: the next submission starts while this one is still
-    /// running, and a reset would free sets this submission's dispatches are
-    /// bound to. Each slot therefore has a pool nobody else can reach, and the
-    /// reset happens where a fence wait has just proved that slot is idle —
-    /// see [`GpuContext::acquire`].
+    /// # Invariant
+    /// A set is read when the submission executes, so one set cannot serve two dispatches and the
+    /// pool cannot be reset between them — a reset frees sets an earlier dispatch is bound to,
+    /// which is undefined rather than slow. The pool is per slot because "reset at the submission
+    /// boundary" stops being a boundary once two are in flight.
     descriptor_pool: vk::DescriptorPool,
 }
 
 /// The pool: the slots, and where the next acquisition looks.
 struct Slots {
     entries: Vec<Slot>,
-    /// Where [`GpuContext::acquire`] looks next. Round-robin rather than "first
-    /// free", so a stream of acquisitions cannot keep returning to slot zero
-    /// while the rest go untouched: round-robin bounds how long any slot can be
-    /// left waiting behind the cursor.
+    /// Where [`GpuContext::acquire`] looks next: round-robin, so no slot is left behind.
     cursor: usize,
 }
 
@@ -364,25 +284,14 @@ impl Slots {
 
 /// A submitted-but-not-yet-waited-for slot.
 ///
-/// [`GpuContext::acquire`] hands one out with a [`Segment`], and
-/// [`GpuContext::sync`] consumes it. It is `Copy` and carries nothing but the
-/// slot's number, which is the same bargain [`ResidentId`] makes and for the
-/// same reason: a token means nothing without the context that issued it, so it
-/// is never compared across contexts or persisted.
-///
-/// **It is consumed by the wait, not clonable into a second wait.** That is the
-/// point. Waiting the same submission twice would not be a no-op — by the time
-/// the second wait ran, the slot could be running *someone else's* submission,
-/// and the wait would return having proved the wrong thing. Taking the token by
-/// value makes the second wait inexpressible rather than merely wrong.
+/// # Invariant
+/// It carries nothing but the slot's number, and the wait consumes it: waiting the same
+/// submission twice would prove the wrong thing, because by then the slot could be running someone
+/// else's submission. Taking the token by value makes the second wait inexpressible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Token(u32);
 
 /// How many freed buffers of one size are kept for reuse.
-///
-/// Four is enough for a chain to ping-pong two buffers plus a host input and a
-/// host output without allocating, and small enough that idling here is not worth
-/// measuring against a device's whole memory.
 const RECYCLED_PER_SIZE: usize = 4;
 
 /// The two layouts a dispatch binds, which depend only on how many buffers the
@@ -393,41 +302,24 @@ struct Layouts {
     pipeline: vk::PipelineLayout,
 }
 
-/// The most storage-buffer bindings **one dispatch** may declare.
-///
-/// Refused by name rather than left to fail as a driver-side pool exhaustion,
-/// which would read like a device problem.
+/// The most storage-buffer bindings one dispatch may declare.
 const MAX_DESCRIPTOR_BINDINGS: usize = 32;
 
-/// The most dispatches **one submission** may record.
+/// The most dispatches one submission may record.
 ///
-/// A second descriptor set per dispatch, and never a shared one — see
-/// [`GpuContext::descriptor_pool`]. The pool is allocated once for this many
-/// sets, so this is a limit of the backend rather than of the device.
-///
-/// Sixty-four is a placeholder, picked to keep the pool in the low hundreds of
-/// kilobytes and deliberately not raised further: the graph-level node set that
-/// ought to own this number does not exist yet, and a larger one here would be
-/// headroom for a program shape nobody has written. A submission wanting more
-/// is refused by name rather than quietly split into two.
+/// # Invariant
+/// A second descriptor set per dispatch, never a shared one: the pool is allocated once for this
+/// many sets, so the limit is the backend's rather than the device's. A submission wanting more is
+/// refused by name rather than quietly split.
 const MAX_DISPATCHES_PER_SUBMISSION: usize = 64;
 
 impl GpuContext {
     /// Find a device and create a compute context on it, with the default pool.
-    ///
-    /// A **discrete** GPU is preferred over an integrated one, because a compute
-    /// run is exactly the workload where that matters; among equals, the lowest
-    /// index wins so the choice is deterministic.
     pub fn new() -> Result<Self, RunError> {
         Self::with_config(GpuConfig::default())
     }
 
     /// [`Self::new`], with a chosen pool depth.
-    ///
-    /// Everything else about the context is the same either way: the device
-    /// choice, the pipeline cache, the buffer pool. The depth is the only knob,
-    /// and it is on this side of the boundary because it is a scheduling budget
-    /// rather than anything a program says — see [`GpuConfig`].
     pub fn with_config(config: GpuConfig) -> Result<Self, RunError> {
         if config.slot_depth == 0 {
             return Err(RunError::NoSlots {
@@ -437,8 +329,7 @@ impl GpuContext {
         let entry = unsafe { ash::Entry::load() }.map_err(|detail| RunError::NoDevice {
             detail: detail.to_string(),
         })?;
-        // No layers and no extensions: a compute run needs neither, and asking for
-        // none means the context works on a machine with no loader extras.
+        // No layers and no extensions: a compute run needs neither.
         let instance = check("instance creation", unsafe {
             entry.create_instance(&vk::InstanceCreateInfo::default(), None)
         })?;
@@ -458,10 +349,8 @@ impl GpuContext {
         for physical in devices {
             let properties = unsafe { instance.get_physical_device_properties(physical) };
             let features = unsafe { instance.get_physical_device_features(physical) };
-            // `shaderInt64` is recorded, not required: a float fragment's module
-            // has no 64-bit integer in it, so refusing the device here would
-            // refuse a kernel this device can run. It is still *preferred* below,
-            // because an integer fragment needs it and the common case is one.
+            // `shaderInt64` is recorded, not required: a float fragment's module has
+            // no 64-bit integer in it.
             let supports_int64 = features.shader_int64 != 0;
             let families =
                 unsafe { instance.get_physical_device_queue_family_properties(physical) };
@@ -478,9 +367,7 @@ impl GpuContext {
                     let current_discrete =
                         current.device_type == vk::PhysicalDeviceType::DISCRETE_GPU;
                     match (discrete, current_discrete) {
-                        // A discrete device wins outright, and among equals the
-                        // lowest index still wins unless the incumbent cannot run
-                        // an integer fragment and this one can.
+                        // A discrete device wins outright; among equals the lowest index.
                         (true, false) => true,
                         (false, true) => false,
                         _ => supports_int64 && !current_int64,
@@ -517,12 +404,11 @@ impl GpuContext {
         })?;
         let queue = unsafe { device.get_device_queue(family, 0) };
 
-        // One slot per permitted in-flight submission, all built before the
-        // context exists because they need a borrow of the device that the
-        // struct literal below is about to move.  A failure part-way leaves the
-        // slots already built alive, so they are destroyed rather than dropped:
-        // their command pools and descriptor pools are device objects, and the
-        // device outlives this function.
+        // One slot per permitted in-flight submission, built before the context
+        // exists because they need a borrow of the device.
+
+        // A failure part-way destroys the slots already built: their pools are
+        // device objects.
         let mut built: Vec<Slot> = Vec::with_capacity(config.slot_depth);
         for _ in 0..config.slot_depth {
             match Slot::new(&device, family) {
@@ -566,38 +452,24 @@ impl GpuContext {
         self.slots.lock().unwrap().entries.len()
     }
 
-    /// Take a slot to record one submission into, and the token that will wait
-    /// for it.
+    /// Take a slot to record one submission into, and the token that will wait for it.
     ///
-    /// This is the whole scheduling surface. A caller that records, submits and
-    /// then drops the segment without submitting gets its slot straight back; a
-    /// caller that submits gets a [`Token`] and the slot stays claimed until
-    /// [`Self::sync`] has seen its fence. Between those two points the host is
-    /// free — that window is what the overlapping strategy is made of, and it
-    /// exists whether or not the host spends it.
-    ///
-    /// The lock is held for the segment's whole life, and that is what makes
-    /// "two threads never record into one command buffer" a borrow-checked fact
-    /// rather than a convention. The cost is that a second thread cannot acquire
-    /// while the first is *recording*, which is a few hundred microseconds of
-    /// host time; the win is that it also cannot acquire while the first is
-    /// **waiting**, which is the whole point.
+    /// # Invariant
+    /// The lock is held for the segment's whole life, which makes "two threads never record into
+    /// one command buffer" a borrow-checked fact rather than a convention. A caller that records
+    /// and drops the segment gets its slot straight back; one that submits keeps it until
+    /// [`Self::sync`] has seen its fence.
     fn acquire(&self) -> Result<Segment<'_>, RunError> {
         let mut slots = self.slots.lock().unwrap();
         let index = slots.cursor;
         slots.cursor = (index + 1) % slots.entries.len();
         if slots.entries[index].claimed {
-            // This is where a depth above one stops being bookkeeping.  The slot
-            // is running someone else's submission, so its command buffer cannot
-            // be reset, its staging cannot be written and its descriptor pool
-            // cannot be touched — and the only thing that makes it reusable is
-            // its fence, so that is what is waited on.
+            // The slot is running someone else's submission, so its fence is the
+            // only thing that makes it reusable.
             self.wait_on(&slots.entries[index])?;
         }
-        // Safe exactly where it is, and only here: the fence above has either
-        // signalled or was never claimed, so nothing is reading the sets this
-        // frees.  See [`Slot::descriptor_pool`] for why there is no other place
-        // a reset could go.
+        // Safe exactly here: the fence has signalled or was never claimed, so
+        // nothing is reading the sets this frees.
         check("descriptor pool reset", unsafe {
             self.device.reset_descriptor_pool(
                 slots.entries[index].descriptor_pool,
@@ -615,14 +487,10 @@ impl GpuContext {
 
     /// Wait for a submitted slot, and release it for reuse.
     ///
-    /// Consumes the token, so one submission is waited for exactly once. See
-    /// [`Token`] for why the second wait has to be inexpressible rather than
-    /// merely discouraged.
-    ///
-    /// This does not need to be called on the thread that submitted, and does
-    /// not need the [`Segment`] that submitted — the segment was consumed by
-    /// [`Segment::submit`] precisely so the host could go and do something else
-    /// in between.
+    /// # Invariant
+    /// The token is consumed, so one submission is waited for exactly once. It need not be called
+    /// on the submitting thread: the segment was consumed by `submit` so the host could go and do
+    /// something else.
     fn sync(&self, token: Token) -> Result<(), RunError> {
         let mut slots = self.slots.lock().unwrap();
         let slot = slots.entry(token)?;
@@ -633,14 +501,10 @@ impl GpuContext {
 
     /// Run a launch set's root over the index range `[0, count)`.
     ///
-    /// Returns one [`ResidentId`] per declared output, owned by the caller until
-    /// it releases them.  **Nothing is copied back here:** the results are where
-    /// the shader ran, and [`Self::fetch`] is what brings them home.  A run whose
-    /// outputs are fed to another run — or never read at all — pays for no
-    /// transfer down.
-    ///
-    /// Literally [`Self::submit`] then a wait, and the shared half is
-    /// [`Self::stage_run`] so the two cannot drift apart.
+    /// # Invariant
+    /// One [`ResidentId`] per declared output, owned until released, and nothing is copied back:
+    /// the results are where the shader ran, so a run whose outputs are another run's inputs pays
+    /// for no transfer. It is [`Self::submit`] then a wait, sharing [`Self::stage_run`].
     pub fn run(
         &self,
         launch: &LaunchSet<'_>,
@@ -648,10 +512,8 @@ impl GpuContext {
         count: usize,
     ) -> Result<Vec<ResidentId>, RunError> {
         let staged = self.stage_run(launch, inputs, count)?;
-        // The upload targets are recycled after the wait rather than in a
-        // `finally`, so a wait that fails does not leave them unreachable — and
-        // a fence that has not signalled in thirty seconds is a device that has
-        // stopped, so handing its memory back is the only honest thing left.
+        // The upload targets are recycled after the wait rather than in a `finally`, so
+        // a failed wait does not leak them.
         let waited = self.sync(staged.token);
         for buffer in staged.scratch {
             self.recycle(buffer);
@@ -660,18 +522,12 @@ impl GpuContext {
         Ok(staged.ids)
     }
 
-    /// [`Self::run`], handed back **before the device is done**.
+    /// [`Self::run`], handed back before the device is done.
     ///
-    /// This is the one place the host can be ahead of the device, and it is only
-    /// a place: whether the device is still busy when the next thing is recorded
-    /// is a property of the device and of how much work the host does in
-    /// between, which is the caller's measurement to make and not this
-    /// function's promise.
-    ///
-    /// The returned ids name buffers the shader **has not been guaranteed to
-    /// have written**. They are for handing to the next run as
-    /// [`BufferSlot::Resident`], and a run that needs their values waits first —
-    /// see [`GpuPending`].
+    /// # Invariant
+    /// The ids name buffers the shader has not been guaranteed to have written: they are for
+    /// handing to the next run as [`BufferSlot::Resident`], and a run that needs their values waits
+    /// first.
     pub fn submit(
         &self,
         launch: &LaunchSet<'_>,
@@ -688,17 +544,13 @@ impl GpuContext {
         })
     }
 
-    /// Record one run and hand it to the queue, leaving three things for the
-    /// caller to finish: the token that waits for it, the ids it will produce,
-    /// and the scratch its host inputs were staged through.
+    /// Record one run and hand it to the queue, leaving the token, the ids and the
+    /// scratch to the caller.
     ///
-    /// The scratch is the reason this is a separate method. Those buffers are
-    /// not resident, so nothing else can name them and **this submission is the
-    /// only thing keeping them alive** — the device is copying out of one of
-    /// them right now. A caller that waits has to hold them across the wait, and
-    /// a caller that does not has to hold them until someone does. Neither
-    /// [`Self::run`] nor [`Self::submit`] can let the buffer pool see them before
-    /// then, so they travel in the return value.
+    /// # Invariant
+    /// The scratch travels in the return value because those buffers are not resident: this
+    /// submission is the only thing keeping them alive, and the pool must not see them until
+    /// someone has waited.
     fn stage_run(
         &self,
         launch: &LaunchSet<'_>,
@@ -749,17 +601,11 @@ impl GpuContext {
         // than memory past the end; see the module docs.
         let padded = count.div_ceil(LOCAL_SIZE_X as usize) * LOCAL_SIZE_X as usize;
         if padded == 0 {
-            // A zero-element run would ask Vulkan for a zero-sized buffer, which
-            // is not a buffer.  Refused by name: "no indices" is a program that
-            // has nothing to dispatch, and saying so beats a driver error.
+            // A zero-element run would ask Vulkan for a zero-sized buffer.
             return Err(RunError::EmptyRun);
         }
-        // The slot is taken before anything is staged into it, and the order is
-        // the point: the staging a run writes is the *slot's* staging, so a run
-        // that staged first and acquired second would be writing into a mapping
-        // some other submission is still copying out of.  Acquiring first makes
-        // "this run's upload is somewhere the device is not reading" true by
-        // construction rather than by the caller remembering it.
+        // The slot is taken before anything is staged into it: the staging a run writes
+        // is the slot's own.
         let mut segment = self.acquire()?;
         // The reservation is the sum of each host input's own `count × byte_width()`.
         let staging_bytes: vk::DeviceSize = inputs
@@ -786,8 +632,7 @@ impl GpuContext {
         let mut offset: vk::DeviceSize = 0;
         for (index, slot) in inputs.iter().enumerate() {
             let buffer = match slot {
-                // Used where it lies: this is the whole point of a resident id,
-                // and it is why chaining two runs costs one upload, not two.
+                // Used where it lies: a chained run costs one upload, not two.
                 BufferSlot::Resident(id) => self.resident_buffer(*id)?,
                 BufferSlot::Host(data) => {
                     let buffer_class = spirv::buffer_class_of(fragment, index, class);
@@ -832,11 +677,8 @@ impl GpuContext {
 
         segment.begin()?;
         segment.record(pipeline, &descriptors, &uploads, count)?;
-        // Nothing below this can fail, which is why the buffer bookkeeping comes
-        // after the submit rather than before it: a failed submit means nothing
-        // reached the queue, and the guard still owns every buffer, so they all
-        // go back to the pool.  After it, the outputs become ids and the upload
-        // targets become the submission's to hold.
+        // Nothing below can fail, so the bookkeeping comes after the submit: a failed
+        // submit means nothing reached the queue.
         let token = segment.submit()?;
         let mut resident = self.resident.lock().unwrap();
         let mut ids = Vec::with_capacity(binding.outputs);
@@ -860,8 +702,7 @@ impl GpuContext {
             );
             ids.push(id);
         }
-        // The guard is now empty and drops to nothing; whatever is left is the
-        // host upload targets, which the device is reading through.
+        // The guard is now empty; what is left is the host upload targets.
         let scratch = std::mem::take(&mut scratch.buffers);
         drop(resident);
         Ok(Staged {
@@ -871,22 +712,13 @@ impl GpuContext {
         })
     }
 
-    /// Record `links` dispatches into **one** command buffer, submit once, wait
-    /// once, and hand back the last link's output.
+    /// Record `links` dispatches into one command buffer, submit once, wait once, and hand
+    /// back the last link's output.
     ///
-    /// Each link consumes the previous link's result, over one `fragment` and
-    /// one `count`, with the first link's input uploaded once from the host. So
-    /// the shape is a linear chain, and that is a real restriction: a graph
-    /// names every node's inputs and may fan out, which this cannot express.
-    /// What it is for is the thing a graph would sit on top of — proving that
-    /// several dispatches can share a submission, which is the first time the
-    /// one-set-per-dispatch rule and the widened trailing barrier are actually
-    /// executed rather than merely written down.
-    ///
-    /// **What it saves is bounded, and the bound is measured**: one submit and
-    /// one fence wait instead of `links` of each, worth 65% to 81% of a 16-link
-    /// chain at counts up to 65 536 and 10.7% at a million. See
-    /// [lichen-compute-gpu.md](../../docs/notes/lichen-compute-gpu.md).
+    /// # Invariant
+    /// Each link consumes the previous link's result over one fragment and one count, with the
+    /// first link's input uploaded once — a linear chain, which a graph can fan out beyond. What it
+    /// saves is bounded and measured: one submit and one fence wait instead of `links` of each.
     pub fn run_chain(
         &self,
         launch: &LaunchSet<'_>,
@@ -944,12 +776,7 @@ impl GpuContext {
         let data_bytes = count as vk::DeviceSize * element;
         let padded_bytes = padded as vk::DeviceSize * element;
 
-        // One slot, and its staging is sized for the **whole chain** up front.
-        // Growing it after recording has begun would be a use-after-write on the
-        // mapping: the device reads staging during the submission, and
-        // reallocating the buffer unmaps the memory a recorded copy still points
-        // at.  Acquiring the slot first is what makes that the only thing that can
-        // happen — the slot is not released until the fence has signalled.
+        // One slot, its staging sized for the whole chain up front.
         let mut segment = self.acquire()?;
         segment.reserve(self, data_bytes)?;
 
@@ -959,9 +786,7 @@ impl GpuContext {
         };
         let source = self.allocate(padded, input_class)?;
         scratch.buffers.push(source);
-        // SAFETY: `reserve` sized and mapped this slot's staging for `count`
-        // elements before anything was recorded, and the copy below writes
-        // exactly that many bytes. Nothing is in flight on this slot.
+        // SAFETY: `reserve` sized and mapped this slot's staging for `count` elements.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 input.as_ptr(),
@@ -976,42 +801,25 @@ impl GpuContext {
             tail: padded_bytes - data_bytes,
         };
 
-        // **Two output buffers, ping-ponged, not one per link.** A link reads
-        // the buffer the link before it wrote, so the one before *that* is dead.
-        // For a chain recorded into one command buffer that is the difference
-        // between two buffers and sixteen, and the one-per-link version is not
-        // merely bigger, it is **slower**: a pool that has to hold a buffer per
-        // link is empty at the start of every call, so every call allocates the
-        // lot and throws most of it straight away again. Measured with the cap
-        // raised to cover it, the one-per-link chain cost 2.226 ms against
-        // 0.115 ms — three times *slower* than not fusing at all, entirely in
-        // `vkAllocateMemory`.
-        //
-        // What this costs is a hazard the other version does not have: link `i`
-        // reads the buffer link `i + 2` writes. That is write-after-read, and the
-        // trailing barrier in `record_dispatch` is widened to order it.
-        //
-        // It holds **because this is a linear chain**. A fan-out needs two live
-        // buffers at once, and then which can be shared is a question about
-        // liveness, which is the graph's to answer — see the memory note in the
-        // graph design.
+        // Two output buffers, ping-ponged, not one per link: a link reads what the one
+        // before it wrote.
+
+        // One per link is slower, not merely bigger: the pool is empty at every call.
+
+        // It holds because this is a linear chain; a fan-out is the graph's question.
         let first = self.allocate(padded, output_class)?;
         let second = self.allocate(padded, output_class)?;
 
-        // One reset for the whole submission and **none** inside it, and it
-        // happened in `acquire` rather than here: a reset frees every set,
-        // including the ones an earlier dispatch in this same command buffer is
-        // still bound to, and those reads happen at execution time, long after
-        // the recording.
+        // One reset for the whole submission and none inside it: a reset frees sets an
+        // earlier dispatch is still bound to.
         segment.begin()?;
 
         let mut current = source;
         let (mut into, mut onto) = (first, second);
         for step in 0..links {
             let descriptors = [current.descriptor(), into.descriptor()];
-            // Only the first link uploads. Later links read a buffer an earlier
-            // link's shader wrote, and the barrier between them is the trailing
-            // one in `record_dispatch`, not a transfer barrier.
+            // Only the first link uploads; later links read a buffer an earlier link's
+            // shader wrote.
             let uploads: &[Transfer] = if step == 0 {
                 std::slice::from_ref(&upload)
             } else {
@@ -1024,9 +832,7 @@ impl GpuContext {
 
         segment.submit_and_wait()?;
 
-        // The last link's output is the answer and becomes resident; the uploaded
-        // source is scratch and so is whichever ping-pong buffer the answer did
-        // not land in. Two buffers go back to the pool, not one per link.
+        // The last link's output becomes resident; two buffers go back to the pool.
         if current.handle == first.handle {
             self.recycle(second);
         } else {
@@ -1055,17 +861,13 @@ impl GpuContext {
             .ok_or(RunError::UnknownResident { id: id.0 })
     }
 
-    /// A fresh device-local buffer for `padded` elements of `class`, from the
-    /// recycled pool when one of that size and class is free.
+    /// A fresh device-local buffer for `padded` elements of `class`, recycled when one of
+    /// that size and class is free.
     ///
-    /// Its contents are undefined until something writes them, and every consumer
-    /// writes all of it — see [`GpuContext::recycled`]. A run fills its outputs
-    /// before the dispatch, and an upload's staging is copied over the whole real
-    /// range with the tail cleared on the device.
-    ///
-    /// The class is part of what a buffer *is* — its byte size and the width a
-    /// fetch reads it back at — so the pool is keyed on both and a float run never
-    /// draws an integer-sized allocation.
+    /// # Invariant
+    /// Its contents are undefined until something writes them, and every consumer writes all of
+    /// it. The class is part of what a buffer is — its byte size and the width a fetch reads it
+    /// back at — so the pool is keyed on both.
     fn allocate(&self, padded: usize, class: ScalarClass) -> Result<DeviceBuffer, RunError> {
         if let Some(buffer) = self
             .recycled
@@ -1139,9 +941,7 @@ impl GpuContext {
         if pool.len() < RECYCLED_PER_SIZE {
             pool.push(buffer);
         } else {
-            // Past the cap the memory is genuinely the caller's again, so it goes
-            // back to the driver rather than sitting here for a run that may
-            // never come.
+            // Past the cap the memory is the caller's again, so it goes back to the driver.
             drop(recycled);
             buffer.destroy(&self.device);
         }
@@ -1149,15 +949,10 @@ impl GpuContext {
 
     /// The first `count` elements of a resident buffer, as host data.
     ///
-    /// A submit and a wait of its own, which is the point of the method: a run
-    /// whose results nobody asks for never pays for moving them.
-    ///
-    /// **The class is the buffer's own**, read off the record the run left, so
-    /// the copy below is sized at [`ScalarClass::byte_width`] and the elements
-    /// come back as the class's own [`ScalarData`] — a float buffer is decoded as
-    /// `f32`s rather than handed over as the bits of one.  A fetch has no
-    /// fragment to consult, which is why the class travels on the resident record
-    /// (`docs/notes/floating-point.md` §3.8, §4.4).
+    /// # Invariant
+    /// A submit and a wait of its own, which is the point: a run whose results nobody asks for
+    /// never pays for moving them. The class is the buffer's own, read off the record the run left,
+    /// so a float buffer is decoded as `f32`s — a fetch has no fragment to consult.
     pub fn fetch(&self, id: ResidentId, count: usize) -> Result<ScalarData, RunError> {
         let buffer = self.resident_buffer(id)?;
         if count > buffer.padded {
@@ -1169,10 +964,8 @@ impl GpuContext {
         let bytes = (count * buffer.class.byte_width()) as vk::DeviceSize;
         let device = &self.device;
 
-        // A fetch takes a slot like anything else, and for the same reason: it is
-        // a submission, and a submission needs a command buffer, a fence and a
-        // staging buffer of its own.  Reading the staging back out is the part
-        // that constrains it — see `submit_and_read_back`.
+        // A fetch takes a slot like anything else: a submission needs a command buffer,
+        // a fence and staging of its own.
         let mut segment = self.acquire()?;
         segment.reserve(self, bytes)?;
 
@@ -1210,9 +1003,9 @@ impl GpuContext {
 
     /// Give a resident buffer's device memory back.
     ///
-    /// Idempotent, because the host may hold a block-scoped view of a buffer and
-    /// release it more than once on some paths; a second release is a no-op rather
-    /// than a double free.
+    /// # Invariant
+    /// Idempotent: the host may hold a block-scoped view and release it more than once, and a
+    /// second release is a no-op rather than a double free.
     pub fn release(&self, id: ResidentId) {
         let Some(buffer) = self.resident.lock().unwrap().remove(&id) else {
             return;
@@ -1222,12 +1015,9 @@ impl GpuContext {
 
     /// Reset `slot`'s command buffer and open it for recording.
     ///
-    /// Split from the close so one submission can record **more than one**
-    /// dispatch: a command buffer is a single recording however many dispatches
-    /// go into it, and a chain is exactly that.  A chain is still **one**
-    /// submission and one fence: recording several dispatches here is not the
-    /// same as having several in flight, and only the second one needs a pool
-    /// deeper than one.
+    /// # Invariant
+    /// Split from the close so one submission can record more than one dispatch; a chain is still
+    /// one submission and one fence, and only several in flight need a pool deeper than one.
     fn begin_recording(&self, slot: &Slot) -> Result<(), RunError> {
         let device = &self.device;
         check("command buffer reset", unsafe {
@@ -1247,10 +1037,8 @@ impl GpuContext {
             device.end_command_buffer(slot.command)
         })
         .and_then(|()| {
-            // The fence is created unsignalled and left signalled by the wait,
-            // so it has to be reset or this would return immediately.  A fence
-            // with nobody waiting on it may still be signalled from a submission
-            // that has been waited for, so this reset is not optional.
+            // The fence is created unsignalled and left signalled by the wait, so it has
+            // to be reset or this returns immediately.
             check("fence reset", unsafe { device.reset_fences(&[slot.fence]) })?;
             check("queue submit", unsafe {
                 device.queue_submit(
@@ -1264,10 +1052,9 @@ impl GpuContext {
 
     /// Block until `slot`'s last submission has finished.
     ///
-    /// The thirty-second bound is a driver-error bound, not a timeout anyone
-    /// chose: a fence that has not signalled that long is a device that has
-    /// stopped making progress, and returning would hand back buffers the device
-    /// is still writing.
+    /// # Invariant
+    /// The thirty-second bound is a driver-error bound: a fence unsignalled that long is a device
+    /// that stopped, and returning would hand back buffers it is still writing.
     fn wait_on(&self, slot: &Slot) -> Result<(), RunError> {
         check("fence wait", unsafe {
             self.device.wait_for_fences(
@@ -1278,23 +1065,13 @@ impl GpuContext {
         })
     }
 
-    /// Record one dispatch into the command buffer that is **already open**.
+    /// Record one dispatch into the command buffer that is already open.
     ///
-    /// There is deliberately no begin and no end here. The caller opened the
-    /// recording and will close it, which is what lets a chain put several
-    /// dispatches into one submission. Each call still takes **its own**
-    /// descriptor set, and that is not tidiness: a set is read when the
-    /// submission executes, so one set rewritten between two dispatches would
-    /// change what the first one sees — see [`Slot::descriptor_pool`].
-    ///
-    /// The uploads read out of `slot`'s own staging and nothing else, which is
-    /// why the staging handle is not a parameter: passing one separately would
-    /// be an invitation to record a copy out of a mapping the device is reading.
-    ///
-    /// The correctness of a chain rests on the trailing barrier below, whose
-    /// destination scope names a shader as well as a transfer. Narrow it to the
-    /// transfer alone and a consumer inside the same submission reads undefined
-    /// data — not stale data, and not a crash.
+    /// # Invariant
+    /// Each call takes its own descriptor set: a set is read when the submission executes, so one
+    /// rewritten between two dispatches changes what the first sees. The uploads read `slot`'s own
+    /// staging. A chain rests on the trailing barrier, whose destination scope names a shader as
+    /// well as a transfer.
     fn record_dispatch(
         &self,
         slot: &Slot,
@@ -1313,10 +1090,8 @@ impl GpuContext {
         let device = &self.device;
         let staging = slot.staging.handle;
 
-        // The two layouts are a function of `total` alone, so they are built once
-        // per shape rather than per run.  `pipeline` builds the *same* pair, so a
-        // pipeline and the sets that bind against it always agree — which is the
-        // invariant the old per-run code got for free by building both every time.
+        // The two layouts are a function of `total` alone, built once per shape, and
+        // `pipeline` builds the same pair.
         let layouts = self.layouts(total)?;
 
         let set_layout = layouts.set;
@@ -1353,14 +1128,11 @@ impl GpuContext {
 
         let command = slot.command;
         unsafe {
-            // These three only exist for the uploads. A later link of a chain
-            // reads a buffer an earlier link's *shader* wrote, and the ordering
-            // for that is the trailing barrier below — a transfer barrier with
-            // no transfer in it is not just wasted recording, it is a claim
-            // about work that did not happen.
+            // These three exist only for the uploads; a later link's ordering is the
+            // trailing barrier below.
             if !uploads.is_empty() {
-                // The host wrote staging before this submit, so the copies below
-                // are the first reader of it: make that write visible to them.
+                // The host wrote staging before this submit, so the copies are the
+                // first reader: make that visible.
                 device.cmd_pipeline_barrier(
                     command,
                     vk::PipelineStageFlags::HOST,
@@ -1383,10 +1155,8 @@ impl GpuContext {
                             size: transfer.bytes,
                         }],
                     );
-                    // The surplus lanes read past `count`, and that read has to
-                    // land on a defined value — so the tail is cleared here, on
-                    // the device, rather than uploaded as zeroes the host already
-                    // had copies of.
+                    // The surplus lanes read past `count`, so the tail is cleared on the
+                    // device rather than uploaded as zeroes.
                     if transfer.tail > 0 {
                         device.cmd_fill_buffer(
                             command,
@@ -1397,8 +1167,8 @@ impl GpuContext {
                         );
                     }
                 }
-                // Both the uploads and the tail fills land in buffers the shader
-                // is about to read, so one barrier after them covers both.
+                // The uploads and the tail fills land in buffers the shader reads, so
+                // one barrier covers both.
                 device.cmd_pipeline_barrier(
                     command,
                     vk::PipelineStageFlags::TRANSFER,
@@ -1442,8 +1212,7 @@ impl GpuContext {
         Ok(())
     }
 
-    /// The descriptor set layout and pipeline layout for a run binding `total`
-    /// storage buffers, built on first use and reused after that.
+    /// The descriptor set and pipeline layouts for a run binding `total` buffers.
     fn layouts(&self, total: usize) -> Result<Layouts, RunError> {
         if let Some(layouts) = self.layouts.lock().unwrap().get(&total) {
             return Ok(*layouts);
@@ -1485,10 +1254,9 @@ impl GpuContext {
 
     /// The pipeline for a launch set, built once per content digest.
     ///
-    /// The SPIR-V is emitted **only on a cache miss**.  It used to be emitted on
-    /// every run, which put a whole-module emission on the critical path of a
-    /// dispatch whose pipeline was already built and waiting — pure repeated work
-    /// that a cache hit was supposed to have removed.
+    /// # Invariant
+    /// The SPIR-V is emitted only on a cache miss: emitting it on every run puts a whole-module
+    /// emission on the critical path of a dispatch whose pipeline is already built.
     fn pipeline(&self, launch: &LaunchSet<'_>, binding: Binding) -> Result<vk::Pipeline, RunError> {
         // **The cache key is the whole set**, not the root: two sets sharing a
         // root and differing in a callee are two modules.
@@ -1525,9 +1293,7 @@ impl GpuContext {
             }
         };
         let layout = layouts.pipeline;
-        // `create_compute_pipelines` reports differently from every other call:
-        // on failure it hands back the pipelines that *did* build alongside the
-        // code, so a caller can tell "one of three failed" from "none built".
+        // `create_compute_pipelines` hands back what did build alongside the error.
         let built = unsafe {
             self.device.create_compute_pipelines(
                 vk::PipelineCache::null(),
@@ -1557,9 +1323,8 @@ impl GpuContext {
             }
         };
 
-        // The module goes here because the pipeline has copied what it needs from
-        // it.  The layouts stay: they are cached, and destroying them would leave
-        // the cache pointing at freed objects.
+        // The module goes because the pipeline has copied what it needs; the layouts
+        // stay, since the cache points at them.
         unsafe { self.device.destroy_shader_module(module, None) };
         self.pipelines.lock().unwrap().insert(key, pipeline);
         Ok(pipeline)
@@ -1568,13 +1333,11 @@ impl GpuContext {
 
 impl Drop for GpuContext {
     fn drop(&mut self) {
-        // Nothing may be in flight by the time a context is dropped, and that is
-        // an invariant of every path that submits rather than something checked
-        // here: `run`, `run_chain` and `fetch` all wait before they return, and
-        // the segments that do not are consumed by a wait of their own. Destroying
-        // a command buffer or unmapping a buffer under a running submission would
-        // be a use-after-free rather than a leak, so this is the one place in
-        // `Drop` that has to be believed rather than verified.
+        // Nothing may be in flight when a context is dropped: an invariant of every
+        // submitting path.
+
+        // Destroying a command buffer under a running submission would be a
+        // use-after-free rather than a leak.
         let device = &self.device;
         for (_, pool) in self.recycled.lock().unwrap().drain() {
             for buffer in pool {
@@ -1608,10 +1371,8 @@ impl lichen_kernel_ir::ParallelBackend for GpuContext {
         "gpu"
     }
 
-    /// Delegates to the inherent [`GpuContext::run`], turning a refusal into the
-    /// string the trait carries. The inherent method is the same code either way —
-    /// this impl exists so the *host program* can install a backend, not so a
-    /// second path can run a kernel.
+    /// Delegates to [`GpuContext::run`], turning a refusal into the string the trait
+    /// carries.
     fn run(
         &self,
         launch: &LaunchSet<'_>,
@@ -1621,10 +1382,8 @@ impl lichen_kernel_ir::ParallelBackend for GpuContext {
         GpuContext::run(self, launch, inputs, count).map_err(|error| error.to_string())
     }
 
-    /// The only backend here that overrides the default, and the reason it can:
-    /// it has a pool, so a submission handed back is a **different slot** from
-    /// the one the next submission will take, and the host's work in between is
-    /// the device's work overlapping rather than waiting.
+    /// The one backend that overrides the default: its pool hands the next
+    /// submission a different slot.
     fn submit<'backend>(
         &'backend self,
         launch: &LaunchSet<'_>,
@@ -1638,12 +1397,8 @@ impl lichen_kernel_ir::ParallelBackend for GpuContext {
         ))
     }
 
-    /// The class comes off the resident record the run left, so a float
-    /// fragment's result is fetched at the width its module declared — and this
-    /// is the half that used to be missing: a float module's `ArrayStride` was
-    /// emitted at four bytes while everything this path staged, allocated and
-    /// read back was sized at eight, so a float fragment could not be run at all
-    /// (`docs/notes/floating-point.md` §3.8, §4.4).
+    /// The class comes off the resident record, so a float fragment's result is
+    /// fetched at the width its module declared.
     fn fetch(&self, id: ResidentId, count: usize) -> Result<ScalarData, String> {
         GpuContext::fetch(self, id, count).map_err(|error| error.to_string())
     }
@@ -1655,20 +1410,19 @@ impl lichen_kernel_ir::ParallelBackend for GpuContext {
 
 /// Install a device as the process's compute backend, replacing any previous one.
 ///
-/// This is what a **host program** calls — the composition that links both
-/// backends together. `lichen-compute` never names this crate, so without this
-/// call a program that asked for `"gpu"` is refused by name, which is the honest
-/// outcome rather than a silent run on the CPU.
+/// # Invariant
+/// This is what a host program calls: `lichen-compute` never names this crate, so without this call
+/// a program that asked for `"gpu"` is refused by name rather than run on the CPU.
 pub fn install(context: GpuContext) {
     lichen_kernel_ir::install_parallel_backend(std::sync::Arc::new(context));
 }
 
 /// Open a device and install it, or say why no backend could be installed.
 ///
-/// Device creation is eager on purpose: a program that cannot dispatch at all
-/// should learn that when it is wired up, not on its first hot loop. The
-/// context itself is not handed back — the registry keeps it alive for as long as
-/// it is installed, and a second handle would only be a second way to be stale.
+/// # Invariant
+/// Device creation is eager: a program that cannot dispatch should learn that when it is wired up.
+/// The context is not handed back — the registry keeps it alive, and a second handle would only be
+/// a second way to be stale.
 pub fn install_default() -> Result<(), String> {
     let context = GpuContext::new().map_err(|error| error.to_string())?;
     install(context);
@@ -1676,19 +1430,15 @@ pub fn install_default() -> Result<(), String> {
 }
 
 /// Whether a backend is installed, and which.
-///
-/// A host program can print this to report what a run will actually use, rather
-/// than leaving it to be inferred from a program's source.
 pub fn installed_backend_name() -> Option<&'static str> {
     lichen_kernel_ir::parallel_backend().map(|backend| backend.name())
 }
 
 /// Remove the installed backend, if any.
 ///
-/// The counterpart to [`install`], and not merely a convenience: uninstalling
-/// **drops the context**, so every device buffer it was holding is released at the
-/// same moment.  A test that installs a device and leaves it installed would hand
-/// that device — and the memory on it — to whatever ran next.
+/// # Invariant
+/// It drops the context, so every device buffer it held is released at the same moment: a test that
+/// left one installed would hand that device — and its memory — to whatever ran next.
 pub fn uninstall() {
     lichen_kernel_ir::clear_parallel_backend();
 }
@@ -1700,52 +1450,39 @@ struct Transfer {
     dst: vk::Buffer,
     /// The `count` elements the host actually holds.
     bytes: vk::DeviceSize,
-    /// The allocation past [`Self::bytes`], which the surplus lanes read.  It is
-    /// zeroed **on the device** rather than uploaded, so a run costs `count`
-    /// elements of bus traffic and not `padded` — and the surplus lanes still read
-    /// a defined `0` rather than whatever was in the allocation.
+    /// The allocation past [`Self::bytes`], which the surplus lanes read.
+    ///
+    /// # Invariant
+    /// Zeroed on the device rather than uploaded, so a run costs `count` elements of traffic and the
+    /// surplus lanes still read a defined `0`.
     tail: vk::DeviceSize,
 }
 
 /// What one run leaves behind for whoever is going to wait for it.
 ///
-/// Produced by [`GpuContext::stage_run`] and consumed by exactly two callers,
-/// which is the whole reason it is a struct: the buffers in `scratch` are
-/// unreachable by name, so the only correct way to think about them is "they
-/// belong to this submission until it is waited for".
+/// # Invariant
+/// Consumed by exactly two callers, which is why it is a struct: the buffers in `scratch` are
+/// unreachable by name, so they belong to this submission until it is waited for.
 struct Staged {
     /// The slot the submission is in, and the only way to wait for it.
     token: Token,
     /// The ids the submission will produce, valid once the token is waited for.
     ids: Vec<ResidentId>,
-    /// Buffers a host input was uploaded into. Not resident, so nothing else can
-    /// reach them while the copy out of them is in flight.
+    /// Buffers a host input was uploaded into; not resident, so nothing else reaches them.
     scratch: Vec<DeviceBuffer>,
 }
 
-/// A run this context has recorded and handed to the queue, and has not waited
-/// for.
+/// A run this context has recorded and handed to the queue, and not waited for.
 ///
-/// It is the implementation of [`lichen_kernel_ir::Pending`] for this backend,
-/// and it is what makes a graph's "only wait where something actually needs the
-/// data" schedule expressible: between [`GpuContext::submit`] and
-/// [`Pending::wait`] the host is doing whatever else the run needs to do, and
-/// the device is not being held up waiting to be asked.
-///
-/// # Dropping it waits
-///
-/// A dropped submission would leave a claimed slot, a staging buffer the device
-/// may be copying out of, and upload targets nothing else can name. So the
-/// `Drop` here waits and releases, which makes the mistake a slowdown rather
-/// than a use-after-free. It is a backstop and not a mechanism: a run submits
-/// and waits inside one call, so a pending that is merely dropped should not
-/// exist, and if one does the wait is the wrong-but-safe answer.
+/// # Invariant
+/// It is the implementation of [`lichen_kernel_ir::Pending`], and what makes a graph's "wait only
+/// where something needs the data" schedule expressible. Dropping it waits and releases, so a
+/// dropped submission is a slowdown rather than a use-after-free.
 pub struct GpuPending<'backend> {
     context: &'backend GpuContext,
     token: Token,
-    /// `None` once the submission has been waited for. An `Option` rather than a
-    /// flag because the buffers have to be *moved out* to be recycled, and this
-    /// type has a `Drop`.
+    /// `None` once the submission has been waited for: the buffers move out to be
+    /// recycled, and this type has a `Drop`.
     scratch: Option<Vec<DeviceBuffer>>,
     ids: Vec<ResidentId>,
     finished: bool,
@@ -1760,8 +1497,6 @@ impl GpuPending<'_> {
         }
         self.finished = true;
         // The order is fixed: the fence first, then the memory it was reading.
-        // Recycling an upload target while the copy out of it is in flight would
-        // hand the buffer to the next run to write into.
         self.context.sync(self.token)?;
         for buffer in self.scratch.take().into_iter().flatten() {
             self.context.recycle(buffer);
@@ -1783,24 +1518,18 @@ impl lichen_kernel_ir::Pending for GpuPending<'_> {
 
 impl Drop for GpuPending<'_> {
     fn drop(&mut self) {
-        // A wait that fails is a fence that did not signal, which `sync` has
-        // already said out loud. Saying it again here would only bury it.
+        // A wait that fails is a fence that did not signal, which `sync` has said.
         let _ = self.finish();
     }
 }
 
 /// A device-local buffer of `padded` elements of one class.
 ///
-/// Device-local because the shader reads and writes it where the shader runs. A
-/// host-visible buffer would put every one of those accesses on the path between
-/// the CPU and the GPU, which is the cost this whole shape exists to avoid.
-///
-/// **The class is part of the record, not of the id.**  A [`ResidentId`] names a
-/// buffer and nothing else, so the width a buffer's elements were written at has
-/// to travel beside it or a fetch of a float buffer is a fetch at the integer
-/// width — the wrong numbers, not a failed shape.  It is the class the fragment
-/// declared, so it is the class the module's `ArrayStride` was emitted at
-/// ([`spirv::element_stride`]) and the two cannot disagree.
+/// # Invariant
+/// Device-local because the shader reads and writes it where the shader runs. The class is part of
+/// the record, not of the id: a [`ResidentId`] names a buffer and nothing else, so the width has to
+/// travel beside it — it is the class the fragment declared, the one the module's `ArrayStride` was
+/// emitted at.
 #[derive(Clone, Copy)]
 struct DeviceBuffer {
     handle: vk::Buffer,
@@ -1835,11 +1564,10 @@ impl DeviceBuffer {
 
 /// Returns device buffers to the context's pool unless the run handed them off.
 ///
-/// A run that fails after allocating buffers for its outputs would otherwise leak
-/// them with nothing left holding their addresses, and a run that succeeds has
-/// already moved its outputs out of here into the ids it hands back.  So this
-/// owns exactly the scratch buffers: host upload targets on every path, plus the
-/// outputs on the path that never completed.
+/// # Invariant
+/// It owns exactly the scratch buffers: host upload targets on every path, plus the outputs on a
+/// path that never completed — a failed run would otherwise leak them with nothing holding their
+/// addresses.
 struct ScratchGuard<'a> {
     context: &'a GpuContext,
     buffers: Vec<DeviceBuffer>,
@@ -1855,30 +1583,26 @@ impl Drop for ScratchGuard<'_> {
 
 /// Mapped host memory every upload and download is staged through.
 ///
-/// One per **slot**, reused and grown: a slot's staging is dead the moment its
-/// fence signals, so a fresh mapping per submission would put an allocation and
-/// a `map_memory` on the critical path of every dispatch. Per slot rather than
-/// per context because "dead the moment its fence signals" is no longer the
-/// whole rule — the device may be reading *another* slot's staging right now,
-/// and one shared mapping would put this submission's bytes underneath it.
+/// # Invariant
+/// One per slot, reused and grown: a slot's staging is dead the moment its fence signals, and one
+/// shared mapping would put this submission's bytes underneath another slot's in-flight copy.
 struct Staging {
     handle: vk::Buffer,
     memory: vk::DeviceMemory,
-    /// The mapping's base address. Bytes rather than `i64`: this is a staging
-    /// byte range, and the alignment Vulkan hands back is what it is.
+    /// The mapping's base address: a staging byte range, not an element index.
     mapped: *mut u8,
     capacity: usize,
 }
 
-// SAFETY: `Staging` is `Send` because every dereference of `mapped` happens
-// while the pool's lock is held — a `Segment` carries that lock for its whole
-// life, and a slot is not reachable again until a fence wait has released it —
-// so no two threads can touch one mapping at once.  The memory itself is host
-// memory the device maps coherently, and the pointer names a fixed offset into
-// it, so moving the pointer between threads changes nothing about what it
-// addresses.  `Sync` is deliberately not implemented: the pointer makes a shared
-// `&Staging` unsound on its own, and `Mutex<Slots>` is `Sync` from
-// `Slot: Send` alone, which is all the context needs.
+// SAFETY: `Staging` is `Send`: every dereference of `mapped` happens while the
+// pool's lock is held.
+
+// A slot is not reachable until a fence wait releases it, so no two threads touch
+// one mapping.
+
+// The pointer names a fixed offset into host memory the device maps coherently.
+
+// `Sync` is not implemented: the pointer makes a shared `&Staging` unsound.
 unsafe impl Send for Staging {}
 
 impl Staging {
@@ -1893,9 +1617,8 @@ impl Staging {
 
     /// A pointer `offset` bytes into the mapping.
     fn at(&self, offset: vk::DeviceSize) -> *mut u8 {
-        // SAFETY: `offset` is added to the mapping's own base. Every caller
-        // bounds it by what `reserve` was told the run needs, and `at` is only
-        // reached after a `reserve` that covered it.
+        // SAFETY: `offset` is added to the mapping's own base, bounded by what
+        // `reserve` was told the run needs.
         unsafe { self.mapped.add(offset as usize) }
     }
 
@@ -1969,15 +1692,12 @@ impl Staging {
     }
 }
 
-/// A host-visible, host-coherent **and host-cached** memory type, or a refusal.
+/// A host-visible, coherent and cached memory type, or a refusal.
 ///
-/// `HOST_CACHED` is required here rather than preferred, and the reason is
-/// measured rather than theoretical: on a discrete GPU the uncached
-/// host-visible type is system RAM reached over PCIe with no cache behind it, so
-/// every host touch on staging costs a round trip.  That is a *correct* buffer
-/// and a ruinously slow one, and picking it silently would leave this backend
-/// reporting success while losing to the CPU it exists to beat — so a device
-/// without cached host memory is refused by name instead.
+/// # Invariant
+/// `HOST_CACHED` is required rather than preferred: on a discrete GPU the uncached type is system
+/// RAM over PCIe, so every host touch costs a round trip — a correct and ruinously slow buffer. A
+/// device without cached host memory is refused by name.
 fn cached_memory_type(
     instance: &ash::Instance,
     physical: vk::PhysicalDevice,
@@ -2009,27 +1729,11 @@ fn cached_memory_type(
 
 /// One submission's claim on a pool slot, and the recording going into it.
 ///
-/// The claim is the pool's lock, held for as long as this value lives. That is
-/// what makes "two threads never record into one command buffer" a property the
-/// borrow checker sees rather than a property the comments promise: a second
-/// thread wanting the same slot cannot get past [`GpuContext::acquire`] until
-/// this one is gone.
-///
-/// The three submit methods are the same two-step decision spelled three ways,
-/// because the interesting difference is not what they record but **what they
-/// leave the caller holding**:
-///
-/// - [`Self::submit_and_wait`] records, submits, waits, and gives the slot back.
-///   This is a run and a `run_chain`: the device is the only thing that matters
-///   and the host wants its answer before it does anything else.
-/// - [`Self::submit`] records and submits, and **keeps the slot claimed** while
-///   handing back a [`Token`]. This is the only path that leaves the device
-///   behind the host, and the token is what says which submission is still out.
-/// - [`Self::submit_and_read_back`] does the download's own read of the staging
-///   while the claim is still held. It cannot be written as `submit` plus
-///   [`GpuContext::sync`] followed by a read, because `sync` gives the slot away
-///   and the next acquisition of it would be free to overwrite the very bytes
-///   being read.
+/// # Invariant
+/// The claim is the pool's lock, held as long as this value lives, which makes "two threads never
+/// record into one command buffer" a property the borrow checker sees. The three submit methods
+/// differ in what they leave the caller holding: `submit_and_wait` gives the slot back, `submit`
+/// keeps it claimed, and `submit_and_read_back` reads the staging while the claim is held.
 struct Segment<'a> {
     context: &'a GpuContext,
     /// The pool lock, held for this value's whole life.
@@ -2037,9 +1741,9 @@ struct Segment<'a> {
     index: usize,
     /// Whether a submission on this slot may still be running.
     ///
-    /// Set by [`Self::submit`] on the way out and cleared only by a wait that has
-    /// confirmed the fence, so "nothing is in flight" is a fact about the device
-    /// and never an assumption about the host.
+    /// # Invariant
+    /// Cleared only by a wait that confirmed the fence, so "nothing is in flight" is a fact about
+    /// the device.
     in_flight: bool,
 }
 
@@ -2061,10 +1765,9 @@ impl Segment<'_> {
 
     /// Guarantee this slot has `bytes` of staging, reallocating only if smaller.
     ///
-    /// Reallocation unmaps the old memory, so this is only safe while nothing is
-    /// reading it. The claim is what guarantees that: the slot was claimed in
-    /// `acquire`, which waited out any submission the previous holder left in
-    /// flight.
+    /// # Invariant
+    /// Reallocation unmaps the old memory, so it is only safe while nothing reads it — which the
+    /// claim guarantees, since `acquire` waited out the previous holder's submission.
     fn reserve(&mut self, context: &GpuContext, bytes: u64) -> Result<(), RunError> {
         self.slots.entries[self.index]
             .staging
@@ -2089,33 +1792,28 @@ impl Segment<'_> {
 
     /// Close the recording and hand it to the queue, without waiting.
     ///
-    /// Takes `&mut self` rather than consuming the segment, so a caller that
-    /// still needs the slot afterwards — to wait on it, or to read the staging it
-    /// just filled — can have both. What it cannot do is promise the device is
-    /// done; that is [`GpuContext::wait_on`] and nothing else.
+    /// # Invariant
+    /// Takes `&mut self` rather than consuming the segment, so a caller that still needs the slot —
+    /// to wait on it or read its staging — can have both. Promising the device is done is
+    /// [`GpuContext::wait_on`]'s job.
     fn hand_to_queue(&mut self) -> Result<(), RunError> {
         self.context.end_and_submit(self.slot())?;
         self.in_flight = true;
         Ok(())
     }
 
-    /// Close the recording, hand it to the queue, and **do not wait**.
+    /// Close the recording, hand it to the queue, and do not wait.
     ///
-    /// The slot stays claimed, so a second acquisition takes a different one and
-    /// the host is free for as long as the device takes.  Waiting is
-    /// [`GpuContext::sync`]'s job, and it is a separate call on purpose: the gap
-    /// between the two is the entire opportunity the overlapping strategy has,
-    /// and an `if wait` parameter would be a way to forget it exists.
+    /// # Invariant
+    /// The slot stays claimed, so a second acquisition takes a different one and the host is free
+    /// for as long as the device takes. Waiting is [`GpuContext::sync`]'s job, a separate call on
+    /// purpose: that gap is the whole opportunity the overlapping strategy has.
     fn submit(mut self) -> Result<Token, RunError> {
         self.hand_to_queue()?;
         Ok(Token(self.index as u32))
     }
 
     /// Record, submit, wait, and release the slot.
-    ///
-    /// Literally [`Self::submit`] then [`GpuContext::sync`], which is the shape
-    /// every non-overlapping path has: one submission, waited for before the
-    /// call returns.
     fn submit_and_wait(self) -> Result<(), RunError> {
         // Read before the move: `submit` consumes the segment, and the context
         // reference is what `sync` needs afterwards.
@@ -2126,17 +1824,11 @@ impl Segment<'_> {
 
     /// Submit, wait, and take `count` elements of this slot's staging with us.
     ///
-    /// The read is inside the claim on purpose. This cannot be written as
-    /// `submit` then [`GpuContext::sync`] followed by a read, because `sync` gives
-    /// the slot away and the next acquisition of it would be free to resize or
-    /// rewrite the very mapping being copied out of — which returns the *wrong
-    /// numbers* rather than failing, so it has to be structurally impossible
-    /// rather than merely discouraged.
-    ///
-    /// `count` is a count of **elements**, so the byte range read is `count * 4`
-    /// for a float buffer and `count * 8` for an integer one: the copy above moved
-    /// exactly that many bytes, and reading a word per element here would read the
-    /// bytes of the two elements after this one.
+    /// # Invariant
+    /// The read is inside the claim on purpose: written as `submit`, `sync`, then a read, the next
+    /// acquisition could rewrite the very mapping being copied out of — the wrong numbers rather
+    /// than a failure. `count` is elements, so the byte range is `count * 4` for a float buffer and
+    /// `count * 8` for an integer one.
     fn submit_and_read_back(
         mut self,
         count: usize,
@@ -2144,15 +1836,10 @@ impl Segment<'_> {
     ) -> Result<ScalarData, RunError> {
         self.hand_to_queue()?;
         self.context.wait_on(self.slot())?;
-        // The fence has signalled, so nothing is in flight and the claim can go
-        // back when this value drops. It is deliberately **not** released here:
-        // the read below still reads this slot's memory.
+        // The fence has signalled; the claim goes back on drop, not here.
         self.in_flight = false;
-        // SAFETY: the slot was reserved for at least this many bytes and mapped
-        // before the submit, the wait above is the one that proves the copy
-        // filling it has finished, and the copy's own barrier made the write
-        // host-visible. The claim is still held, so no other thread can be
-        // writing this mapping.
+        // SAFETY: the slot was reserved and mapped before the submit, and the wait
+        // above proves the copy finished.
         let data =
             unsafe { std::slice::from_raw_parts(self.staging().at(0), count * class.byte_width()) };
         Ok(match class {
@@ -2175,9 +1862,6 @@ impl Segment<'_> {
 impl Drop for Segment<'_> {
     fn drop(&mut self) {
         // Only a path that neither submitted nor waited gives the slot back here.
-        // A segment that submitted leaves the claim alone: the submission may
-        // still be running, and the next acquisition of this slot waits its
-        // fence — which is exactly what `GpuContext::acquire` is for.
         if !self.in_flight {
             self.slots.entries[self.index].claimed = false;
         }
@@ -2185,12 +1869,12 @@ impl Drop for Segment<'_> {
 }
 
 impl Slot {
-    /// A command buffer, a fence, a descriptor pool and an unmapped staging
-    /// buffer, all of them this submission's own.
+    /// A command buffer, a fence, a descriptor pool and a staging buffer, all this
+    /// submission's own.
     ///
-    /// The fence is created unsignalled and reset before every use, so a wait
-    /// always waits on *this* slot's last submission and never on a previous
-    /// one's.
+    /// # Invariant
+    /// The fence is created unsignalled and reset before every use, so a wait always waits on this
+    /// slot's last submission.
     fn new(device: &ash::Device, family: u32) -> Result<Self, RunError> {
         let command_pool = check("command pool", unsafe {
             device.create_command_pool(
@@ -2257,14 +1941,12 @@ impl Slot {
 
     /// Release every device object this slot owns.
     ///
-    /// **Only safe when nothing is in flight on it.** A command buffer, a fence
-    /// and a mapped buffer all destroyed under a running submission is a
-    /// use-after-free, and `GpuContext::drop` relies on the invariant that every
-    /// path that submits also waits before returning.
+    /// # Invariant
+    /// Only safe when nothing is in flight: destroying these under a running submission is a
+    /// use-after-free, and `GpuContext::drop` relies on every submitting path waiting first.
     fn destroy(&mut self, device: &ash::Device) {
-        // The staging needs the context, not the device, to unmap; when it has
-        // never been reserved it holds nothing and there is nothing to unmap, so
-        // the null memory is skipped rather than passed to `unmap_memory`.
+        // The staging needs the context, not the device, to unmap; a never-reserved
+        // one holds nothing.
         if self.staging.capacity > 0 {
             unsafe {
                 device.unmap_memory(self.staging.memory);
@@ -2298,10 +1980,9 @@ fn device_name(properties: &vk::PhysicalDeviceProperties) -> String {
 
 /// A memory type index carrying all of `wanted`, or `None` when the device has none.
 ///
-/// No fallback to a type without the flags.  A buffer in memory the host cannot
-/// reach cannot be read back, and quietly choosing one would produce empty
-/// results rather than an error, so a missing flag is a refusal that names the
-/// flags it wanted.
+/// # Invariant
+/// No fallback to a type without the flags: memory the host cannot reach cannot be read back, so a
+/// missing flag is a refusal that names what it wanted rather than empty results.
 fn memory_type(
     instance: &ash::Instance,
     physical: vk::PhysicalDevice,
