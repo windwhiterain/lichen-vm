@@ -17,8 +17,9 @@ use lichen_highlevel::shape::{
     field_list, field_names, field_type, low_type_of_slot,
 };
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelRoles, KernelShape,
-    ResidentId, ScalarClass, ScalarData, ScalarLeaf, fragment_digest,
+    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelMark, KernelRoles,
+    KernelShape, MarkField, ResidentId, ScalarClass, ScalarData, ScalarLeaf, ValueId,
+    fragment_digest,
 };
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
@@ -145,6 +146,7 @@ mod kernel_intern_tests {
             output_classes: Vec::new(),
             result_classes: vec![ScalarClass::Int],
             int_width: IntWidth::I64,
+            marks: Vec::new(),
         }
     }
 
@@ -1695,6 +1697,104 @@ where
     Some((names, shape))
 }
 
+/// The mark a labelled value carries, read from the label slot the checker published.
+///
+/// # Invariant
+/// The slot is the annotation value's `[value, type]` pair, and the mark's payload is that
+/// pair's value: **one text** (published as the payload's unnamed field) or a **record** of
+/// named scalar fields. Any other shape is refused **by name**: a fragment that published a
+/// half-read mark would hand its consumer a claim the body does not carry.
+fn mark_of<P>(module: &Module<P>, value: ValueId, slot: NodeId) -> Result<KernelMark, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    // SAFETY: `slot` is a live node of `module`; nothing here releases a block.
+    let pair = unsafe { module.array_items(slot) }
+        .ok_or_else(|| "a mark's slot is not a [value, type] pair".to_string())?;
+    let payload = pair
+        .first()
+        .map(|item| item.node)
+        .ok_or_else(|| "a mark's slot holds no payload".to_string())?;
+    if let Some(text) = text_of_value(module, payload) {
+        return Ok(KernelMark {
+            value,
+            payload: vec![MarkField { name: None, text }],
+        });
+    }
+    let names = pair
+        .get(PAIR_TYPE_SLOT)
+        .and_then(|item| field_names(module, TypeRef::Term(item.node)))
+        .unwrap_or_default();
+    // SAFETY: `payload` is a field of the payload pair, a live node of `module`.
+    let Some(LowValue::Array(fields)) = module
+        .node_value(payload)
+        .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+    else {
+        return Err(
+            "a mark's payload is not a text, and a mark names what its value means: spell \
+             it as a string, or as a struct of scalar fields"
+                .to_string(),
+        );
+    };
+    let mut read = Vec::with_capacity(unsafe { fields.items() }.len());
+    // SAFETY: `fields` is the payload value read from the live node `payload`.
+    for (at, item) in unsafe { fields.items() }.iter().enumerate() {
+        let text = mark_field_text(module, item.node)?;
+        let name = names
+            .get(at)
+            .copied()
+            .flatten()
+            .ok_or_else(|| format!("a mark's payload field {at} has no name"))?;
+        read.push(MarkField {
+            name: Some(name.to_string()),
+            text,
+        });
+    }
+    Ok(KernelMark {
+        value,
+        payload: read,
+    })
+}
+
+/// One payload field's text, or the refusal that names what the field is.
+///
+/// # Invariant
+/// A mark's payload crosses into the fragment as text, so only the scalars a fragment can
+/// spell are read; an aggregate is refused rather than flattened into a form its reader
+/// would have to guess the shape of.
+fn mark_field_text<P>(module: &Module<P>, node: AnyNodeId) -> Result<String, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    text_of_value(module, node).ok_or_else(|| {
+        "a mark's payload field is not a scalar, and a mark crosses into the fragment as \
+         text: spell it as a string, an Int or a Float"
+            .to_string()
+    })
+}
+
+/// The text a scalar value holds, or `None` when it is not one.
+fn text_of_value<P>(module: &Module<P>, node: AnyNodeId) -> Option<String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    match module
+        .node_value(node)
+        .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+    {
+        Some(LowValue::Str(text)) => Some(text.to_string()),
+        Some(LowValue::USize(number)) => Some(number.to_string()),
+        Some(LowValue::Float(number)) => Some(number.to_string()),
+        _ => None,
+    }
+}
+
 /// The class of every scalar leaf of a parallel parameter, in signature order.
 ///
 /// # Invariant
@@ -1972,10 +2072,10 @@ where
 ///
 /// # Invariant
 /// A kernel must be explicitly specialized: this runs before any apply, so the
-/// parameter's type is where the language states the class — a body whose class
-/// is left open is refused by name ([`UNDECIDED_DOMAIN`]). The domain is seeded,
-/// passed, then read back, and the seed is a low-type write, never a type cell.
-fn compile_fragment<P>(
+/// parameter's type is where the language states the class — a body whose class is
+/// left open is refused by name ([`UNDECIDED_DOMAIN`]). It is public because a host
+/// reading a *kernel value* has no other way to the fragment.
+pub fn compile_fragment<P>(
     module: &mut Module<P>,
     function: AnyFunctionId,
 ) -> Result<KernelFragment, String>
@@ -2075,7 +2175,18 @@ where
         output_classes: Vec::new(),
         result_classes,
         int_width: IntWidth::I64,
+        marks: std::mem::take(&mut tally.marks),
     })
+}
+
+/// The fragment a registered kernel names, or `None` when no kernel is registered under it.
+///
+/// # Invariant
+/// The registry is the compiler's own and the fragment is immutable, so this is the read a
+/// host that holds a kernel *value* — not the artifact `jit` built from it — needs to reach
+/// what the kernel compiled to. See docs/notes/graph-fusion.md §3.
+pub fn kernel_fragment(id: KernelId) -> Option<KernelFragment> {
+    kernels().lock().unwrap().get(&id).cloned()
 }
 
 /// The body's value resolved into the leaves a wasm body must leave on the stack.
@@ -2131,9 +2242,9 @@ where
 /// # Invariant
 /// The every-ordinal-written rule holds by construction: the lowered body is
 /// straight-line, the only conditional in the subset is the emitter's 2-element
-/// scalar `select`, and a `select` can skip only a *value* — a write reached
-/// inside one is refused by name, so write `k` runs on every index.
-fn compile_parallel_fragment<P>(
+/// scalar `select`, and a `select` can skip only a *value* — a write reached inside
+/// one is refused by name. Public for the same reason [`compile_fragment`] is.
+pub fn compile_parallel_fragment<P>(
     module: &mut Module<P>,
     function: AnyFunctionId,
 ) -> Result<KernelFragment, String>
@@ -2266,6 +2377,7 @@ where
         // The dummy scalar the write-only body leaves, in the first write's class.
         result_classes: vec![class],
         int_width: IntWidth::I64,
+        marks: std::mem::take(&mut tally.marks),
     })
 }
 
@@ -2690,6 +2802,8 @@ struct Positions {
     /// whose class no node carries, because the host binds the buffer. `Int` by
     /// default until the caller says otherwise.
     element_class: Option<ScalarClass>,
+    /// The marks the body's labelled expressions published, in lowering order.
+    marks: Vec<KernelMark>,
 }
 
 impl Positions {
@@ -5818,6 +5932,7 @@ mod parallel_launch_tests {
             output_classes: vec![ScalarClass::Int, ScalarClass::Int],
             result_classes: vec![ScalarClass::Int],
             int_width: IntWidth::I64,
+            marks: Vec::new(),
         }
     }
 

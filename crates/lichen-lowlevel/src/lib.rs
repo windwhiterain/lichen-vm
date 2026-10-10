@@ -889,6 +889,14 @@ pub struct Module<P: Program> {
     pub extension_diagnostics: Vec<ExtensionDiagnostic>,
     /// Program-global extension state — see [`Program::GlobalExt`].
     pub global_ext: P::GlobalExt,
+    /// The **label slot** each labelled value carries, keyed by the value node.
+    ///
+    /// # Invariant
+    /// A value's `[value, type, attrs…]` pair is not reachable from the value: the checker
+    /// stores the pair's element 0 as the value's node, so no graph edge points at the pair.
+    /// The attribute a value carries is published here instead, where the checker resolved
+    /// it, and a reader asks through [`Self::label_of`].
+    labels: HashMap<NodeId, NodeId>,
     apply_total: usize,
     /// The depth [`Module::add_node`] stamps on the nodes it creates, or zero outside an apply.
     stamp_depth: u32,

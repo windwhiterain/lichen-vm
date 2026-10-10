@@ -56,6 +56,7 @@ fn fragment(body: Vec<FlatOp>) -> KernelFragment {
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
+        marks: Vec::new(),
     }
 }
 
@@ -839,6 +840,7 @@ fn adds_a_runtime_scalar() -> KernelFragment {
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
+        marks: Vec::new(),
     }
 }
 
@@ -877,6 +879,7 @@ fn scales_by_a_runtime_float() -> KernelFragment {
         output_classes: vec![ScalarClass::Float],
         result_classes: vec![ScalarClass::Float; 1],
         int_width: IntWidth::I64,
+        marks: Vec::new(),
     }
 }
 

@@ -1,0 +1,13 @@
+[package]
+name = "lichen-fusion-bridge"
+version.workspace = true
+edition.workspace = true
+
+# This crate is the seam docs/notes/graph-fusion.md §6 says is missing: it is the side that
+# pays for the fragment IR, so neither core crate does.  `lichen-fusion` stays dependency-free
+# (its own manifest states why), and `lichen-kernel-ir` stays a backend contract that knows
+# nothing about symbolic rewriting; the bridge names both, and a host that reads a claim names
+# the bridge.
+[dependencies]
+lichen-fusion.workspace = true
+lichen-kernel-ir.workspace = true

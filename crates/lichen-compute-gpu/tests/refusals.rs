@@ -31,6 +31,7 @@ fn unary_callee(tail: Vec<FlatOp>) -> KernelFragment {
         output_classes: Vec::new(),
         result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
+        marks: Vec::new(),
     }
 }
 
@@ -94,6 +95,7 @@ fn calls_kernel_7() -> KernelFragment {
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
+        marks: Vec::new(),
     }
 }
 
@@ -213,6 +215,7 @@ fn a_write_position_counts_outputs_not_the_combined_buffer_list() {
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
+        marks: Vec::new(),
     };
     let binding = Binding {
         inputs: 2,
@@ -279,6 +282,7 @@ fn an_operator_with_too_few_operands_is_refused_by_arity() {
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
+        marks: Vec::new(),
     };
     let refusal =
         spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
@@ -379,6 +383,7 @@ fn a_write_inside_a_loop_is_refused_by_name() {
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
+        marks: Vec::new(),
     };
     fragment
         .body

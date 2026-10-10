@@ -11,8 +11,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 mod body;
+mod marks;
 
 pub use body::{BasicBlock, Br, FlatOp, KernelBody, Terminator, ValueDef, ValueId, from_flat};
+pub use marks::{KernelMark, MarkField};
 
 /// What a value is: an `Int`, a `Float`, or the zero-width [`Self::State`] a write leaves.
 ///
@@ -679,6 +681,13 @@ pub struct KernelFragment {
     pub result_classes: Vec<ScalarClass>,
     /// The integer width the body was lowered to mean.
     pub int_width: IntWidth,
+    /// The marks expressions in the body carried, in the order the walk published them.
+    ///
+    /// # Invariant
+    /// **Metadata, and additive**: no backend reads it, because a mark says what a value
+    /// *means* rather than what the kernel computes. A consumer that needs the marks reads
+    /// them itself and refuses by name when the role it needs is not there.
+    pub marks: Vec<KernelMark>,
 }
 
 impl KernelFragment {
@@ -709,9 +718,9 @@ impl KernelFragment {
 ///
 /// # Invariant
 /// Every field is hashed, and a field left out is a way for two fragments that differ in it
-/// to share one identity — a cache keyed on that identity then serves one kernel's compiled
-/// form for another's, silently. `results` is the sharpest case: it types the result list,
-/// so a two-result and a three-result fragment must not collapse.
+/// to share one identity — a cache then serves one kernel's compiled form for another's,
+/// silently. `marks` is hashed for the same reason: two fragments differing only in what
+/// their values mean are two artifacts.
 pub fn fragment_digest(fragment: &KernelFragment) -> u64 {
     use std::hash::{Hash as _, Hasher as _};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -724,5 +733,6 @@ pub fn fragment_digest(fragment: &KernelFragment) -> u64 {
     format!("{:?}", fragment.output_classes).hash(&mut hasher);
     fragment.result_classes.hash(&mut hasher);
     format!("{:?}", fragment.int_width).hash(&mut hasher);
+    format!("{:?}", fragment.marks).hash(&mut hasher);
     hasher.finish()
 }

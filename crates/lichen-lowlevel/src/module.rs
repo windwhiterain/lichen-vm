@@ -37,6 +37,7 @@ impl<P: Program> Module<P> {
             apply_error_nodes: HashSet::new(),
             extension_diagnostics: Vec::new(),
             global_ext: P::GlobalExt::default(),
+            labels: HashMap::new(),
             apply_total: 0,
             stamp_depth: 0,
             deep_depth: 0,
@@ -125,6 +126,38 @@ impl<P: Program> Module<P> {
     /// node, `d + 1` for a clone made at depth `d`.
     pub fn node_depth(&self, node: NodeId) -> u32 {
         self.nodes[node].depth
+    }
+
+    /// Record that the value `value` carries the label whose slot pair is `slot`.
+    ///
+    /// # Invariant
+    /// One slot per value: a later label over the same value **replaces** the earlier one,
+    /// which is what the attribute layer does to a label (`? b` over `? a` keeps `b`), and
+    /// a checker compiles an annotation's value before the annotation wrapping it.
+    pub fn stamp_label(&mut self, value: NodeId, slot: NodeId) {
+        self.labels.insert(value, slot);
+    }
+
+    /// The label slot the value `value` carries, or `None` when it carries none.
+    ///
+    /// # Invariant
+    /// The value's **class** is asked as well as the node: a value is committed to its
+    /// class's representative, and a reader holding one member of a class must see the
+    /// label another member was stamped with — a per-call clone carries its template's.
+    pub fn label_of(&self, value: NodeId) -> Option<NodeId> {
+        self.labels
+            .get(&value)
+            .or_else(|| self.labels.get(&self.class_root(value)))
+            .copied()
+    }
+
+    /// Every published label slot.
+    ///
+    /// # Invariant
+    /// A list rather than an iterator, because the caller that wants them computed needs
+    /// `&mut self` for each: it takes the list, then deep-evaluates each slot.
+    pub fn label_slots(&self) -> Vec<NodeId> {
+        self.labels.values().copied().collect()
     }
 
     /// The block `node` is homed in, and the arena its payloads live in.

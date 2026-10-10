@@ -304,6 +304,11 @@ where
         if target.is_some() {
             self.block = enclosing;
         }
+        // A labelled value publishes its mark here, where its value is known.
+        if let Some(slot) = self.module.label_of(node) {
+            let mark = super::mark_of(self.module, value, slot)?;
+            self.tally.marks.push(mark);
+        }
         self.values.insert(node, value);
         Ok(value)
     }

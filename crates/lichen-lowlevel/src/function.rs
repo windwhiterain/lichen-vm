@@ -362,9 +362,14 @@ impl<P: Program> Module<P> {
         self.nodes[clone].runned =
             mapped.is_some_and(|value| !self.answer_elements_are_undecided(value));
         self.nodes[clone].operation = operation;
-        // The clone is a singleton class here, so the slot write *is* the class write.
+        // A clone is a singleton class here, so the slot write *is* the class write.
         if let Some(low_shape) = low_shape {
             self.nodes[clone].low_shape = Some(low_shape);
+        }
+        // A label travels with the value it is stamped on: the clone carries the same
+        // slot, which is only ever read.
+        if let Some(slot) = self.label_of(node) {
+            self.stamp_label(clone, slot);
         }
         clone
     }

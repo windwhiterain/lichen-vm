@@ -48,6 +48,7 @@ fn adds() -> KernelFragment {
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int],
         int_width: IntWidth::I64,
+        marks: Vec::new(),
     }
 }
 
@@ -89,6 +90,7 @@ fn sums() -> KernelFragment {
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int],
         int_width: IntWidth::I64,
+        marks: Vec::new(),
     }
 }
 
@@ -122,6 +124,7 @@ fn with_a_runtime_scalar() -> KernelFragment {
         output_classes: vec![ScalarClass::Int],
         result_classes: vec![ScalarClass::Int],
         int_width: IntWidth::I64,
+        marks: Vec::new(),
     }
 }
 
