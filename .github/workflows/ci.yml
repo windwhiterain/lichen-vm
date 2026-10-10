@@ -25,6 +25,17 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # The comment policy is `comments-test.toml`, which states the rule and the
+      # numbers in one place. The checker's revision is pinned rather than tracking
+      # the branch, so that a new push cannot turn a green branch red without a
+      # change here.
+      - name: Install the comment checker
+        run: >-
+          cargo install --git https://github.com/windwhiterain/comments-test.git
+          --rev d8f6d33649fd1554a14dc644c690c5f69f525d4a
+          comments-check --locked
+      - name: Check comment compliance
+        run: comments-check --config comments-test.toml
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Lint
@@ -36,19 +47,4 @@ jobs:
           cargo fmt --manifest-path tree-sitter-lichen/Cargo.toml --all -- --check
           cargo clippy --manifest-path tree-sitter-lichen/Cargo.toml --workspace --all-targets -- -D warnings
           cargo test --manifest-path tree-sitter-lichen/Cargo.toml --workspace
-      # The comment policy is `comments-test.toml`, which states the rule and the
-      # numbers in one place. The revision is pinned rather than tracking the
-      # branch, so that a new push cannot turn a green branch red without a
-      # change here.
-      #
-      # These run last, not first: the tree does not yet satisfy the policy, so
-      # checking comments first would hide the formatting, lint and test signal for
-      # every crate until the tree is remediated. Move these above `Check
-      # formatting` once the last violation is fixed.
-      - name: Install the comment checker
-        run: >-
-          cargo install --git https://github.com/windwhiterain/comments-test.git
-          --rev d8f6d33649fd1554a14dc644c690c5f69f525d4a
-          comments-check --locked
-      - name: Check comment compliance
-        run: comments-check --config comments-test.toml
+
