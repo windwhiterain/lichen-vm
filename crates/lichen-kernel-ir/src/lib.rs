@@ -104,6 +104,22 @@ impl ScalarClass {
             ScalarClass::Float => 4,
         }
     }
+
+    /// A dense index for this class, so a backend can key a per-class table on it.
+    ///
+    /// **The two are in step with the two variants, which is the whole reason this
+    /// exists.** A module that needs one element type per class — an SPIR-V
+    /// storage buffer, whose `ArrayStride` is the class's `byte_width()` — is
+    /// holding a fixed-size table of them, and the table's length has to be the
+    /// number of classes rather than something restated beside it.
+    pub const ALL: [ScalarClass; 2] = [ScalarClass::Int, ScalarClass::Float];
+
+    pub fn index(self) -> usize {
+        match self {
+            ScalarClass::Int => 0,
+            ScalarClass::Float => 1,
+        }
+    }
 }
 
 /// The elements of a buffer a backend has handed back, with the class they are

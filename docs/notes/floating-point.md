@@ -652,34 +652,56 @@ can be the quietly permissive one. See
 [kernel-class-crossing-fixes](kernel-class-crossing-fixes.md) for the three
 causes this took, and [operators](operators.md) §7.
 
-**One "one class" assumption is left, and it is about buffers rather than
+**One "one class" assumption was left, and it was about buffers rather than
 values.** A *value* may be any class, and crossing is representable in every
-module, but **a module still declares one storage-buffer element type and one
-`ArrayStride`**: `spirv::module_class` folds `input_classes` and
+module, but a module declared **one** storage-buffer element type and **one**
+`ArrayStride`: `spirv::module_class` folded `input_classes` and
 `output_classes` into a single class, and `Ids`' `elem`/`array`/`buffer_struct`
-and the one `ARRAY_STRIDE` derive from it. So a kernel that reads an `Int`
-buffer and writes a `Float` buffer is refused by `MixedClasses` even though
-**every class it needs is already carried** — `input_classes` and
-`output_classes` are per-buffer vectors, and nothing about the IR forbids the
+and the one `ARRAY_STRIDE` derived from it. So a kernel that reads an `Int`
+buffer and writes a `Float` buffer was refused by `MixedElementClasses` even
+though **every class it needs was already carried** — `input_classes` and
+`output_classes` are per-buffer vectors, and nothing about the IR forbade the
 mixture.
 
-The work is therefore a **layout** change and not a typing one, which is why
-it is its own item:
+**The module side is done, and the host side is refused rather than wrong.**
+`Ids` now holds a `BufferTypes` chain per class a fragment actually uses
+(`ScalarClass::index` is the key, and `ScalarClass::ALL` is the length), and the
+chain is read **per buffer** in the four places that were one module-wide answer:
 
-| today                        | what a mixed-buffer module needs                    |
-|------------------------------|----------------------------------------------------|
-| one `elem` struct            | one per class present, `{ Int }` and `{ Float }`     |
-| one `array` + one `ArrayStride` | one per class, the stride being that class's `byte_width()` |
-| one `buffer_struct`          | one per class, each `Block`-decorated               |
-| one `ptr_in`/`ptr_array`/`ptr_elem` | one set per class                               |
+| was                        | now                                                    |
+|----------------------------|--------------------------------------------------------|
+| one `elem`/`array`/`buffer_struct`/`ptr_array`/`ptr_elem` | one chain per class in use, allocated five ids each |
+| one `ArrayStride`          | one per class, and it is `that class`'s `byte_width()` |
 | a buffer variable typed with the module's class | typed with **its own** buffer's class, from `input_classes[k]` / `output_classes[k]` |
-| `dispatch.rs` derives one stride and one padding from `module_class` | derives each buffer's from **its own** class |
+| `Buffer{Read,Write}Call` read and stored `ids.class` | read and store `buffer_class_of(slot)`, and the access chain goes through that class's `ptr_elem` |
 
-`needs_int64` is the other half: it is `module_class(...) == Int` today, and
-becomes "does this fragment use a 64-bit integer anywhere", which a mixed
-fragment still can. The same-operation refusal (`x + 0.5` with no crossing) is
-**kept** — it is a different fact, it is already shared between both backends,
-and no layout change touches it.
+`module_class` no longer refuses: it is now the module's **arithmetic** class,
+and the first buffer class wins, so a fragment with no arithmetic of its own is
+built for the class of the first buffer it binds. `needs_int64` stopped asking
+"is this an integer module" and asks **whether a 64-bit integer is used
+anywhere** — an `Int` buffer now declares the `Int64` chain even when the
+arithmetic default is `Float`. `ScalarClass::index` and `ScalarClass::ALL` exist
+so that table's length is the number of classes rather than something restated
+beside it.
+
+**What is not done is the host staging, and it is refused rather than
+silently wrong.** A dispatch reserves one upload block per host input at
+`count ×` *the fragment's* `byte_width()` and offsets the next block by that
+same width, so a mixed fragment would upload eight bytes per `f32` element and
+read back a wrong number. `spirv::buffers_are_uniform` is the question, and
+both dispatch entry points answer `RunError::MixedBufferClasses` when it says
+no. **The refusal is in the dispatch path on purpose** — the emitter must keep
+accepting a mixed fragment, because that is the half that is finished and is
+what `spirv-val` checks. The follow-up is per-buffer `allocate`, per-buffer
+`reserve` and per-upload `offset`, all in `stage_run`.
+
+Straight-line output is no longer byte-identical: the id numbering moved
+(`fn_ty` and `ptr_in` follow the per-class chains), which is arbitrary but real.
+`spirv-val` accepts every module the suite emits.
+
+The same-operation refusal (`x + 0.5` with no crossing) is **kept** — it is a
+different fact, it is already shared between both backends, and no layout change
+touches it.
 
 **A crossing is always representable on both targets, and the width is what it
 costs.** Both element types are declared in every SPIR-V module, so only the

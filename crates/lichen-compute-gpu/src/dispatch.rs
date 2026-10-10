@@ -109,6 +109,19 @@ pub enum RunError {
     /// the whole leaf list (`docs/notes/compute-runtime-scalars.md` §3).  A leaf
     /// the body never reads is *not* this: nothing is missing from it.
     ScalarsNotPushed { leaves: usize },
+    /// A fragment whose buffers are **not all one class**.
+    ///
+    /// **The emitter already lowers this**, and `spirv-val` accepts the module: an
+    /// element type, an array stride, a block struct and a variable type are each
+    /// read off the buffer they belong to.  What is still one-per-fragment is the
+    /// **host staging** — an upload block is sized at `count ×` *the fragment's*
+    /// `byte_width()` and the next block is offset by that same width — so staging
+    /// a mixed fragment would upload eight bytes per `f32` element.
+    ///
+    /// Refused by name because that is a **silently wrong number**, not a slow
+    /// one.  The follow-up is per-buffer staging; see
+    /// [`spirv::buffers_are_uniform`].
+    MixedBufferClasses,
     /// A resident id this context is not holding — never issued, or already
     /// released.  Refused rather than read as empty: an id is a handle, and using
     /// a dead one means the host lost track of its own buffers, which reporting
@@ -168,6 +181,13 @@ impl fmt::Display for RunError {
                  previous one's result, and this fragment has {inputs} and {outputs}."
             ),
             RunError::Emit(refusal) => write!(f, "{refusal}"),
+            RunError::MixedBufferClasses => write!(
+                f,
+                "this fragment binds buffers of more than one class, and a dispatch still stages \
+                 one width per fragment — so it would upload eight bytes per f32 element and read \
+                 back a wrong number. The SPIR-V module itself is lowered and validated; what is \
+                 missing is per-buffer host staging."
+            ),
             RunError::ScalarsNotPushed { leaves } => write!(
                 f,
                 "this fragment's parameter declares {leaves} leaf/leaves (the launch extent, \
@@ -757,6 +777,9 @@ impl GpuContext {
             return Err(RunError::ScalarsNotPushed { leaves });
         }
         let class = spirv::module_class(fragment).map_err(RunError::Emit)?;
+        if !spirv::buffers_are_uniform(fragment) {
+            return Err(RunError::MixedBufferClasses);
+        }
         let element = class.byte_width() as vk::DeviceSize;
         let binding = Binding {
             inputs: inputs.len(),
@@ -765,12 +788,17 @@ impl GpuContext {
         for (index, slot) in inputs.iter().enumerate() {
             // Only a host slot can be too short; a resident one already holds what
             // an earlier run put there, and its length is that run's business.
+            //
+            // **The width is this buffer's own class**, so a fragment that reads an
+            // `Int` buffer and a `Float` one checks each against its own width
+            // rather than against one module-wide answer.
+            let width = spirv::buffer_class_of(fragment, index, class).byte_width();
             if let BufferSlot::Host(data) = slot
-                && data.len() < count * class.byte_width()
+                && data.len() < count * width
             {
                 return Err(RunError::InputShorterThanCount {
                     buffer: index,
-                    len: data.len() / class.byte_width(),
+                    len: data.len() / width,
                     count,
                 });
             }
@@ -936,6 +964,9 @@ impl GpuContext {
         // The class comes off the fragment, exactly as it does in `stage_run`, so
         // the bytes this chain stages are the bytes the emitted module reads.
         let class = spirv::module_class(fragment).map_err(RunError::Emit)?;
+        if !spirv::buffers_are_uniform(fragment) {
+            return Err(RunError::MixedBufferClasses);
+        }
         let element = class.byte_width();
         if input.len() < count * element {
             return Err(RunError::InputShorterThanCount {

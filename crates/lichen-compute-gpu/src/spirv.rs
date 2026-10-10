@@ -530,11 +530,35 @@ impl Literals {
     }
 }
 
+/// The storage-buffer type chain for **one** class: the element struct, the
+/// runtime array over it, the block struct that wraps the array, and the two
+/// pointers the body reaches through.
+///
+/// Vulkan requires a `StorageBuffer` variable to be typed as a struct, or an
+/// array of one — a bare runtime array is the older `Uniform` + `BufferBlock`
+/// style and is rejected (`VUID-StandaloneSpirv-Uniform-06807`) — and a runtime
+/// array may only be the final member of one, so the buffer takes two struct
+/// levels: the element struct, and this one holding the array.
+///
+/// `ptr_elem` is a pointer to one element *in the storage buffer storage class* —
+/// what an access chain produces, and what `OpLoad` reads and `OpStore` writes
+/// through. Its pointee is the class's own scalar, which is what makes a buffer's
+/// element type a fact of the buffer rather than of the module.
+#[derive(Clone, Copy)]
+struct BufferTypes {
+    elem: u32,
+    array: u32,
+    buffer_struct: u32,
+    ptr_array: u32,
+    ptr_elem: u32,
+}
+
 /// Every module-scope id, allocated before anything is emitted.
 struct Ids {
-    /// The class the module is built for, [`module_class`]'s answer. It decides
-    /// the scalar type, the buffer element type, the array stride, which
-    /// arithmetic opcodes a `Bin` reaches, and which capabilities are declared.
+    /// The class the module's *arithmetic* is built for, [`module_class`]'s
+    /// answer. It decides the default scalar type and which arithmetic opcodes a
+    /// `Bin` reaches — but **not** a buffer's element type, which is that
+    /// buffer's own class: see [`Self::chain_of`].
     class: ScalarClass,
     main: u32,
     label: u32,
@@ -562,27 +586,19 @@ struct Ids {
     /// module, where nothing is 64-bit — the type an element index has.
     uint: u32,
     v3uint: u32,
-    /// The single-member struct a storage buffer's element type must be.  Its
-    /// member is the module's scalar, which is where "does this buffer hold
-    /// floats" is decided: the module bakes the element type in, and a caller's
-    /// [`Binding`] has nowhere to say it.
+    /// The per-class storage-buffer type chain, keyed by [`ScalarClass::index`].
     ///
-    /// Vulkan requires a `StorageBuffer` variable to be typed as a struct, or an
-    /// array of one — a bare runtime array is the older `Uniform` + `BufferBlock`
-    /// style and is rejected (`VUID-StandaloneSpirv-Uniform-06807`).
-    elem: u32,
-    array: u32,
-    /// The struct that *wraps* the runtime array.  Vulkan requires a
-    /// `StorageBuffer` variable to be typed as a struct, and a runtime array may
-    /// only be the final member of one, so the buffer takes two struct levels:
-    /// the element struct, and this one holding the array.
-    buffer_struct: u32,
+    /// **One per class a fragment actually uses**, because the element type, the
+    /// array stride and the block struct are all a property of the *buffer's*
+    /// class rather than of the module: Vulkan binds a storage buffer against the
+    /// stride its own `ArrayStride` declares, so a module that read one `Int`
+    /// buffer and wrote one `Float` buffer needs both chains and a variable
+    /// typed with the chain of the buffer it names.
+    ///
+    /// An id nothing defines is legal — the id bound is an upper limit, not a
+    /// count — so only the classes a fragment uses are emitted.
+    buffer_types: [BufferTypes; ScalarClass::ALL.len()],
     ptr_in: u32,
-    ptr_array: u32,
-    /// A pointer to one element of a storage buffer, in the storage buffer
-    /// storage class — what an access chain produces, and what `OpLoad` reads
-    /// and `OpStore` writes through.
-    ptr_elem: u32,
     fn_ty: u32,
     /// The 32-bit `0` an access chain's member indices are built from, and the
     /// zero a float's *bit pattern* is compared against ([`as_condition`]) — 32
@@ -647,9 +663,9 @@ impl Ids {
         }
     }
 
-    /// The array stride, and so the bytes one buffer element occupies.
-    fn element_stride(&self) -> u32 {
-        element_stride(self.class)
+    /// The storage-buffer type chain for `class`.
+    fn chain_of(&self, class: ScalarClass) -> BufferTypes {
+        self.buffer_types[class.index()]
     }
 }
 
@@ -680,7 +696,7 @@ pub(crate) fn index_local(fragment: &KernelFragment) -> Option<u32> {
 }
 
 /// Every parameter leaf's class, in flattening order — the order
-/// [`KernelShape::flat_arity`] counts and `LocalGet` indexes in.
+/// [`KernelShape::flat_arity`] counts and the entry block's parameters are in.
 fn leaf_classes(shape: &KernelShape) -> Vec<ScalarClass> {
     match shape {
         KernelShape::Scalar(class) => vec![*class],
@@ -688,19 +704,56 @@ fn leaf_classes(shape: &KernelShape) -> Vec<ScalarClass> {
     }
 }
 
-/// Take `class` as the one class seen so far, or refuse.
-fn record(seen: &mut Option<ScalarClass>, class: ScalarClass) -> Result<(), SpirvRefusal> {
-    match *seen {
-        Some(previous) if previous != class => Err(SpirvRefusal::MixedElementClasses),
-        _ => {
-            *seen = Some(class);
-            Ok(())
-        }
-    }
+/// The class of **buffer `slot`** — inputs first, then outputs, which is the
+/// order a [`Binding`] and every `Buffer{Read,Write}Call` position use.
+///
+/// **This is what makes a module able to bind buffers of different classes.** A
+/// buffer's element type, array stride and block struct are that buffer's own
+/// facts, so each one is read from the fragment's per-buffer class lists rather
+/// than from a single module-wide answer; a fragment whose lists do not reach a
+/// slot falls back to [`module_class`], which is the class its parameters imply.
+///
+/// `pub(crate)` because the **dispatch path asks it too**: the bytes staged for a
+/// buffer are that buffer's class's `byte_width()`, and a fragment with two
+/// classes stages two widths. One question, asked by both sides, so a caller and
+/// the module it binds cannot disagree about how wide a buffer is.
+pub(crate) fn buffer_class_of(
+    fragment: &KernelFragment,
+    slot: usize,
+    fallback: ScalarClass,
+) -> ScalarClass {
+    fragment
+        .input_classes
+        .get(slot)
+        .or_else(|| {
+            fragment
+                .output_classes
+                .get(slot.checked_sub(fragment.inputs)?)
+        })
+        .copied()
+        .unwrap_or(fallback)
 }
 
-/// The class of the values a fragment's body computes — the class of the module
-/// [`compile`] builds for it.
+/// Every class a fragment's **buffers** hold, in [`ScalarClass::ALL`] order.
+///
+/// **The set the module declares a type chain for.** A class no buffer holds is
+/// not declared: an unused `OpTypeStruct` is legal but it would be a second copy
+/// of a rule nobody asked for, and a fragment that declares it has no way to say
+/// which of its chains a given binding means.
+fn buffer_classes(fragment: &KernelFragment, fallback: ScalarClass) -> Vec<ScalarClass> {
+    let used = |class: &ScalarClass| {
+        fragment.input_classes.contains(class) || fragment.output_classes.contains(class)
+    };
+    ScalarClass::ALL
+        .into_iter()
+        .filter(|class| {
+            used(class) || (*class == fallback && fragment.inputs + fragment.outputs == 0)
+        })
+        .collect()
+}
+
+/// The class a fragment's **arithmetic** is built for — the default scalar, and
+/// the answer a fragment with no declared buffer class is read as.
 ///
 /// # Where it is read from, and why that order
 ///
@@ -715,43 +768,81 @@ fn record(seen: &mut Option<ScalarClass>, class: ScalarClass) -> Result<(), Spir
 /// A fragment with neither (no buffers, one leaf, that leaf being the index) is
 /// an integer module, which is what every fragment was before a class existed.
 ///
-/// A fragment whose declared positions disagree has no answer here and is
-/// refused by name: a module's element type, the pointer into it and its array
-/// stride are one decision, and `Int` and `Float` do not convert
-/// (`docs/notes/floating-point.md` §4.2).
+/// **It no longer refuses a fragment whose buffers disagree.** It is one module's
+/// *arithmetic* class now, and a buffer's element type is that buffer's own
+/// class ([`buffer_class`]); the refusal this function used to end with is gone
+/// with the assumption behind it. The first buffer class wins, so a fragment
+/// with no arithmetic of its own is built for the class of the first buffer it
+/// binds, which is the one its values came from.
 pub fn module_class(fragment: &KernelFragment) -> Result<ScalarClass, SpirvRefusal> {
-    let mut seen: Option<ScalarClass> = None;
-    for class in fragment
+    if let Some(class) = fragment
         .input_classes
         .iter()
         .chain(fragment.output_classes.iter())
         .copied()
+        .next()
     {
-        record(&mut seen, class)?;
+        return Ok(class);
     }
-    if seen.is_none() {
-        let leaves = leaf_classes(&fragment.param_shape);
-        let index = index_local(fragment);
-        for (offset, class) in leaves.iter().enumerate() {
-            if Some(offset as u32) == index {
-                continue;
-            }
-            record(&mut seen, *class)?;
-        }
-    }
-    Ok(seen.unwrap_or(ScalarClass::Int))
+    let leaves = leaf_classes(&fragment.param_shape);
+    let index = index_local(fragment);
+    Ok(leaves
+        .iter()
+        .enumerate()
+        .find(|(offset, _)| Some(*offset as u32) != index)
+        .map(|(_, class)| *class)
+        .unwrap_or(ScalarClass::Int))
 }
 
 /// Whether a module for this fragment declares the 64-bit integer type, and so
 /// needs a device that offers `shaderInt64`.
 ///
 /// **SPIR-V's `Float32` is core, so a float fragment needs no capability at
-/// all**: its index is 32-bit and no value in it is a 64-bit integer. This is
-/// the same derivation [`compile`] makes, read as the question a device chooser
-/// can ask — a caller and the module it builds cannot disagree about whether the
-/// feature is needed.
+/// all**: its index is 32-bit and no value in it is a 64-bit integer.
+///
+/// **It asks whether a 64-bit integer is used *anywhere*, not whether the module
+/// is an integer one.** That is the difference a mixed fragment makes: it reads
+/// an `Int` buffer, so its module declares the `Int64` chain and needs the
+/// feature, even though its arithmetic default is `Float` and it would have
+/// answered `false` before.
 pub fn needs_int64(fragment: &KernelFragment) -> Result<bool, SpirvRefusal> {
-    Ok(module_class(fragment)? == ScalarClass::Int)
+    let holds_an_integer_buffer = fragment
+        .input_classes
+        .iter()
+        .chain(fragment.output_classes.iter())
+        .any(|class| *class == ScalarClass::Int);
+    Ok(holds_an_integer_buffer || module_class(fragment)? == ScalarClass::Int)
+}
+
+/// Whether every buffer a fragment binds is of one class.
+///
+/// # Why this is asked at all when the module no longer cares
+///
+/// **The module side already answers a mixed fragment**: the element type, the
+/// array stride, the block struct and the variable's own type are each read off
+/// *that buffer's* class, and `spirv-val` accepts the result. What has **not**
+/// been made per-buffer is the **host staging**: a dispatch reserves one upload
+/// block per host input at `count × class.byte_width()` and offsets the next
+/// block by that same width, so a fragment binding an `Int` buffer and a `Float`
+/// one would upload eight bytes per `f32` element and read back a wrong number.
+///
+/// That is a silently wrong answer rather than a slow one, so a mixed fragment is
+/// **refused by name here** until staging is per-buffer too. The refusal is in
+/// the dispatch path on purpose: the emitter must keep accepting a mixed fragment,
+/// because that is the half that is finished and is what `spirv-val` checks.
+pub fn buffers_are_uniform(fragment: &KernelFragment) -> bool {
+    let mut seen: Option<ScalarClass> = None;
+    for class in fragment
+        .input_classes
+        .iter()
+        .chain(fragment.output_classes.iter())
+    {
+        match seen {
+            Some(previous) if previous != *class => return false,
+            _ => seen = Some(*class),
+        }
+    }
+    true
 }
 
 /// Compile one fragment to SPIR-V words.
@@ -793,16 +884,37 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
     // undefined there. An id that nothing defines is legal: the id bound is an
     // upper limit, not a count.
     //
-    // **Both element types are declared in every module** (see the module docs),
-    // so the `1`/`0` a comparison materialises into are allocated for *both*
-    // classes: the integer pair is the 64-bit one in an integer module and the
-    // 32-bit one in a float module, and the float pair is reverse. A float
-    // module's integer zero is the module's 32-bit `zero`; an integer module
-    // needs two ids no other module uses for its floats.
+    // **The storage-buffer type chain is allocated per class in use**, and this is
+    // what lets one module bind an `Int` buffer and a `Float` buffer: five ids per
+    // class the fragment's buffers actually hold, in [`ScalarClass::ALL`] order. A
+    // class no buffer holds is not allocated, so `Ids::chain_of` is only
+    // read for a class [`buffer_classes`] reported.
     let (one_integer, zero_integer, one_float, zero_float, gid) = match class {
         ScalarClass::Int => (17, 18, 19, 20, 21),
         ScalarClass::Float => (19, 16, 17, 18, 20),
     };
+    let classes = buffer_classes(fragment, class);
+    // Five ids per class, then the two module-wide pointers and the function type.
+    let chain_base = 9;
+    let fn_ty = chain_base + 5 * classes.len() as u32;
+    let ptr_in = fn_ty + 1;
+    let mut buffer_types = [BufferTypes {
+        elem: 0,
+        array: 0,
+        buffer_struct: 0,
+        ptr_array: 0,
+        ptr_elem: 0,
+    }; ScalarClass::ALL.len()];
+    for (position, used) in classes.iter().enumerate() {
+        let base = chain_base + 5 * position as u32;
+        buffer_types[used.index()] = BufferTypes {
+            elem: base,
+            array: base + 1,
+            buffer_struct: base + 2,
+            ptr_array: base + 3,
+            ptr_elem: base + 4,
+        };
+    }
     let ids = Ids {
         class,
         main: 1,
@@ -813,13 +925,9 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
         float: 6,
         uint: 7,
         v3uint: 8,
-        elem: 9,
-        array: 10,
-        buffer_struct: 11,
-        ptr_in: 12,
-        ptr_array: 13,
-        ptr_elem: 14,
-        fn_ty: 15,
+        buffer_types,
+        ptr_in,
+        fn_ty,
         zero: 16,
         one_integer,
         zero_integer,
@@ -1216,6 +1324,12 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                     at,
                 )?;
                 let slot = buffer_slot(position, at, 0, binding.inputs, "input")?;
+                // **A read yields that buffer's element class**, so the value's kind
+                // and the type the access chain reaches through are both the
+                // buffer's own — which is what lets one module read an `Int`
+                // buffer and a `Float` one.
+                let element_class = buffer_class_of(fragment, slot, ids.class);
+                let chain = ids.chain_of(element_class);
                 let pointer = next;
                 next += 1;
                 let loaded = next;
@@ -1225,7 +1339,7 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                 code.push(Inst::new(
                     op::ACCESS_CHAIN,
                     vec![
-                        ids.ptr_elem,
+                        chain.ptr_elem,
                         pointer,
                         ids.buffers + slot as u32,
                         ids.zero,
@@ -1233,20 +1347,26 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                         ids.zero,
                     ],
                 ));
-                code.push(Inst::new(op::LOAD, vec![ids.scalar(), loaded, pointer]));
-                slots.insert(definition, scalar(loaded, ids.class));
+                code.push(Inst::new(
+                    op::LOAD,
+                    vec![ids.type_of(element_class), loaded, pointer],
+                ));
+                slots.insert(definition, scalar(loaded, element_class));
             }
             KernelInstr::BufferWriteCall(_) => {
                 let value = operand(2)?;
                 let element = operand(1)?;
                 let position = operand(0)?;
-                // A buffer element is the module's scalar whatever the body
-                // computed the value as, so a comparison stored into one is
-                // materialised here — and a value of the *other* class is refused
-                // rather than converted.
+                let slot = buffer_slot(position, at, binding.inputs, binding.outputs, "output")?;
+                // **A write stores that buffer's element class**, whichever class
+                // the body computed the value in — so a value crossing into a
+                // `Float` buffer is materialised into `Float` here, and a value of
+                // the *other* class is refused rather than converted.
+                let element_class = buffer_class_of(fragment, slot, ids.class);
+                let chain = ids.chain_of(element_class);
                 let value = as_class(
                     value,
-                    ids.class,
+                    element_class,
                     &ids,
                     &mut literals,
                     &mut code,
@@ -1262,13 +1382,12 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                     &mut next,
                     at,
                 )?;
-                let slot = buffer_slot(position, at, binding.inputs, binding.outputs, "output")?;
                 let pointer = next;
                 next += 1;
                 code.push(Inst::new(
                     op::ACCESS_CHAIN,
                     vec![
-                        ids.ptr_elem,
+                        chain.ptr_elem,
                         pointer,
                         ids.buffers + slot as u32,
                         ids.zero,
@@ -1313,7 +1432,16 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
         });
     }
 
-    Ok(assemble(&ids, binding, &literals.declarations, &code, next))
+    Ok(assemble(
+        fragment,
+        &ids,
+        binding,
+        &classes,
+        needs_int64(fragment)?,
+        &literals.declarations,
+        &code,
+        next,
+    ))
 }
 
 /// Write the module in SPIR-V's required section order.
@@ -1322,7 +1450,16 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
 /// names, annotations must precede the types and variables they decorate, and
 /// types must precede their use. All of that is legal only because every id was
 /// reserved up front.
-fn assemble(ids: &Ids, binding: Binding, literals: &[Inst], code: &[Inst], bound: u32) -> Vec<u32> {
+fn assemble(
+    fragment: &KernelFragment,
+    ids: &Ids,
+    binding: Binding,
+    classes: &[ScalarClass],
+    needs_int64: bool,
+    literals: &[Inst],
+    code: &[Inst],
+    bound: u32,
+) -> Vec<u32> {
     let mut out = vec![SPIRV_MAGIC, SPIRV_VERSION, GENERATOR, bound, 0];
 
     let emit_all = |out: &mut Vec<u32>, instructions: &[Inst]| {
@@ -1371,30 +1508,37 @@ fn assemble(ids: &Ids, binding: Binding, literals: &[Inst], code: &[Inst], bound
     // 4. Annotations. Decorating a type or variable declared in the *next*
     // section is legal, and is why `OpDecorate` is a separate section at all.
     //
-    // The stride is the element class's width — eight bytes for the integer
-    // ABI's `i64`, four for an `f32` — and it is the *only* place the module
-    // states it: the runtime array it decorates is the buffer a dispatch binds.
-    let mut annotations = vec![Inst::new(
-        op::DECORATE,
-        vec![ids.array, decoration::ARRAY_STRIDE, ids.element_stride()],
-    )];
-    // A storage buffer's struct member needs its byte offset, and the sole
-    // member sits at zero.
-    annotations.push(Inst::new(
-        op::MEMBER_DECORATE,
-        vec![ids.elem, 0, decoration::OFFSET, 0],
-    ));
-    // …and the struct that *contains* the runtime array must say so, or the
-    // module does not describe a block-backed resource at all. A `Block` struct
-    // has to be explicitly laid out, so its member needs an offset too.
-    annotations.push(Inst::new(
-        op::DECORATE,
-        vec![ids.buffer_struct, decoration::BLOCK],
-    ));
-    annotations.push(Inst::new(
-        op::MEMBER_DECORATE,
-        vec![ids.buffer_struct, 0, decoration::OFFSET, 0],
-    ));
+    // The stride is the **buffer's own** element width — eight bytes for the
+    // integer ABI's `i64`, four for an `f32` — and it is the *only* place the
+    // module states it: the runtime array it decorates is the buffer a dispatch
+    // binds. **One stride per class in use**, because a module that binds an
+    // `Int` buffer and a `Float` buffer declares both and a dispatch reads the
+    // stride off the buffer it is binding rather than off the module.
+    let mut annotations = Vec::new();
+    for used in classes {
+        let types = ids.chain_of(*used);
+        annotations.push(Inst::new(
+            op::DECORATE,
+            vec![types.array, decoration::ARRAY_STRIDE, element_stride(*used)],
+        ));
+        // A storage buffer's struct member needs its byte offset, and the sole
+        // member sits at zero.
+        annotations.push(Inst::new(
+            op::MEMBER_DECORATE,
+            vec![types.elem, 0, decoration::OFFSET, 0],
+        ));
+        // …and the struct that *contains* the runtime array must say so, or the
+        // module does not describe a block-backed resource at all. A `Block`
+        // struct has to be explicitly laid out, so its member needs an offset too.
+        annotations.push(Inst::new(
+            op::DECORATE,
+            vec![types.buffer_struct, decoration::BLOCK],
+        ));
+        annotations.push(Inst::new(
+            op::MEMBER_DECORATE,
+            vec![types.buffer_struct, 0, decoration::OFFSET, 0],
+        ));
+    }
     for slot in 0..binding.total() {
         let variable = ids.buffers + slot as u32;
         annotations.push(Inst::new(
@@ -1416,44 +1560,51 @@ fn assemble(ids: &Ids, binding: Binding, literals: &[Inst], code: &[Inst], bound
     // here and not in the function), then the globals. The order within the
     // section is the spec's: types, constants, global variables.
     //
-    // The scalar type is the class's, and the element struct's only member is
-    // that same id — which is where "does this buffer hold floats" is decided.
+    // The element struct's only member is **that buffer's own scalar**, which is
+    // where "does this buffer hold floats" is decided — per buffer, not per
+    // module.
     let mut types = vec![
         Inst::new(op::TYPE_VOID, vec![ids.void]),
         Inst::new(op::TYPE_BOOL, vec![ids.boolean]),
     ];
-    // **Both element types are declared in every module**, because a body may
-    // hold values of either class and cross between them through `Conv`. `Float32`
-    // is core SPIR-V and carries no capability, so it is unconditional; the
-    // 64-bit integer is what costs `Int64`, and an integer module's own signedness
-    // is `0` because the language's `Int` is unsigned and the unsigned opcodes a
-    // kernel divides, takes a remainder and compares with require it (see
-    // [`Ids::ulong`]).
+    // **Both scalar types are declared in every module**, because a body may hold
+    // values of either class and cross between them through `Conv`. `Float32` is
+    // core SPIR-V and carries no capability, so it is unconditional; the 64-bit
+    // integer is what costs `Int64`, and it is declared whenever **anything** in
+    // the fragment is 64-bit — an integer buffer counts, which is the difference
+    // a mixed fragment makes (`needs_int64` asks the same question).
     types.push(Inst::new(op::TYPE_FLOAT, vec![ids.float, 32]));
-    if ids.class == ScalarClass::Int {
+    if needs_int64 {
         types.push(Inst::new(op::TYPE_INT, vec![ids.ulong, 64, 0]));
     }
+    types.push(Inst::new(op::TYPE_INT, vec![ids.uint, 32, 0]));
+    types.push(Inst::new(op::TYPE_VECTOR, vec![ids.v3uint, ids.uint, 3]));
+    // One storage-buffer chain per class in use, each closing over its own scalar.
+    for used in classes {
+        let chain = ids.chain_of(*used);
+        let scalar = ids.type_of(*used);
+        types.extend([
+            Inst::new(op::TYPE_STRUCT, vec![chain.elem, scalar]),
+            Inst::new(op::TYPE_RUNTIME_ARRAY, vec![chain.array, chain.elem]),
+            Inst::new(op::TYPE_STRUCT, vec![chain.buffer_struct, chain.array]),
+            Inst::new(
+                op::TYPE_POINTER,
+                vec![
+                    chain.ptr_array,
+                    storage_class::STORAGE_BUFFER,
+                    chain.buffer_struct,
+                ],
+            ),
+            Inst::new(
+                op::TYPE_POINTER,
+                vec![chain.ptr_elem, storage_class::STORAGE_BUFFER, scalar],
+            ),
+        ]);
+    }
     types.extend([
-        Inst::new(op::TYPE_INT, vec![ids.uint, 32, 0]),
-        Inst::new(op::TYPE_VECTOR, vec![ids.v3uint, ids.uint, 3]),
-        Inst::new(op::TYPE_STRUCT, vec![ids.elem, ids.scalar()]),
-        Inst::new(op::TYPE_RUNTIME_ARRAY, vec![ids.array, ids.elem]),
-        Inst::new(op::TYPE_STRUCT, vec![ids.buffer_struct, ids.array]),
         Inst::new(
             op::TYPE_POINTER,
             vec![ids.ptr_in, storage_class::INPUT, ids.v3uint],
-        ),
-        Inst::new(
-            op::TYPE_POINTER,
-            vec![
-                ids.ptr_array,
-                storage_class::STORAGE_BUFFER,
-                ids.buffer_struct,
-            ],
-        ),
-        Inst::new(
-            op::TYPE_POINTER,
-            vec![ids.ptr_elem, storage_class::STORAGE_BUFFER, ids.scalar()],
         ),
         Inst::new(op::TYPE_FUNCTION, vec![ids.fn_ty, ids.void]),
     ]);
@@ -1512,10 +1663,16 @@ fn assemble(ids: &Ids, binding: Binding, literals: &[Inst], code: &[Inst], bound
         vec![ids.ptr_in, ids.gid, storage_class::INPUT],
     )];
     for slot in 0..binding.total() {
+        // **A buffer's variable is typed with its own class's block struct.** This
+        // is the line that makes a mixed module bindable: a dispatch binds a
+        // descriptor against the type the shader declares for that binding, so the
+        // `Int` variable must be the `Int` chain and the `Float` variable the
+        // `Float` one.
+        let chain = ids.chain_of(buffer_class_of(fragment, slot, ids.class));
         globals.push(Inst::new(
             op::VARIABLE,
             vec![
-                ids.ptr_array,
+                chain.ptr_array,
                 ids.buffers + slot as u32,
                 storage_class::STORAGE_BUFFER,
             ],
