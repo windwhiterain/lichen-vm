@@ -882,6 +882,18 @@ done** — the acceptance case at item 5 runs on both backends:
    `compute.read`, one projection and one frozen ref from a body the kernel can
    enter, and the stopping condition for this item was not met.
 
+   **Nothing here is curried, and that is why the route terminates.** `read` is
+   written `read = (x : (Read _)) => $read(x.from, x.at): x.from.element`
+   (`crates/lichen-compute/src/compute.lichen:16`) — one parameter, one
+   application, and the `ComputeOperator::Read` lives in the **frozen body of
+   `read` itself**, not at the call site: the call site holds only the projection
+   and the `Read` struct. The two curried bindings in that module are `launch` and
+   `call` (`launch = k: (K _) => a: k.I => …`), and a kernel body cannot apply
+   either — they are the host's — so an intermediate closure is never what a
+   kernel lowering meets. `write` and `range` are the same one-parameter wrapper
+   shape and are routed the same way; `collect` is that shape too, and a kernel
+   body does not reach it (it yields an array).
+
    **The operator's operands are the call site's own argument** — the argument's
    value half, once, for both the arithmetic and the compute operators. That is
    what makes `ComputeOperator::Read` emitable at this site: the frozen body
