@@ -140,10 +140,11 @@ which is why the pre-apply case is the mainstream one.
 **The join's "unreachable" case is reachable, so it is not an assertion.** The
 design reasoned that two different decided low types on one class cannot happen,
 because the checker proved `value : type` consistent — and a `debug_assert`
-sufficed; measurement says otherwise. A unification **deferral** merges two
-classes whose values were never compared (a pending computation against a
-skeleton, a deferred field read, a type round-trip), so two arrays of different
-arity can legitimately share a class, and the class is reconciled later, if at
+sufficed; measurement says otherwise. Unification is unconditional, so a
+**merge** can put two writers whose values were never compared on one class (an
+unevaluated computation against a skeleton, a field read that has not answered
+yet, a type round-trip), and two arrays of different
+arity can legitimately share a class; the class is reconciled later, if at
 all. The join therefore answers `Unknown`, which is the design's own safety
 argument: a reader degrades to "undecided" rather than to a wrong shape. The cost
 is bounded by what reads low types — a class whose writers disagree is a class
