@@ -5,7 +5,7 @@
 
 use lichen_language::package::PackageStore;
 use lichen_language::program::{LangProgram, LangValue};
-use lichen_lowlevel::{Module, NodeId};
+use lichen_lowlevel::{LowValue, Module, NodeId};
 
 mod common;
 
@@ -2102,5 +2102,100 @@ out = (compute.plrun k ((compute.A In)(.n {ELEMENT_COUNT}, .I In(.a 0))) : Out)
     assert!(
         common::values_eq((&cpu_module, &cpu), (&gpu_module, &gpu)),
         "the two backends answered one class crossing differently"
+    );
+}
+
+/// The `f32` elements of a collected `Float` buffer, however the backend tagged
+/// its words.
+///
+/// **The CPU backend types every output by the fragment's *first* class**, so a
+/// mixed fragment's `Float` output arrives there as its elements' bit patterns;
+/// the device fetches each output at its own class.  The numbers are the same
+/// either way, and comparing them is the agreement this file pins.
+fn float_elements(module: &Module<LangProgram>, value: &LangValue) -> Vec<f32> {
+    common::array_values(module, value)
+        .iter()
+        .map(|element| match element {
+            LangValue::LowValue(LowValue::Float(number)) => *number,
+            LangValue::LowValue(LowValue::USize(word)) => f32::from_bits(*word as u32),
+            other => panic!("a collected `Float` element is not a scalar: {other:?}"),
+        })
+        .collect()
+}
+
+/// A kernel whose buffers are of **two classes** — an `Int` input and a `Float`
+/// output — computed by both backends.
+///
+/// **The codomain declares a second, `Int`, output because the language types
+/// every input position by the fragment's *first* output class**
+/// (`Positions::element_class`): with one `Float` output, a host `Int` buffer
+/// would be read as `Float` and refused by name.  So the mixture here is the
+/// input against the `Float` output, and the device sizes, allocates and reads
+/// back each of the three buffers at that buffer's own width.
+///
+/// **At [`ELEMENT_COUNT`]**, one workgroup plus five: a wrong element width does
+/// not fail there, it corrupts the neighbour, and the last five elements are the
+/// ones a wrong padded size drops.
+#[test]
+fn a_fragment_whose_buffers_are_of_two_classes_agrees_across_the_two_backends() {
+    let source = format!(
+        r#"
+--- compute = import "compute.lichen" ---
+In1  = struct<.a Int>
+Out1 = struct<.z (compute.Buf _)>
+Par1 = compute.P (compute.KT _)(.I In1, .O Out1)
+f1 = (k : Par1) => {{
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 10))
+}}
+k1 = compute.parallel f1 "{BACKEND}"
+inbuf = (compute.plrun k1 ((compute.A In1)(.n {ELEMENT_COUNT}, .I In1(.a 0))) : Out1)
+In2  = struct<.b (compute.Buf _)>
+Out2 = struct<.w (compute.Buf _), .v (compute.Buf _)>
+Par2 = compute.P (compute.KT _)(.I In2, .O Out2)
+f2 = (k : Par2) => {{
+  i = compute.range k.n
+  a = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  (compute.write ((compute.Write _)(.to k.out.w, .at i, .value a + 1)), compute.write ((compute.Write _)(.to k.out.v, .at i, .value int2float a + 0.5)))
+}}
+k2 = compute.parallel f2 "{BACKEND}"
+out = (compute.plrun k2 ((compute.A In2)(.n {ELEMENT_COUNT}, .I In2(.b inbuf.z))) : Out2)
+(compute.collect out.w, compute.collect out.v)
+"#,
+    );
+    let Some(((cpu_module, cpu), (gpu_module, gpu))) = answer_from_each_backend(&source) else {
+        return;
+    };
+    let cpu_buffers = common::array_values(&cpu_module, &cpu);
+    let gpu_buffers = common::array_values(&gpu_module, &gpu);
+
+    // The input was `i + 10`, so this output is `i + 11`.
+    let integers = common::usize_array(&cpu_module, &cpu_buffers[0]);
+    assert_eq!(integers.len(), ELEMENT_COUNT, "the integer output's length");
+    assert_eq!(integers[0], 11, "the first integer element");
+    assert_eq!(
+        integers[ELEMENT_COUNT - 1],
+        ELEMENT_COUNT + 10,
+        "the last integer element, past the workgroup multiple"
+    );
+    assert_eq!(
+        integers,
+        common::usize_array(&gpu_module, &gpu_buffers[0]),
+        "the two backends answered the integer output differently"
+    );
+
+    // The same input crossed to `Float` and offset by a half.
+    let floats = float_elements(&cpu_module, &cpu_buffers[1]);
+    assert_eq!(floats.len(), ELEMENT_COUNT, "the float output's length");
+    assert_eq!(floats[0], 10.5, "the first float element");
+    assert_eq!(
+        floats[ELEMENT_COUNT - 1],
+        ELEMENT_COUNT as f32 + 9.5,
+        "the last float element, past the workgroup multiple"
+    );
+    assert_eq!(
+        floats,
+        common::float_array(&gpu_module, &gpu_buffers[1]),
+        "the two backends answered the float output differently"
     );
 }
