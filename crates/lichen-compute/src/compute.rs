@@ -5606,10 +5606,8 @@ fn run_parallel_range(
                       results: &mut [wasmi::Val]| {
                     let pos = position_of(params.first());
                     let idx = position_of(params.get(1));
-                    // The index is **global** — inputs are never partitioned — so
-                    // no rebase here; a worker reads the whole input buffer.  The
-                    // word is the element's own bits for both classes: an `f32`'s
-                    // for a float buffer, the value for an integer one.
+                    // The index is global, so no rebase: the word is the element's
+                    // own bits.
                     let value = caller
                         .data()
                         .inputs
@@ -5634,12 +5632,11 @@ fn run_parallel_range(
                     let idx = position_of(params.get(1));
                     let value = params.get(2).map_or(0, |v| value_word(element_class, v));
                     let state = caller.data_mut();
-                    // **The rebase.**  The kernel is handed a global index, and the
-                    // worker owns `[base, base + span.len())` of this buffer, so the
-                    // store is at `idx - base`.  A write outside the worker's own
-                    // span cannot be rebased into it — `checked_sub` yields `None`
-                    // and the write is dropped, exactly as an out-of-range write is
-                    // today, rather than aliasing another worker's slots.
+                    // The rebase: a global index into the worker's own span is the
+                    // store at `idx - base`.
+
+                    // A write outside the span is dropped rather than aliasing
+                    // another worker's slots.
                     if let Some(slot) = state
                         .outputs
                         .get_mut(out_pos)
@@ -5659,9 +5656,8 @@ fn run_parallel_range(
     let main = instance
         .get_func(&store, "main")
         .ok_or_else(|| "parallel kernel has no export `main`".to_string())?;
-    // The leaves are fixed for the whole range and the index is the argument the
-    // loop rewrites, so the list is built once: a leaf is handed over as the
-    // value its own parameter field declared.
+    // The leaves are fixed for the whole range and only the index moves, so the
+    // list is built once.
     let mut args: Vec<wasmi::Val> = {
         let state = store.data();
         state
@@ -5674,16 +5670,11 @@ fn run_parallel_range(
     args.push(word_value(ScalarClass::Int, base as i64));
     let mut results = [word_value(class, 0)];
     for i in base..end {
-        // **The ABI's arguments are the parameter's scalar leaves in field order,
-        // then the index** — so the index is the one argument that moves per
-        // element, and every leaf is handed over as the value *its own field*
-        // declared (`docs/notes/compute-runtime-scalars.md` §1).  The extent is
-        // leaf 0, which is why `count` is passed whole: the index function is a
-        // function of the full extent, not of the chunk.
-        //
-        // A leaf that is not data — the extent and the index — is `i64` whatever
-        // class the body computes in.  The result is the dummy the fragment leaves
-        // on the stack, in the fragment's own class.
+        // The ABI's arguments are the scalar leaves then the index: only the index
+        // moves per element.
+
+        // The extent and the index are not data: `i64` whatever class the body
+        // computes in.
         if let Some(index) = args.last_mut() {
             *index = word_value(ScalarClass::Int, i as i64);
         }
@@ -5695,17 +5686,15 @@ fn run_parallel_range(
 
 /// The position or the index a `read`/`write` import's argument carries.
 ///
-/// **Always an `i64`, in every class**: a position is a compile-time ordinal in
-/// the buffer space and an index is a lane number, so neither is ever the data.
-/// The conversion this replaces read an `f32` back into an integer, which
-/// existed only because a fragment had one class
-/// (`docs/notes/floating-point.md` §4.4).
+/// # Invariant
+/// Always an `i64`, in every class: a position is a compile-time ordinal and an index
+/// a lane number, so neither is ever data.
 fn position_of(value: Option<&wasmi::Val>) -> usize {
     value.and_then(|value| value.i64()).unwrap_or(0) as usize
 }
 
 /// The word a `read`/`write` import's value argument carries, in the fragment's
-/// class — an `f32`'s bits for a float fragment, the value for an integer one.
+/// class.
 fn value_word(class: ScalarClass, value: &wasmi::Val) -> i64 {
     match class {
         ScalarClass::Int => value.i64().unwrap_or(0),
@@ -5730,20 +5719,19 @@ mod parallel_launch_tests {
     // construction.
     use lichen_kernel_ir::{FlatOp, KernelBody, ResidentId};
 
-    /// A two-output parallel fragment over `(n, i)`: `out0[i] = i + 1` and
-    /// `out1[i] = i + i`, with each `BufferWriteCall` fed the
-    /// `[out_pos, idx, val]` stack its host import takes.  The trailing
-    /// `Const(0)` is what `compile_parallel_fragment` appends: the index
-    /// function only has side effects, and the shared assembler's `-> i64`
-    /// signature needs one value left on the stack.
+    /// A two-output parallel fragment over `(n, i)`: `out0[i] = i + 1`, `out1[i] = i + i`.
+    ///
+    /// # Invariant
+    /// The trailing `Const(0)` is what the compiler appends: the body only has side
+    /// effects, and the shared assembler's `-> i64` signature needs one value left on
+    /// the stack.
     fn two_outputs() -> KernelFragment {
         KernelFragment {
             param_shape: KernelShape::Tuple(vec![
                 KernelShape::Scalar(ScalarClass::Int),
                 KernelShape::Scalar(ScalarClass::Int),
             ]),
-            // The tuple form's parameter shape: a count at position 0 and the
-            // buffers at position 1, which is what a walk-less ABI reads.
+            // The tuple form's shape: a count at 0 and the buffers at 1.
             roles: KernelRoles::default(),
             body: KernelBody::from_flat(
                 2,
@@ -5772,22 +5760,15 @@ mod parallel_launch_tests {
         }
     }
 
-    /// The compute backend slot is **process-global**, so tests that install or
-    /// clear one have to be serialized against each other: cargo runs a test
-    /// binary's tests on parallel threads, and two of them installing different
-    /// backends would make each other's assertion a race. This is not a test
-    /// harness artefact — the same global is what a host program configures once.
+    /// The backend slot is process-global, so tests that install one must be
+    /// serialized against each other.
     static BACKEND_SLOT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// A parallel kernel compiled for the `"gpu"` backend goes to the installed
-    /// backend, not to this crate's thread pool.  A stub stands in for a device
-    /// here: what is under test is the **routing**, and the real backend's
-    /// execution is proved by `lichen-compute-gpu`'s own tests.
+    /// A "gpu" kernel goes to the installed backend, not to this crate's thread pool.
     ///
-    /// The two are deliberately tested apart. A test that drove a real device
-    /// would prove the routing and the device at once, and would then fail on a
-    /// machine with no GPU — turning a routing regression into a hardware
-    /// question.
+    /// # Invariant
+    /// A stub stands in for a device: what is under test is the routing, and a test
+    /// that drove a real device would fail on a machine with no GPU.
     #[test]
     fn a_gpu_kernel_is_routed_to_the_installed_backend() {
         let _serialized = BACKEND_SLOT.lock().unwrap();
@@ -5857,10 +5838,9 @@ mod parallel_launch_tests {
 
     /// A stub that records what each run was handed, one entry per run.
     ///
-    /// A real device cannot report this, and it is the thing worth pinning: if the
-    /// chain fell back to host data the *values* would still be right, so a
-    /// value-comparison cannot tell the difference between "the intermediate
-    /// stayed on the device" and "the intermediate came home and went back out".
+    /// # Invariant
+    /// A value comparison cannot tell a resident intermediate from one that came home
+    /// and went back out, so the handover is what has to be pinned.
     struct ChainRecorder {
         seen: Mutex<Vec<Vec<Slot>>>,
         fetched: AtomicUsize,
@@ -5868,9 +5848,9 @@ mod parallel_launch_tests {
 
     /// What one input slot was, as the backend was handed it.
     ///
-    /// A host slot records its **elements**, which is the payload over the
-    /// class's width ([`ScalarClass::byte_width`]) — a host slot is bytes, and a
-    /// count of bytes is not a count of the elements a run reads.
+    /// # Invariant
+    /// A host slot records its elements — the payload over the class's width — since a
+    /// host slot is bytes, and a count of bytes is not a count of elements.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Slot {
         Host(usize),
@@ -5961,10 +5941,8 @@ mod parallel_launch_tests {
         );
     }
 
-    /// A `"cpu"` run has no device to read from, so an input a `"gpu"` run left
-    /// there is brought home before the run starts.  This is a *fetch* rather
-    /// than a refusal: the program's data is on the device, and moving it is
-    /// what running on the CPU means — not a change in what gets computed.
+    /// A "cpu" run has no device, so an input a "gpu" run left there is brought home
+    /// before the run starts: a fetch, not a refusal.
     #[test]
     fn a_cpu_run_brings_home_an_input_a_gpu_run_left_on_the_device() {
         let _serialized = BACKEND_SLOT.lock().unwrap();
@@ -5993,9 +5971,8 @@ mod parallel_launch_tests {
         );
     }
 
-    /// A `"gpu"` run with **no** backend installed is refused by name. There is
-    /// no third value to fall back to: the choice is the author's, and quietly
-    /// running on the CPU would make the program's timing meaningless.
+    /// A "gpu" run with no backend installed is refused by name: there is no third
+    /// value to fall back to.
     #[test]
     fn a_gpu_run_without_an_installed_backend_is_refused_by_name() {
         let _serialized = BACKEND_SLOT.lock().unwrap();
@@ -6009,8 +5986,7 @@ mod parallel_launch_tests {
         );
     }
 
-    /// A backend that declines is reported, not swallowed: the CPU path is not a
-    /// fallback here, so the reason has to reach the diagnostic.
+    /// A backend that declines is reported, not swallowed: the CPU is no fallback.
     #[test]
     fn a_declining_backend_is_reported_with_its_reason() {
         let _serialized = BACKEND_SLOT.lock().unwrap();
@@ -6047,9 +6023,8 @@ mod parallel_launch_tests {
         );
     }
 
-    /// The backend names a string parameter can be checked against, and the
-    /// language has no enum type to lean on, so the parse is strict: a typo is
-    /// reported with both what was written and what is accepted.
+    /// The parse is strict: a typo is reported with both what was written and what is
+    /// accepted.
     #[test]
     fn an_unknown_backend_name_is_refused_with_both_the_value_and_the_choices() {
         assert_eq!(parse_backend("cpu"), Ok(Backend::Cpu));
