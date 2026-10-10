@@ -1,7 +1,5 @@
-//! The lichen language parser: `Token`s → AST.  Depends only on the lex crate
-//! (for [`span`](lichen_language_lex::Span) and [`Token`]), so it is a pure,
-//! checker-free front-end.  The language crate re-exports this crate as `parse`
-//! (and `ast`), so `lichen_language::parse::parse` / `::ast::Expr` resolve.
+//! The lichen language parser: `Token`s to AST, depending only on the lex crate
+//! (for `Span` and `Token`).
 
 pub mod ast;
 pub mod path;

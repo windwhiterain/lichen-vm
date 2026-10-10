@@ -1,65 +1,9 @@
-//! The parser: tokens → AST, with error recovery.
+//! The parser: tokens to AST, with error recovery.  Grammar:
+//! `docs/language-spec.md` §2.
 //!
-//! The recovered-error walk and chumsky's diagnostic conversion live in the
-//! sibling modules `error_blocks` and `diagnostics`.
-//!
-//! The top level **is a block** — a program is a [`block_body`]: a `name =
-//! expr; …` binding / bare-expression statement list, `pub`-capable, followed
-//! by an optional tail expression (the end of the input acts as the closing
-//! `Separator`).  With a tail the program is an ordinary program whose value
-//! is that final expression; without one it is a *record program* — a module
-//! whose value is an anonymous struct built from the statements (see
-//! [`Program`]).  The identical body, wrapped in `{ … }`, forms a block
-//! expression (see [`Expr::Block`] / [`Expr::RecordBlock`]); the top level and
-//! a `{ … }` body share the one [`block_body`] grammar.  A binding
-//! without `let` is *block-wide*: its name is in scope throughout the block,
-//! so it may recurse with itself and with the block's other bindings.  A
-//! `let` before a binding (`let a = …`) is *restrictive*: the name is in
-//! scope only in later statements, never in its own value.  Statements are
-//! separated by `;`, `,`, or a newline (the lexer lexes all as `Separator`), and
-//! consecutive, leading, and trailing separators are all tolerated — one rule,
-//! shared by every list form too: the separators between a tuple's, array's,
-//! table entry's, struct type's or struct instantiation's items, and the run
-//! after the last of them, are of any quantity as well ([`separator_run`]).
-//! What a run never does is let an *expression* continue across it: `1 +\n2`,
-//! `table { 1 ==>\n2 }` and `x =>\n x + 1` are all parse errors.  A
-//! binding at statement start is `name =` (or `let name =`); anything else
-//! is an expression — a bare expression is a statement anywhere, and only
-//! the last statement is the list's value.  Within an expression, one
-//! grammar covers terms and types (types are expressions) with no *mode*
-//! flag: `(a, b)` is always a `Tuple` value, `<a, b>` always a `TypeTuple`
-//! type expression, and `_` always a [`Expr::Placeholder`] (never a name)
-//! — an annotated `expr : expr` parses both sides the same way.  Angle
-//! brackets are type-level: `<a, b>` is always a `TypeTuple`, `struct<T1, T2>`
-//! always a `StructType`, and the array type is the keyword-led
-//! `array<T, n>`.  Postfix forms are marked by a `Glue` token (the lexer
-//! emits it when the delimiter is directly glued to the previous token): a
-//! glued `[` is an index `e[i]`, a glued `<` a raw type-component read
-//! `X<e>`.  A spaced `[` is a fresh array-literal atom (so `f ([1, 2])`
-//! applies `f` to the array) and
-//! a spaced `<` a tuple-type atom.  Precedence (loosest → tightest): `=>` (right) → `:`
-//! (right) → `->` (right) → `<=`/`==` (left) → `+`/`-` (left) → application
-//! (left) → postfix `<e>` / `[e]` / `(…)` / atoms.  A `(` immediately after
-//! an expression — no space between them — is *struct instantiation*
-//! (`C(f1, …, fn)`, zero or more comma-separated fields; a single field
-//! needs no trailing comma, `C()` is a field-less instance), and it lowers
-//! to [`ExprKind::Instantiate`].  A spaced `(` is a paren atom; the same
-//! juxtaposition rule (`apply := atom atom`) makes it the argument, so there
-//! is no distinct spaced-apply form.  `name =>` starts a lambda only
-//! in prefix position, so `f x => e` is a parse error rather than
-//! `f (x => e)`; `name : T => e` (and, parens being transparent for
-//! annotations, `(name : T) => e`) is a lambda whose parameter is annotated
-//! with `T`.  `if cond then e1 else e2` is a conditional expression (the
-//! `then`/`else` keywords delimit the branches, which extend maximally).
-//!
-//! Errors are *recovered*, not fail-fast: a broken statement is skipped
-//! (to the next separator) and parsed again as a fresh statement, a broken
-//! final expression becomes an error node, and the parse continues — every
-//! recovered error is reported, and the partial program still compiles and
-//! checks ([`Expr::Err`] lowers to a masked [`ExprKind::ErrorBlock`] the
-//! checker skips).  `parse`
-//! therefore produces a program (possibly with error nodes) for almost any
-//! input; only an input with no parseable statement at all fails outright.
+//! # Invariant
+//! `parse` produces a program for almost any input; only an input with no
+//! parseable statement at all fails outright.
 
 use chumsky::input::Stream;
 use chumsky::prelude::*;
@@ -81,9 +25,8 @@ use crate::ast::{
     StructInstArg, TypeConst,
 };
 
-/// A parse diagnostic: a message plus the source position it is grounded in.
-/// Check-free, so it is `Send` and stays entirely in this crate; the language
-/// crate widens it into its own `Diag` at `Stage::Parse`.
+/// A parse diagnostic: a message plus its source position; widened to the
+/// language crate's `Diag` at `Stage::Parse`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParseDiag {
     pub span: Option<Span>,
@@ -104,34 +47,17 @@ pub struct Parsed {
     pub errors: Vec<ParseDiag>,
 }
 
-/// The stack the parse runs on.  The parser's construction and run recurse
-/// deeply (a fixed depth, driven by the size of the combinator grammar) and
-/// comfortably exceed the main thread's stack, so the work happens off the
-/// caller's thread — see [`ParseWorker`].
+/// The stack the parse runs on: the combinator grammar recurses too deep for
+/// the caller's stack ([`ParseWorker`]).
 const WORKER_STACK: usize = 16 * 1024 * 1024;
 
-/// The process-lived worker every parse runs on.
+/// The process-lived worker every parse runs on: a job sent to it, run on its
+/// warm stack, answered on a channel.
 ///
-/// The parse needs a large stack, so it cannot run on the caller's, and
-/// **creating that thread per parse is the cost** `D13` measured: 289 µs of a
-/// 551-byte parse — 47% of it — on the editor's small-file path, and it is
-/// `std::thread`'s creation rather than the 16 MiB reservation (1/16/64 MiB
-/// spawns measure the same).  One worker is therefore created on first use and
-/// reused: a parse is a job sent to it, run on its warm stack, answered on a
-/// channel.
-///
-/// A job owns what it needs, because the worker is `'static` and a borrow of
-/// the caller's token slice cannot cross.  That is the per-parse token copy
-/// `D13` accepted: 1.6 µs on the small input against the 289 µs it removes, and
-/// 592 µs on an 85 KiB one whose parse is 115 ms — the same trade the
-/// measurement was made to decide.
-///
-/// **One worker serialises parses.**  Per-parse threads did not, so this is a
-/// real change in shape; it is accepted because the callers that parse
-/// concurrently are not on a hot path (the language server serialises its
-/// requests via `concurrency_level(1)` and the CLI parses one file), and
-/// because the alternative — a pool — would have to hand a job to *whichever*
-/// worker is free, which needs a reply routing layer for no measured win.
+/// # Invariant
+/// One worker serialises parses, and a job owns its input — a job is `'static`,
+/// so no borrow of the caller's token slice crosses the channel
+/// (`docs/notes/code-audit.md` D13).
 struct ParseWorker {
     jobs: std::sync::Mutex<std::sync::mpsc::Sender<Job>>,
 }
@@ -160,12 +86,11 @@ impl ParseWorker {
         })
     }
 
-    /// Run `f` on the worker and return its result, blocking until it answers.
+    /// Run `f` on the worker and block until it answers.
     ///
-    /// A panic is caught on the worker and **resumed here**, so it reaches the
-    /// caller with its own payload and backtrace — the same observable
-    /// behaviour as the `join()` this replaces — and, just as importantly, it
-    /// does not take the worker down with it: the next parse still has one.
+    /// # Invariant
+    /// A panic is caught on the worker and resumed on the caller, so the worker
+    /// survives a panicking parse.
     fn run<T: Send + 'static>(&self, f: impl FnOnce() -> T + Send + 'static) -> T {
         let (tx, rx) = std::sync::mpsc::channel();
         let job: Job = Box::new(move || {
@@ -185,11 +110,7 @@ impl ParseWorker {
     }
 }
 
-/// Parse a token stream.  See the module docs for the recovery behavior.
-///
-/// The parser's construction and run recurse deeply (a fixed depth, driven
-/// by the size of the combinator grammar) and comfortably exceed the main
-/// thread's stack, so the parse runs on the process-lived [`ParseWorker`].
+/// Parse a token stream on the process-lived [`ParseWorker`].
 pub fn parse(tokens: &[Token]) -> Parsed {
     // Owned, because the worker is `'static`: see `ParseWorker` for why the
     // copy is the accepted half of `D13`.
@@ -198,8 +119,7 @@ pub fn parse(tokens: &[Token]) -> Parsed {
     Parsed { program, errors }
 }
 
-/// The worker's result: the program plus its diagnostics.  [`ParseDiag`] is
-/// `Send` (no checker payload), so no stripped-form workaround is needed.
+/// The worker's result: the program plus its diagnostics.
 type ParseOut = (Program, Vec<ParseDiag>);
 
 fn parse_inner(tokens: &[Token]) -> ParseOut {
@@ -207,10 +127,8 @@ fn parse_inner(tokens: &[Token]) -> ParseOut {
     let parser = program_parser(tokens);
     let (output, errs) = parser.parse(stream).into_output_errors();
     let mut errors: Vec<ParseDiag> = Vec::new();
-    // The dedup key is the diagnostic's whole content, so the set answers
-    // "has this exact diagnostic been emitted?" in one hash lookup instead of
-    // a scan of the list built so far — chumsky emits the same rich error
-    // more than once, and the list it feeds is the recovery's whole output.
+    // Dedup by whole diagnostic content: chumsky emits the same rich error more
+    // than once.
     let mut seen: HashSet<(Option<Span>, String)> = HashSet::new();
     for e in &errs {
         let diag = diag_from(tokens, e);
@@ -242,28 +160,13 @@ fn parse_inner(tokens: &[Token]) -> ParseOut {
             }
         }
     };
-    // Surface the recovered error regions on the program, in source order, so
-    // the frontend can mask them out of a content signature / diff.
+    // Surface the recovered error regions on the program, in source order.
     program.error_blocks = collect_error_blocks(&program);
     (program, errors)
 }
 
-/// Re-parse a contiguous statement *window* `tokens[start..end]` into its
-/// statements, for incremental splicing.
-///
-/// The window must begin at a token-before-a-statement (it may open with
-/// leading separators and close with trailing ones, both dropped) — the caller
-/// chooses it to cover exactly the statements that a user edit touched.  The
-/// Like [`parse`], the window carries recovered errors rather than failing.
-/// Statements are the same (`pub`-capable) block statements a program's top
-/// level holds, so a spliced window preserves `pub` marks exactly.
-///
-/// This is the incremental-parse primitive: the tokens it consumes already
-/// carry *absolute* byte ranges and (line, col) spans (the lexer emits them),
-/// so the resulting statements are directly spliceable into a program without
-/// any position re-mapping.  It reuses the recovery behavior of the whole
-/// statement list, so a statement in the window recovers in exactly the way it
-/// would when parsed as part of a full program.
+/// Re-parse the statement window `tokens[start..end]` into its statements, for
+/// incremental splicing.
 pub fn parse_statement_region(
     tokens: &[Token],
     start: usize,
@@ -273,16 +176,8 @@ pub fn parse_statement_region(
     (statements, errors)
 }
 
-/// Re-parse a contiguous statement *window* `tokens[start..end]` into its
-/// statements **and** the token-index range each covered, for incremental
-/// splicing.
-///
-/// This is [`parse_statement_region`] plus the ranges: the second element is
-/// one `(start, end)` per returned statement, absolute token indices into
-/// `tokens` (the region's spans are offset by `start` back into the whole
-/// stream).  The ranges let the session splice the window into a program and
-/// keep [`Program::stmt_ranges`] correct without re-parsing the untouched
-/// prefix and suffix.
+/// As [`parse_statement_region`], plus each statement's absolute token-index
+/// range.
 pub fn parse_statement_region_traced(
     tokens: &[Token],
     start: usize,
@@ -300,8 +195,7 @@ type RegionOut = (Vec<BlockStmt>, Vec<(usize, usize)>, Vec<ParseDiag>);
 fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
     let region = &tokens[start..end];
     let expr = expression(region);
-    // `seps elem (seps elem)* seps` — like the statement list, but without the
-    // tail pop.  Leading/trailing separators are consumed and dropped.
+    // `seps elem (seps elem)* seps` — the statement list without the tail pop.
     let seps = separator_run();
     let seps1 = separators_between();
     let elem = block_statement(region, expr.clone())
@@ -338,9 +232,8 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
             errors.push(diag);
         }
     }
-    // The region's tokens carry absolute *byte* positions, so the statements are
-    // spliceable as-is; only the *token-index* spans are region-relative, so
-    // offset them back by `start` into the whole stream.
+    // Byte positions are absolute; the token-index ranges are region-relative,
+    // so offset them by `start`.
     let elems: Vec<(BlockStmt, (usize, usize))> = output.unwrap_or_default();
     let statements: Vec<BlockStmt> = elems.iter().map(|(s, _)| s.clone()).collect();
     let ranges: Vec<(usize, usize)> = elems
@@ -362,19 +255,12 @@ fn token<'a>(kind: TokenKind) -> impl Parser<'a, In<'a>, Token, E<'a>> + Clone {
         .labelled(label)
 }
 
-/// A **run** of separators, any quantity including none: the statement level's
-/// own "consecutive, leading, and trailing separators are all tolerated" rule
-/// as one combinator, so every list form below shares it and none of them can
-/// drift from the statement form or from each other.
+/// A **run** of separators, any quantity including none — the one rule the
+/// statement level and every list form share.
 ///
-/// The output is the run's tokens, so a caller that *distinguishes* a run from
-/// no run (a trailing comma makes an instantiation where a bare argument makes
-/// a positional read) can still ask; a caller that only drops them ignores it.
-///
-/// [`repeated`] rewinds an iteration that fails, so a run that is not there
-/// leaves the enclosing closer (`)`, `]`, `>`, `}`) or the end of the input to
-/// match at the same position — this is what lets the trailing run be optional
-/// without consuming a token the caller still needs.
+/// # Invariant
+/// `repeated` rewinds, so a run that is not there leaves the enclosing closer
+/// or the end of input to match at the same position.
 fn separator_run<'a>() -> impl Parser<'a, In<'a>, Vec<()>, E<'a>> + Clone {
     token(TokenKind::Separator)
         .ignored()
@@ -382,8 +268,7 @@ fn separator_run<'a>() -> impl Parser<'a, In<'a>, Vec<()>, E<'a>> + Clone {
         .collect::<Vec<_>>()
 }
 
-/// A run of separators of **at least one** — the separator *between* two list
-/// items.  See [`separator_run`] for the rewinding property.
+/// A run of separators of at least one — the separator between two items.
 fn separators_between<'a>() -> impl Parser<'a, In<'a>, Vec<()>, E<'a>> + Clone {
     token(TokenKind::Separator)
         .ignored()
@@ -392,8 +277,7 @@ fn separators_between<'a>() -> impl Parser<'a, In<'a>, Vec<()>, E<'a>> + Clone {
         .collect::<Vec<_>>()
 }
 
-/// A name token — an identifier.  `_` is *not* a name: it lexes as its own
-/// [`TokenKind::Placeholder`] token and is always a placeholder.
+/// A name token; `_` lexes as its own [`TokenKind::Placeholder`] token.
 fn name<'a>() -> impl Parser<'a, In<'a>, (String, Span), E<'a>> + Clone {
     any::<In<'a>, E<'a>>()
         .filter(|t: &Token| matches!(t.kind, TokenKind::Name(_)))
@@ -404,8 +288,8 @@ fn name<'a>() -> impl Parser<'a, In<'a>, (String, Span), E<'a>> + Clone {
         .labelled("a name")
 }
 
-/// The `(line, col)` span of the token at token-index `i` — the parse
-/// fallback for positions at or past the end of the stream.
+/// The `(line, col)` span of the token at `index`, or the last token's past
+/// the end.
 fn span_at(tokens: &[Token], index: usize) -> Span {
     tokens
         .get(index)
@@ -413,8 +297,7 @@ fn span_at(tokens: &[Token], index: usize) -> Span {
         .unwrap_or_else(|| tokens.last().map(|t| t.span).unwrap_or((1, 1)))
 }
 
-/// The byte offset at token-index `i`, or the end of the source when `i` is
-/// at or past the end (the lexer's Eof token sits there).
+/// The byte offset at token-index `i`, or the end of the source past the end.
 fn token_byte(tokens: &[Token], index: usize) -> u32 {
     tokens
         .get(index)
@@ -423,9 +306,8 @@ fn token_byte(tokens: &[Token], index: usize) -> u32 {
         .unwrap_or(0)
 }
 
-/// The byte range a token-index span `[start, end)` covers — the region the
-/// recovered construct's fallback consumed.  A zero-width range (the missing
-/// operand at `start`) or a past-the-end boundary collapses to a point.
+/// The byte range a token-index span covers; a zero-width or past-the-end span
+/// collapses to a point.
 fn byte_range(tokens: &[Token], span: SimpleSpan<usize>) -> (u32, u32) {
     let start = token_byte(tokens, span.start);
     if span.end > span.start {
@@ -438,9 +320,7 @@ fn byte_range(tokens: &[Token], span: SimpleSpan<usize>) -> (u32, u32) {
     }
 }
 
-/// Build a recovered-error AST node from the token-index span a recovery
-/// produced: the byte `range` the fallback covered (the mask), plus the
-/// (line, col) where the broken construct began.
+/// Build a recovered-error node: the fallback's byte range plus where it began.
 fn err_node(tokens: &[Token], span: SimpleSpan<usize>) -> Expr {
     Expr::Err {
         range: byte_range(tokens, span),
@@ -448,15 +328,11 @@ fn err_node(tokens: &[Token], span: SimpleSpan<usize>) -> Expr {
     }
 }
 
-/// The program: the block body (the top level is itself a block, terminated
-/// by the end of the input), then the end of the input.  One
-/// expression parser is built here and threaded through the whole grammar —
-/// the statement list, the bindings, and the block bodies all recurse
-/// through the same [`expression`] recursion point.
+/// The program: the block body (the top level is a block) then the end of the
+/// input.
 fn program_parser<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Program, E<'a>> {
     let expr = expression(tokens);
-    // The lexer appends a real `Eof` token, so the end of the input is that
-    // token, not stream exhaustion — `end()` would fail with it unconsumed.
+    // The lexer appends a real `Eof`, so `end()` would fail with it unconsumed.
     block_body(tokens, expr)
         .then_ignore(token(TokenKind::Eof).ignored())
         .map(|items| {
@@ -482,9 +358,8 @@ fn statement<'a>(
     ))
 }
 
-/// `['@loop'] ['cache'] ['let'] name = expr` — a binding, with three independent
-/// marks: `@loop` (whose recursion **may become a loop**), `cache` (whose value
-/// is a retained cell) and `let` (restrictive).
+/// `['@loop'] ['cache'] ['let'] name = expr` — a binding, with three
+/// independent marks.
 fn binding<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -508,12 +383,8 @@ fn binding<'a>(
                 .map(|(cached, (n, restrictive))| (n, restrictive, cached.is_some())),
         )
         .map(|(looping, (n, restrictive, cached))| (n, restrictive, cached, looping.is_some()));
-    // A broken binding value is recovered, not fatal: skip the offending
-    // tokens (stopping before the next separator *or the end of the input*,
-    // which the program parser then consumes) and substitute an error node, so
-    // the binding still parses and the rest of the program is reached.  The
-    // Eof token is never a recoverable-skip target: it must stay for the
-    // program's `then_ignore(Eof)`.
+    // A broken value skips to the next separator or the input's end (never Eof)
+    // and substitutes an error node.
     let value = expr.recover_with(via_parser(
         any::<In<'a>, E<'a>>()
             .filter(|t: &Token| t.kind != TokenKind::Separator && t.kind != TokenKind::Eof)
@@ -534,12 +405,8 @@ fn binding<'a>(
     )
 }
 
-/// A full expression in an operator's operand position — or, when the
-/// operator is dangling (its operand missing at a statement boundary), a
-/// non-consuming error node at the point the operand was expected.  The
-/// recovery keeps the operator consumed, so a dangling operator never
-/// leaks into the statement list and breaks it; the original "expected an
-/// expression" error is still emitted.
+/// An operand: a full expression, or a non-consuming error node when the
+/// operator is dangling at a statement boundary.
 fn operand<'a>(
     tokens: &'a [Token],
     p: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -549,15 +416,7 @@ fn operand<'a>(
     ))
 }
 
-/// One prefix conversion: `int2float e` / `float2int e`.
-///
-/// The keyword is a word rather than an operator token, so the conversion takes
-/// its operand by juxtaposition exactly like an application's head, and the
-/// caller passes the level it should bind to ([`application`] in
-/// [`expression`] — looser than application, tighter than every binary
-/// operator, so `int2float f x` converts `f x` while `int2float a + 1`
-/// converts `a`).  The two directions share this parser and differ only in the
-/// token and the [`ConvOp`] they map to.
+/// One prefix conversion, `int2float e` / `float2int e`.
 fn prefix_conv<'a>(
     tokens: &'a [Token],
     kind: TokenKind,
@@ -574,8 +433,7 @@ fn prefix_conv<'a>(
         .boxed()
 }
 
-/// An expression: the precedence chain over atoms, with `=>` as the loosest
-/// (right-associative) operator, validated into a lambda.
+/// The precedence chain over atoms, with `=>` as the loosest operator.
 fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
     recursive(|expr| {
         let atom = atom_parser(tokens, expr.clone());
@@ -597,22 +455,16 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
             })
             .boxed();
 
-        // `@assert e` — a prefix assert.  It binds tighter than every binary
-        // operator but looser than application: `@assert f x` asserts `f x`,
-        // `@assert (x <= 3)` the comparison.  Asserting a comparison under the
-        // binary operators requires parens — `@assert x <= 3` is
-        // `(@assert x) <= 3`.
+        // `@assert e` — a prefix assert, tighter than every binary operator but
+        // looser than application.
         let unary = token(TokenKind::KwAssert)
             .ignore_then(application.clone())
             .map_with(|e, me| Expr::Assert {
                 value: Box::new(e),
                 span: span_at(tokens, me.span().start),
             })
-            // `int2float e` / `float2int e` — the two prefix conversions, at the
-            // same level as the assert: they take one operand and no infix
-            // token, so they need no new precedence rung, and the word is the
-            // direction (`a + int2float b` converts `b`, `int2float a + 1`
-            // converts `a`).
+            // The two prefix conversions, at the assert's level: one operand, no
+            // infix token, so no new rung.
             .or(choice((
                 prefix_conv(
                     tokens,
@@ -630,12 +482,8 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
             .or(application.clone())
             .boxed();
 
-        // Each level below ends in `.boxed()`, and that is load-bearing for
-        // **build time**, not for behaviour: chumsky threads the whole
-        // combinator chain as one generic type, so an unboxed level
-        // re-elaborates every level under it (see
-        // `docs/notes/build-performance.md` — the same fix, applied to the
-        // levels this operator set added). The parsed output is unchanged.
+        // Each level ends in `.boxed()` for build time, not behaviour: see
+        // `docs/notes/build-performance.md`.
 
         // `*` / `/` / `%`, left-associative — the tightest binary level, so
         // `a + b * c` is `a + (b * c)`.
@@ -665,10 +513,7 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
             )
             .boxed();
 
-        // `&`, then `^`, then `|` — three levels, tightest first, so the
-        // bitwise operators nest the way every reader expects (`a | b & c` is
-        // `a | (b & c)`) and bind tighter than a comparison, so `a & b == c` is
-        // `(a & b) == c`.  Over two comparison results — which are `0`/`1` —
+        // `&`, `^`, `|` — three levels, tightest first; over `0`/`1` results
         // they are the language's `and`/`xor`/`or`.
         let bitand = sum
             .clone()
@@ -701,28 +546,14 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
             )
             .boxed();
 
-        // The comparisons, left-associative, and the loosest binary level:
-        // `<` `>` `<=` `>=` `==` `!=`.  `@in` (set membership) sits here too:
-        // it is a predicate yielding the same `0`/`1` the comparisons yield, so
-        // `x @in S == 1` reads as `(x @in S) == 1`, and its right operand is an
-        // ordinary expression at this level — the set it tests against.
-        //
-        // **`>` is the one operator that is also a delimiter**, so whether it is
-        // the comparison at all is decided *before* it is consumed: it is the
-        // comparison when an expression follows it **unglued**, and it closes
-        // the angle bracket it is in otherwise.  That is the grammar's own rule
-        // read literally — an infix operator needs a right operand, and a
-        // *glued* delimiter is never the start of one: a glued `(` or `<`
-        // belongs to the angle form (`struct<…>(…)` instantiates, `X<e><0>`
-        // chains another raw read).  Without the test the operand of `>` would
-        // swallow both, and `struct<Int, Int>(1, 2)` would stop parsing.
-        //
-        // The test is a zero-width lookahead **at** the `>` rather than a peek
-        // after it, and that placement is what keeps the diagnostics: a peek
-        // past the `>` records its error one token further on, which wins
-        // chumsky's furthest-error rule and makes every malformed angle bracket
-        // (`<Int>`, `f <3>`) report "at the end of the program" instead of at
-        // the bracket it is in.
+        // The comparisons, left-associative, and the loosest binary level; `@in`
+        // sits here too (it yields the same `0`/`1`).
+
+        // `>` is both the comparison and a delimiter: it compares only when an
+        // expression follows it **unglued**.
+
+        // Otherwise it closes the angle bracket it is in
+        // (`docs/notes/operators.md` §4).
         let comparison_loose = choice((
             token(TokenKind::LAngle).to(BinOp::Lt),
             token(TokenKind::Leq).to(BinOp::Leq),
@@ -764,14 +595,8 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                 })
             });
 
-        // `:` (the type annotation), `#` (the perspective) and `!` (the
-        // refinement) at the same precedence, right-associative.  Any may
-        // appear alone; they fold into a single `Annotation` carrying whichever
-        // are present (at most one of each).  Every right side is parsed at the
-        // `->` level: `e : Int -> Int` annotates with the arrow type, `e # n`
-        // with `n`, `e ! p` with the predicate `p` — so a refinement predicate
-        // is written explicitly, `e : Int ! (v => v > 3)`, and a bare `e ! f x`
-        // takes `f` alone (parenthesize an application).
+        // `:` `#` `!` `?` at the same precedence, right-associative; each right
+        // side parses at the `->` level.
         let term4 = term3
             .clone()
             .then(
@@ -827,18 +652,7 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                         ..
                     } => match *value {
                         Expr::Name(parameter, parameter_span, _) => {
-                            // A parameter **refinement** is desugared into a
-                            // body statement, `x ! p => e` becoming
-                            // `x => { x ! p; e }` — the same desugar the
-                            // perspective documents, but *not* optimized into
-                            // an IR parameter field (the perspective's
-                            // `parameter_attribute` is a single slot, and the
-                            // desugar is the general form).  It buys the
-                            // refinement's whole semantics from the ordinary
-                            // annotation rule: the annotate-and-assert runs in
-                            // the body scope, so the assertion is registered on
-                            // the function being built and an apply clone
-                            // re-checks it against the call's argument
+                            // A parameter refinement desugars to `x => { x ! p; e }`
                             // (`docs/notes/operator-polymorphism.md` §3).
                             let r#return = match refinement {
                                 None => rhs,
@@ -884,9 +698,7 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
     })
 }
 
-/// Fold a binary operator application into its [`Expr`] node, spanning from the
-/// left operand's start — the shape every precedence level shares, so the levels
-/// differ only in which operators they accept and what they accept as an
+/// Fold a binary operator into its [`Expr`] node, spanning from the left
 /// operand.
 fn bin_op(left: Expr, operator: BinOp, right: Expr) -> Expr {
     let span = left.span();
@@ -924,15 +736,7 @@ enum AnnPiece {
 }
 
 /// Accumulate a `: T` / `# p` / `! r` / `? e` chain into one
-/// [`Expr::Annotation`], carrying whichever of the four annotations are present
-/// (at most one of each — a later one of the same kind overwrites, matching the
-/// `expr [: expr] [# expr] [! expr] [? expr]` grammar).  `e : A : B` keeps `B`
-/// (rightmost wins), as before.  An expression with no annotation (`rest`
-/// empty) is returned unchanged — it is not wrapped in a no-op
-/// `Annotation`, so the grammar stays faithful.
-/// `? e` is the label slot: a metadata value (a user-made struct instance),
-/// never a constraint.  `! r` is the opposite: a predicate on the value,
-/// required to evaluate to `1`.
+/// [`Expr::Annotation`]; a later one of a kind overwrites.
 fn fold_annotations(first: Expr, rest: Vec<AnnPiece>) -> Expr {
     if rest.is_empty() {
         return first;
@@ -968,18 +772,12 @@ enum Pre {
     FatArrow(Box<Expr>, Box<Expr>),
 }
 
-/// Whether a token can begin an expression — the lookahead that tells a
-/// comparison's `>` from a `>` that closes an angle bracket.
+/// Whether a token can begin an expression — the `>` comparison lookahead.
 ///
-/// **It mirrors [`atom_parser`]'s `primary` alternatives**, with one deliberate
-/// absence: `Glue`.  A glued delimiter is a *postfix* form's marker or the
-/// delimiter of the form that follows, never the start of a new operand — after
-/// a closing `>` a glued `(` is a struct instantiation and a glued `<` another
-/// raw read, which is exactly the shape this predicate must not steal.  Drift
-/// here is loud rather than silent: a primary kind left out makes `a > <that
-/// kind>` stop parsing (the `>` is taken as a closer), and a kind included that
-/// cannot begin an expression makes the reverse fail.  Both are parse errors at
-/// the token, not a misparse.
+/// # Invariant
+/// It mirrors [`atom_parser`]'s primaries, minus `Glue`: a glued delimiter is a
+/// postfix marker, never the start of a new operand.  Drift is loud rather than
+/// silent — either direction is a parse error at the token, never a misparse.
 fn starts_an_expression(kind: &TokenKind) -> bool {
     matches!(
         kind,
@@ -998,9 +796,8 @@ fn starts_an_expression(kind: &TokenKind) -> bool {
             | TokenKind::KwIf
             | TokenKind::KwArray
             | TokenKind::KwAssert
-            // The prefix operators of the `unary` level, listed here beside the
-            // assert for the same reason: they begin an expression without being
-            // atoms, and `a > int2float b` must read its `>` as a comparison.
+            // The `unary` level's prefix operators begin an expression without
+            // being atoms, so `a > int2float b` compares.
             | TokenKind::KwInt2Float
             | TokenKind::KwFloat2Int
             | TokenKind::Dollar
@@ -1011,13 +808,11 @@ fn starts_an_expression(kind: &TokenKind) -> bool {
     )
 }
 
-/// The zero-width lookahead that decides whether the `>` at the cursor is the
-/// comparison: it succeeds when the token **after** the `>` can begin an
-/// expression, and consumes nothing either way.
+/// The zero-width lookahead deciding whether the `>` at the cursor compares.
 ///
-/// The `>`'s own position decides where a failure is recorded — see the
-/// comparison level in [`expression`] for why that matters, and
-/// [`starts_an_expression`] for what counts as an expression's beginning.
+/// # Invariant
+/// It consumes nothing and matches **at** the `>` — see the comparison level in
+/// [`expression`] for why the position matters.
 fn a_comparison_follows<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, (), E<'a>> + Clone {
     // The span of a zero-width match is the cursor's own token index, so the
     // token after the `>` is `at + 1`.
@@ -1031,15 +826,8 @@ fn a_comparison_follows<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, (), 
         .ignored()
 }
 
-/// The atoms, with their postfix forms: `e[i]` (array index), `a(k)` (the
-/// positional slot read — an adjacent single-expression paren), `t{k}`
-/// (table lookup), `X<e>` (raw type-component read), and `C(...)` (struct
-/// instantiation — any other adjacent paren content).  The bracket and angle
-/// forms are always postfix, with no whitespace rule; a paren or a brace is
-/// postfix
-/// *only when adjacent* (no space before it) — a spaced `(` is a paren
-/// atom, and a spaced `{` is a block: the application rule treats either
-/// as an argument, never this postfix.
+/// The atoms, with their postfix forms: `e[i]`, `a(k)`, `t{k}`, `X<e>`, `X::a`,
+/// and `C(...)`.
 fn atom_parser<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
@@ -1070,10 +858,8 @@ fn atom_parser<'a>(
             token(TokenKind::KwFloat).map(|t| Expr::TypeConst(TypeConst::Float, t.span)),
             token(TokenKind::KwString).map(|t| Expr::TypeConst(TypeConst::String, t.span)),
             token(TokenKind::KwType).map(|t| Expr::TypeConst(TypeConst::Type, t.span)),
-            // `_` — an inference placeholder in any position (type or value).
-            // It is its own token, never a name, so it can appear as a value
-            // expression too (`f _`, `(1, _)`, `_ : Int`) but cannot be bound
-            // or used as a lambda parameter.
+            // `_` is its own token, never a name: it can appear as a value but
+            // cannot be bound.
             token(TokenKind::Placeholder).map(|t| Expr::Placeholder(t.span)),
             name().map(|(n, span)| Expr::Name(n, span, None)),
             native_call(tokens, expr.clone()),
@@ -1089,19 +875,8 @@ fn atom_parser<'a>(
         )))
         .labelled("an expression");
 
-    // The postfix forms, chained left.  A `[` after an expression is always
-    // an index, a `<` after an expression is the **raw** component read
-    // `X<e>` (the container's type must be the tuple kind) — the glued `<` no
-    // longer builds an array
-    // type (that is now the keyword-led `array<T, n>` atom, see
-    // [`array_type`]) — and a glued `::name` is the **raw** named read
-    // `X::a` (the container's type must be a TypeStruct).  A `(` or a `{` is
-    // postfix only when *adjacent* — the bracket comes straight after the
-    // expression, no space between: a `(` holding a single comma-free
-    // expression is the positional slot read `a(k)`, any other adjacent `(`
-    // is struct instantiation, an adjacent `{` is a table lookup.  A spaced
-    // `(` is a paren atom and a spaced `{` a block; the application rule
-    // treats either as an argument, never this postfix.
+    // The postfix forms, chained left: `[` is an index, a glued `<` is `X<e>`,
+    // and a glued `::name` is `X::a`.
     let glue = token(TokenKind::Glue).ignored();
     let postfix = choice((
         token(TokenKind::Dot)
@@ -1165,14 +940,8 @@ fn atom_parser<'a>(
                         span,
                     },
                     Postfix::Paren((fields, saw_comma)) => {
-                        // The single comma-free expression `a(e)` is the
-                        // positional slot read; every empty or comma-bearing
-                        // form instantiates (`a()`, `a(,)`, `a(e,)`,
-                        // `a(e1, e2)`), mirroring the tuple grammar's `()`
-                        // unit vs `(,)` empty tuple.  A single comma-free
-                        // *named* argument (`a(.x 1)`) is still an
-                        // instantiation — the `.name` prefix is a field
-                        // argument, never a positional slot expression.
+                        // A single comma-free expression is the slot read; every empty
+                        // or comma-bearing form instantiates.
                         if fields.len() == 1 && !saw_comma && fields[0].name.is_none() {
                             let mut iter = fields.into_iter();
                             let only = iter.next().unwrap();
@@ -1206,9 +975,7 @@ enum Postfix {
     Paren((Vec<StructInstArg>, bool)),
 }
 
-/// `.name expr` — a named struct-field argument (`A(.x 1)`) or a plain
-/// expression (a positional argument).  The `.` prefix is the discriminator,
-/// the same one a `struct<.x T, ...>` definition field uses.
+/// `.name expr` or a plain expression — one instantiation field argument.
 fn struct_inst_field<'a>(
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, StructInstArg, E<'a>> + Clone {
@@ -1225,19 +992,12 @@ fn struct_inst_field<'a>(
     ))
 }
 
-/// A comma-separated list of **zero or more** items, a leading, inner, or
-/// trailing comma-run tolerated — plus *whether any comma appeared*, which the
-/// paren callers ([`paren_fields`], [`struct_inst_fields`]) use to split the
-/// single-comma-free form from the instantiating one.  The other callers
-/// ([`table_literal`], [`set_literal`], [`struct_type`]) drop the flag: a
-/// table, a set, and a struct type's field list each have one form per item
-/// count.  One combinator, so the comma discipline and the comma-run tolerance
-/// of every list form cannot differ.
+/// A comma-separated list of zero or more items, runs tolerated — plus whether
+/// any comma appeared.
 ///
-/// The separators are *runs*, not single tokens: any quantity of them between
-/// two items and after the last, exactly as at the statement level — so
-/// `(1,\n2)` is the same list as `(1, 2)` and `(1,\n)` the same as `(1,)`,
-/// while `(,)` is the empty list.
+/// # Invariant
+/// Every list form shares this one combinator, so their comma discipline cannot
+/// differ.
 fn comma_list<'a, T>(
     item: impl Parser<'a, In<'a>, T, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, (Vec<T>, bool), E<'a>> + Clone {
@@ -1251,11 +1011,8 @@ fn comma_list<'a, T>(
         )
         .then(separator_run())
         .map(|((first, rest), trailing)| {
-            // The discriminator is a separator that ran *between* two items or
-            // *after* the last one, so a bare `A(1)` stays a positional read and
-            // `A(1,)` / `A(1\n2)` are instantiations.  No leading-run term is
-            // needed: the loop above pairs every run with the item that follows
-            // it, so a run cannot be left over at the front.
+            // A separator between items or after the last means instantiation; a
+            // bare `A(1)` is the slot read.
             let saw_comma = !rest.is_empty() || !trailing.is_empty();
             let mut items = Vec::new();
             if let Some(first) = first {
@@ -1266,35 +1023,23 @@ fn comma_list<'a, T>(
         })
 }
 
-/// The content of an adjacent `(` in a struct-instantiation position: zero or
-/// more field arguments (each positional or `.name`-prefixed) separated by
-/// commas, a trailing comma tolerated — plus *whether any comma appeared*.
-/// The caller splits the single-comma-free form: a lone unnamed argument is
-/// the positional slot read, everything else instantiates.
+/// The content of an adjacent `(` in an instantiation position, plus whether
+/// any comma appeared.
 fn struct_inst_fields<'a>(
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, (Vec<StructInstArg>, bool), E<'a>> + Clone {
     comma_list(struct_inst_field(expr))
 }
 
-/// The content of an adjacent `(`: zero or more expressions separated by
-/// commas, a trailing comma tolerated — plus *whether any comma appeared*.
-/// The caller splits the two single-expression shapes: `a(e)` (one
-/// expression, no comma) is the positional slot read, while every
-/// comma-bearing or empty form instantiates.  `a(,)` parses as the empty
-/// field list (the trailing comma is the whole content) — the instantiation
-/// spelling of the tuple grammar's `(,)` empty tuple, against the future
-/// `()` unit.
+/// The content of an adjacent `(`: expressions plus whether any comma appeared.
 fn paren_fields<'a>(
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, (Vec<Expr>, bool), E<'a>> + Clone {
     comma_list(expr)
 }
 
-/// `(e)` — grouping, parens transparent; `(e1, …, en)` — a tuple value (always
-/// a [`Expr::Tuple`]; the [`Expr::TypeTuple`] form comes from angle brackets,
-/// see [`angle_tuple`]).  A trailing comma is tolerated, and the separators
-/// are runs, so the elements may be one per line.
+/// `(e)` — transparent grouping; `(e1, …, en)` — a tuple value (angle brackets
+/// spell the tuple type).
 fn paren<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1319,11 +1064,8 @@ fn paren<'a>(
         })
 }
 
-/// `$name(args…)` — a native-operator call.  A plugin's embedded source uses
-/// this to call one of its registered native operators; the name resolves only
-/// against the compiling module's private registry.  The arg list is the
-/// comma-separated expr list of a parenthesized form (adjacent parens — a
-/// `$` native call never uses a spaced paren).
+/// `$name(args…)` — a native-operator call; the name resolves only against the
+/// module's private registry.
 fn native_call<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1341,10 +1083,8 @@ fn native_call<'a>(
         })
 }
 
-/// `[e1, …, en]` — an array literal (its elements are terms).  A trailing
-/// comma is tolerated.
-/// An element may be prefixed with the `~` shallow marker — the only place
-/// `~` is accepted.
+/// `[e1, …, en]` — an array literal, where an element may carry the `~` shallow
+/// marker.
 fn array_literal<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1368,12 +1108,8 @@ fn array_literal<'a>(
         })
 }
 
-/// `table { k1 ==> v1, k2 ==> v2, … }` — a constant table literal.  Each
-/// entry is a key/value pair separated by `==>`.  Keys and values are full
-/// expressions; the table arrow is not part of the expression grammar, so
-/// it unambiguously separates the pair.  Anything else recovers as a parse
-/// error.  Entries are comma-separated with a tolerated trailing comma;
-/// `table {}` is the empty table.
+/// `table { k ==> v, … }` — a constant table literal; `==>` separates the pair
+/// unambiguously.
 fn table_literal<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1405,11 +1141,7 @@ fn table_literal<'a>(
         .map_with(|(entries, _), me| Expr::Table(entries, span_at(tokens, me.span().start)))
 }
 
-/// `set{a, b, …}` — a set of ordinary values.  The form is keyword-led in
-/// *value* position, exactly like `table{…}`: angle brackets are the spelling
-/// of an expression in type position, and a set is not one.  The members are
-/// full expressions, comma-separated with a tolerated trailing comma;
-/// `set{}` is the empty set.
+/// `set{a, b, …}` — a set of ordinary values, keyword-led like `table{…}`.
 fn set_literal<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1422,10 +1154,8 @@ fn set_literal<'a>(
         .map_with(|(members, _), me| Expr::Set(members, span_at(tokens, me.span().start)))
 }
 
-/// An array element with an optional `~` prefix: `~ e`, `~2 e`, or a plain
-/// `e`.  The marker token carries the depth (`usize::MAX` = the bare `~`);
-/// the marker wraps the element as [`Expr::Shallow`], keeping the marker's
-/// own span.
+/// An array element with an optional `~` prefix; the marker wraps it as
+/// [`Expr::Shallow`].
 fn tilde_marked<'a>(
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
@@ -1443,11 +1173,7 @@ fn tilde_marked<'a>(
         })
 }
 
-/// `<e1, …, en>` — always a `TypeTuple`, in term and type position alike
-/// (angle brackets are exclusively type-level, so there is no mode flag
-/// here, unlike `( )`).  At least two elements: a single element is a typo
-/// for either `(e)` grouping or a real tuple type.  The separators are runs, so
-/// the elements may be one per line, and a trailing one is tolerated.
+/// `<e1, …, en>` — always a `TypeTuple`, with at least two elements.
 fn angle_tuple<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1471,12 +1197,7 @@ fn angle_tuple<'a>(
         })
 }
 
-/// One `struct<…>` field: a `.name` prefix followed by the field's type
-/// expression, or a bare type expression.  The leading `.` is the
-/// language-server-friendly discriminator — it unambiguously marks a named
-/// field, so a field name can never be confused with a field type while the
-/// user is typing.  A bare type is an unnamed (positional) field; a
-/// `.name Type` is a named field.
+/// One `struct<…>` field: `.name type`, or a bare (positional) type.
 fn struct_field<'a>(
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, StructField, E<'a>> + Clone {
@@ -1488,13 +1209,7 @@ fn struct_field<'a>(
     choice((named, unnamed))
 }
 
-/// `struct<T1, …, Tn>` — a nominal struct type.  Each field may carry an
-/// optional name (`.name type`); a bare field is positional.  The field list
-/// is **optional**, the empty form being `struct<>` — the type-level mirror of
-/// the instantiation's `A()`/`A(,)` (see [`struct_inst_fields`]) — so the
-/// field list is exactly the [`comma_list`] discipline: zero or more fields,
-/// the separators are runs, and a leading, inner, or trailing run is
-/// tolerated (`struct<,>`, `struct<Int,>`, `struct<\n>`).
+/// `struct<…>` — a nominal struct type; the field list is optional (`struct<>`).
 fn struct_type<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1503,19 +1218,14 @@ fn struct_type<'a>(
     token(TokenKind::KwStruct)
         .ignore_then(token(TokenKind::Glue).ignored().or_not())
         .ignore_then(token(TokenKind::LAngle))
-        // The separator flag is the instantiation split's business, not a
-        // struct type's: every field count is one struct type here.
+        // The separator flag is the instantiation split's, not a struct type's.
         .ignore_then(comma_list(field).map(|(fields, _saw_separator)| fields))
         .then_ignore(token(TokenKind::RAngle))
         .map_with(|fields, me| Expr::StructType(fields, span_at(tokens, me.span().start)))
 }
 
-/// `array<T, n>` — the array type: the element type `T` and the length `n`,
-/// keyword-led exactly like `struct<…>`.  This replaces the old glued
-/// `T<e>` array-type postfix, which is now the raw type-component read
-/// (`X<e>`).  Exactly two fields: `array<Int, 3>` (a single field is a
-/// typo).  The one separator between them is a run, so the two fields may be on
-/// different lines, and a trailing one is tolerated.
+/// `array<T, n>` — the array type, keyword-led like `struct<…>`, with exactly
+/// two fields.
 fn array_type<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1534,9 +1244,7 @@ fn array_type<'a>(
         })
 }
 
-/// `{ stmt; …; expr }` — a block: scoped statements followed by the block's
-/// value.  The body is the same statement list as a program's, recursing
-/// through the same expression parser.
+/// `{ stmt; …; expr }` — a block: a program's statement list plus its value.
 fn block<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1596,19 +1304,12 @@ enum BlockItem {
     Return(Expr),
 }
 
-/// A block body: a list of body items separated by separators.  Each item is a
-/// (possibly `pub`) statement, or a `return <expr>` tail marker.  This is the
-/// whole body *syntax* — a plain separator-separated list; separators may be
-/// any quantity and sit anywhere between items (leading, trailing, consecutive,
-/// or a bare newline), and the end of the input / a `}` is **not** a separator
-/// — it just terminates the list.  The body's tail (and whether it is a record)
-/// is resolved *later* by [`split_block_items`].
+/// A block body: a separator-separated list of body items — a possibly `pub`
+/// statement or a `return <expr>` tail marker.
 ///
-/// Shared by a `{ … }` block and the top level — the top level *is* a block
-/// body terminated by the end of the input.
-///
-/// Returns the raw item list, each paired with the token-index range it
-/// covered (so [`Program::stmt_ranges`] can be built once the tail is split).
+/// # Invariant
+/// The end of the input or a `}` is **not** a separator; it terminates the list.
+/// The tail is resolved later by [`split_block_items`].
 type BlockBody = Vec<(BlockItem, (usize, usize))>;
 
 fn block_body<'a>(
@@ -1617,10 +1318,8 @@ fn block_body<'a>(
 ) -> impl Parser<'a, In<'a>, BlockBody, E<'a>> + Clone {
     let seps = separator_run();
     let seps1 = separators_between();
-    // Each item: a `return <expr>` (the tail marker), or a (possibly `pub`)
-    // statement.  Broken items are recovered by skipping tokens and retrying —
-    // stopping at the end of the input *or* a block's closing brace, so a
-    // recovered statement never swallows the tokens after its terminator.
+    // A broken item skips tokens and retries, stopping at Eof or a `}` so it
+    // never swallows the terminator.
     let item = choice((
         token(TokenKind::KwReturn)
             .ignore_then(expr.clone())
@@ -1650,20 +1349,13 @@ fn block_body<'a>(
         })
 }
 
-/// Resolve a parsed block body's **tail** — the later stage over the raw item
-/// list ([`BlockBody`]).  An explicit `return <expr>` anywhere designates the
-/// body's tail (a second `return` is dropped); otherwise the *last* bare
-/// expression is the tail, and a trailing binding (or an empty body) leaves no
-/// tail — the body is a record (a struct-returning block or a record program).
-///
-/// This is deliberately separate from [`block_body`] (which is only the
-/// separator-separated list *syntax*): the tail is identified by its position
-/// at the end of the body, not by the separator grammar.
+/// Resolve a block body's **tail**: an explicit `return <expr>`, else the last
+/// bare expression.
 fn split_block_items(
     items: Vec<(BlockItem, (usize, usize))>,
 ) -> (Vec<BlockStmt>, Vec<(usize, usize)>, Option<Expr>) {
-    // An explicit `return <expr>` designates the body's tail; every other
-    // item is a statement (a second `return` is dropped).
+    // An explicit `return <expr>` designates the tail; a second `return` is
+    // dropped.
     if items
         .iter()
         .any(|(i, _)| matches!(i, BlockItem::Return(..)))
@@ -1725,9 +1417,8 @@ fn split_block_items(
     }
 }
 
-/// A statement inside a `{ … }` block: an optional `pub` prefix plus the
-/// statement.  `pub` and `let` cannot co-exist — a `pub` mark on a `let`
-/// (restrictive) binding is a parse error.
+/// A statement inside a block: an optional `pub` prefix; `pub` cannot mark a
+/// `let` binding.
 fn block_statement<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1747,10 +1438,8 @@ fn block_statement<'a>(
         })
 }
 
-/// `if cond then e1 else e2` — a conditional.  `cond` is any expression up
-/// to the `then` keyword (both keywords delimit it — neither is an atom or
-/// an infix operator, so the condition cannot extend through them); the
-/// branches extend maximally, like a lambda body.
+/// `if cond then e1 else e2` — the keywords delimit the condition and the
+/// branches extend maximally.
 fn if_expr<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,

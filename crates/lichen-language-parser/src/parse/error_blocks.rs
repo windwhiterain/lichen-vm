@@ -5,16 +5,10 @@ use super::*;
 use crate::ast::ErrorBlock;
 use stacksafe::stacksafe;
 /// Collect the byte-range masks of every recovered-error node in the AST, in
-/// source order.  [`Program::error_blocks`] carries these so the frontend can
-/// exclude the error regions from a content signature / diff.
+/// source order.
 pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
-    /// The walk's recursion: one frame per nested expression (through
-    /// `walk_stmt` for a block, and back here), so a deep program overflows the
-    /// stack it runs on.  The in-parser call site is inside the parser's 16 MiB
-    /// worker, but `lichen_language`'s session splice calls this walk on the
-    /// caller's thread.  `#[stacksafe]`: the recursion grows the stack instead
-    /// of overflowing the process — the arrangement `docs/notes/code-audit.md`
-    /// (P1-22) gave the frontend's walks.
+    /// One frame per nested expression: `#[stacksafe]` grows the stack
+    /// (`docs/notes/code-audit.md` P1-23).
     #[stacksafe]
     fn walk_expr(e: &Expr, out: &mut Vec<ErrorBlock>) {
         match e {

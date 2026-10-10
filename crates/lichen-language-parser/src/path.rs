@@ -1,32 +1,9 @@
-//! Occurrence paths: a node's identity as a route from the program root.
+//! Occurrence paths: a node's identity as a route from the program root
+//! (`docs/notes/incremental-update.md` §2).
 //!
-//! The design is `docs/notes/incremental-update.md` §2.  A retained unit's
-//! identity is its **position** in the syntax tree, not a hash of its content:
-//! a step is a **name** wherever the syntax gives the position one (a binding,
-//! a named struct field, a named instantiation argument) and an **index** only
-//! where it does not — so inserting a statement *before* a binding does not
-//! move that binding's path, while a pure child-index scheme would move every
-//! path after it.  A name that **repeats** in its own list is not a position
-//! (two entries would share one path, and a path is an identity): every entry
-//! carrying a repeated name falls back to its index, exactly as an unnamed one
-//! does.  Only that list's own names are compared — the same name in two
-//! different lists is two positions, which is what a path's steps already say.
-//!
-//! The tree is the **AST**, not the highlevel IR.  The IR is a graph (a
-//! binding's node *is* its value's node, and it holds no binding names), while
-//! the AST is the tree the resolver already walks by name.  A path therefore
-//! names a *position*: a node reached by several positions has several paths,
-//! and a retained cell is a position, not a node.
-//!
-//! Two contracts live here and nowhere else:
-//!
-//! - [`children`] is the **step vocabulary** — which positions a node has and
-//!   what reaches each one.  Changing it renumbers every stored path, so it is
-//!   a compatibility contract exactly as the attribute order is.
-//! - Fixed-arity positions use **reserved role slots**, not compacted
-//!   positions: a lambda's `parameter_type` is always `Index(0)` and its
-//!   `return` always `Index(2)`, whether or not the optional annotations are
-//!   present.  An absent role simply does not resolve.
+//! # Invariant
+//! [`children`] is the whole step vocabulary: changing it renumbers every
+//! stored path.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -36,8 +13,7 @@ use crate::ast::{Binding, Expr, Program, RecordField, Stmt};
 /// One step of an occurrence path.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Step {
-    /// A named position: a binding, a named struct field, a named
-    /// instantiation argument.  Stable under an insertion before it.
+    /// A named position: a binding, a named struct field, or a named argument.
     Name(String),
     /// A positional step: a reserved role slot (see the module doc) or an
     /// element of a list whose syntax gives no name.
@@ -94,9 +70,8 @@ pub enum Node<'a> {
 }
 
 impl<'a> Node<'a> {
-    /// The expression this position holds — a binding's or a field's *value*
-    /// (a binding's node is its value's node: the IR's graph-sharing
-    /// invariant), or the expression itself.
+    /// The expression this position holds: a binding's or field's value, or the
+    /// expression.
     pub fn expr(self) -> &'a Expr {
         match self {
             Node::Binding(binding) => &binding.value,
@@ -106,9 +81,8 @@ impl<'a> Node<'a> {
     }
 }
 
-/// The children of `expr`, each with the step that reaches it.
-///
-/// This function *is* the step vocabulary (see the module doc).
+/// The children of `expr`, each with the step that reaches it — the step
+/// vocabulary.
 pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
     let mut out = Vec::new();
     match expr {
@@ -278,8 +252,8 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
     out
 }
 
-/// The names that appear more than once among `names` — the entries whose step
-/// must fall back to an index (see the module doc).
+/// The names appearing more than once among `names`; their steps fall back to
+/// an index.
 fn repeated_names<'a>(names: impl Iterator<Item = Option<&'a str>>) -> HashSet<&'a str> {
     let mut seen = HashSet::new();
     let mut repeated = HashSet::new();
@@ -291,8 +265,7 @@ fn repeated_names<'a>(names: impl Iterator<Item = Option<&'a str>>) -> HashSet<&
     repeated
 }
 
-/// The step reaching a named-or-positional list entry: the name where the
-/// syntax gives one *and it is unique in this list*, the entry's index
+/// The step for a list entry: its name when unique in the list, its index
 /// otherwise.
 fn field_step(name: &Option<String>, index: usize, repeated: &HashSet<&str>) -> Step {
     match name {
@@ -306,9 +279,8 @@ fn push_index<'a>(out: &mut Vec<(Step, Node<'a>)>, index: u32, expr: &'a Expr) {
     out.push((Step::Index(index), Node::Expr(expr)));
 }
 
-/// The step and node of a statement position: a binding is reached by its
-/// **name** (unless that name repeats in the same statement list), a bare
-/// expression statement by its index.
+/// The step and node of a statement: a binding by name, a bare expression by
+/// index.
 fn statement_position<'a>(
     statement: &'a Stmt,
     index: usize,
@@ -335,8 +307,7 @@ fn statement_name(statement: &Stmt) -> Option<&str> {
     }
 }
 
-/// The children of the program root: its statements, then its tail (absent for
-/// a record program — a module has no tail position).
+/// The children of the program root: its statements, then its tail.
 pub fn root_children(program: &Program) -> Vec<(Step, Node<'_>)> {
     let repeated = repeated_names(program.statements.iter().map(|bs| statement_name(&bs.stmt)));
     let mut out: Vec<(Step, Node<'_>)> = program
@@ -351,9 +322,7 @@ pub fn root_children(program: &Program) -> Vec<(Step, Node<'_>)> {
     out
 }
 
-/// Resolve `path` against `program`, one step at a time — the dynamic lookup
-/// the design asks for: nothing is registered when a node is built, and a path
-/// that no longer resolves (a moved, renamed or deleted position) simply
+/// Resolve `path` against `program`, one step at a time; an unresolvable path
 /// answers `None`.
 pub fn resolve<'a>(program: &'a Program, path: &Path) -> Option<Node<'a>> {
     let mut positions = root_children(program);

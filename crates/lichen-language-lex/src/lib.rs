@@ -1,67 +1,19 @@
-//! The lexer: source text -> tokens, each with a (line, column) span.
-//!
-//! This crate consumes the shared source-position protocol from
-//! [`lichen_span`] — the [`Span`] type and the byte→(line, col) mapping
-//! ([`line_starts`], [`line_col`]), re-exported here so `lichen_language_lex::Span`
-//! still resolves — and produces the token stream.  Nothing above it (the
-//! parser, the language crate) needs its own span type — the parser consumes
-//! [`Token::span`], and the language crate stores spans in its own map keyed by
-//! the IR id it gets back from the checker.
-//!
-//! Whitespace (space/tab/cr) is trivia and never reaches the token stream.
-//! There are no comments at all in the language -- prose lives in the
-//! preprocessor's `---...---` block as metadata strings.  A newline, comma, or
-//! semicolon all lex as the same Separator token -- the language treats them
-//! uniformly as a boundary (statement or list-element separator), and the
-//! quantity never matters.
-//!
-//! The only whitespace-significance the grammar needs is adjacency: an
-//! expression followed immediately (no trivia) by '(' '{' '<' '[' or '::' is
-//! a postfix form (a slot read or struct instantiation, a table lookup, a raw
-//! type-component read, an index, or a raw named read).
-//! So the lexer emits a Glue token immediately before one of those five
-//! delimiters when it is directly glued to the previous token.  The parser
-//! reads Glue to decide postfix vs application -- no hidden space_before flag.
-//!
-//! There is no comment masking or re-scan: the lexer sees exactly the code it
-//! is given.  [lex] handles a whole source (byte 0); [lex_with] handles a
-//! slice of a larger source, mapping every token's span and range back to the
-//! original file via a base offset and the source's line starts.
-//!
-//! Int, Float, string, Type, struct, table, let, if, then, else, return, pub,
-//! cache, and array lex as keywords.  A float literal is
-//! `[0-9]+\.[0-9]+`: a digit is required before the dot, so `.5` is a dot then
-//! an integer and `x.5` is a field read, and there is no exponent form --
-//! `1.5e3` is a float then the name `e3`.  '->'
-//! is the function-type arrow, '=>' a lambda, '::' the raw named-read
-//! separator, '==>' the table key/value separator, '@assert' the prefix assert,
-//! '!' the refinement annotation's sigil.  A
-//! bare '~' folds into Tilde(usize::MAX) and '~' with adjacent digits into
-//! Tilde(n); a run that overflows is a lex error with no token.  Any other
-//! character is a lex error -- errors accumulate (the
-//! character is skipped).
+//! The lexer: source text to tokens with `(line, column)` spans.  Grammar:
+//! `docs/language-spec.md`; postfix Glue is §2.1.
 
 use logos::Logos;
 
-// The source-position protocol lives in `lichen_span` (a tiny dependency-free
-// crate) so a crate that only needs to name a source position doesn't have to
-// depend on the lexer.  Re-exported here for the existing
-// `lichen_language_lex::{Span, line_starts, line_col}` paths.
 pub use lichen_span::{Span, line_col, line_starts, line_text, offset_of_span};
 
-/// A lex diagnostic: a message plus the source position it is grounded in.
-/// Check-free (no checker payload), so it is `Send` and stays entirely in this
-/// crate; the language crate widens it into its own [`Diag`] at `Stage::Lex`.
+/// A lex diagnostic: a message plus its source position; widened to the
+/// language crate's `Diag` at `Stage::Lex`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LexDiag {
     pub span: Option<Span>,
     pub message: String,
 }
 
-// `Eq` deliberately absent: `Float` carries an `f32`, which is not `Eq` --
-// `NaN != NaN`, so a total equality cannot exist over the float class.  Nothing
-// here folds a token into a key: every consumer keeps tokens in a `Vec` and
-// compares them with `==`, so `PartialEq` is the whole requirement.
+// No `Eq`: the `f32` payload (`docs/notes/floating-point.md` §3.3).
 #[derive(Clone, Debug, PartialEq)]
 pub enum TokenKind {
     /// An integer literal.
@@ -73,14 +25,12 @@ pub enum TokenKind {
     Str(String),
     /// An identifier, never a keyword.
     Name(String),
-    /// `_` — an inference placeholder hole, usable in *any* position (type or
-    /// value).  It is never a name: it cannot be bound and cannot be a lambda
-    /// parameter.
+    /// `_` — an inference placeholder hole in any position; never a name.
     Placeholder,
     /// The Int type constant.
     KwInt,
-    /// The Float type constant -- the real-number kind marker, a keyword for
-    /// the same reason `Int` is (see `docs/notes/floating-point.md` §3.3).
+    /// The `Float` type constant — a keyword like `Int`
+    /// (`docs/notes/floating-point.md` §3.3).
     KwFloat,
     /// The string type constant.
     KwString,
@@ -90,10 +40,7 @@ pub enum TokenKind {
     KwStruct,
     /// The table keyword -- a constant table literal.
     KwTable,
-    /// The set keyword -- a set value, `set{a, b}`, and the set type a reader
-    /// sees for one.  A set's members are ordinary values, so the form is a
-    /// value form led by a word, exactly like `table{…}`: angle brackets stay
-    /// the spelling of an expression in *type* position, and a set is not one.
+    /// The `set` keyword — a set value, `set{a, b}` (`docs/language-spec.md` §2).
     KwSet,
     /// The let keyword -- a restrictive binding.
     KwLet,
@@ -105,40 +52,24 @@ pub enum TokenKind {
     KwElse,
     /// The return keyword -- a block's explicit tail expression marker.
     KwReturn,
-    /// `@loop` -- a binding whose recursion may become a loop. The keyword
-    /// sigil is `@`; this is the first keyword to carry it.
+    /// `@loop` — a binding whose recursion may become a loop; the first keyword
+    /// at the `@` sigil.
     KwLoop,
-    /// `@assert` -- the prefix assert, `@assert e`.  It replaced the `!`
-    /// sigil (which `docs/notes/operator-polymorphism.md` §3 gives to a
-    /// refinement annotation), so the two are not confusable: `@assert` is a
-    /// word at the `@` keyword sigil, and `!` sits in the annotation's
-    /// attribute chain.
+    /// `@assert` — the prefix assert, `@assert e`; it replaced the `!` sigil,
+    /// now a refinement annotation.
     KwAssert,
-    /// `@in` -- set membership, `value @in set`: the predicate form a class
-    /// domain is consulted with (`type_of v @in Num`).  It is the one keyword
-    /// that is an **infix operator** instead of a prefix form — it takes the
-    /// operand the comparison level has already parsed and answers the
-    /// language's `0`/`1` scalar — so `@` is the sigil of a keyword and the
-    /// keyword is the operator, the way `!` is a symbol and the annotation is
-    /// the attribute (`docs/notes/operator-polymorphism.md` §3).
+    /// `@in` — set membership, `value @in set`; the one keyword that is an infix
+    /// operator.
     KwIn,
     /// The pub keyword -- a block statement marked as a struct field.
     KwPub,
-    /// The cache keyword -- a binding whose value is a *retained cell*
-    /// (`cache name = expr`).  The mark is parsed and carried on
-    /// `Binding::cached`, and the retention mechanism exists
-    /// (`lichen_language::compile_with_cells`); no production path calls it yet
-    /// -- see `docs/notes/incremental-update.md` §12.
+    /// The `cache` keyword — a binding whose value is a retained cell
+    /// (`docs/notes/incremental-update.md` §3).
     KwCache,
-    /// The array keyword -- a keyword-led array type, `array<T, n>`.  This
-    /// replaces the old `T<e>` array-type postfix, which is now the raw
-    /// type-component read (`X<e>`).
+    /// The `array` keyword — a keyword-led array type, `array<T, n>`.
     KwArray,
-    /// The `int2float` keyword -- the prefix conversion from `Int` to `Float`.
-    /// It is a keyword because the operation is the language's own (its two
-    /// classes are), and it needs no new precedence level: it sits at the
-    /// prefix level beside `!`, so `int2float f x` converts `f x` and
-    /// `int2float a + 1` converts `a`.
+    /// The `int2float` keyword — the prefix `Int` to `Float` conversion, at the
+    /// prefix level beside `!`.
     KwInt2Float,
     /// The `float2int` keyword -- the prefix conversion from `Float` to `Int`,
     /// truncating toward zero.
@@ -157,14 +88,10 @@ pub enum TokenKind {
     Hash,
     /// '?' -- the label (doc) annotation: `e ? expr`.
     Question,
-    /// `!` -- the refinement annotation's sigil, `e : T ! p`: `p` is a
-    /// predicate on the annotated value's *value*, required to evaluate to
-    /// `1`.  The assert, which that sigil used to spell, is the keyword
-    /// [`TokenKind::KwAssert`] (`@assert`).
+    /// `!` — the refinement annotation's sigil, `e : T ! p`; the assert it used
+    /// to spell is `@assert`.
     Bang,
-    /// '$' -- a native-operator call prefix: `$jit(f)`.  Reserved for a
-    /// plugin's own embedded source; a normal file never lexes it as a valid
-    /// call (the checker's private registry resolves it, or it is an error).
+    /// '$' — a native-operator call prefix, `$jit(f)`, for a plugin's own source.
     Dollar,
     /// '=' -- a statement binding.
     Equals,
@@ -206,23 +133,17 @@ pub enum TokenKind {
     LBrace,
     /// '}'.
     RBrace,
-    /// '<' -- exclusively type-level as a **delimiter**, and the less-than
-    /// comparison as an operator.  Which of the two is the parser's decision,
-    /// not the lexer's, and the rule it uses is the Glue marker: a `<` that is
-    /// *glued* to the previous token is the raw index `X<e>`, and a `<` with a
-    /// space before it is either a tuple type at an operand position or the
-    /// comparison — the comparison when an expression precedes it.
+    /// '<' — a type delimiter, or the less-than comparison; Glue decides
+    /// (`docs/language-spec.md` §2.1).
     LAngle,
-    /// '>' -- closes '<' as a delimiter, and is the greater-than comparison as
-    /// an operator.  A `>` followed by an expression is the comparison; a `>`
-    /// followed by anything else closes the angle bracket it is in.
+    /// '>' — closes an angle bracket, or is the greater-than comparison.
     RAngle,
     /// A '~' shallow marker.
     Tilde(usize),
     /// A newline, comma, or semicolon -- a uniform boundary token.
     Separator,
-    /// A zero-width marker: the next '(' '{' '<' '[' or '::' is directly
-    /// glued to the previous token, so it is a postfix form.
+    /// A zero-width marker: the next '(' '{' '<' '[' or '::' is glued to the
+    /// previous token, so it is a postfix form.
     Glue,
     Eof,
 }
@@ -311,16 +232,13 @@ impl std::fmt::Display for Token {
     }
 }
 
-/// The result of lexing: the tokens (always ending with Eof) plus any lex
-/// errors.  Errors accumulate -- an unexpected character is skipped and
-/// lexing continues.
+/// The result of lexing: the tokens (always ending with Eof) plus any errors.
 pub struct Lexed {
     pub tokens: Vec<Token>,
     pub errors: Vec<LexDiag>,
 }
 
-/// The token kinds logos recognizes.  Payloads are read from the matched
-/// slice in the loop so integer overflow can be its own error.
+/// The token kinds logos recognizes; payloads are read from the matched slice.
 // Same reason as `TokenKind`: the float payload is `f32`, not `Eq`.
 #[derive(Logos, Clone, Debug, PartialEq)]
 #[logos(skip r"[ \t\r]+")]
@@ -329,18 +247,12 @@ enum RawToken {
     Separator,
     #[regex(r"[0-9]+")]
     IntLit,
-    /// A float literal.  A digit is required **before** the dot as well as
-    /// after it, because a leading dot is already field access: with
-    /// `[0-9]*\.[0-9]+`, `.5` would lex as one float and `x.5`'s `x` would
-    /// still win by priority, but `.5` alone must not be a literal, and
-    /// requiring the leading digit states that in the pattern rather than in
-    /// the loop.  Longest-match then keeps `3.5` whole while `1.` and `x.5`
-    /// stay `Int`/`Name`, `Dot`, `Int`.
+    /// A float literal `[0-9]+\.[0-9]+`; a digit before the dot is required
+    /// (`docs/notes/floating-point.md` §3.3).
     #[regex(r"[0-9]+\.[0-9]+")]
     FloatLit,
-    /// A `"..."` string literal (no escapes; may span newlines).  The trailing
-    /// quote is optional so an unterminated string lexes as one unit and is
-    /// diagnosed as a whole, rather than as a run of single-char errors.
+    /// A `"..."` string literal: no escapes, may span newlines, the closing
+    /// quote optional.
     #[regex("\"[^\"]*\"?")]
     StrLit,
     #[token("Int")]
@@ -371,9 +283,7 @@ enum RawToken {
     KwPub,
     #[token("cache")]
     KwCache,
-    /// A `@`-prefixed word. Only the keywords carry the sigil, so the word is
-    /// matched whole and resolved below: an unknown one is a lex error, which is
-    /// what reserves `@` for the keywords that follow.
+    /// A `@`-prefixed word; an unknown one is a lex error, which reserves `@`.
     #[regex(r"@[A-Za-z_][A-Za-z0-9_]*")]
     AtNameLit,
     #[token("array")]
@@ -470,19 +380,13 @@ pub fn lex(source: &str) -> Lexed {
     lex_with(source, &line_starts, 0)
 }
 
-/// Lex `code`, a slice of a larger source (whose line starts are
-/// `line_starts`) beginning at byte `base` within it.  Token ranges and
-/// spans are absolute positions in the full source (`base + local`), so
-/// diagnostics and LSP positions point at the real source even when `code`
-/// is only a suffix of it (e.g. the code after a stripped `---...---`
-/// preprocessor block).
+/// Lex `code`, a slice of a larger source at `base`; ranges and spans are
+/// absolute positions in that source.
 pub fn lex_with(code: &str, line_starts: &[usize], base: u32) -> Lexed {
     let mut tokens: Vec<Token> = Vec::new();
     let mut errors: Vec<LexDiag> = Vec::new();
     let mut lexer = RawToken::lexer(code);
-    // End of the last real token (not a Separator/Glue).  Used to decide
-    // whether the next delimiter is glued to it.  Reset to None at a boundary
-    // (a Separator or an error) so a following delimiter is a fresh atom.
+    // Byte end of the last real token; None after a Separator or error.
     let mut prev_end: Option<u32> = None;
     while let Some(result) = lexer.next() {
         match result {
@@ -544,34 +448,12 @@ pub fn lex_with(code: &str, line_starts: &[usize], base: u32) -> Lexed {
     Lexed { tokens, errors }
 }
 
-/// Re-lex a source **incrementally**, given the previous full token stream and
-/// a single edit.
+/// Incremental re-lex: reuse `prev`'s prefix, re-lex the edit, re-sync
+/// (`docs/notes/incremental-parse-compile.md`).
 ///
-/// The edit replaces the bytes `[a, b)` **of the old source** (a pure insertion
-/// has `a == b`; a pure deletion removes `[a, b)` and inserts nothing) with new
-/// text, turning `old_source` into `new_source` (so positions `>= a` shift by
-/// `delta = new_source.len() - old_source.len()`).  `prev` is the full token
-/// stream of `old_source` (including its `Eof`), with byte ranges in absolute
-/// source coordinates.
-///
-/// `old_source` and `new_source` are the **code** of a possibly larger source
-/// (the text after a stripped `---…---` block) beginning at byte `base` within it,
-/// exactly as [`lex_with`] takes them; `a`, `b` and the token ranges are
-/// *absolute* positions in that larger source, so the two coordinate spaces are
-/// never mixed.  A whole-file caller passes `base = 0`, where the two coincide.
-///
-/// The result reuses the *prefix* of `prev` unchanged, re-lexes only the
-/// affected region, and re-uses the *suffix* by re-synchronizing against the
-/// old stream once lexing has passed the changed region and produced a token
-/// that is byte-identical to an old one at the shifted position.  This is
-/// `O(edit)` in the regex work; materializing the returned `Vec` copies the
-/// prefix and suffix.
-///
-/// The lexer is stateless except for `Glue` (an immediately-preceding token's
-/// byte-end equals this delimiter's start), so the only cross-token dependency
-/// is local.  Re-synchronization must compare (**kind, byte range**) — not
-/// byte offset alone — because an edit can *merge* two tokens (`a b` -> `ab`)
-/// or *split* one (`ab` -> `a b`).
+/// # Invariant
+/// `a`, `b` and every token range are absolute in the larger source, and two
+/// tokens match only on (kind, byte range) — an edit can merge or split one.
 pub fn lex_resume(
     prev: &[Token],
     old_source: &str,
@@ -585,15 +467,12 @@ pub fn lex_resume(
     let mut tokens: Vec<Token> = Vec::new();
     let mut errors: Vec<LexDiag> = Vec::new();
 
-    // The first old token that could be affected: the one whose byte range
-    // ends at or after `a`.  This is the token that would absorb an insertion
-    // just before `a`, or that contains the edit.
+    // The first old token whose byte range ends at or after `a`.
     let i = prev
         .iter()
         .position(|t| t.range.1 >= a as u32)
         .unwrap_or(prev.len());
-    // The byte offset (in `old_source`/`new_source`) at which to start re-lexing.
-    // `prev[i].range.0 <= a`, so this offset is identical in old and new.
+    // Start re-lexing here; `prev[i].range.0 <= a`, so old and new agree.
     let s: u32 = if i < prev.len() {
         prev[i].range.0
     } else {
@@ -603,14 +482,11 @@ pub fn lex_resume(
     // Reuse the intact prefix (tokens before index `i` are before the edit).
     tokens.extend_from_slice(&prev[..i]);
 
-    // Seed the `Glue` decision: the byte end of the last real token before the
-    // region, or `None` after a separator/error/bos.
+    // Seed the `Glue` decision: byte end of the last real token before the region.
     let mut prev_end = seed_prev_end(prev, i);
 
-    // `s` is absolute; the text it indexes starts at `base` in that space.  A
-    // caller that passes a code-relative `a` with a base offset breaks the
-    // contract the doc states, and this is where it is caught rather than
-    // slicing at a silently wrong offset.
+    // `s` is absolute, but the text it indexes starts at `base`; a code-relative
+    // `a` is caught here.
     let local = s
         .checked_sub(base)
         .expect("lex_resume: the edit span is absolute, like the token ranges");
@@ -687,9 +563,8 @@ pub fn lex_resume(
     }
 
     if let Some(jj) = resynced_at {
-        // Reuse the old suffix, shifted to the new source (positions at or past
-        // the edit move by `delta`); recompute spans so line/col stay correct
-        // even if the edit added/removed newlines.
+        // Reuse the old suffix shifted by `delta`, recomputing spans so line/col
+        // survive newline edits.
         for tk in &prev[jj..] {
             let r = (tk.range.0 as isize + delta) as u32;
             let re = (tk.range.1 as isize + delta) as u32;
@@ -713,9 +588,8 @@ pub fn lex_resume(
     Lexed { tokens, errors }
 }
 
-/// The `Glue` seed for the token at index `i`: the byte end of the last *real*
-/// token before it (skipping `Glue`s, which do not set the flag), or `None`
-/// after a separator / error / beginning of the stream.
+/// The `Glue` seed for the token at `i`: the byte end of the last real token
+/// before it, or `None`.
 fn seed_prev_end(prev: &[Token], i: usize) -> Option<u32> {
     let mut k = i;
     while k > 0 {
@@ -729,11 +603,11 @@ fn seed_prev_end(prev: &[Token], i: usize) -> Option<u32> {
     None
 }
 
-/// Attempt to re-synchronize the re-lexed token `t` against the old stream,
-/// probing from `j`.  Only re-sync on a token at or past the old edit end `b`
-/// (the only tokens whose new position is `old + delta`); an earlier token is
-/// still inside the changed region.  Advances `j` past old tokens entirely
-/// before the target so the probe is amortized `O(edit)`.
+/// Re-synchronize re-lexed token `t` against `prev`, probing from `j`.
+///
+/// # Invariant
+/// `j` only advances, so a whole re-lex is `O(edit)`; a token before the old
+/// edit end `b` never matches.
 fn resync(prev: &[Token], j: &mut usize, t: &Token, delta: isize, b: usize) -> Option<usize> {
     let target = t.range.0 as isize - delta;
     if target < b as isize {
@@ -753,9 +627,8 @@ fn resync(prev: &[Token], j: &mut usize, t: &Token, delta: isize, b: usize) -> O
     }
 }
 
-/// Map a raw token plus its matched slice to a TokenKind.  Numeric literals
-/// are parsed here — `Int`, and the `~n` shallow marker's depth; an overflow
-/// records an error and returns None (no token).
+/// Map a raw token and its matched slice to a `TokenKind`; an overflow records
+/// an error and yields no token.
 fn raw_to_kind(
     raw: &RawToken,
     slice: &str,
@@ -781,22 +654,15 @@ fn raw_to_kind(
             Some(TokenKind::Int(value))
         }
         RawToken::FloatLit => {
-            // The matched slice is digits, one dot, digits — never empty — so
-            // `from_str` is always `Ok` and its result is correctly rounded.
-            // A magnitude above `f32::MAX` parses to an infinity and is **not**
-            // a lex error: the `Int` arm's range check has no counterpart,
-            // because `f32::INFINITY` is a value the class admits (produced by
-            // the operators too, `docs/notes/floating-point.md` §4.2), while
-            // `usize` has no infinity for an overflowing `Int` to become.
+            // `from_str` always succeeds; an overflow is an infinity, not an
+            // error.
             Some(TokenKind::Float(
                 slice.parse::<f32>().unwrap_or(f32::INFINITY),
             ))
         }
         RawToken::StrLit => {
-            // The matched text is `"…"` (or a bare `"` / an unterminated
-            // `"…` when the closing quote is missing).  An unterminated
-            // string is a lex error and the token is dropped; a terminated
-            // one keeps its content (the quotes stripped).
+            // The matched text is `"…"`; an unterminated string is an error, a
+            // terminated one keeps its content.
             if slice.len() < 2 || !slice.ends_with('"') {
                 errors.push(LexDiag {
                     span: Some(lc),
@@ -852,8 +718,8 @@ fn raw_to_kind(
             let mut n: usize = 0;
             for byte in digits.bytes() {
                 let digit = (byte - b'0') as usize;
-                // Saturating would turn an out-of-range depth into the bare
-                // `~` — a different marker; report it as the `IntLit` arm does.
+                // Saturating would make an out-of-range depth the bare `~`, a
+                // different marker.
                 match n.checked_mul(10).and_then(|v| v.checked_add(digit)) {
                     Some(v) => n = v,
                     None => {

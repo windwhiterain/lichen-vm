@@ -1,7 +1,6 @@
 use super::*;
 
-/// The significant tokens: Glue and Separator are layout/boundary markers the
-/// parser consumes; the token-vocabulary tests focus on the real tokens.
+/// The real tokens, with the layout markers (Glue, Separator) filtered out.
 fn kinds(source: &str) -> Vec<TokenKind> {
     lex(source)
         .tokens
@@ -55,9 +54,7 @@ fn a_table_arrow_separates_a_table_entry() {
 
 #[test]
 fn a_glued_double_colon_is_a_raw_field_postfix() {
-    // `S::a` — the `::` is glued to `S`, so a Glue marker precedes it; the
-    // spaced `::` (the old table separator) is now `==>`.  `kinds_all`
-    // keeps Glue; `kinds` (below) filters it and Separator.
+    // `S::a` is glued, so a Glue marker precedes `::`; `kinds_all` keeps it.
     assert_eq!(
         kinds_all("S::a"),
         vec![
@@ -117,8 +114,8 @@ fn int_and_type_are_keywords_but_not_prefixes() {
 #[test]
 fn an_underscore_lexes_as_a_placeholder_token() {
     assert_eq!(kinds("_"), vec![TokenKind::Placeholder, TokenKind::Eof]);
-    // A bare `_` is a placeholder, but `_` inside a longer identifier is just
-    // part of the name — `_` is never a valid binder/identifier on its own.
+    // A bare `_` is a placeholder; inside a longer identifier it is part of the
+    // name.
     assert_eq!(
         kinds("_a a_ _1"),
         vec![
@@ -318,8 +315,8 @@ fn a_tilde_is_a_shallow_marker_token() {
 
 #[test]
 fn an_overflowing_shallow_depth_is_a_lex_error() {
-    // A depth that does not fit `usize` must not become the bare `~`, whose
-    // payload is `usize::MAX`; it is reported and dropped, like an `Int`.
+    // An out-of-range depth must not become the bare `~` (`usize::MAX`); report
+    // and drop it, like an `Int`.
     let source = "~99999999999999999999999999999999999999 x";
     let lexed = lex(source);
     assert_eq!(lexed.errors.len(), 1);
@@ -406,14 +403,10 @@ fn glue_marks_a_glued_delimiter_only() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Incremental re-lex (`lex_resume`) — the output must be *identical* to a full
-// re-lex (`lex`) of the new source, for every edit shape: token growth, split,
-// merge, deletion, append, and a newline insertion that shifts the suffix.
-// ---------------------------------------------------------------------------
+// Incremental re-lex (`lex_resume`) must match a full `lex` of the new source.
 
-/// Apply the edit `replace [a, b) of old with text`, re-lex both whole and
-/// incrementally, and assert they agree (tokens and errors).
+/// Apply the edit `[a, b) -> text`, then assert the incremental and whole
+/// re-lexes agree in tokens and errors.
 fn assert_incremental_eq(old: &str, a: usize, b: usize, text: &str) {
     let mut new = String::with_capacity(old.len() + text.len());
     new.push_str(&old[..a]);
@@ -493,13 +486,7 @@ fn incremental_resume_append_to_large_prefix() {
     assert_eq!(got.errors.len(), expected.errors.len());
 }
 
-/// The same equivalence when the code is a **suffix** of a larger source (the
-/// text after a stripped `---…---` block): `base` is the offset it starts at, and
-/// every token range and span is absolute in the larger source.
-///
-/// This is the shape the language server's session compiles, and the offset is
-/// exactly what the code-relative and absolute coordinate spaces must not be
-/// confused about.
+/// The same equivalence when `code` is a suffix, at `base`, of a larger source.
 #[test]
 fn incremental_resume_matches_full_relex_with_a_base_offset() {
     let cases: &[(&str, usize, usize, &str)] = &[

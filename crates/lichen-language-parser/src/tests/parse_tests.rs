@@ -34,8 +34,8 @@ fn bindings(program: &Program) -> Vec<&Binding> {
 fn a_program_records_statement_token_ranges() {
     let tokens = lex("a = 1\nb = 2\na + b").tokens;
     let program = parse(&tokens).program;
-    // One entry per statement plus one for the final expression, each the
-    // token-index range `[start, end)` its parse consumed.
+    // One per statement, plus one for the final expression: the token-index
+    // range `[start, end)` each parse consumed.
     assert_eq!(program.statements.len() + 1, program.stmt_ranges.len());
     // Tokens: a = 1 SEP b = 2 SEP a + b EOF.
     assert_eq!(program.stmt_ranges, vec![(0, 3), (4, 7), (8, 11)]);
@@ -62,8 +62,8 @@ fn a_region_over_the_whole_stream_equals_the_statement_sequence() {
     // Ends in an expression so the program parses cleanly.
     let tokens = lex("a = 1\nb = 2\na + b").tokens;
     let program = parse(&tokens).program;
-    // The full logical statement list = the program's `statements` (all but the
-    // last) plus the final expression as its own block statement.
+    // The program's `statements` (all but the last) plus the final expression
+    // as its own block statement.
     let expected_full = {
         let mut v = program.statements.clone();
         v.push(BlockStmt {
@@ -98,15 +98,15 @@ fn a_region_parses_a_middle_window() {
 #[test]
 fn a_traced_region_reports_absolute_token_ranges() {
     let tokens = lex("a = 1\nb = 2\na + b").tokens;
-    // The region over the whole stream (everything before Eof) must produce the
-    // same per-statement ranges as the whole-program parser.
+    // The whole-stream region must produce the same per-statement ranges as
+    // the whole-program parser.
     let (stmts, ranges, errors) = parse_statement_region_traced(&tokens, 0, tokens.len() - 1);
     assert!(errors.is_empty(), "unexpected region errors: {errors:?}");
     assert_eq!(ranges, vec![(0, 3), (4, 7), (8, 11)]);
     assert_eq!(stmts.len(), ranges.len(), "one range per statement");
 
-    // A middle window reports its ranges offset back into the whole stream
-    // (absolute token indices), not relative to the region slice.
+    // A middle window reports absolute token indices, not offsets into the
+    // slice.
     let (stmts, ranges, _) = parse_statement_region_traced(&tokens, 4, 7);
     assert_eq!(stmts.len(), 1);
     assert_eq!(ranges, vec![(4, 7)]);
@@ -114,15 +114,14 @@ fn a_traced_region_reports_absolute_token_ranges() {
 
 #[test]
 fn a_region_recovering_over_a_broken_window_still_produces_statements() {
-    // An unclosed `(` makes the trailing *expression* statement an error block;
-    // the region parser must still return that statement (recovered), like the
-    // whole program parser would.
+    // An unclosed `(` makes the trailing statement an error block, which the
+    // region parser must still return, recovered.
     let source = "a = 1\n(2";
     let tokens = lex(source).tokens;
     let whole_program = parse(&tokens).program;
     let (region_stmts, _) = parse_statement_region(&tokens, 0, tokens.len() - 1);
-    // The whole program's statement list, with the recovered tail expression
-    // appended as its own statement (the form the region parser produces).
+    // The whole program's list, with the recovered tail appended as its own
+    // statement.
     let expected_full = {
         let mut v = whole_program.statements.clone();
         v.push(BlockStmt {
@@ -137,8 +136,8 @@ fn a_region_recovering_over_a_broken_window_still_produces_statements() {
 
 #[test]
 fn a_trailing_binding_program_is_a_record_program() {
-    // A program whose last statement is a binding has no tail expression — it
-    // is a record program (a module) whose value is a struct of the bindings.
+    // A program whose last statement is a binding has no tail: it is a record
+    // program (a module).
     let tokens = lex("a = 5").tokens;
     let program = parse(&tokens).program;
     assert!(program.expr.is_none(), "no tail on a record program");
@@ -213,10 +212,8 @@ fn newlines_separate_statements() {
 
 #[test]
 fn a_run_of_separators_inside_a_list_form_is_tolerated() {
-    // The statement level tolerates any quantity of separators, and every list
-    // form shares the rule now: a run *between* items is the same list, and a
-    // run after the last one is the same trailing separator.  `array<…>` is the
-    // narrowest end of it — exactly one separator in the whole form.
+    // A run of separators between items is tolerated; a run after the last item
+    // is the same trailing separator.
     let Expr::Tuple(elements, _) = parse_ok("(1,\n2)") else {
         panic!("expected a tuple")
     };
@@ -252,9 +249,8 @@ fn a_run_of_separators_inside_a_list_form_is_tolerated() {
         parse_ok("table { 1 ==> 2,\n3 ==> 4 }"),
         Expr::Table(entries, _) if entries.len() == 2
     ));
-    // A run after the last item is still a *separator*, so it keeps the form
-    // a tuple (a bare `(1)` is transparent grouping) and still reads as an
-    // instantiation rather than a positional slot read.
+    // A run after the last item still keeps the form a tuple (a bare `(1)` is
+    // transparent grouping) or an instantiation.
     assert!(matches!(
         parse_ok("(1,\n)"),
         Expr::Tuple(elements, _) if elements.len() == 1
@@ -267,9 +263,7 @@ fn a_run_of_separators_inside_a_list_form_is_tolerated() {
 
 #[test]
 fn an_expression_cannot_continue_across_a_separator() {
-    // The other side of the same rule: a run *between list items* is tolerated,
-    // but an expression still stops at a separator — the flip side the spec
-    // states.  Widening the list forms' separators must not reach these.
+    // The flip side: an expression still stops at a separator.
     for source in ["1 +\n2", "x =>\n x + 1", "table { 1 ==>\n2 }"] {
         let tokens = lex(source).tokens;
         let Parsed { errors, .. } = parse(&tokens);
@@ -379,7 +373,7 @@ fn an_annotated_parameter_is_a_lambda() {
 #[test]
 fn parens_are_always_tuple_values_and_angles_are_always_type_tuples() {
     // `(a, b)` is a tuple *value* in every position — there is no type/value
-    // mode, so `expr : expr` parses both sides the same way.
+    // mode.
     let Expr::Annotation { r#type, .. } = parse_ok("x : (Int, Int)") else {
         panic!("expected an annotation")
     };
@@ -427,8 +421,8 @@ fn struct_types_are_positional_fields_in_angle_brackets() {
         panic!("expected an apply")
     };
     assert!(matches!(*argument, Expr::StructType(..)));
-    // A tuple-type field is spelled with angle brackets (`<<Int, Type>>`);
-    // a paren tuple in a field is a tuple *value*, not a type.
+    // A tuple-type field uses angle brackets (`<<Int, Type>>`); a paren tuple
+    // is a value.
     let Expr::StructType(fields, _) = parse_ok("struct<<Int, Type>>") else {
         panic!("expected a struct type")
     };
@@ -492,9 +486,7 @@ fn named_field_read_is_dot_postfix() {
 
 #[test]
 fn raw_named_read_is_glued_double_colon_postfix() {
-    // `S::a` — a raw named component read.  The `::` is glued to the
-    // container (a `Glue` marker precedes it), so the spaced `S :: a` is *not*
-    // this postfix (the table separator that used to read `::` is now `==>`).
+    // `S::a` — a raw named read; the `::` must be glued to the container.
     let Expr::RawNamedField {
         container, name, ..
     } = parse_ok("S::a")
@@ -512,8 +504,7 @@ fn raw_named_read_is_glued_double_colon_postfix() {
     };
     assert_eq!(name, "a");
     assert!(matches!(*container, Expr::StructType(..)));
-    // The spaced `::` is not glued, so it is not a postfix — it is a parse
-    // error (a bare `::` infix has no meaning now that tables use `==>`).
+    // The spaced `::` is not a postfix, so it is a parse error.
     let _ = parse_err("S :: a");
 }
 
@@ -537,9 +528,7 @@ fn struct_instantiation_is_adjacent_parens() {
         parse_ok("A(1,)"),
         Expr::StructInst { fields, .. } if fields.len() == 1
     ));
-    // a field-less struct instance parses in both spellings — `A()` and
-    // the empty-tuple form `A(,)` (the instantiation mirror of the
-    // tuple grammar's `(,)` empty tuple vs the future `()` unit).
+    // A field-less struct instance parses in both spellings: `A()` and `A(,)`.
     assert!(matches!(
         parse_ok("A()"),
         Expr::StructInst { fields, .. } if fields.is_empty()
@@ -651,9 +640,7 @@ fn the_array_type_keyword() {
 
 #[test]
 fn the_raw_index_postfix() {
-    // `X<e>` — the glued `<` reads element `e` of `X`'s value with no type
-    // validation (the delimiter the array type used to use).  It reads a
-    // component of a type-as-value or of any expression.
+    // `X<e>` — the glued `<` reads element `e` of `X`'s value, unvalidated.
     let Expr::RawIndex {
         container, index, ..
     } = parse_ok("<Int, string><0>")
@@ -702,9 +689,7 @@ fn the_index_postfix() {
 
 #[test]
 fn index_errors_carry_spans() {
-    // `a[]` is application of `a` to an empty array literal — the
-    // element error mentions the `~` prefix the array parser now accepts, and the
-    // two prefix keywords a unary position can start with.
+    // `a[]` applies `a` to an empty array literal.
     let err = parse_err("a[]");
     assert_eq!(
         err.message,
@@ -805,8 +790,7 @@ fn an_at_assert_binds_a_full_application_but_tighter_than_a_binary_operator() {
 
 #[test]
 fn an_at_in_membership_test_parses_at_the_comparison_level() {
-    // `a @in S` — the left operand is the application (it binds tighter), the
-    // right is an ordinary expression at this level: the set being tested.
+    // `a @in S` — the left operand is the application (it binds tighter).
     let e = parse_ok("type_of v @in set{Int, Float}");
     let Expr::BinOp {
         operator: BinOp::In,
@@ -919,8 +903,7 @@ fn block_errors_carry_spans() {
     // An empty block is not a block: the value expression is missing.
     let err = parse_err("{}");
     assert!(err.message.contains("found '}'"));
-    // A block whose last statement is a binding has no tail expression; it
-    // parses as a struct-returning block (an anonymous struct instance).
+    // A block whose last statement is a binding is a struct-returning block.
     let Expr::RecordBlock { fields, .. } = parse_ok("{a = 1}") else {
         panic!("expected a struct-returning block");
     };
@@ -934,12 +917,8 @@ fn block_errors_carry_spans() {
 
 #[test]
 fn the_recovered_error_walk_does_not_overflow_a_shallow_caller_stack() {
-    // `1+1+…` is flat in the token stream but left-nested in the AST, so the
-    // recovered-error walk recurses once per term.  Unlike the in-parser call
-    // inside the 16 MiB worker, `lichen_language`'s session splice calls it on
-    // the caller's thread, which is what this shallow thread stands in for.
-    // See `docs/notes/code-audit.md` (P1-28).  Like `P1-22`'s pin, the unfixed
-    // tree aborts this process here rather than failing an assertion.
+    // The walk recurses per term on the caller's thread; a shallow one stands
+    // in (`docs/notes/code-audit.md` P1-23).
     const TERMS: usize = 2000;
     const STACK_BYTES: usize = 128 * 1024;
     let tokens = lex(&("1+".repeat(TERMS) + "1")).tokens;
@@ -985,11 +964,8 @@ fn broken_statements_are_recovered() {
 
 #[test]
 fn dangling_operators_are_recovered() {
-    // An operator with a missing operand consumes the operator and
-    // recovers the operand as an error node — one precise error, no
-    // "could not be parsed" cascade, and the rest of the program is
-    // reached.  Same across every operator level; the recovered
-    // expression keeps the operator's shape with an error-node operand.
+    // A missing operand consumes the operator and recovers the operand as an
+    // error node, with no cascade.
     let cases: &[(&str, (u32, u32))] = &[
         ("a = 1 + ; b = 2; b", (1, 9)),
         ("a = 1 <= ; b = 2; b", (1, 10)),
@@ -1011,9 +987,8 @@ fn dangling_operators_are_recovered() {
         let Stmt::Binding(binding) = &program.statements[0].stmt else {
             panic!("{source}: first statement is a binding");
         };
-        // The dangling operator is consumed — the value keeps the
-        // operator's shape (BinOp/Arrow/Annotation/Lambda) with an
-        // error node in the operand slot.
+        // The value keeps the operator's shape with an error node in the
+        // operand slot.
         let recovered = matches!(
             &binding.value,
             Expr::BinOp { right, .. }
@@ -1035,12 +1010,8 @@ fn dangling_operators_are_recovered() {
     }
 }
 
-/// The parse worker is process-lived, so a panic inside one parse must not take
-/// it down: per-parse threads contained a panic to its own parse for free, and
-/// reusing one thread gives that up unless the panic is caught and resumed on
-/// the caller.  If this ever regresses, the *first* panicking parse is fine and
-/// every later parse in the process fails instead — a failure a long-lived host
-/// would see and a single-shot test never would.
+/// The parse worker is process-lived, so a panic in one parse must not take it
+/// down (`docs/notes/code-audit.md` D13).
 #[test]
 fn a_panicking_parse_leaves_the_worker_alive() {
     let worker = ParseWorker::global();
@@ -1057,10 +1028,8 @@ fn a_panicking_parse_leaves_the_worker_alive() {
     );
 }
 
-/// The worker is created once and reused, which is the whole point of `D13`: a
-/// fresh thread per parse was 47% of a small parse.  Both parses must therefore
-/// run on the *same* thread, and that thread must not be the caller's — the
-/// stack the parser needs is why it runs off the caller at all.
+/// Both parses share one worker thread, which is not the caller's
+/// (`docs/notes/code-audit.md` D13).
 #[test]
 fn parses_share_one_worker_thread() {
     let here = std::thread::current().id();
