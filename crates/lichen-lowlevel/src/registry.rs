@@ -3,8 +3,7 @@
 
 use super::*;
 
-/// The top bit of a key: set for a **retained cell**'s artifact, clear for a
-/// device's (see [`Registry::allocate_cell_key`]).
+/// The top bit of a key: set for a **retained cell**'s artifact, clear for a device's.
 pub const CELL_KEY_BIT: u64 = 1 << 63;
 impl<P: Program> Default for Registry<P> {
     fn default() -> Self {
@@ -20,54 +19,50 @@ impl<P: Program> Registry<P> {
         }
     }
 
-    /// A fresh key for a **retained cell**'s artifact, unique within this
-    /// registry.
+    /// A fresh key for a **retained cell**'s artifact, unique within this registry.
     ///
-    /// A cell's identity is its occurrence path, never its content, so the key
-    /// only has to be distinct — and the counter is the registry's because the
-    /// registry is what uniqueness is relative to: several sessions (an editor's
-    /// open documents) file cells into one registry, each keeping its own paths.
+    /// # Invariant
     ///
-    /// The keys live in their **own space** ([`CELL_KEY_BIT`]), disjoint from the
-    /// device's, because the two kinds of artifact share the registry: a cell's
-    /// frozen closure must resolve the imported packages it read through the
-    /// registry it is filed in ([`Self::freeze_closure_mapped`] asserts exactly
-    /// that), so a cell and an import are filed side by side.  The device's keys
-    /// are a dense counter (and the reclaimed holes in it), so the two spaces
-    /// cannot meet.
+    /// Cell keys occupy their own space ([`CELL_KEY_BIT`]), disjoint from the device's
+    /// dense counter and its reclaimed holes: a cell's frozen closure must resolve the
+    /// packages it read through the registry it is filed in, so a cell and an import
+    /// are filed side by side. A cell's identity is its occurrence path, never its
+    /// content, so the counter only has to be distinct.
     pub fn allocate_cell_key(&mut self) -> ModuleKey {
         self.next_cell_key += 1;
         ModuleKey::from_raw(CELL_KEY_BIT | self.next_cell_key)
     }
 
-    /// An executing module bound to this registry: every static ref it
-    /// touches resolves through `self`.  Modules in one thread share the one
-    /// registry `Arc` (see the `Registry` doc for why it cannot cross a
-    /// thread) — a `Module` itself is never shared (`Arc<Module>` does not
-    /// exist; it is a per-thread owned value).
+    /// An executing module bound to this registry: every static ref it touches
+    /// resolves through `self`.
+    ///
+    /// # Invariant
+    ///
+    /// Modules in one thread share the one registry `Arc`, never each other: a
+    /// `Module` is per-thread owned (`Arc<Module>` does not exist).
     pub fn new_module(registry: &Arc<RwLock<Registry<P>>>) -> Module<P> {
         Module::with_registry(registry.clone())
     }
 
-    /// Compile a dynamic module into a static artifact and file it under
-    /// `key` — the device key allocated by the device registry (the caller
-    /// provides it so the artifact's refs are baked with their final key;
-    /// the key must not already be registered — same content must not be
-    /// compiled twice).  A failed build leaves the registry untouched.
+    /// Compile a dynamic module into a static artifact and file it under `key`.
+    ///
+    /// # Invariant
+    ///
+    /// `key` is the caller's already-allocated device key, unregistered here: refs are
+    /// baked with their final key, and the same content must not be compiled twice. A
+    /// failed build leaves the registry untouched.
     pub fn freeze(&mut self, module: &Module<P>, key: ModuleKey, hash: [u8; 32]) -> ModuleKey {
         self.freeze_mapped(module, key, hash).key
     }
 
-    /// Like [`Self::freeze`], but also returns the source→statics node map
-    /// so a caller can construct exported [`StaticNodeId`]s for root nodes.
+    /// Like [`Self::freeze`], but also returns the source→statics node map.
     ///
-    /// The source may itself carry static refs — its frozen dependencies
-    /// (a package importing packages).  They are absolute from birth, so the
-    /// artifact keeps them verbatim; this method checks the soundness
-    /// precondition the verbatim refs imply: every module key the source's
-    /// values reference must already be registered *here*, so the frozen
-    /// artifact resolves from any importer through this registry.  Freeze
-    /// dependencies first.
+    /// # Invariant
+    ///
+    /// A source carrying static refs keeps them verbatim — they are absolute from birth.
+    /// Every module key its values reference must already be registered here, so the
+    /// artifact resolves from any importer through this registry. Freeze dependencies
+    /// first.
     pub fn freeze_mapped(&mut self, module: &Module<P>, key: ModuleKey, hash: [u8; 32]) -> Freeze {
         for dep in crate::static_module::referenced_keys(module) {
             assert!(
@@ -80,9 +75,7 @@ impl<P: Program> Registry<P> {
             "freezing a module under device key {key:?}, which is already registered — the same content must not be compiled twice"
         );
         let (static_module, node_map) = StaticModule::from_module_mapped(module, key);
-        // The artifact's own refs, read off the frozen values: exactly the keys a
-        // live ref into it could name (see `StaticModule::referenced_keys`), which
-        // is what `evict` checks.
+        // The artifact's own refs: the keys a live ref into the artifact could name.
         let refs = static_module.referenced_keys();
         self.entries.insert(
             key,
@@ -96,17 +89,14 @@ impl<P: Program> Registry<P> {
         Freeze { key, node_map }
     }
 
-    /// [`Self::freeze_mapped`] for the **closure** of `roots` — the per-cell
-    /// freeze: only the nodes those roots can reach are filed, so an artifact is
-    /// as small as the value it keeps (see [`StaticModule::freeze_closure`]).
+    /// [`Self::freeze_mapped`] for the **closure** of `roots`: only reachable nodes file.
     ///
-    /// The preconditions are `freeze_mapped`'s, and are checked the same way —
-    /// except that the dependency check is over the **closure's** own refs rather
-    /// than the whole module's.  The closure's set is what the artifact will
-    /// reference, so it is the predicate this filing needs; the module's is
-    /// stricter than a single cell needs and costs a scan of every node of the
-    /// module on every freeze (measured: ~9 µs of a 15 µs freeze at 600 marks).
-    /// The check runs before the freeze, so a refusal has transferred nothing.
+    /// # Invariant
+    ///
+    /// The closure's ref set, not the whole module's, is what the artifact references,
+    /// so that is the predicate checked: the module's set is a superset and costs a scan
+    /// of every node on every freeze. The check runs before the freeze, so a refusal has
+    /// transferred nothing.
     pub fn freeze_closure_mapped(
         &mut self,
         module: &Module<P>,
@@ -131,9 +121,7 @@ impl<P: Program> Registry<P> {
                 }
             },
         );
-        // The **closure's** refs, not the whole module's: the module-level set is a
-        // superset, and a superset would refuse to evict an artifact nothing
-        // actually references — a leak in the name of safety.
+        // The **closure's** refs: a superset would refuse to evict an unreferenced one.
         let refs = static_module.referenced_keys();
         self.entries.insert(
             key,
@@ -147,26 +135,15 @@ impl<P: Program> Registry<P> {
         Freeze { key, node_map }
     }
 
-    /// [`Self::freeze_mapped`] for a **recompile**: the key is the file's own,
-    /// and a file whose source or dependency moved is rebuilt into its own slot
-    /// (`PackageStore`'s `build_package`).
+    /// [`Self::freeze_mapped`] for a **recompile**: the key is the file's own slot.
     ///
-    /// What [`Self::freeze_mapped`] asserts — that nothing is filed under the key
-    /// — is exactly what a recompile does, so the caller states the other half of
-    /// the contract instead, and it cannot be checked here: **every live artifact
-    /// that referenced the replaced one is gone, or is being replaced in this
-    /// same operation.**  A recompile walks the import closure and rebuilds every
-    /// dependent whose identity moved (a dependent's identity folds its
-    /// dependencies', so it moved with them), and a session that read the old
-    /// artifact is dropped before its next compile
-    /// (`docs/notes/incremental-update.md` §8) — a static ref that survives into
-    /// the replaced key names the *new* arena, which is the wrong value rather
-    /// than a crash.
+    /// # Invariant
     ///
-    /// Dropping the old artifact runs its release obligations, and those do not
-    /// read the arenas its values referenced ([`Release`] owns host resources,
-    /// not other artifacts), so the replacement order is the caller's business
-    /// only for the reads it plans to do.
+    /// Every live artifact that referenced the replaced one is gone, or is replaced in this
+    /// same operation: a recompile rebuilds every dependent whose identity moved, and a
+    /// session that read the old artifact is dropped before its next compile
+    /// (`docs/notes/incremental-update.md` §8), so a ref surviving into the replaced key
+    /// names the *new* arena rather than crashing.
     pub fn freeze_mapped_replacing(
         &mut self,
         module: &Module<P>,
@@ -177,14 +154,13 @@ impl<P: Program> Registry<P> {
         self.freeze_mapped(module, key, hash)
     }
 
-    /// File an already-built artifact (a module loaded from the device's
-    /// persistent store) under its device `key` — the load-time mirror of
-    /// [`Self::freeze_mapped`]: the artifact's refs are already baked with
-    /// `key`, nothing is rebuilt or re-keyed.  The key must not already be
-    /// registered — a registered key is a loaded module, and re-inserting
-    /// it would shadow the resident one; the caller checks first
-    /// ([`Self::get`], comparing [`Package::hash`] to recognize a key
-    /// reallocated after reclamation).
+    /// File an already-built artifact (one loaded from the device store) under its `key`.
+    ///
+    /// # Invariant
+    ///
+    /// `key` is unregistered: a registered key is a resident module, and re-inserting it
+    /// would shadow the resident one. The caller checks first ([`Self::get`], comparing
+    /// [`Package::hash`] to recognize a key reallocated after reclamation).
     pub fn insert_module(&mut self, key: ModuleKey, hash: [u8; 32], module: StaticModule<P>) {
         assert!(
             !self.entries.contains_key(&key),
@@ -203,24 +179,21 @@ impl<P: Program> Registry<P> {
     }
 
     /// Evict a filed artifact: drop it, which frees its arena and runs the release
-    /// obligations it owns ([`Release`]).
+    /// obligations it owns.
     ///
-    /// **Two preconditions, and this call can only check one of them.**
+    /// # Invariant
     ///
-    /// It checks that no **live registered artifact** references the key (the
-    /// `refs` recorded at freeze time): a static ref is a raw handle into the
-    /// artifact's arena, and a surviving artifact's value may hold one — a
-    /// retained cell whose value read another retained cell, for instance.  Such
-    /// an eviction is refused ([`Eviction::StillReferenced`]) and the caller may
-    /// retry once the referencing artifact is gone too.  Two artifacts that
-    /// reference each other can therefore never be evicted while both are filed;
-    /// that is the honest answer for a cycle.
+    /// No live registered artifact references the key (the `refs` recorded at freeze
+    /// time); such an eviction is refused ([`Eviction::StillReferenced`]) and the caller
+    /// may retry once the referencing artifact is gone too, so two artifacts referencing
+    /// each other can never be evicted while both are filed.
     ///
-    /// It cannot check the other one: a static ref may also live outside the
-    /// registry, in a [`Module`] the caller still holds (a `StaticNodeId` names a
-    /// key, and [`Module::static_module`] panics on an unregistered one).  So
-    /// eviction is the caller's decision, made when the caller knows every module
-    /// that could still hold such a ref is gone.
+    /// # Safety
+    ///
+    /// A static ref may also live outside the registry, in a [`Module`] the caller still
+    /// holds — `Module::static_module` panics on an unregistered key. Eviction is the
+    /// caller's decision, made when it knows every module that could still hold such a
+    /// ref is gone.
     pub fn evict(&mut self, key: ModuleKey) -> Eviction {
         if !self.entries.contains_key(&key) {
             return Eviction::NotRegistered;
@@ -236,10 +209,7 @@ impl<P: Program> Registry<P> {
         Eviction::Freed
     }
 
-    /// Set the opaque per-package metadata for an existing registered
-    /// package.  Higher layers use this to store export markers, source
-    /// paths, or any future package-level state without the lowlevel
-    /// knowing what that state means.
+    /// Set the opaque per-package metadata; higher layers store markers and paths.
     pub fn set_package_meta(&mut self, key: ModuleKey, meta: P::PackageMeta) {
         self.entries
             .get_mut(&key)
@@ -247,25 +217,17 @@ impl<P: Program> Registry<P> {
             .meta = meta;
     }
 
-    /// The registered module behind a device key — the file-system `get`.
-    /// `None` is the "no such key" answer; a static ref naming an
-    /// unregistered key is a broken module graph and panics at its
-    /// resolution site.
+    /// The registered module behind a device key; `None` means no such key.
     pub fn get(&self, key: ModuleKey) -> Option<&Package<P>> {
         self.entries.get(&key)
     }
 
     /// Iterate the registered modules — the device's directory listing.
-    /// (The persistent store uses it to collect the arenas a serialized
-    /// artifact's payload refs point into.)
     pub fn iter(&self) -> impl Iterator<Item = (ModuleKey, &Package<P>)> {
         self.entries.iter().map(|(&key, package)| (key, package))
     }
 
-    /// Whether the registry holds no registered modules.  (Sources with
-    /// static refs — packages importing packages — may only be frozen into
-    /// a registry that holds their dependencies; see
-    /// [`Self::freeze_mapped`].)
+    /// Whether the registry holds no registered modules.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

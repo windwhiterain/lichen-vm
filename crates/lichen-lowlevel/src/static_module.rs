@@ -1,27 +1,5 @@
-//! Static module dependencies: a fully-solved [`StaticModule`] registered
-//! in the device's [`Registry`] and used in place by an importer
-//! [`Module`].
-//!
-//! The importer-apply and the freeze each live in a sibling module (`apply`,
-//! `freeze`); this file holds the registry-facing reads and the helpers both
-//! share.
-//!
-//! The design (see the feature note `docs/notes/static-modules.md`):
-//! - every ref into a static module — node, function, or handle — carries
-//!   the module's device key ([`ModuleKey`]), so refs are absolute from
-//!   birth.  An importer stores and resolves them verbatim
-//!   ([`Module::static_read`] fetches the module from the shared registry);
-//!   nothing is retargeted or copied, and the module's arena is shared by
-//!   every importer.
-//! - applying a static function materializes its reachable graph into fresh
-//!   dynamic clones: baked (concrete) nodes become leaves holding the shared
-//!   value, residual nodes keep their operations with remapped
-//!   operands so the parameter-dependent spine re-runs against the argument;
-//!   static function values are always baked (frozen templates).  A residual
-//!   clone carries the enclosing template's owner tag, so a caller applied
-//!   again re-instantiates it; a baked clone stays unowned and is referenced
-//!   in place.  The apply tail (parameter unify, `ApplyError`, cell wiring) is
-//!   shared with [`Module::function_apply`] in `apply.rs`.
+//! Static module dependencies: a fully-solved [`StaticModule`] used in place. Design:
+//! `docs/notes/static-modules.md`.
 
 use std::collections::{HashMap, HashSet};
 use std::ptr;
@@ -41,12 +19,13 @@ use lichen_utils::extend::AsEnum;
 mod apply;
 mod freeze;
 
-/// A one-entry resolution cache for a value walk: a walk over a value's items
-/// resolves many static refs, and the common case names one module, so the
-/// registry read lock and the `Arc` clone are paid once per *distinct* module
-/// instead of once per ref.  Each lookup takes the lock exactly as
-/// [`Module::static_module`] does and releases it before the next — the lock
-/// is never held across the walk, so a writer is never blocked by one.
+/// A one-entry cache for a value walk: the lock and `Arc` clone are paid once per
+/// *distinct* module, not once per ref.
+///
+/// # Invariant
+///
+/// Each lookup takes the lock as [`Module::static_module`] does and releases it before
+/// the next: the lock is never held across the walk, so a writer is never blocked.
 pub(crate) struct StaticModuleCache<P: Program> {
     last: Option<(ModuleKey, Arc<StaticModule<P>>)>,
 }
@@ -81,10 +60,8 @@ impl<P: Program> StaticModuleCache<P> {
 }
 
 impl<P: Program> Module<P> {
-    /// The static module behind `key` — the `get` of the device's registry
-    /// (its virtual file system).  The `Arc` is cloned out of the lock
-    /// guard, so no borrow of `self` or of the guard persists; a static ref
-    /// naming an unregistered key is a broken module graph.
+    /// The static module behind `key`; its `Arc` is cloned out of the lock guard, so no
+    /// borrow persists.
     pub(crate) fn static_module(&self, key: ModuleKey) -> Arc<StaticModule<P>> {
         self.registry
             .read()
@@ -95,28 +72,20 @@ impl<P: Program> Module<P> {
             .clone()
     }
 
-    /// Read a static node through its ref: the module's solved value,
-    /// verbatim, or [`None`] when the node is a residual computation with no
-    /// cached answer.  Refs are absolute (keyed), so the value stores anywhere
-    /// with no conversion, and its payloads stay in the module's shared
-    /// arena — nothing is copied.
+    /// Read a static node's solved value verbatim, or [`None`] for a residual
+    /// with no cached answer.
     pub fn static_read(&self, sref: StaticNodeId) -> Option<P::Value> {
         self.static_module(sref.module).read(sref.index)
     }
 
-    /// The representative of a **static** node's equality class — the frozen
-    /// mirror of [`Module::equality_representative`], walking `parent` over the
-    /// artifact's own local ids (no path compression, so a read never mutates
-    /// the artifact).
+    /// The representative of a **static** node's class: a `parent` walk that
+    /// never mutates the artifact.
     ///
-    /// A reader that *names* cells must use it, exactly as it uses the dynamic
-    /// representative: the freeze keeps the equality class of a node whose own
-    /// value is still undecided **whole** (see `freeze::closure`'s contract — the
-    /// class is what holds that node's answer), so two refs in one class are one
-    /// variable.  Keying a name table by the ref alone prints them as two:
-    /// measured, an imported polymorphic `?a -> ?a` rendered `?a -> ?b`, while
-    /// the same type rendered dynamically — where the printer does follow the
-    /// representative — read `?a -> ?a`.
+    /// # Invariant
+    ///
+    /// A reader that *names* cells must use it: the freeze keeps the class of an
+    /// undecided node whole, so two refs in one class are one variable. Keying a name
+    /// table by the ref alone printed an imported polymorphic `?a -> ?a` as `?a -> ?b`.
     pub fn static_equality_representative(&self, sref: StaticNodeId) -> StaticNodeId {
         let module = self.static_module(sref.module);
         let mut index = sref.index;
@@ -134,11 +103,7 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The raw value behind `id` — no evaluation.  A static ref reads its
-    /// solved value (or nothing, for a residual); refs are absolute, so
-    /// the raw value is safe to store anywhere.  A dynamic ref that names a
-    /// released node reads `None` (via `SlotMap::get`), so the read API is
-    /// safe for a node the executor may have dropped.
+    /// The raw value behind `id` — no evaluation. A released dynamic node reads `None`.
     pub fn node_value(&self, id: AnyNodeId) -> Option<P::Value> {
         match id {
             Dyn(node) => self.nodes.get(node).and_then(|node| node.value),
@@ -148,56 +113,39 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Whether `node`'s operator **owes an answer** — the evaluator's run gate,
-    /// so the definition and its only use cannot drift apart:
-    /// [`Self::evaluate_node`] runs the operator when this is `true` and no
-    /// frame is already computing the node.
+    /// Whether `node`'s operator **owes an answer** — the evaluator's run gate
+    /// [`Self::evaluate_node`] cannot drift from.
     ///
-    /// Both axes of [`Node::value`] meet here: an operation is present, and
-    /// either the slot holds no value (no answer in hand — the operator never
-    /// ran, or ran and could not decide) or the value it holds is **not this
-    /// operator's**, because a unification wrote it and the operator still owes
-    /// its own reconciliation with it ([`Self::write_node_answer`]).
+    /// # Invariant
     ///
-    /// `false` for a node with no operation (a bound constant: nothing to run),
-    /// for a released node (nothing left to run), and for an operator whose
-    /// answer sits in its slot and is its own.
-    ///
-    /// A caller asking the **value** axis ("is this answer concrete") asks
-    /// [`Self::node_evaluated_deep`] instead.  The two disagree in both
-    /// directions: an operator that ran and could not decide is owed (the slot
-    /// stays empty and the next read runs it again) yet undecided, while a
-    /// member holding a value a unification propagated is owed yet concrete.
+    /// Both axes of [`Node::value`] meet here: an operation is present, and either the
+    /// slot holds no value — the operator never ran, or ran and could not decide — or
+    /// the value is **not this operator's**, because a unification wrote it and the
+    /// operator still owes its own reconciliation with it (`write_node_answer`).
     pub fn has_no_result_yet(&self, node: NodeId) -> bool {
         self.nodes
             .get(node)
             .is_some_and(|node| node.operation.is_some() && (node.value.is_none() || !node.runned))
     }
 
-    /// The optional [`LowShape`] a layer above the lowlevel computed for
-    /// `node` — stored *with* the node's private value, not in a side table.
-    /// `None` means the node has no traced shape (it is type-check-only, or
-    /// it is materialized before the backend runs), so the backend must not
-    /// rely on it.
+    /// The optional [`LowShape`] a layer above computed for `node`, kept with
+    /// the node's value, not in a side table.
     pub fn node_shape(&self, node: NodeId) -> Option<&LowShape> {
         self.nodes
             .get(node)
             .and_then(|node| node.low_shape.as_ref())
     }
 
-    /// Record `node`'s [`LowShape`].  Only the layer above the lowlevel that
-    /// *has* the type calls this, after the graph is resolved — never the
-    /// checker at lowering time (see [`LowShape`]).
+    /// Record `node`'s [`LowShape`]: only the layer above that has the type, never the
+    /// checker at lowering time.
     pub fn set_node_shape(&mut self, node: NodeId, shape: Option<LowShape>) {
         if let Some(node) = self.nodes.get_mut(node) {
             node.low_shape = shape;
         }
     }
 
-    /// The dynamic node behind `id`: a static ref materializes into a fresh
-    /// leaf node holding its value (homed in `block`), so
-    /// `NodeId`-typed machinery (the apply tail, the unify arm) can unify
-    /// and bind it like any other node.
+    /// The dynamic node behind `id`: a static ref becomes a fresh leaf in
+    /// `block`, so `NodeId` machinery binds it.
     pub fn materialize_leaf(&mut self, sref: StaticNodeId, block: BlockId) -> NodeId {
         let value = self.static_read(sref);
         self.add_node(block, None, value)
@@ -211,10 +159,8 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The static function's **signature cells** — its parameter type and its
-    /// return type — as refs a renderer can read without materializing.
-    /// `None` when `sref` is not a static function of a registered module, or
-    /// its parameter is not a pair.
+    /// The static function's **signature cells** — parameter type and return type — as
+    /// un-materialized refs.
     pub fn static_function_signature(
         &self,
         sref: StaticFunctionRef,
@@ -233,9 +179,8 @@ impl<P: Program> Module<P> {
             .static_read(param_pair_ref)
             .and_then(|value| value.as_enum())
         {
-            // SAFETY: `array` is a static payload read through `param_pair_ref`,
-            // whose home module is registered — the registration pins its
-            // arena.
+            // SAFETY: `array` is a payload in a registered static module's arena, which
+            // the registration pins.
             Some(LowValue::Array(array)) => unsafe { array.items() }.get(1)?.node,
             _ => return None,
         };
@@ -248,22 +193,15 @@ impl<P: Program> Module<P> {
         ))
     }
 
-    /// The materialized `(parameter, return type)` of a **static** function's
-    /// signature: the frozen template's parameter pair and return type cell,
-    /// copied into fresh dynamic leaves so the unify arm can descend into them
-    /// positionally.  `None` when `sref` is not a static function of a
-    /// registered module.
+    /// The materialized `(parameter, return type)` of a static signature, as
+    /// fresh leaves for the unify arm to descend.
     ///
-    /// The pair, not just its type slot, because the unify arm treats a
-    /// signature like any other `[value, type, attrs…]` pair — that is what
-    /// gives a frozen function's signature the same attribute reach a dynamic
-    /// one has, instead of a weaker rule that only ever sees types.
+    /// # Invariant
     ///
-    /// A static signature is immutable, so nothing is cloned as a *template*:
-    /// the leaves are copies, and the frozen original never binds.  This is not
-    /// a corner case — the whole prelude is a frozen module, and its functions'
-    /// type nodes carry a static self-cycle, so a dynamic-only reading would
-    /// leave the unifier blind to every one of them.
+    /// The parameter *pair* is materialized, not just its type slot: the unify arm
+    /// treats a signature like any other `[value, type, attrs…]` pair, which gives a
+    /// frozen signature the attribute reach a dynamic one has. The leaves are copies —
+    /// a static signature is immutable, so the frozen original never binds.
     pub fn materialize_static_signature(
         &mut self,
         sref: StaticFunctionRef,
@@ -292,11 +230,8 @@ impl<P: Program> Module<P> {
     }
 }
 
-/// The solved union-find representative of `key` in the static meta — the
-/// static side of `disjoint::find`, walked without path compression (the
-/// solved structure is immutable).  **`pub(crate)`** because a recogniser in
-/// `equality.rs` must ask a frozen node's *class* the way the dynamic
-/// recogniser asks a dynamic node's (`Module::class_root`), not its identity.
+/// The solved union-find representative of `key` — no path compression (the solved
+/// structure is immutable).
 pub(crate) fn static_find<P: Program>(nodes: &[StaticNode<P>], key: LocalNodeId) -> LocalNodeId {
     let mut current = key;
     while let Some(parent) = nodes[current.index].equality.parent() {
@@ -305,9 +240,7 @@ pub(crate) fn static_find<P: Program>(nodes: &[StaticNode<P>], key: LocalNodeId)
     current
 }
 
-/// The static identity of a node in `module` — the form a host's own
-/// per-node tables can key on when an assert is cloned out of a static
-/// module (the importing module has no dynamic node for the template).
+/// The static identity of a node in `module`: what a host's tables key a cloned assert on.
 fn static_ref<P: Program>(module: &StaticModule<P>, node: LocalNodeId) -> AnyNodeId {
     AnyNodeId::Static(StaticNodeId {
         module: module.key,
@@ -315,12 +248,8 @@ fn static_ref<P: Program>(module: &StaticModule<P>, node: LocalNodeId) -> AnyNod
     })
 }
 
-/// Every module key a static ref in the module's solved values names — the
-/// module's frozen dependencies.  A freeze may file the artifact only into a
-/// registry that holds all of them ([`Registry::freeze_mapped`] checks), so
-/// every ref the rewritten values keep verbatim resolves from any importer.
-/// Dynamic array items are not recursed into: each item's node is itself a
-/// node of the module, visited in its own right.
+/// Every module key a static ref in the module's solved values names — its frozen
+/// dependencies.
 pub(crate) fn referenced_keys<P: Program>(module: &Module<P>) -> HashSet<ModuleKey> {
     let mut keys = HashSet::new();
     for node in module.nodes.values() {
@@ -331,14 +260,8 @@ pub(crate) fn referenced_keys<P: Program>(module: &Module<P>) -> HashSet<ModuleK
     keys
 }
 
-/// [`referenced_keys`] over `node_ids` instead of the whole module — the closure
-/// a per-cell freeze is about to file ([`StaticModule::freeze_closure`]).
-///
-/// The answer is the dependency half of what the artifact's own values will name:
-/// the rewrite keeps every dependency ref verbatim, and a ref into the artifact
-/// itself is not a dependency.  So this is exactly the predicate
-/// [`Registry::freeze_closure_mapped`] checks — and it is O(closure), where the
-/// module-wide set is O(module) and stricter than a single cell needs.
+/// [`referenced_keys`] over `node_ids`: the closure a per-cell freeze files. A self
+/// ref is not a dependency.
 pub(crate) fn referenced_keys_of<P: Program>(
     module: &Module<P>,
     node_ids: &[NodeId],
@@ -352,17 +275,13 @@ pub(crate) fn referenced_keys_of<P: Program>(
     keys
 }
 
-/// One value's contribution to [`referenced_keys`]: every module key a static ref
-/// in `value` names.  The single site of this match, so the module-wide scan and
-/// the closure-scoped one cannot disagree.
+/// One value's contribution to [`referenced_keys`]: the single site of this match.
 fn collect_referenced_keys<P: Program>(value: P::Value, keys: &mut HashSet<ModuleKey>) {
     match value.as_enum() {
         Some(LowValue::Array(AnyHandle::Static(handle))) => {
             keys.insert(handle.module);
-            // SAFETY: the payload lives in the dependency's shared arena,
-            // pinned by the registry that holds the dependency — the registry
-            // this freeze is about to file into, which is what the check
-            // before it establishes.
+            // SAFETY: the payload lives in the dependency's shared arena, pinned by the
+            // registry holding it.
             for item in unsafe { &*handle.offset } {
                 if let AnyNodeId::Static(sref) = item.node {
                     keys.insert(sref.module);
@@ -370,9 +289,8 @@ fn collect_referenced_keys<P: Program>(value: P::Value, keys: &mut HashSet<Modul
             }
         }
         Some(LowValue::Array(AnyHandle::Dynamic(handle))) => {
-            // SAFETY: the handle points into one of `module`'s own block
-            // arenas (`Module::alloc_array`), alive as long as the module
-            // is — the `drop_block` contract.
+            // SAFETY: `Module::alloc_array` put it in a block arena of `module`,
+            // alive as long as the module is.
             for item in unsafe { &*handle.0 } {
                 if let AnyNodeId::Static(sref) = item.node {
                     keys.insert(sref.module);
@@ -393,9 +311,7 @@ fn collect_referenced_keys<P: Program>(value: P::Value, keys: &mut HashSet<Modul
             }
         }
         Some(LowValue::Table(AnyHandle::Dynamic(handle))) => {
-            // SAFETY: as in the dynamic array arm above — the payload was
-            // allocated in one of `module`'s own block arenas by
-            // `Module::alloc_table`.
+            // SAFETY: as in the dynamic array arm, via `Module::alloc_table`.
             for item in unsafe { &*handle.0 } {
                 if let AnyNodeId::Static(sref) = item.key {
                     keys.insert(sref.module);
@@ -417,27 +333,15 @@ fn collect_referenced_keys<P: Program>(value: P::Value, keys: &mut HashSet<Modul
     }
 }
 
-/// Whether static function `index` has **open captures**: its body graph
-/// reaches a `undecided` node outside its own template scope
-/// ([`StaticFunction::nodes`], which covers the parameter, the return, and
-/// every body-owned node).  A scope's own open cells re-open per call through
-/// the residual clone rule, but a capture sits outside the scope: its binding
-/// was made by whichever application minted this closure — the solve-time
-/// one, with marker cells, for a closure frozen into an artifact — and only
-/// re-homing the closure through the apply's shared remap clones the capture
-/// alongside the applied parameter, so the regroup re-joins their frozen
-/// class and the parameter unify binds this call's values.
+/// **Open captures**: its body reaches an undecided node outside its own
+/// template scope (`StaticFunction::nodes`).
 ///
-/// Nested same-module closures are entered through their entry points and
-/// their scopes join the allowed set: a capture one closure layer down is
-/// still a capture of this one.  The walk answers through the nested
-/// function's entry points rather than descending into a function *value*
-/// node, which is a leaf of the graph it rides in.
+/// # Invariant
 ///
-/// The answer is the artifact's [`StaticFunction::open_captures`], filled
-/// once when the artifact is built — this takes the node and function tables
-/// directly so both the freeze and the loader can fill it before the
-/// [`StaticModule`] is assembled.
+/// A scope's own open cells re-open per call through the residual clone rule, but a
+/// capture sits outside it: its binding was made by whichever application minted this
+/// closure, so only re-homing the closure through the apply's shared remap clones it
+/// alongside the applied parameter.
 fn static_closure_has_open_captures<P: Program>(
     key: ModuleKey,
     nodes: &[StaticNode<P>],
@@ -475,9 +379,8 @@ fn static_closure_has_open_captures<P: Program>(
         if let Some(value) = sn.value {
             match value.as_enum() {
                 Some(LowValue::Array(array)) => {
-                    // SAFETY: `array` is a payload in the artifact's arena (the
-                    // module being built, or a dependency the registry pins),
-                    // and the caller holds every module alive for this walk.
+                    // SAFETY: `array` is a payload in an artifact arena the caller
+                    // holds alive for this walk.
                     for item in unsafe { array.items() } {
                         if let AnyNodeId::Static(sref) = item.node
                             && sref.module == key
@@ -509,12 +412,13 @@ fn static_closure_has_open_captures<P: Program>(
 }
 
 impl<P: Program> StaticModule<P> {
-    /// Fill every function's [`StaticFunction::open_captures`] from this
-    /// artifact's own tables — once, at build time, so the materialize pass
-    /// reads a field instead of walking a body per function-valued position.
-    /// A host that assembles a [`StaticModule`] by hand (a decoder reading
-    /// serialized bytes) calls it after assembly; the graph is the only
-    /// source, so a stored verdict that disagreed with the graph cannot arise.
+    /// Fill every function's [`StaticFunction::open_captures`] from the artifact's own
+    /// tables, once, at build time.
+    ///
+    /// # Safety
+    ///
+    /// The graph is the only source: a host that assembles a [`StaticModule`] by hand
+    /// must call this after assembly, so a stored verdict cannot disagree with the graph.
     pub fn fill_open_captures(&mut self) {
         let key = self.key;
         let computed: Vec<bool> = (0..self.functions.len())
@@ -531,17 +435,14 @@ impl<P: Program> StaticModule<P> {
             function.open_captures = open;
         }
     }
-    /// Every module key a static ref in the artifact's values names — its frozen
-    /// dependencies, in the form an artifact that is *already* static can answer.
-    /// The mirror of `referenced_keys(module)` above, and what a registry needs to
-    /// decide whether a key may be evicted: an artifact that another live artifact
-    /// still references cannot be freed, because that reference is a raw handle
-    /// into this artifact's arena.
+    /// Every module key a static ref in the artifact's values names: [`referenced_keys`]
+    /// for an already-static artifact.
     ///
-    /// The artifact's **own** key appears when a value references a node of this
-    /// module (a self-referential value, which phase 3 rewrites to a ref into
-    /// `key`).  The caller decides what to do with that — the registry's eviction
-    /// check ignores a self-reference, or the artifact could never be evicted.
+    /// # Invariant
+    ///
+    /// The artifact's **own** key appears when a value references a node of this module,
+    /// so the caller decides what to do with a self-reference: the registry's eviction
+    /// check ignores it, or the artifact could never be evicted.
     pub(crate) fn referenced_keys(&self) -> HashSet<ModuleKey> {
         let mut keys = HashSet::new();
         for node in &self.nodes {
@@ -549,10 +450,8 @@ impl<P: Program> StaticModule<P> {
             match value.as_enum() {
                 Some(LowValue::Array(AnyHandle::Static(handle))) => {
                     keys.insert(handle.module);
-                    // SAFETY: the payload lives in the dependency's shared arena,
-                    // which the registry keeps alive for as long as this artifact
-                    // is filed there — a dependency is registered before anything
-                    // that references it.
+                    // SAFETY: a dependency's shared arena, kept alive by the registry
+                    // while this artifact is filed.
                     for item in unsafe { &*handle.offset } {
                         if let AnyNodeId::Static(sref) = item.node {
                             keys.insert(sref.module);

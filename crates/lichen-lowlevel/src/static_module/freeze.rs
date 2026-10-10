@@ -9,27 +9,19 @@ impl<P: Program> StaticModule<P> {
         self.nodes[node.index].value
     }
 
-    /// Freeze a solved module into static form under the registry-allocated
-    /// `key`: consecutive local indices over the source's slotmap order, the
-    /// flattenable payloads (array item slices and ext-value bytes, deduped
-    /// by `(ptr, len)` so aliased handles keep identity equality) laid out
-    /// once into `arena`, and every value rewritten to static form keyed by
-    /// `key` — absolute from birth, shared by every importer.  The key is
-    /// allocated by the [`Registry`] before the build
-    /// ([`SlotMap::try_insert_with_key`]), so refs are baked with their
-    /// final key.
+    /// Freeze a solved module into static form under the registry-allocated `key`.
     ///
-    /// The source must be fully solved: every node holds its final answer,
-    /// or is a residual operation with no cached answer, which reads as
-    /// undecided.  Module-level pending asserts of the source are dropped — a
-    /// solved module has decided everything decidable.
+    /// # Invariant
     ///
-    /// Static refs the source already carries name its frozen dependencies.
-    /// They are absolute from birth (keyed by the dependency's final key), so
-    /// they are filed **verbatim** — never rewritten to `key`, their payloads
-    /// never copied into the new arena.  The artifact is therefore only sound
-    /// inside a registry that holds every referenced key;
-    /// [`Registry::freeze_mapped`] checks exactly that before building.
+    /// The source is fully solved: every node holds its final answer or is a residual
+    /// operation with no cached answer, which reads as undecided. Module-level pending
+    /// asserts are dropped — a solved module has decided everything decidable.
+    ///
+    /// # Safety
+    ///
+    /// Static refs the source already carries name its frozen dependencies and are filed
+    /// verbatim, payloads and all. The artifact therefore resolves only inside a registry
+    /// holding every key those refs name; [`Registry::freeze_mapped`] checks that first.
     pub fn from_module(module: &Module<P>, key: ModuleKey) -> Self {
         Self::from_module_mapped(module, key).0
     }
@@ -45,26 +37,14 @@ impl<P: Program> StaticModule<P> {
         Self::freeze_set(module, key, &nodes, &functions)
     }
 
-    /// [`Self::from_module`] for the **closure** of `roots` — the per-cell
-    /// freeze: only the nodes those roots can reach are filed, so an artifact is
-    /// as small as the value it keeps, and an edit freezes only the cells it
-    /// dirtied.
+    /// [`Self::from_module`] for the **closure** of `roots`: only the reachable nodes file.
     ///
-    /// The soundness obligations are the whole-module freeze's: the caller files
-    /// the artifact under a key that is not yet taken, in a registry that already
-    /// holds every key the closure's values reference.  What is new is that the
-    /// closure, not the module, must be self-contained — see [`closure`], and
-    /// [`Self::freeze_set`] for the one edge that may leave it.
+    /// # Safety
     ///
-    /// `check` is handed that second obligation's **evidence** — the closure's
-    /// dependency keys ([`referenced_keys_of`]) — and it is handed them *before*
-    /// anything is frozen, for two reasons.  The keys are the closure's, not the
-    /// module's, because a cell references only what its own closure reaches and
-    /// the module-wide set costs a scan of every node on every freeze.  And the
-    /// order matters beyond speed: a freeze takes the artifact's **release
-    /// obligations** off the values it freezes (the ownership transfer), so a
-    /// refusal that came after it would have to drop an artifact whose
-    /// obligations it had already taken.
+    /// The closure, not the module, must be self-contained (see [`closure`]), and every key
+    /// its values reference must already be filed. `check` gets that evidence *before* the
+    /// freeze: freezing takes the artifact's release obligations off the values, so a later
+    /// refusal would drop an artifact whose obligations were already taken.
     pub(crate) fn freeze_closure(
         module: &Module<P>,
         key: ModuleKey,
@@ -76,47 +56,35 @@ impl<P: Program> StaticModule<P> {
         Self::freeze_set(module, key, &nodes, &functions)
     }
 
-    /// Freeze exactly `node_ids`/`function_ids`, both in slotmap order so the
-    /// artifact's local indices are dense and canonical for the codec.
+    /// Freeze exactly `node_ids`/`function_ids`, in slotmap order.
     ///
-    /// Every intra-artifact reference must land inside the set: the maps below
-    /// are indexed with `[...]`, so a reference that escapes panics here rather
-    /// than producing an artifact that names a node it does not contain.  The
-    /// one edge that may leave the set is the equality class — the closure takes
-    /// a class whole only from a node whose own value is undecided ([`closure`]) —
-    /// so a class the artifact does not hold whole is **spliced** to the members
-    /// it does hold, exactly as the GC splices a class that lost members
-    /// (`Module::flatten_class`).
+    /// # Invariant
+    ///
+    /// Every intra-artifact reference lands inside the set: the maps are indexed with
+    /// `[...]`, so an escaping reference panics rather than naming an absent node. A
+    /// closure's indices are a subsequence of the whole-module freeze's; the equality
+    /// class may leave, and is spliced unless [`closure`] took it whole from an
+    /// undecided node.
     fn freeze_set(
         module: &Module<P>,
         key: ModuleKey,
         node_ids: &[NodeId],
         function_ids: &[FunctionId],
     ) -> (Self, HashMap<NodeId, LocalNodeId>) {
-        // Phase 1: indices and per-node facts.  Two passes: every id must
-        // be in the map before any meta is remapped (a class's member list
-        // points forward in slotmap order).
+        // Phase 1: indices and facts. A class's member list points forward, so
+        // every id is mapped before a meta is remapped.
         let mut node_map: HashMap<NodeId, LocalNodeId> = HashMap::new();
         for (index, &id) in node_ids.iter().enumerate() {
             node_map.insert(id, LocalNodeId { index });
         }
-        // The frozen nodes of each class, in slotmap order (so a spliced class's
-        // member list is canonical).  A class is held whole when the artifact has
-        // as many of its members as the class has — every member present is a
-        // distinct member, so the counts can only agree when nothing is missing.
+        // Each class's frozen nodes, in slot order. Held whole = all present;
+        // each is distinct, so equal counts prove it.
         let mut classes: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
         for &id in node_ids {
             classes.entry(class_root(module, id)).or_default().push(id);
         }
-        // The links a class the artifact does not hold whole is spliced down to,
-        // in the source's key space (mapped through `node_map` below): the first
-        // frozen member (in slotmap order) is the representative, every other
-        // member's parent points straight at it, and the member list is re-linked
-        // in that order — `disjoint::rebuild`'s splice, in the artifact's own key
-        // space.  Two frozen members of one class therefore stay in one class,
-        // which is all the frozen links are read for (`static_find`, the apply's
-        // clone grouping), and a member the artifact does not hold has no clone to
-        // be grouped with.
+        // Spliced like `disjoint::rebuild`: the first frozen member represents, the
+        // rest parent to it, in slot order.
         let mut spliced: HashMap<NodeId, disjoint::Meta<NodeId>> = HashMap::new();
         for (&class, members) in &classes {
             if members.len() as u32 == module.nodes[class].equality.size() {
@@ -150,10 +118,8 @@ impl<P: Program> StaticModule<P> {
             let equality = spliced.get(&id).copied().unwrap_or(node.equality);
             nodes.push(StaticNode {
                 value: None, // rewritten in phase 2, once arena offsets exist
-                // The class's low type, not this member's own slot: the low type
-                // is a property of the class, and the authoritative copy lives on
-                // its representative — a member's own slot may hold nothing while
-                // its class is decided.
+
+                // The class's low type, not this member's own — a member's slot may be empty.
                 low_shape: module.class_low_type(id).cloned(),
                 operation: node.operation.map(|operation| StaticOperation {
                     operator: operation.operator,
@@ -165,12 +131,8 @@ impl<P: Program> StaticModule<P> {
                     equality.tail().map(|t| node_map[&t]),
                     equality.size(),
                 ),
-                // The two axes of [`Node::value`] travel **uncollapsed**: the
-                // materialize pass's carry rule asks the same questions the
-                // dynamic clone rule asks (`runned` and `evaluated_deep`), and
-                // collapsing them into one flag here is exactly what left it
-                // unable to ask.  [`StaticNode::undecided`] derives the
-                // collapsed read for the readers that want it.
+                // The two axes of [`Node::value`] travel uncollapsed; [`StaticNode::undecided`]
+                // collapses on read.
                 runned: node.runned,
                 evaluated_deep: node.evaluated_deep,
             });
@@ -183,15 +145,13 @@ impl<P: Program> StaticModule<P> {
             functions.push(StaticFunction {
                 parameter: node_map[&function.parameter],
                 r#return: node_map[&function.r#return],
-                // A hand-built function (a lowlevel test) may leave
-                // `return_type` unset: fall back to the return node, which is
-                // always mapped — its signature is unused.
+                // A hand-built function may leave `return_type` unset; fall back to the
+                // return node, always mapped.
                 return_type: *node_map
                     .get(&function.return_type)
                     .unwrap_or(&node_map[&function.r#return]),
-                // The original-position id travels into the artifact: a
-                // re-exported function keeps pointing at the module that first
-                // built it, so two re-exports of one function compare equal.
+                // A re-exported function keeps its original-position id, so two
+                // re-exports of one function compare equal.
                 origin: function.static_origin,
                 asserts: function
                     .asserts
@@ -199,23 +159,20 @@ impl<P: Program> StaticModule<P> {
                     .map(|&condition| node_map[&condition])
                     .collect(),
                 nodes: function.nodes.iter().map(|&node| node_map[&node]).collect(),
-                // Filled below, once every value is in static form: the
-                // open-capture walk reads the value edges phase 3 rewrites.
+                // Filled below, once every value is in static form.
                 open_captures: false,
             });
         }
 
-        // The ownership transfer: every frozen value is asked what it owns
-        // outside the arena, and the artifact carries the obligations until it is        // dropped — which is its eviction (see `ValueExt::release_obligations`).
+        // The ownership transfer: every frozen value is asked what it owns outside the arena.
         let mut releases: Vec<Box<dyn Release>> = Vec::new();
         for value in values.iter().flatten() {
             value.release_obligations(&mut releases);
         }
 
-        // Phase 2: collect, dedupe, and lay out the payload regions.  Only
-        // dynamic payloads are laid out; a static payload (an array, function
-        // value, or ext handle from a frozen dependency) already lives in its
-        // dependency's shared arena and is filed verbatim — no copy.
+        // Phase 2: dedupe and lay out payload regions. A static payload is
+        // never copied — it stays in its dependency's arena.
+
         let mut unique: Vec<(usize, usize, usize)> = Vec::new(); // (ptr, len, align)
         let mut seen: HashSet<(usize, usize)> = HashSet::new();
         for &id in node_ids {
@@ -223,10 +180,8 @@ impl<P: Program> StaticModule<P> {
                 continue;
             };
             if let Some(LowValue::Array(AnyHandle::Dynamic(handle))) = value.as_enum() {
-                // SAFETY: a dynamic payload is allocated in a block arena of
-                // `module` by `Module::alloc_array`, and the freeze holds
-                // `module` borrowed for the whole build, so every block — and
-                // every arena in them — is alive here.
+                // SAFETY: `Module::alloc_array` put it in a block arena of `module`,
+                // which the freeze borrows for the whole build.
                 let items = unsafe { &*handle.0 };
                 let bytes = std::mem::size_of_val(items);
                 let key = (handle.0 as *const u8 as usize, bytes);
@@ -234,10 +189,8 @@ impl<P: Program> StaticModule<P> {
                     unique.push((key.0, key.1, std::mem::align_of::<ArrayItem>()));
                 }
             } else if let Some(LowValue::Table(AnyHandle::Dynamic(handle))) = value.as_enum() {
-                // SAFETY: as in the array arm above — the payload was
-                // allocated in a block arena of `module` by
-                // `Module::alloc_table`, and the freeze's borrow keeps that
-                // block alive.
+                // SAFETY: as in the array arm, with `Module::alloc_table`; the
+                // borrow of `module` keeps the block alive.
                 let items = unsafe { &*handle.0 };
                 let bytes = std::mem::size_of_val(items);
                 let key = (handle.0 as *const u8 as usize, bytes);
@@ -259,26 +212,16 @@ impl<P: Program> StaticModule<P> {
             offsets.insert((ptr, len), offset);
             cursor = offset + len;
         }
-        // The arena base derives from the one alignment the artifact codec
-        // derives from the program type ([`crate::codec::arena_align`]) —
-        // never from the payloads that happen to be present — so a
-        // serialized artifact round-trips to the same base.  Every payload
-        // alignment divides it (alignments are powers of two), so each
-        // payload stays aligned at base + offset.
+        // The base comes from `crate::codec::arena_align`, not the payloads
+        // present, so a round-trip lands at the same base.
         let arena_align = crate::codec::arena_align::<P>();
         let buffer = vec![0u8; cursor + arena_align];
         let base = align_up(buffer.as_ptr() as usize, arena_align) as *mut u8;
-        // The single payload copy: phase 3 only rewrites refs inside these
-        // arena copies and builds the static handles pointing at them.
+        // The single payload copy: phase 3 only rewrites refs inside these arena copies.
         for &(ptr, len, _) in &unique {
             let offset = offsets[&(ptr, len)];
-            // SAFETY: `ptr`/`len` were read from a live dynamic payload of
-            // `module` above, so the source range is a real allocation;
-            // `offset` is the `align_up`-ed cursor position that payload was
-            // laid out at and the layout totals `cursor` bytes, with `base`
-            // aligned inside `buffer`'s `cursor + arena_align` bytes — so the
-            // destination range lies inside the freshly allocated `buffer` and
-            // cannot overlap the source.
+            // SAFETY: source is a live `module` payload, destination lies in the fresh
+            // `buffer`, so the ranges are disjoint.
             unsafe { ptr::copy_nonoverlapping(ptr as *const u8, base.add(offset), len) };
         }
         let arena = buffer;
@@ -296,9 +239,7 @@ impl<P: Program> StaticModule<P> {
             ));
         }
 
-        // The open-capture verdict, one walk per function, after phase 3: the
-        // walk follows the value edges the rewrite produced (before it, every
-        // node's value is still `None` and the walk would see operands only).
+        // The open-capture verdict runs after phase 3: before it, every value is `None`.
         let mut artifact = StaticModule {
             key,
             nodes,
@@ -315,14 +256,13 @@ fn align_up(value: usize, align: usize) -> usize {
     (value + align - 1) & !(align - 1)
 }
 
-/// The phase-3 value rewrite: dynamic payloads → static-arena payloads
-/// (`AnyHandle::Static` keyed by `key`), item refs → `AnyNodeId::Static`
-/// into `key`, function refs → `AnyFunctionId::Static` into `key`.
-/// The item rewrite applies to the arena copy, never the source slice.
-/// A value that is already static (an array payload, function ref, or ext
-/// handle from a frozen dependency) is returned verbatim: its refs are
-/// absolute from birth and its payload lives in the dependency's shared
-/// arena — nothing to rewrite, nothing to copy.
+/// The phase-3 value rewrite: dynamic payloads and refs → static form keyed by `key`.
+///
+/// # Invariant
+///
+/// A value that is already static is returned verbatim: its refs are absolute from birth
+/// and its payload lives in the dependency's shared arena. The item rewrite applies to
+/// the arena copy, never the source slice.
 fn rewrite_value<P: Program>(
     value: P::Value,
     key: ModuleKey,
@@ -333,22 +273,16 @@ fn rewrite_value<P: Program>(
 ) -> P::Value {
     match value.as_enum() {
         Some(LowValue::Array(AnyHandle::Dynamic(handle))) => {
-            // SAFETY: the payload was allocated in a block arena of the module
-            // being frozen (`Module::alloc_array`), and that module is
-            // borrowed for the whole build, so the arena is alive.
+            // SAFETY: `Module::alloc_array` put it in a block arena of `module`,
+            // which is borrowed for the whole build.
             let items = unsafe { &*handle.0 };
             let bytes = std::mem::size_of_val(items);
-            // Phase 2 laid out and copied every dynamic payload of the
-            // module, so the lookup is total by construction and the
-            // payload is already in the arena — only the item refs of the
-            // arena copy are rewritten here.
+            // Phase 2 laid out and copied every dynamic payload, so the lookup is total.
             let offset = *offsets
                 .get(&(handle.0 as *const u8 as usize, bytes))
                 .expect("phase 2 laid out every dynamic payload of the module");
-            // SAFETY: phase 2 laid out exactly `bytes` at `offset` inside
-            // `buffer` and copied the payload there, and `base` is that
-            // buffer's aligned start — so the range is in bounds, aligned for
-            // `ArrayItem`, and no other reference to the copy exists yet.
+            // SAFETY: phase 2 laid out `bytes` at `offset` in `buffer`; `base`
+            // is its aligned start: in bounds, aligned, unaliased.
             let copied = unsafe {
                 std::slice::from_raw_parts_mut(base.add(offset) as *mut ArrayItem, items.len())
             };
@@ -358,41 +292,37 @@ fn rewrite_value<P: Program>(
                         module: key,
                         index: node_map[&node],
                     }),
-                    // A static ref the source carries names a frozen
-                    // dependency — absolute from birth, so it is filed
-                    // verbatim and keeps pointing into the dependency.
+                    // A static ref the source carries is filed verbatim and keeps naming
+                    // the dependency.
                     static_ref @ AnyNodeId::Static(_) => static_ref,
                 };
             }
             P::Value::from(LowValue::Array(AnyHandle::Static(StaticHandle {
                 module: key,
                 offset: ptr::slice_from_raw_parts(
-                    // SAFETY: the same in-bounds arena copy as `copied` above,
-                    // at the phase-2 offset for this payload.
+                    // SAFETY: the in-bounds arena copy of `copied` above, at this
+                    // payload's phase-2 offset.
                     unsafe { base.add(offset) } as *const ArrayItem,
                     items.len(),
                 ),
             })))
         }
-        // A static payload is the dependency's shared arena, keyed by the
-        // dependency's final key — verbatim, never re-keyed or copied.
+        // A static payload is the dependency's shared arena, keyed by its final
+        // key — verbatim, never re-keyed or copied.
         Some(LowValue::Array(AnyHandle::Static(_)))
         | Some(LowValue::Table(AnyHandle::Static(_)))
         | Some(LowValue::Function(AnyFunctionId::Static(_))) => value,
         Some(LowValue::Table(AnyHandle::Dynamic(handle))) => {
-            // SAFETY: as in the array arm above — the payload was allocated in
-            // a block arena of the module being frozen (`Module::alloc_table`)
-            // and the build's borrow keeps the arena alive.
+            // SAFETY: as in the array arm, but `Module::alloc_table`; the build
+            // borrows `module` for the whole freeze.
             let items = unsafe { &*handle.0 };
             let bytes = std::mem::size_of_val(items);
-            // Same invariant as the array arm: phase 2 already laid out and
-            // copied the payload; only the entry refs are rewritten here.
+            // As in the array arm: phase 2 laid out and copied the payload;
+            // only the entry refs are rewritten here.
             let offset = *offsets
                 .get(&(handle.0 as *const u8 as usize, bytes))
                 .expect("phase 2 laid out every dynamic payload of the module");
-            // SAFETY: as in the array arm above — the arena copy at `offset`
-            // is in bounds, aligned for `TableItem`, and uniquely referenced
-            // while phase 3 rewrites it.
+            // SAFETY: as in the array arm above, with `TableItem` alignment.
             let copied = unsafe {
                 std::slice::from_raw_parts_mut(base.add(offset) as *mut TableItem, items.len())
             };
@@ -402,9 +332,8 @@ fn rewrite_value<P: Program>(
                         module: key,
                         index: node_map[&node],
                     }),
-                    // A static ref the source carries names a frozen
-                    // dependency — absolute from birth, so it is filed
-                    // verbatim and keeps pointing into the dependency.
+                    // A static ref the source carries is filed verbatim and keeps
+                    // naming the dependency.
                     static_ref @ AnyNodeId::Static(_) => static_ref,
                 };
                 item.value = match item.value {
@@ -414,15 +343,14 @@ fn rewrite_value<P: Program>(
                     }),
                     static_ref @ AnyNodeId::Static(_) => static_ref,
                 };
-                // The stored hash travels verbatim: a static key reads the
-                // same solved content a dynamic one did, so the hash stays
-                // the artifact's own.
+                // The stored hash travels verbatim: a static key reads the same
+                // solved content.
             }
             P::Value::from(LowValue::Table(AnyHandle::Static(StaticHandle {
                 module: key,
                 offset: ptr::slice_from_raw_parts(
-                    // SAFETY: the same in-bounds arena copy as `copied` above,
-                    // at the phase-2 offset for this payload.
+                    // SAFETY: the in-bounds arena copy of `copied` above, at this
+                    // payload's phase-2 offset.
                     unsafe { base.add(offset) } as *const TableItem,
                     items.len(),
                 ),
@@ -435,9 +363,8 @@ fn rewrite_value<P: Program>(
             })),
         ),
         _ if value.is_handle() => {
-            // An ext-value payload: only a dynamic handle is laid out into
-            // the new arena and re-keyed; a static one stays in its
-            // dependency's arena, verbatim.
+            // An ext payload: only a dynamic handle is laid out and re-keyed; a
+            // static one stays in its dependency's arena.
             if matches!(value.handle(), AnyHandle::Static(_)) {
                 return value;
             }
@@ -451,9 +378,8 @@ fn rewrite_value<P: Program>(
             value.set_handle(AnyHandle::Static(StaticHandle {
                 module: key,
                 offset: ptr::slice_from_raw_parts(
-                    // SAFETY: phase 2 laid out this ext payload's `old.len()`
-                    // bytes at the offset the lookup above returned, inside
-                    // the same `buffer` whose aligned start is `base`.
+                    // SAFETY: as in the array arm — `old.len()` bytes at the
+                    // looked-up offset, inside the same `buffer`.
                     unsafe { base.add(offset) } as *const u8,
                     old.len(),
                 ),
@@ -464,58 +390,28 @@ fn rewrite_value<P: Program>(
     }
 }
 
-/// The **closure** of `roots`: the node and function sets a freeze must contain
-/// for the artifact to be self-contained, in slotmap order so the local indices
-/// agree with the whole-module freeze's.
+/// The **closure** of `roots`: the node and function sets a freeze must contain to be
+/// self-contained, in slotmap order.
 ///
-/// Closed under four edge kinds, plus whatever a value reports of itself:
+/// # Invariant
 ///
-/// - a value's items/entries (arrays, tables);
-/// - `operation.operand` — a residual node must be able to re-run later, so
-///   unlike the GC's walk, which deliberately does not follow a cached value's
-///   operand, this one must;
-/// - the equality class of a node whose **own value is still undecided** — the
-///   class is what holds that node's answer (the shared inference cell, the
-///   template's pattern), so the class is the structure a later read of it
-///   depends on and is taken whole.  A node that already carries its own solved
-///   value takes nothing from its class: every member of a solved class reads
-///   alike, and a member the walk never reaches has no clone to be grouped with
-///   (`static_find`, the apply's clone grouping, only ever asks about nodes the
-///   artifact holds).  Either way a class is expanded **once**, however many of
-///   its members the walk reaches: a shared type node puts every binding of a
-///   program in one class, and walking it per visited member was the walk's
-///   entire cost.  What the artifact does with a class it does not hold whole is
-///   [`freeze_set`]'s business (it splices it, as the GC splices a class that
-///   lost members);
-/// - the **whole function template** — `StaticFunction.nodes` is the template's
-///   member list, and a missing member is a broken template.
+/// Closed under four edge kinds: a value's items/entries; a residual node's
+/// `operation.operand` (the GC's walk skips a cached operand, this one cannot); the
+/// equality class of a node whose own value is undecided (it holds that node's answer,
+/// taken whole once however many members the walk reaches); and the whole function
+/// template. A class not held whole is spliced by [`freeze_set`].
 ///
-/// It also takes whatever the value reports through [`ValueExt::traced`] — the
-/// contract the GC relies on, and the only way to see a node an opaque ext
-/// payload holds: phase 3 rewrites a handle and never the bytes behind it, so a
-/// value that holds nodes without saying so would freeze into an artifact that
-/// does not contain them.  **A value that fails to answer is not caught**, here
-/// exactly as in the GC.
+/// # Safety
+///
+/// A value must report every node its opaque ext payload holds through
+/// [`ValueExt::traced`]: phase 3 rewrites a handle and never the bytes behind it, so a
+/// payload that holds nodes silently would freeze into an artifact that lacks them. A
+/// value that fails to answer is not caught, here exactly as in the GC.
 fn closure<P: Program>(module: &Module<P>, roots: &[NodeId]) -> (Vec<NodeId>, Vec<FunctionId>) {
     let mut nodes: HashSet<NodeId> = HashSet::new();
     let mut functions: HashSet<FunctionId> = HashSet::new();
     let mut work: Vec<NodeId> = roots.to_vec();
-    // The classes the walk has already expanded.  A class is expanded **once**,
-    // not once per member the walk visits: `class_members` is a walk of its own,
-    // and a *shared* type node puts every binding of the program in one class —
-    // so re-expanding it for each visited member was the whole cost of this walk
-    // (measured: 363,627 visits for a 611-node closure, 7 ms).
-    //
-    // Only a node whose **own value is undecided** takes its class, and that is what
-    // keeps a decided leaf from paying for a class it does not need.  Such a
-    // node's answer *is* its class — a shared inference cell, a template's
-    // pattern — so the class is the structure a later read of it depends on and is
-    // taken whole.  A node that already carries its own solved value takes nothing
-    // from its class: a solved class reads alike at every member, and a member the
-    // walk never reaches has no clone to be grouped with.  Deciding it per class
-    // instead — "is every member of this class bound?" — costs the class's size at
-    // every freeze that touches it: measured, ~50 µs for a 601-member shared type
-    // class, against ~7 µs for the same freeze in a small program.
+    // Classes already expanded, once each — not once per visited member.
     let mut decided: HashSet<NodeId> = HashSet::new();
     while let Some(node) = work.pop() {
         if !nodes.insert(node) {
@@ -543,9 +439,8 @@ fn closure<P: Program>(module: &Module<P>, roots: &[NodeId]) -> (Vec<NodeId>, Ve
         work.extend(traced);
         match value.as_enum() {
             Some(LowValue::Array(AnyHandle::Dynamic(handle))) => {
-                // SAFETY: the payload was allocated in a block arena of `module`
-                // by `Module::alloc_array`, and this walk borrows `module`, so
-                // the arena is alive.
+                // SAFETY: `Module::alloc_array` put it in a block arena of `module`,
+                // which this walk borrows.
                 for item in unsafe { &*handle.0 } {
                     if let AnyNodeId::Dynamic(node) = item.node {
                         work.push(node);
@@ -572,9 +467,8 @@ fn closure<P: Program>(module: &Module<P>, roots: &[NodeId]) -> (Vec<NodeId>, Ve
                     work.extend(template.nodes.iter().copied());
                 }
             }
-            // A static payload names a frozen dependency: its refs are absolute
-            // from birth and its arena belongs to that dependency, so nothing is
-            // pulled in.  A leaf holds nothing.
+            // A static payload names a frozen dependency, whose arena owns it; a
+            // leaf holds nothing.
             _ => {}
         }
     }
@@ -586,20 +480,15 @@ fn closure<P: Program>(module: &Module<P>, roots: &[NodeId]) -> (Vec<NodeId>, Ve
         .into_iter()
         .filter(|&function| module.functions.contains_key(function))
         .collect();
-    // Slot order, without scanning the module: `NodeId`'s `Ord` is its key data's,
-    // whose first field is the slot index, so sorting the frozen set is exactly
-    // the order `SlotMap::iter` yields — the order the whole-module freeze files
-    // its nodes in, so a closure's local indices are a subsequence of that one's.
-    // The scan this replaces was the walk's dominant cost once the closure was
-    // small: one lookup per node of the *module* per freeze (measured, ~40 µs to
-    // order a 7-node closure in a 3,600-node module).
+    // Slot order without a module scan: `NodeId`'s `Ord` leads with the slot
+    // index, which is `SlotMap::iter`'s own order.
     node_ids.sort_unstable();
     function_ids.sort_unstable();
     (node_ids, function_ids)
 }
 
-/// The representative of `node`'s equality class — up through `parent`, with no
-/// path compression, so a read never mutates the tree.
+/// `node`'s class representative — up through `parent`, no path compression, so a
+/// read never mutates the tree.
 fn class_root<P: Program>(module: &Module<P>, node: NodeId) -> NodeId {
     let mut root = node;
     while let Some(parent) = module.nodes[root].equality.parent() {
@@ -608,9 +497,8 @@ fn class_root<P: Program>(module: &Module<P>, node: NodeId) -> NodeId {
     root
 }
 
-/// Every member of `node`'s equality class, read-only: the representative and then
-/// across `next` — the list `write_node_value` replicates over.  No path
-/// compression, so a read never mutates the tree.
+/// `node`'s class, read-only: the representative, then across `next` — the list
+/// `write_node_value` replicates over.
 fn class_members<P: Program>(module: &Module<P>, node: NodeId) -> Vec<NodeId> {
     let root = class_root(module, node);
     let mut members = vec![root];
