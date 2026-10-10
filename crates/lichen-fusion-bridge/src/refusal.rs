@@ -37,6 +37,8 @@ pub enum BridgeRefusal {
         /// The value computed in the integer class.
         value: ValueId,
     },
+    /// The marked value computes in the state class: an effect token is not a number.
+    StateClass,
     /// The marked value applies an operator the symbolic language has no counterpart for.
     UnsupportedOperator {
         /// The operator, as the lowered kernel IR names it.
@@ -113,6 +115,11 @@ impl fmt::Display for BridgeRefusal {
                 "the projection computes {value:?} in the machine-integer class, and the \
                  symbolic language is over real numbers: `Int` wraps and `f64` does not hold \
                  every value"
+            ),
+            BridgeRefusal::StateClass => write!(
+                formatter,
+                "the projection computes in the state class — an effect token — and the \
+                 symbolic language is over numbers"
             ),
             BridgeRefusal::UnsupportedOperator { operator } => write!(
                 formatter,
