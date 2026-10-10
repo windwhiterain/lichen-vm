@@ -29,9 +29,8 @@ compose_ext! {
 #[test]
 fn compose_ext_generates_a_tuple_struct_of_components_with_field_accessors() {
     let mut h = Host::default();
-    // Each component's inherent method is reached via AsField get_mut — no
-    // per-component accessor trait is wired by the macro, and the tuple
-    // positions mean no field-name collision.
+    // `get_mut` reaches each component's methods through `AsField`, with no
+    // accessor trait.
     assert_eq!(AsField::<Counter>::get_mut(&mut h).bump(), 0);
     assert_eq!(AsField::<Counter>::get_mut(&mut h).bump(), 1);
     assert_eq!(AsField::<Counter>::get(&h).n, 2);

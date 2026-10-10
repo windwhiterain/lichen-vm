@@ -1,25 +1,5 @@
-//! Programmatic inspection of a compiled lichen program.
-//!
-//! The debugger of last resort for a graph question that neither a rendered
-//! value nor a diagnostic answers: *which node holds what, and through which
-//! class*.  A reader here asks the same questions the printers and the backends
-//! ask — a node's own value, the class's committed value, the width of its item
-//! list, the class it shares — so a conclusion drawn from this crate is a
-//! conclusion about the compiled program, not about a second implementation of
-//! it.
-//!
-//! ```no_run
-//! use lichen_analyze::Analysis;
-//!
-//! let mut analysis = Analysis::compile("1 + 1").expect("it checks");
-//! let expressions: Vec<_> = analysis.expressions().collect();
-//! for expression in expressions {
-//!     println!("{}", analysis.describe_expression(expression));
-//! }
-//! ```
-//!
-//! Every read goes through the lowlevel's public API, so this crate adds no
-//! behaviour to the compiler and changes no graph.
+//! Programmatic inspection of a compiled lichen program: which node holds what,
+//! and through which class.
 
 use lichen_highlevel::checker::Build;
 use lichen_highlevel::ir::ExprId;
@@ -27,9 +7,8 @@ use lichen_language::package::PackageStore;
 use lichen_language::program::{LangProgram, LangValue};
 use lichen_lowlevel::{AnyNodeId, LowValue, Module, NodeId};
 
-/// One node as this crate reports it: the two value axes side by side, which is
-/// what separates a node that merely holds no value from one whose value is the
-/// undecided marker.
+/// One node as this crate reports it: the node's own slot and its class's
+/// committed value side by side.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeReport {
     pub node: NodeId,
@@ -43,7 +22,8 @@ pub struct NodeReport {
     pub origin: Option<NodeId>,
     /// The deep pass's verdict for this node: `None` when it never ran.
     pub evaluated_deep: Option<bool>,
-    /// Whether this node's own value is the undecided marker.
+    /// Whether the node's own slot is empty, which is how this crate spells the
+    /// undecided marker.
     pub undecided: bool,
 }
 
@@ -54,9 +34,8 @@ pub struct Analysis {
 }
 
 impl Analysis {
-    /// Compile `source` as the language program the CLI compiles, returning the
-    /// compiled graph even when checking reported diagnostics — a graph that
-    /// failed to check still has a shape worth reading.
+    /// Compile `source`, keeping the graph even when checking reported
+    /// diagnostics (see [`Self::diagnostics`]).
     pub fn compile(source: &str) -> Result<Self, Vec<String>> {
         let mut store = PackageStore::<LangProgram>::new();
         let (preprocessed, _) = lichen_language::preprocess::preprocess(source, None, &mut store);
@@ -99,10 +78,8 @@ impl Analysis {
         )
     }
 
-    /// Evaluate the program, so the graph holds this run's apply clones and not
-    /// only the templates the checker built.  Clones are what an apply's
-    /// behaviour is a fact about, so a reader that asks about an applied program
-    /// asks after this.
+    /// Evaluate the program, so the graph holds this run's apply clones rather
+    /// than only the templates the checker built.
     pub fn evaluate(&mut self) {
         let root = self.build.root_val;
         let _ = self.build.module.evaluate_node_deep(root, None);
@@ -172,15 +149,12 @@ impl Analysis {
         lichen_utils::disjoint::members(&self.build.module.nodes, representative).collect()
     }
 
-    /// Every node in the graph that was cloned from `template`: one run's clones
-    /// of a single template node.
+    /// Every node cloned from `template`: one template's clones in one run.
     ///
-    /// A question about what an *apply* did is a question about the clones it
-    /// made — the template is not written (that is what keeps a function
-    /// reusable) — so a reader that asks about the result of an applied program
-    /// asks here, and [`NodeReport::origin`] is the inverse map.  Linear in the
-    /// node count, so this answers one question once rather than sitting on a
-    /// path the compiler takes.
+    /// # Invariant
+    ///
+    /// The template itself is never written, which is what keeps a function
+    /// reusable; [`NodeReport::origin`] is the inverse map.
     pub fn clones_of(&mut self, template: NodeId) -> Vec<NodeId> {
         let nodes: Vec<NodeId> = self.build.module.nodes.keys().collect();
         nodes
@@ -189,10 +163,8 @@ impl Analysis {
             .collect()
     }
 
-    /// The template node `node` was cloned from, resolved to the end of the
-    /// origin chain: an apply's clone names its template, and a clone of a clone
-    /// names the previous clone, so a reader that wants the source node follows
-    /// the chain rather than one step.
+    /// Follow `node`'s clone-origin chain to its end, where the source node is
+    /// the one no clone names as its origin.
     pub fn source_of(&mut self, node: NodeId) -> NodeId {
         let mut current = node;
         for _ in 0..64 {
@@ -248,8 +220,7 @@ impl Analysis {
         out
     }
 
-    /// Walk a node's array tree breadth-first, describing at most `limit` nodes,
-    /// so a structure's shape can be read without naming every node by hand.
+    /// Walk a node's array tree breadth-first, describing at most `limit` nodes.
     pub fn dump_tree(&mut self, root: NodeId, limit: usize) -> Vec<String> {
         let mut out = Vec::new();
         let mut queue = vec![(root, 0usize)];

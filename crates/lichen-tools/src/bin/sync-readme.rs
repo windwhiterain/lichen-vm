@@ -1,20 +1,5 @@
-//! Regenerate the example section of the top-level README from
-//! `examples/`.
-//!
-//! Run with: `cargo run -p lichen-tools --bin sync-readme`
-//!
-//! The section lives between the `<!-- begin: examples -->` and
-//! `<!-- end: examples -->` markers; only that region is rewritten, so the
-//! heading and lead-in around it stay as they are.  Each example's `output =`
-//! metadata is also rewritten to its actual output first, so the README
-//! embeds the whole file as it stands.  Idempotent: running it twice changes
-//! nothing.  `tests/readme.rs` resyncs the README in place on drift, so this
-//! command is only needed to commit the result of an example change right
-//! away.
-//!
-//! Run outside the repository — where the compile-time
-//! `CARGO_MANIFEST_DIR`-relative `examples/` does not exist — it prints the
-//! unreadable path and exits non-zero instead of panicking.
+//! Regenerate the README example section and each example's `output =` value,
+//! on demand.  See docs/notes/readme-sync.md.
 
 use std::fs;
 use std::process::ExitCode;
@@ -31,9 +16,8 @@ fn main() -> ExitCode {
     }
 }
 
-/// The whole command: rewrite the `output =` metadata, render the tree, splice
-/// the blob into the README and write it back when it changed.  `Err` is the
-/// diagnostic [`main`] prints.
+/// Rewrite the `output =` metadata, render the tree, and splice the blob into
+/// the README.
 fn run() -> readme::ReadmeResult<()> {
     if readme::sync_output_comments()? {
         println!("updated example output metadata");

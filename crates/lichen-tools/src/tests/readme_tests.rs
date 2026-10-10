@@ -24,13 +24,8 @@ fn a_synced_region_is_a_noop() {
 
 #[test]
 fn renders_the_tree_grouped_and_ordered() {
-    // Render the controlled fixture tree, not the live example set: the real
-    // `examples/` is a moving spec, so asserting its names here
-    // would force a test edit for every example added/renamed/reordered.
-    // The fixture exercises the same behaviours the live tree does: files at
-    // several `order =` values, a tie broken by name, an undeclared entry
-    // sorting last, a directory opened by its `_.lichen`, and a nested
-    // directory rendered a level deeper.
+    // A controlled fixture, not the live `examples/`, whose names change with
+    // every example added, renamed or reordered.
     let fixture = crate_dir().join("tests").join("fixtures").join("readme");
     let blob = render_examples_in(&fixture).unwrap_or_else(|e| panic!("{e}"));
     let headings: Vec<(usize, String)> = blob
@@ -63,8 +58,7 @@ fn renders_the_tree_grouped_and_ordered() {
         .collect::<Vec<_>>(),
         "directories render as units ordered by their `_.lichen`, files by their `order =`"
     );
-    // The face opens the directory: `_.lichen`'s whole file sits directly
-    // under the directory heading, `---...---` block included.
+    // The face opens the directory: its own file sits right under the heading.
     assert!(
         blob.contains("### `pkg`\n\n```text\n---"),
         "the directory's `_.lichen` is shown first inside the directory"
@@ -86,10 +80,8 @@ fn renders_the_tree_grouped_and_ordered() {
 
 #[test]
 fn a_missing_example_directory_is_reported_not_a_panic() {
-    // The tool invoked outside the repository: the `CARGO_MANIFEST_DIR`-
-    // relative `examples/` is absent, so the walk must report the unreadable
-    // path (the `sync-readme` command prints it and exits non-zero) rather
-    // than panicking.
+    // Outside the repository the relative `examples/` is absent, so the walk
+    // must report the path rather than panic.
     let missing = crate_dir()
         .join("tests")
         .join("fixtures")

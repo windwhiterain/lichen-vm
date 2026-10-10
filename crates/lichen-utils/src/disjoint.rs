@@ -1,38 +1,22 @@
-//! An intrusive disjoint-set (union-find) with a member list per set.
-//!
-//! Each set is a `parent`-pointer tree plus a singly-linked list of all its
-//! members headed by the representative, so walking `next` from a root visits
-//! every node of the set. [`find`] compresses paths without touching the
-//! list, [`union`] splices the two member lists with O(1) pointer surgery,
-//! and neither allocates: the metadata lives inside the caller's nodes and
-//! every operation is plain field reads and writes.
-//!
-//! The links are the union-find's state, not the caller's: [`Meta`]'s fields
-//! are private and the mutable accessor [`Node::meta_mut`] requires a permit
-//! only this module can mint, so a node changes sets only through the
-//! operations below.  See `P2-13` in `docs/notes/code-audit.md`.
+//! An intrusive disjoint-set (union-find): a `parent`-pointer tree per set, plus
+//! a member list from the representative.
 
 use slotmap::{Key, SlotMap};
 use stacksafe::stacksafe;
 
-/// The disjoint-set metadata embedded in a node.
+/// The disjoint-set metadata embedded in a node; the fields are private.
 ///
-/// # Contract
-/// - Call [`make_set`] right after inserting the node, before any other
-///   operation touches it.
-/// - `tail` and `size` are meaningful only on the representative of a set;
-///   they are never read elsewhere.
-/// - The member list is acyclic: [`union`] splices a root (a None-terminated
-///   list head) onto the tail of another root's list, so `next` never loops.
+/// # Invariant
 ///
-/// The links are the union-find's state, so the fields are private: read
-/// them through the accessors, and build one with [`Self::new`] only to
-/// carry solved links between key spaces.
+/// [`make_set`] runs right after the node is inserted, before anything else
+/// touches it; `tail` and `size` are meaningful only on a representative; and
+/// the member list is acyclic, because [`union`] splices a None-terminated list
+/// head onto another root's tail, so `next` never loops.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Meta<K: Copy> {
     /// The representative of the set; `None` means this node is its own root.
     parent: Option<K>,
-    /// The next member in the set's member list, headed by the representative.
+    /// The next member in the member list headed by the representative.
     next: Option<K>,
     /// Valid only at a representative: the last member of its list.
     tail: Option<K>,
@@ -41,12 +25,8 @@ pub struct Meta<K: Copy> {
 }
 
 impl<K: Copy> Meta<K> {
-    /// Assemble metadata from its four links.
-    ///
-    /// The one way to build a [`Meta`] whose links did not come from this
-    /// module's own operations: freezing a solved module remaps a live
-    /// node's links onto local indices, and the artifact decoder reads them
-    /// back.
+    /// Assemble metadata from four links from outside this module — freezing or
+    /// decoding remaps a node's links.
     pub fn new(parent: Option<K>, next: Option<K>, tail: Option<K>, size: u32) -> Self {
         Self {
             parent,
@@ -77,11 +57,8 @@ impl<K: Copy> Meta<K> {
     }
 }
 
-/// The permit [`Node::meta_mut`] requires.
-///
-/// Its field is private, so only this module can mint one: a [`Meta`] the
-/// caller built with [`Meta::new`] (or [`Default`]) can be handed *back*, but
-/// a live node's links are writable only by the operations here.
+/// The permit [`Node::meta_mut`] requires.  The field is private, so only this
+/// module mints one.
 pub struct MetaPermit(());
 
 /// A node type that carries a [`Meta`] for a disjoint-set.
@@ -89,15 +66,12 @@ pub trait Node: Sized {
     /// The node's key in the [`SlotMap`] that stores it.
     type Key: Copy;
     fn meta(&self) -> &Meta<Self::Key>;
-    /// The node's metadata, writable under a minted `permit` — see
-    /// [`MetaPermit`].
+    /// The node's metadata, writable only under a minted [`MetaPermit`].
     fn meta_mut(&mut self, permit: MetaPermit) -> &mut Meta<Self::Key>;
 }
 
-/// Initialize `key` as the singleton representative of its own set.
-///
-/// Must be called once, right after `key` is inserted into `nodes`, before
-/// the key participates in any other operation.
+/// Initialize `key` as the singleton representative of its own set, once, right
+/// after insertion.
 pub fn make_set<K, V>(nodes: &mut SlotMap<K, V>, key: K)
 where
     K: Key,
@@ -112,11 +86,10 @@ where
 
 /// Return the representative of `key`'s set.
 ///
-/// Compresses the path from `key` to the root: every node visited is
-/// re-pointed directly at the root, so later finds are shorter. Only the
-/// `parent` field is rewritten — the member list is left untouched, which
-/// keeps it valid at no extra cost. Recursion depth is bounded by the path
-/// length and grows the stack on demand.
+/// # Invariant
+///
+/// Every node on the path is re-pointed at the root, so later finds are
+/// shorter.  Only `parent` is written, never the member list.
 #[stacksafe]
 pub fn find<K, V>(nodes: &mut SlotMap<K, V>, key: K) -> K
 where
@@ -133,13 +106,14 @@ where
     root
 }
 
-/// Merge the sets of `a` and `b` and return the representative of the merged
+/// Merge the sets of `a` and `b`, returning the representative of the merged
 /// set.
 ///
-/// The smaller set is attached under the larger one (by member count), which
-/// bounds the tree depth by the logarithm of the set size, and its member
-/// list is spliced onto the tail of the other root's list in O(1). Nothing
-/// is allocated.
+/// # Invariant
+///
+/// The smaller set is attached under the larger, bounding tree depth by the
+/// logarithm of the size; the member lists are spliced in O(1) and nothing is
+/// allocated.
 pub fn union<K, V>(nodes: &mut SlotMap<K, V>, a: K, b: K) -> K
 where
     K: Key,
@@ -172,15 +146,11 @@ where
 
 /// Rewrite a set's member list to exactly `members`, in the order given.
 ///
-/// `members[0]` becomes the representative, every other member's parent is
-/// re-pointed straight at it (flattening the tree), the member list is
-/// re-linked in that order and the representative's `tail` and `size` are
-/// recorded.  Members left out keep their own metadata — the caller is
-/// dropping them.  An empty `members` is a no-op, so a set that loses every
-/// member is left alone.
+/// # Invariant
 ///
-/// This is the splice a caller needs when some of a set's members die: see
-/// `Module::flatten_class`.
+/// `members[0]` becomes the representative and every other member's parent is
+/// re-pointed straight at it, flattening the tree.  Members left out keep their
+/// metadata; an empty `members` is a no-op.
 pub fn rebuild<K, V>(nodes: &mut SlotMap<K, V>, members: &[K])
 where
     K: Key,
@@ -205,10 +175,7 @@ where
     meta.size = members.len() as u32;
 }
 
-/// Iterate over every member of the set represented by `root`, starting with
-/// `root` itself, in member-list order.
-///
-/// The iterator borrows `nodes` and allocates nothing.
+/// Iterate over every member of `root`'s set, `root` first, in list order.
 pub fn members<'n, K, V>(nodes: &'n SlotMap<K, V>, root: K) -> impl Iterator<Item = K> + 'n
 where
     K: Key,

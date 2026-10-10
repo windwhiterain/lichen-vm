@@ -16,9 +16,8 @@ where
         Self::new_with(module, arrows, None)
     }
 
-    /// A printer that renders an extension vocabulary's own variants through
-    /// `render_ext` — a hook the base renderer cannot know, returning the
-    /// variant's spelling (or `None` for a value it does not recognize).
+    /// A printer whose extension vocabulary renders through `render_ext`, the
+    /// hook returning a variant's spelling or `None`.
     pub fn new_with_ext(
         module: &'a Module<P>,
         render_ext: Option<RenderExt<'a, P::Value>>,
@@ -43,22 +42,24 @@ where
         }
     }
 
-    /// Turn the nominal-id suffix on — the diagnostic printer needs it so two
-    /// structs with the same field shape stay distinguishable.
+    /// Turn the nominal-id suffix on, so two structs of one field shape stay
+    /// distinguishable.
     pub fn show_struct_ids(&mut self) {
         self.show_struct_id = true;
     }
 
-    /// The module this printer renders from — for a renderer that needs to walk
-    /// the module alongside a rendered type (e.g. a [`DiagKind::NamedField`]
-    /// diagnostic's did-you-mean clause, which enumerates the struct's fields).
+    /// The module this printer renders from, for a renderer that must walk it
+    /// alongside a rendered type.
     pub fn module(&self) -> &'a Module<P> {
         self.module
     }
 
-    /// Render a type node; an undecided cell renders as its class name.  A
-    /// empty value ([`LowValue::Error`]) is a concrete value and renders
-    /// as `none` — it is never a fresh class variable.
+    /// Render a type node; an undecided cell renders as its class name.
+    ///
+    /// # Invariant
+    ///
+    /// An empty value ([`LowValue::Error`]) is concrete and renders `none`,
+    /// never a fresh class variable.
     pub fn node(&mut self, node: NodeId) -> String {
         if self.path.contains(node) {
             return "…".to_string();
@@ -73,9 +74,8 @@ where
         out
     }
 
-    /// The stable name of an undecided cell's class: `?a`, `?b`, … — cells in
-    /// the same class share a name.  A node the walk cannot place has no class
-    /// to name, so it renders as the unknown `?`.
+    /// The stable name of an undecided cell's class: cells in one class share a
+    /// name; an unplaceable node renders `?`.
     pub fn class_name(&mut self, node: NodeId) -> String {
         let Some(rep) = representative(self.module, node) else {
             return "?".to_string();
@@ -89,11 +89,14 @@ where
         name
     }
 
-    /// The stable name of an undecided **static** cell: `?a`, `?b`, … — a frozen
-    /// module's type variable.  Keyed by the cell's **equality class**, exactly
-    /// as [`Self::class_name`] is: the artifact keeps a class whole, so two refs
-    /// in one class are one variable, and naming them by ref alone would print
-    /// an imported polymorphic `?a -> ?a` as `?a -> ?b`.
+    /// The stable name of an undecided **static** cell, keyed by the cell's
+    /// equality class as [`Self::class_name`] is.
+    ///
+    /// # Invariant
+    ///
+    /// The artifact keeps a class whole, so two refs in one class are one
+    /// variable; naming by ref alone would print an imported polymorphic
+    /// `?a -> ?a` as `?a -> ?b`.
     pub fn static_class_name(&mut self, sref: lichen_lowlevel::StaticNodeId) -> String {
         let representative = self.module.static_equality_representative(sref);
         if let Some(name) = self.static_names.get(&representative) {
@@ -110,9 +113,8 @@ where
         if let Some(structural) = value.as_enum() {
             return match structural {
                 LowValue::USize(n) => n.to_string(),
-                // A float in a type expression is a structural value, as a
-                // `USize` array length is: it prints its own digits, never the
-                // marker's name (`type_constant` spells that).
+                // A float in a type expression is structural, like a `USize`
+                // array length: it prints its digits, not the marker's name.
                 LowValue::Float(value) => float_literal(value),
                 LowValue::Str(s) => format!("\"{s}\""),
                 // SAFETY: `array` is the payload of `node`, a live node of the
@@ -127,17 +129,13 @@ where
             .unwrap_or_else(|| "?".to_string())
     }
 
-    /// The spelling of a type constant — or of an extension's own variant:
-    /// the lowlevel structural values return `None`, they are rendered by
-    /// [`Self::value`]'s structural branch.
+    /// The spelling of a type constant, or of an extension's own variant.
     pub(crate) fn type_constant(&self, value: &P::Value) -> Option<String> {
         if value == &P::Value::int_marker() {
             Some("Int".to_string())
         } else if value == &P::Value::float_marker() {
-            // The marker itself, not a float value: source syntax spells the
-            // type constant `Float` (the lexer's keyword), not the registry's
-            // doc label `float`.  A float *value* is the other site, and prints
-            // its digits through `float_literal`.
+            // The marker, not a float value: the constant is spelled `Float`,
+            // not a registry label; a float value prints its digits.
             Some("Float".to_string())
         } else if value == &P::Value::string_marker() {
             Some("string".to_string())
@@ -163,10 +161,8 @@ where
     }
 
     fn elements(&mut self, node: NodeId, elements: &[ArrayItem]) -> String {
-        // A bare struct kind `[[payload, TypeStruct], K]` (a struct type
-        // pair's type slot): render its tag `TypeStruct`.  Detected before the
-        // `[head, K]` atomic branch, since its marker is a pair
-        // (not a plain type constant).
+        // A bare struct kind `[[payload, TypeStruct], K]`: render its tag, since
+        // its marker is a pair.
         if is_struct_kind(self.module, node) {
             return "TypeStruct".to_string();
         }
@@ -175,14 +171,8 @@ where
         if elements.len() == 2 && self.is_universe_any(elements[1].node) {
             return self.any_node(elements[0].node);
         }
-        // A function-type node `[Function(fid), ↺]` — a function's own type
-        // (`f : f`): slot 0 holds a `Function` value and slot 1 is the node
-        // itself (the self-cycle, like the universe `[Type, ↺]`). Its
-        // signature lives in the function template (`parameter` / `r#return`),
-        // not in a `[dom, cod]` shape, so render `domain -> codomain` from the
-        // template's parameter and return type cells. A static function-type
-        // (a frozen module's) is left to the raw fallback — its signature
-        // reads through the static module, not yet wired here.
+        // A function-type node `[Function(fid), ↺]`: its signature lives in the
+        // template, not a `[dom, cod]` shape.
         if elements.len() == 2
             && self.slot1_is_self(elements[1].node, node)
             && let Some(fv) = self.module.node_value(elements[0].node)
@@ -191,16 +181,13 @@ where
         {
             return format!("{dom} -> {cod}");
         }
-        // A struct type: `[shape, [[payload, TypeStruct], K]]` — the kind is a
-        // standard `[marker, K]` pair whose marker is the `[payload, TypeStruct]`
-        // pair.  The id renders as `#n` so two structs with the
-        // same field shape stay distinguishable (their nominal types differ).
+        // A struct type: the kind is the standard marker pair, whose id renders
+        // `#n` to distinguish same-shaped structs.
         if elements.len() == 2
             && let Some(kind) = self.module.node_value(elements[1].node)
             && let Some(LowValue::Array(kind)) = kind.as_enum()
-            // SAFETY: `kind` is the payload of a value read from the live node
-            // `elements[1]`; this printer releases no block.  The note covers
-            // the three `items()` calls in this arm.
+            // SAFETY: `kind` is a value read from the live node `elements[1]`;
+            // this arm's other `items()` calls share the note.
             && self.kind_is_struct_any(unsafe { kind.items() })
         {
             let fields = self.fields_any(elements[0].node);
@@ -239,13 +226,8 @@ where
                     }
                 }
                 Some(m) if m == P::Value::tuple_type_marker() => {
-                    // shape = the field-type list — render `<T1, ..., Tn>`.  A
-                    // shape the graph has not decided (a cell — the pin a
-                    // positional read states on an undecided container) is an
-                    // **open** field list: the arity is unknown, so its one
-                    // placeholder is shown with an ellipsis rather than
-                    // mistaken for the whole tuple (`<?a>` reads as a
-                    // one-element tuple).
+                    // An open field list — an undecided shape — shows its
+                    // placeholder with an ellipsis, so `<?a>` is not a tuple.
                     let open = !matches!(
                         self.module
                             .node_value(elements[0].node)
@@ -276,8 +258,7 @@ where
                     }
                 }
                 Some(m) if m == P::Value::set_type_marker() => {
-                    // shape = the element type alone — render `set<T>`.  A set
-                    // has no length, which is exactly what separates it from
+                    // A set has no length, which is what separates it from
                     // `array<T, n>`.
                     if let Some(shape) = self.module.node_value(elements[0].node)
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
@@ -292,9 +273,8 @@ where
                 _ => {}
             }
         }
-        // A bare `[in, out]` shape with no kind wrapper: an arrow only when
-        // the checker registered the shape (the diagnostic path); otherwise
-        // it falls through to the raw pair.
+        // A bare `[in, out]` shape is an arrow only when the checker registered
+        // the shape; otherwise it reads raw.
         if elements.len() == 2 && self.is_arrow(node) {
             return format!(
                 "{} -> {}",
@@ -321,16 +301,15 @@ where
         })
     }
 
-    /// Whether an element-1 node **is** the node's own self-cycle — the mark of
-    /// a function-type `[Function(fid), ↺]`, as against a plain `[value, type]`
-    /// pair.  Two forms count:
+    /// Whether element 1 **is** the node's own self-cycle, marking a function
+    /// type `[Function(fid), ↺]`.
     ///
-    /// - a **dynamic** self-cycle, compared by class so a cell bound to the
-    ///   function-type also counts (it carries the same value but is a class
-    ///   member, not the self-ref node itself);
-    /// - a **static** self-ref: a materialized static function-type copies the
-    ///   frozen node's value, so its slot 1 points at the frozen node's own
-    ///   cycle rather than back at the copy.
+    /// # Invariant
+    ///
+    /// Two forms count: a **dynamic** self-cycle, compared by class, so a cell
+    /// bound to the function-type counts; and a **static** self-ref, because a
+    /// materialized static function-type carries the frozen node's value, so its
+    /// slot 1 names that node's cycle, not the copy.
     pub(super) fn slot1_is_self(&self, slot1: AnyNodeId, node: NodeId) -> bool {
         match slot1 {
             AnyNodeId::Dynamic(slot1) => {
@@ -340,18 +319,15 @@ where
         }
     }
 
-    /// The function a **static** node's value is the type of — `Some(fid)` for
-    /// `[Function(fid), t]` whose slot 1 `t` is itself a function type (a
-    /// self-cycle), which is what makes the pair a *type* rather than a
-    /// `[value, type]` pair.  `None` for anything else.
+    /// The function a **static** node's value is the type of: a
+    /// `[Function(fid), t]` whose slot 1 is itself a function type.
     ///
-    /// The slot-1 test is about the node `t` names, **never about the node
-    /// being printed**: a materialized member of a function type's class
-    /// carries the frozen type's value, so its slot 1 names the frozen node that
-    /// *is* the cycle rather than the member itself.  That is the static form of
-    /// the relation the dynamic arm of [`Self::slot1_is_self`] reads as "one
-    /// class": a class has one value, and a member carries it
-    /// (`docs/notes/class-channel.md`).
+    /// # Invariant
+    ///
+    /// Slot 1 is about the node `t` names, never about the node printed: a
+    /// materialized member of a function type's class carries the frozen type's
+    /// value, so its slot 1 names the frozen node that *is* the cycle.  See
+    /// docs/notes/class-channel.md.
     fn static_function_type_function(
         &self,
         sref: lichen_lowlevel::StaticNodeId,
@@ -381,14 +357,14 @@ where
         .then_some(fid)
     }
 
-    /// The `domain -> codomain` spelling of a function-type node's signature,
-    /// read from the function template's parameter and return *type* cells
-    /// (`Function::parameter` and `Function::r#return` are the `[value, type]`
-    /// pairs; slot 1 is the type). The template's cells are read directly —
-    /// they are undecided for a polymorphic function (so `?a -> ?a`) and bound
-    /// for a monomorphic one, which is exactly the signature to print. `None`
-    /// for a static function-type (its template lives in a static module, not
-    /// wired here yet) or a function whose entry points are not pairs.
+    /// The `domain -> codomain` spelling of a signature, from the template's
+    /// parameter and return type cells.
+    ///
+    /// # Invariant
+    ///
+    /// The cells read undecided for a polymorphic function (`?a -> ?a`) and
+    /// bound for a monomorphic one.  `None` for a static function-type or
+    /// non-pair entry points.
     fn function_signature(&mut self, fid: AnyFunctionId) -> Option<(String, String)> {
         match fid {
             AnyFunctionId::Dynamic(function) => {
@@ -404,9 +380,8 @@ where
         }
     }
 
-    /// Element 1 (the type slot) of a `[value, type, attrs…]` pair, as a
-    /// dynamic node. `None` when `pair` is not a 2+-element array or its type
-    /// slot is a static ref.
+    /// Element 1 (the type slot) of a `[value, type, attrs…]` pair; `None` for a
+    /// short pair or a static slot.
     fn pair_type_slot(&self, pair: NodeId) -> Option<NodeId> {
         // SAFETY: `pair` is a live node of the module being rendered; this
         // printer releases no block.
@@ -471,10 +446,8 @@ where
             // registered module pins the arena.
             Some(LowValue::Array(array)) => {
                 let items = unsafe { array.items() };
-                // A static **function-type node** `[Function(fid), ↺]` — or a
-                // member carrying one (a materialized class member's slot 1
-                // names the frozen cycle): print the template's signature rather
-                // than the raw pair.  The dynamic case is in `elements`.
+                // A static function-type node, or a member carrying one, prints
+                // the template's signature rather than the raw pair.
                 if let Some(fid) = self.static_function_type_function(sref)
                     && let Some((dom, cod)) = self.function_signature(fid)
                 {
@@ -506,15 +479,13 @@ where
         if elements.len() == 2 && self.is_static_universe(elements[1].node) {
             return self.static_any(elements[0].node, visiting);
         }
-        // A struct type: `[shape, [[payload, TypeStruct], K]]` — the kind is a
-        // standard `[marker, K]` pair whose marker is the `[payload, TypeStruct]`
-        // pair; a name table rides in the payload's names slot.
+        // A struct type: the kind is the standard marker pair, and a name table
+        // rides in the payload's names slot.
         if elements.len() == 2
             && let Some(kind) = self.module.node_value(elements[1].node)
             && let Some(LowValue::Array(kind)) = kind.as_enum()
-            // SAFETY: `kind` is the payload of a value read from the live node
-            // `elements[1]`; the note covers the three `items()` calls in this
-            // arm.
+            // SAFETY: `kind` is a value read from the live node `elements[1]`;
+            // this arm's other `items()` calls share the note.
             && self.kind_is_struct_any(unsafe { kind.items() })
         {
             let fields = self.static_fields(elements[0].node, visiting);
@@ -611,20 +582,16 @@ where
         }
     }
 
-    /// Whether a **static** ref's value is the universe, `[Type, ↺]`.
+    /// Whether a **static** ref's value is the universe `[Type, ↺]`, whose head
+    /// is the `Type` marker, not a containing kind.
     ///
-    /// The head must be the `Type` marker: that is what separates *the* universe
-    /// from a kind that merely *contains* it — an `array<…>`'s `[TypeArray, K]`
-    /// has the same self-referential silhouette
-    /// ([universe-containment](../docs/notes/universe-containment.md) §2).
+    /// # Invariant
     ///
-    /// The tail must be the universe too, but it need not be *this very node*: a
-    /// kind read out of a frozen module is a **replica** whose two items are refs
-    /// into the module that wrote it, and the tail then names that module's
-    /// canonical self-loop rather than the replica.  Reading through the ref is
-    /// what lets a `[shape, [Type, ↺]]` pair that crossed a module boundary render
-    /// as its head instead of falling back to the raw mark
-    /// ([raw-rendering-mark](../docs/notes/raw-rendering-mark.md) §2).
+    /// The tail is the universe too, but need not be this very node: a kind read
+    /// from a frozen module is a replica whose items are refs into the writing
+    /// module, so its tail names that module's canonical self-loop.  Reading
+    /// through the ref lets a `[shape, [Type, ↺]]` pair that crossed a module
+    /// boundary render as its head rather than the raw mark.
     fn is_static_universe(&self, id: AnyNodeId) -> bool {
         let AnyNodeId::Static(sref) = id else {
             return false;

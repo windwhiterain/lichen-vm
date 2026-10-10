@@ -1,8 +1,7 @@
 use lichen_utils::enum_ext;
 use lichen_utils::extend::AsEnum;
 
-// The extension enums are ordinary enums — plain definitions, located
-// wherever they belong (same crate here; another crate for the carriers).
+// The extension enums are plain definitions, wherever they belong.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Extra {
     Alpha,
@@ -74,8 +73,8 @@ enum_ext!(
     + Small;
 );
 
-// The path form: the carry variant is named explicitly, so the extension can
-// be referenced from another module (or another crate, as the carriers do).
+// The path form names the carry variant explicitly, so another module or crate
+// can name the extension.
 mod hidden {
     #[derive(Debug, Clone, PartialEq)]
     pub enum Secret {
@@ -104,8 +103,7 @@ pub enum Mid {
     Marker,
 }
 
-// The top of the chain names every layer directly — all siblings, no
-// nesting, and the views/From impls for both layers are generated.
+// The top of the chain names every layer directly: all siblings, no nesting.
 enum_ext!(
     #[derive(Debug, Clone, PartialEq)]
     pub enum Top {
@@ -198,8 +196,8 @@ fn empty_base_gets_only_carry_variant() {
 
 #[test]
 fn empty_extension_compiles() {
-    // An extension with no variants: the carry variant exists but is
-    // uninhabited, and the `From`/`AsEnum` impls still compile.
+    // A variantless extension: the carry variant exists, uninhabited, and the
+    // generated impls still compile.
     enum_ext!(
         #[derive(Debug, Clone, PartialEq)]
         pub enum WithNil {
@@ -221,8 +219,7 @@ fn as_enum_clones_heap_payloads() {
 
 #[test]
 fn ext_discriminants_stay_in_ext() {
-    // Discriminants live on the extension enum itself; the composed enum
-    // never re-numbers them because it never splices variants.
+    // Discriminants stay on the extension enum, never renumbered.
     assert_eq!(Tagged::A as usize, 1);
     assert_eq!(Tagged::B as usize, 2);
     assert_eq!(WithDisc::from(Tagged::B), WithDisc::Tagged(Tagged::B));

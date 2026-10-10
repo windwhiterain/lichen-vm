@@ -1,107 +1,39 @@
-//! Compose a struct out of extension component types and expose each
-//! component through the [`AsField`] view trait — the struct analogue of
-//! [`enum_ext`](crate::extend::enum_ext).
+//! Compose a struct of extension component types, exposed through
+//! [`AsField`].  See docs/notes/compiler-plugin.md.
 //!
-//! An "extension" is an ordinary struct carrying its own state and its own
-//! behaviour (inherent methods).  [`compose_ext!`] composes several such
-//! extensions into one *tuple* host struct — a host field is a bare extension
-//! type, so there is no field-name to collide — and, for every extension type
-//! `T`, generates `impl AsField<T> for Host` with `get`/`get_mut`.  The host
-//! is then read or mutated per extension by pulling that extension out through
-//! `AsField` and calling the extension's own methods; the macro wires no
-//! per-extension accessor trait.
+//! # Invariant
 //!
-//! # Extending an upstream host
-//!
-//! A downstream that extends a host composes its own by listing the
-//! upstream's components *flat* (by symbol) alongside its own — one macro,
-//! no per-upstream wrapper:
-//!
-//! ```
-//! use lichen_utils::compose::AsField;
-//! use lichen_utils::compose_ext;
-//!
-//! #[derive(Debug, Default)]
-//! struct Shared {
-//!     n: usize,
-//! }
-//!
-//! #[derive(Debug, Default)]
-//! struct Mine {
-//!     m: i32,
-//! }
-//!
-//! compose_ext! {
-//!     #[derive(Debug, Default)]
-//!     struct Host(Shared, Mine,);
-//! }
-//!
-//! let mut host = Host::default();
-//! assert_eq!(AsField::<Shared>::get(&host).n, 0);
-//! AsField::<Mine>::get_mut(&mut host).m = 3;
-//! assert_eq!(AsField::<Mine>::get(&host).m, 3);
-//! ```
-//!
-//! Flat is load-bearing: never nest the upstream host itself as a component.
-//! Per-type `AsField` access resolves only against a flat tuple, so a nested
-//! host breaks every operator reading a component through `AsField` — and
-//! such an operator's code lives upstream, out of the downstream's reach.
+//! A downstream extending an upstream host lists its components flat alongside
+//! its own, in one [`compose_ext!`]: `AsField` needs a flat tuple.
 
-/// View a composed (tuple) struct as one of its extension component types.
+/// View a composed (tuple) struct as one of its component types.
+///
+/// # Invariant
 ///
 /// [`compose_ext!`] implements this for a composed struct against each of its
-/// extension component types.  `get` borrows the component immutably; `get_mut`
-/// borrows it mutably — so a component is reached and its own behaviour
-/// (inherent methods) invoked without the macro wiring any per-component
-/// accessor trait.
+/// component types.  `get` borrows immutably, `get_mut` mutably, so a
+/// component's methods are reached through the view with no accessor trait.
 pub trait AsField<T> {
     fn get(&self) -> &T;
     fn get_mut(&mut self) -> &mut T;
 }
 
-/// Compose a tuple struct out of extension component types and, for every
-/// component type `T`, generate `impl AsField<T>` (get/get_mut) for the
-/// composed struct.
+/// Compose a tuple struct of component types, generating `impl AsField<T>` for
+/// each.
 ///
-/// Each listed type becomes one positional field of the tuple struct; the
-/// component is reached by its type, so field names never collide.  The
-/// struct keeps the leading attributes, so the caller can derive `Default`
-/// (each component must be `Default`) and whatever else.  No trait is
-/// implemented on the components — reach a component through `AsField` and
-/// call its inherent methods.
+/// # Invariant
 ///
-/// # Example
+/// Each listed type is one positional field, so field names never collide.  The
+/// leading attributes are kept; a component type may appear at most once.
 ///
 /// ```
-/// use lichen_utils::compose::AsField;
 /// use lichen_utils::compose_ext;
+/// struct Component;
+/// compose_ext! { struct Host(Component,); }
 ///
-/// #[derive(Debug, Default)]
-/// struct Counter { n: usize }
-/// impl Counter {
-///     fn bump(&mut self) -> usize { let n = self.n; self.n += 1; n }
-/// }
-///
-/// compose_ext! {
-///     #[derive(Debug, Default)]
-///     pub struct Host(
-///         Counter,
-///     );
-/// }
-///
-/// let mut h = Host::default();
-/// assert_eq!(AsField::<Counter>::get_mut(&mut h).bump(), 0);
-/// assert_eq!(AsField::<Counter>::get_mut(&mut h).bump(), 1);
-/// assert_eq!(AsField::<Counter>::get(&h).n, 2);
+/// let _: &Component = lichen_utils::compose::AsField::<Component>::get(
+/// &Host { 0: Component });
 /// ```
-///
-/// # Notes
-///
-/// - A component type may appear at most once, else the `AsField<T>` impls
-///   overlap; compose each extension with a distinct type.
-/// - The composed struct is not generic; use distinct concrete component types.
-/// - `get`/`get_mut` are ambiguous when a host has several components; qualify
-///   with `AsField::<T>::get(&host)`.
 #[macro_export]
 macro_rules! compose_ext {
     // ── entry: a single tuple host struct of component types ──
@@ -119,9 +51,8 @@ macro_rules! compose_ext {
     };
 }
 
-/// Generates an `AsField` impl per tuple position.  Internal helper —
-/// callers use [`compose_ext!`].  Each arm pins a literal index and recurses
-/// with the next literal, so a tuple position is never computed mid-match.
+/// Generates an `AsField` impl per tuple position.  Internal helper; callers use
+/// [`compose_ext!`].
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __compose_ext_as_field {

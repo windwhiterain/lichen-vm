@@ -1,40 +1,5 @@
-//! Keeping the README example section in sync with the top-level `examples/`.
-//!
-//! The example programs are the single source of truth for the top-level
-//! README's example section: [`render_examples`] walks `examples/`
-//! as a tree, and every directory under it renders as one unit — opened by
-//! the directory's `_.lichen` program, followed by the files it contains,
-//! with nested directories rendering the same way to any depth, one heading
-//! level deeper each time.  Every program is rendered as its whole source
-//! file, `---...---` block included; the block's `output = "..."` metadata is
-//! the file's actual output, kept current by [`sync_output_comments`], so
-//! the README never relies on a hand-written promise in the file.
-//! Placement is declared in each file's opening `---...---` block as
-//! `order = "N"`: a file's order places it among its siblings, and a
-//! directory's is the one in its `_.lichen`, whose program also always shows
-//! first inside the directory; undeclared entries sort last, ties by name.
-//! Programs run standalone wherever they sit — the block's
-//! `name = import "path"` entries resolve relative to their own file, so a
-//! directory of packages is just a group of ordinary programs.
-//! [`sync_output_comments`] rewrites each file's `output = "..."` entry (in
-//! the same block) to that same actual output, so the file and the README
-//! agree.
-//! [`replace_examples`] splices the rendered blob into the region between
-//! the `<!-- begin: examples -->` / `<!-- end: examples -->` markers, and
-//! `cargo run -p lichen-tools --bin sync-readme` writes it back.
-//! `tests/readme.rs` rewrites the README's generated region in place whenever
-//! it drifts, so the README cannot go stale.  A program's `output = "..."`
-//! metadata is *not* self-healed: it is a claim about observable behaviour, so
-//! `tests/examples.rs` asserts it and fails on drift, while the `sync-readme`
-//! binary rewrites both for committing on demand.
-//!
-//! This is repository tooling, not a compiler surface: it walks the checkout
-//! through the compile-time `CARGO_MANIFEST_DIR`, so it lives in `lichen-tools`
-//! and no consumer of the compiler library links it (`P2-6`).  Both drives of
-//! the tree are fallible — a run outside the repository names the unreadable
-//! path instead of panicking — and bounded in depth ([`MAX_DEPTH`]), so a
-//! directory symlink that points back into the tree is a diagnostic rather
-//! than a stack overflow.
+//! The README example section, rendered from `examples/`, the living spec.  See
+//! docs/notes/readme-sync.md.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -45,27 +10,19 @@ use lichen_language::program::LangProgram;
 use lichen_language::render::render_all;
 use lichen_language::run::evaluate_raw;
 
-/// A fallible drive of the checkout.  The message names the path and the
-/// cause, so `sync-readme` reports it as a diagnostic and exits non-zero when
-/// it is run outside the repository (where the `CARGO_MANIFEST_DIR`-relative
-/// `examples/` does not exist).
+/// A fallible drive of the checkout; the message names the path and the cause.
 pub type ReadmeResult<T> = std::result::Result<T, String>;
 
-/// The deepest directory nesting either tree walk descends.
-///
-/// The bound exists because the walks follow directory entries: a symlink
-/// pointing at an ancestor recurses forever, and the walk that finds it is the
-/// one that must stop.  It is generous for `examples/` (a handful of levels),
-/// and exceeding it is reported, never a silent truncation.
+/// The deepest directory nesting either tree walk descends; exceeding it is
+/// reported, never a silent truncation.
 pub const MAX_DEPTH: usize = 32;
 
-/// The marker that opens the generated region in the READMEs.
+/// The marker that opens the generated region.
 pub const BEGIN_MARKER: &str = "<!-- begin: examples -->";
-/// The marker that closes the generated region in the READMEs.
+/// The marker that closes the generated region.
 pub const END_MARKER: &str = "<!-- end: examples -->";
 
-/// A directory's own program: its `order =` places the whole directory
-/// among its siblings, and its code opens the directory's section.
+/// A directory's own program; its `order =` places the whole directory.
 const DIR_FACE: &str = "_.lichen";
 
 /// Read a directory, or report why it cannot be read.
@@ -73,15 +30,13 @@ fn read_dir(dir: &Path) -> ReadmeResult<fs::ReadDir> {
     fs::read_dir(dir).map_err(|e| format!("read {}: {e}", dir.display()))
 }
 
-/// The crate directory, embedded at compile time so it is independent of the
-/// current working directory (tests run from the crate dir, the sync binary
-/// from wherever the user invokes it).
+/// The crate directory, from the compile-time `CARGO_MANIFEST_DIR`, not the
+/// current directory.
 pub fn crate_dir() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// The directory holding the example programs — a tree of files and
-/// directories, where each directory renders as one unit.
+/// The directory holding the example programs.
 pub fn example_dir() -> PathBuf {
     crate_dir().join("..").join("..").join("examples")
 }
@@ -91,19 +46,16 @@ pub fn readme_path() -> PathBuf {
     crate_dir().join("..").join("..").join("README.md")
 }
 
-/// Read a file with `\r\n` line endings normalized to `\n`, so a README
-/// checked out with CRLF on Windows still compares equal to the rendered blob.
+/// Read a file with `\r\n` normalized to `\n`, so a CRLF checkout still compares
+/// equal to the rendered blob.
 pub fn read_normalized(path: &Path) -> String {
     fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
         .replace("\r\n", "\n")
 }
 
-/// Every example program: every `.lichen` file anywhere under the example
-/// directory, including each directory's `_.lichen` face.  Order within the
-/// list is irrelevant — [`render_examples`] re-sorts the tree.  Reports an
-/// unreadable directory instead of panicking, so a run outside the repository
-/// names the missing `examples/`.
+/// Every `.lichen` file under the example directory, each directory's
+/// `_.lichen` face included.  Order is irrelevant.
 pub fn example_files() -> ReadmeResult<Vec<(String, PathBuf)>> {
     fn walk(
         dir: &Path,
@@ -136,11 +88,8 @@ pub fn example_files() -> ReadmeResult<Vec<(String, PathBuf)>> {
 /// The order an unnumbered entry sorts after — after every numbered entry.
 const DEFAULT_ORDER: usize = usize::MAX;
 
-/// Read the `order = "N"` metadata from a program's source, if it has one.
-///
-/// The directive can sit on any line; a value that is not a number panics
-/// with the file's name, so a typo is caught by the sync command instead of
-/// silently mis-ordering the section.
+/// Read a program's `order = "N"` metadata, if it has one; a value that is not
+/// a number panics.
 fn declared_order(file: &Path, source: &str) -> Option<usize> {
     let (interior, _) = split_block(source);
     let interior = interior?;
@@ -156,20 +105,18 @@ fn declared_order(file: &Path, source: &str) -> Option<usize> {
     }))
 }
 
-/// One entry of a directory: a `.lichen` program file, or a subdirectory
-/// (which renders as one unit, opened by its `_.lichen`).
+/// One entry of a directory: a `.lichen` file, or a subdirectory.
 struct Entry {
-    /// The path relative to the example directory, `/`-separated — the name
-    /// the entry shows under in the README.
+    /// The entry's path under the example directory, `/`-separated: the name it
+    /// shows under in the README.
     name: String,
     path: PathBuf,
     is_dir: bool,
 }
 
 impl Entry {
-    /// The `order =` the entry sorts by: a file's own directive, or a
-    /// directory's the one in its `_.lichen`.  Undeclared sorts last either
-    /// way — including a directory without an `_.lichen` at all.
+    /// The `order =` the entry sorts by: a file's own, or a directory's from
+    /// its `_.lichen`.  Undeclared sorts last.
     fn order(&self) -> usize {
         let path = if self.is_dir {
             self.path.join(DIR_FACE)
@@ -187,10 +134,8 @@ impl Entry {
     }
 }
 
-/// The `output = "..."` metadata a program declares — what it says it prints.
-/// The counterpart of [`program_output`]: the two together are the example
-/// suite's behavioural guard, so a program's declared output and its actual
-/// output are both read through these and never through a second notion.
+/// The `output = "..."` metadata a program declares; with [`program_output`] it
+/// forms the suite's behaviour guard.
 pub fn declared_output(source: &str) -> Option<String> {
     let (interior, _) = split_block(source);
     block_metadata(interior?)
@@ -199,11 +144,8 @@ pub fn declared_output(source: &str) -> Option<String> {
         .map(|(_, value)| value)
 }
 
-/// The program's actual output, or a panic naming the file and showing its
-/// diagnostics — the same rendering the CLI prints for a failing file.
-/// Programs run through a package store with their own path as the base, so
-/// `@import` lines resolve relative to the file (import-free programs are
-/// unaffected).
+/// The program's actual output, or a panic showing its diagnostics.  The file's
+/// own path is the import base.
 pub fn program_output(file: &Path, source: &str) -> String {
     let mut store = PackageStore::<LangProgram>::new();
     evaluate_raw(source, Some(file), &mut store).unwrap_or_else(|diags| {
@@ -211,20 +153,15 @@ pub fn program_output(file: &Path, source: &str) -> String {
     })
 }
 
-/// One program's markdown body: the whole source file, `---...---` block
-/// included, shown as-is.  The block's `output = "..."` metadata is the
-/// file's actual output, checked against it by `tests/examples.rs`, so the
-/// README shows the file exactly as it is in the repo.
+/// The program's markdown body: its whole source, `---...---` block included.
 fn render_program_body(path: &Path) -> String {
     let source = read_normalized(path);
     let text = source.trim_end_matches('\n');
     format!("```text\n{text}\n```")
 }
 
-/// Render one directory's entries — its `.lichen` files and subdirectories,
-/// each already ordered by [`Entry::order`] (ties by name) — as markdown
-/// blocks at the given heading level.  The `_.lichen` face is not an entry:
-/// [`render_entry`] opens the directory with it.
+/// Render one directory's entries, already ordered by [`Entry::order`], as
+/// markdown blocks at the given heading level.
 fn render_dir(dir: &Path, prefix: &str, level: usize, depth: usize) -> ReadmeResult<Vec<String>> {
     if depth > MAX_DEPTH {
         return Err(format!(
@@ -255,11 +192,8 @@ fn render_dir(dir: &Path, prefix: &str, level: usize, depth: usize) -> ReadmeRes
         .collect()
 }
 
-/// Render one entry at the given heading level: a program file becomes a
-/// heading over its whole file; a directory becomes a heading — opened
-/// by its `_.lichen` when it has one — over its entries, one level deeper.
-/// Headings start at `###` for the top level and deepen per directory,
-/// capped at `######`, so nesting of any depth still renders as markdown.
+/// Render one entry: a file becomes a heading over its file, a directory one
+/// over its `_.lichen` and its entries.
 fn render_entry(entry: &Entry, level: usize, depth: usize) -> ReadmeResult<String> {
     let hashes = "#".repeat(level.min(6));
     if !entry.is_dir {
@@ -283,34 +217,17 @@ fn render_entry(entry: &Entry, level: usize, depth: usize) -> ReadmeResult<Strin
     Ok(blocks.join("\n\n"))
 }
 
-/// Render every example program as the markdown section between the markers.
-///
-/// `examples/` is walked as a tree: each directory renders as one
-/// unit — a heading named by its path relative to the example directory,
-/// opened by its `_.lichen` program when it has one, then its files and
-/// nested directories, ordered by their `order =` metadata (a directory's
-/// is its `_.lichen`'s), undeclared last, ties by name.  Each program is
-/// shown as its whole file, so its `output =` metadata must be current —
-/// [`sync_output_comments`] keeps it that way (and `tests/readme.rs` runs
-/// it before rendering).
+/// Render `examples/` as the markdown section between the markers.
 pub fn render_examples() -> ReadmeResult<String> {
     render_examples_in(&example_dir())
 }
 
-/// Render every example program under `dir` as the markdown section between
-/// the markers.
-///
-/// [`render_examples`] renders the live `examples/` tree; this takes
-/// a base directory so the unit tests drive the same rendering logic from a
-/// controlled fixture instead of the live example set (which is a moving spec,
-/// so asserting it in a unit test would force a test edit per add/rename/
-/// reorder).
+/// Render the tree under `dir`, so the tests can drive a controlled fixture.
 fn render_examples_in(dir: &Path) -> ReadmeResult<String> {
     let root = dir;
     let mut blocks = Vec::new();
-    // A `_.lichen` directly in the example directory has no directory to
-    // introduce (the section itself is the root's unit) — it renders as an
-    // ordinary program.
+    // The root's own `_.lichen` has no directory to introduce, so it renders
+    // as an ordinary program.
     let face = root.join(DIR_FACE);
     if face.is_file() {
         blocks.push(format!(
@@ -322,19 +239,13 @@ fn render_examples_in(dir: &Path) -> ReadmeResult<String> {
     Ok(blocks.join("\n\n"))
 }
 
-/// Rewrite every example program's `output = "..."` metadata entry to its
-/// actual output, so each file shows what the language really prints — which
-/// is exactly what the README then embeds.  An existing `output =` entry is
-/// replaced in place; a file without one gets it appended.  A multi-line
-/// output becomes a multi-line string.  Returns true when any file was
-/// rewritten.
+/// Rewrite every example's `output =` metadata to its actual output.
 ///
-/// **A maintenance operation, run by the `sync-readme` binary on demand — not
-/// by the test suite.**  The suite compares a program's declared output with
-/// its actual one and *fails* on a difference (see `tests/examples.rs`): an
-/// output that changed on its own is a behaviour change, and rewriting it away
-/// would absorb the regression into a passing test and a dirty tree.  Reaching
-/// for this to make a failing suite green is exactly the case it is not for.
+/// # Invariant
+///
+/// A maintenance operation, run by the `sync-readme` binary on demand, never by
+/// the test suite: the suite asserts a declared output against its actual one
+/// and fails on a difference, so rewriting it away would hide the change.
 pub fn sync_output_comments() -> ReadmeResult<bool> {
     let mut changed = false;
     for (_, file) in example_files()? {
@@ -349,10 +260,13 @@ pub fn sync_output_comments() -> ReadmeResult<bool> {
     Ok(changed)
 }
 
-/// Replace the `output = "..."` metadata entry in `source` with `comment`;
-/// append it (inside the block) when there is none.  The result always ends
-/// with a newline; the block is normalized to the `---` … `---` form, one
-/// directive per line, two-space indented.
+/// Replace the `output =` metadata in `source` with `output`, appending it
+/// inside the block when there is none.
+///
+/// # Invariant
+///
+/// The result re-emits the block as `---`, one two-space-indented directive per
+/// line, and ends with a newline.
 fn replace_output_comment(source: &str, output: &str) -> String {
     let (interior, code) = split_block(source);
     let mut out = String::with_capacity(source.len() + output.len() + 16);
@@ -453,11 +367,13 @@ fn replace_output_comment(source: &str, output: &str) -> String {
     out
 }
 
-/// Replace the region between the markers in `content` with `blob`.
+/// Replace the region between the markers in `content` with `blob`; the markers
+/// stay.
 ///
-/// The markers themselves stay, with one blank line around the region.
-/// Errors with a message naming the marker when one is missing (or the `end`
-/// marker appears before the `begin` marker).
+/// # Invariant
+///
+/// The region keeps one blank line on each side, and a missing marker or an
+/// `end` before a `begin` is an error naming it.
 pub fn replace_examples(content: &str, blob: &str) -> Result<String, String> {
     let begin = content
         .find(BEGIN_MARKER)

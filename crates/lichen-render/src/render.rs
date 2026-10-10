@@ -1,15 +1,5 @@
-//! The program-generic pretty printer core: the type printer, the value
-//! printer, and the attribute-list / struct-field renderers.  All generic over
-//! `P: HighProgram`, so a host and a plugin that contributes an attribute
-//! (e.g. `lichen-doc`'s `? name = "…"`) reuse the same machinery.
-//!
-//! Everything here reads the top of the recursive-pair encoding and spells it
-//! in a concrete language's syntax.  Nothing names a concrete host program —
-//! a host (e.g. `lichen-language`) composes `ValuePrinter`/`TypePrinter` with
-//! its own value vocabulary and the free printers below.
-//!
-//! The two printers' methods live in the sibling modules `type_printer` and
-//! `value_printer`; their state and the shared helpers stay here.
+//! The pretty printer core: the type printer, the value printer, and the
+//! attribute and struct-field renderers.
 
 use std::collections::{HashMap, HashSet};
 
@@ -23,24 +13,20 @@ use lichen_utils::extend::AsEnum;
 
 mod type_printer;
 mod value_printer;
-// A rendering hook for extension vocabularies: an extension value → its
-// spelling, or `None` when the value is not the extension’s to name.  The
-// alias exists because the bare closure type trips clippy’s `type_complexity`.
+// A rendering hook for extension vocabularies: an extension value to its
+// spelling, or `None` when not the extension's.
 
 type RenderExt<'a, V> = &'a dyn Fn(&V) -> Option<String>;
 
-/// Render a runtime value as the program's output, *read against its type*.
+/// Render a runtime value as the program's output, read against its type.
 ///
-/// The type chain decides how the value reads: a value whose type is the
-/// universe is an atomic type constant (`Int` / `Type`), a value whose type
-/// is a kind is a compound type (`struct<.f Int, .g Type>`, `Int -> Int`,
-/// `<Int, Type>`, `array<Int, 3>`), a value whose type is a tuple type reads as a
-/// tuple `(1, Int)`, an array type as an array `[1, 2, 3]`, and a struct
-/// type as its field tuple.  When the type chain is opaque (an undecided cell,
-/// an extension type), the value falls back to its raw layout, and **every**
-/// reading of that layout is marked: a list of cells `raw[…]`, an atomic
-/// `raw 6` / `raw Int`.  A dump never spells itself like a form the chain
-/// explained — the two sit behind different structures.
+/// # Invariant
+///
+/// The type chain decides how the value reads: the universe an atomic constant
+/// (`Int`), a kind a compound type, a tuple `(1, Int)`, an array `[1, 2, 3]`, a
+/// struct its field tuple.  An opaque chain — an undecided cell, an extension
+/// type — falls back to the raw layout, and every reading of it is marked:
+/// `raw[…]`, `raw 6` / `raw Int`.  A dump never spells itself like a read.
 pub fn print_value<P: HighProgram>(module: &Module<P>, value: P::Value, ty: NodeId) -> String
 where
     P::Value: ValueType,
@@ -48,12 +34,13 @@ where
     ValuePrinter::new(module).print(value, ty)
 }
 
-/// Render a type expression (the recursive-pair encoding again) in the
-/// language's own type syntax: `Int`, `Type`, `T1 -> T2`, `<T1, ..., Tn>`,
-/// `array<T, len>`, `struct<.a T1, ...>`.  Undecided cells get stable `?a`, `?b`, …
-/// names — cells in the same unification class share a name — so the type
-/// shows which parts are linked.  Cycles are cut at `…`; a node the walk
-/// cannot read as a form renders as its raw layout, marked `raw[…]`.
+/// Render a type expression in the language's own type syntax.
+///
+/// # Invariant
+///
+/// Undecided cells get stable `?a`, `?b`, … names, shared within a unification
+/// class, so the type shows which parts are linked; cycles are cut at `…`; a node
+/// the walk cannot read as a form renders as its marked raw layout.
 pub fn print_type<P: HighProgram>(module: &Module<P>, root: NodeId) -> String
 where
     P::Value: ValueType,
@@ -61,14 +48,14 @@ where
     TypePrinter::new(module).node(root)
 }
 
-/// The **label** an expression reads as, when one of the attributes it carries
-/// names it — the general answer to "how is a value printed" for a value with no
-/// spelling of its own (a function, which is what a refinement's slot holds).
+/// The **label** an expression reads as when an attribute names it: how a value
+/// with no spelling of its own is printed.
 ///
-/// `tail` and `pair` are the same schema-tail/pair pair [`render_attributes`]
-/// reads, and the label is looked for the same way: one spelling per *present*
-/// attribute, first answer wins.  `None` means the expression prints as it
-/// always did.
+/// # Invariant
+///
+/// `tail` and `pair` are the schema-tail/pair pair [`render_attributes`] reads,
+/// and the label is looked for the same way: one spelling per *present*
+/// attribute, first answer wins.  `None` means the expression prints as before.
 pub fn value_label<P: HighProgram>(
     module: &Module<P>,
     pair: NodeId,
@@ -85,8 +72,8 @@ where
         .node_value(AnyNodeId::Dynamic(pair))
         .and_then(|v| v.as_enum())
         .and_then(|v| match v {
-            // SAFETY: `a` is the payload of a value read from a live node of
-            // the module being rendered; this printer releases no block.
+            // SAFETY: `a` is a value read from a live node of the module being
+            // rendered; this printer releases no block.
             LowValue::Array(a) => Some(unsafe { a.items() }.to_vec()),
             _ => None,
         })?;
@@ -100,19 +87,21 @@ where
         if let Some(slot) = slot
             && let Some(label) = attr_ext(marker).label(module, slot)
         {
-            // A labelled value *reads* as `?name`: the name is the attribute's
-            // ([`AttrExt::label`]), the doc sigil is this reading's.
+            // A labelled value reads as `?name`: the name is the attribute's.
             return Some(format!("?{label}"));
         }
     }
     None
 }
 
-/// Render the attributes an expression actually carries, from its schema tail
-/// (the expression's attribute *set*) and its runtime pair.  Returns empty when
-/// the expression carries no attribute; otherwise one spelling per *present*
-/// attribute, space-separated — so an un-annotated expression renders exactly
-/// as it always did, and only the attributes that are genuinely there appear.
+/// Render the attributes an expression carries, from its schema tail and runtime
+/// pair, space-separated.
+///
+/// # Invariant
+///
+/// Empty when the expression carries no attribute, and otherwise one spelling
+/// per *present* attribute: an un-annotated expression renders as before, and
+/// only attributes that are genuinely there appear.
 pub fn render_attributes<P: HighProgram>(
     module: &Module<P>,
     pair: NodeId,
@@ -129,8 +118,8 @@ where
         .node_value(AnyNodeId::Dynamic(pair))
         .and_then(|v| v.as_enum())
         .and_then(|v| match v {
-            // SAFETY: `a` is the payload of a value read from a live node of
-            // the module being rendered; this printer releases no block.
+            // SAFETY: `a` is a value read from a live node of the module being
+            // rendered; this printer releases no block.
             LowValue::Array(a) => Some(unsafe { a.items() }.to_vec()),
             _ => None,
         });
@@ -154,49 +143,32 @@ where
     parts.join(" ")
 }
 
-/// The shared pretty type printer: stateful across calls, so one instance
-/// renders a whole diagnostic (or report) with consistent `?a`/`?b` class
-/// names.  Generic over the value vocabulary: the lowlevel structural values
-/// render through [`AsEnum`], the type constants through [`ValueType`], and
-/// an extension's own variants through the render hook.
+/// The shared pretty type printer, stateful across calls so one instance names
+/// classes consistently within a diagnostic.
 pub struct TypePrinter<'a, P: HighProgram>
 where
     P::Value: ValueType,
 {
     module: &'a Module<P>,
-    /// The checker's arrow-shape registry, when rendering diagnostics: a
-    /// class whose representative is a bare `[in, out]` shape (no kind
-    /// wrapper) renders as an arrow only if a member is registered here.
-    /// The CLI output path has no registry and leaves such shapes raw, which
-    /// the `raw[…]` mark makes visible.
+    /// The checker's arrow-shape registry: a bare `[in, out]` shape renders as an
+    /// arrow only when registered, else raw.
     arrows: Option<&'a HashSet<NodeId>>,
-    /// Stable class names: representative → `?a`, `?b`, …, within one type
-    /// (or one diagnostic report).
+    /// Class names within one type: representative → `?a`, `?b`, ….
     names: HashMap<NodeId, String>,
-    /// Stable names for undecided *static* cells — a frozen module's type
-    /// variables.  Keyed by the absolute static ref, so the same cell (e.g. a
-    /// kernel's shared `d`/`c` signature cells) keeps one name across the
-    /// whole type, exactly as a dynamic class shares one.  Distinct from
-    /// `names` because a static ref has no union-find class to join.
+    /// Names for undecided *static* cells, keyed by the absolute static ref so one
+    /// signature cell keeps one name.
     static_names: HashMap<lichen_lowlevel::StaticNodeId, String>,
     next: usize,
     /// Array nodes on the current recursion; a cycle renders as `…`.
     path: AncestorNodes<NodeId>,
-    /// The extension's own value variants — how a variant the base
-    /// vocabulary does not know renders.  `None` (the base vocabulary) or a
-    /// hook returning `None` for a value leaves it `?`.
+    /// The extension's own value variants; `None` leaves them `?`.
     render_ext: Option<RenderExt<'a, P::Value>>,
-    /// Render a struct type's nominal id as `struct<…>#n` — on for the
-    /// diagnostic printer (two structs with the same field shape are
-    /// distinguishable), off for the value/type output path (a single value's
-    /// type needs no id noise).
+    /// Render a struct type's nominal id as `struct<…>#n`, on for the diagnostic
+    /// printer only.
     show_struct_id: bool,
 }
 
-/// The pretty value printer: renders a runtime value against its type chain,
-/// so a value reads like the code that produced it.  Generic over the value
-/// vocabulary, like [`TypePrinter`]; an extension's own variants render
-/// through the same render hook.
+/// The pretty value printer: renders a runtime value against its type chain.
 pub struct ValuePrinter<'a, P: HighProgram>
 where
     P::Value: ValueType,
@@ -207,25 +179,30 @@ where
     path: AncestorNodes<NodeId>,
     /// Type nodes on the current recursion; a cycle renders as `…`.
     tpath: AncestorNodes<NodeId>,
-    /// Cells the current **raw dump** has entered; one met again renders as
-    /// `…`, which is what stops a self-referential kind (`[Type, ↺]`) from
-    /// unrolling forever.  Static refs count as well as dynamic ones: a kind
-    /// read out of a frozen module carries its own self-loop.
+    /// Cells the current raw dump has entered; one met again renders `…`, which
+    /// stops a self-referential kind unrolling.
+    ///
+    /// # Invariant
+    ///
+    /// Static refs count too: a frozen kind carries its own self-loop.
     raw_path: AncestorNodes<AnyNodeId>,
 }
 
 /// The class representative of `node`, via a read-only `parent` walk (the
-/// printers never mutate the module).  `None` when the walk cannot answer: a
-/// node the module's table does not hold, or a `parent` chain longer than the
-/// table (a revisit — corrupt equality state).  Either way the caller renders
-/// its own "no answer" instead of panicking or looping.
+/// printers never mutate the module).
+///
+/// # Invariant
+///
+/// `None` when the walk cannot answer — a node the table does not hold, or a
+/// chain longer than the table (a revisit) — so the caller renders its own "no
+/// answer" instead of panicking or looping.
 fn representative<P: HighProgram>(module: &Module<P>, node: NodeId) -> Option<NodeId>
 where
     P::Value: ValueType,
 {
     let mut n = node;
-    // A parent chain visits each node at most once, so it cannot be longer
-    // than the node table.
+    // A parent chain visits each node at most once, so it is never longer than
+    // the node table.
     for _ in 0..=module.nodes.len() {
         module.nodes.get(n)?;
         match module.node_equality(n).parent() {
@@ -247,24 +224,15 @@ fn letter_name(i: usize) -> String {
     }
 }
 
-/// The source spelling of a float value — the ONE place a float becomes text
-/// (`docs/notes/floating-point.md` §3.5).  Both printers reach it: a float is a
-/// structural value wherever it appears, so a type expression prints its digits
-/// exactly as a value does.
+/// The source spelling of a float value, the one place a float becomes text.
 ///
-/// # The invariant: the spelling reads back as the same `f32`
+/// # Invariant
 ///
-/// The digits are `f32`'s own `Display`: the shortest decimal that parses back
-/// bit-identical, and positional — `{:?}` switches to an exponent (`1e38`) that
-/// the lexer's `[0-9]+\.[0-9]+` float literal has no syntax for.  A `.` is
-/// forced, because the same digits without one (`1`) read back as an `Int`: a
-/// different `LowValue`, and so a different type.
-///
-/// An infinity is spelled as a magnitude past the round-to-infinity threshold
-/// `(2 - 2^-24) * 2^127` — the only form the lexer reads back as an infinity,
-/// since `inf` is a name rather than a literal.  `NaN` has no spelling in the
-/// literal syntax at all and keeps Rust's own, so a reader refuses it instead
-/// of acquiring a different float.
+/// The digits are `f32`'s own positional `Display`, never `{:?}`, whose exponent
+/// the lexer has no literal for; a `.` is forced, since the bare digits read back
+/// as an `Int`; an infinity is a magnitude past the round-to-infinity threshold,
+/// the only form the lexer reads back, and `NaN` keeps Rust's spelling.  See
+/// docs/notes/floating-point.md.
 fn float_literal(value: f32) -> String {
     if value.is_nan() {
         return value.to_string();
@@ -283,8 +251,8 @@ fn float_literal(value: f32) -> String {
     text
 }
 
-/// Whether `node` is itself a struct kind `[[payload, TypeStruct], K]` (as opposed
-/// to a struct type term `[shape, kind]`, whose kind slot is such a node).
+/// Whether `node` is itself a struct kind, rather than a struct type term whose
+/// kind slot is such a node.
 fn is_struct_kind<P: HighProgram>(module: &Module<P>, node: NodeId) -> bool
 where
     P::Value: ValueType,
@@ -300,17 +268,15 @@ where
         })
 }
 
-/// Whether `node`'s class is the canonical universe `K = [Type, ↺]` — the
-/// 2-element array whose **head is the `Type` marker** and whose tail is a
-/// member of its own unification class.  The tail test is a class comparison,
-/// so it covers both the canonical node itself and a cell that carries the
-/// replicated value; a class the walk cannot place is not the universe.
+/// Whether `node`'s class is the canonical universe `K = [Type, ↺]`.
 ///
-/// The head is checked first and the length pinned: a **kind** `[marker, K]`
-/// has the same self-referential silhouette whenever its `K` is the frozen
-/// (static) universe — a type value computed inside a frozen module and read
-/// in the importing one — so a tail-only test reads every such kind as the
-/// universe (see `docs/notes/universe-containment.md`).
+/// # Invariant
+///
+/// The head is the `Type` marker and the length is two, checked before the tail:
+/// a kind `[marker, K]` whose `K` is the frozen universe has the same
+/// self-referential silhouette, so a tail-only test would read every such kind
+/// as the universe.  The tail is a class comparison, so it covers the canonical
+/// node and a cell carrying the replicated value.
 fn is_universe<P: HighProgram>(module: &Module<P>, node: NodeId) -> bool
 where
     P::Value: ValueType,
@@ -336,8 +302,7 @@ where
     }
 }
 
-/// The read-only, static-aware universe test shared by the free printer
-/// helpers: a static universe is the self-referential `[Type, itself]`.
+/// The read-only, static-aware universe test shared by the printer helpers.
 fn is_universe_any<P: HighProgram>(module: &Module<P>, id: AnyNodeId) -> bool
 where
     P::Value: ValueType,
@@ -361,11 +326,12 @@ where
     }
 }
 
-/// Whether a value is a struct marker — the pair `[payload, TypeStruct]` whose
-/// payload is `[TypeId, names, names_in_order]`.  The test is the **tag**: the
-/// marker must be a two-element `[value, type]` pair whose type slot holds the
-/// `TypeStruct` atom.  A pair whose type slot is anything else is not a struct
-/// marker.
+/// Whether a value is a struct marker, the pair `[payload, TypeStruct]`.
+///
+/// # Invariant
+///
+/// The test is the tag: the marker is a two-element `[value, type]` pair whose
+/// type slot holds the `TypeStruct` atom; anything else is not a struct marker.
 fn marker_is_struct<P: HighProgram>(module: &Module<P>, marker: AnyNodeId) -> bool
 where
     P::Value: ValueType,
@@ -380,9 +346,8 @@ where
             == Some(P::Value::type_struct_marker())
 }
 
-/// Whether `kind_items` (the element items of a kind value) describe a struct
-/// kind: `[[payload, TypeStruct], K]`.  The kind is a
-/// standard `[marker, K]` pair whose marker carries the `TypeStruct` tag.
+/// Whether `kind_items` describe a struct kind: a standard `[marker, K]` pair
+/// whose marker carries the `TypeStruct` tag.
 fn kind_is_struct<P: HighProgram>(module: &Module<P>, kind_items: &[ArrayItem]) -> bool
 where
     P::Value: ValueType,
@@ -392,12 +357,12 @@ where
         && marker_is_struct(module, kind_items[0].node)
 }
 
-/// The per-field names of a struct type, read from the marker pair's payload
-/// `[TypeId, names, names_in_order]` (the marker sits at the kind's
-/// slot 0, its payload at the marker's [`shape::STRUCT_MARKER_PAYLOAD_SLOT`]):
-/// `None` for an unnamed (positional)
-/// field, `Some(name)` for a `.name Ty` field.  Sized to `field_count`; a
-/// name whose index maps outside the field list is dropped (defensive).
+/// The per-field names of a struct type, read from the marker pair's payload.
+///
+/// # Invariant
+///
+/// The result is sized to `field_count`: `None` for an unnamed field, `Some` for
+/// a `.name Ty` one; a name whose index falls outside the field list is dropped.
 fn struct_field_names<P: HighProgram>(
     module: &Module<P>,
     kind_items: &[ArrayItem],
@@ -465,16 +430,13 @@ where
     out
 }
 
-/// The named-field list of a struct **type term** (`[shape, kind]`), read from
-/// the type's kind marker pair `[payload, TypeStruct]`.  `None`
-/// when `node` is not a concrete
-/// struct type (an undecided cell, a tuple, an array, a function).  A `None`
-/// entry is a positional (unnamed) field; a `Some(name)` entry is a
-/// `.name Ty` field.
+/// The named-field list of a struct type term, read from its kind marker pair.
 ///
-/// This is the read-only counterpart to the checker's `struct_names_any`, for a
-/// renderer that only has the module (e.g. the did-you-mean clause on a
-/// [`DiagKind::NamedField`] diagnostic, which needs the struct's field names).
+/// # Invariant
+///
+/// `None` when `node` is not a concrete struct type (an undecided cell, a tuple,
+/// an array, a function); otherwise sized to the shape with `None` entries
+/// positional and `Some` entries `.name Ty`.
 pub fn struct_type_named_fields<P: HighProgram>(
     module: &Module<P>,
     node: NodeId,
@@ -487,8 +449,8 @@ where
     let LowValue::Array(ty_arr) = ty.as_enum()? else {
         return None;
     };
-    // SAFETY: `ty_arr`/`shape`/`kind` are payloads of values read from live
-    // nodes of `module`; the note covers this function's `items()` calls.
+    // SAFETY: `ty_arr`, `shape` and `kind` come from live nodes of `module`,
+    // whose `items()` calls this note covers.
     let tys = unsafe { ty_arr.items() };
     if tys.len() != 2 {
         return None;
@@ -509,10 +471,7 @@ where
     Some(struct_field_names(module, kind_items, field_count))
 }
 
-/// The nominal id of a struct type, read from its kind's marker payload
-/// `[TypeId, names, names_in_order]` (the marker pair sits at the kind's
-/// slot 0, its payload at [`shape::STRUCT_MARKER_PAYLOAD_SLOT`], the id at
-/// [`shape::STRUCT_MARKER_ID_SLOT`] of the payload).
+/// The nominal id of a struct type, read from its kind's marker payload.
 fn struct_kind_id<P: HighProgram>(module: &Module<P>, kind_items: &[ArrayItem]) -> Option<usize>
 where
     P::Value: ValueType,
@@ -550,15 +509,13 @@ fn struct_fields_with_names(fields: &[String], names: &[Option<&'static str>]) -
         .collect()
 }
 
-/// Render a struct-instance value's **named fields** (`name = value, …`) —
-/// the doc label's spelling — reading the *names* from the struct type's name
-/// table and each value against its field type.  `None` when the value/type
-/// does not form a struct instance.
+/// Render a struct instance's named fields (`name = value, …`), the names read
+/// from the struct type's name table.
 ///
-/// `value_node` is the struct value (a field-tuple array) and `ty_node` its
-/// struct type (a `[shape, [[payload, TypeStruct], K]]` pair).  The renderer
-/// walks the *type chain*, so the names come from the type, never a hardcoded
-/// shape.
+/// # Invariant
+///
+/// The renderer walks the *type chain*, so the names come from the type, never a
+/// hardcoded shape; `None` when the value and type do not form a struct instance.
 pub fn render_struct_fields_named<P: HighProgram>(
     module: &Module<P>,
     value_node: AnyNodeId,
@@ -572,8 +529,8 @@ where
     let LowValue::Array(value_arr) = value else {
         return None;
     };
-    // SAFETY: every slice below is the payload of a value read from a live
-    // node of `module`; the note covers this function's `items()` calls.
+    // SAFETY: each slice below is a value read from a live node of `module`,
+    // whose `items()` calls this note covers.
     let field_values = unsafe { value_arr.items() };
 
     // The struct type: `[shape, kind]` where kind is `[marker, K]`.

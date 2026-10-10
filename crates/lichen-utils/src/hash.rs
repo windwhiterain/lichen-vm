@@ -1,8 +1,5 @@
-//! Shared hashing helpers: SHA-256 and its hex encoding.
-//!
-//! These are used by the language layer's artifact cache (the device store)
-//! and by the package manager's compiler cache key — two crates that must not
-//! depend on each other — so they live here, in the leaf utility crate.
+//! Hashing shared by the language layer's artifact cache and the package
+//! manager's compiler cache key.
 
 use sha2::Digest as _;
 

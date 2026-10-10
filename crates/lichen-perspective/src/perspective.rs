@@ -1,13 +1,5 @@
-//! The program-generic perspective semantics: the attribute marker and its
-//! divisibility-lattice lowering, plus the n-ary `gcd` operator leaf.
-//!
-//! Nothing here names a concrete host program — every entry point (the
-//! [`AttrExt`] impl, the [`OperatorExt`] impl, the [`persp_attr_ext`] registry)
-//! is bounded only by the associated-type constraints a host satisfies when its
-//! composed value/operator vocabularies carry [`Perspective`] and [`GcdOp`]
-//! alongside the structural leaves.  The host composes those leaves and passes
-//! the registry to its checker; the codesign (grammar, IR schema tail, persist
-//! discriminator) stays in the host language layer.
+//! The perspective semantics: the attribute marker, its lattice lowering, and
+//! the n-ary `gcd` operator leaf.
 
 use lichen_highlevel::attr::{AttrExt, AttrExtRegistry, AttrSpec, slot_value_node};
 use lichen_highlevel::diagnostic::DiagKind;
@@ -18,15 +10,10 @@ use lichen_lowlevel::{AnyNodeId, BlockId, LowValue, Module, NodeId, OperatorExt,
 use lichen_utils::extend::AsEnum;
 
 /// The perspective's operator leaf: the n-ary `gcd` meet.
-///
-/// A plain enum, provided whole for a host's operator-vocabulary composition —
-/// the same leaf shape as the highlevel's `TypeOperator`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GcdOp {
-    /// n-ary `gcd` over the operand array.  An empty operand array (a leaf
-    /// with no sub-expressions) evaluates to `0` — the meet identity / top,
-    /// so `gcd(n, 0) = n` makes it neutral.  A lazy operand declines with
-    /// `None`, like `Add`/`Sub`.
+    /// n-ary `gcd` over the operand array; an empty array is `0`, the meet
+    /// identity.  A lazy operand declines.
     Gcd,
 }
 
@@ -47,38 +34,30 @@ impl OperatorCodec for GcdOp {
     }
 }
 
-/// The perspective attribute marker: a plain non-negative integer whose
-/// lattice is divisibility (`a ⊑ b ⟺ a | b`), meet (`gcd`), top (`0`,
-/// "uniform over all threads", the `∞` fold), and bottom (`1`).  A node with
-/// an unannotated perspective is *missing*, which in GPU code means "not
-/// expressed per-thread" — i.e. uniform over all threads — so it IS the top,
-/// `0`.  A `# p`-annotated leaf uses `p`; an unannotated leaf contributes `0`
-/// (the top, neutral in `gcd`).  Stage 1 uses only `gcd` and `0`.
+/// The perspective attribute marker; `# p` is uniform over `p` aligned threads.
 ///
-/// The marker carries no data — the perspective's *value* is a runtime node.
+/// # Invariant
+///
+/// The lattice is divisibility: meet is `gcd`, top is `0` (uniform over all
+/// threads, the `∞` fold), bottom is `1`.  An unannotated value is the top.
+/// The marker carries no data — the perspective's value is a runtime node.  See
+/// docs/notes/attributes.md.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Perspective;
 
 impl AttrSpec for Perspective {}
 
-/// `gcd` over the divisibility lattice.  `gcd(n, 0) = n` (the meet identity),
-/// `gcd(0, 0) = 0`.
+/// `gcd` over the divisibility lattice: the meet.  `gcd(n, 0) = n`.
 pub fn gcd(a: usize, b: usize) -> usize {
     if b == 0 { a } else { gcd(b, a % b) }
 }
 
-/// Whether `sub` divides `sup` in the divisibility lattice — the subtype
-/// order `sub ⊑ sup ⟺ sub | sup`.
+/// Whether `sub` divides `sup`: the subtype order `sub ⊑ sup ⟺ sub | sup`.
 ///
-/// `0` is the lattice **top**, "uniform over all threads" (the `∞` fold: a
-/// value with no `#` is not expressed per-thread in GPU code, so it is
-/// uniform across every thread).  Since Rust integers have no `∞`, the top
-/// is encoded `0` — every `n | 0`, and `gcd(n, 0) = n` (the meet identity).
+/// # Invariant
 ///
-/// - `sub = 0` (declared uniform-over-all): only a uniform-over-all value
-///   satisfies it, so `divides(0, sup) ⟺ sup == 0`.
-/// - `sub > 0`: `sub | sup ⟺ sup % sub == 0`.  `sup = 0` (a uniform-over-all
-///   value) satisfies any requirement, since `0 % sub == 0`.
+/// `0` is the top, so `sub = 0` holds only for `sup = 0`; `sup = 0` holds for
+/// any `sub`.
 pub fn divides(sub: usize, sup: usize) -> bool {
     if sub == 0 {
         sup == 0
@@ -87,14 +66,8 @@ pub fn divides(sub: usize, sup: usize) -> bool {
     }
 }
 
-/// The attribute-extension registry for a host program `P`: maps the
-/// [`Perspective`] marker to its lowering behaviour.  A host composes
-/// [`Perspective`] into its vocabulary and passes this to the checker's
-/// attribute machinery.
-///
-/// The closure returns the single [`Perspective`] marker coerced to a
-/// `&'static` extension — the checker sees a uniform attribute and never names
-/// a concrete lattice.
+/// Map the [`Perspective`] marker to its lowering behaviour, for a host that
+/// composed the marker into its vocabulary.
 pub fn persp_attr_ext<P>() -> AttrExtRegistry<P, Perspective>
 where
     P: HighProgram,
@@ -106,18 +79,18 @@ where
 
 /// `GcdOp::run` — the VM dispatch for the injected `Gcd` operator.
 ///
+/// # Invariant
+///
 /// The operand is the array of the children's attribute slots, pre-padded with
-/// the missing value (`0`) by the checker.  A lazy operand (an undecided
-/// parameter) stays lazy.
+/// the missing value `0` by the checker; a lazy operand stays lazy.
 impl<P> OperatorExt<P> for GcdOp
 where
     P: Program,
     P::Value: AsEnum<LowValue> + From<LowValue>,
 {
     fn run(&self, operand: P::Value, _block: BlockId, module: &mut Module<P>) -> Option<P::Value> {
-        // An operator that cannot decide yet answers `None`, which is the
-        // trait's own spelling of "undecided"; the closure gives every early
-        // return inside the single arm one return type to agree on.
+        // `None` is the trait's spelling of "undecided"; the closure gives the
+        // arm's early returns one type to agree on.
         (|| match self {
             GcdOp::Gcd => {
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
@@ -125,12 +98,10 @@ where
                 };
                 let mut acc = 0;
                 // SAFETY: `operands` is the payload of the operand value the
-                // VM just evaluated for this operation; its home block is
-                // alive for the duration of the run.
+                // VM just evaluated, so its block outlives this run.
                 for item in unsafe { operands.items() } {
-                    // A child slot is a `[value, type]` term pair; the lattice
-                    // value is its element 0.  A bare value (an un-annotated
-                    // edge that never became a pair) is accepted too.
+                    // A child slot is a `[value, type]` pair; its element 0 is
+                    // the lattice value.  A bare value is accepted too.
                     let Some(n) = module
                         .node_value(item.node)
                         .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
@@ -161,75 +132,51 @@ where
     }
 }
 
-/// The attribute-extension lowering of the [`Perspective`] marker: its missing
-/// value, its `gcd` combine, and the divisibility subtype order.  *Where* the
-/// slot sits is the composed set's canonical order, not this impl's business
-/// ([`AttrSet::order_index`](lichen_highlevel::attr::AttrSet::order_index)).
-///
-/// Program-generic: `combine` builds the operator over `P::Operator` (which the
-/// host's vocabulary carries via a `From<GcdOp>` leaf), and the subtype reads
-/// the two slot values through the curated [`Ctx`].
+/// The attribute-extension lowering of the [`Perspective`] marker.
 impl<P> AttrExt<P> for Perspective
 where
     P: HighProgram,
     P::Value: ValueType + AsEnum<LowValue>,
     P::Operator: From<GcdOp>,
 {
-    /// `0` — neutral in `gcd` (the meet identity), concrete in equality
-    /// unify.  The slot's absent form is `[0, int]` (see
-    /// [`AttrExt::missing_slot`]).
+    /// `0`, the meet identity, so it stays concrete under unify; the absent
+    /// slot is `[0, int]` ([`AttrExt::missing_slot`]).
     fn missing_value(&self) -> Option<LowValue> {
         Some(LowValue::USize(0))
     }
 
-    /// The absent form is the constant `0` — concrete, so reconciliation only
-    /// ever *reads* it and one node can serve every absent occurrence.  (A doc's
-    /// absent form is an undecided cell, which a unify binds, so it cannot say
-    /// this; see [`AttrExt::share_missing_slot`].)
+    /// The absent form is the concrete constant `0`, so reconciliation reads
+    /// it and one node serves every absent occurrence.
     fn share_missing_slot(&self) -> bool {
         true
     }
 
-    /// Perspective combine: a single `Gcd` op node over the children's
-    /// attribute slots (the n-ary gcd meet), wrapped as a `[value, type]`
-    /// term pair — the uniform slot shape.  An absent child reads `[0, int]`
-    /// (padded by the checker), whose value `0` is neutral, so
-    /// `(1 # 4 + 2) # 4` derives `gcd(4, 0) = 4`.  The `Gcd` operator reads
-    /// each child's lattice value from its pair's element 0.
+    /// Perspective combine: a `Gcd` node over the children's `[value, type]`
+    /// pairs.  An absent child is `0`, neutral in gcd.
     fn combine(&self, ctx: &mut dyn Ctx<P>, children: &[NodeId]) -> NodeId {
         let operands = ctx.array_node(children);
         let gcd = ctx.op_node(P::Operator::from(GcdOp::Gcd), Some(operands));
         ctx.pair(gcd, ctx.int_type())
     }
 
-    /// Perspective unify: two slots must unify, or — when they differ — the
-    /// declared (`b`) must be a *subtype* of the value's (`a`) under the
-    /// divisibility order.  An absent side reads `0` before this is called.
-    ///
-    /// Each slot is a `[value, type]` term pair; the lattice value is element
-    /// 0.  The unify compares the *values* (so the diagnostic and the subtype
-    /// read bare `4`/`8`, not `[4, Int]`/`[8, Int]`).
+    /// Perspective unify: the slots must unify, and two differing values hold
+    /// when the declared is a subtype of the value's.
     fn unify_slots(&self, ctx: &mut dyn Ctx<P>, a: NodeId, b: NodeId, loc: Loc) {
         let a = slot_value_node(ctx, a);
         let b = slot_value_node(ctx, b);
         ctx.check_unify_relaxed(a, b, loc, DiagKind::Attribute, &|ctx, value, declared| {
-            // `a` (first) is the value's actual perspective, `b` (second) the
-            // declared one.  A value uniform over `value` threads is usable
-            // where `declared` is required iff `declared | value` (an aligned
-            // `value`-group can be partitioned into `declared`-groups, so
-            // uniform-`value` implies uniform-`declared`).  `0` (no
-            // perspective) matches only `0`.
+            // A value uniform over `value` threads is usable where `declared`
+            // is required iff `declared | value`.
             self.is_subtype(ctx, declared, value)
         });
     }
 
-    /// `sub ⊑ super ⟺ sub | super` under the divisibility order, where `0`
-    /// is the top ("uniform over all threads", the `∞` fold): `sub = 0` is
-    /// satisfied only by `super = 0`, and `super = 0` satisfies any `sub`.
-    /// Implementation reads the two slot values — each slot is a
-    /// `[value, type]` term pair, so the lattice value is its element 0 (a
-    /// bare value — an un-annotated edge — is accepted too).  An undecided
-    /// value (a runtime-dependent perspective) is not a subtype.
+    /// The subtype order: `sub ⊑ super ⟺ sub | super`.
+    ///
+    /// # Invariant
+    ///
+    /// `0` is the top: `sub = 0` holds only for `super = 0`, and `super = 0`
+    /// holds for any `sub`.  An undecided value is not a subtype.
     fn is_subtype(&self, ctx: &dyn Ctx<P>, sub: NodeId, sup: NodeId) -> bool {
         let value_of = |node: NodeId| -> Option<usize> {
             let value = ctx.class_value(node)?;
@@ -256,9 +203,8 @@ where
         divides(sub, sup)
     }
 
-    /// A leaf perspective spells `# n`; a compound's gcd meet (or an undecided
-    /// value) has no single spelling and is not shown.  The slot is a
-    /// `[value, type]` term pair, so the lattice value is its element 0.
+    /// A leaf perspective spells `# n`; a compound's meet has no spelling.
+    /// Element 0 of the slot is the lattice value.
     fn render(
         &self,
         module: &Module<P>,

@@ -26,12 +26,8 @@ fn add(nodes: &mut SlotMap<TestKey, TestNode>) -> TestKey {
     id
 }
 
-/// Link `child` directly under `parent`, bypassing [`disjoint::union`], to
-/// build a deliberately deep path for compression tests.
-///
-/// The links live in this file's own node type, so building one is field
-/// assignment on `TestNode` — not a write through the union-find, which
-/// hands out no mutable [`Meta`].
+/// Link `child` directly under `parent`, bypassing [`disjoint::union`], to build
+/// a deep path for compression tests.
 fn link(nodes: &mut SlotMap<TestKey, TestNode>, child: TestKey, parent: TestKey) {
     let meta = nodes[child].set;
     nodes[child].set = Meta::new(Some(parent), meta.next(), meta.tail(), meta.size());

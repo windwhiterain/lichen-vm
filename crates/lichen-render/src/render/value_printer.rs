@@ -10,8 +10,8 @@ where
         Self::new_with_ext(module, None)
     }
 
-    /// A printer that renders an extension vocabulary's own variants through
-    /// `render_ext` — see [`TypePrinter::new_with_ext`].
+    /// A printer that renders an extension vocabulary's variants through
+    /// `render_ext`; see [`TypePrinter::new_with_ext`].
     pub fn new_with_ext(
         module: &'a Module<P>,
         render_ext: Option<RenderExt<'a, P::Value>>,
@@ -30,9 +30,12 @@ where
         self.value(value, ty)
     }
 
-    /// Render a value against its type: the type chain decides how the value
-    /// reads.  When the type chain is opaque, fall back to the raw layout,
-    /// which marks every reading it dumps (`raw[…]`, `raw Int`).
+    /// Render `value`, whose type is `ty`: the type chain decides how it reads.
+    ///
+    /// # Invariant
+    ///
+    /// When the type chain is opaque the raw layout is the fallback, marking
+    /// every reading it dumps (`raw[…]`, `raw Int`).
     fn value(&mut self, value: P::Value, ty: NodeId) -> String {
         // The universe as the type: the value is an atomic type constant —
         // `Int`, `Type`, or an extension's own type constant.
@@ -49,10 +52,8 @@ where
         // SAFETY: `ty_array` is the payload of the value read from the live
         // node `ty`.
         let tys = unsafe { ty_array.items() };
-        // A struct type itself: the value's type is the struct kind
-        // `[[payload, TypeStruct], K]` (not a `[shape, [marker, K]]` pair),
-        // and the value is the field-type list — render
-        // `struct<.a T1, ..., .n Tn>` (a struct field always carries a name).
+        // A struct kind: the type node is `[[payload, TypeStruct], K]`, and the
+        // value is the field-type list.
         if is_struct_kind(self.module, ty)
             && let Some(LowValue::Array(shape)) = value.as_enum()
         {
@@ -74,10 +75,8 @@ where
         {
             return out;
         }
-        // A struct instance: the value reads against the struct's
-        // field-type list (the shape); its kind is `[[payload, TypeStruct], K]`
-        // (a standard `[marker, K]` pair whose marker carries the tag), so it is
-        // detected beside the `[marker, K]` kinds.
+        // A struct instance: the value reads against the kind's field-type
+        // shape, whose kind slot is the struct marker.
         if tys.len() == 2
             && self.is_struct_kind_any(tys[1].node)
             && let Some(marker) = self.struct_marker_value(tys[1].node)
@@ -98,36 +97,27 @@ where
         {
             return out;
         }
-        // A type that names a **leaf class**: `[class, K]` whose kind slot is
-        // the self-looping universe, or a function-type node
-        // `[Function(fid), ↺]` whose kind slot is the node's own self-cycle.
-        // The value such a type holds is a scalar or a function, and reads by
-        // its own spelling (`1`, `"s"`, `Function`) — a standard format, so
-        // it is **not** what the tail of this cascade dumps.  A value the
-        // class does not hold (a list, say) is a mismatch and falls through.
+        // A leaf class: the type is two cells.
         if let Some(spelling) = self.leaf_class(value, ty, tys) {
             return spelling;
         }
         self.raw(value)
     }
 
-    /// [`Self::spelling`] when the type `ty` — read as the cells `tys` —
-    /// names a leaf class, `None` for any other type and for a value the
-    /// class does not hold.  A leaf class is a two-cell type node whose
-    /// **class slot** names what it holds: a function type is named by a
-    /// `Function` value and closes on itself (`[Function(fid), ↺]`), every
-    /// other class by a type constant whose kind slot is the self-looping
-    /// universe (`[Int, ↺]`, `[string, ↺]`, …).
+    /// A leaf class named by `ty`, read as the cells `tys`; `None` otherwise.
+    ///
+    /// # Invariant
+    ///
+    /// A leaf class is two cells whose **class slot** names what it holds: a
+    /// function type is a `Function` value and closes on itself
+    /// (`[Function(fid), ↺]`), every other class a type constant whose kind slot
+    /// is the self-looping universe (`[Int, ↺]`, `[string, ↺]`, …).
     fn leaf_class(&self, value: P::Value, ty: NodeId, tys: &[ArrayItem]) -> Option<String> {
         if tys.len() != 2 {
             return None;
         }
         let class = self.module.node_value(tys[0].node)?;
-        // The **class slot** says which kind of leaf this is: a function type
-        // is named by a `Function` value and its kind slot is the node's own
-        // self-cycle; every other class is a type constant whose kind slot is
-        // the universe — read through the ref, so a class frozen in another
-        // module counts too.
+        // The class slot distinguishes a function type from a type constant.
         let leaf = if matches!(class.as_enum(), Some(LowValue::Function(_))) {
             self.printer.slot1_is_self(tys[1].node, ty)
         } else {
@@ -139,11 +129,15 @@ where
         self.spelling(value)
     }
 
-    /// An atomic type constant: the value of a type expression whose type is
-    /// the universe.  A value this vocabulary has no name for is `?`: the
-    /// chain *did* read it as a type constant, so the mark would claim the
-    /// opposite.  A structural value typed by the universe (the universe node
-    /// itself) is no type constant at all, and falls back to the raw layout.
+    /// An atomic type constant: a type expression's value whose type is the
+    /// universe.
+    ///
+    /// # Invariant
+    ///
+    /// A value this vocabulary has no name for reads `?`: the chain *did* read
+    /// it as a type constant, so the raw mark would claim the opposite.  A
+    /// structural value typed by the universe is no type constant at all, and
+    /// falls back to the raw layout.
     fn atomic(&mut self, value: P::Value) -> String {
         match self.printer.type_constant(&value) {
             Some(spelling) => spelling,
@@ -152,10 +146,13 @@ where
         }
     }
 
-    /// A compound type value: the value is the shape `[in, out]` /
-    /// element list / `[element, length]` / `[TypeId, fields]`, and the
-    /// marker decides how the shape reads.  `None` when the value or the
-    /// marker does not fit a compound type.
+    /// A compound type value: the value is the shape, and the marker decides how
+    /// it reads.
+    ///
+    /// # Invariant
+    ///
+    /// The shape is `[in, out]`, an element list, `[element, length]`, or
+    /// `[TypeId, fields]`.  `None` when the value or marker does not fit.
     fn compound_type(&mut self, value: P::Value, marker_node: AnyNodeId) -> Option<String> {
         let marker = self.module.node_value(marker_node)?;
         let Some(LowValue::Array(shape)) = value.as_enum() else {
@@ -188,17 +185,19 @@ where
             // A set type value: the shape is the element type alone.
             return Some(format!("set<{}>", self.printer.any_node(shape[0].node)));
         }
-        // A struct type never reaches `compound_type` — its kind is a standard
-        // `[marker, K]` pair whose marker is the `[payload, TypeStruct]` pair,
-        // and the struct branch in `value` / `elements` handles it
-        // before this falls through.
+        // A struct type never reaches here: its kind is the struct marker pair,
+        // handled earlier.
         None
     }
 
-    /// A term of a tuple, array, or struct type: the value's elements read
-    /// against the shape — a tuple reads `(v1, ..., vn)` (a single element
-    /// `(v1,)`), an array `[v1, ..., vn]`, a struct instance its field tuple
-    /// `(v1, ..., vn)`.  `None` when the value or the shape does not fit.
+    /// A term of a tuple, array, or struct type: the elements read against the
+    /// shape.
+    ///
+    /// # Invariant
+    ///
+    /// A tuple reads `(v1, ..., vn)` with a single element keeping its trailing
+    /// comma, an array `[v1, ..., vn]`, a struct instance its field tuple.
+    /// `None` when the value or the shape does not fit.
     fn instance(
         &mut self,
         value: P::Value,
@@ -208,8 +207,8 @@ where
         let Some(LowValue::Array(values)) = value.as_enum() else {
             return None;
         };
-        // SAFETY: `values`/`shape` are payloads of the value being printed and
-        // of the shape node, both in the module being rendered.
+        // SAFETY: `values`/`shape` are payloads of the value and shape node,
+        // both in the module being rendered.
         let values = unsafe { values.items() };
         let shape = self.module.node_value(shape_node).and_then(|v| v.as_enum());
         let Some(LowValue::Array(shape)) = shape else {
@@ -248,13 +247,10 @@ where
             }
             return Some(format!("set{{{}}}", out.join(", ")));
         }
-        // A struct marker is the pair `[payload, TypeStruct]`, whose *type* slot
-        // holds the `TypeStruct` atom.  Checking the tag (never the array's
-        // shape) is what keeps another kind's array-like value from being read
-        // as a struct.
+        // `[payload, TypeStruct]`: checking the tag, not the shape, keeps
+        // another kind's value from reading as a struct.
         if self.marker_is_struct(marker) {
-            // The shape is the positional field-type list (the nominal id
-            // lives in the struct marker), so the element types are the fields.
+            // The shape is the positional field-type list.
             let fields = shape;
             if fields.len() != values.len() {
                 return None;
@@ -321,8 +317,7 @@ where
             })
     }
 
-    /// Whether a marker *value* is a struct marker: the pair
-    /// `[payload, TypeStruct]`, whose type slot is the `TypeStruct` atom.
+    /// Whether a marker value is a struct marker: `[payload, TypeStruct]`.
     fn marker_is_struct(&self, marker: P::Value) -> bool {
         let Some(LowValue::Array(m)) = marker.as_enum() else {
             return false;
@@ -337,10 +332,8 @@ where
                 == Some(P::Value::type_struct_marker())
     }
 
-    /// The struct marker value (`[payload, TypeStruct]`) from
-    /// a struct type's kind node (`[marker, K]`), or `None` when the kind is
-    /// not a struct kind.  Used to render a struct instance whose value reads
-    /// against the field-type shape.
+    /// The struct marker value from a struct type's kind node, or `None` when
+    /// the kind is not a struct kind.
     fn struct_marker_value(&self, kind_node: AnyNodeId) -> Option<P::Value> {
         let Some(LowValue::Array(kind)) =
             self.module.node_value(kind_node).and_then(|v| v.as_enum())
@@ -355,14 +348,15 @@ where
         self.marker_is_struct(marker).then_some(marker)
     }
 
-    /// The raw value layout — the fallback for a value the type chain named
-    /// no class for.  **Every reading here is marked `raw`**: a list of cells
-    /// as `raw[…]` (the mark fuses with the list's own brackets), an atomic
-    /// as `raw x` — `raw 6`, `raw Int`.  The mark is unconditional because no
-    /// reading here is a form the chain explained, and a dump spelled exactly
-    /// like a read one (`6`, `Int`) would be indistinguishable from that read
-    /// though the two sit behind entirely different structures — see
-    /// [raw-rendering-mark](../docs/notes/raw-rendering-mark.md).
+    /// The raw value layout: the fallback for a value the type chain named no
+    /// class for.
+    ///
+    /// # Invariant
+    ///
+    /// Every reading is marked `raw`: a cell list as `raw[…]`, an atomic as
+    /// `raw x`.  The mark is unconditional, because a dump spelled like a read
+    /// one would be indistinguishable from it though the two sit behind
+    /// different structures.  See docs/notes/raw-rendering-mark.md.
     fn raw(&mut self, value: P::Value) -> String {
         self.raw_any(value)
     }
@@ -374,9 +368,8 @@ where
             // being rendered.
             return self.raw_cells(unsafe { array.items() });
         }
-        // An atomic reads by its own spelling; the array is the one value
-        // [`Self::spelling`] has no answer for, and it is handled above, so
-        // `?` here is the printer's own "this vocabulary cannot name it".
+        // The array, the one value with no spelling, is handled above, so `?`
+        // here means unnameable.
         let atomic = self.spelling(value).unwrap_or_else(|| "?".to_string());
         format!("raw {atomic}")
     }
@@ -386,9 +379,7 @@ where
     fn raw_cells(&mut self, elements: &[ArrayItem]) -> String {
         let mut out = Vec::with_capacity(elements.len());
         for item in elements {
-            // A cell this dump has already entered is a cycle, and reads as
-            // `…` — the type printer's own spelling.  It is what keeps a
-            // self-referential kind (`[Type, ↺]`) from unrolling forever.
+            // A cell already on the dump path is a cycle and reads as `…`.
             if self.raw_path.contains(item.node) {
                 out.push("…".to_string());
                 continue;
@@ -404,12 +395,13 @@ where
         format!("raw[{}]", out.join(", "))
     }
 
-    /// The value's own spelling: a scalar's digits, a string's quotes, a
-    /// function's or a table's name, a type constant's spelling.  This is the
-    /// **standard** reading wherever the type chain named a class for the
-    /// value ([`Self::leaf_class`]), and the content of a dump — marked — where
-    /// it did not.  `None` for an array, the one value with no single-token
-    /// spelling: its cells are the reading instead.
+    /// The value's own spelling, or `None` for an array (its cells read).
+    ///
+    /// # Invariant
+    ///
+    /// This is the **standard** reading wherever the type chain named a class
+    /// for the value ([`Self::leaf_class`]), and the marked content of a dump
+    /// where it did not.
     fn spelling(&self, value: P::Value) -> Option<String> {
         match value.as_enum() {
             Some(LowValue::USize(n)) => Some(n.to_string()),

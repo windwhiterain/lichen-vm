@@ -1,32 +1,5 @@
-//! The compiler CLI, shared by the real `lichen-compiler` binary and the
-//! plugin-built compiler crate (its generated `main.rs` calls [`main`]) so
-//! every compiler speaks the same dialect.
-//!
-//! `lichen-compiler <program.lichen>` compiles and runs one program, printing
-//! its output; a directory path runs every `.lichen` file in it, printing
-//! `file: output` per program.  The `run` and `build` subcommands are also
-//! accepted.
-//!
-//! The compiler is **depend-aware**: a file's `depend "url"` directives
-//! resolve against the lichen-home source cache (populated by the package
-//! manager's `lichen fetch`), so running a file with dependencies needs no
-//! git access here — the compiler only *reads* what the package manager put in
-//! the cache.  The compiler binary is invoked by the package manager for its
-//! `run`/`build` commands, which is how a plugin-built compiler's vocabulary
-//! takes effect.
-//!
-//! The compiler's **artifact cache is scoped per plugin set**.  A compiled
-//! package is serialized into the device store keyed by file ID (see
-//! [`lichen_language::package::PackageStore`] / [`lichen_language::persist`]),
-//! and the artifact encoding depends on the compiler's value/operator
-//! vocabulary.  A plugin-built compiler must therefore NOT share the shipping
-//! compiler's device cache — the same source file compiled by a different
-//! plugin set produces a different artifact, so the cache slot must be isolated
-//! per vocabulary.  [`main`] uses the shipping compiler's own
-//! `compilers/<toolchain-key>` slot (`persist::shipping_cache_root`);
-//! [`main_with_cache_dir`] lets a plugin-built compiler scope its artifacts to
-//! its own `compilers/<plugin-set-key>` slot.  Source staging (the git source
-//! cache) stays shared; only the compiled-artifact store is scoped.
+//! The compiler CLI, shared by the shipping and plugin-built compilers.  See
+//! docs/notes/language-toolchain.md.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -44,25 +17,12 @@ use lichen_language::persist::{self, ArtifactCodec};
 use lichen_language::preprocess::stage_depends;
 use lichen_language::program::GcdOp;
 
-/// One native plugin package to register on the store a compiler evaluates
-/// against: `(virtual_path, embedded_source, private_native_ops)`.  A
-/// plugin-built compiler's generated `main` supplies one entry per plugin, so
-/// the plugin's wrapper source is compiled against its own private native-op
-/// registry and served by name (`<alias>.lichen`) — see
-/// [`PackageStore::register_native`](lichen_language::package::PackageStore::register_native).
-///
-/// `native_ops` is the plugin's per-module registry; the wrapper const and the
-/// ops macro are named from the plugin crate (see `crate::plugin`'s generated
-/// `main`).  A shipping compiler registers nothing (`&[]`), so its store is
-/// exactly as before — the plugin-built path is opt-in.
+/// One native plugin package for a compiler's store: `(virtual_path,
+/// embedded_source, private_native_ops)`.
 pub type NativePackage<P> = (&'static str, &'static str, NativeOps<P>);
 
-/// The compiler CLI surface: a single positional program path (the default
-/// `run` action) or an explicit subcommand (`run`, `build`).
-///
-/// The command name is overridden at runtime from `argv[0]` (see
-/// [`main_with_native_packages`]) so a plugin-built `lichen-compiler-<name>`
-/// reports its own name in usage/help.
+/// The compiler CLI surface: a positional program path, or an explicit
+/// `run`/`build` subcommand.
 #[derive(Parser)]
 #[command(name = "lichen-compiler", version)]
 struct Cli {
@@ -88,13 +48,8 @@ enum Command {
     },
 }
 
-/// Run the compiler CLI with the process arguments, using the shipping
-/// compiler's `compilers/<toolchain-key>` slot as the device/artifact cache
-/// root (so every vocabulary — shipping included — caches under `compilers/`).
-/// The program name is read from `argv[0]` so the plugin-built
-/// `lichen-compiler-<name>` reports its own name in usage.  Generic over a
-/// single program type `P` (the associate-type collector), so the shipped
-/// compiler and a plugin-built compiler share one CLI.
+/// Run the compiler CLI, reading the program name from `argv[0]`, with the
+/// shipping compiler's cache slot.
 pub fn main<P>() -> ExitCode
 where
     P: LangProgramShape,
@@ -107,14 +62,8 @@ where
     main_with_cache_dir::<P>(&persist::shipping_cache_root())
 }
 
-/// [`Self::main`] with an explicit **device/artifact cache root**.
-///
-/// The compile artifacts drive the incremental device store
-/// ([`lichen_language::package::PackageStore`]'s `with_cache_dir`).  Every compiler
-/// scopes its artifacts to a `compilers/<plugin-set-key>` slot so it never
-/// collides with (or reuses) another vocabulary's artifacts — the shipping
-/// compiler uses the empty plugin set's slot (see [`persist::shipping_cache_root`]),
-/// a **plugin-built** compiler its own slot (`<lichendir>/compilers/<plugin-set-key>`).
+/// [`Self::main`] with an explicit artifact cache root, selecting the plugin
+/// set's cache slot.
 pub fn main_with_cache_dir<P>(cache_root: &Path) -> ExitCode
 where
     P: LangProgramShape,
@@ -127,17 +76,8 @@ where
     main_with_native_packages::<P>(cache_root, &[])
 }
 
-/// [`Self::main`] with an explicit **device/artifact cache root** and a set of
-/// **native plugin packages** to register on the store each program is
-/// evaluated against.
-///
-/// This is the plugin-built compiler's entry: a generated `main` passes one
-/// `(virtual_path, embedded_source, native_ops)` triple per plugin, so the
-/// plugin's wrapper source (e.g. `std.lichen`) is compiled against the
-/// plugin's private native-op registry and served by name — the same store the
-/// program runs through, exactly as the reference `std_native` test's
-/// `register_native` plug.  A shipping compiler calls [`Self::main_with_cache_dir`]
-/// with the empty set, keeping its store native-free.
+/// [`Self::main_with_cache_dir`] plus native plugin packages for the store each
+/// program is evaluated against.
 pub fn main_with_native_packages<P>(cache_root: &Path, native: &[NativePackage<P>]) -> ExitCode
 where
     P: LangProgramShape,
@@ -147,10 +87,8 @@ where
         + 'static,
     P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
-    // The program name is read from argv[0] so a plugin-built
-    // `lichen-compiler-<name>` reports its own name in usage/help.  clap's
-    // `Command::name` takes a `'static` string (clap's `Str`), so the name is
-    // leaked once — harmless for a short-lived CLI process.
+    // clap's `Command::name` wants a `'static` string, so the name is leaked;
+    // the short-lived process makes that harmless.
     let bin: &'static str = Box::leak(
         std::env::args()
             .next()
@@ -198,16 +136,8 @@ where
     }
 }
 
-/// A store that stages the file's `depend` directives from the source cache
-/// and reports a diagnostic when one has not been fetched.  The device cache
-/// root is the caller's artifact/cache root (the lichen home for the shipping
-/// compiler, the per-plugin-set slot for a plugin-built compiler).
-///
-/// Each native plugin package in `native` is registered on the store **after**
-/// the file's own dependencies are staged, so the block's `import "<alias>"`
-/// resolves the plugin's wrapper as a native virtual package (compiled against
-/// the plugin's private native-op registry) on this same store — the same
-/// `register_native` plug the reference `std_native` test uses.
+/// A store holding the file's staged `depend` directives, with native packages
+/// registered on it after staging.
 fn staged_store<P>(
     source: &str,
     cache_root: &Path,
@@ -221,9 +151,8 @@ where
         + 'static,
     P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
-    // A persistent codec drives a cache directory; an in-memory-only one
-    // (`NoPersist`) never serializes, so the store is in-memory and no
-    // artifact is written (avoids the `NoPersist` unreachable path).
+    // A non-persistent codec never serializes, so the store stays in memory
+    // and no artifact is written.
     let mut store: PackageStore<P> = if P::Codec::PERSISTENT {
         PackageStore::with_cache_dir(cache_root.to_path_buf())
     } else {
@@ -348,11 +277,8 @@ where
     match store.load_package(path) {
         Ok(handle) => {
             println!("built {}", handle.path.display());
-            // The build command is a prototyping command: the package was
-            // loaded/frozen.  Its value's type is rendered via a tiny import
-            // of the same file, which exercises the real importer path and
-            // prints the exported type.  The import names the file itself,
-            // resolved against the file's directory.
+            // The package was loaded and frozen.  The tiny import below is the
+            // real importer path, and it prints the exported type.
             let name = path.file_name().unwrap().to_string_lossy();
             let source = format!("---\n  _pkg = import \"{name}\"\n---\n_pkg\n");
             match lichen_language::run::evaluate_raw::<P>(&source, Some(path), &mut store) {

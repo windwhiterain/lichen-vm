@@ -1,7 +1,5 @@
-//! The one byte ↔ line/column model: 1-based `(line, column-in-bytes)`, lines
-//! broken by `\n` alone, end of file a valid position, nothing panics.  Every
-//! edge here was measured against the other conversions before they were made
-//! to delegate to this one.
+//! The byte ↔ line/column model every other conversion delegates to, edge cases
+//! included.
 
 use lichen_span::{Span, line_col, line_starts, line_text, offset_of_span};
 
@@ -60,9 +58,7 @@ fn an_empty_line_start_table_is_a_total_input() {
 
 #[test]
 fn a_table_that_does_not_begin_at_zero_is_total_too() {
-    // Not a table `line_starts` produces, but the conversion must still not
-    // underflow on one: a byte before the first recorded start is column 1 of
-    // line 1.
+    // A byte before the first recorded start is line 1, column 1.
     assert_eq!(line_col(&[5], 0), (1, 1));
     assert_eq!(line_col(&[5, 9], 0), (1, 1));
     assert_eq!(line_col(&[5], 5), (1, 1));
@@ -87,8 +83,7 @@ fn offset_of_span_inverts_line_col() {
 fn an_out_of_range_span_saturates_on_the_line_and_keeps_the_column() {
     let one = line_starts("ab");
     let two = line_starts("ab\ncd");
-    // `(99, 3)` names line 1 + 2 bytes in the one-line source, and line 2 + 2
-    // bytes in the two-line one — never "another line's start".
+    // `(99, 3)` saturates on each source's own last line, never another's.
     assert_eq!(offset_of_span(&one, (99, 3)), 2);
     assert_eq!(offset_of_span(&two, (99, 3)), 5);
     // Below the first line saturates to line 1.

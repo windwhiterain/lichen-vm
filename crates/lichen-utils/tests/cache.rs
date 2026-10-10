@@ -1,6 +1,5 @@
-//! The compiler-cache slot key: the single derivation the package manager
-//! (which builds a composed compiler into the slot) and the compiler (which
-//! locates its own artifact-cache root in it) both call.
+//! The compiler-cache slot key: the single derivation the package manager and
+//! the compiler both call.
 
 use lichen_utils::cache::{DEFAULT_CORE_REPO, compiler_slot_key};
 
