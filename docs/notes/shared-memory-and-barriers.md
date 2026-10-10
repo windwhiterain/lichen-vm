@@ -390,14 +390,39 @@ The residual hazard is stated rather than fixed: **`KernelFragment` has no
 produce one — a parallel fragment's result is the dummy constant in the first
 write's value class — but a hand-written fixture can. §10 item 3 keeps this open.
 
-**The state is a carried value of every loop nest, and that is §3's argument
-tested rather than asserted.** `Lower` seeds the token with a `Const(State, 0)` in
-the entry block, `buffer_write` consumes and replaces it, and a loop's nest blocks
-take it as one more parameter beside their slots, with the backedge and the exit
-arm handing it on. This is not a straight-line-only path: a write in a conversion's
-exit or step arm — `@loop pass = s => if s(0) == 0 then write(…) else pass(…)` —
-lands in a nest block, so the token crosses a backedge in the tree today. A
-positional scan over `instrs` would have had nothing to carry.
+**The state is a carried value of every loop nest, and no source program can put a
+write there yet.** `Lower` seeds the token with a `Const(State, 0)` in the entry
+block, `buffer_write` consumes and replaces it, and `lower_loop` gives every nest
+block one more parameter beside its slots, the backedge and the exit arm handing it
+on. `spirv_validation`'s hand-built loops exercise the carry structurally; the
+*source* path into it is closed, and naming the gates that close it matters because
+[§8](#8-what-the-loop-rule-does-and-does-not-change) is exactly the relaxation that
+opens the first.
+
+A codomain position must reduce to a `compute.write`, and the one non-write leaf
+that gate tolerates is a `Selection::Computed` conditional (`compute.rs:2316`) — a
+`@loop` head is an `Apply`, so `@loop pass = s => if s(0) == 0 then write(…) else
+pass(…)` *as* the codomain is refused before the lowering runs. With the loop inside
+a codomain write's value instead, `buffer_write` takes its ordinal before it lowers
+its operands (`body.rs:1574`), so the nest's own write bills a second ordinal and
+the tally gate refuses it (`compute.rs:2335`). And there is no third route:
+`lower_index_function` walks only the codomain leaves, so a `@loop` bound to a
+statement the codomain never reads is not emitted at all, and `Lower::value` hoists
+a node the active nest does not own to the nest's **entry** block rather than to an
+arm (`body.rs:262`). A write reaches an arm's block only as a nest-owned node, and
+both gates refuse one.
+
+So the carry is built ahead of the relaxation that will need it, and §3's argument
+for the spine rests on the restructurings that are *coming* — a converted loop's
+nests, a shared write inside one, the host backend's segments — rather than on an
+ordering a source program can observe today. **The end-to-end test of a write
+inside a nest is therefore not writable yet either**; it becomes writable at §8,
+which is the point to add it, and until then the carry's only coverage is the
+structural one. One unit test did land with the spine, and it is not about the
+carry: `static_function_compute_operator_skips_an_operand_less_operation`
+(`lichen-lowlevel/tests/basic/static_module.rs`) pins the discriminator the
+annotated `write` forced on `static_function_compute_operator` (§6.2's surface
+change), which nothing else in the tree guards.
 
 The two backends materialise the token for free, and neither changes an ABI:
 
@@ -494,6 +519,20 @@ uses it, and its unwritten state is never a caller-visible element. So a write t
 *shared* inside a loop is admissible where a write to an *output* is not — and it
 has to be, because every algorithm that wants shared memory (a scan, a tiled
 matmul, a block reduction) writes it from inside a loop.
+
+**And the relaxation has three named sites, not one.** §6.2 records that no source
+program can put a write inside a nest today, and the reason is *not*
+`WriteInsideLoop` — that is the SPIR-V emitter's and it fires last. Two
+`lichen-compute` front gates refuse first, both in `compile_parallel_fragment`:
+the **codomain gate**, which requires every output position to reduce to a
+`compute.write` and tolerates only a `Selection::Computed` conditional
+(`compute.rs:2316`), and the **tally gate**, which requires exactly one write per
+output and so bills a nest's own write as a second one (`compute.rs:2335`). A
+shared write in a loop has to be admissible at both, *and* at `WriteInsideLoop`
+for the output case that stays refused. That is the concrete meaning of "a
+genuine relaxation": three refusals have to learn to tell a shared slot from an
+ABI output, and the fact that lets them is the nominal wrapper (§6.1), not a new
+flag.
 
 That is a genuine relaxation of a stated invariant and is recorded as one, not as
 an oversight. The guard it needs is the barrier one, not the reachability one: a

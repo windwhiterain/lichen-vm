@@ -789,3 +789,38 @@ fn static_apply_keeps_foreign_items_in_place() {
     assert_eq!(u128_of(imp.evaluate_node(inner[1].node, None).unwrap()), 20);
     let _ = func_node;
 }
+
+/// An operation that reads no operand is a nominal id, not a compute operator.
+#[test]
+fn static_function_compute_operator_skips_an_operand_less_operation() {
+    // An operator over operands beside a nominal id, which reads none.
+    let mut m = Module::new();
+    let body = m.add_block(None);
+    let param = m.add_node(body, None, None);
+    let one = u128_node(&mut m, body, 1);
+    let operands = array_node(&mut m, body, &[param, one], None);
+    let compute = op_node(&mut m, body, TestOperator::Add, Some(operands));
+    let nominal = op_node(&mut m, body, TestOperator::Id, None);
+    let ret = array_node(&mut m, body, &[compute, nominal], None);
+    let (func_node, _) = wrap_function(&mut m, body, ret, param);
+
+    let mut imp = Module::new();
+    let _root = imp.add_block(None);
+    let key = freeze(&mut imp, &m, 1);
+    let answer = imp.static_function_compute_operator(StaticFunctionRef {
+        module: key,
+        index: StaticFunctionId(0),
+    });
+    let _ = func_node;
+    let (operator, operand) = answer.expect("the body names exactly one compute operator");
+    assert_eq!(
+        operator,
+        TestOperator::Add,
+        "the operand-less Id is not one"
+    );
+    let items = raw_items(
+        imp.static_read(operand)
+            .expect("the operator's frozen operand"),
+    );
+    assert_eq!(items.len(), 2, "the answer is the operator's own operand");
+}
