@@ -363,15 +363,17 @@ compute.call k0 v + 1)` compiles and runs, answering `5 : Int`. So "one kernel
 body calls another" is solved in one of the two body shapes and not the other,
 and the difference was not named either.
 
-**It means the device has no working call at all.** Only `parallel` names a
+**It means the device had no working call at all.** Only `parallel` names a
 backend, so a cross-kernel call is reachable on a device *only* from inside a
-parallel body — and that path fails in the compiler, before any backend sees it.
+parallel body — and that path failed in the compiler, before any backend saw it.
 So `SpirvRefusal::CrossKernelCall`, which
-[`lichen-compute-gpu.md`](lichen-compute-gpu.md#not-yet) documents as the reason
-cross-kernel calls are out of scope there, **is a refusal no lichen program can
-currently provoke.**
+[`lichen-compute-gpu.md`](lichen-compute-gpu.md) documented as the reason
+cross-kernel calls were out of scope there, **was a refusal no lichen program
+could provoke.** Both halves are now closed: the call lowers in a parallel body,
+and both backends resolve it from a caller-supplied launch set
+([lichen-compute-gpu § Several functions in one module](lichen-compute-gpu.md#several-functions-in-one-module)).
 
-**Partly fixed, and the remainder is three cases of one fact.** The message is
+**Partly fixed, and the remainder is two cases of one fact.** The message is
 now the fact all three share (*a kernel is compiled from a template before any
 apply, so a binding the body would fill in at run time is still empty*) and lists
 the three shapes, **deliberately without claiming which one it is** — a refusal
@@ -890,7 +892,7 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   a different fragment — the failure mode is a recompile, never a wrong kernel).
 
   Content addressing is not a tidiness change; it is what makes the derived
-  module cache work at all.  That cache is keyed on `(LaunchMode, KernelId)`, so
+  module cache work at all.  That cache is keyed on the kernel id, so
   a fresh id per compile meant it **could never hit**, and every keystroke
   re-assembled and re-ran `wasmi::Module::new`.  Measured on the same
   `jit`+`launch` program compiled three times in one process, counting module

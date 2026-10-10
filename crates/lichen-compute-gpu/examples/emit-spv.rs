@@ -14,7 +14,7 @@
 
 use lichen_kernel_ir::{
     FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape,
-    ScalarClass,
+    LaunchSet, ScalarClass,
 };
 
 fn main() {
@@ -58,7 +58,7 @@ fn main() {
         inputs: 1,
         outputs: 1,
     };
-    match lichen_compute_gpu::spirv::compile(&fragment, binding) {
+    match lichen_compute_gpu::spirv::compile(&LaunchSet::single(&fragment), binding) {
         Ok(words) => {
             let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
             let path = std::path::Path::new("target/spirv-dump.spv");

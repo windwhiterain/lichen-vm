@@ -17,7 +17,7 @@ use lichen_compute_gpu::{GpuContext, RunError};
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, ResidentId, ScalarClass,
+    KernelShape, LaunchSet, ResidentId, ScalarClass,
 };
 
 /// `out[i] = in[i] + in[i] + 1`.
@@ -314,7 +314,11 @@ fn a_parameter_with_a_runtime_scalar_is_refused_by_name() {
     };
     let data = vec![0u8; 8 * 8];
     let refusal = context
-        .run(&with_a_runtime_scalar(), &[BufferSlot::Host(&data)], 8)
+        .run(
+            &LaunchSet::single(&with_a_runtime_scalar()),
+            &[BufferSlot::Host(&data)],
+            8,
+        )
         .expect_err("a runtime scalar has no push constant to arrive in");
     assert_eq!(refusal, RunError::ScalarsNotPushed { leaves: 3 });
     assert!(

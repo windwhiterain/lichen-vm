@@ -196,8 +196,8 @@ fn alloc_kernel_id() -> KernelId {
 /// **Kernel ids are content-addressed** (`D15`).  A compiled fragment is a pure
 /// function of the function it came from, so the same source recompiled — which
 /// an editor does on every keystroke — must produce the *same* id, or nothing
-/// downstream can be reused: the derived-module cache is keyed on
-/// `(LaunchMode, KernelId)`, so a fresh id per compile means it can never hit
+/// downstream can be reused: the derived-module cache is keyed on the
+/// `KernelId`, so a fresh id per compile means it can never hit
 /// and every keystroke re-assembles and re-runs `wasmi::Module::new`.
 ///
 /// A digest is not an identity, so the index is an **intern table and nothing
@@ -356,8 +356,8 @@ mod kernel_intern_tests {
 
     /// The point of content addressing: the same function compiled twice — which
     /// an editor does on every keystroke — must intern to **one** id, because
-    /// everything downstream is keyed on it (the derived-module cache on
-    /// `(LaunchMode, KernelId)`).  A fresh id per compile is what made that
+    /// everything downstream is keyed on it (the derived-module cache on the
+    /// `KernelId`).  A fresh id per compile is what made that
     /// cache unable to hit.
     #[test]
     fn the_same_fragment_interns_to_one_id() {
@@ -1428,11 +1428,11 @@ where
                     match compile_parallel_fragment(module, function) {
                         Ok(fragment) => {
                             // Content-addressed like `jit`'s, and for the same
-                            // reason: the parallel launch path keys the module cache
-                            // on `(LaunchMode::Parallel, KernelId)`, so a fresh id
-                            // per compile is a re-assembly per compile.  The backend
-                            // is *not* part of the fragment, so the same body
-                            // compiled for either backend shares this one id.
+                            // reason: the module cache is keyed on the `KernelId`,
+                            // so a fresh id per compile is a re-assembly per
+                            // compile.  The backend is *not* part of the
+                            // fragment, so the same body compiled for either
+                            // backend shares this one id.
                             let id = intern_kernel(fragment);
                             Some(<P::Value as From<ComputeValue>>::from(
                                 ComputeValue::ParKernel(id, backend),
@@ -5936,16 +5936,6 @@ pub fn module_cache_misses() -> usize {
     MODULE_CACHE_MISSES.load(Ordering::Relaxed)
 }
 
-/// Which launch assembled a cached module.  The fragment set is the mode's, so
-/// the mode is part of the cache key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum LaunchMode {
-    /// [`run_kernel`]: the root's relative launch set.
-    Kernel,
-    /// [`run_parallel_kernel`]: the single parallel fragment.
-    Parallel,
-}
-
 /// One cached module and the engine that compiled it.
 struct CachedModule {
     /// The engine the module was compiled by — see [`MODULES`] for why it is
@@ -5959,14 +5949,14 @@ struct CachedModule {
 /// The bounded map behind [`MODULES`].
 #[derive(Default)]
 struct ModuleCache {
-    entries: HashMap<(LaunchMode, KernelId), CachedModule>,
+    entries: HashMap<KernelId, CachedModule>,
     next_stamp: u64,
 }
 
 impl ModuleCache {
     /// A resident module, cloned out (both are `Arc` handles) so the caller
     /// does not hold the lock while instantiating.
-    fn get(&self, key: (LaunchMode, KernelId)) -> Option<(wasmi::Engine, wasmi::Module)> {
+    fn get(&self, key: KernelId) -> Option<(wasmi::Engine, wasmi::Module)> {
         self.entries
             .get(&key)
             .map(|cached| (cached.engine.clone(), cached.module.clone()))
@@ -5975,12 +5965,7 @@ impl ModuleCache {
     /// Insert a freshly compiled module, evicting the oldest entry once the
     /// bound is reached.  Replacing a resident key evicts nothing: the assembly
     /// for a key is deterministic, so the entry is the same module.
-    fn insert(
-        &mut self,
-        key: (LaunchMode, KernelId),
-        engine: wasmi::Engine,
-        module: wasmi::Module,
-    ) {
+    fn insert(&mut self, key: KernelId, engine: wasmi::Engine, module: wasmi::Module) {
         if self.entries.len() >= MAX_CACHED_MODULES
             && !self.entries.contains_key(&key)
             && let Some(oldest) = self
@@ -6004,14 +5989,17 @@ impl ModuleCache {
     }
 }
 
-/// The compiled module for `(mode, root)`, assembling and compiling it on a
-/// miss.  `assemble` is the one half the launch paths do differently.
+/// The compiled module for `root`, assembling and compiling it on a miss.
+///
+/// **One entry per kernel id, and no mode beside it.** Both launch paths assemble
+/// the root's relative launch set — a parallel fragment cross-calls exactly as a
+/// scalar one does — so the id decides the module and a second key component
+/// would only be a second way to reach one assembly.
 fn cached_module(
-    mode: LaunchMode,
     root: KernelId,
     assemble: impl FnOnce() -> Result<Vec<u8>, String>,
 ) -> Result<(wasmi::Engine, wasmi::Module), String> {
-    let key = (mode, root);
+    let key = root;
     if let Some(cached) = modules().lock().unwrap().get(key) {
         return Ok(cached);
     }
@@ -6101,7 +6089,7 @@ fn run_kernel(id: KernelId, args: &[ScalarValue]) -> Result<Vec<ScalarValue>, St
     // so the buffer is never empty; the guard keeps the invariant stated here
     // rather than resting on the emitter alone.
     let outputs = results.max(1);
-    let (engine, module) = cached_module(LaunchMode::Kernel, id, || assemble_launch_set(id))?;
+    let (engine, module) = cached_module(id, || assemble_launch_set(id))?;
     let mut store = wasmi::Store::new(&engine, ());
     let linker = wasmi::Linker::new(&engine);
     let instance = linker
@@ -6130,15 +6118,19 @@ fn run_kernel(id: KernelId, args: &[ScalarValue]) -> Result<Vec<ScalarValue>, St
         .collect()
 }
 
-/// Assemble the wasm bytes of the root kernel's **relative launch set** — the
-/// root plus every kernel it (transitively) cross-calls.
+/// The fragments of a kernel's **relative launch set**, in BFS order, and where
+/// each kernel id sits in that order.
 ///
-/// The set is discovered in BFS order: `ordered[i]` becomes wasm function
-/// index `i`; `index` maps a callee kernel-id to that index.  The result is a
-/// function of the root id alone (the registry's fragments are immutable and
-/// ids are never reused), which is what makes the id a sufficient cache key
-/// for [`cached_module`].
-fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
+/// The set is the root plus every kernel it (transitively) cross-calls, so
+/// `ordered[i]` is position `i` and `index` maps a callee kernel-id to that
+/// position. **The fragments are cloned and the registry lock released before
+/// this returns**, because every consumer emits from the set and an emitter that
+/// reaches the registry again would deadlock on a lock that is not reentrant.
+///
+/// One derivation, and both consumers take it: [`assemble_launch_set`] links it
+/// into wasm and [`run_on_installed_backend`] hands it to an installed backend,
+/// so the two cannot enumerate a call graph differently.
+fn ordered_launch_set(id: KernelId) -> Result<OrderedLaunchSet, String> {
     let mut ordered: Vec<KernelFragment> = Vec::new();
     let mut index: HashMap<KernelId, u32> = HashMap::new();
     let mut seen: HashSet<KernelId> = HashSet::new();
@@ -6167,7 +6159,24 @@ fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
         ordered.push(frag);
     }
     drop(fragments);
+    Ok(OrderedLaunchSet { ordered, index })
+}
 
+/// The two halves of a launch set, owned so the registry lock is gone before
+/// anything is emitted from them.
+struct OrderedLaunchSet {
+    ordered: Vec<KernelFragment>,
+    index: HashMap<KernelId, u32>,
+}
+
+/// Assemble the wasm bytes of the root kernel's **relative launch set** — the
+/// root plus every kernel it (transitively) cross-calls.
+///
+/// The result is a function of the root id alone (the registry's fragments are
+/// immutable and ids are never reused), which is what makes the id a sufficient
+/// cache key for [`cached_module`].
+fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
+    let OrderedLaunchSet { ordered, index } = ordered_launch_set(id)?;
     assemble_module(&ordered, &index)
 }
 
@@ -6229,9 +6238,10 @@ struct ParallelState<'a> {
 /// author's, and overriding it here would be the one place the language's
 /// explicit dataflow quietly stopped being explicit.
 ///
-/// The fragment is cloned out of the registry and the lock released before the
-/// call, because a backend that emitted a cross-kernel call would reach the
-/// registry again — the lock is not reentrant.
+/// The fragment is cloned out of the registry — as is every fragment it
+/// cross-calls, into one launch set — and the lock released before the call,
+/// because a backend that emits a cross-kernel call reads the set again, and the
+/// lock is not reentrant.
 fn run_on_installed_backend(
     id: KernelId,
     count: usize,
@@ -6245,19 +6255,17 @@ fn run_on_installed_backend(
              device"
         ));
     };
-    let fragment = {
-        let fragments = kernels().lock().unwrap();
-        fragments
-            .get(&id)
-            .cloned()
-            .ok_or_else(|| format!("parallel kernel {id} is not registered"))?
-    };
+    let OrderedLaunchSet { ordered, index } = ordered_launch_set(id)?;
+    let fragment = ordered
+        .first()
+        .expect("a launch set is built from a root, so it holds at least one fragment");
     if fragment.outputs != outputs {
         return Err(format!(
             "parallel kernel {id} declares {} output(s) here and {} in the fragment it names",
             outputs, fragment.outputs
         ));
     }
+    let launch = lichen_kernel_ir::LaunchSet::new(&ordered, &index);
     // The class check runs before the dispatch: a host slot is a raw bit
     // payload, so a buffer of the wrong class would reach the device as the
     // right shape and the wrong numbers.
@@ -6292,7 +6300,7 @@ fn run_on_installed_backend(
             RunInput::Resident(resident) => BufferSlot::Resident(resident.id),
         })
         .collect();
-    let resident = backend.run(&fragment, &slots, count).map_err(|reason| {
+    let resident = backend.run(&launch, &slots, count).map_err(|reason| {
         format!(
             "the {:?} backend declined this run: {reason}",
             backend.name()
@@ -6323,22 +6331,6 @@ fn run_on_installed_backend(
             })
             .collect(),
     ))
-}
-
-/// Assemble the wasm bytes of one **parallel** fragment — the degenerate
-/// single-fragment link (`assemble_module`, which `run_kernel` uses for a whole
-/// relative launch set).  Like [`assemble_launch_set`] this is a function of
-/// the kernel id alone, and it is the other half of [`cached_module`]'s key:
-/// the two modes assemble different fragment sets for one id.
-fn assemble_parallel_fragment(id: KernelId) -> Result<Vec<u8>, String> {
-    let fragment = kernels()
-        .lock()
-        .unwrap()
-        .get(&id)
-        .cloned()
-        .ok_or_else(|| format!("parallel kernel {id} is not registered"))?;
-    let index: HashMap<KernelId, u32> = [(id, 0)].into();
-    assemble_module(&[fragment], &index)
 }
 
 /// The most elements one `plrun` may collect — the bound on the count the
@@ -6545,8 +6537,7 @@ fn run_parallel_kernel(
         }
     }
     let inputs = host_inputs;
-    let (engine, module) =
-        cached_module(LaunchMode::Parallel, id, || assemble_parallel_fragment(id))?;
+    let (engine, module) = cached_module(id, || assemble_launch_set(id))?;
     let mut outputs: Vec<Vec<i64>> = (0..outputs).map(|_| vec![0i64; count]).collect();
     let workers = parallel_worker_count(count);
     PARALLEL_LAUNCH_WORKERS.set(workers);
@@ -7015,7 +7006,7 @@ mod parallel_launch_tests {
             }
             fn run(
                 &self,
-                _fragment: &KernelFragment,
+                _launch: &lichen_kernel_ir::LaunchSet<'_>,
                 _inputs: &[BufferSlot],
                 _count: usize,
             ) -> Result<Vec<ResidentId>, String> {
@@ -7094,7 +7085,7 @@ mod parallel_launch_tests {
         }
         fn run(
             &self,
-            _fragment: &KernelFragment,
+            _launch: &lichen_kernel_ir::LaunchSet<'_>,
             inputs: &[BufferSlot],
             _count: usize,
         ) -> Result<Vec<ResidentId>, String> {
@@ -7232,7 +7223,7 @@ mod parallel_launch_tests {
             }
             fn run(
                 &self,
-                _fragment: &KernelFragment,
+                _launch: &lichen_kernel_ir::LaunchSet<'_>,
                 _inputs: &[BufferSlot],
                 _count: usize,
             ) -> Result<Vec<ResidentId>, String> {

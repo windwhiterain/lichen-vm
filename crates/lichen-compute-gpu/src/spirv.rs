@@ -11,7 +11,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use lichen_kernel_ir::{
-    KernelBin, KernelFragment, KernelInstr, KernelShape, ScalarClass, Terminator, ValueDef, ValueId,
+    KernelBin, KernelFragment, KernelId, KernelInstr, KernelShape, LaunchSet, ScalarClass,
+    Terminator, ValueDef, ValueId,
 };
 
 /// SPIR-V opcodes.  Not from memory: these are the `SpvOp*` values in the
@@ -39,7 +40,10 @@ mod op {
     pub const STORE: u16 = 62;
     pub const ACCESS_CHAIN: u16 = 65;
     pub const FUNCTION: u16 = 54;
+    pub const FUNCTION_PARAMETER: u16 = 55;
     pub const FUNCTION_END: u16 = 56;
+    /// The cross-kernel call, into a function this module declares.
+    pub const FUNCTION_CALL: u16 = 57;
     pub const PHI: u16 = 245;
     pub const LOOP_MERGE: u16 = 246;
     pub const SELECTION_MERGE: u16 = 247;
@@ -47,6 +51,9 @@ mod op {
     pub const BRANCH: u16 = 249;
     pub const BRANCH_CONDITIONAL: u16 = 250;
     pub const RETURN: u16 = 253;
+    /// A function that leaves a value behind, which is how every function but
+    /// the entry point ends.
+    pub const RETURN_VALUE: u16 = 254;
     pub const U_CONVERT: u16 = 113;
     /// `OpConvertFToU` (109) — the `float2int` crossing: a 32-bit float to the
     /// unsigned integer type, truncating toward zero (and undefined outside what
@@ -160,9 +167,22 @@ pub const LOCAL_SIZE_X: u32 = 64;
 /// runs but computes the wrong thing is worse than one that does not run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpirvRefusal {
-    /// A cross-kernel call.  Supporting it means emitting several functions into
-    /// one module and resolving the call graph, which this slice does not do.
-    CrossKernelCall { kernel: usize, at: usize },
+    /// A call to a kernel the supplied launch set does not hold; the message
+    /// names which callee is missing.
+    CalleeNotInLaunchSet { kernel: KernelId, at: usize },
+    /// A call whose argument count is not the callee's own domain.
+    CrossKernelArity {
+        kernel: KernelId,
+        expected: usize,
+        given: usize,
+        at: usize,
+    },
+    /// A call to a callee that does not leave exactly one value.
+    CrossKernelResults {
+        kernel: KernelId,
+        results: usize,
+        at: usize,
+    },
     /// A parameter read that is not the index.  A buffer is *bound* to this
     /// shader as a storage buffer, never passed as a value, so there is no value
     /// a non-index parameter could produce.
@@ -208,11 +228,33 @@ pub enum SpirvRefusal {
 impl fmt::Display for SpirvRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SpirvRefusal::CrossKernelCall { kernel, at } => write!(
+            SpirvRefusal::CalleeNotInLaunchSet { kernel, at } => write!(
                 f,
-                "the GPU backend does not emit cross-kernel calls: instruction {at} calls kernel \
-                 {kernel}. That needs a call graph across several functions in one module, which \
-                 this backend does not do yet."
+                "instruction {at} calls kernel {kernel}, which the launch set handed to this \
+                 emitter does not hold. A cross-kernel call becomes a call into a function this \
+                 module declares, so the caller has to assemble the callee into the same set — the \
+                 same set the wasm backend links (`docs/notes/lichen-compute-gpu.md`)."
+            ),
+            SpirvRefusal::CrossKernelArity {
+                kernel,
+                expected,
+                given,
+                at,
+            } => write!(
+                f,
+                "instruction {at} calls kernel {kernel}, whose own domain takes {expected} \
+                 argument(s), with {given}. The arity is the callee's, not this body's: \
+                 `KernelInstr::arity` answers `None` for a call because the IR does not carry it."
+            ),
+            SpirvRefusal::CrossKernelResults {
+                kernel,
+                results,
+                at,
+            } => write!(
+                f,
+                "instruction {at} calls kernel {kernel}, which leaves {results} value(s). A call \
+                 here is typed by the callee's one return value, so a callee that leaves none or \
+                 several has no signature to call."
             ),
             SpirvRefusal::NonIndexParameter { local, at } => write!(
                 f,
@@ -464,12 +506,16 @@ struct BufferTypes {
 }
 
 /// Every module-scope id, allocated before anything is emitted.
+///
+/// # Invariant
+/// One cursor hands every module-scope id out, and nothing else may name one.
+/// A hand-written range cannot stay correct as the set grows — a second buffer
+/// class pushes its type chains into the range the constants were written at, and
+/// `spirv-val` answers `Id 16 is defined more than once`.
 struct Ids {
-    /// The class the module's *arithmetic* is built for, [`module_class`]'s answer;
-    /// not a buffer's element type.
+    /// The class the module's *arithmetic* is built for — [`module_class`] of the
+    /// root; not a buffer's element type.
     class: ScalarClass,
-    main: u32,
-    label: u32,
     void: u32,
     boolean: u32,
     /// The fragment's own integer type, and the type every *integer* value in
@@ -491,7 +537,8 @@ struct Ids {
     float: u32,
     /// The 32-bit unsigned type. It is the type of an invocation id's component
     /// and of an access chain's member indices in every module, and — in a float
-    /// module, where nothing is 64-bit — the type an element index has.
+    /// module, where nothing is 64-bit — the type an element index and a callee's
+    /// integer parameter have.
     uint: u32,
     v3uint: u32,
     /// The per-class storage-buffer type chain, keyed by [`ScalarClass::index`].
@@ -503,7 +550,15 @@ struct Ids {
     /// An id nothing defines is legal — the id bound is an upper limit, not a count.
     buffer_types: [BufferTypes; ScalarClass::ALL.len()],
     ptr_in: u32,
-    fn_ty: u32,
+    /// One `OpTypeFunction` per fragment, because an `OpFunctionCall` is typed
+    /// by the callee's signature.
+    function_types: Vec<u32>,
+    /// One `OpFunction` per fragment, in the launch set's order.
+    ///
+    /// # Invariant
+    /// Position `0` is the entry point, and every function is named before any
+    /// body is walked, so a call may name a function emitted later.
+    functions: Vec<u32>,
     /// The 32-bit `0` an access chain's member indices are built from, and the
     /// zero a float's *bit pattern* is compared against ([`as_condition`]) — 32
     /// bits in every module, which is what makes it the right zero there even
@@ -528,6 +583,14 @@ struct Ids {
 }
 
 impl Ids {
+    /// The entry point's `OpFunction`: the one the pipeline names `main`.
+    fn entry(&self) -> u32 {
+        self.functions
+            .first()
+            .copied()
+            .expect("a launch set holds a root, so the module holds an entry function")
+    }
+
     /// The module's scalar: the type of every value the body computes.
     fn scalar(&self) -> u32 {
         match self.class {
@@ -679,53 +742,63 @@ pub fn module_class(fragment: &KernelFragment) -> Result<ScalarClass, SpirvRefus
         .unwrap_or(ScalarClass::Int))
 }
 
-/// Whether a module for this fragment declares the 64-bit integer type, and needs
-/// `shaderInt64`.
+/// Whether a module for this launch set declares the 64-bit integer type, and
+/// needs `shaderInt64`.
 ///
 /// # Invariant
-/// It asks whether a 64-bit integer is used *anywhere*, not whether the module is an
-/// integer one: a mixed fragment reads an `Int` buffer, so its module declares the
-/// `Int64` chain and needs the feature even though its arithmetic default is `Float`.
-pub fn needs_int64(fragment: &KernelFragment) -> Result<bool, SpirvRefusal> {
-    let holds_an_integer_buffer = fragment
-        .input_classes
-        .iter()
-        .chain(fragment.output_classes.iter())
-        .any(|class| *class == ScalarClass::Int);
-    Ok(holds_an_integer_buffer || module_class(fragment)? == ScalarClass::Int)
+/// It asks the **whole set**, not the root: a callee is a function in the same module, so
+/// an integer buffer it reads is an integer chain this module declares.
+pub fn needs_int64(launch: &LaunchSet<'_>) -> Result<bool, SpirvRefusal> {
+    for fragment in launch.ordered().iter().copied() {
+        let holds_an_integer_buffer = fragment
+            .input_classes
+            .iter()
+            .chain(fragment.output_classes.iter())
+            .any(|class| *class == ScalarClass::Int);
+        if holds_an_integer_buffer || module_class(fragment)? == ScalarClass::Int {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
-/// Compile one fragment to SPIR-V words.
-pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, SpirvRefusal> {
-    if let Err(broken) = fragment.body.validate() {
-        return Err(SpirvRefusal::ControlFlow { detail: broken });
-    }
-    if fragment.int_width.bits() != 64 {
-        return Err(SpirvRefusal::UnsupportedIntWidth {
-            bits: fragment.int_width.bits(),
-        });
-    }
-    // The module's one numeric class, read off the fragment before anything is
+/// Compile a launch set to SPIR-V words: one `OpFunction` per fragment, position
+/// `0` being the entry point.
+pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, SpirvRefusal> {
+    let ordered = launch.ordered();
+    let root = launch.root();
+    // The module's one numeric class, read off the root before anything is
     // emitted: it decides the scalar type, the element type and stride, the
     // arithmetic opcodes and the capability list, and [`needs_int64`] reads the
     // same derivation, so a caller and this module cannot disagree about it.
-    let class = module_class(fragment)?;
-    let index = index_local(fragment).ok_or(SpirvRefusal::ResultArity {
-        results: fragment.result_classes.len(),
+    let class = module_class(root)?;
+    let index = index_local(root).ok_or(SpirvRefusal::ResultArity {
+        results: root.result_classes.len(),
         left: 0,
     })?;
-
-    // Pass 1 — every module-scope id is allocated, then the body is walked into an
-    // instruction list.
-    let (one_integer, zero_integer, one_float, zero_float, gid) = match class {
-        ScalarClass::Int => (17, 18, 19, 20, 21),
-        ScalarClass::Float => (19, 16, 17, 18, 20),
+    // **One cursor hands out every module-scope id**, so no range can collide
+    // with a chain.
+    let mut taken = 1u32;
+    let mut take = |count: u32| {
+        let first = taken;
+        taken += count;
+        first
     };
-    let classes = buffer_classes(fragment, class);
-    // Five ids per class, then the two module-wide pointers and the function type.
-    let chain_base = 9;
-    let fn_ty = chain_base + 5 * classes.len() as u32;
-    let ptr_in = fn_ty + 1;
+    let void = take(1);
+    let boolean = take(1);
+    let ulong = take(1);
+    let float = take(1);
+    let uint = take(1);
+    let v3uint = take(1);
+    let ptr_in = take(1);
+    let zero = take(1);
+    let one_integer = take(1);
+    let zero_integer = take(1);
+    let one_float = take(1);
+    let zero_float = take(1);
+    let gid = take(1);
+    let classes = buffer_classes(root, class);
+    // Five ids per class, then one function type and one function per fragment.
     let mut buffer_types = [BufferTypes {
         elem: 0,
         array: 0,
@@ -733,8 +806,8 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
         ptr_array: 0,
         ptr_elem: 0,
     }; ScalarClass::ALL.len()];
-    for (position, used) in classes.iter().enumerate() {
-        let base = chain_base + 5 * position as u32;
+    for used in &classes {
+        let base = take(5);
         buffer_types[used.index()] = BufferTypes {
             elem: base,
             array: base + 1,
@@ -743,85 +816,195 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
             ptr_elem: base + 4,
         };
     }
+    // Every function is named before any body is walked: a call may name one
+    // that is emitted later.
+    let function_types = take(ordered.len() as u32);
+    let functions = take(ordered.len() as u32);
+    let buffers = take(binding.total() as u32);
     let ids = Ids {
         class,
-        main: 1,
-        label: 2,
-        void: 3,
-        boolean: 4,
-        ulong: 5,
-        float: 6,
-        uint: 7,
-        v3uint: 8,
+        void,
+        boolean,
+        ulong,
+        float,
+        uint,
+        v3uint,
         buffer_types,
         ptr_in,
-        fn_ty,
-        zero: 16,
+        function_types: (0..ordered.len())
+            .map(|offset| function_types + offset as u32)
+            .collect(),
+        functions: (0..ordered.len())
+            .map(|offset| functions + offset as u32)
+            .collect(),
+        zero,
         one_integer,
         zero_integer,
         one_float,
         zero_float,
         gid,
-        buffers: gid + 1,
+        buffers,
     };
-    let mut next = ids.buffers + binding.total() as u32;
-    // `OpConstant` is a *module-scope* instruction, so the body's literals are
-    // collected here and emitted with the types rather than inside the function.
-    let mut literals = Literals::default();
-    // The entry block's own code before the body's: the ids the body's first
-    // instruction reads are defined here.
-    let mut prologue: Vec<Inst> = Vec::new();
 
-    // The index value: the invocation id's x component. It is an **integer**
-    // whatever the fragment's parameter leaves say, because this target's index
-    // is the invocation id rather than a value of the fragment's domain — a
-    // parallel fragment's leaves are `(config, index)` and both are integers
-    // however its buffers are classed.
-    //
-    // An integer module widens it to the fragment's 64-bit `Int`, which is the
-    // scalar a body may then use it as (`out[i] = i + i`); an index is never
-    // negative, so the widening is exact and the CPU path's index parameter is
-    // the same value. A float module leaves it 32-bit: that is all an access
-    // chain's index takes, and it keeps a 64-bit integer — and its capability —
-    // out of a module that has no other use for one.
-    let loaded = next;
+    // `OpConstant` is a *module-scope* instruction, so the bodies' literals are
+    // collected here and emitted with the types rather than inside a function.
+    let mut literals = Literals::default();
+    // The first function-local id: everything above is module-scope.
+    let mut next = taken;
+    let mut bodies = Vec::with_capacity(ordered.len());
+    for (position, fragment) in ordered.iter().copied().enumerate() {
+        bodies.push(emit_function(
+            Function {
+                root,
+                fragment,
+                entry: position == 0,
+                index,
+                binding,
+            },
+            &ids,
+            launch,
+            &mut literals,
+            &mut next,
+        )?);
+    }
+
+    Ok(assemble(
+        launch,
+        &ids,
+        binding,
+        &classes,
+        needs_int64(launch)?,
+        &literals.declarations,
+        &bodies,
+        next,
+    ))
+}
+
+/// One function's facts.
+struct Function<'a> {
+    /// The fragment whose buffers are bound, and the slots' classes read from.
+    root: &'a KernelFragment,
+    fragment: &'a KernelFragment,
+    /// Whether this is position `0`: the entry point.
+    entry: bool,
+    /// The root's index parameter, from `index_local`.
+    index: u32,
+    binding: Binding,
+}
+
+/// One function's instructions: its parameters, then its blocks in an order
+/// where a definition precedes its uses.
+///
+/// # Invariant
+/// Its ids are this function's own. They start above every module-scope id and
+/// run to a cursor the next function starts above, so nothing two functions emit
+/// can be one value — and a module-scope id is never reissued as a local one,
+/// which is what would make a constant and a local the same id.
+fn emit_function(
+    function: Function<'_>,
+    ids: &Ids,
+    launch: &LaunchSet<'_>,
+    mut literals: &mut Literals,
+    cursor: &mut u32,
+) -> Result<Vec<Inst>, SpirvRefusal> {
+    // This function's own cursor, above every module-scope id and above every
+    // earlier function's.
+    let mut next = *cursor;
+    let Function {
+        root,
+        fragment,
+        entry,
+        index,
+        binding,
+    } = function;
+    if let Err(broken) = fragment.body.validate() {
+        return Err(SpirvRefusal::ControlFlow { detail: broken });
+    }
+    if fragment.int_width.bits() != 64 {
+        return Err(SpirvRefusal::UnsupportedIntWidth {
+            bits: fragment.int_width.bits(),
+        });
+    }
+    // The entry block's label is the first id this function owns.
+    let entry_label = next;
     next += 1;
-    let component = next;
-    next += 1;
-    prologue.push(Inst::new(op::LOAD, vec![ids.v3uint, loaded, ids.gid]));
-    prologue.push(Inst::new(
-        op::COMPOSITE_EXTRACT,
-        vec![ids.uint, component, loaded, 0],
-    ));
-    let index_value = match class {
-        ScalarClass::Int => {
-            let widened = next;
-            next += 1;
-            prologue.push(Inst::new(
-                op::U_CONVERT,
-                vec![ids.ulong, widened, component],
-            ));
-            widened
+    // The code the body's first instruction reads is defined here.
+    let mut prologue: Vec<Inst> = Vec::new();
+    let mut parameters: Vec<Inst> = Vec::new();
+    let mut slots: HashMap<ValueId, Slot> = HashMap::new();
+
+    if entry {
+        // The index value: the invocation id's x component. It is an **integer**
+        // whatever the fragment's parameter leaves say, because this target's index
+        // is the invocation id rather than a value of the fragment's domain — a
+        // parallel fragment's leaves are `(config, index)` and both are integers
+        // however its buffers are classed.
+        //
+        // An integer module widens it to the fragment's 64-bit `Int`, which is the
+        // scalar a body may then use it as (`out[i] = i + i`); an index is never
+        // negative, so the widening is exact and the CPU path's index parameter is
+        // the same value. A float module leaves it 32-bit: that is all an access
+        // chain's index takes, and it keeps a 64-bit integer — and its capability —
+        // out of a module that has no other use for one.
+        let loaded = next;
+        next += 1;
+        let component = next;
+        next += 1;
+        prologue.push(Inst::new(op::LOAD, vec![ids.v3uint, loaded, ids.gid]));
+        prologue.push(Inst::new(
+            op::COMPOSITE_EXTRACT,
+            vec![ids.uint, component, loaded, 0],
+        ));
+        let index_value = match ids.class {
+            ScalarClass::Int => {
+                let widened = next;
+                next += 1;
+                prologue.push(Inst::new(
+                    op::U_CONVERT,
+                    vec![ids.ulong, widened, component],
+                ));
+                widened
+            }
+            ScalarClass::Float => component,
+        };
+        // **The index parameter is the one entry-block parameter this target can
+        // place**: it is the invocation id.
+        if let Some(index_parameter) = fragment.body.parameters().get(index as usize).copied() {
+            slots.insert(index_parameter, scalar(index_value, ScalarClass::Int));
         }
-        ScalarClass::Float => component,
-    };
+    } else {
+        // **A callee's domain arrives as function parameters**; the entry
+        // point's cannot.
+        let leaves = leaf_classes(&fragment.param_shape);
+        for (offset, &value) in fragment.body.parameters().iter().enumerate() {
+            let Some(class) = leaves.get(offset).copied() else {
+                return Err(SpirvRefusal::ControlFlow {
+                    detail: format!(
+                        "this body takes {} parameter(s) but its domain flattens to {}, so the \
+                         call that names it has no signature",
+                        fragment.body.parameters().len(),
+                        leaves.len()
+                    ),
+                });
+            };
+            let id = next;
+            next += 1;
+            parameters.push(Inst::new(
+                op::FUNCTION_PARAMETER,
+                vec![ids.type_of(class), id],
+            ));
+            slots.insert(value, scalar(id, class));
+        }
+    }
+    let first_label = next;
 
     // The structure the emitter adds: loop headers and one merge block per merge
     // instruction; see [`plan_body`].
-    let plan = plan_body(fragment, ids.label, next)?;
+    let plan = plan_body(fragment, entry_label, first_label)?;
     next += plan.fresh_labels;
     // One `OpPhi` list per block, filled as the edges that reach it are emitted.
     let mut blocks: Vec<Block> = plan.nodes.iter().map(|_| Block::default()).collect();
 
-    // **The index parameter is the one entry-block parameter this target can place**:
-    // it is the invocation id.
-    let mut slots: HashMap<ValueId, Slot> = HashMap::new();
-    if let Some(index_parameter) = fragment.body.parameters().get(index as usize).copied() {
-        slots.insert(index_parameter, scalar(index_value, ScalarClass::Int));
-    }
-
-    // Pass 2 — every block the plan lays out, in an order where a block's
-    // definitions precede its uses.
     let mut returns = 0usize;
     for position in 0..plan.order.len() {
         let node = plan.order[position];
@@ -1118,9 +1301,9 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                                 at,
                             )?;
                             let slot = buffer_slot(position, at, 0, binding.inputs, "input")?;
-                            // **A read yields that buffer's element class**, so one module can
-                            // read `Int` and `Float` buffers.
-                            let element_class = buffer_class_of(fragment, slot, ids.class);
+                            // **A read yields that buffer's element class**, read
+                            // off the root: a slot is one module-scope variable.
+                            let element_class = buffer_class_of(root, slot, ids.class);
                             let chain = ids.chain_of(element_class);
                             let pointer = next;
                             next += 1;
@@ -1161,9 +1344,9 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                                 binding.outputs,
                                 "output",
                             )?;
-                            // **A write stores that buffer's element class**, whichever class the
-                            // body computed in.
-                            let element_class = buffer_class_of(fragment, slot, ids.class);
+                            // **A write stores that buffer's element class**, read
+                            // off the root as above.
+                            let element_class = buffer_class_of(root, slot, ids.class);
                             let chain = ids.chain_of(element_class);
                             let value = as_class(
                                 value,
@@ -1198,13 +1381,60 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                             ));
                             code.push(Inst::new(op::STORE, vec![pointer, value.id]));
                         }
-                        KernelInstr::CallKernel(kernel) => {
-                            return Err(SpirvRefusal::CrossKernelCall { kernel, at });
+                        // **The callee's own facts**: the set carries its arity,
+                        // which is its domain's flattening.
+                        KernelInstr::CallKernel(callee) => {
+                            let Some((position, target)) = launch.callee(callee) else {
+                                return Err(SpirvRefusal::CalleeNotInLaunchSet {
+                                    kernel: callee,
+                                    at,
+                                });
+                            };
+                            let leaves = leaf_classes(&target.param_shape);
+                            if args.len() != leaves.len() {
+                                return Err(SpirvRefusal::CrossKernelArity {
+                                    kernel: callee,
+                                    expected: leaves.len(),
+                                    given: args.len(),
+                                    at,
+                                });
+                            }
+                            let Some(&result_class) = target.result_classes.first() else {
+                                return Err(SpirvRefusal::CrossKernelResults {
+                                    kernel: callee,
+                                    results: target.result_classes.len(),
+                                    at,
+                                });
+                            };
+                            let result = next;
+                            next += 1;
+                            let mut call =
+                                vec![ids.type_of(result_class), result, ids.functions[position]];
+                            for (offset, class) in leaves.iter().enumerate() {
+                                // **A leaf's class is its own**: the position
+                                // coerces the argument.
+                                let argument = operand(offset)?;
+                                call.push(
+                                    as_class(
+                                        argument,
+                                        *class,
+                                        &ids,
+                                        &mut literals,
+                                        &mut code,
+                                        &mut next,
+                                        at,
+                                    )?
+                                    .id,
+                                );
+                            }
+                            code.push(Inst::new(op::FUNCTION_CALL, call));
+                            slots.insert(definition, scalar(result, result_class));
                         }
                     }
                 }
                 Emitter {
                     fragment,
+                    entry,
                     ids: &ids,
                     plan: &plan,
                     blocks: &mut blocks,
@@ -1220,6 +1450,7 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                 let args = blocks[node].params.clone();
                 Emitter {
                     fragment,
+                    entry,
                     ids: &ids,
                     plan: &plan,
                     blocks: &mut blocks,
@@ -1241,18 +1472,11 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
             detail: "no path through the body returns; a shader's function has to end".to_string(),
         });
     }
-    let function = function_body(&plan, &mut blocks, &ids);
-
-    Ok(assemble(
-        fragment,
-        &ids,
-        binding,
-        &classes,
-        needs_int64(fragment)?,
-        &literals.declarations,
-        &function,
-        next,
-    ))
+    let mut body = parameters;
+    body.extend(function_body(&plan, &mut blocks, &ids));
+    // The next function starts above everything this one handed out.
+    *cursor = next;
+    Ok(body)
 }
 
 /// The one entry-block parameter this target places is the index; any other is
@@ -1851,6 +2075,8 @@ fn received(fragment: &KernelFragment, node: usize) -> &[ValueId] {
 /// The block-level emission: recording edges, and each block's terminator.
 struct Emitter<'a> {
     fragment: &'a KernelFragment,
+    /// Whether this function is the entry point, which returns nothing.
+    entry: bool,
     ids: &'a Ids,
     plan: &'a Plan,
     blocks: &'a mut Vec<Block>,
@@ -1969,7 +2195,29 @@ impl Emitter<'_> {
                     });
                 }
                 *self.returns += 1;
-                code.push(Inst::new(op::RETURN, vec![]));
+                // **The entry point returns nothing**; every other function
+                // leaves the value its caller reads.
+                if self.entry {
+                    code.push(Inst::new(op::RETURN, vec![]));
+                    return Ok(());
+                }
+                let Some(&result_class) = self.fragment.result_classes.first() else {
+                    return Err(SpirvRefusal::ResultArity {
+                        results: 0,
+                        left: 1,
+                    });
+                };
+                // Placed in the class the function's return type names.
+                let value = as_class(
+                    self.slots[&values[0]],
+                    result_class,
+                    self.ids,
+                    self.literals,
+                    code,
+                    self.next,
+                    at,
+                )?;
+                code.push(Inst::new(op::RETURN_VALUE, vec![value.id]));
             }
             Terminator::Br(br) => {
                 let target = self.plan.targets[node][0];
@@ -2063,16 +2311,22 @@ fn function_body(plan: &Plan, blocks: &mut [Block], ids: &Ids) -> Vec<Inst> {
 /// names, annotations must precede the types and variables they decorate, and
 /// types must precede their use. All of that is legal only because every id was
 /// reserved up front.
+///
+/// # Invariant
+/// One `OpFunction` per fragment in the set, in the set's order, and position `0`
+/// is the entry point: a call names a function id, so the set's order *is* the
+/// module's function order and the two cannot come apart.
 fn assemble(
-    fragment: &KernelFragment,
+    launch: &LaunchSet<'_>,
     ids: &Ids,
     binding: Binding,
     classes: &[ScalarClass],
     needs_int64: bool,
     literals: &[Inst],
-    code: &[Inst],
+    bodies: &[Vec<Inst>],
     bound: u32,
 ) -> Vec<u32> {
+    let root = launch.root();
     let mut out = vec![SPIRV_MAGIC, SPIRV_VERSION, GENERATOR, bound, 0];
 
     let emit_all = |out: &mut Vec<u32>, instructions: &[Inst]| {
@@ -2105,8 +2359,9 @@ fn assemble(
     // the shader reads from the invocation: SPIR-V 1.4 narrowed this list to
     // Input/Output variables, which is what the validator enforces. Storage
     // buffers are reached through the descriptor set instead and are named by
-    // their `Binding` decorations.
-    let mut interface = vec![EXECUTION_MODEL_GL_COMPUTE, ids.main];
+    // their `Binding` decorations — **and a called function reaches the same ones
+    //**, which is why they are not listed per function.
+    let mut interface = vec![EXECUTION_MODEL_GL_COMPUTE, ids.entry()];
     interface.extend(spv_string(b"main"));
     interface.push(ids.gid);
     emit_all(&mut out, &[Inst::new(op::ENTRY_POINT, interface)]);
@@ -2114,7 +2369,7 @@ fn assemble(
         &mut out,
         &[Inst::new(
             op::EXECUTION_MODE,
-            vec![ids.main, EXECUTION_MODE_LOCAL_SIZE, LOCAL_SIZE_X, 1, 1],
+            vec![ids.entry(), EXECUTION_MODE_LOCAL_SIZE, LOCAL_SIZE_X, 1, 1],
         )],
     );
 
@@ -2197,13 +2452,34 @@ fn assemble(
             ),
         ]);
     }
-    types.extend([
-        Inst::new(
-            op::TYPE_POINTER,
-            vec![ids.ptr_in, storage_class::INPUT, ids.v3uint],
-        ),
-        Inst::new(op::TYPE_FUNCTION, vec![ids.fn_ty, ids.void]),
-    ]);
+    types.extend([Inst::new(
+        op::TYPE_POINTER,
+        vec![ids.ptr_in, storage_class::INPUT, ids.v3uint],
+    )]);
+    // **One function type per fragment**: `OpFunctionCall` is typed by the
+    // callee's.
+    for (position, fragment) in launch.ordered().iter().copied().enumerate() {
+        let ty = ids.function_types[position];
+        if position == 0 {
+            types.push(Inst::new(op::TYPE_FUNCTION, vec![ty, ids.void]));
+            continue;
+        }
+        let mut operands = vec![ty];
+        operands.extend(
+            leaf_classes(&fragment.param_shape)
+                .iter()
+                .map(|class| ids.type_of(*class)),
+        );
+        operands.push(
+            fragment
+                .result_classes
+                .first()
+                .map(|class| ids.type_of(*class))
+                // A callee that leaves other than one value is refused above.
+                .unwrap_or(ids.void),
+        );
+        types.push(Inst::new(op::TYPE_FUNCTION, operands));
+    }
     emit_all(&mut out, &types);
 
     let mut constants = vec![Inst::new(op::CONSTANT, vec![ids.uint, ids.zero, 0])];
@@ -2261,7 +2537,7 @@ fn assemble(
     for slot in 0..binding.total() {
         // **A buffer's variable is typed with its own class's block struct**, which is
         // what makes a mixed module bindable.
-        let chain = ids.chain_of(buffer_class_of(fragment, slot, ids.class));
+        let chain = ids.chain_of(buffer_class_of(root, slot, ids.class));
         globals.push(Inst::new(
             op::VARIABLE,
             vec![
@@ -2273,16 +2549,33 @@ fn assemble(
     }
     emit_all(&mut out, &globals);
 
-    // 6. The function, its body, and its end: every block in the plan's order.
-    emit_all(
-        &mut out,
-        &[Inst::new(
-            op::FUNCTION,
-            vec![ids.void, ids.main, 0, ids.fn_ty],
-        )],
-    );
-    emit_all(&mut out, code);
-    emit_all(&mut out, &[Inst::new(op::FUNCTION_END, vec![])]);
+    // 6. Every function, its body and its end, in the launch set's order.
+    for (position, body) in bodies.iter().enumerate() {
+        let result = if position == 0 {
+            ids.void
+        } else {
+            launch
+                .ordered()
+                .get(position)
+                .and_then(|fragment| fragment.result_classes.first())
+                .map(|class| ids.type_of(*class))
+                .unwrap_or(ids.void)
+        };
+        emit_all(
+            &mut out,
+            &[Inst::new(
+                op::FUNCTION,
+                vec![
+                    result,
+                    ids.functions[position],
+                    CONTROL_NONE,
+                    ids.function_types[position],
+                ],
+            )],
+        );
+        emit_all(&mut out, body);
+        emit_all(&mut out, &[Inst::new(op::FUNCTION_END, vec![])]);
+    }
     out
 }
 

@@ -21,8 +21,13 @@ use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X};
 use lichen_kernel_ir::BufferSlot;
 use lichen_kernel_ir::{
     FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape,
-    Pending, ScalarClass, ScalarData,
+    LaunchSet, Pending, ScalarClass, ScalarData,
 };
+
+/// A one-fragment launch set: this example measures one kernel at a time.
+fn only(fragment: &KernelFragment) -> LaunchSet<'_> {
+    LaunchSet::single(fragment)
+}
 
 /// The **packed** bytes of `words`, one `i64` each — the host payload an integer
 /// fragment reads.  Packed rather than reinterpreted, because the ABI's element
@@ -102,7 +107,7 @@ fn fixed_cost(context: &GpuContext) -> (f64, f64) {
     let input: Vec<i64> = (0..count as i64).collect();
     let packed = pack(&input);
     let warm = context
-        .run(&fragment(), &[BufferSlot::Host(&packed)], count)
+        .run(&only(&fragment()), &[BufferSlot::Host(&packed)], count)
         .expect("the warm-up run completes");
     for id in &warm {
         context.release(*id);
@@ -112,7 +117,7 @@ fn fixed_cost(context: &GpuContext) -> (f64, f64) {
     for _ in 0..REPEATS {
         let started = Instant::now();
         let resident = context
-            .run(&fragment(), &[BufferSlot::Host(&packed)], count)
+            .run(&only(&fragment()), &[BufferSlot::Host(&packed)], count)
             .expect("a probe run completes");
         let elapsed = started.elapsed().as_secs_f64() * 1e3;
         for id in &resident {
@@ -140,14 +145,14 @@ fn resident_cost(context: &GpuContext) -> (f64, f64) {
     let input: Vec<i64> = (0..count as i64).collect();
     let packed = pack(&input);
     let seed = context
-        .run(&fragment(), &[BufferSlot::Host(&packed)], count)
+        .run(&only(&fragment()), &[BufferSlot::Host(&packed)], count)
         .expect("the seeding run completes");
 
     let mut samples = Vec::with_capacity(REPEATS);
     for _ in 0..REPEATS {
         let started = Instant::now();
         let resident = context
-            .run(&fragment(), &[BufferSlot::Resident(seed[0])], count)
+            .run(&only(&fragment()), &[BufferSlot::Resident(seed[0])], count)
             .expect("a probe run completes");
         let elapsed = started.elapsed().as_secs_f64() * 1e3;
         for id in &resident {
@@ -165,12 +170,16 @@ fn resident_cost(context: &GpuContext) -> (f64, f64) {
 fn time_chain(context: &GpuContext, input: &[u8], count: usize, links: usize) -> f64 {
     let started = Instant::now();
     let mut current = context
-        .run(&fragment(), &[BufferSlot::Host(input)], count)
+        .run(&only(&fragment()), &[BufferSlot::Host(input)], count)
         .expect("the chain's first link uploads");
     for _ in 1..links {
         // Each link is handed the previous one's id and never sees its data.
         let next = context
-            .run(&fragment(), &[BufferSlot::Resident(current[0])], count)
+            .run(
+                &only(&fragment()),
+                &[BufferSlot::Resident(current[0])],
+                count,
+            )
             .expect("a link consumes the previous link's id");
         context.release(current[0]);
         current = next;
@@ -188,7 +197,7 @@ fn time_chain(context: &GpuContext, input: &[u8], count: usize, links: usize) ->
 fn time_fused_chain(context: &GpuContext, input: &[u8], count: usize, links: usize) -> f64 {
     let started = Instant::now();
     let id = context
-        .run_chain(&fragment(), input, count, links)
+        .run_chain(&only(&fragment()), input, count, links)
         .expect("the fused chain records");
     let _answer = context
         .fetch(id, count)
@@ -214,7 +223,7 @@ fn time_fused_chain(context: &GpuContext, input: &[u8], count: usize, links: usi
 fn check_fused(context: &GpuContext, count: usize, links: usize) {
     let input: Vec<i64> = (0..count as i64).collect();
     let id = context
-        .run_chain(&fragment(), &pack(&input), count, links)
+        .run_chain(&only(&fragment()), &pack(&input), count, links)
         .expect("the chain under test records");
     let answer = words(
         context
@@ -290,7 +299,7 @@ fn time_split(
     let millis = |elapsed: std::time::Duration| elapsed.as_secs_f64() * 1e3;
     let started = Instant::now();
     let pending = context
-        .submit(&fragment(), &[BufferSlot::Host(input)], count)
+        .submit(&only(&fragment()), &[BufferSlot::Host(input)], count)
         .expect("the run is recorded and handed to the queue");
     let submitted = Instant::now();
 
@@ -409,7 +418,7 @@ fn main() {
         // Its result is released rather than kept: the ids are what a program
         // releases, and this example is also where that path gets exercised.
         let warm = context
-            .run(&fragment(), &[BufferSlot::Host(&packed)], count)
+            .run(&only(&fragment()), &[BufferSlot::Host(&packed)], count)
             .expect("the warm-up run completes");
         for id in &warm {
             context.release(*id);
@@ -420,7 +429,7 @@ fn main() {
         // kernels pays the first and not the second.
         let started = Instant::now();
         let resident = context
-            .run(&fragment(), &[BufferSlot::Host(&packed)], count)
+            .run(&only(&fragment()), &[BufferSlot::Host(&packed)], count)
             .expect("the timed run completes");
         let dispatch = started.elapsed();
 
@@ -467,7 +476,7 @@ fn main() {
         let input: Vec<i64> = (0..count).map(|value| value as i64).collect();
         let packed = pack(&input);
         let warm = context
-            .run(&fragment(), &[BufferSlot::Host(&packed)], count)
+            .run(&only(&fragment()), &[BufferSlot::Host(&packed)], count)
             .expect("the warm-up run completes");
         for id in &warm {
             context.release(*id);
@@ -476,12 +485,16 @@ fn main() {
         for links in [1usize, 2, 4, 8, 16] {
             let started = Instant::now();
             let mut current = context
-                .run(&fragment(), &[BufferSlot::Host(&packed)], count)
+                .run(&only(&fragment()), &[BufferSlot::Host(&packed)], count)
                 .expect("the chain's first link uploads");
             for _ in 1..links {
                 // Each link is handed the previous one's id and never sees its data.
                 let next = context
-                    .run(&fragment(), &[BufferSlot::Resident(current[0])], count)
+                    .run(
+                        &only(&fragment()),
+                        &[BufferSlot::Resident(current[0])],
+                        count,
+                    )
                     .expect("a link consumes the previous link's id");
                 context.release(current[0]);
                 current = next;
@@ -542,7 +555,7 @@ fn main() {
         let input: Vec<i64> = (0..count).map(|value| value as i64).collect();
         let packed = pack(&input);
         let warm = context
-            .run(&fragment(), &[BufferSlot::Host(&packed)], count)
+            .run(&only(&fragment()), &[BufferSlot::Host(&packed)], count)
             .expect("the warm-up run completes");
         for id in &warm {
             context.release(*id);
@@ -621,7 +634,7 @@ fn main() {
         let mut host: Vec<i64> = (0..count).map(|value| value as i64).collect();
         let packed = pack(&input);
         let warm = context
-            .run(&fragment(), &[BufferSlot::Host(&packed)], count)
+            .run(&only(&fragment()), &[BufferSlot::Host(&packed)], count)
             .expect("the warm-up run completes");
         for id in &warm {
             context.release(*id);

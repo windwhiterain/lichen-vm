@@ -678,11 +678,17 @@ reader to the wrong place. The three, all confirmed on both backends:
 
 The first is the one on the critical path, and the reason is unchanged by the
 better message: **only `parallel` names a backend, so a device cross-kernel call
-is reachable *only* from a parallel body**, and that path fails in the compiler
-before any backend sees it. So `SpirvRefusal::CrossKernelCall`, which
-[lichen-compute-gpu](lichen-compute-gpu.md#not-yet) documents as the reason
-cross-kernel calls are out of scope there, **is a refusal no lichen program can
-currently provoke**.
+is reachable *only* from a parallel body**, and that path failed in the compiler
+before any backend saw it. So `SpirvRefusal::CrossKernelCall` **was a refusal no
+lichen program could provoke**.
 
-**What is left is not the message, it is the three cases.** All three are the
-same missing *apply* §4.1 is about, and none is fixed by naming them.
+**The first row is closed.** Both backends now resolve a cross-kernel call from a
+launch set the caller supplies, so a `compute.call` inside a parallel body runs
+on the CPU and on a device — see
+[lichen-compute-gpu § Several functions in one module](lichen-compute-gpu.md#several-functions-in-one-module)
+and the cross-backend test in `crates/lichen-language/tests/compute.rs`. What
+closed it was not the message: the fragment alone cannot name a callee, so the
+*set* had to reach both backends. The other two rows are still open.
+
+**What is left is not the message, it is the two remaining cases.** Both are the
+same missing *apply* §4.1 is about, and neither is fixed by naming them.
