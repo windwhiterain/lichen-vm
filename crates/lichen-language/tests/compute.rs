@@ -404,18 +404,7 @@ compute.launch k ((2, 3), 4)
 
 #[test]
 fn jit_cross_kernel_call() {
-    // Style 2: `k1`'s body calls kernel `k0` (`k0 x`).  Launch assembles k1's
-    // *relative launch set* — k1 plus the kernel it cross-calls, k0 — into one
-    // wasm module, so the cross-kernel call is an in-module `call`:
-    //   launch k1 6 = k0(6) = 7.
-    // The argument is the parameter read directly.  An operator *inside* the
-    // argument (`k0 (x + 1)`, what this test used to write) is emitted now
-    // rather than refused — `jit_an_operator_inside_a_cross_kernel_argument_is_emitted`
-    // below pins it (`docs/notes/operator-polymorphism.md` §7.1, cost 1).
-    // The bare `k x` apply leaves a direct kernel apply's codomain `?a` (the
-    // checker only resolves it via `$launch`), so the value is asserted.  The
-    // wrapper form `compute.launch k0 x` *does* give `Int` — covered by
-    // `jit_cross_kernel_wrapper` below.
+    // Style 2: k1's body calls k0, so both are in one module:   launch k1 6 = k0(6) = 7.
     let (_module, value, _root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
@@ -427,16 +416,13 @@ compute.launch k1 6
     assert_eq!(common::usize_of(&value), 7, "cross-kernel call produced 7");
 }
 
-/// The third shape a cross-kernel argument can take: an operator applied
-/// **inside** the argument.
+/// The third shape a cross-kernel argument can take: an operator applied inside the
+/// argument.
 ///
-/// A kernel body may cross-call a kernel with an argument it reads directly
-/// (`k0 x`, the test above), may apply an operator to a call's *result*
-/// (`k0 x + 1`, `jit_cross_kernel_subexpr`), and — since a routed operator's
-/// identity is now read out of its **frozen callee's body** rather than out of
-/// the apply's class value — may apply one *inside* the argument. `k0 (x + 1)`
-/// was refused by name while the class channel was the only route
-/// (`docs/notes/operator-polymorphism.md` §7.1, cost 1); it is emitted now.
+/// # Invariant
+/// A routed operator's identity is read out of its **frozen callee's body**, so `k0 (x +
+/// 1)` is emitted; it was refused by name while the class channel was the only route
+/// (`docs/notes/operator-polymorphism.md` §7.1, cost 1).
 #[test]
 fn jit_an_operator_inside_a_cross_kernel_argument_is_emitted() {
     let (_module, value, _root_ty) = run(r#"
@@ -452,15 +438,8 @@ compute.launch k1 5
 
 #[test]
 fn jit_cross_kernel_subexpr() {
-    // A cross-kernel call result used as a sub-expression: `k0 (x) + 1`.  The
-    // checker peels the call result via `Index(apply, 0)` (a `value_of`
-    // extraction), which the JIT now looks through to emit the kernel call
-    // directly:   launch k1 5 = k0(5) + 1 = 6 + 1 = 7.
-    //
-    // **Both parameters are annotated**, which is the whole un-park: an
-    // unannotated parameter leaves the kernel's class undecided at compile time
-    // and the `jit` refuses by name.  `docs/notes/kernel-parameter-class.md`
-    // measured that stating them runs this program and produces 7.
+    // A call result as a sub-expression; the JIT looks through the peel and emits the
+    // call:   launch k1 5 = k0(5) + 1 = 7.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k0 = compute.jit (y : Int => y + 1)
@@ -569,14 +548,8 @@ compute.launch k1 (100, ((9, 4), 5))
 
 #[test]
 fn jit_cross_kernel_tuple_argument_through_the_wrapper() {
-    // Style 3 with a tuple argument: the wrapper's `launch` argument is a bare
-    // undecided cell — concrete only at run time — so the tuple is
-    // reached through the cell's equality class rather than as an array value:
+    // Style 3, a tuple argument reached through the cell's equality class:
     //   launch k1 5 = k0(5, 1) = 6.
-    //
-    // **`k1`'s parameter is annotated**, which is the whole un-park: it is `k1`
-    // the wrapper launches, so an undecided class on `k1` is what the launch
-    // refused.  See `docs/notes/kernel-parameter-class.md`.
     let (_module, value, _root_ty) = run(r#"
 --- compute = import "compute.lichen" ---
 k0 = compute.jit (p : <Int, Int> => p(0) + p(1))
@@ -763,21 +736,7 @@ compute.launch k1 (5, 3)
 
 #[test]
 fn a_tuple_domain_kernel_type_renders_as_a_function() {
-    // A tuple-domain kernel's signature is `[<Int, Int>, Int]`.  The kernel
-    // struct carries the domain in its `.I` field, so the value's second
-    // element is the tuple type and the struct's type names `.I`/`.O`.
-    //
-    // **The `.I` field's type is `TypeTuple`, not `Type`**, and that is the
-    // whole point of the pair with its scalar sibling: a tuple of element types
-    // is itself a tuple, so its type is the tuple universe.  The parked
-    // expectation here said the dump was because "what is missing is a class for
-    // a tuple of element types" — the class exists and has a name
-    // (`docs/notes/kernel-parameter-class.md` §"What it means for the parked
-    // test", which also records that the old `#[ignore]` reason was wrong in
-    // three measured ways).  The other two halves follow the same rule as
-    // `a_kernel_value_and_type_render_by_name`: `.native` dumps `raw Kernel`,
-    // and the domain is **decided** rather than rendered under the raw mark.
-    // `.O` is a flat `Int`; only a *tuple* codomain dumps nested.
+    // A tuple-domain kernel's signature is `[<Int, Int>, Int]`, carried in `.I`.
     let out = render(
         r#"
 --- compute = import "compute.lichen" ---
@@ -2143,9 +2102,7 @@ out = (compute.plrun k2 ((compute.A In2)(.n {ELEMENT_COUNT}, .I In2(.b inbuf.z))
         "the two backends answered the integer output differently"
     );
 
-    // The same input crossed to `Float` and offset by a half. **Read as the typed
-    // value, not as element bits**: the CPU backend tags each output with the
-    // class its write ordinal declares, so a `Float` output arrives a `Float`.
+    // The same input crossed to `Float` and offset by a half, read as the typed value.
     let floats = common::float_array(&cpu_module, &cpu_buffers[1]);
     assert_eq!(floats.len(), ELEMENT_COUNT, "the float output's length");
     assert_eq!(floats[0], 10.5, "the first float element");
@@ -2163,18 +2120,11 @@ out = (compute.plrun k2 ((compute.A In2)(.n {ELEMENT_COUNT}, .I In2(.b inbuf.z))
 
 /// A `@loop` inside a kernel, lowered as a **nest**, on both backends.
 ///
-/// **The carried state is a run-time value**, so the checker cannot expand the
-/// recursion and the kernel reader must build the nest: the header's `params`
-/// are the state, the base test branches out of it, and the exit hands the
-/// carried value on. The seed fills the buffer with zero, so the base test holds
-/// on entry and the loop leaves by its first test with `7` — the number only a
-/// nest whose state arrived through the entering call can produce.
-///
-/// **This is the backend's carried-state typing, measured.** The state is a
-/// buffer read, so it is an *instruction the entry block computes*; until the
-/// wasm lowering decided value types over the whole body rather than from
-/// block to block, this body was refused with "block 1 has parameters but no
-/// branch reaches it with a value".
+/// # Invariant
+/// The carried state is a run-time value, so the checker cannot expand the recursion and
+/// the kernel reader must build the nest: the header's `params` are the state, the base
+/// test branches out of it, and the exit hands the carried value on
+/// (`docs/notes/loop-conversion.md` §8.6).
 #[test]
 fn a_kernel_loop_nest_carries_a_runtime_state() {
     let source = format!(
