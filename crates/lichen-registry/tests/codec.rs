@@ -1,6 +1,5 @@
-//! The leaf-name discriminator's length is a one-byte field, so the writer
-//! must refuse a name it cannot encode rather than truncate the length and
-//! desynchronise every field after it.
+//! The leaf-name discriminator's length is a one-byte field: a name it cannot
+//! encode is refused, not truncated.
 
 use lichen_registry::codec::{Reader, Writer};
 

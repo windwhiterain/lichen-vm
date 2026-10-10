@@ -1,35 +1,11 @@
 //! The preprocessor for the `---...---` directive block.
+//! See docs/notes/preprocessor-isolation.md.
 //!
-//! A file may open with a single `---...---` block (once, before any code; a
-//! non-`@` prefix is allowed and ignored).  Inside the block is a set of
-//! statements, Separator-separated: `name = import "path"` loads a package
-//! bound to `name`, `name = depend "url"` declares a git dependency bound to
-//! `name`, and `name = "value"` defines a string metadata entry.
-//! The language lexer/parser never sees the block: it is cut out by a pure
-//! byte scan (independent of the lexer), the interior is parsed by this
-//! module's own little frontend (see [lex] and [parse]), and the caller
-//! compiles only the code that follows the block.
+//! # Invariant
 //!
-//! The leading non-`@` bytes before the block are ignored; `@` is reserved
-//! for the block delimiters, so it cannot appear in the surrounding code or
-//! inside a block string.  A file with no `@` is ordinary code (code = the
-//! whole source, base = 0).
-//!
-//! The preprocessor is allocation-light: `code` is a borrowed suffix of the
-//! source (no copy), and only the metadata values (tiny) are owned.
-//!
-//! This crate is **isolated**: it depends only on the shared source-position
-//! protocol ([`lichen_span`]) and its own block lexer/parser (`logos`).  It
-//! never names a compile vocabulary or a package store.  Resolving an
-//! `import "path"` against a package store is delegated to a caller through
-//! the [`ImportResolver`] trait, and the only vocabulary-bound data it
-//! carries is generic over the export handle `E` (see [`ResolvedImport`]),
-//! which the language layer pins to its own package handle.
-//!
-//! The preprocessor also **owns the preprocessor import path**: the lichen
-//! home ([`lichendir`]) and its git source cache ([`sources_root`]), the root
-//! the package manager fetches each `depend` into and the compiler reads the
-//! vendored aliases from (see [`Depend::vendored_dir`]).
+//! Isolated: it depends only on `lichen-span` and its own block lexer/parser, and never names a
+//! compile vocabulary or a package store — import resolution goes through `ImportResolver`, and
+//! the only vocabulary-bound data is generic over the export handle `E`.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -40,14 +16,15 @@ mod parse;
 
 pub use parse::Directive;
 
-/// A preprocessor diagnostic: a message plus, when the failure is a property of
-/// the source, the position it is grounded in.  A failure that is about no
-/// source text at all — a dependency directory that has not been fetched, a
-/// `sub` path that is not a relative path inside its clone — carries `None` and
-/// is rendered as its message alone.  Check-free — the preprocessor never
-/// touches a checker or a program marker — so it is not typed over a
-/// vocabulary.  A caller (the language layer) widens it into its own diagnostic
-/// at `Stage::Preprocess`.
+/// A preprocessor diagnostic: a message plus, for a source failure, the position it
+/// is grounded in.
+///
+/// # Invariant
+///
+/// Check-free — the preprocessor never touches a checker or a program marker — so it is not typed
+/// over a vocabulary; a caller widens it into its own diagnostic at `Stage::Preprocess`. A failure
+/// about no source text (an unfetched dependency, a `sub` outside its clone) carries no span and
+/// renders as its message alone.
 #[derive(Clone, Debug)]
 pub struct PreprocessDiag {
     pub span: Option<Span>,
@@ -62,8 +39,8 @@ impl PreprocessDiag {
         }
     }
 
-    /// A diagnostic with no source position: the failure is not a property of
-    /// any source text, so it renders as its message alone, with no caret.
+    /// A diagnostic with no source position, for a failure that is not a property
+    /// of any source text.
     pub fn unattributed(message: impl Into<String>) -> Self {
         PreprocessDiag {
             span: None,
@@ -72,36 +49,40 @@ impl PreprocessDiag {
     }
 }
 
-/// A resolved package: what an `import "path"` binding resolves to, before it
-/// is wrapped with the binding's own `name` and `span`.  The export handle `E`
-/// is vocabulary-bound (the language layer pins it to its static node id), so
-/// this crate needs no dependency on the lowlevel/VM stack.
+/// A resolved package: what an `import "path"` binding resolves to, before it is
+/// wrapped with its `name` and `span`.
+///
+/// # Invariant
+///
+/// The export handle `E` is vocabulary-bound (the language layer pins it to its static node id),
+/// so this crate needs no dependency on the lowlevel or VM stack.
 #[derive(Clone, Debug)]
 pub struct ResolvedPackage<E> {
     pub export: E,
     pub path: PathBuf,
-    /// Extra `(name, export)` bindings the package exposes directly, so
-    /// `import` can bind them as names (the compute package's
-    /// `jit`/`launch`/`Kernel`).
+    /// Extra `(name, export)` bindings the package exposes directly, bound as
+    /// names alongside the import's own.
     pub direct: Vec<(String, E)>,
 }
 
-/// The import-resolution seam.  A caller provides a `PackageStore`-like object
-/// implementing this: it resolves an `import "path"` (relative to `base`), and
-/// registers a vendored dependency alias the package manager staged into the
-/// source cache.  Generic over the export handle `E` so the preprocessor crate
-/// stays free of any compile vocabulary.
+/// The import-resolution seam: a caller-provided store resolves an `import "path"`
+/// and registers a vendored alias.
+///
+/// # Invariant
+///
+/// Generic over the export handle `E`, so the preprocessor crate stays free of any compile
+/// vocabulary.
 pub trait ImportResolver<E> {
-    /// Resolve an import path relative to the current source file's directory
-    /// (`base` is the file or directory the import is resolved against).
+    /// Resolve an import path relative to `base`, the file or directory the import
+    /// is resolved against.
     fn resolve_import(
         &mut self,
         base: Option<&Path>,
         import_path: &str,
     ) -> Result<ResolvedPackage<E>, PreprocessDiag>;
 
-    /// Register a vendored dependency directory under an import alias, so the
-    /// compiler resolves `import "alias"` / `import "alias/rest"` into it.
+    /// Register a vendored dependency directory under an import alias, so
+    /// `import "alias"` resolves into it.
     fn register_vendored(&mut self, alias: String, dir: PathBuf);
 }
 
@@ -116,17 +97,17 @@ pub struct ResolvedImport<E> {
     pub export: E,
     /// The canonical path of the imported package.
     pub path: PathBuf,
-    /// Extra `(name, export)` bindings the package exposes directly (the
-    /// compute package's `jit`/`launch`/`Kernel`), bound as names alongside
-    /// the import's own `name`.
+    /// Extra `(name, export)` bindings the package exposes directly, bound as
+    /// names alongside the import's own `name`.
     pub direct: Vec<(String, E)>,
 }
 
-/// A git dependency declared by a `name = depend "url"` directive in the block.
-/// The package manager fetches it (into the lichen-home source cache) and
-/// stages it as a vendored alias before resolving the block's `import`
-/// bindings.  `name` is the left-hand side binding, the alias the dependency
-/// is staged under.
+/// A git dependency declared by a `name = depend "url"` directive.
+///
+/// # Invariant
+///
+/// The package manager fetches it and stages it as a vendored alias before the block's `import`
+/// bindings resolve; `name` is the binding, and the alias it is staged under.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Depend {
     /// The git repository URL.
@@ -139,35 +120,37 @@ pub struct Depend {
     pub tag: Option<String>,
     /// The Rust crate package name (a native-plugin dependency).
     pub package: Option<String>,
-    /// A subdirectory of the fetched repository holding the package
-    /// (a monorepo dependency): the vendored alias resolves to
-    /// `<clone>/<sub>` instead of the clone root.
+    /// A subdirectory of the fetched repository holding the package: the vendored
+    /// alias resolves to `<clone>/<sub>`.
     pub sub: Option<String>,
     /// A native plugin: importing it requires the compiler to be rebuilt.
     pub plugin: bool,
 }
 
 impl Depend {
-    /// The import alias the dependency is staged under: its binding name
-    /// (`name = depend`).  This is the key both the package manager (when it
-    /// fetches into the source cache) and the compiler (when it resolves the
-    /// vendored alias) use, so the two agree by construction.
+    /// The import alias the dependency is staged under: its binding name.
+    ///
+    /// # Invariant
+    ///
+    /// Both the package manager (fetching into the source cache) and the compiler (resolving the
+    /// vendored alias) key on it, so the two agree by construction.
     pub fn alias(&self) -> String {
         self.name.clone()
     }
 
-    /// The git clone root in the source cache: `sources_root()/<alias>`.
-    /// The package manager clones (or fetches) a dependency here; the compiler
-    /// reads the same path when it resolves the vendored alias.
+    /// The git clone root in the source cache, `sources_root()/<alias>`: where the
+    /// package manager fetches a dependency.
     pub fn sources_dir(&self) -> PathBuf {
         sources_root().join(sanitize_alias(&self.alias()))
     }
 
-    /// The vendored directory the alias resolves to: the clone root, or its
-    /// `sub` subdirectory (a monorepo dependency).  `sub` is free-form text
-    /// from the source file, so it is validated here — the one place every
-    /// consumer reads the path from — and rejected unless it is a plain
-    /// relative path inside the clone.
+    /// The vendored directory the alias resolves to: the clone root, or its `sub`
+    /// subdirectory.
+    ///
+    /// # Invariant
+    ///
+    /// `sub` is free-form source text, validated here — the one place every consumer reads the path
+    /// from — and rejected unless it is a plain relative path inside the clone.
     pub fn vendored_dir(&self) -> Result<PathBuf, String> {
         let root = self.sources_dir();
         match &self.sub {
@@ -209,13 +192,12 @@ fn sanitize_alias(alias: &str) -> String {
     out
 }
 
-/// The preprocessor output: the borrowed code (a suffix of the source), the
-/// byte offset where it starts (so spans map back to the original file),
-/// resolved imports, the block's string metadata, and its git dependency set.
+/// The preprocessor output: the borrowed code, its base offset, the imports, the
+/// metadata, and the dependency set.
 #[derive(Clone, Debug)]
 pub struct Preprocessed<'a, E> {
-    /// The code to compile: the source after the `---...---` block (or the
-    /// whole source when there is no block).  Borrowed, never copied.
+    /// The code to compile: the source after the block, or the whole source when
+    /// there is none. Borrowed, never copied.
     pub code: &'a str,
     /// The byte offset of `code` within the original source.
     pub code_base: u32,
@@ -227,10 +209,8 @@ pub struct Preprocessed<'a, E> {
     pub depends: Vec<Depend>,
 }
 
-/// Preprocess: cut out the leading `---...---` block (if any), resolve its
-/// import bindings through `resolver`, and collect its metadata.  The code to
-/// compile is the source after the block.  Diagnostics (lex/parse/resolve)
-/// are reported with spans against the original file.
+/// Preprocess: cut out the leading block, resolve its imports through `resolver`,
+/// and collect its metadata and depends.
 pub fn preprocess<'a, E, R>(
     raw: &'a str,
     base: Option<&Path>,
@@ -296,10 +276,8 @@ where
                             }
                         }
                         Directive::Metadata { name, value } => metadata.push((name, value)),
-                        // Both `name = depend "url"` and `name = plug "url"`
-                        // normalize through `depend_of` — the one place a
-                        // `Depend` is built — so a new field cannot be dropped
-                        // on this path.
+                        // Both `depend` and `plug` normalize through `depend_of`,
+                        // the one place a `Depend` is built, so no field is dropped.
                         other => {
                             if let Some(dep) = depend_of(other) {
                                 depends.push(dep);
@@ -329,9 +307,8 @@ where
     )
 }
 
-/// Split a source into its leading `---...---` interior (if any) and the code
-/// after it.  Never resolves imports -- for tooling (readme, sync) that reads
-/// a block's metadata without a package store.
+/// Split a source into its leading block interior and the code after it, without
+/// resolving imports.
 pub fn split_block(source: &str) -> (Option<&str>, &str) {
     if let Some((is, ie, cs)) = scan_block(source) {
         (Some(&source[is..ie]), &source[cs..])
@@ -340,8 +317,8 @@ pub fn split_block(source: &str) -> (Option<&str>, &str) {
     }
 }
 
-/// Parse a block interior into its directives (imports + metadata), in order.
-/// Empty when the interior fails to lex/parse (the block is unusable).
+/// Parse a block interior into its directives, in order; empty when it fails to
+/// lex or parse.
 pub fn block_directives(interior: &str) -> Vec<Directive> {
     let lexed = lex::tokenize(interior);
     if !lexed.errors.is_empty() {
@@ -366,9 +343,8 @@ pub fn block_metadata(interior: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The `Depend`s in a block interior: `name = depend "url"` git bindings and
-/// `name = plug "url"` native-plugin bindings, both normalized to a [`Depend`]
-/// (a `plug` is a plugin dep bound to the statement's name).
+/// The `Depend`s in a block interior: `depend` git bindings and `plug`
+/// native-plugin bindings, both normalized.
 pub fn block_depends(interior: &str) -> Vec<Depend> {
     block_directives(interior)
         .into_iter()
@@ -376,8 +352,8 @@ pub fn block_depends(interior: &str) -> Vec<Depend> {
         .collect()
 }
 
-/// Normalize a [`Directive`] to a [`Depend`]: a `depend` passes through, a
-/// `plug` becomes a plugin dep (`plugin: true`) bound to the statement's name.
+/// Normalize a [`Directive`] to a [`Depend`]: a `plug` becomes a plugin dep
+/// (`plugin: true`).
 pub fn depend_of(dir: Directive) -> Option<Depend> {
     match dir {
         Directive::Depend {
@@ -421,14 +397,14 @@ pub fn depend_of(dir: Directive) -> Option<Depend> {
     }
 }
 
-/// Stage a source's `depend "url"` / `name = plug "url"` directives onto
-/// `resolver` as vendored aliases, resolving each against the lichen-home
-/// source cache (see [`Depend::vendored_dir`]).  A dependency that has not
-/// been fetched by the package manager (`lichen fetch`) is reported as a
-/// preprocess diagnostic naming the missing dir, and one whose `sub` is not a
-/// relative path inside the clone is reported the same way — the compiler
-/// never fetches git sources itself, it only reads what the package manager
-/// put in the cache.
+/// Stage a source's `depend`/`plug` directives on `resolver` as vendored aliases,
+/// resolved against the source cache.
+///
+/// # Invariant
+///
+/// The compiler never fetches git sources: a dependency the package manager has not fetched, or
+/// one whose `sub` is not a relative path inside its clone, is a preprocess diagnostic naming the
+/// missing directory.
 pub fn stage_depends<E, R>(resolver: &mut R, source: &str) -> Vec<PreprocessDiag>
 where
     R: ImportResolver<E>,
@@ -459,21 +435,15 @@ where
     diags
 }
 
-/// Locate the leading `---...---` block in `raw` by a pure byte scan.  Returns
-/// the byte ranges of the interior and the start of the code that follows the
-/// block.  `None` when there is no `---` (no block).
+/// Locate the leading `---...---` block in `raw` by a pure byte scan: the interior
+/// and the code after it.
 ///
-/// **The delimiter is `---`, and the reason is a reserved sigil.** This block
-/// used to be `---...---`; `@` is now the prefix every keyword carries
-/// (`@loop`, and every keyword after it), so the block moved rather than
-/// competing for it. `---` was free because **the language has no comments at
-/// all** — prose lives in this block — so the dashes cannot collide with a
-/// line comment the way a punctuation reuse would.
+/// # Invariant
 ///
-/// A block is found by its first `---`, wherever that is, so a markdown header
-/// may precede it; and the first `---` is the open, the second the close. That
-/// is the same rule the `---` form used, and it carries the same obligation:
-/// `---` is reserved and cannot appear in code or in a string before the block.
+/// `---` is reserved and cannot appear in code or in a string before the block's own opening; the
+/// first `---` is the open and the second the close, so a prose prefix may precede it. It is the
+/// delimiter because the language has no comments at all — prose lives in this block — while `@`
+/// is the prefix every keyword carries.
 fn scan_block(raw: &str) -> Option<(usize, usize, usize)> {
     let at = raw.find("---")?;
     let rest = &raw[at + 3..];
@@ -481,9 +451,8 @@ fn scan_block(raw: &str) -> Option<(usize, usize, usize)> {
     let interior_start = at + 3;
     let interior_end = at + 3 + close;
     let mut code_start = at + 3 + close + 3;
-    // Skip the newline (or CRLF) that terminates the block line, so the code
-    // begins at its first real character (a leading Separator would be
-    // harmless, but this keeps the code text and rendered output tidy).
+    // Skip the newline (or CRLF) terminating the block line, so the code begins at
+    // its first real character.
     let bytes = raw.as_bytes();
     if bytes.get(code_start) == Some(&b'\n') {
         code_start += 1;
@@ -506,9 +475,8 @@ pub fn lichendir() -> PathBuf {
     }
 }
 
-/// The source-cache subdir name, under the lichen home.  The package manager
-/// keeps each fetched git dependency under `sources/<alias>`; the compiler
-/// resolves a file's `depend "url"` directives against this same root.
+/// The source-cache subdir name under the lichen home: the package manager keeps
+/// each fetched dependency there.
 pub const SOURCES_DIR: &str = "sources";
 
 /// The root of the git source cache: the lichen home's `sources/` directory.
@@ -533,8 +501,8 @@ mod tests {
 
     #[test]
     fn a_prose_prefix_before_the_block_is_allowed() {
-        // The block is located by its first `---`, wherever that is, so a
-        // markdown header may precede it — the same rule the `---` form used.
+        // The block is located by its first `---`, wherever that is, so a prose
+        // prefix may precede it.
         assert_eq!(
             scan_block("# header\n---x = \"1\"---\na"),
             Some((12, 19, 23))

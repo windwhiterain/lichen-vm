@@ -1,26 +1,11 @@
-//! Git dependency fetching for the package manager.
+//! Git dependency fetching into the lichen-home source cache.
+//! See docs/notes/package-manager.md.
 //!
-//! Dependencies are declared per-file as `depend "url"` directives in the
-//! `---…---` block.  Each is fetched with the `git` CLI (no libgit2 dependency)
-//! into a **source cache under the lichen home** (`$LICHEN_HOME` or
-//! `~/.lichen`, the same root the compiler's static-module cache uses; see
-//! [`lichen_preprocess::lichendir`]).  A missing source is cloned, an
-//! existing one is `fetch`ed and checked out to the pinned revision, so
-//! `lichen fetch` is idempotent and only pulls what changed.  The source cache
-//! lives in `sources/`, a sibling of the compiler's `artifacts/`/`registry`.
+//! # Invariant
 //!
-//! The cache path and the import alias a dependency resolves to come from
-//! [`Depend`] (see [`Depend::sources_dir`], [`Depend::vendored_dir`],
-//! [`Depend::alias`]) — the same derivation the compiler uses when it stages
-//! the vendored alias, so fetch and run agree by construction.
-//!
-//! Every source-file value git receives — the `depend` URL and the
-//! `rev`/`branch`/`tag` revision — is never read as a git option: the URL is
-//! terminated by `--`, and any value starting with `-` is refused.
-//!
-//! Paths handed to git are normalized to drop the Windows `\\?\` extended-path
-//! prefix that `std::fs::canonicalize` produces — git refuses a `\\?\`
-//! destination on clone ("could not create work tree dir").
+//! Every source-file value git receives — the `depend` URL and the `rev`/`branch`/`tag` revision —
+//! is never read as an option: the URL is terminated by `--`, and any value starting with `-` is
+//! refused (`D2`). Paths drop the Windows `\\?\` prefix `canonicalize` adds, which git refuses.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -37,8 +22,8 @@ pub fn crate_name(dep: &Depend) -> String {
     dep.package.clone().unwrap_or_else(|| alias_of(dep))
 }
 
-/// The right-hand side of a `git clone`/checkout: an explicit `rev`, else
-/// `branch`, else `tag`; `None` leaves the clone at its default HEAD.
+/// What a checkout pins to: `rev`, else `branch`, else `tag`; `None` leaves the
+/// default HEAD.
 pub fn checkout(dep: &Depend) -> Option<&str> {
     dep.rev
         .as_deref()
@@ -46,11 +31,12 @@ pub fn checkout(dep: &Depend) -> Option<&str> {
         .or(dep.tag.as_deref())
 }
 
-/// Refuse a source-file value git would read as an option rather than an
-/// operand: no legitimate URL or revision starts with `-`, and a `-` first byte
-/// turns `--upload-pack=<command>` into command execution or `-f` into a silent
-/// `HEAD` checkout.  `directive` is the `Depend` field the value came from, for
-/// the error message.
+/// Refuse a source-file value git would read as an option rather than an operand.
+///
+/// # Invariant
+///
+/// No legitimate URL or revision starts with `-`, and a leading `-` turns `--upload-pack=<command>`
+/// into command execution or `-f` into a silent `HEAD` checkout (`D2`).
 fn reject_option_like(value: &str, directive: &str) -> Result<(), String> {
     if value.starts_with('-') {
         return Err(format!(
@@ -60,8 +46,8 @@ fn reject_option_like(value: &str, directive: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// A path as git wants it: without the `\\?\` (and `\\?\UNC\`) extended-path
-/// prefix that canonicalized Windows paths carry.
+/// A path as git wants it: without the Windows `\\?\` extended-path prefix that
+/// canonicalizing adds.
 fn git_path(p: &Path) -> String {
     let s = p.to_string_lossy().into_owned();
     if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
@@ -78,18 +64,13 @@ pub fn git_available() -> bool {
     crate::tool_available("git")
 }
 
-/// Clone or update a dependency into the lichen-home source cache and return
-/// its vendored directory.
-///
-/// A fresh source is cloned (under `sources/`) then checked out to the pinned
-/// revision; an existing source is `fetch`ed and the pinned revision is
-/// checked out.
+/// Clone or update a dependency into the source cache and return its vendored
+/// directory.
 pub fn fetch(dep: &Depend) -> Result<PathBuf, String> {
     // Reject an invalid `sub` before any git command or cache write.
     let vendored = dep.vendored_dir()?;
-    // The URL and the revision are source-file text, so neither may reach git
-    // as an option.  `clone --` terminates the URL; this refusal is the layer
-    // that also covers `checkout <rev>` and needs no minimum git version.
+    // The URL and the revision are source-file text: neither may reach git as an
+    // option. This also covers `checkout <rev>`.
     reject_option_like(&dep.url, "url")?;
     let rev = checkout(dep);
     if let Some(rev) = rev {
@@ -127,11 +108,12 @@ pub fn fetch(dep: &Depend) -> Result<PathBuf, String> {
     Ok(vendored)
 }
 
-/// The resolved version (commit hash) of a fetched dependency: the current
-/// `HEAD` of its source-cache clone.  A dependency is fetched (or updated)
-/// before this is called, so the commit is concrete and stable — which is
-/// what the compiler cache keys on, so a dependency's change is a new cache
-/// slot.  The source must have been fetched into the cache.
+/// A fetched dependency's resolved version: the `HEAD` of its source-cache clone.
+///
+/// # Invariant
+///
+/// The dependency is fetched (or updated) before this is called, so the commit is concrete and
+/// stable — the compiler cache keys on it, so a dependency's change is a new slot.
 pub fn resolved_version(dep: &Depend) -> Result<String, String> {
     let dir = dep.sources_dir();
     let dir_git = git_path(&dir);

@@ -1,22 +1,11 @@
 //! The compiler cache under the lichen home.
+//! See docs/notes/package-manager.md.
 //!
-//! A native plugin extends the compiler's vocabulary, so running a program
-//! that uses one needs a compiler built over that plugin set.  Rather than
-//! building into the project, the package manager builds that compiler into a
-//! **cache under the lichen home** (`<lichendir>/compilers/<key>/`), keyed by
-//! the toolchain version, the core repository the composed compiler's core
-//! crates come from, and every plugin's *resolved* version (the commit `HEAD`
-//! in the fetched source cache).  The same plugin set + toolchain + repository
-//! reuses the cached binary; a change to any of them keys a new slot.  The key
-//! is derived once, in `lichen_utils::cache::compiler_slot_key`, because the
-//! compiler that reads the slot derives it too and the two crates cannot see
-//! each other.
+//! # Invariant
 //!
-//! `ensure` builds on a miss and returns the cached binary on a hit, so each
-//! `lichen run`/`build` can gather the project's native plugins and drive the
-//! matching compiler — the plugin-built compiler actually takes effect because
-//! it is the one the package manager spawns (delegation, not in-process
-//! linking, see `crate::main`).
+//! A slot key covers the toolchain version, the core repository, and every plugin's resolved
+//! `HEAD`; the derivation lives once in `lichen_utils::cache::compiler_slot_key`, because the
+//! compiler that reads the slot derives it too and the two crates cannot see each other.
 
 use std::path::PathBuf;
 
@@ -33,30 +22,28 @@ pub fn root() -> PathBuf {
     lichendir().join(COMPILERS_DIR)
 }
 
-/// The compiler name a cached build is produced under (the `name` baked into
-/// the `lichen-compiler-<name>` binary; the cache key already separates plugin
-/// sets, so a fixed name is unambiguous in each slot).
+/// The name a cached compiler is produced under; the slot key separates the
+/// plugin sets, so a fixed name is unambiguous.
 pub const COMPILER_NAME: &str = "project";
 
-/// The language-server name a cached build is produced under (the `name` baked
-/// into the `lichen-language-server-<name>` binary).
+/// The name a cached language server is produced under.
 pub const LSP_NAME: &str = "project";
 
-/// The cache key for a plugin set: a stable hash of the toolchain version, the
-/// core repository the composed compiler's core crates come from, and every
-/// plugin's (name, resolved version), sorted so the same set in any order keys
-/// identically.  Each plugin must already be fetched so its source cache `HEAD`
-/// is resolvable.
+/// The cache key for a plugin set: the toolchain version, the core repository and
+/// each plugin's `(name, version)`.
+///
+/// # Invariant
+///
+/// Each plugin is already fetched, so its resolved `HEAD` is readable; the parts are sorted, so
+/// the same set in any order keys one slot.
 pub fn key(core_repo: &str, plugins: &[Depend]) -> Result<String, String> {
     let mut parts: Vec<String> = Vec::new();
     for dep in plugins {
         let version = git::resolved_version(dep)?;
         parts.push(format!("{}@{version}", dep.name));
     }
-    // The derivation lives in `lichen_utils::cache`, which the language layer
-    // also calls for the shipping slot it reads: the two sides cannot see each
-    // other, so a second derivation here is the defect (see `P1-13` of
-    // `docs/notes/code-audit.md`).
+    // `lichen_utils::cache::compiler_slot_key` derives it for both sides, on
+    // `lichen-utils`'s own version plus `core_repo`.
     Ok(lichen_utils::cache::compiler_slot_key(core_repo, &parts))
 }
 
@@ -83,13 +70,12 @@ fn resolve_lsp(key: &str) -> Option<PathBuf> {
     if bin.is_file() { Some(bin) } else { None }
 }
 
-/// Ensure a compiler built over `plugins` (with `leaves`) is cached and return
-/// its binary path.  On a cache hit it is reused; on a miss it is built (a
-/// `cargo build` of a generated crate) into the lichen-home cache slot.
+/// Ensure a compiler built over `plugins` and `leaves` is cached, returning its path.
 ///
-/// Each plugin must already be fetched (its source-cache `HEAD` is read for
-/// the cache key).  `core_repo` is the repository (or local checkout path) the
-/// core crates and toolchain come from.
+/// # Invariant
+///
+/// Each plugin is already fetched (its source-cache `HEAD` keys the cache), and `core_repo` is
+/// the repository (or local checkout) the core crates and toolchain come from.
 pub fn ensure(core_repo: &str, plugins: &[Depend], leaves: &Leaves) -> Result<PathBuf, String> {
     let key = key(core_repo, plugins).map_err(|e| format!("cannot key the compiler cache: {e}"))?;
     if let Some(bin) = resolve(&key) {
@@ -100,16 +86,13 @@ pub fn ensure(core_repo: &str, plugins: &[Depend], leaves: &Leaves) -> Result<Pa
     Ok(build.bin)
 }
 
-/// Ensure a language server composed over `plugins` (with `leaves`) is cached
-/// and return its binary path.  On a cache hit it is reused; on a miss it is
-/// built (a `cargo build` of a generated bin-only crate) into the same
-/// lichen-home cache slot as the compiler.  Only a **non-empty** plugin set
-/// needs a composed server; the empty set resolves to the shipping
-/// `lichen-language-server` (see [`crate::toolchain::resolve_lsp_for`]).
+/// Ensure a language server composed over `plugins` and `leaves` is cached, returning
+/// its path.
 ///
-/// Each plugin must already be fetched (its source-cache `HEAD` is read for
-/// the cache key).  `core_repo` is the repository (or local checkout path) the
-/// core crates and toolchain come from.
+/// # Invariant
+///
+/// It shares the compiler's slot (`core_repo` and the plugin versions key both); only a non-empty
+/// plugin set needs a composed server, the empty one resolving to the shipping server.
 pub fn ensure_lsp(core_repo: &str, plugins: &[Depend], leaves: &Leaves) -> Result<PathBuf, String> {
     let key = key(core_repo, plugins).map_err(|e| format!("cannot key the LSP cache: {e}"))?;
     if let Some(bin) = resolve_lsp(&key) {

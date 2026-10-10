@@ -1,14 +1,10 @@
-//! The project: a directory of lichen programs whose dependencies are
-//! declared per-file as `name = depend "url"` directives in each `---…---` block.
+//! A project: a directory of lichen programs with per-file `depend` directives.
+//! See docs/notes/package-manager.md.
 //!
-//! A [`Project`] is the unit the package manager operates on.  There is no
-//! project manifest: a file's `depend` directives name its git sources, the
-//! package manager fetches them into the lichen-home source cache
-//! ([`crate::git`]), and **compiles by delegating to the compiler binary** —
-//! it never compiles a program in-process itself.  The compiler resolves each
-//! `depend` against the cache it just populated (see
-//! [`lichen_preprocess::stage_depends`]), so `import "alias"`
-//! resolves into the fetched source.
+//! # Invariant
+//!
+//! No project manifest; the package manager fetches each `depend` into the lichen-home source
+//! cache and delegates compilation to the compiler binary, never in-process.
 
 use std::path::{Path, PathBuf};
 

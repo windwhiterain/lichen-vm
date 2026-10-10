@@ -1,26 +1,11 @@
 //! The lichen package manager CLI.
+//! See docs/notes/package-manager.md.
 //!
-//! `lichen` manages a project whose dependencies are declared per-file as
-//! `name = depend "url"` directives in each `---…---` meta block: it fetches them
-//! (`fetch`), fetches the toolchain binaries (`install`), rebuilds the
-//! compiler for a native plugin (`rebuild-plugin`), and reclaims the device
-//! cache (`clean`).
+//! # Invariant
 //!
-//! The `run` and `build` commands orchestrate the workflow but **delegate the
-//! actual compilation to the compiler binary** — they fetch the dependencies
-//! into the source cache, then spawn `lichen-compiler` (or the plugin-built
-//! `lichen-compiler-<name>`) as a subprocess.  The package manager never
-//! compiles a program in-process, so a compiler rebuilt with a native plugin
-//! is the one that actually runs the program.
-//!
-//! `clean` is the exception: the package manager owns it, opening the shipping
-//! compiler's base cache root (`lichendir()`) and **every** plugin-composed
-//! compiler slot's [`lichen_registry::DeviceRegistry`] and calling `gc()` — no
-//! compiler subprocess, and no language/VM dependency (the registry layer is
-//! type-independent, in `lichen-registry`).
-//!
-//! The command surface is declared with clap (derive); each command's runtime
-//! work stays in the `cmd_*` functions below.
+//! `run` and `build` fetch into the source cache, then spawn a compiler binary — the package
+//! manager never compiles in-process. `clean` is the exception: it opens each cache root's
+//! `DeviceRegistry` and calls `gc()` directly, pulling in no language or VM stack.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -180,9 +165,8 @@ fn collect_depends(target: &Path) -> Vec<Depend> {
     out
 }
 
-/// Fetch every dependency into the lichen-home source cache, printing each
-/// fetched `alias -> dir`.  Returns an error (with the failing alias) on the
-/// first failure, so callers can abort instead of half-fetching.
+/// Fetch each dependency into the source cache, printing `alias -> dir`; a
+/// failure aborts rather than half-fetching.
 fn fetch_depends(depends: &[Depend]) -> Result<(), String> {
     for dep in depends {
         let alias = git::alias_of(dep);
@@ -230,15 +214,12 @@ fn cmd_build(target: PathBuf, repo: &str) -> ExitCode {
     delegate(&target, "build", repo)
 }
 
-/// The shared `run`/`build` workflow: fetch the target's dependencies into the
-/// source cache, select the compiler binary (the plugin-built one, from the
-/// lichen-home compiler cache, when the target imports a native plugin, else
-/// the shipped compiler), and delegate the actual compilation to it as a
-/// subprocess.
+/// The shared `run`/`build` workflow: fetch, select the compiler binary, spawn it.
 ///
-/// `core_repo` is the repository (or local checkout path / git URL) the
-/// compositor's core crates come from; a local (non-default) `core_repo` lets
-/// the generated compositor build offline (see [`plugin::core_patch`]).
+/// # Invariant
+///
+/// `core_repo` is the repository (or local checkout / git URL) the compositor's core crates come
+/// from; a local one lets the generated compositor build offline (`plugin::core_patch`).
 fn delegate(target: &Path, sub: &str, core_repo: &str) -> ExitCode {
     if !target.exists() {
         eprintln!("cannot {sub}: {} does not exist", target.display());
@@ -261,14 +242,12 @@ fn delegate(target: &Path, sub: &str, core_repo: &str) -> ExitCode {
     spawn_compiler(&bin, &[sub, target_str.as_str()])
 }
 
-/// The compiler binary to drive: the plugin-built one (from the lichen-home
-/// compiler cache, built or reused) when the target's deps include a native
-/// plugin (`name = plug …` or `depend … plugin`), else the installed/shipping
-/// `lichen-compiler`.
+/// The compiler binary to drive: plugin-built when the deps include a native plugin,
+/// else the installed/shipping one.
 ///
-/// The plugin set must already be fetched ([`crate::git::fetch`]) so its
-/// resolved version can key the cache.  `core_repo` is the repository (or
-/// local checkout path / git URL) the compositor's core crates come from.
+/// # Invariant
+///
+/// The plugin set is fetched first: its resolved version keys the cache.
 fn select_compiler(depends: &[Depend], core_repo: &str) -> Result<PathBuf, String> {
     let plugins: Vec<Depend> = depends.iter().filter(|dep| dep.plugin).cloned().collect();
     if plugins.is_empty() {
@@ -280,8 +259,7 @@ fn select_compiler(depends: &[Depend], core_repo: &str) -> Result<PathBuf, Strin
     compiler_cache::ensure(core_repo, &plugins, &plugin::Leaves::shipping())
 }
 
-/// The shipped compiler binary: an installed one, else a sibling
-/// `lichen-compiler` next to the running `lichen` (a dev workspace build).
+/// The shipped compiler: an installed one, else a sibling of the running `lichen`.
 fn stock_compiler() -> Option<PathBuf> {
     if let Some(found) = toolchain::find(toolchain::Tool::Compiler) {
         return Some(found);
@@ -313,16 +291,13 @@ fn spawn_compiler(bin: &Path, args: &[&str]) -> ExitCode {
     }
 }
 
-/// `lichen clean`: reclaim every device-cache artifact that is no longer a
-/// live `.lichen` (or `virtual:`) source slot, across the shipping compiler's
-/// base cache root (`lichendir()`) and **every plugin-composed compiler cache
-/// slot** under the lichen home (`compilers/<key>`).
+/// `lichen clean`: reclaim cache artifacts no live source slot claims, in the base
+/// root and every plugin-composed root.
 ///
-/// The package manager owns clean: it opens each cache root's
-/// [`lichen_registry::DeviceRegistry`] and calls `gc()` directly, so it never
-/// needs to spawn (or even install) the compiler binary.  The registry layer
-/// is type-independent (`lichen-registry`), so this pulls no language/VM
-/// stack.
+/// # Invariant
+///
+/// The package manager opens each root's `DeviceRegistry` and calls `gc()` directly, so it
+/// spawns no compiler and pulls in no language or VM stack.
 fn cmd_clean() -> ExitCode {
     let home = lichendir();
     let mut roots: Vec<PathBuf> = vec![home.clone()];
@@ -346,8 +321,7 @@ fn cmd_clean() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `lichen install <tool>`: install a prebuilt toolchain binary into Lichen Home
-/// from the GitHub release tagged with this binary's own commit.
+/// `lichen install <tool>`: install a prebuilt binary into Lichen Home.
 fn cmd_install(tool: &str, repo: &str) -> ExitCode {
     let tools: Vec<toolchain::Tool> = match tool {
         "all" => toolchain::Tool::ALL_PLUGIN_SENSITIVE.to_vec(),
@@ -371,8 +345,7 @@ fn cmd_install(tool: &str, repo: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `lichen update`: update the package manager itself to the repo's latest release,
-/// written to `$LICHEN_HOME/tools/lichen`.
+/// `lichen update`: update the package manager to the repository's latest release.
 fn cmd_update(repo: &str) -> ExitCode {
     match toolchain::update(repo) {
         Ok(None) => {
@@ -395,18 +368,14 @@ fn cmd_update(repo: &str) -> ExitCode {
     }
 }
 
-/// `lichen path <tool>`: print the resolved toolchain binary path, installing it
-/// into Lichen Home first if it is absent.  For `language-server`, an optional
-/// `--project <dir>` gathers the project's native-plugin set and composes a
-/// server over it (built + cached into the plugin-set LSP slot).
+/// `lichen path <tool>`: print the resolved binary path, installing it if absent.
 fn cmd_path(tool: &str, repo: &str, project: Option<PathBuf>) -> ExitCode {
     let Some(t) = toolchain::Tool::from_name(tool) else {
         eprintln!("unknown tool: {tool}");
         return ExitCode::FAILURE;
     };
-    // A plugin-set language server: when a project directory is given, gather its
-    // native plugins and resolve the composed server for them.  The empty plugin
-    // set falls through to the standard shipping resolution below.
+    // A project directory composes a server over its plugins; an empty set
+    // falls through to the shipping resolution below.
     if t == toolchain::Tool::LanguageServer
         && let Some(dir) = project
     {
@@ -415,11 +384,8 @@ fn cmd_path(tool: &str, repo: &str, project: Option<PathBuf>) -> ExitCode {
     resolve_and_print(t, repo)
 }
 
-/// `lichen path language-server --project <dir>`: gather the project's native
-/// plugin set from the `.lichen` sources under `dir`, fetch each plugin, and
-/// resolve the language server for the set.  With plugins, a composed server is
-/// ensured (built + cached into the plugin-set LSP slot) and its path printed;
-/// with no plugins, the standard shipping server resolution/install runs.
+/// `lichen path language-server --project <dir>`: resolve the server for the
+/// project's plugin set.
 fn cmd_path_lsp_project(dir: &Path, repo: &str) -> ExitCode {
     if !dir.exists() {
         eprintln!(
@@ -432,9 +398,8 @@ fn cmd_path_lsp_project(dir: &Path, repo: &str) -> ExitCode {
         .into_iter()
         .filter(|dep| dep.plugin)
         .collect();
-    // Fetch each plugin so its resolved version can key the LSP cache, then
-    // ensure a composed server over the plugin set (or fall through to the
-    // shipping server when there are no native plugins).
+    // Fetch each plugin so its resolved version can key the LSP cache; no plugins
+    // falls through to the shipping server.
     if let Err(e) = fetch_depends(&plugins) {
         eprintln!("{e}");
         return ExitCode::FAILURE;
@@ -492,8 +457,7 @@ fn cmd_rebuild_plugin(target: Option<PathBuf>, repo: &str) -> ExitCode {
     if plugins.is_empty() {
         println!("no native-plugin dependencies; rebuilding over the shipping plugin set");
     }
-    // Fetch the plugins so their resolved versions can key the cache, then
-    // build (or reuse) a plugin-composed compiler into the lichen-home cache.
+    // Fetch the plugins first: their resolved versions key the compiler cache.
     if let Err(e) = fetch_depends(&plugins) {
         eprintln!("{e}");
         return ExitCode::FAILURE;

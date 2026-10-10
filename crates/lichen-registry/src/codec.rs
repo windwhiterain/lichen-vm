@@ -1,31 +1,26 @@
-//! The binary byte codec used by the artifact and registry formats.
+//! The binary byte codec the artifact and registry formats share.
 //!
-//! A little-endian byte reader/writer over a byte buffer, plus the
-//! path/leaf-name helpers the registry and artifact formats share.  This is
-//! the type-independent half of the codec: the per-leaf *value* and *operator*
-//! codec traits ([`liche_lowlevel::codec::ValueCodec`] /
-//! [`OperatorCodec`]) stay in the lowlevel crate (they name `Program` values
-//! and operators).
+//! # Invariant
+//!
+//! Type-independent: the per-leaf value/operator codec traits stay in the lowlevel crate, since
+//! they name `Program` values and operators.
 
 use std::path::{Path, PathBuf};
 
 /// The largest leaf name [`Writer::leaf`] can encode.
 ///
-/// A leaf name is a Rust identifier from lichen-language's vocabulary
-/// composition macro (`stringify!` of a plugin-declared variant name), never
-/// source text, so this is a closed vocabulary: a name longer than the
-/// one-byte length field is a compiler bug, and the writer refuses it rather
-/// than truncating the length — a truncated length leaves the rest of the
-/// name in the stream and every field after it is then read from the wrong
-/// offset.
+/// # Invariant
+///
+/// A leaf name is a Rust identifier from the vocabulary composition macro, never source text, so
+/// this is a closed vocabulary: a longer name is a compiler bug, and truncating the one-byte
+/// length would leave the rest of the name in the stream, desynchronising every field after it.
 pub const MAX_LEAF_NAME_BYTES: usize = u8::MAX as usize;
 
 /// A little-endian byte writer for the artifact format.
 pub struct Writer {
     buf: Vec<u8>,
-    /// The first leaf name that could not be encoded.  Once set the writer is
-    /// poisoned: its buffer is a prefix that must never be handed out, and
-    /// [`Writer::finish`] reports this instead.
+    /// The first leaf name that could not be encoded: once set, the writer's buffer
+    /// is a prefix never to be handed out.
     error: Option<String>,
 }
 
@@ -53,14 +48,14 @@ impl Writer {
         self.u32(bytes.len() as u32);
         self.buf.extend_from_slice(bytes.as_bytes());
     }
-    /// Write a length-prefixed leaf-name discriminator: a one-byte length then
-    /// the name bytes.  The composed `ProgramCodec` tags every value/operator
-    /// leaf with its carry-variant name so the reader knows which leaf codec
-    /// to dispatch to.
+    /// Write a length-prefixed leaf-name discriminator: a one-byte length then the
+    /// name bytes.
     ///
-    /// Refuses a name longer than [`MAX_LEAF_NAME_BYTES`]: the length field
-    /// cannot hold it, and writing the name anyway desynchronises the stream
-    /// (see [`Reader::leaf_name`]).
+    /// # Invariant
+    ///
+    /// The composed `ProgramCodec` tags every value/operator leaf with its carry-variant name; a
+    /// name longer than `MAX_LEAF_NAME_BYTES` is refused, since writing it would desynchronise the
+    /// stream.
     pub fn leaf(&mut self, name: &str) -> Result<(), String> {
         if name.len() > MAX_LEAF_NAME_BYTES {
             let error = format!(
@@ -74,11 +69,12 @@ impl Writer {
         self.bytes(name.as_bytes());
         Ok(())
     }
-    /// The finished buffer, or the first leaf name [`Writer::leaf`] refused.
+    /// The finished buffer, or the first leaf name `Writer::leaf` refused.
     ///
-    /// Prefer this over [`Writer::into_bytes`] wherever a leaf name can have
-    /// been written: it is the only way a refused name reaches the caller as
-    /// an error instead of a buffer that misparses.
+    /// # Invariant
+    ///
+    /// Wherever a leaf name can have been written this is the only way a refusal reaches the
+    /// caller, instead of a buffer that misparses.
     pub fn finish(self) -> Result<Vec<u8>, String> {
         match self.error {
             Some(error) => Err(error),
@@ -87,10 +83,10 @@ impl Writer {
     }
     /// The finished buffer, infallibly.
     ///
-    /// The format's fixed fields are all write-only here — nothing in the
-    /// registry or in the artifact *header* goes through [`Writer::leaf`] — so
-    /// neither can a name be refused.  A writer that did refuse one must be
-    /// finished with [`Writer::finish`] instead.
+    /// # Invariant
+    ///
+    /// Nothing on this path goes through `Writer::leaf` — not the registry, not the artifact
+    /// header — so no name can be refused; a writer that refused one must use `Writer::finish`.
     pub fn into_bytes(self) -> Vec<u8> {
         self.finish()
             .expect("no leaf name is written on this path, so none can be refused")
@@ -142,30 +138,28 @@ impl<'a> Reader<'a> {
         let bytes = self.take(len)?;
         Ok(PathBuf::from(String::from_utf8_lossy(bytes).into_owned()))
     }
-    /// Read a length-prefixed leaf-name discriminator (see [`Writer::leaf`]).
-    /// The returned slice borrows the buffer, not the reader, so the reader
-    /// stays usable for the leaf payload.
+    /// Read a length-prefixed leaf-name discriminator (see `Writer::leaf`); the
+    /// slice borrows the buffer, not the reader.
     pub fn leaf_name(&mut self) -> Result<&'a [u8], String> {
         let len = self.u8()? as usize;
         self.take(len)
     }
     /// How many bytes are still unread in the buffer.
     ///
-    /// This is the bound every length read out of the stream is checked
-    /// against: a list of `n` elements costs at least `n` bytes, so a declared
-    /// count larger than the remaining byte count cannot have been produced by
-    /// any writer.  A reader that preallocates from the count alone lets a
-    /// tiny file request an enormous allocation.
+    /// # Invariant
+    ///
+    /// Every length read out of the stream is checked against this: a list of `n` elements costs at
+    /// least `n` bytes, so a larger declared count was produced by no writer, and preallocating
+    /// from it would let a tiny file request an enormous allocation.
     pub fn remaining(&self) -> usize {
         self.buf.len().saturating_sub(self.pos)
     }
     /// How many bytes have been read so far — the read offset into the buffer.
     ///
-    /// The artifact container uses this to find where its header ends: the body
-    /// digest covers exactly the bytes after the header, and a caller slices
-    /// them out of the original buffer from this offset onward, because
-    /// [`Reader::take`] hands back a borrow of the buffer rather than of the
-    /// reader.
+    /// # Invariant
+    ///
+    /// The artifact container finds its header's end here: the body digest covers exactly the bytes
+    /// after the header, and the caller slices them from the original buffer at this offset.
     pub fn position(&self) -> usize {
         self.pos
     }

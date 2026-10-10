@@ -1,16 +1,15 @@
 //! The generated `Cargo.toml` is a TOML document, not a concatenated string.
 //!
-//! Every value in it comes from a plugin's own manifest or from a `--repo`
-//! argument: the preprocessor's string lexer allows a newline inside a string
-//! (see `lichen-preprocess`'s lexer tests), and a `--repo` may be a Windows
-//! directory path, so a value must never be able to end the string — or the
-//! line — it is written into.
+//! # Invariant
+//!
+//! Every value comes from a plugin's manifest or a `--repo`: a newline is lexed inside a string
+//! (see `lichen-preprocess`'s lexer tests) and a `--repo` may be a Windows path, so no value may
+//! end the string — or the line — it is written into.
 
 use super::{Depend, core_dep_line, server_dep, write_cargo_toml};
 
-/// A plugin whose package name, URL, and pinned revision carry the characters
-/// that used to break the generated manifest: a newline (which the
-/// preprocessor's string lexer permits) and an injected `[package]`/key.
+/// A plugin whose package name, URL, and revision carry a newline and an
+/// injected `[package]` key.
 fn hostile_plugin() -> Depend {
     Depend {
         url: "https://example.com/plug\n[package]".into(),
@@ -24,12 +23,12 @@ fn hostile_plugin() -> Depend {
     }
 }
 
-/// A `--repo` that is a Windows directory path: `\w` is not a TOML escape, so
-/// an unescaped backslash makes the whole document unparseable.
+/// A `--repo` that is a Windows path: `\w` is not a TOML escape, so an unescaped
+/// backslash breaks the whole document.
 const WINDOWS_CORE_REPO: &str = r"C:\work\lichen-vm";
 
-/// The extra dependency line `rebuild` passes for a compiler crate: the CLI
-/// crate the generated `main` calls (`P2-12`).
+/// The extra dependency line `rebuild` passes for a compiler crate: the CLI crate
+/// the generated `main` calls.
 fn compiler_dep() -> String {
     format!("\n{}", core_dep_line(WINDOWS_CORE_REPO, "lichen-compiler"))
 }
@@ -84,9 +83,8 @@ fn the_language_server_dependency_line_parses_too() {
             .is_some(),
         "the language-server dependency must survive:\n{manifest}"
     );
-    // The split's whole point (`P2-12`): a generated language server is an
-    // embedder of the compiler library, not of its CLI, so it must not gain a
-    // dependency on the CLI crate.
+    // A generated language server embeds the compiler library, not its CLI, so it
+    // must not depend on the CLI crate.
     assert!(
         parsed["dependencies"].get("lichen-compiler").is_none(),
         "a generated language server must not depend on the CLI crate:\n{manifest}"

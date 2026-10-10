@@ -1,15 +1,11 @@
-//! The disk device registry: the content-addressed compiled-artifact cache.
+//! The disk device registry: the cross-process compiled-artifact store.
+//! See docs/notes/artifact-cache.md.
 //!
-//! A **file ID** is a compiled unit's identity: an on-disk file's canonical
-//! path, or `virtual:<name>` for an embedded source.  Artifacts are stored at
-//! `artifacts/<sha256(file_id)>.module` and **overwritten** when the file is
-//! recompiled, so a frequently modified file keeps exactly one cache slot.
+//! # Invariant
 //!
-//! This module is **type-independent**: it never names a program value or
-//! operator.  The vocabulary only enters when a caller loads an artifact's
-//! bytes and deserializes them with a codec (see
-//! `lichen-language::persist::load_artifact`, which reads the path from
-//! [`DeviceRegistry::artifact_file`]).
+//! Type-independent: the module never names a program value or operator — the vocabulary enters
+//! only when a caller deserializes the bytes it returns. Artifacts are file-ID keyed and
+//! overwritten on recompile, so a file keeps one slot.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Write as _;
@@ -22,20 +18,14 @@ use crate::module_key::ModuleKey;
 use crate::{Hash, hex, sha256};
 use sha2::Digest as _;
 
-/// The artifact identity of a compiled package: its own source hash followed
-/// by each direct dependency's `(key, identity)` in source order.
+/// The artifact identity of a compiled package: its source hash folded with each
+/// direct dependency's `(key, identity)`.
 ///
-/// The hash is transitive — a change anywhere in the recorded closure changes
-/// every importer's identity — and deterministic, so every process computes the
-/// same identity for the same source chain.
+/// # Invariant
 ///
-/// The dependency's **identity**, not its key, is what makes it transitive: a
-/// recompile reuses the key ([`DeviceRegistry::alloc`]), so the key names the
-/// cache slot, not the content behind it.  Folding the key alone therefore
-/// leaves an importer's identity unchanged when a dependency's *content*
-/// changes, and its frozen artifact — full of cross-module node references
-/// written as `(dependency key, index)` — would then be served against the
-/// dependency's new node layout.
+/// The dependency's *identity*, not its key, is what makes this transitive: a recompile reuses
+/// the key, so folding keys alone would serve a frozen artifact whose cross-module references
+/// name the dependency's old node layout.
 pub fn artifact_hash(source: Hash, deps: &[(ModuleKey, Hash)]) -> Hash {
     use sha2::Sha256;
     let mut hasher = Sha256::new();
@@ -47,23 +37,22 @@ pub fn artifact_hash(source: Hash, deps: &[(ModuleKey, Hash)]) -> Hash {
     hasher.finalize().into()
 }
 
-/// The identity of a dependency this store has no record of: all zeros, which
-/// no real identity equals, so an artifact keyed by it can never be served.
+/// The identity of a dependency this store has no record of: all zeros, which no
+/// real identity equals.
 const UNKNOWN_IDENTITY: Hash = [0; 32];
 
-/// The stable cache key of a file ID: SHA-256 over the identity string.  Used
-/// as the artifact file name, so the same file ID always occupies the same
-/// cache slot — recompiling a modified file overwrites it.
+/// The stable cache key of a file ID: SHA-256 over the identity string, used as
+/// the artifact file name.
 pub fn file_id_hash(file_id: &str) -> Hash {
     sha256(file_id.as_bytes())
 }
 
-/// The prefix of an embedded lichen source's file ID: `virtual:<name>` is a
-/// compiled unit's identity for a source that has no place on disk.
+/// The prefix of an embedded lichen source's file ID: `virtual:<name>` names a unit
+/// with no place on disk.
 const VIRTUAL_PREFIX: &str = "virtual:";
 
 /// The file ID of an embedded lichen source: the identity the device files it
-/// under, and the identity a dependent must record for it (see the module doc).
+/// under and a dependent records.
 pub fn virtual_file_id(name: &str) -> String {
     format!("{VIRTUAL_PREFIX}{name}")
 }
@@ -80,29 +69,31 @@ pub fn virtual_name(file_id: &str) -> Option<&str> {
     file_id.strip_prefix(VIRTUAL_PREFIX)
 }
 
-/// Whether a file ID names a lichen source the cache should keep: an on-disk
-/// `.lichen` file path, or a `virtual:` embedded lichen source.
+/// Whether a file ID names a source the cache keeps: a `.lichen` path or a
+/// `virtual:` embedded source.
 pub fn is_lichen_file_id(file_id: &str) -> bool {
     file_id.ends_with(".lichen") || is_virtual_file_id(file_id)
 }
 
-/// One registered artifact's record: its device key, the hash of the raw
-/// source it was compiled from, the identity that source compiled to (see
-/// [`artifact_hash`]), and its direct dependencies (file ID + key).
+/// One registered artifact's record: its key, source hash, published identity, and
+/// direct dependencies.
 #[derive(Debug, Clone)]
 pub struct Entry {
     pub key: ModuleKey,
     pub source_hash: Hash,
-    /// This artifact's identity, recorded when it was published: the fold of
-    /// its source hash with the identities its dependencies had *then*.  A
-    /// dependency republished since changes this artifact's recomputed
-    /// identity, which is how a stale frozen artifact is rejected.
+    /// This artifact's identity as published: its source hash folded with the
+    /// identities its dependencies had then.
+    ///
+    /// # Invariant
+    ///
+    /// A dependency republished since changes the recomputed identity, which is how a stale frozen
+    /// artifact is rejected.
     pub artifact: Hash,
     pub deps: Vec<(String, ModuleKey)>,
 }
 
-/// The result of a successful incremental verification: the artifact's
-/// identity and its dependency list, ready for loading.
+/// The result of a successful verification: the artifact's identity and its
+/// dependency list.
 #[derive(Debug, Clone)]
 pub struct Verified {
     pub key: ModuleKey,
@@ -110,31 +101,27 @@ pub struct Verified {
     pub deps: Vec<(String, ModuleKey)>,
 }
 
-/// The disk shape of the device registry: the key allocator (with its free
-/// list) and the file-ID → entry table.  A **file ID** is a compiled unit's
-/// identity: an on-disk file's canonical path, or `virtual:<name>` for an
-/// embedded source.  Artifacts are stored at `artifacts/<sha256(file_id)>.module`
-/// and **overwritten** when the file is recompiled, so a frequently modified
-/// file keeps exactly one cache slot.  Index mutations (`alloc`, `publish`,
-/// `gc`, `remove`) go through the cross-process `mkdir` lock and are saved by
-/// rename; an artifact payload ([`Self::store_artifact`]) is written **without**
-/// the lock, made atomic by a unique temp name plus a rename instead.  Reads
-/// ([`Self::verify`]) lock nothing.
+/// The disk store: the key allocator and the file-ID → entry table.
+/// See docs/notes/artifact-cache.md.
+///
+/// # Invariant
+///
+/// Index mutations (`alloc`, `publish`, `gc`, `remove`) hold the cross-process `mkdir` lock and
+/// save by rename; an artifact payload is written without it, atomic by a unique temp name plus a
+/// rename; reads lock nothing.
 pub struct DeviceRegistry {
     dir: PathBuf,
     next_key: u64,
     free: BTreeSet<u64>,
     entries: HashMap<String, Entry>,
     by_key: HashMap<ModuleKey, String>,
-    /// Whether this process already recovered from an unreadable registry file.
-    /// A still-unreadable file after that is the same corruption — a preserve
-    /// or a save that did not take — not a new one, so the state the recovery
-    /// started is kept rather than cleared again (see [`Self::reload`]).
+    /// Whether this process already recovered from an unreadable registry file: a
+    /// repeat is the same corruption.
     registry_recovered: bool,
 }
 
-/// The lock's stale threshold: registry mutations are millisecond-scale, so
-/// a lock older than this is a crashed holder and is broken.
+/// The lock's stale threshold: mutations are millisecond-scale, so an older lock is
+/// a crashed holder.
 const LOCK_STALE: Duration = Duration::from_secs(10);
 const LOCK_WAIT: Duration = Duration::from_secs(30);
 
@@ -157,20 +144,16 @@ impl DeviceRegistry {
     fn registry_path(&self) -> PathBuf {
         self.dir.join("registry")
     }
-    /// The artifact file for a file ID: `artifacts/<sha256(file_id)>.module` —
-    /// stable per file ID, so recompiling a file overwrites its slot.
+    /// The artifact file for a file ID: `artifacts/<sha256(file_id)>.module`, stable
+    /// per file ID.
     fn artifact_path(&self, file_id: &str) -> PathBuf {
         self.dir
             .join("artifacts")
             .join(format!("{}.module", hex(&file_id_hash(file_id))))
     }
 
-    /// Re-read the registry file, replacing the in-memory state.
-    ///
-    /// A missing file is a fresh store.  A file that exists but cannot be
-    /// parsed is never overwritten and never silently dropped — [`Self::recover`]
-    /// preserves it and restarts the key space, and its own doc says why the
-    /// restart cannot collide with the artifacts already on disk.
+    /// Re-read the registry file, replacing the in-memory state: a missing file is a
+    /// fresh store, an unreadable one recovers.
     fn reload(&mut self) {
         let Ok(bytes) = std::fs::read(self.registry_path()) else {
             return;
@@ -187,30 +170,22 @@ impl DeviceRegistry {
                 self.free = state.free;
                 self.entries = state.entries;
             }
-            // Already recovered in this process: the file is still unreadable,
-            // which is the same corruption (a preserve or a save that did not
-            // take), not a new one.  Keeping the restarted state means an
-            // `alloc`/`publish` pair still completes in memory — a second
-            // recovery would leave `publish` without its pending entry.
+            // Already recovered here: the file is still unreadable, the same
+            // corruption, so the restarted state stands.
             Err(_) if self.registry_recovered => {}
             Err(reason) => self.recover(&reason),
         }
     }
 
-    /// Recover an unreadable registry: preserve it and the artifacts it alone
-    /// could still describe, then start a fresh, empty entry table.
+    /// Recover an unreadable registry: preserve it and its artifacts, then start a
+    /// fresh, empty entry table.
     ///
-    /// The key space may only restart once no artifact on disk carries an
-    /// older key, because a [`ModuleKey`] is a recycled index and artifact
-    /// bytes embed it as an absolute reference.  The registry file was the only
-    /// thing that mapped a file ID to a key, so the artifacts are unusable
-    /// without it: they are moved aside with it, and the restarted space then
-    /// has nothing on disk to collide with.  The key frontier (`next_key`) is
-    /// kept and the free list dropped, so the space also hands out no key this
-    /// process already gave to a different module — the lowlevel registry in
-    /// memory may still hold it.  Nothing is deleted: a diagnosis can still
-    /// read the bytes the recovery message names, and the store keeps working
-    /// by recompiling.
+    /// # Invariant
+    ///
+    /// The key space restarts only once no artifact on disk carries an older key: a `ModuleKey` is
+    /// a recycled index embedded in artifact bytes, and the registry file was the only map from
+    /// file ID to key, so the artifacts are moved aside with it. `next_key` is kept and the free
+    /// list dropped, so no key this process handed out is reissued. Nothing is deleted.
     fn recover(&mut self, reason: &str) {
         let registry = quarantine(&self.registry_path());
         let artifacts = quarantine(&self.dir.join("artifacts"));
@@ -228,8 +203,8 @@ impl DeviceRegistry {
         );
     }
 
-    /// Write the registry file (a fixed temp name plus a rename).  Only called
-    /// under the registry lock, which is what makes the fixed name safe.
+    /// Write the registry file, a fixed temp name plus a rename; the registry lock
+    /// makes the fixed name safe.
     fn save(&self) {
         let bytes = serialize_registry(self);
         let tmp = self.dir.join("registry.tmp");
@@ -238,9 +213,8 @@ impl DeviceRegistry {
         }
     }
 
-    /// Run `f` under the cross-process registry lock: re-read the latest
-    /// disk state, mutate, save atomically.  Mutations are millisecond-scale
-    /// and never evaluate, so the lock is held briefly.
+    /// Run `f` under the cross-process registry lock: re-read the latest disk state,
+    /// mutate, save.
     fn with_lock<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
         let guard = RegistryLock::acquire(&self.dir);
         self.reload();
@@ -259,11 +233,8 @@ impl DeviceRegistry {
         &self.dir
     }
 
-    /// Allocate the device key for a file ID: the existing key when the file
-    /// is already registered (recompiles reuse it, overwriting the slot),
-    /// otherwise a reclaimed free key (or the next fresh index) with a pending
-    /// entry written back — visible to every process before the (possibly
-    /// long) compile starts.  Returns `(key, is_new)`.
+    /// Allocate the device key for a file ID, writing a pending entry back so every
+    /// process sees it before the compile.
     pub fn alloc(&mut self, file_id: &str) -> (ModuleKey, bool) {
         self.with_lock(|registry| {
             if let Some(entry) = registry.entries.get(file_id) {
@@ -281,12 +252,8 @@ impl DeviceRegistry {
                 file_id.to_string(),
                 Entry {
                     key,
-                    // A pending entry: `source_hash` all-zero can never
-                    // verify (a real hash is all-zero with probability
-                    // 2^-256), so a crash between allocation and publish
-                    // reads as a miss and recompiles.  `artifact` is zeroed for
-                    // the same reason: until it is published, a dependent must
-                    // not be able to fold in a settled identity.
+                    // A pending entry: an all-zero `source_hash` never verifies, so a
+                    // crash before publish is a miss; `artifact` stays zero.
                     source_hash: [0; 32],
                     artifact: UNKNOWN_IDENTITY,
                     deps: Vec::new(),
@@ -297,30 +264,25 @@ impl DeviceRegistry {
         })
     }
 
-    /// The registry's current on-disk state, read fresh.  Reads lock nothing
-    /// (see the module docs), so this is also what a *write* side must read from
-    /// when it needs to agree with [`Self::verify`].
+    /// The registry's current on-disk state, read fresh: a write side must agree
+    /// with `verify`, which reads from here.
     fn state(&self) -> Option<RegistryState> {
         let bytes = std::fs::read(self.registry_path()).ok()?;
         parse_registry(&bytes).ok()
     }
 
-    /// The identity `file_id`'s artifact will have when it is published from a
-    /// source hashing to `source_hash` with these recorded dependencies: the
-    /// same fold [`Self::publish`] records and [`Self::verify`] recomputes.
+    /// The identity `file_id`'s artifact will have when published, from a source
+    /// hashing to `source_hash`.
     ///
-    /// A caller needs this *before* publishing, because the frozen artifact
-    /// carries the identity in its header and the load rejects a header that
-    /// does not match — so the two sides must be answered from the same place.
-    /// That place is the registry's own record, **not** the caller's in-memory
-    /// view of its dependencies: an embedded dependency (`virtual:<name>`) has
-    /// no source file and need have no record here, and it must contribute the
-    /// all-zero sentinel on *both* sides of the fold or every dependent would
-    /// miss its cache on every single run.
+    /// # Invariant
+    ///
+    /// A caller needs it before publishing, since the frozen artifact carries the identity in its
+    /// header and the load rejects a mismatch. It is answered from the registry's own record, not
+    /// the caller's view: a `virtual:<name>` dependency need have no record and contributes the
+    /// all-zero sentinel on both sides, or every dependent would miss on every run.
     pub fn artifact_identity(&self, source_hash: Hash, deps: &[(String, ModuleKey)]) -> Hash {
-        // An unreadable state is a state with no records, which is exactly what
-        // `reload` recovers to — so this still agrees with what `publish` will
-        // record.
+        // An unreadable state is a state with no records, which is what `reload`
+        // recovers to, so this agrees with `publish`.
         let empty = HashMap::new();
         let entries = &self
             .state()
@@ -328,12 +290,13 @@ impl DeviceRegistry {
         artifact_hash(source_hash, &dep_identities(entries, deps))
     }
 
-    /// Complete an artifact's record after its compile: its raw-source hash
-    /// and its dependency list (file ID + key).  `key` must match the pending
-    /// allocation.  The artifact's identity is folded here, from the
-    /// dependencies' identities as they stand *now* — they are published
-    /// before their importer compiles, so this is the same fold the importer
-    /// computed when it built.
+    /// Complete an artifact's record after its compile: its source hash and its
+    /// dependency list.
+    ///
+    /// # Invariant
+    ///
+    /// `key` matches the pending allocation; the identity is folded from the dependencies'
+    /// identities as they stand now, which is the same fold the importer computed.
     pub fn publish(
         &mut self,
         file_id: &str,
@@ -361,19 +324,12 @@ impl DeviceRegistry {
 
     /// Write an artifact file, overwriting the file ID's slot.
     ///
-    /// Deliberately **not** taken under the registry lock: artifact payloads are
-    /// far larger than the index, and the lock's stale detection assumes
-    /// millisecond-scale holders, so serialising payload writes behind it would
-    /// hold the index lock for the length of a write.  A unique temp name in the
-    /// artifacts directory plus a rename gives each slot the same atomicity;
-    /// `fsync` before the rename closes the crash window, so the slot holds
-    /// either the previous artifact or the complete new one, never a partial
-    /// write or another invocation's bytes.
+    /// # Invariant
     ///
-    /// Every failure here is swallowed on purpose: the cache degrades to a miss
-    /// and a recompile rather than failing the build, so a failed store must
-    /// leave the previous artifact untouched — the destination is never
-    /// truncated, and the temp file is removed.
+    /// Deliberately not under the registry lock (a payload is far larger than the index): a unique
+    /// temp name plus a rename gives the same atomicity, and `fsync` before the rename closes the
+    /// crash window. Every failure is swallowed — the cache degrades to a miss — so a failed store
+    /// leaves the previous artifact untouched.
     pub fn store_artifact(&mut self, file_id: &str, bytes: &[u8]) {
         let path = self.artifact_path(file_id);
         let nonce = ARTIFACT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -387,18 +343,14 @@ impl DeviceRegistry {
         }
     }
 
-    /// Incremental verification: is the artifact for `file_id` up to date
-    /// against its current source?  Walks the *recorded* dependency graph
-    /// (never parses or re-hashes transitively beyond one source hash per
-    /// node): each node compares one source-file hash against its record and
-    /// recurses into its recorded dependencies.  Returns the artifact identity
-    /// when the whole graph verifies.
+    /// Is the artifact for `file_id` up to date against `source`? Walks the recorded
+    /// dependency graph, one hash per node.
     ///
-    /// The returned identity is **recomputed** from the graph as it stands now,
-    /// not read from the record.  That is the whole point: a dependency that was
-    /// republished since this artifact was built folds in its *new* identity, so
-    /// the answer no longer matches the identity written into the frozen
-    /// artifact's header, and the load rejects it and recompiles.
+    /// # Invariant
+    ///
+    /// The returned identity is recomputed from the graph as it stands now, never read from the
+    /// record: a dependency republished since folds in its new identity, the answer stops matching
+    /// the frozen header, and the load rejects it.
     pub fn verify(&self, file_id: &str, source: &[u8]) -> Option<Verified> {
         let state = self.state()?;
         let entry = state.entries.get(file_id)?;
@@ -414,15 +366,13 @@ impl DeviceRegistry {
         })
     }
 
-    /// Clean the device cache: remove every artifact whose file ID is **not**
-    /// a lichen file path (`.lichen`) and **not** a virtual lichen-file path
-    /// (`virtual:`) — i.e. keep exactly the on-disk and embedded lichen
-    /// sources, and prune anything else.  The kept artifacts stay keyed by
-    /// their file ID (a `.lichen` source is kept even when its slot is
-    /// overwritten by a recompile).  A dead entry whose key a surviving entry
-    /// still names is kept as well: reclaiming that key would hand it to a
-    /// different module while an artifact on disk still refers to it by the
-    /// old one.  Returns the number of removed artifacts.
+    /// Clean the cache: remove every artifact whose file ID is neither a `.lichen`
+    /// path nor a `virtual:` one.
+    ///
+    /// # Invariant
+    ///
+    /// A dead entry whose key a surviving entry still names is kept: reclaiming that key would hand
+    /// it to a different module while an artifact on disk still refers to it.
     pub fn gc(&mut self) -> usize {
         self.with_lock(|registry| {
             let dead: Vec<String> = registry
@@ -453,9 +403,8 @@ impl DeviceRegistry {
         })
     }
 
-    /// Explicitly remove the artifact for `file_id` (its entry, artifact file,
-    /// and key) from the device — keeping it when another artifact depends on
-    /// its key.  Returns whether anything was removed.
+    /// Remove `file_id`'s artifact (its entry, file, and key), unless another
+    /// artifact depends on its key.
     pub fn remove(&mut self, file_id: &str) -> bool {
         self.with_lock(|registry| {
             let Some(entry_key) = registry.entries.get(file_id).map(|e| e.key) else {
@@ -479,17 +428,16 @@ impl DeviceRegistry {
 /// the pid separates processes.
 static ARTIFACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Write `bytes` to `path` and flush them to disk, so a crash after this
-/// returns cannot leave a truncated file behind the rename that follows.
+/// Write `bytes` to `path` and flush them to disk, so a crash cannot leave a
+/// truncated file behind the following rename.
 fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut file = std::fs::File::create(path)?;
     file.write_all(bytes)?;
     file.sync_all()
 }
 
-/// Move `path` aside to the first free `<name>.corrupt[.<n>]` sibling,
-/// returning where it went — an earlier quarantine is never overwritten.
-/// `None` when there is nothing at `path` or the move failed.
+/// Move `path` aside to the first free `<name>.corrupt[.<n>]` sibling; an earlier
+/// quarantine is never overwritten.
 fn quarantine(path: &Path) -> Option<PathBuf> {
     if !path.exists() {
         return None;
@@ -505,15 +453,13 @@ fn quarantine(path: &Path) -> Option<PathBuf> {
     std::fs::rename(path, &candidate).ok().map(|()| candidate)
 }
 
-/// The identity each recorded dependency contributes to an importer's fold: its
-/// key, and the identity its own artifact was published with.  A dependency with
-/// no record contributes [`UNKNOWN_IDENTITY`].
+/// The identity each recorded dependency contributes to an importer's fold.
 ///
-/// This is the **one** answer to that question, shared by the three sites that
-/// need it ([`DeviceRegistry::artifact_identity`], [`DeviceRegistry::publish`]
-/// and [`DeviceRegistry::verify`]).  They have to agree: a mismatch is not a
-/// miss but a permanent one, because the importer would then recompile on every
-/// single run.
+/// # Invariant
+///
+/// This is the one answer, shared by `artifact_identity`, `publish` and `verify`; a dependency
+/// with no record contributes `UNKNOWN_IDENTITY`, and a mismatch between the sites would make the
+/// importer recompile on every run.
 fn dep_identities(
     entries: &HashMap<String, Entry>,
     deps: &[(String, ModuleKey)],
@@ -557,12 +503,8 @@ fn verify_entry(
             return None;
         }
         if is_virtual_file_id(dep_file_id) {
-            // An embedded source is compiled into the compiler binary, and the
-            // artifact store is scoped per toolchain/plugin set
-            // (`docs/notes/artifact-cache.md`), so its bytes cannot change under
-            // this cache root: it can never invalidate a dependent.  The device
-            // holds its identity, not its bytes, so there is nothing to read or
-            // hash here.
+            // An embedded source is compiled into the binary and the store is
+            // scoped per plugin set, so its bytes cannot change.
             continue;
         }
         let dep_raw = std::fs::read(dep_file_id).ok()?;
@@ -571,10 +513,13 @@ fn verify_entry(
     Some(())
 }
 
-/// The cross-process registry lock: an exclusive directory (`<dir>/lock`),
-/// created atomically, removed on release.  A lock whose mtime is older than
-/// [`LOCK_STALE`] is a crashed holder and is broken; a wait longer than
-/// [`LOCK_WAIT`] panics rather than hanging a compile.
+/// The cross-process registry lock: an exclusive `<dir>/lock` directory, created
+/// atomically and removed on release.
+///
+/// # Invariant
+///
+/// A lock older than `LOCK_STALE` is a crashed holder and is broken; a wait past `LOCK_WAIT`
+/// panics rather than hanging a compile.
 struct RegistryLock(PathBuf);
 
 impl RegistryLock {
@@ -616,9 +561,7 @@ impl Drop for RegistryLock {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Registry file serialization
-// ---------------------------------------------------------------------------
+// Registry file serialization.
 
 struct RegistryState {
     next_key: u64,
@@ -655,9 +598,8 @@ fn parse_registry(bytes: &[u8]) -> Result<RegistryState, String> {
     if r.take(6)? != b"LCHREG" {
         return Err("bad registry magic".into());
     }
-    // Version 2 recorded no artifact identity, so a version-2 registry cannot
-    // say which content a key held; it reads as unreadable and is recovered as
-    // a fresh registry, which costs one full recompile and nothing else.
+    // A version-2 registry recorded no artifact identity, so it reads as unreadable
+    // and recompiles.
     if r.u32()? != 3 {
         return Err("unknown registry format version".into());
     }

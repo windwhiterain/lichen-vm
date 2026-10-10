@@ -1,7 +1,5 @@
-//! Device-registry recovery: an unreadable registry file, and the artifacts
-//! only it could describe, are preserved on disk, and the key space restarts
-//! over an empty artifact directory so no recycled key can be paired with an
-//! artifact the new registry does not describe.
+//! Device-registry recovery: an unreadable registry and its artifacts are
+//! preserved, and the key space restarts empty.
 
 use std::fs;
 use std::path::PathBuf;
@@ -107,9 +105,8 @@ fn an_unreadable_registry_is_preserved_and_the_key_space_restarts_clean() {
 
 #[test]
 fn a_recovery_does_not_hand_out_a_key_this_process_already_used() {
-    // The quarantine removed every artifact, so the restarted space is free to
-    // start anywhere — but not below a key this process already gave a module
-    // its in-memory registry may still hold.
+    // The quarantine removed every artifact, so the restarted space must still
+    // stay above any key already handed out here.
     let dir = temp_dir("recover-frontier");
     let mut device = DeviceRegistry::open(dir.clone());
     let (first, _) = device.alloc("/x/first.lichen");
@@ -138,8 +135,7 @@ fn a_recovery_does_not_hand_out_a_key_this_process_already_used() {
 fn gc_keeps_a_key_a_surviving_entry_still_names() {
     let dir = temp_dir("gcref");
     let mut device = DeviceRegistry::open(dir.clone());
-    // A dead (non-lichen) entry, as only an out-of-band registration can
-    // produce — the store rejects non-`.lichen` packages at load.
+    // A dead (non-lichen) entry, as only an out-of-band registration produces.
     let (dead_key, _) = device.alloc("junk.txt");
     device.publish("junk.txt", dead_key, [1; 32], Vec::new());
     // A surviving, kept entry that still names the dead entry's key.

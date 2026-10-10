@@ -1,13 +1,11 @@
 //! The preprocessor's block-interior parser.
+//! See docs/notes/preprocessor-isolation.md.
 //!
-//! It turns the interior token stream into a list of [Directive]s.  The
-//! grammar is a set of statements, Separator-separated (blank lines and a
-//! stray trailing separator are tolerated): `name = import "path"` is an
-//! import binding, `name = depend "url"` is a git dependency, and
-//! `name = "value"` is a string metadata entry.  The block
-//! is small and line-oriented, so a simple scan gives precise, uniform
-//! errors (expected X found Y) with a byte offset into the interior, which
-//! the caller turns into a (line, col) diagnostic against the original file.
+//! # Invariant
+//!
+//! The block is small and line-oriented, so a simple scan gives precise, uniform errors (`expected
+//! X found Y`) with a byte offset into the interior, which the caller turns into a `(line, col)`
+//! diagnostic against the original file.
 
 use super::lex::{Token, TokenKind};
 
@@ -18,9 +16,8 @@ pub enum Directive {
     Import { name: String, path: String },
     /// `name = "value"` -- a string metadata entry.
     Metadata { name: String, value: String },
-    /// `name = depend "url" [rev/branch/tag/package/sub = "x"] [plugin]` -- a
-    /// git dependency bound to `name`, fetched by the package manager (not
-    /// resolved here).
+    /// `name = depend "url" [options]` -- a git dependency bound to `name`,
+    /// fetched by the package manager.
     Depend {
         url: String,
         name: String,
@@ -31,10 +28,12 @@ pub enum Directive {
         sub: Option<String>,
         plugin: bool,
     },
-    /// `name = plug "url" [rev/branch/tag/package/sub = "x"]` -- a native
-    /// plugin (a Rust crate) bound to `name`, fetched by the package manager
-    /// and composed into a rebuilt compiler.  A `plug` is always a plugin
-    /// (never a plain import), so it needs no `plugin` flag.
+    /// `name = plug "url" [options]` -- a native plugin (a Rust crate) bound to
+    /// `name`.
+    ///
+    /// # Invariant
+    ///
+    /// A `plug` is always a plugin, never a plain import, so it needs no `plugin` flag.
     Plug {
         url: String,
         name: String,
@@ -50,14 +49,12 @@ pub enum Directive {
 /// interior, of its first token.
 pub type LocatedDirective = (Directive, u32);
 
-/// One parse failure: the byte offset, within the block interior, of the
-/// offending token, and the message saying what was expected instead.
+/// One parse failure: the offset of the offending token in the interior, and the
+/// message saying what was expected.
 pub type ParseFailure = (u32, String);
 
-/// Parse a block-interior token stream.  Returns each directive with the
-/// byte offset (within the interior) of its first token, or the
-/// (byte-offset, message) for the first error (the block is small, so
-/// stopping at the first problem is acceptable).
+/// Parse a block-interior token stream: each directive with its first token's
+/// offset, or the first failure.
 pub fn parse(tokens: &[Token]) -> Result<Vec<LocatedDirective>, Vec<ParseFailure>> {
     let mut out = Vec::new();
     let mut i = 0;
@@ -134,11 +131,8 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<LocatedDirective>, Vec<ParseFailure
     Ok(out)
 }
 
-/// Parse `depend "url" [options...]` starting at `*i` (already past the
-/// `depend` keyword), binding the dependency under `name` (the statement's
-/// left-hand side).  Reads a URL string then zero or more options:
-/// `rev|branch|tag|package|sub = "..."`, `plugin`.  Stops at a Separator (the
-/// outer loop consumes it) or the end of the block.
+/// Parse `depend "url" [options...]` from `*i`, binding it under `name`; stops at
+/// a Separator or the end of the block.
 fn parse_depend(
     tokens: &[Token],
     i: &mut usize,
@@ -210,10 +204,7 @@ fn parse_depend(
     })
 }
 
-/// Parse `plug "url" [options...]` starting at `*i` (already past the `plug`
-/// keyword), binding the plugin under `name` (the statement's left-hand side).
-/// A `plug` is a native plugin: an always-`plugin` dependency, so the option
-/// set is the dependency options minus the `plugin` flag.
+/// Parse `plug "url" [options...]` from `*i`, binding the plugin under `name`.
 fn parse_plugin(
     tokens: &[Token],
     i: &mut usize,

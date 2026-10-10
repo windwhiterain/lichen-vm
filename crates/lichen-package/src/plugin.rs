@@ -1,44 +1,11 @@
 //! Rebuilding the compiler / language server for a native plugin.
+//! See docs/notes/plugin-taxonomy.md.
 //!
-//! A *native plugin* (see [`docs/notes/plugin-taxonomy.md`]) extends the
-//! compiler's value/operator vocabulary at **compile time**: it contributes
-//! enum leaves to the `Program` marker, so a compiler (or the language server)
-//! that knows a plugin must be built with that plugin composed into its
-//! vocabulary.  That is what this module does — "when a native plugin is
-//! imported, rebuild the compiler (or the LSP server)."
+//! # Invariant
 //!
-//! The mechanism: generate a crate under a caller-chosen directory (the package
-//! manager's compiler cache under the lichen home — see
-//! [`crate::compiler_cache`]) that depends on the plugin (from git or a local
-//! path) and composes its vocabulary with the shipping leaves via
-//! `lichen_language::lang_compose_vocabulary!`, then run `cargo build` and
-//! report the produced binary.  [`rebuild`] builds the *compiler*
-//! (`lichen-compiler-<name>`); [`rebuild_lsp`] builds the *language server*
-//! (`lichen-language-server-<name>`), which drives the shared generic
-//! [`lichen_language_server::server::main`] over the composed program.
-//!
-//! **Structure of the generated crate.**  Both the compiler crate and the
-//! language-server crate are generated **bin-only**: `src/main.rs` holds the
-//! composition *and* the `main`.  In a lib+bin package `crate::` refers to the
-//! *binary* crate (which has no composition), so `crate::LangProgram` — used by
-//! both `lichen_compiler::cli::main::<crate::LangProgram>()` (compiler) and
-//! `server::main::<crate::LangProgram>(&cache_root)` (LSP) — would not resolve there.  The
-//! bin-only shape makes the composed `LangProgram` a root item of the binary
-//! crate, so both entry points resolve it.
-//!
-//! **Status:** the *composition* scaffold is real — the generated crate
-//! `cargo check`s once the plugin's leaves exist.  The language layer's
-//! tooling (package store, run, render, CLI, server) is generic over a
-//! program's value/operator vocabularies (see `lichen_language::LangProgramShape`),
-//! so a generated compiler routes through the shared [`lichen_compiler::cli`]
-//! and a generated server through the shared
-//! [`lichen_language_server::server`] over its own composed vocabulary.  The
-//! composition macro emits a **per-leaf [`ProgramCodec`]** (persistent — see
-//! `lichen_language::persist`), so a built compiler writes a real device cache;
-//! a generated compiler scopes that artifact cache to its **own plugin-set
-//! slot** (`<lichendir>/compilers/<key>`, [`write_compiler_main_rs`]), so its
-//! compile artifacts are isolated per vocabulary and never collide with (or
-//! reuse) another plugin set's artifacts for the same file ID.
+//! The generated crate is bin-only: in a lib+bin package `crate::` is the binary crate, which
+//! would carry no composition, so `<crate>::LangProgram` has to be a root item of the binary.
+//! The generated `main` roots the artifact cache at its own plugin-set slot.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -48,9 +15,11 @@ use lichen_preprocess::Depend;
 use crate::git;
 
 /// The value/operator/attr leaves a plugin contributes to the vocabulary.
-/// A plugin's leaves are its own item names, spelled at the call site; the
-/// generator cannot infer them from the crate.  The shipping set is composed
-/// by default.
+///
+/// # Invariant
+///
+/// A plugin's leaves are its own item names, spelled at the call site — the generator cannot
+/// infer them from the crate.
 #[derive(Debug, Clone, Default)]
 pub struct Leaves {
     pub values: Vec<(&'static str, &'static str)>,
@@ -97,9 +66,7 @@ pub struct ServerBuild {
     pub bin: PathBuf,
 }
 
-/// Rebuild the compiler: generate a compiler crate at `dir` (the cache slot)
-/// composing `leaves` with the plugin dependencies (if any), then `cargo build`
-/// it.  Returns the produced binary path.
+/// Build a compiler crate at `dir` (the cache slot) over `leaves` and the plugins.
 pub fn rebuild(
     dir: &Path,
     name: &str,
@@ -117,9 +84,7 @@ pub fn rebuild(
         &format!("lichen-compiler-{name}"),
         core_repo,
         plugins,
-        // The generated compiler drives the shared CLI, which lives in its own
-        // crate (`P2-12`); the language-server build below does not need it, so
-        // the dependency is passed here rather than baked into the base list.
+        // Only the compiler build needs the CLI crate, so it is passed per call.
         &format!("\n{}", core_dep_line(core_repo, "lichen-compiler")),
     )?;
     write_compiler_main_rs(dir, plugins, leaves)?;
@@ -132,12 +97,8 @@ pub fn rebuild(
     })
 }
 
-/// Rebuild the language server: generate a **bin-only** crate at `dir` (the
-/// cache slot) composing `leaves` with the plugin dependencies (if any), then
-/// `cargo build` it.  The generated `main` drives the shared generic server over
-/// the composed program (`lichen_language_server::server::main::<crate::LangProgram>(&cache_root)`),
-/// so the produced server understands the plugin's leaves for
-/// diagnostics / hover / go-to-definition.
+/// Build the language-server crate at `dir` (the cache slot) over `leaves` and the
+/// plugins.
 pub fn rebuild_lsp(
     dir: &Path,
     name: &str,
@@ -172,9 +133,8 @@ pub fn rebuild_lsp(
     })
 }
 
-/// `cargo build --release` the generated crate at `dir`, returning the
-/// command's stderr on failure.  The shared tail of [`rebuild`] and
-/// [`rebuild_lsp`], which differ only in the crate they generate.
+/// `cargo build --release` the generated crate at `dir`, surfacing its stderr on
+/// failure.
 fn cargo_build(dir: &Path) -> Result<(), String> {
     let out = Command::new("cargo")
         .args(["build", "--release"])
@@ -208,12 +168,14 @@ pub fn server_bin_name(name: &str) -> String {
     )
 }
 
-/// The TOML basic-string literal for `value` — the only way a value reaches the
-/// generated manifest.  Every interpolated value (a dependency key, a path, a
-/// URL, a revision, a package name) goes through here, so a `"`, a backslash (a
-/// Windows directory path), or a control character (the preprocessor's string
-/// lexer allows a newline inside a string) can neither end the literal nor
-/// become an escape sequence of its own.
+/// The TOML basic-string literal for `value`: the only way a value reaches the
+/// generated manifest.
+///
+/// # Invariant
+///
+/// Every interpolated value (a dependency key, a path, a URL, a revision, a package name) goes
+/// through here, so a `"`, a backslash, or a control character cannot end the literal or become
+/// an escape of its own.
 fn toml_string(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
@@ -237,11 +199,8 @@ fn toml_string(value: &str) -> String {
     out
 }
 
-/// The `lichen-language-server` dependency line for a generated crate: a local
-/// path dep (in `core_repo/crates/lichen-language-server`) when `core_repo` is a
-/// directory here, else a git dep, both without the default `server` feature
-/// (so the server's own default is not double-enlisted) and with `server`
-/// enabled explicitly.
+/// The `lichen-language-server` dependency line: a path dep for a local
+/// `core_repo`, else a git dep, with `server` on.
 fn server_dep(core_repo: &str) -> String {
     let key = toml_string("lichen-language-server");
     if std::path::Path::new(core_repo).is_dir() {
@@ -258,22 +217,14 @@ fn server_dep(core_repo: &str) -> String {
     }
 }
 
-/// The generated crate's `Cargo.toml`: depends on the language crate, the
-/// plugin dependencies (from a local path when `git` is a path that exists),
-/// core crates from `core_repo` (a local checkout path or a git URL), and any
-/// `extra_deps` — the dependency lines only one of the two generated crates
-/// needs.  The producers are [`server_dep`] (the language server for an LSP
-/// crate) and [`core_dep_line`] with `"lichen-compiler"` (the CLI crate for a
-/// compiler); a crate that is not the kind being generated never gets the
-/// other's.
+/// Write the generated crate's `Cargo.toml` from `core_repo`, the plugins, and
+/// `extra_deps`.
 ///
-/// Every value in the document is written through [`toml_string`], so no value
-/// can end the literal it sits in.
+/// # Invariant
 ///
-/// `package_name` is the generated package's name (e.g.
-/// `lichen-compiler-{name}` or `lichen-language-server-{name}`); the binary
-/// target is auto-detected from `src/main.rs` (bin-only) or both `src/lib.rs`
-/// and `src/main.rs` (lib+bin).
+/// Every value in the document is written through [`toml_string`], so no value can end the
+/// literal it sits in. `extra_deps` holds the dependency lines only one generated crate needs:
+/// [`server_dep`] for the LSP crate, [`core_dep_line`] with `"lichen-compiler"` for the compiler.
 fn write_cargo_toml(
     dir: &Path,
     package_name: &str,
@@ -311,11 +262,8 @@ edition = "2024"
     std::fs::write(dir.join("Cargo.toml"), toml).map_err(|e| format!("write Cargo.toml: {e}"))
 }
 
-/// A single core-crate dependency line for the generated crate: a local path
-/// dep (`{core_repo}/crates/{crate_name}`) when `core_repo` is a directory
-/// here, else a git dep.  A git `core_repo` names the workspace member via
-/// `package = <crate_name>` (the repo root is a virtual workspace, so without
-/// it cargo looks for a package there and fails).
+/// A core-crate dependency line: a path dep for a local `core_repo`, else a git dep
+/// naming the workspace member.
 fn core_dep_line(core_repo: &str, crate_name: &str) -> String {
     let key = toml_string(crate_name);
     if std::path::Path::new(core_repo).is_dir() {
@@ -330,21 +278,14 @@ fn core_dep_line(core_repo: &str, crate_name: &str) -> String {
     }
 }
 
-/// The `[patch]` section emitted when the generated crate is built against a
-/// **non-default** `core_repo`.  A native plugin (e.g. `lichen-std-native`)
-/// declares its own core crates as **git** deps to the canonical repo
-/// ([`crate::toolchain::DEFAULT_REPO`]), so a local `core_repo` (a `file://`
-/// checkout of the same repo) must add a `[patch]` redirecting those deps to
-/// the local source — otherwise cargo reaches out to the canonical repo (the
-/// network dependency the harness is avoiding) and, worse, the plugin's git
-/// core crates would be *distinct* crate instances from the compositor's own
-/// and the plugins' trait impls would not unify (the type-unification break
-/// the workspace root's `[patch]` already solves for the monorepo's build).
+/// The `[patch]` section for a non-default `core_repo`: it redirects the crates a
+/// plugin git-deps to the local source.
 ///
-/// Only the core crates the plugin set links against are patched (the ones a
-/// native plugin git-deps), not every core crate, to keep the redirect minimal.
-/// When `core_repo` is the canonical repo itself, no patch is needed (the
-/// plugin's git deps already point at the same source).
+/// # Invariant
+///
+/// Without it, cargo reaches the canonical repo over the network and the plugin's git core crates
+/// are *distinct instances* from the compositor's, so the plugins' trait impls do not unify. Only
+/// the crates a native plugin git-deps are patched; the canonical repo needs no patch.
 fn core_patch(core_repo: &str) -> String {
     if core_repo == crate::toolchain::DEFAULT_REPO {
         return String::new();
@@ -360,9 +301,8 @@ fn core_patch(core_repo: &str) -> String {
     out
 }
 
-/// The plugin dependency lines for a generated crate: each plugin from a local
-/// path when its `url` is a path that exists, else from git (with the pinned
-/// `rev`/`branch`/`tag` if any).
+/// The plugin dependency lines: a path dep when the plugin's `url` exists here,
+/// else a git dep at the pinned revision.
 fn plugin_lines(plugins: &[Depend]) -> String {
     let mut plugin_lines = String::new();
     for dep in plugins {
@@ -374,13 +314,8 @@ fn plugin_lines(plugins: &[Depend]) -> String {
             let rev = git::checkout(dep)
                 .map(|r| format!(", rev = {}", toml_string(r)))
                 .unwrap_or_default();
-            // A remote plugin is a **git** dep on a crate inside the plugin
-            // repo's workspace (e.g. `lichen-std-native` inside the lichen-vm
-            // monorepo).  `package = <crate_name>` names the workspace member
-            // so cargo finds it in the repo (without it, cargo looks for a
-            // package at the repo root and fails).  The plugin's own core deps
-            // are git too, so cargo resolves the whole subtree from git — a
-            // path dep into the workspace is what it cannot fresh-resolve.
+            // A remote plugin is a git dep on a crate in the plugin's workspace;
+            // `package` names the member so cargo finds it there.
             plugin_lines.push_str(&format!(
                 "{key} = {{ git = {}, package = {}{rev} }}\n",
                 toml_string(&dep.url),
@@ -391,10 +326,7 @@ fn plugin_lines(plugins: &[Depend]) -> String {
     plugin_lines
 }
 
-/// The Rust keywords, so a crate identifier spelled like one is refused: the
-/// generated source uses the identifier as a path segment, where a keyword
-/// cannot parse.  Reserved words are included, because a future edition may
-/// promote one into the strict set.
+/// The Rust keywords, reserved words included, refused as crate identifiers.
 const RUST_KEYWORDS: &[&str] = &[
     "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
     "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in",
@@ -403,12 +335,13 @@ const RUST_KEYWORDS: &[&str] = &[
     "typeof", "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
 ];
 
-/// Whether `value` is spelled in the identifier alphabet the generated source
-/// can carry: an ASCII letter or `_`, then ASCII letters, digits, or `_`.  It
-/// is the alphabet the preprocessor lexes a binding name from
-/// (`[A-Za-z_][A-Za-z0-9_]*`), so a name that reaches generation from a source
-/// file always passes, and a hand-composed `Depend` is refused rather than
-/// written into code or into a string literal.
+/// Whether `value` is spelled in the identifier alphabet the generated source can carry.
+///
+/// # Invariant
+///
+/// `[A-Za-z_][A-Za-z0-9_]*` is the alphabet the preprocessor lexes a binding name from, so a name
+/// from a source file passes and a hand-composed `Depend` is refused rather than written into code
+/// or a string literal.
 fn is_identifier_name(value: &str) -> bool {
     let mut characters = value.chars();
     match characters.next() {
@@ -418,17 +351,13 @@ fn is_identifier_name(value: &str) -> bool {
     characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
-/// The Rust crate identifier for a plugin dependency — its crate name with
-/// hyphens replaced by underscores (the extern-prelude / macro-preferred
-/// spelling).  The Cargo.toml dependency key keeps the hyphenated package
-/// name; the Rust source uses this ident for `<crate>` and derives the leaf
-/// macro name `<crate>_leaves`.
+/// The Rust identifier for a plugin dependency: its crate name with `-` as `_`.
 ///
-/// The value is written into generated **Rust source**, and a `package` is a
-/// source-file string the preprocessor lexes with `"[^"@]*"` (no escapes, may
-/// be multiline), so it is refused unless it is a valid Rust identifier: a
-/// newline or a `}` would close the generated item and inject arbitrary code
-/// that `cargo build` then compiles.
+/// # Invariant
+///
+/// The identifier is written into generated Rust source, and `package` is lexed with `"[^"@]*"` (no
+/// escapes, may be multiline), so it is refused unless it is a valid identifier: a newline or a `}`
+/// would close the generated item and inject code that `cargo build` then compiles.
 fn crate_ident(dep: &Depend) -> Result<String, String> {
     let name = git::crate_name(dep);
     let ident = name.replace('-', "_");
@@ -441,12 +370,8 @@ fn crate_ident(dep: &Depend) -> Result<String, String> {
     Ok(ident)
 }
 
-/// The composed-vocabulary body shared by the compiler (`src/lib.rs`) and the
-/// language server (`src/main.rs`): the `lang_compose_vocabulary!` invocation
-/// over the shipping plus plugin leaves, closing with the composed `LangProgram`
-/// and its `Program` alias.  Both generated crates put this at the crate root,
-/// so `LangProgram` is available as `<crate>::LangProgram` (the bin-only server
-/// crate resolves it from `main`).
+/// The composed-vocabulary body shared by both generated crates: the
+/// `lang_compose_vocabulary!` call and `Program` alias.
 fn compose_source(plugins: &[Depend], leaves: &Leaves) -> Result<String, String> {
     let mut attrs = String::new();
     for (ty, variant) in &leaves.attrs {
@@ -492,24 +417,14 @@ pub type Program = LangProgram;
     ))
 }
 
-/// The `register_native` slots a plugin's embedded wrapper against its private
-/// native-op registry, served as a native virtual package at `<alias>.lichen`.
-/// A plugin-built compiler's `main` hands one `(virtual_path, wrapper, ops)`
-/// tuple per plugin to `lichen_compiler::cli::main_with_native_packages`, so
-/// the plugin's `$sort` (etc.) resolves privately — and the wrapper is compiled
-/// on the same store the program evaluates against, exactly as the reference
-/// `std_native` test's `register_native` plug.
+/// The native-package tuples a generated compiler registers, one per plugin, at
+/// `<alias>.lichen`.
 ///
-/// The wrapper is `<crate_ident>::WRAPPER_SOURCE` and the ops registry is
-/// `<crate_ident>::<crate_ident>_ops!(crate::LangProgram)` — the plugin's
-/// `WRAPPER_SOURCE` const and the `<crate>_ops!` macro, both named from the
-/// plugin's crate ident (the Cargo.toml dependency key with `-`→`_`).
+/// # Invariant
 ///
-/// The alias is written into a Rust **string literal**, so it is refused
-/// unless it is spelled in the same identifier alphabet: `dep.alias()` is the
-/// dependency's binding name, which a source file lexes from exactly that
-/// alphabet (so no escaping is needed), and a hand-composed `Depend` carrying
-/// a `"` cannot end the literal and inject code after it.
+/// The alias is written into a Rust string literal, so it is refused unless it is spelled in the
+/// same identifier alphabet: a hand-composed `Depend` carrying a `"` cannot end the literal and
+/// inject code after it.
 fn native_package_lines(plugins: &[Depend]) -> Result<String, String> {
     let mut out = String::new();
     for dep in plugins {
@@ -527,22 +442,17 @@ fn native_package_lines(plugins: &[Depend]) -> Result<String, String> {
     Ok(out)
 }
 
-/// The generated crate's `src/main.rs` (the **bin-only** compiler): the
-/// composition at the crate root, then the shared [`lichen_compiler::cli`]
-/// over the composed program.  A compiler must be **bin-only** (not lib+bin)
-/// so `<crate>::LangProgram` resolves from the binary crate's root — in a
-/// lib+bin package `crate::` refers to the binary crate, which would have no
-/// composition, so `lichen_compiler::cli::main::<crate::LangProgram>()` would
-/// not compile.
+/// The generated compiler crate's `src/main.rs`: the composition, then the shared
+/// CLI over the composed program.
 ///
-/// The generated `main` runs the compiler with its **own plugin-set cache
-/// slot** as the artifact-cache root, so the compiled-artifact store is scoped
-/// per vocabulary: a rebuilt compiler never shares (or reuses) another plugin
-/// set's artifacts for the same file ID (see `lichen_compiler::cli` and
-/// `docs/notes/artifact-cache.md`).
+/// # Invariant
+///
+/// The crate is bin-only, so `<crate>::LangProgram` is a root item and
+/// `lichen_compiler::cli::main::<crate::LangProgram>()` resolves; in a lib+bin package `crate::`
+/// is the binary crate, which would carry no composition. The cache root is the plugin-set slot.
 fn write_compiler_main_rs(dir: &Path, plugins: &[Depend], leaves: &Leaves) -> Result<(), String> {
-    // The slot directory base name IS the plugin-set cache key — the same key
-    // [compiler_cache::key] used to place this build in `compilers/<key>/`.
+    // The slot directory's base name is the plugin-set cache key that placed it here
+    // (`compiler_cache::key`).
     let key = dir
         .file_name()
         .map(|k| k.to_string_lossy().into_owned())
@@ -574,15 +484,11 @@ fn main() -> std::process::ExitCode {{
     std::fs::write(dir.join("src/main.rs"), lines).map_err(|e| format!("write src/main.rs: {e}"))
 }
 
-/// The generated crate's `src/main.rs` (the **bin-only** language server): the
-/// composition at the crate root, then a `main` that drives the shared generic
-/// server over the composed program.  Because the composition lives in the
-/// binary crate's root, `<crate>::LangProgram` (used by `server::main`) is the
-/// composed program — see the module docs for why a bin-only crate, not
-/// lib+bin.
+/// The generated language-server crate's `src/main.rs`: the composition, then a
+/// `main` driving the shared server.
 fn write_server_main_rs(dir: &Path, plugins: &[Depend], leaves: &Leaves) -> Result<(), String> {
-    // The slot directory base name IS the plugin-set cache key — the same key
-    // [compiler_cache::key] used to place this build in `compilers/<key>/`.
+    // The slot directory's base name is the plugin-set cache key that placed it here
+    // (`compiler_cache::key`).
     let key = dir
         .file_name()
         .map(|k| k.to_string_lossy().into_owned())
@@ -628,10 +534,8 @@ mod generated_main_tests {
         let dir = std::env::temp_dir().join(format!("lichen-plugin-main-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        // A compiler is built into `compilers/<key>/`; its generated `main`
-        // must scope the compile-artifact cache to that slot, not the shared
-        // lichen home (so a different plugin set never reuses this vocabulary's
-        // artifacts for the same file ID).
+        // The generated `main` must root the cache at its own slot: another plugin
+        // set must not reuse these artifacts.
         let key = "deadbeef";
         let slot = dir.join(key);
         std::fs::create_dir_all(slot.join("src")).unwrap();
@@ -658,8 +562,8 @@ mod generated_main_tests {
         let dir = std::env::temp_dir().join(format!("lichen-server-main-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        // The generated LSP `main` must scope the compile-artifact cache to its
-        // own plugin-set slot (like the compiler), not the shared lichen home.
+        // The generated LSP `main` must root the cache at its own plugin-set slot,
+        // not the shared lichen home.
         let key = "cafebabe";
         let slot = dir.join(key);
         std::fs::create_dir_all(slot.join("src")).unwrap();
@@ -682,9 +586,8 @@ mod generated_main_tests {
 
     #[test]
     fn native_package_lines_register_each_plugins_wrapper() {
-        // A generated compiler must register each plugin's native package so its
-        // wrapper (`$sort` etc.) resolves against the plugin's own registry —
-        // the tuple shape `lichen_compiler::cli::main_with_native_packages` expects.
+        // Each plugin's native package must be registered so its wrapper resolves
+        // against the plugin's own registry.
         let dep = Depend {
             url: "file:///C:/work/lichen-vm".into(),
             name: "std".into(),
@@ -713,9 +616,8 @@ mod generated_main_tests {
 
     #[test]
     fn core_patch_redirects_plugin_core_deps_to_a_local_repo() {
-        // A local (non-default) core_repo must add a `[patch]` redirecting the
-        // crates a native plugin git-deps against the canonical repo to the
-        // local source, so the generated compositor resolves offline.
+        // A local `core_repo` must patch a plugin's core deps to the local source,
+        // so the build resolves offline.
         let patch = core_patch("file:///C:/work/lichen-vm");
         assert!(
             patch.contains("[patch.\"https://github.com/windwhiterain/lichen-vm\"]"),

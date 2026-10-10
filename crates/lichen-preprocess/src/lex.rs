@@ -1,18 +1,11 @@
 //! The preprocessor's block-interior lexer.
+//! See docs/notes/preprocessor-isolation.md.
 //!
-//! The `---...---` block at the top of a file holds a set of statements, one
-//! per line (Separator-separated): `name = import "path"` binds an import,
-//! `name = depend "url"` declares a git dependency, and `name = "value"`
-//! defines a string metadata entry.  The block is cut
-//! out of the source by a pure byte scan (see [super]) before this lexer
-//! runs, so it only ever sees the block's interior -- no `---` / `---` and no
-//! `@` at all (`@` is reserved for the block delimiters, so it cannot appear
-//! here or inside a string).
+//! # Invariant
 //!
-//! Like the main lexer, whitespace (space/tab/cr) is trivia and newline,
-//! comma, and semicolon all lex as the same Separator token (uniform
-//! boundary).  A string is `"…"` with no escape characters and may span
-//! newlines; its content is any character except `"` or `@`.
+//! It only ever sees the interior the block scan cut out. Whitespace (space/tab/cr) is trivia, and
+//! newline, comma and semicolon all lex as one Separator token; a string is `"…"` with no escapes,
+//! may span newlines, and takes any character but `"`.
 
 use logos::Logos;
 
@@ -29,22 +22,20 @@ pub enum TokenKind {
     /// The `import` keyword: `name = import "path"`.
     #[token("import")]
     KwImport,
-    /// The `depend` keyword: `name = depend "url" [options...]` — declare a git
-    /// dependency fetched from `url`, bound to `name` (handled by the package
-    /// manager).
+    /// The `depend` keyword: `name = depend "url" [options...]` — a git
+    /// dependency fetched from `url`, bound to `name`.
     #[token("depend")]
     KwDepend,
-    /// The `plug` keyword: `name = plug "url" [options...]` — declare a native
-    /// plugin (a Rust crate) fetched from `url`, bound to `name` (handled by
-    /// the package manager, which rebuilds the compiler over it).
+    /// The `plug` keyword: `name = plug "url" [options...]` — a native plugin
+    /// fetched from `url`, bound to `name`.
     #[token("plug")]
     KwPlug,
     /// A string literal (quotes stripped); no escapes, may be multiline.
     ///
-    /// **Any character but `"`**, where this used to exclude `@` as well because
-    /// `@` delimited the block. It is the keyword prefix now, and a `@` inside a
-    /// string is ordinary content — a `depend`/`plug` URL is exactly where one
-    /// turns up (`https://user@host/repo.git`).
+    /// # Invariant
+    ///
+    /// The content is any character but `"` — `@` is the keyword prefix now, and a `@` inside a
+    /// string is ordinary content (a `depend`/`plug` URL is where one turns up).
     #[regex(r#""[^"]*""#, |lex| {
         let s = lex.slice();
         s[1..s.len() - 1].to_string()
@@ -98,10 +89,8 @@ pub struct Lexed {
     pub errors: Vec<LexError>,
 }
 
-/// Tokenize a block interior (the bytes between `---` and `---`, no
-/// delimiters).  An unexpected character makes the block unusable, so the
-/// first one is reported and lexing stops -- the caller blanks/ignores the
-/// whole preprocessor block.
+/// Tokenize a block interior; an unexpected character makes it unusable, so the
+/// first is reported and lexing stops.
 pub fn tokenize(interior: &str) -> Lexed {
     let mut tokens = Vec::new();
     let mut errors = Vec::new();
@@ -212,9 +201,6 @@ mod tests {
 
     #[test]
     fn an_at_sign_is_ordinary_string_content() {
-        // `@` was the block delimiter and so was excluded from string content.
-        // It is the keyword prefix now, and a `depend` URL is where a `@`
-        // actually turns up.
         let lexed = tokenize("git = \"https://user@host/repo.git\"");
         assert!(lexed.errors.is_empty(), "{:?}", lexed.errors);
         assert_eq!(

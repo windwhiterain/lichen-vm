@@ -1,18 +1,16 @@
 //! The generated `src/main.rs` is Rust source, not a concatenation of a
 //! dependency's strings.
 //!
-//! A plugin's `package` and binding name come from a source file's
-//! `depend`/`plug` declaration (or from a host that composes a [`Depend`]
-//! directly), and the preprocessor's string lexer is `"[^"@]*"` — documented
-//! "no escapes, may be multiline" (`lichen-preprocess`'s lexer) — so a `}` or
-//! a newline in either used to close the generated item and inject Rust source
-//! that `cargo build` then compiles and runs.
+//! # Invariant
+//!
+//! A plugin's `package` and binding name come from a source declaration the preprocessor lexes
+//! with `"[^"@]*"` ("no escapes, may be multiline"), so a `}` or a newline is refused rather than
+//! closing the generated item and injecting Rust that `cargo build` would compile.
 
 use super::{Depend, Leaves, write_compiler_main_rs};
 
-/// A plugin whose `package` carries a closing brace and a newline: as a Rust
-/// crate identifier it closed the generated item and injected a top-level
-/// function beside it.
+/// A plugin whose `package` carries a brace and a newline, which would close the
+/// generated item.
 fn injected_package_plugin() -> Depend {
     Depend {
         url: "https://example.com/plug".into(),
@@ -26,8 +24,8 @@ fn injected_package_plugin() -> Depend {
     }
 }
 
-/// A plugin whose binding name carries a `"`: interpolated into the generated
-/// `"<alias>.lichen"` literal it ended the literal and injected code after it.
+/// A plugin whose binding name carries a `"`, which would end the generated
+/// `"<alias>.lichen"` literal.
 fn injected_alias_plugin() -> Depend {
     Depend {
         name: "evil\"); fn injected_by_an_alias() {} //".into(),

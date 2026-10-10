@@ -1,12 +1,9 @@
 //! The artifact identity fold, pinned directly.
 //!
-//! The fold is what makes the cache transitive, and the difference it turns on
-//! is exactly one thing: a dependency contributes its **identity**, not its key.
-//! A recompile reuses the key (the key names the cache slot, not the content
-//! behind it), so a fold over keys alone leaves an importer's identity unchanged
-//! when a dependency's content changed — and its frozen artifact, full of
-//! cross-module node references written as `(dependency key, index)`, is then
-//! served against the dependency's new node layout.
+//! # Invariant
+//!
+//! A dependency contributes its identity, not its key: a recompile reuses the key, so a fold over
+//! keys alone would leave an importer's identity unchanged when a dependency's content changed.
 
 use lichen_registry::{ModuleKey, artifact_hash, sha256};
 
