@@ -1,23 +1,8 @@
-//! Spike: can waffle lower a two-block loop with a carried value, and does the
-//! result run under this workspace's `wasmi`?
+//! Spike: can `waffle` lower a two-block loop with a carried value under `wasmi`?
 //!
-//! The question this answers is a version one. `wasmi` 2.0.0 validates every
-//! module with `wasmparser` 0.228, and `waffle` 0.3.2 links `wasm-encoder` and
-//! `wasmparser` 0.248. If 0.248's output is not accepted by 0.228's validator,
-//! adopting waffle means changing the runtime too, which is a much larger
-//! decision than changing the emitter.
-//!
-//! The loop built here is `countdown(n) -> n` walked to zero:
-//!
-//! ```text
-//!   head(n): { cond = n == 0; }  if cond { done(count) } else { body(count) }
-//!   body(n): { m = n - 1; }      br head(m)
-//!   done(r): return r
-//! ```
-//!
-//! `head`'s blockparam is the loop-carried value, and `body` passes `m` to it —
-//! which is the whole feature, expressed as a CFG rather than as structured
-//! control flow.
+//! # Invariant
+//! A version question: `wasmi` 2.0.0 validates with `wasmparser` 0.228, `waffle` 0.3.2
+//! links 0.248.
 
 use waffle::{
     BlockTarget, Export, ExportKind, FuncDecl, FunctionBody, Module, Operator, Signature,
@@ -26,18 +11,10 @@ use waffle::{
 
 /// The function this spike compiles, as a `waffle` body.
 ///
-/// **The entry block is the function's signature**: its blockparams *are* the
-/// parameters (`FunctionBody::new` builds them), and they may not be added to. So
-/// a loop needs a block of its own, entered through a preheader — which is the
-/// same shape the kernel IR's `Flow::While` has, where the fragment's entry block
-/// is the preheader and the loop's header is a block inside it.
-///
-/// ```text
-///   entry(n): { }                    br head(n)
-///   head(c):  { cond = c == 0 }      if cond { done(c) } else { body(c) }
-///   body(c):  { one = 1; m = c - 1 } br head(m)
-///   done(r):  return r
-/// ```
+/// # Invariant
+/// The entry block is the function's signature: its blockparams are the parameters and
+/// may not be added to, so a loop needs a block of its own entered through a preheader
+/// — the shape the kernel IR's `Flow::While` has.
 fn countdown_body(module: &Module, sig: Signature) -> FunctionBody {
     let mut body = FunctionBody::new(module, sig);
     let entry = body.entry;
@@ -58,12 +35,9 @@ fn countdown_body(module: &Module, sig: Signature) -> FunctionBody {
         },
     );
 
-    // head: `cond = c == 0` — tested on every entry, including the first.
-    //
-    // **`i64.eqz` produces an `i32`**, which is what a `CondBr` condition is; the
-    // kernel IR's `0`/`1` scalar is an `i64` and needs a narrowing, which is what
-    // `KernelInstr::I32WrapI64` is for. This is the same fact the hand-written
-    // emitter kept getting wrong, stated by the type checker instead.
+    // head: `cond = c == 0`, tested on every entry including the first.
+
+    // `i64.eqz` produces an `i32`: the IR's `0`/`1` scalar needs `I32WrapI64`.
     let c = body.add_blockparam(head, Type::I64);
     let cond = body.add_op(head, Operator::I64Eqz, &[c], &[Type::I32]);
     body.set_terminator(
@@ -134,8 +108,7 @@ fn waffle_lowers_a_loop_and_wasmi_runs_it() {
         .expect("waffle must compile the module");
     std::fs::write("spike-countdown.wasm", &bytes).expect("write the spike's module");
 
-    // **The question of the spike**: `wasmi` 2.0.0 validates with `wasmparser`
-    // 0.228, and this module was produced by `wasm-encoder` 0.248.
+    // The question of the spike: `wasmi` 2.0.0 validates with `wasmparser` 0.228.
     let engine = wasmi::Engine::default();
     let module = wasmi::Module::new(&engine, &bytes[..])
         .expect("the runtime's own validator must accept waffle's output");

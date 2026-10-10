@@ -1,5 +1,4 @@
-//! The cache-root resolver: read a file ID's artifact bytes with the
-//! vocabulary's codec, and name the shipping compiler's cache slot.
+//! The cache-root resolver: artifact bytes by file ID, and the shipping cache slot.
 
 use super::*;
 
@@ -9,9 +8,7 @@ use std::sync::Arc;
 
 use lichen_lowlevel::{LocalNodeId, Program, StaticModule};
 
-/// Load and deserialize a file ID's artifact.  `modules` must hold every
-/// dependency the artifact's refs name (they are loaded first).  The codec
-/// `C` decodes the value/operator variants of the program `P`.
+/// Load and deserialize a file ID's artifact; `modules` must hold its dependencies.
 pub fn load_artifact<P, C>(
     device: &DeviceRegistry,
     file_id: &str,
@@ -28,15 +25,13 @@ where
     deserialize_artifact_with::<P, C>(&bytes, key, hash, modules, C::default())
 }
 
-/// The Lichen Home `compilers/<toolchain-key>` slot for the **shipping**
-/// (empty plugin-set) vocabulary.
+/// The Lichen Home `compilers/<toolchain-key>` slot for the shipping vocabulary.
 ///
-/// The slot key is derived by `lichen_utils::cache::compiler_slot_key`, the one
-/// derivation the package manager also calls (for an empty plugin set it
-/// computes `compiler_cache::key(DEFAULT_REPO, &[])`), so the shipping compiler
-/// and language server cache under the same `compilers/<key>` slot the package
-/// manager installs them into.  Deriving it here a second time from this
-/// crate's own version is exactly what let the two sides drift.
+/// # Invariant
+/// The slot key comes from `lichen_utils::cache::compiler_slot_key`, the one derivation
+/// the package manager also calls, so the shipping compiler, the language server and the
+/// manager install into the same slot; deriving it here from this crate's version is
+/// what let the two sides drift.
 pub fn shipping_cache_root() -> PathBuf {
     let key = lichen_utils::cache::compiler_slot_key(lichen_utils::cache::DEFAULT_CORE_REPO, &[]);
     lichendir().join("compilers").join(key)

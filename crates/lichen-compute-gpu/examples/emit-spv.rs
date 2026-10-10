@@ -1,16 +1,8 @@
 //! Dump a fragment's SPIR-V so it can be validated and read offline.
 //!
-//! The emitter is hand-written, and the reason that is safe is that its output
-//! can be checked without a device: this writes the module to a file for
-//! `spirv-val` (does it satisfy the spec?) and `spirv-dis` (what did it actually
-//! emit?). Neither tool is a dependency of the crate — they are how the emitter
-//! is developed, and how a broken module is diagnosed instead of guessed at.
-//!
-//! ```text
-//! cargo run -p lichen-compute-gpu --example emit-spv
-//! spirv-val --target-env vulkan1.1 target/spirv-dump.spv
-//! spirv-dis target/spirv-dump.spv
-//! ```
+//! # Invariant
+//! The emitter is hand-written, and its output can be checked without a device.
+//! See docs/notes/lichen-compute-gpu.md.
 
 use lichen_kernel_ir::{
     FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles, KernelShape,
@@ -18,15 +10,11 @@ use lichen_kernel_ir::{
 };
 
 fn main() {
-    // `out[i] = in[i] + 1` over `count` indices, the shape a single-input
-    // parallel kernel has: the body's last value is the dummy a compute shader
-    // does not need, so the write is the whole effect.
-    //
-    // The read is three instructions, not two: a `BufferReadCall` takes
-    // `[cfg_pos, idx]` off the stack, so the position and the index both have to
-    // be pushed before it. A body that pushed only the index compiled and ran,
-    // and computed `1 + i` instead of `in[i] + 1` — a wrong answer with nothing
-    // refused anywhere.
+    // `out[i] = in[i] + 1` over `count` indices: the body's last value is the dummy
+    // a compute shader does not need.
+
+    // The read is three instructions, not two, because a `BufferReadCall` takes
+    // `[cfg_pos, idx]`.
     let count_prologue = vec![
         FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // buffer position, in the *output* space
         FlatOp::Read(1),                                        // the index

@@ -67,17 +67,17 @@ fn edge_cases_parse_without_error_nodes() {
         .expect("set lichen grammar");
 
     let cases = [
-        "",                    // empty file
-        "5",                   // bare expression
-        "a = 1\nb = a + 2\nb", // no preprocess block, bindings + expr
-        "f = x => x\nf 1",     // lambda + application
-        "if x then a else b",  // conditional
-        "let a = 1\na",        // restrictive binding
-        "T = struct<.x Int, .y Type>\nT", // named struct fields
-        "t = table{}\nt",      // empty constant table
-        "type_of = x => {t = _; x: t; t}\ntype_of 1", // standard library's type read
-        "v = 5 # 8 ? doc\n{ return v }\nv", // `?` doc annotation + `return` block tail
-        "b = { pub a = 1; a }\nb", // `pub`-marked block statement
+        "",                                           // empty
+        "5",                                          // bare
+        "a = 1\nb = a + 2\nb",                        // b + expr
+        "f = x => x\nf 1",                            // lambda
+        "if x then a else b",                         // cond
+        "let a = 1\na",                               // restrictive
+        "T = struct<.x Int, .y Type>\nT",             // struct
+        "t = table{}\nt",                             // table
+        "type_of = x => {t = _; x: t; t}\ntype_of 1", // read
+        "v = 5 # 8 ? doc\n{ return v }\nv",           // doc
+        "b = { pub a = 1; a }\nb",                    // `pub`-marked block statement
     ];
 
     for (idx, src) in cases.iter().enumerate() {
