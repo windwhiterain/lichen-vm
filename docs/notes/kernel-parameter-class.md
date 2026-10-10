@@ -235,14 +235,27 @@ cannot change the outcome.  At `compute.rs:2392` and its parallel twin
 parameter) the same text is accurate.
 
 The arm above removes the function-arrow instance of the false case, so that
-message is no longer reachable through it — but the conflation itself stands at
+message is no longer reachable through it — but the conflation itself stood at
 `compute.rs:2962`, which also serves the empty case (a traced-but-undecided class
 reads back `Some(Unknown)` rather than `None`) and any other unreadable position.
-The discriminator is available where the refusal is decided: the parameter's type
-cell holds no value ⇒ the cell really is empty ⇒ the existing text; it holds a
-value while the seed or read domain has an undecided position ⇒ a second message
-that names the decoded shape and the position and does **not** ask for an
-annotation.  Splitting it is a separate change.
+
+**Split, and measured on three programs.**  `kernel_domain` now takes the fact it
+cannot read for itself — `DomainStatement` — and the caller asks the parameter's
+own type cell.  The three decoded shapes are why one text could not tell them
+apart:
+
+| program | decoded domain | refusal now |
+|---|---|---|
+| `p : In`, `In = struct<.a Int>` | `Array(Unknown, 2)` | the domain **is a struct type**, and a kernel domain must be a scalar or a tuple of scalars |
+| `y => y + y` (unannotated) | `Array(Array(Unknown, 2), 2)` | `UNDECIDED_DOMAIN` verbatim — annotate the parameter |
+| `p : <Int, _>` | `Tuple([USize, Unknown])` | **position 1** has no class; the position is named and nothing asks for an annotation |
+
+The classifier reads the parameter's type cell: a struct type term
+(`struct_fields_of_slot`) is `Struct`, a tuple type (`low_type_of_slot`) is
+`Shape`, anything else is `Absent`.  The parallel path passes `Shape`, because its
+parameter *is* the declared named struct — a leaf with no class there is a declared
+field whose class the lowering could not read.  Measured unchanged: `p : <Int, Int>`
+compiles and runs, and `compute` is 57 passed / 0 failed / 3 ignored.
 
 ## What this refutes
 
@@ -280,18 +293,19 @@ annotation.  Splitting it is a separate change.
 
 ## What is still open, and who decides
 
-1. **The `UNDECIDED_DOMAIN` text** is still one message for two conditions; the
-   split described above is a change nobody has approved.
-2. **The static type-value reader gap.**  `low_type_of`'s arm is gated on
+1. **The static type-value reader gap.**  `low_type_of`'s arm is gated on
    `AnyNodeId::Dynamic` and `pair_type_half` answers `None` for a static type
    half, so a frozen function type decodes as `Function(Unknown, Unknown)` while
    the same node local decodes fully.  It is a *reader* that cannot name a static
    ref — a different mechanism from Defect I, neither causing the other — and no
    caller is known to need it; widening it is a separate change.
-3. **The empty `.in` group's coverage.**  The capability is measured end to end on
+2. **The empty `.in` group's coverage.**  The capability is measured end to end on
    both backends, and the graph-placeholder hole it exposed is fixed (`7643a37`),
    but no test exercises either one; whether the fillers the tests and examples
    carry should migrate to the empty group is a maintainer's decision.
+3. **The split's own coverage.**  The three refusals above are measured by probe,
+   not by a test: a test for the struct-domain and the open-position texts is a
+   maintainer's decision, like (2).
 4. Two silent compute failures recorded elsewhere are **not** this note's and are
    still open: a bare `plrun` whose body reads a runtime scalar on a device answers
    `none` with no diagnostic, and the `graph` chain's `flat_arity` guard was read
@@ -300,5 +314,6 @@ annotation.  Splitting it is a separate change.
 Resolved here, and no longer open: Defect I's requirement (the type **must** carry
 the signature), where the fill was owed (the static materialize walk's carry rule,
 which needed the frozen node's mirrored fields), whether a class write may cross
-the frozen boundary (**it must**, and it does), and the sibling expectation that
-conflicted with the model (it pinned the defect and is re-pinned above).
+the frozen boundary (**it must**, and it does), the sibling expectation that
+conflicted with the model (it pinned the defect and is re-pinned above), and the
+`UNDECIDED_DOMAIN` conflation (split into the three facts it covered).
