@@ -186,7 +186,7 @@ are read from the parameter's type by `parallel_roles` and travel in the fragmen
 `fragment_digest` like every other field. The author's type lambdas (`KT`/`A`/`P`/`S`) are in
 `compute.lichen`, and the JIT'd signature has to come from the author, because a struct type's
 identity is the occurrence it is written at
-([applied-struct-nominal-id](applied-struct-nominal-id.md)).
+([function-type-merge](function-type-merge.md)).
 
 The two blockers this shape was diagnosed through are **fixed**: a named read resolves through
 the parameter's type by the two-pass `param_path` walk, and a nested static closure keeps its

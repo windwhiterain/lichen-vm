@@ -168,7 +168,7 @@ inbuf = (compute.plrun kg ((compute.A In)(.n 3, .I In(.a 0))) : Out)
 - The kernel's signature is the function's own `f: I -> O` annotation; the JIT
   reads it back through the kernel struct's `.I`/`.O`. Nothing else has to state
   it, because a struct type's identity is the occurrence it is written at
-  ([applied-struct-nominal-id](applied-struct-nominal-id.md)).
+  ([function-type-merge](function-type-merge.md)).
 - The launch's argument is the parameter's scalar leaves in field order, then the
   input group. The shipped `compute.A I = struct<.n Int, .I I>` builds the
   one-scalar shape; a parameter with more scalars is spelled by the author (see

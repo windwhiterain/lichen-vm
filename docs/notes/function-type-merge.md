@@ -1,520 +1,187 @@
-# A function's type is the function, and its signature is two cells
+# Function types, and a struct type's nominal identity
 
-> Status: **landed, measured, and it did not fix what it was aimed at.** It
-> supersedes
-> [function-type-as-function](function-type-as-function.md) for the arrow half:
-> a function type stops being a node of its own, and the arrow stops being a
-> type. The `f : f` half of that note is untouched and still current.
-> The wrapper defect in
-> [compute-buffer-wrapper.md](compute-buffer-wrapper.md) (planned as
-> `compute-type-wrapper.md`) **survives the merge
-> unchanged**, so its cause is somewhere this change never reached — and it is
-> now reproduced in two lines of pure language, with no JIT and no operator
-> involved; see
-> [the same defect in two lines of pure language](#the-same-defect-in-two-lines-of-pure-language-and-what-it-actually-takes).
-> Base: `dev` at `dcf0cf3`; re-merged with `8f45cd9` (the operator seam returns
-> `Option`) and `c21c88d` (`LowValue::Parameterized` deleted) before landing.
-> Branch `feature/function-type-merge`.  The
-> [isomorphism gap](#the-arm-and-the-array-arm-are-one-shape-and-two-codes) was
-> measured **after** landing, on `dev` at `eada614`, so it is a statement about
-> the code as merged rather than about a branch that no longer exists.
+> Status: **current.** A written arrow lowers to a *function*, so a function's
+> type is the function itself (`f : f`) and there is only one representation of a
+> function type. Two functions unify the way two arrays do. A struct type's
+> nominal identity is pinned when the type expression is checked, so one written
+> occurrence is one type however many times it is evaluated.
 >
-> **Corrected at `fb62d96`: the frozen reproduction below no longer diverges from
-> its local control.**  The imported `w.wrap` and the same wrapper in one file both
-> render `Function: raw[?a, ?b] -> raw[?c, ?d] -> ?b`, byte for byte, and
-> `crates/lichen-language/tests/frozen_function_type.rs` passes — so the collapse
-> this note's search was about is gone, and "a written arrow in a frozen module"
-> is not a live cause of anything.  The two parked compute tests fail for two
-> other, measured reasons, and the "What goes" list below is a **plan, not a
-> report**: five of its items are still in the tree.  Both corrections are
-> recorded, with their reproductions, in
-> [the kernel parameter's class](kernel-parameter-class.md).
+> This note absorbs the still-true halves of *"A function's type is the function
+> itself"* (the `f : f` half; its arrow half is what this note replaces) and of
+> *"An applied struct type expression is not a function"*.
+>
+> Points at: `crates/lichen-lowlevel/src/equality.rs` (the function/array unify
+> arm, the function-type recognisers, the signature reads),
+> `crates/lichen-highlevel/src/checker/lambda.rs` (`check_signature`, and the
+> `check_lam` wiring that makes a lambda's type its own pair),
+> `crates/lichen-highlevel/src/checker.rs` (`struct_type_type`,
+> `fresh_nominal_id`, `struct_marker_node`),
+> `crates/lichen-highlevel/src/checker/structs.rs` (the struct type's emitting
+> sites), `crates/lichen-highlevel/src/shape.rs`
+> (`STRUCT_MARKER_ID_SLOT`, `low_type_of`'s function arm),
+> `crates/lichen-render` (the `dom -> cod` spelling), and `crates/lichen-compute`
+> (the kernel signature readers).
+> Open questions are in [What is open](#what-is-open).
 
-## The two representations, and why they are the problem
+## One representation: a written arrow is a function
 
-A function's type is written today as `A -> B` and compiled to an **arrow
-term** `[[dom, cod], [FunctionType, K]]`. A function's *own* type is a
-different thing: the self-referential node `[Function(fid), ↺]`, whose
-signature is not in it at all but in the template (`Function::parameter`'s
-type slot, and `Function::return_type`). Unifying the two went through
-`Program::unify_function_type` — a `Program` hook, so the lowlevel could ask
-its host a type question — and that hook had to answer two questions at once:
-*where is the signature* and *may it be written*. It answered them
-differently for the two kinds of function, so a dynamic function's signature
-bound and a frozen module's did not.
+`A -> B` in a type position compiles to a **real function** — `_: A => _: B`,
+a lambda whose parameter is annotated `A` and whose return is annotated `B`
+(`Checker::check_signature`). The surface syntax is unchanged; only the lowering
+is.
 
-The cost was not the asymmetry itself. It was that the lowlevel, whose job is
-positional unification, had to be told by a host what a function type is.
+A function value's *own* type is then the same thing, and it needs no second
+node: `check_lam` binds the function pair's type cell to the pair itself, so a
+function's type is the self-referential node
 
-## The decision
-
-**There is one representation: a function value, and the two cells it
-already holds.** So:
-
-- **`A -> B` compiles to a function, not to a type.** In a type position an
-  arrow lowers to the term `_: A => _: B` — a real lambda whose parameter is
-  annotated `A` and whose return is annotated `B`. The surface syntax does not
-  change; only the lowering does. A function type is therefore a function, and
-  a function's type is its own two cells — which is why `f : f` is a
-  *consequence* and not a rule anybody maintains.
-- **Two functions unify positionally, like two arrays.** One arm of the
-  value match, recursing into `parameter` and the return side. No hook, no
-  policy, no clone, and no place for a dynamic/static asymmetry to live.
-- **The arm descends into the parameter's whole `[value, type, attrs…]`
-  pair** — the position a signature occupies, not its type slot alone, so the
-  attribute tail comes along. Unifying slot 0 as well is a claim about
-  *values*, and the design here was narrower than the code: the tail-only
-  version was tried, measured identical, and dropped as the strict subset it
-  is. See
-  [slot 0 was tried as an exclusion](#slot-0-was-tried-as-an-exclusion-and-made-no-difference).
-
-`Function::parameter` stays the `[value, type, attrs…]` pair it is: its
-*value* slot is the variable the body binds, and the apply clone walk
-(`function_apply` / `node_apply`) clones it. So the arm names its two
-positions rather than reusing the generic positional match — the shape is
-array-like, the slot choice is function-specific.
-
-## Why: attribute constraints on a signature, not only on a value
-
-Today an arrow carries `dom` and `cod` and nothing else, so writing the same
-cell in both positions gives *"input and output have the same **type**"* and
-nothing more. `attributes.md` records the consequence: attribute flow through
-a function is an explicit non-goal, because there is nowhere on an arrow to
-hang an attribute.
-
-After the merge, a function type's parameter and return are **terms**, so they
-carry attributes, so a signature can constrain the values that flow through it:
-
-```lichen
-?a: Int => ?a: Int
+```text
+[Function(fid), ↺]
 ```
 
-The two `?a`s are one class, so unifying a function against this signature
-makes the argument and the result the same cell — the constraint is *on the
-values*, and it is stated in the *type*.
+— value slot holds the function, type slot points back at itself, exactly the
+shape the universe `K = [Type, ↺]` has. It is recognised as a type by that
+self-cycle (`Module::is_function_type`), and distinguished from the universe by
+slot 0: the universe holds the `Type` marker, a function type holds a
+`LowValue::Function`.
 
-**This capability is argued, not measured.** No test in the workspace writes a
-signature that constrains a value, so the honest claim is that the
-representation now *can* carry the constraint; whether the checker lets a
-source author spell it is the open question at the end of this note. Recording
-that here rather than claiming the section's headline is verified: the
-soundness argument below is the one that got tested, and it passed.
+Two consequences, and both are deliberate:
 
-## The soundness question this forces, and how it is settled
+- **`f : f` is a consequence, not a rule anybody maintains.** The type chain
+  closes at the function the way it closes at `Type`, so a function's type is the
+  function (`overview.md`).
+- **A function's signature is not in the type node.** It lives in the function
+  template: the parameter is the `[value, type, attrs…]` pair the body binds and
+  the apply clone walk clones (`Function::parameter`), and the return side is
+  `Function::return_type` — the return's *type* cell, because `r#return` may be
+  an unevaluated operation node whose own slots do not name the type. An apply
+  clones those two cells fresh per call and never binds the template, so a
+  function's signature is let-polymorphic: `f = x => x` accepts `1` and `1.5` in
+  turn, and an annotation checks a clone rather than specialising the template.
 
-Merging two functions merges their **parameter value cells**. For
-`?a: Int => ?a: Int` against `x => x` that is the point. For two unrelated
-functions of the same type — `f = x => x + 1`, `g = y => y + 1` — unify puts
-`x` and `y` in one class.
+`Type` is the **terminal** of the chain, not a supertype: there is no subtyping
+relation anywhere (`Int` is not `<: Type`; a compound type is typed by its kind),
+and **there is no occurs check** — cyclic types unify (equi-recursive
+behaviour), which is exactly what lets the universe and a recursive struct type
+exist. The self-cycle test below is a *shape* judgement inside that semantics, not
+an occurs check.
 
-A parameter cell is only ever read inside its own body, and both bodies are
-checked, so *in principle* the merge leaks nothing. That is an argument, not a
-measurement, and the `apply-clone-ownership` family is exactly the family where
-"two things became one class and a read came out different" has bitten before
-(`pipeline`'s `an_applied_struct_constructor_keeps_the_occurrence_identity`
-and `a_raw_named_read_yields_the_field_type` are both parked red for it).
+## Functions unify like arrays
 
-So the baseline is the judge, not the argument: the arm lands first, and the
-fourteen parked reds are re-run before anything else. **They are all still
-parked and none moved**, which is the evidence
-[the soundness question](#the-soundness-question-this-forces-and-how-it-is-settled)
-asked for and got: the `apply-clone-ownership` family did not move, so the
-merge is sound as written.
+When both operands are function types, the unifier descends the two signatures
+positionally: the parameter pairs unify against each other — value against value,
+type against type, attribute against attribute — and the two return type cells
+unify. When the elements agree the two classes merge, the same merge two arrays
+with equal elements make. There is **no host hook and no clone**: the old
+`Program` policy had to ask its host *where* a signature lives and *whether it
+may be written*, and it answered differently for a dynamic function and a frozen
+module's, which is how a wrapper in an imported module ended up reported as an
+undecided struct. The lowlevel now needs to be told nothing about function types.
 
-## What the measurement said
+The descent names the parameter **pair**, not its type slot alone, so a signature
+carries attributes and can constrain the *values* that flow through it:
+`?a: Int => ?a: Int` puts one cell in both positions, so unifying a function
+against it makes the argument and the result the same cell. That capability is
+argued from the representation rather than measured: no test in the workspace
+writes a value-constraining signature yet.
 
-Landed on `feature/function-type-merge` as `0c8cda9`, with every clause above
-in force. The mechanical parts all hold. What the measurement refused was the
-premise.
+Three shapes the arm has to tell apart, and the judgement is the invariant rather
+than a roster:
 
-**The wrapper defect is untouched.** The frozen-module reproduction
-below still prints
+- **Both sides a function type** — descend as above.
+- **A *degenerate* function type** — a `[Function(fid), t]` pair whose type slot
+  names a *different* function. It is not a self-cycle, and the positional match
+  is the right answer for it; `examples/closure.lichen` builds one, because a
+  lambda whose body returns a nested closure gives the outer function a return
+  type that *is* the inner function's type node.
+- **A function type against a self-cycle that is not a function type** — the
+  universe `Type`, or a recursive struct type. This is refused, so
+  `(\x. x) : Type` does not check. A *roster* of forbidden names would have to be
+  extended by whoever invents the next cyclic type and would be wrong the day
+  they forgot; the self-cycle test is the invariant.
 
-```
-struct<.I raw[?a, ?b], .O raw[?c, ?d]>
-```
+### Frozen functions
 
-before and after, and `examples/compute_jit.lichen` still types its `6` as
-`raw[Int, raw[?a, ?b]]` rather than `Int`. So the two representations of a
-function's type were never the cause. Whatever leaves `I` and `O` undecided
-across the module boundary is downstream of the arrow, not the arrow itself, and
-the earlier suspicion — `materialize_static_signature` reading a frozen
-template's cells without binding them — was a guess that the merge did not
-confirm.
+A frozen (imported) function's template is immutable, so its signature is
+**copied** into fresh dynamic leaves rather than read in place and bound — the
+frozen original must never move. This is not a corner case: the whole `core`
+prelude is a frozen module ([core-prelude](core-prelude.md)), and its functions'
+type nodes carry a static self-cycle. A read that must not allocate
+(`function_type_signature`, a `&self` query) reads the immutable template
+instead.
 
-**The cost shrank to zero distinct regressions.** The first landing broke nine
-tests. Seven of them were expectations pinning the old representation, and each
-was re-pinned with its reason in the commit that changed it: the two
-`lichen-highlevel --test checker` cases that named the arrow's shape, the
-render case that became `a_written_arrow_is_a_function`, the `pipeline` case
-whose `5` is now typed `Int -> Int`, and `examples/gcd.lichen`, which
-declared `raw 6: ?a` and now declares `6: Int`. `gcd` was `6: ?a` before this
-change and is `6: Int` after, so the polymorphic rendering it used to
-apologise for is gone.
+One logical function can be named through several refs — a dynamic closure and
+the frozen function it was materialized from, or two modules' re-exports of one
+imported binding — so unifying values that name it through different refs must
+merge, not conflict. `Module::function_identity` follows `Function::static_origin`
+(dynamic) and `StaticFunction::origin` (static) to the one real function;
+`function_identity_equal` compares identities. Without it, a re-export unified
+against its original compared two `Function` values and conflicted.
 
-**Two are still red, and they are one defect wearing two coats** — both are the
-wrapper defect, reached without a JIT. They are parked with that reason rather
-than re-pinned, because re-pinning `compute.jit`'s unapplied wrapper to render
-as a collapsed signature would record the defect as intended behaviour. See
-[what is open](#what-is-open).
+## A struct type's nominal identity is pinned per written occurrence
 
-## Three things the implementation had to say that the design above did not
+A struct type expression compiles to the pair `[shape, kind]`, and its nominal
+identity is a marker of the form
 
-**Both sides, or neither.** The arm fires only when *both* operands are
-function types. When only one is, the other is a *degenerate* function type — a
-`[Function(fid), t]` pair whose type slot names a **different** function rather
-than itself — and the positional match is the right answer for it. That shape
-is not invented here: `examples/closure.lichen` builds one, because a lambda whose
-body returns a nested closure gives the outer function a return type that *is*
-the inner function's type node, and the apply clone walk then pairs the two.
-Reading any one-sided case as a conflict broke `closure.lichen` outright; the
-design above assumed only the well-formed case exists, and that assumption was
-wrong.
-
-**The merge is the array's merge.** When the signatures agree the two
-function-type nodes become one class, exactly as two arrays with equal elements
-do. An earlier draft kept them apart on the argument that a self-cycle merged
-with another hands readers whichever `Function` value the merge carried — which
-is true, and was measured as *free* to remove: the red set over the workspace is
-identical with the merge and without it, `closure.lichen` and `gcd` unchanged.
-So the asymmetry bought nothing and cost the arm a second rule.
-
-The hole it leaves is the sub-typing question, stated rather than patched: the
-descent names the signature's two positions and never reads slot 0, so a merged
-class of two function types keeps one carrier and answers with whichever
-function the merge took. Whether two agreeing signatures are *the same type* or
-one a subtype of the other is not decided here, and a class carrying two
-identities is what answering that question positionally before asking it looks
-like. A special case would not have answered it; it would have hidden it behind
-an exception the next change has to unlearn.
-
-**A function type and the universe never merge.** This is the one rule the
-design above listed as *not decided* and the code had to decide, because
-`(\x. x) : Type` is a program that must not check. A function type and the
-universe are both self-cycles, so the obvious positional answer — descend,
-unify the two cells, merge the classes — makes the universe a function.
-
-The judgement is **a self-cycle test, not a name list**: when exactly one side
-is a function type and the other side is a self-cycle that is *not* a function
-type, the unification is refused. That covers the universe and also a
-recursive struct type, without a second rule for each. A *degenerate* function
-type is not a self-cycle — its type slot names a different function — so it
-yields, which is exactly what `closure.lichen` needs. The test is the
-invariant, not the roster; a roster would have to be extended by whoever
-invents the next cyclic type, and would be wrong the day they forgot.
-
-## Slot 0 was tried as an exclusion, and made no difference
-
-The arm unifies the whole `[value, type, attrs…]` pair. The design's own wording
-in [the decision](#the-decision) is narrower — the *tail* from the type slot on
-— and slot 0 is the variable the body binds, the one the apply clone walk
-clones per call, so unifying it merges two functions' **arguments** and is a
-claim about values rather than about types. It looks like the polymorphism
-collapse, and it is: unifying whole pairs is what makes `compute.jit`'s
-parameter render as `raw[Function, <signature>]` instead of the open `?a` — a
-wrapper that stopped being generic.
-
-Tried: unify the tail only, slot 1 onwards, positionally. **Measured identical
-on this workspace** — `compute::wrapper_functions_render_with_named_type_variables`
-still prints `raw[Function, …]`, and nothing else moved. So the arm's own pair
-unify is not what binds that cell; something else does, and it is not in this
-change. The tail version is also strictly less than the pair version, which
-already covers it. So the pair version shipped, and the open question is named
-in [the pure-language reproduction](#the-same-defect-in-two-lines-of-pure-language-and-what-it-actually-takes)
-rather than answered: **whatever binds a wrapper's parameter value cell lives
-outside this arm.**
-
-## The arm and the array arm are one shape and two codes
-
-The decision above says the function arm is the array arm. That is true of the
-*descent* and false of the *code*, and the difference is six things the array
-arm does that the function arm does not:
-
-| | array arm | function arm |
-|---|---|---|
-| arity | checked before descending | not checked |
-| a self-cycle on either side | short-circuits, refuses | descends |
-| `path` | shared with the descent | fresh |
-| `steps` | pushed and popped around the descent | never pushed |
-| early break | the moment a child disagrees | never |
-| reports a failed child | once, at the child | **twice**, child and parent |
-| merges the class | only when *every* child agreed | whenever the recursion returns |
-
-The function arm also decides by comparing `unify_errors.len()` across a fresh
-`self.unify` — a second recursion with its own `AncestorPairs` — where the array
-arm reuses the descent's own state. So the function arm is a **second
-implementation of the same rule**, and it is the weaker one: it has no early
-break, so it pays for the whole tree, and it has no shared `steps`, so a failure
-deep in a signature records a diagnostic without the path that names where.
-
-### What that costs, measured
-
-The same program shape through each arm, on `dev` at `eada614`:
-
-| program | diagnostics |
-|---|---|
-| `[1, "s"] : array<Int, 2>` | 1 — `expected Int, found string` |
-| `[[1, "s"]] : array<array<Int, 2>, 1>` | **1** — the array arm does not re-report at the parent, so two levels deep is still one |
-| `f = x => 1` then `k = (f : Int -> string)` | **2** — the same text, twice |
-| the same signature inside an array | **2** — the outer array adds no third |
-
-**The function arm reports one conflict twice.** The array arm's parent breaks
-and returns without recording; the function arm's parent records whenever
-`unify_errors.len()` grew, so the child records the failure and then the parent
-records it again at the function-type level. Both messages are byte-identical,
-so the reader sees the same line twice and learns nothing the second time. The
-fourth row is what makes it a function-arm defect and not a nesting one: the
-array around it contributed no extra message.
-
-**The second message is also the wrong one to lead with.** The public `unify`
-builds its own `root`, so an error inside a signature names *the inner pair of
-cells* as its root, not the two function types, and starts its `steps` empty.
-`expected Int -> string, found Int -> Int` does not say **which** side of the
-signature conflicted — parameter or return — and the descent path that would say
-it is the one the fresh `steps` threw away. The array arm's version of the same
-message does carry the element path, which is the whole reason `UnifyStep`
-exists.
-
-**Not the same defect as `pipeline`'s parked "mirrored double diagnostic".**
-That one is *two different messages*, one per direction (`expected Int, found
-Float` and `expected Float, found Int`); this is one message repeated. Same
-symptom, different mechanism — do not close either with the other.
-
-### The one difference that is not a deficiency
-
-The other five are what a shared loop gives back for free. This one the shared
-abstraction has to be built around, because it is a fact about the operands
-rather than about the loop:
-
-**the two element sources live in different arenas.** The array arm iterates
-`ArrayItem`s out of `unsafe { pa.items() }` — indices inside a *value* payload.
-The function arm's elements are `Function::parameter` and
-`Function::return_type` — indices into `self.nodes`. And that side is neither
-total nor allocation-free: `materialize_static_signature` **copies** a frozen
-template into fresh dynamic leaves (the frozen original must never bind, and the
-whole prelude is a frozen module), and it answers `None` for a hand-built
-function whose `return_type` was never set. So the shared element source is
-fallible and, for one case, has a side effect:
-
-```rust
-fn elements(&mut self, node: NodeId) -> Option<[AnyNodeId; 2]>
+```text
+wrapper = [ shape, kind ]
+shape   = [ field types… ]
+payload = [ id, names, names_in_order ]
+marker  = [ payload, TypeStruct ]
+kind    = [ marker, K ]
 ```
 
-The array arm answers with its own items, the function arm with
-`function_signature`. Nothing else in the loop changes: `UnifyStep` already
-records an `AnyNodeId`, so the index and `node_or_default` are common to both.
+`Checker::struct_type_type` is the single construction point, and it
+**deep-evaluates the marker** while the occurrence is being checked. That is what
+makes one written occurrence one nominal type:
 
-### The repair
+- The `id` is a `Fresh` node allocated per emitting site
+  (`Checker::fresh_nominal_id`), and the name table is an arena payload. Both are
+  computations the apply clone walk would otherwise copy per application — and a
+  copied table is a *different* table that does not unify with the original. A
+  node the deep pass has proved concrete is referenced in place by every clone,
+  so the identity survives application; the same verdict freezes it
+  non-undecided in a static module, so a persisted artifact bakes the identity
+  rather than re-minting it per materialization.
+- The **field types stay out of the identity** — they ride in the shape. An
+  occurrence applied to two different arguments therefore stays one occurrence
+  (`A Int` and `A Float` share the id and differ because their shapes differ),
+  and two `struct<…>` written apart remain two declarations because each written
+  occurrence allocated its own id. Without the pin, `A In` written twice was two
+  nominal types, which made a type constructor that is not a function: a derived
+  type could not be named by writing its expression, only by binding it once.
 
-Treat the signature as the two-element sequence `[parameter, return_type]` and
-run the array arm's loop over it, parameterising only the element source. That
-buys back the early break, the shared `path`, the `steps` trail and the real
-`root` for free, drops the diagnostic from two to one, and **deletes**
-`unify_function_types` rather than adding a rule to it. It also gives the
-signature descent a cycle guard and a depth bound for the first time — the
-fresh `self.unify` resets `depth` to 0 and the `path` to empty, so the bound
-`MAX_VALUE_DEPTH` and the ancestor-pair check both stop at the signature edge.
-**That gap was not shown to be reachable**: four mutually-recursive programs
-(`f = x => g` / `g = y => f`, with and without a call to force it, plus two
-controls) all terminate normally, so it is recorded as a structural property of
-the split rather than as a defect.
-
-**It is not done here** — it is a refactor of a hot path with two red tests
-already attributed to this feature, and doing both at once would make the reds
-unattributable. It is the first thing the next change should do.
-
-## The same defect in two lines of pure language, and what it actually takes
-
-The wrapper defect was long read as a compute problem, on the reasoning that
-`compute.jit` is a JIT wrapper and the JIT is where the cells go missing. That
-reasoning is wrong. Two files, no operator, no `.native`, no struct:
-
-`b.lichen` — a **frozen** module, because it is imported:
-
-```lichen
-wrap = f => {I = _; f: I -> _; I}
-```
-
-`main.lichen`:
-
-```lichen
----
-w = import "b.lichen"
----
-w.wrap
-```
-
-On this branch `w.wrap` types as
-
-```
-Function: raw[Function, raw[?a, ?b] -> raw[?c, ?d]] -> ?b
-```
-
-and on `dev` at `dcf0cf3` the same program types as
-
-```
-Function: raw[?a, raw[?b, ?c]] -> raw[?d, ?e]] -> ?b
-```
-
-— generic, which is what a wrapper is supposed to be. A written arrow in a
-frozen module's signature collapses the parameter's cell onto the `Function`
-marker and freezes the signature into it. That is the whole of
-`compute.jit`'s symptom, and it is the same defect that leaves `compute_jit`'s
-`6` typed `raw[Int, raw[?a, ?b]]`.
-
-Each candidate ingredient was removed in turn, on this branch, and the collapse
-tracks exactly one of them:
-
-| variant | type | collapses |
-|---|---|---|
-| `wrap = f => f` | `?a -> ?a` | no |
-| arrow annotation `f: I -> _`, no struct, no native operator | `raw[Function, <sig>] -> ?b` | **yes** |
-| the same, but the module is **local** | `raw[?a, ?b] -> …` | no |
-| a struct instantiation, but **no** arrow annotation | `?a -> struct<…>` | no |
-| arrow + a two-field struct | `raw[Function, …>` | yes |
-| arrow + a three-field struct carrying `.native` | `raw[Function, …>` | yes |
-
-**A struct is not required. A native operator is not required. A JIT is not
-required.** The necessary and sufficient ingredient is **a written arrow
-annotation in a frozen module**. The compute wrapper is that, plus a struct and
-an operator, which is why it looked like a compute problem.
-
-**What is still unknown is the mechanism.** Nothing in this change binds that
-cell, and [the slot-0 experiment](#slot-0-was-tried-as-an-exclusion-and-made-no-difference)
-ruled out the function arm's own pair unify as the cause. So the next person on
-this has a two-line reproduction and a narrowed search space, and that is a
-better position than the one this note started from.
-
-**Narrowed further: it is materialization, not the annotation.** The suspicion
-above (a frozen template's cells being read without being bound) was never
-confirmed; it is now measured from the other side — *re-annotating the wrapper
-does not remove the collapse, and the same spelling does not collapse at all
-when the module is local*:
-
-| `b.lichen`'s `wrap` | module | `w.wrap` types as |
-|---|---|---|
-| `f => {I = _; f: I -> _; I}` | local (same file) | `Function: raw[?a, ?b] -> raw[?c, ?d] -> ?b` |
-| the same, imported | **frozen** | `Function: raw[Function, raw[?a, ?b] -> raw[?c, ?d]] -> ?b` |
-| `(f: _ -> _) => f`, imported | frozen | `Function: raw[Function, …] -> raw[Function, …]` — both sides |
-
-So the arrow itself is not the difference — the *copy* is: the printed form is
-exactly the pair's two items dumped (a function value, then the signature), where
-the module that built the node prints the bare arrow, and the only thing between
-them is `materialize_static_signature` copying the frozen signature pair into
-fresh dynamic leaves (`static_module.rs`). That also says what to try next: make
-the copy **reconstitute** the pair's second item as the pair (the `[func, ↺]`
-self-cycle) instead of carrying the frozen signature as its own item, so the
-materialized signature reads as a function type the way the original does.
-
-**And a tighter annotation leaks.** Annotating the wrapper's kernel function with
-the very cells the returned kernel struct carries (`f: I -> O`, then
-`(K _)(.native …, .I I, .O O)`) merges the arrow's cells with the *callee's*
-parameter cells, which decides a template's `cfg` before any apply: measured with
-the `compute.lichen` wrappers re-annotated, `graph_structure`'s
-`a_parameter_read_is_a_bare_cell_and_pins_an_open_tuple_type` and
-`a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied`
-both go red (they pin "undecided until the apply"), while the seven target reds
-below do **not** move. That is
-[the soundness question](#the-soundness-question-this-forces-and-how-it-is-settled)
-answered by measurement rather than by the argument it was left with: the merge's
-parameter-value-cell reach is observable from the caller's annotation, so a
-signature-carrying wrapper cannot state more than the fresh `_ -> _` it states
-today without also stating it for the body it wraps.
-
-## What goes
-
-- `Program::unify_function_type`, `FunctionTypeUnify` and its three answers,
-  and the hook call in `equality.rs`.
-- `Module::is_function_type_node` and the self-referential node it recognised.
-- `shape`'s `is_arrow_type_any`, `is_function_type_node_any`,
-  `is_function_type_any`, `is_function_type`, `function_type_parts_any`,
-  `function_type_parts`, `unify_function_type`, `signature_pair`,
-  `signature_cells`, `clone_signature_dynamic`.
-- `Module::clone_signature` and `Program::materialize_static_signature`; the
-  latter is rewritten, not deleted, and now returns the parameter pair and the
-  return type.
-- `low_type_of`'s function arm, which decoded the arrow's shape.
-- The clone-on-unify that `function-type-as-function` introduced: the
-  `gcd` doc paragraph that described it as a rule is rewritten, because the
-  rule is gone by construction now.
-
-## What stays behind, dead
-
-The arrow **rendering** machinery is not removed and is now unreachable: the
-`TypeFunction` marker and its registry entry, the `arrows` set, `Ctx::arrow`,
-`arrow_parts`, and the kind marker. Nothing builds `[FunctionType, Type]` any
-more, so these are kept only so the diff stays reviewable. They are the obvious
-next deletion, and they are safe because the marker is what
-`compute-runtime-scalars.md` §5 quotes in a historical error message — removing
-it changes that quote, so it wants its own commit and its own note edit.
+The identity matters wherever a type is built by one layer and named by another —
+a kernel's JIT-built input type and the host's argument type are two evaluations
+of one expression applied to one argument, and they must unify.
 
 ## What is open
 
-- **What binds a wrapper's parameter value cell.** The two-line reproduction
-  above, minus the function arm. This is the blocker for the compute wrapper
-  work, and it is not in this change.
-- **Whether the function arm should be the array arm.** The obstacle question
-  is settled: **one difference is mechanical** — the element source lives in
-  another arena and is fallible — and the other five are what a shared loop pays
-  back rather than what it costs.  A conflict inside a signature is **measured**
-  to report twice, where the array arm reports once even two levels deep; see
-  [what that costs, measured](#what-that-costs-measured).  The repair is a
-  deletion, not a design question.
-- **Two reds, parked.**
-  `compute::wrapper_functions_render_with_named_type_variables` — the *unapplied*
-  `compute.jit` no longer renders as a generic wrapper, because its parameter
-  collapsed to `raw[Function, <signature>]`. The test's own comment says "the
-  wrapper itself stays generic", so re-pinning it would assert the defect.
-  `compute::a_float_domain_is_permitted_at_every_position_the_walk_reaches` —
-  a domain containing `Int -> Float` is now refused earlier than the test
-  expects, and the message it produces says "annotate the parameter" about a
-  parameter that is already annotated, which is a second bug in its own right.
-  Both un-park by deleting one `#[ignore]` each once the mechanism above is
-  found; neither should be re-pinned before then.
+- **The frozen written-arrow reduction is closed.** A written arrow annotation in
+  a frozen module used to collapse the parameter's cell onto the `Function`
+  marker; the imported wrapper and its local control now render identically and
+  `crates/lichen-language/tests/frozen_function_type.rs` passes. A written arrow
+  in a frozen module is therefore *not* a live cause of anything, and the two
+  compute tests the old reading parked now run. What remains of that family is
+  measured, with its reproductions, in
+  [the kernel parameter's class](kernel-parameter-class.md).
+- **The function arm is a second implementation of the array rule.** It descends
+  with a fresh `path` and `steps`, has no early break, and records a failed child
+  **twice** — once at the child and once at the function-type level — so the same
+  message is printed twice with no descent path to say which side of the
+  signature conflicted. Measured: a signature conflict reports two identical
+  messages where the array arm reports one even two levels deep. The repair is to
+  treat the signature as the two-element sequence `[parameter, return_type]` and
+  run the array loop over it, parameterising only the element source — whose
+  function side is fallible (materialization copies a frozen template, and a
+  hand-built function may have no readable return type). It is a refactor of a
+  hot path and is not done here.
+- **The sub-typing question.** When two signatures agree their two function types
+  merge into one class, and a class keeps **one** carrier, so it answers with
+  whichever function the merge took. Whether two agreeing signatures are *the
+  same type* or one a subtype of the other is not decided; a class carrying two
+  identities is what answering that positionally before asking it looks like.
+  Left deliberately to the next change rather than patched with a special case.
 - **`?a: Int => ?a: Int` as source syntax.** Whether the type language spells a
-  signature with attributes, and how a written `?a` in the two positions is
-  made one cell, is the next question the merge opens — and the reason the
-  merge is worth doing first.
-- **The sub-typing question** in
-  [the merge is the array's merge](#three-things-the-implementation-had-to-say-that-the-design-above-did-not):
-  whether two agreeing signatures are the same type. Deliberately left to the
-  next change rather than answered with a special case.
-
-## Order of work, as it went
-
-1. lowlevel: the `Function` arm; delete the hook, the enum, the call site and
-   `is_function_type_node`. — `0c8cda9`
-2. Measure before anything else. The special case that kept two function types
-   apart is *free to remove*: the red set is byte-identical either way. — `7b4afee`
-3. highlevel: delete the recognizers and the policy; `lambda.rs`'s
-   function-ness gate recurses into the two cells directly; a type-position `->`
-   compiles a lambda. — `0c8cda9`
-4. Re-pin the five expectations that named the old representation, each with its
-   reason. — `b8d7daf`, `3220fb0`, `7819381`
-5. Merge `dev`, then fix the single-sided self-cycle hole the merge exposed
-   (`(\x. x) : Type` must fail). — `cf21c76`, `b8d7daf`
-6. Merge `dev` twice more, under `c21c88d` which deleted
-   `LowValue::Parameterized`.  The two changes touched the same four files for
-   the same reason — each was one way of writing *this node is not decided
-   yet* — so the conflicts were import lists and one test that asserts the
-   opposite thing about the same cell.  That test is the interesting one: `dev`
-   says a frozen template's parameter type **must not be guessed** and this
-   branch says the annotation **does** reach it.  Both cannot hold.  This
-   branch's claim is the one kept, because the note's whole argument is that
-   a signature is a pair the unifier descends into, and a template whose
-   parameter type nothing can reach is the failure mode `materialize_static_
-   signature` exists to fix.
-6. **Verify, in this order — the first is the whole point, and it did not
-   happen:**
-   - the frozen-module reproduction goes from
-     `struct<.I raw[?a, ?b], .O raw[?c, ?d]>` to `struct<.I Type, .O Type>` —
-     **it did not; it printed the same before and after.** The reduced form of
-     the same question is
-     [two lines of pure language](#the-same-defect-in-two-lines-of-pure-language-and-what-it-actually-takes),
-     which is where the next attempt should start.
-   - `examples/compute_jit.lichen`: `raw 6: raw[Int, raw[?a, ?b]]` → `6: Int`,
-     then drop it from `tests/examples.rs`'s `WORK_IN_PROGRESS` — **still
-     `raw[Int, raw[?a, ?b]]`; the name stays in the list.**
-   - the fourteen parked reds, against the same list — **none moved.**
-   - `gcd` stays `6: Int` — **it is `6: Int`; it was `6: ?a` before this
-     change.**
+  signature with attributes, and how a written `?a` in the two positions is made
+  one cell, is argued from the representation but not measured — no workspace
+  test writes one.
