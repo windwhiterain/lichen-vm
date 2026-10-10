@@ -2226,20 +2226,17 @@ compute.read ((compute.Read _)(.from out.z, .at 0))
 /// A dynamic reduction on both backends at three lengths: the triangle numbers.
 ///
 /// # Invariant
-/// Lane `i` reads its trip count from `data[i]`, so the last lane's count is the
-/// buffer's length; the seed fills `data[i] = i + 1`, and the answer is the
-/// hand-derived `length(length + 1)/2` — `10`, `28` and `180_300` at four, seven
-/// and six hundred elements. **Both arm orders are run**: the loop's exit
-/// condition is the spelling's own, so the base-first leg is the guard for a
+/// Lane `i`'s trip count is `data[i]`, so the last lane's count is the buffer's
+/// length and the answer is the hand-derived `length(length + 1)/2` — `10`, `28` and
+/// `180_300` at four, seven and six hundred elements. **Both arm orders are run**:
+/// a loop's exit condition is the spelling's own, so the base-first leg guards a
 /// header that leaves from its `if_true` arm
 /// (`docs/notes/loop-conversion.md` §8.6 item 6).
 #[test]
 fn a_kernel_loop_reduces_a_runtime_buffer_length() {
     let recur = "sum_to (s(0) - 1, s(1) + compute.read ((compute.Read _)(.from k.in.b, \
                  .at s(0) - 1)))";
-    // The same reduction written both ways round. The three-hundred-element case
-    // rides the continue-first leg only: the length is not what the emitter's arm
-    // order depends on.
+    // Both spellings of one reduction: the base-first leg is the emitter's guard.
     let legs = [
         (
             "continue arm first",

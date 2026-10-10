@@ -234,8 +234,8 @@ fn branches_to_a_merge() -> KernelFragment {
     one_integer_output(body)
 }
 
-/// A loop with a carried value: `n = 0; while (i < 10) { n = n + 1 }`; the exit arm is
-/// `if_true` when `exit_first` (`docs/notes/loop-conversion.md` §8.6 item 6).
+/// A loop with a carried value: `n = 0; while (i < 10) { n = n + 1 }`; its exit arm is
+/// `if_true` when `exit_first`.
 fn counts_to_ten(exit_first: bool) -> KernelFragment {
     let mut body = KernelBody::new();
     let entry = body.add_block();
@@ -266,8 +266,7 @@ fn counts_to_ten(exit_first: bool) -> KernelFragment {
     );
 
     let ten = body.add_const(header, ScalarClass::Int, 10);
-    // **The exit test is the condition in both spellings**: `i < 10` continues and
-    // `i >= 10` leaves, so which arm is `if_true` is the spelling's fact alone.
+    // **The exit test is the condition in both spellings**: `i < 10` continues.
     let test_op = if exit_first {
         KernelBin::Geq
     } else {
@@ -850,8 +849,7 @@ fn the_two_conversions_validate_in_a_float_module() {
     }
 }
 
-/// The emitted loop header's merge block, continue target, and the label its
-/// condition's **true** arm names, walked by word count.
+/// The merge block, continue target and true label of the module's loop header.
 fn loop_header_facts(words: &[u32]) -> (u32, u32, u32) {
     let mut at = 5;
     while at < words.len() {
@@ -866,18 +864,18 @@ fn loop_header_facts(words: &[u32]) -> (u32, u32, u32) {
     panic!("this module emits no loop header");
 }
 
-/// `OpLoopMerge` (246) and `OpBranchConditional` (250); `spirv::op` is private to
-/// the crate, so the numbers are the specification's own.
+/// `OpLoopMerge` (246) and `OpBranchConditional` (250), the specification's own numbers.
 const LOOP_MERGE: u16 = 246;
 const BRANCH_CONDITIONAL: u16 = 250;
 
-/// A loop header leaves when its **own** condition holds, whichever arm the
-/// spelling wrote first: a condition's polarity and the label its true arm names
-/// are one fact (`docs/notes/loop-conversion.md` §8.6 item 6).
+/// A loop header leaves on its own exit arm, wherever the spelling put it.
 ///
-/// `spirv-val` cannot see this. A header that branches to its own body on its exit
-/// condition is a legal module — the device answered `0` where the CPU answered the
-/// reduction — so the emitter's arm order needs a reader, not a validator.
+/// # Invariant
+/// The condition's polarity and the label its true arm names are one fact, so a
+/// header whose `if_true` arm is the base leaves when the condition holds. A module
+/// that breaks this is **legal** — the device answered `0` where the cpu answered the
+/// reduction — so the arm order needs a reader
+/// (`docs/notes/loop-conversion.md` §8.6 item 6), not a validator.
 #[test]
 fn a_loop_header_leaves_on_its_own_exit_arm() {
     for (what, exit_first) in [("continue arm first", false), ("base arm first", true)] {

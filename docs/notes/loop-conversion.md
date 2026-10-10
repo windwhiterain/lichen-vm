@@ -13,12 +13,13 @@
 > item 5): a dynamic reduction whose trip count is a run-time buffer read, `10`,
 > `28` and `180_300` at four, seven and six hundred elements — the last past the
 > emitter's 512-level walk, with a `2001`-element run past the VM's apply budget
-> measured beside it. **Two device-side defects were measured on
-> the way and are reported, not worked around**: `spirv.rs` branches a loop
-> header on the plan's body/exit order rather than on the terminator's arm order,
-> so the base-first spelling of the nest is mis-compiled on the device; and a
-> device dispatch pushes the launch extent alone, so a count cannot come from
-> `k.n`.
+> measured beside it. **One device-side defect was measured on the
+> way and is fixed**: `spirv.rs` branched a loop header on the plan's body/exit
+> order rather than on the terminator's arm order, so the base-first spelling of
+> the nest was mis-compiled on the device — the labels follow the arms now, and the
+> acceptance case runs both spellings (§8.6 item 6). **A second is reported, not
+> worked around**: a device dispatch pushes the launch extent alone, so a count
+> cannot come from `k.n`.
 > Three of
 > [§8.3](#83-known-broken-and-by-whom)'s items are now
 > **closed** — the `passed_out` contract, a loop body that can compute its state and
@@ -759,8 +760,9 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
 
   **The one genuinely new decision is how a loop is recognised, because SSA has
   no `While` variant.** `CondBr` covers both a selection and a loop's exit test,
-  and the two look identical: a loop's header does
-  `CondBr { cond, if_true: body, if_false: exit }` and a selection branches to two
+  and the two look identical: a loop's header is a `CondBr` whose two arms are its
+  body and its exit, **in whichever order the spelling wrote them**, and a
+  selection branches to two
   *different* blocks. They are told apart **structurally**, by a backedge: a block
   is a loop header when an edge on the active depth-first path returns to it
   (the phrasing "some block it transitively reaches branches back to it" is
@@ -794,7 +796,7 @@ not ship one.
 The program, **as it runs today** (the `.Read` struct form is the surface — the
 brief's `compute.read [buf, …]` spelling predates it — the trip count is a
 **buffer read** because a device dispatch pushes the launch extent alone, and the
-test is **continue-first** because of the emitter defect item 5 records):
+test runs **both arm orders**, which is what item 6's fix made answerable):
 
 ```lichen
 ---
@@ -970,13 +972,13 @@ done** — the acceptance case at item 5 runs on both backends:
    `length²/2` iterations on the cpu path, so that single length takes about
    twenty seconds where all three committed ones together add none.
 
-   **Three measurements are what the case needed to say, and each is a refusal
-   the source had to be written around:**
+   **Three measurements shaped the case: two are refusals the source had to be
+   written around, and one was a device defect that is now fixed.**
 
    | what | measured | why the case looks as it does |
    |---|---|---|
    | **the launch extent cannot carry the count** | `sum_to (k.n, 0)` answers `10`/`28` on the **cpu** and is refused on the device twice: `a kernel body's index cannot be placed …`, and `the "gpu" backend declined this run: this fragment's parameter declares 2 leaf/leaves (the launch extent, any runtime scalar, and the index), and a dispatch pushes the extent alone` (`RunError::ScalarsNotPushed`) | the count is a **buffer read**, so it is a run-time value on both backends, and the last lane's count is the buffer's length |
-   | **the device branches the nest's test the wrong way round** | the same program written base-first — `if s(0) == 0 then s(1) else sum_to (…)`, the spelling this section sketches — answers `10` on the cpu and **`0`** on the device. `spirv-dis` on the emitted module reads `OpIEqual %bool %35 %ulong_0_0`, `OpLoopMerge %31 %28 None`, `OpBranchConditional %37 %28 %31`: true goes to the **step** (%28), false to the **exit** (%31) | `spirv.rs`'s `plan_body` decides which arm leaves the loop from the graph while `terminator` emits `OpBranchConditional cond body exit` **whichever arm `if_true` names**, so the base-first spelling is **silently mis-compiled on the device**. The case is therefore spelled continue-first, which both backends answer. This is a defect in `crates/lichen-compute-gpu`, reported rather than worked around |
+   | **the device branched the nest's test the wrong way round** | the same program written base-first — `if s(0) == 0 then s(1) else sum_to (…)`, the spelling this section sketches — answered `10` on the cpu and **`0`** on the device. `spirv-dis` on the emitted module read `OpIEqual %bool %35 %ulong_0_0`, `OpLoopMerge %31 %28 None`, `OpBranchConditional %37 %28 %31`: true went to the **step** (%28), false to the **exit** (%31) | `spirv.rs`'s `plan_body` decides which arm leaves the loop from the graph while `terminator` named the branch's two labels **positionally**, whichever arm `if_true` named — so the base-first spelling was silently mis-compiled on the device. **Fixed**: the labels follow the arms now, the reduction answers the hand-derived number in both spellings on both backends, and the case runs both as two legs (§8.6 item 6) |
    | **a `@loop` entered with a body-local argument is refused by the checker** | `sum_to (i, 0)` with `i = compute.range k.n` reports `a struct parameter field read names 'in', which is not a field of the type it is read from — that type's fields are None` for the loop's own `k.in.b` | the count is passed through a **buffer read**, which is what avoids a marked recursion losing its captured environment's types |
 
    **Both ceilings are answered at a length rather than only by construction**:
@@ -1188,20 +1190,31 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
      `Module::static_function_of_callee` reads it through the export array, so
      **the callee of an imported binding is a static fact of the artifact and not
      a runtime closure**, and the reduction now runs.
-   - **The device inverts the nest's test, and the evidence is a disassembly.**
-     The base-first spelling — `if s(0) == 0 then s(1) else sum_to (…)` — answers
-     `10` on the cpu and **`0`** on the device. `spirv-dis` on the emitted module
-     reads `OpIEqual %bool %35 %ulong_0_0`, `OpLoopMerge %31 %28 None`,
-     `OpBranchConditional %37 %28 %31`: true goes to the **step** (%28) and false
-     to the **exit** (%31), while the condition *is* `s(0) == 0`. Everything else
-     in the module is right — one `OpPhi` pair per incoming edge, the continue
-     target the step, the merge the exit. The cause is that `plan_body` decides
-     which arm leaves the loop from the graph, while `terminator` emits
-     `OpBranchConditional cond body exit` for a header **whichever arm `if_true`
-     names**: the branch order is taken from the plan and not from the
-     terminator. **It is a defect in `crates/lichen-compute-gpu`, not in the
-     reader**, and it is why the acceptance case is spelled continue-first — a
-     spelling, not a mechanism.
+   - **The emitter's branch order came from the plan and not from the terminator,
+     and that is fixed.** The base-first spelling — `if s(0) == 0 then s(1) else
+     sum_to (…)` — answered `10` on the cpu and **`0`** on the device.
+     `spirv-dis` on the emitted module reads `OpIEqual %bool %35 %ulong_0_0`,
+     `OpLoopMerge %31 %28 None`, `OpBranchConditional %37 %28 %31`: true goes to the
+     **step** (%28) and false to the **exit** (%31), while the condition *is*
+     `s(0) == 0`. `plan_body` decides which arm leaves the loop **from the graph**
+     and lays a header's `targets` out as `[body, exit]`, while `terminator` named
+     the two labels **positionally** — so a header whose `if_true` arm is the base
+     sent its exit condition to its own body. **The reader was never at fault**: the
+     two spellings' `KernelBody`s are identical but for the header's two `CondBr`
+     arms — same blocks, same parameters, same `ValueId`s, in the same order — and
+     the plan's `targets`, `loop_bodies` and `merges` are the same for both, so the
+     arm the plan calls the body is the step either way. Everything else in the
+     module was right: one `OpPhi` pair per incoming edge, the continue target the
+     step, the merge the exit. **`spirv-val` cannot see this** — a header that
+     branches to its body on its exit condition is a legal module, and the validator
+     accepts it in both spellings — so what covers the arm order without a device is
+     `a_loop_header_leaves_on_its_own_exit_arm`
+     (`crates/lichen-compute-gpu/tests/spirv_validation.rs`), which reads the
+     header's `OpLoopMerge` and the labels of the branch after it, and the base-first
+     loop module is one of the modules that test hands to `spirv-val`. The labels now
+     follow the arms — an exit arm spelled first swaps them, so the condition's
+     polarity stays the spelling's own — and the acceptance case runs **both
+     spellings** as two legs.
    - **The launch extent cannot carry a count into a device body.** `sum_to
      (k.n, 0)` is refused on the device by `RunError::ScalarsNotPushed` — a
      dispatch pushes the extent alone — and one layer earlier by `a kernel body's
@@ -1320,9 +1333,10 @@ accumulator, and the one a GPU algorithm wants is a fold over a **buffer** whose
 trip count is the buffer's length"), and it is the shape a `T -> T` `loop` cannot
 express at all, which is the second reason §7 does not ship one.
 
-The reduction, **now written and run on both backends** (`a_kernel_loop_reduces_a_runtime_buffer_length`),
-against a buffer filled by a seed kernel, at more than one length so that the trip
-count is demonstrably not a compile-time constant:
+The reduction, **now written and run on both backends in both arm orders**
+(`a_kernel_loop_reduces_a_runtime_buffer_length`), against a buffer filled by a seed
+kernel, at more than one length so that the trip count is demonstrably not a
+compile-time constant:
 
 ```lichen
 --- compute = import "compute.lichen" ---
@@ -1337,9 +1351,11 @@ and its trip count is **per-lane** (the performance model of §9, not a
 correctness one). **Measured**: `10`, `28` and `180_300` at four, seven and six
 hundred elements, both backends, against the hand-derived
 `length(length + 1)/2` — and the count is a **buffer read** rather than the launch
-extent because a device dispatch pushes the extent alone. §8.5's item 5 has the
-source as it runs, the `2001`-element measurement, and the two device-side defects
-the spelling had to work around.
+extent because a device dispatch pushes the extent alone. The four- and
+seven-element lengths run in **both spellings** and the six-hundred-element one on
+the continue-first leg only: the arm order is not a function of the length. §8.5's
+item 5 has the source as it runs, the `2001`-element measurement, and the two
+device-side defects that shaped it.
 
 **Stage 2 — the conversion.** Cycle extraction, defunctionalisation, nest
 construction, and rules 1, 2, 3, 5, 6. The probe grows two cases:
