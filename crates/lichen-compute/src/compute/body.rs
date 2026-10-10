@@ -37,10 +37,11 @@
 use std::collections::HashMap;
 
 use lichen_kernel_ir::{
-    KernelBin, KernelBody, KernelInstr, KernelShape, ScalarClass, Terminator, ValueId,
+    Br, KernelBin, KernelBody, KernelInstr, KernelShape, ScalarClass, Terminator, ValueId,
 };
 use lichen_lowlevel::{
-    AnyNodeId, Define, FunctionId, LowOperator, LowValue, Module, NodeId, Program,
+    AnyNodeId, Define, FunctionId, LoopArm, LoopConversion, LowOperator, LowValue, Module, NodeId,
+    Program,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -91,7 +92,6 @@ pub struct Lower<'a, P: Program> {
     function: FunctionId,
     tally: &'a mut Positions,
     body: KernelBody,
-    entry: usize,
     /// A node to the value it produced. **This is what makes emission happen
     /// once**, so a shared subexpression is computed once.
     values: HashMap<NodeId, ValueId>,
@@ -107,6 +107,39 @@ pub struct Lower<'a, P: Program> {
     /// The node whose definition is being emitted, so [`Lower::emit`] can record
     /// the class it declared against it.
     defining: NodeId,
+    /// The block instructions are emitted into.
+    ///
+    /// # Invariant
+    /// It moves to a loop's merge block when a nest is built, so the caller's
+    /// remaining instructions land in the block the nest leaves.
+    block: usize,
+    /// The active `@loop` nests, innermost last.
+    loops: Vec<ActiveLoop>,
+}
+
+/// One `@loop` nest being emitted: the conversion's roles and the state each
+/// block of the nest receives.
+///
+/// # Invariant
+/// A state read of the marked function resolves to one of `block_slots`, which
+/// are the parameters of the block being emitted — the same binding the host
+/// loop reads through `Instantiation::node_of` (`loop_run.rs`).
+struct ActiveLoop {
+    function: FunctionId,
+    conversion: LoopConversion,
+    /// The parameters of [`Self::block`], in the conversion's slot order.
+    block_slots: Vec<ValueId>,
+    /// The block the nest starts from: it dominates every block of the nest.
+    entry: usize,
+    /// The block the nest is currently emitting into.
+    block: usize,
+    /// The state's home, and one block per test, step and exit level.
+    header: usize,
+    tests: Vec<usize>,
+    steps: Vec<usize>,
+    exits: Vec<usize>,
+    /// Where the nest leaves its result.
+    merge: usize,
 }
 
 /// A cross-kernel callee must return exactly one value, and it must be the
@@ -155,20 +188,24 @@ where
             function,
             tally,
             body,
-            entry,
             values: HashMap::new(),
             depth: 0,
             classes: HashMap::new(),
             leaf_classes: param_classes_of(params),
             defining: NodeId::default(),
+            block: entry,
+            loops: Vec::new(),
         };
         let mut values = Vec::new();
         for node in lower.leaves_of(codomain)? {
             values.push(lower.value(node)?);
         }
+        // **The return belongs where the walk ended**, which is the entry block
+        // for a straight-line body and the loop nest's merge block for a body
+        // that contains one.
         lower
             .body
-            .set_terminator(lower.entry, Terminator::Return { values });
+            .set_terminator(lower.block, Terminator::Return { values });
         Ok(lower.body)
     }
 
@@ -213,12 +250,13 @@ where
             function,
             tally,
             body,
-            entry,
             values: HashMap::new(),
             depth: 0,
             classes: HashMap::new(),
             leaf_classes: param_classes_of(params),
             defining: NodeId::default(),
+            block: entry,
+            loops: Vec::new(),
         };
         for output in outputs {
             // The value a write leaves is discarded on purpose: see the doc.
@@ -226,7 +264,7 @@ where
         }
         let dummy = lower.emit_const(class, const_bits(class, 0));
         lower.body.set_terminator(
-            lower.entry,
+            lower.block,
             Terminator::Return {
                 values: vec![dummy],
             },
@@ -239,11 +277,32 @@ where
     /// The value `node` names, emitting its definition the first time it is asked
     /// for.
     fn value(&mut self, node: NodeId) -> Result<ValueId, String> {
+        // **Inside a `@loop` nest, the roles are the binding.** A node of the
+        // marked function's own template is either a read of its carried state —
+        // the conversion's paths say which slot — or a computation over such
+        // reads, which is the same role the host loop resolves through
+        // `Instantiation::node_of` (`loop_run.rs`).
+        if let Some(index) = self.loop_owner(node)
+            && let Some(value) = self.loop_value(index, node)?
+        {
+            return Ok(value);
+        }
         if let Some(&value) = self.values.get(&node) {
             return Ok(value);
         }
         if self.depth > MAX_KERNEL_BODY_DEPTH {
             return Err(super::kernel_body_too_deep());
+        }
+        // A role of an active nest is emitted in that nest's current block; a
+        // value the nest reaches but does not own is emitted where the nest
+        // starts, which is the one block that dominates all of it.
+        let enclosing = self.block;
+        let target = match self.loop_owner(node) {
+            Some(index) => Some(self.loops[index].block),
+            None => self.current_loop().map(|index| self.loops[index].entry),
+        };
+        if let Some(target) = target {
+            self.block = target;
         }
         self.depth += 1;
         // **Every emission for this node records its class against this node.**
@@ -285,8 +344,64 @@ where
             },
         };
         self.depth -= 1;
+        // Only the frame that moved the cursor puts it back: a nest's move to its
+        // merge block has to stand, because the caller's code belongs there.
+        if target.is_some() {
+            self.block = enclosing;
+        }
         self.values.insert(node, value);
         Ok(value)
+    }
+
+    // ------------------------------------------------------------------ loops
+
+    /// The innermost active nest, copied out so the borrow ends before the
+    /// emission it governs.
+    fn current_loop(&self) -> Option<usize> {
+        self.loops.len().checked_sub(1)
+    }
+
+    /// The innermost active nest whose marked function owns `node`.
+    fn loop_owner(&self, node: NodeId) -> Option<usize> {
+        for index in (0..self.loops.len()).rev() {
+            let function = self.loops[index].function;
+            if self.module.belongs_to(node, function).unwrap_or(false) {
+                return Some(index);
+            }
+        }
+        None
+    }
+
+    /// The value a nest's state read names, or `None` for a node that is not a
+    /// state read of that nest.
+    ///
+    /// # Invariant
+    /// A read is matched by the conversion's own path ([`LoopConversion::state`])
+    /// against [`Module::parameter_value_path`]; a read covering no slot is a
+    /// disagreement between the readers, not a shape to guess at.
+    fn loop_value(&self, index: usize, node: NodeId) -> Result<Option<ValueId>, String> {
+        let active = &self.loops[index];
+        let Some(path) = self.module.parameter_value_path(active.function, node) else {
+            return Ok(None);
+        };
+        let Some(slot) = active
+            .conversion
+            .state
+            .iter()
+            .position(|candidate| *candidate == path)
+        else {
+            return Err(format!(
+                "a `@loop` nest read its carried state at path {path:?}, which the conversion's \
+                 slots do not name"
+            ));
+        };
+        let value = active.block_slots.get(slot).copied().ok_or_else(|| {
+            format!(
+                "a `@loop` nest read state slot {slot}, and the entering call bound {} slot(s)",
+                active.block_slots.len()
+            )
+        })?;
+        Ok(Some(value))
     }
 
     /// The parameter read `node` names, through the wrappers it may arrive wrapped in.
@@ -465,14 +580,14 @@ where
         })
     }
 
-    /// Emit `instr` over `args` in the entry block, declaring what it leaves.
+    /// Emit `instr` over `args` in the current block, declaring what it leaves.
     fn emit(&mut self, instr: KernelInstr, args: Vec<ValueId>, class: ScalarClass) -> ValueId {
         let declared = if instr.produces() == 0 {
             Vec::new()
         } else {
             vec![class]
         };
-        let value = self.body.add_op(self.entry, instr, args, declared);
+        let value = self.body.add_op(self.block, instr, args, declared);
         if instr.produces() > 0 {
             // **Recorded against the node being defined**, which is what an
             // operator consults to learn what class its operands are.
@@ -635,15 +750,18 @@ where
         ))
     }
 
-    /// An `Apply`: a call of a routed operator, or a cross-kernel call.
+    /// An `Apply`: a `@loop` recursion, a call of a routed operator, or a
+    /// cross-kernel call.
     ///
-    /// **Three cases, and the third is the one that is not yet.** The routing
+    /// **Four cases, and the third is the one that is not yet.** The routing
     /// lowers `x + 1` to a call of the prelude's binding, so the frozen callee is
     /// a body this module cannot walk and the **residual** the lowlevel's clone
     /// wrote for the call is what gets emitted. A callee that is a *kernel value*
-    /// is a cross-kernel call. An ordinary lichen-function call is Style 1 —
-    /// inlining its body — and is refused by name, which is where a marked
-    /// recursion reaches the emitter today.
+    /// is a cross-kernel call. A callee that is a **marked recursion** whose shape
+    /// converts is the loop nest ([`Lower::lower_loop`]) — the roles
+    /// `Module::loop_conversion` names, emitted instead of interpreted. An
+    /// ordinary lichen-function call is Style 1 — inlining its body — and is
+    /// refused by name.
     fn apply(&mut self, node: NodeId, operand: NodeId) -> Result<ValueId, String> {
         let Some(operands) = self.module.operand_items(operand).ok() else {
             return Err("Apply operand is missing".into());
@@ -678,6 +796,21 @@ where
             };
             return self.value(residual);
         }
+        // **A marked recursion**: what a self-apply converts to is a loop, and
+        // the shape that decides it is the callee's own template.
+        if let Some(function) = self.module.callee_function(node)
+            && self.module.functions[function].looping
+        {
+            return match self.module.loop_conversion(function) {
+                Ok(conversion) => self.lower_loop(node, function, &conversion),
+                Err(refusal) => Err(format!(
+                    "a `@loop`-marked recursion this kernel body applies is not convertible, and a \
+                     kernel body has no expansion to fall back on: the shape is {} \
+                     (`docs/notes/loop-conversion.md` §4)",
+                    refusal.name()
+                )),
+            };
+        }
         // A cross-kernel call.
         if kernel_id_of(self.module, callee).is_some() {
             let arg = operands.get(1).map(|item| item.node);
@@ -701,8 +834,265 @@ where
         )
     }
 
-    /// The class a value this walk has already emitted was declared in.
+    // ------------------------------------------------------------ loop nesting
+
+    /// The entering call lowered to a `@loop` **nest**, over the conversion's
+    /// roles — the same roles `loop_run.rs` interprets
+    /// (`docs/notes/loop-conversion.md` §8.6).
     ///
+    /// # Invariant
+    /// Every block of the nest receives the whole carried state as its `params`,
+    /// so a read of the marked function's parameter means one thing in all of
+    /// them; the header is the outermost test, because a merge block is joined
+    /// from the header and a backend's structured control flow requires the
+    /// header to be the block that chooses.
+    fn lower_loop(
+        &mut self,
+        node: NodeId,
+        function: FunctionId,
+        conversion: &LoopConversion,
+    ) -> Result<ValueId, String> {
+        let slots = self.loop_state(node, conversion)?;
+        let entry = self.block;
+        let header = self.body.add_block();
+        for _ in 0..slots.len() {
+            self.body.add_param(header);
+        }
+        // The outermost test *is* the header: SPIR-V joins a merge block from the
+        // header, so the header must be the block whose branch chooses.
+        let tests: Vec<usize> = (0..conversion.tests.len())
+            .map(|position| {
+                if position == 0 {
+                    header
+                } else {
+                    self.loop_block(slots.len())
+                }
+            })
+            .collect();
+        let steps: Vec<usize> = (0..conversion.steps.len())
+            .map(|_| self.loop_block(slots.len()))
+            .collect();
+        let exits: Vec<usize> = (0..conversion.exits.len())
+            .map(|_| self.loop_block(slots.len()))
+            .collect();
+        let merge = self.loop_block(1);
+        self.body.set_terminator(
+            entry,
+            Terminator::Br(Br {
+                target: header,
+                args: slots.clone(),
+            }),
+        );
+        // A nested outermost decision gets its own block; the header's own
+        // conditional branch is set with the other tests.
+        let Some(&first) = tests.first() else {
+            return Err(
+                "a `@loop` conversion names no test, so its nest has no decision to make — the \
+                 conversion refuses a spine with no base test, and the two readers of one \
+                 conversion disagree"
+                    .to_string(),
+            );
+        };
+        if first != header {
+            self.body.set_terminator(
+                header,
+                Terminator::Br(Br {
+                    target: first,
+                    args: self.body.blocks[header].params.clone(),
+                }),
+            );
+        }
+        self.loops.push(ActiveLoop {
+            function,
+            conversion: conversion.clone(),
+            block_slots: self.body.blocks[header].params.clone(),
+            entry,
+            block: header,
+            header,
+            tests,
+            steps,
+            exits,
+            merge,
+        });
+        let index = self.loops.len() - 1;
+        self.lower_loop_tests(index)?;
+        self.lower_loop_steps(index)?;
+        let result = self.lower_loop_exit(index)?;
+        self.loops.pop();
+        // The caller's remaining instructions go in the merge block, which is
+        // where the nest leaves its result.
+        self.block = merge;
+        self.values.insert(node, result);
+        Ok(result)
+    }
+
+    /// The carried state the entering call binds: one value per slot, from the
+    /// argument's elements in the conversion's slot order.
+    ///
+    /// # Invariant
+    /// The addressing is [`LoopConversion::state`], so a one-slot empty path is
+    /// the whole argument and `[k]` is element `k` of its value; a tuple of the
+    /// wrong arity is refused rather than guessed at.
+    fn loop_state(
+        &mut self,
+        node: NodeId,
+        conversion: &LoopConversion,
+    ) -> Result<Vec<ValueId>, String> {
+        let Some(argument) = self.module.operands_of(node).ok().and_then(|operands| {
+            operands
+                .get(1)
+                .copied()
+                .or_else(|| operands.first().copied())
+        }) else {
+            return Err(
+                "a `@loop` call names no argument: an Apply reads [callee, argument] and this one \
+                 has neither"
+                    .into(),
+            );
+        };
+        let value = self.module.pair_value_half(argument).unwrap_or(argument);
+        let scalar = conversion.state.len() == 1 && conversion.state[0].is_empty();
+        if scalar {
+            return Ok(vec![self.value(value)?]);
+        }
+        let elements = unsafe { self.module.array_items(value) }.ok_or_else(|| {
+            format!(
+                "a `@loop` call carries {} state slot(s), and its argument is not a tuple of that \
+                 arity — the state a kernel loop carries is the entering call's own element list",
+                conversion.state.len()
+            )
+        })?;
+        if elements.len() != conversion.state.len() {
+            return Err(format!(
+                "a `@loop` call carries {} state slot(s) and its argument has {} element(s): the \
+                 conversion's slots and the call's argument are the same list",
+                conversion.state.len(),
+                elements.len()
+            ));
+        }
+        elements
+            .iter()
+            .map(|element| {
+                let element = dynamic(element.node)?;
+                self.value(element)
+            })
+            .collect()
+    }
+
+    /// A fresh nest block receiving `slots` parameters.
+    fn loop_block(&mut self, slots: usize) -> usize {
+        let block = self.body.add_block();
+        for _ in 0..slots {
+            self.body.add_param(block);
+        }
+        block
+    }
+
+    /// One test: its condition, then a two-way branch on the arm chosen.
+    fn lower_loop_tests(&mut self, index: usize) -> Result<(), String> {
+        for position in 0..self.loops[index].tests.len() {
+            let block = self.loops[index].tests[position];
+            self.enter_loop_block(index, block);
+            let condition = self.loops[index].conversion.tests[position].condition;
+            let condition = self.value(condition)?;
+            let test = self.loops[index].conversion.tests[position];
+            let (if_true, if_false) = self.loop_arms(index, test.on_one, test.on_zero)?;
+            self.body.set_terminator(
+                block,
+                Terminator::CondBr {
+                    cond: condition,
+                    if_true,
+                    if_false,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// One step: the next state, then the backedge that hands it to the header.
+    fn lower_loop_steps(&mut self, index: usize) -> Result<(), String> {
+        for position in 0..self.loops[index].steps.len() {
+            let block = self.loops[index].steps[position];
+            self.enter_loop_block(index, block);
+            let next = self.loops[index].conversion.steps[position].next.clone();
+            let next: Vec<ValueId> = next
+                .into_iter()
+                .map(|value| self.value(value))
+                .collect::<Result<_, _>>()?;
+            let header = self.loops[index].header;
+            self.body.set_terminator(
+                block,
+                Terminator::Br(Br {
+                    target: header,
+                    args: next,
+                }),
+            );
+        }
+        Ok(())
+    }
+
+    /// One exit: the base's value, then the branch into the merge block.
+    fn lower_loop_exit(&mut self, index: usize) -> Result<ValueId, String> {
+        let mut result = None;
+        for position in 0..self.loops[index].exits.len() {
+            let block = self.loops[index].exits[position];
+            self.enter_loop_block(index, block);
+            let value = self.loops[index].conversion.exits[position].value;
+            let value = self.value(value)?;
+            let merge = self.loops[index].merge;
+            self.body.set_terminator(
+                block,
+                Terminator::Br(Br {
+                    target: merge,
+                    args: vec![value],
+                }),
+            );
+            result = Some(value);
+        }
+        result.ok_or_else(|| {
+            "a `@loop` conversion has no exit, so the nest it names has no result — the conversion \
+             refuses that shape, and the two readers of one conversion disagree"
+                .to_string()
+        })
+    }
+
+    /// Set the nest's current block: roles emitted from here go into it, and a
+    /// state read resolves to that block's own parameters.
+    fn enter_loop_block(&mut self, index: usize, block: usize) {
+        self.block = block;
+        self.loops[index].block = block;
+        self.loops[index].block_slots = self.body.blocks[block].params.clone();
+    }
+
+    /// The two branches one test's arms take.
+    fn loop_arms(
+        &mut self,
+        index: usize,
+        on_one: LoopArm,
+        on_zero: LoopArm,
+    ) -> Result<(Br, Br), String> {
+        Ok((
+            self.loop_arm(index, on_one)?,
+            self.loop_arm(index, on_zero)?,
+        ))
+    }
+
+    /// Where one arm goes, handing the current state on unchanged: a step
+    /// recomputes the next state in its own block and branches back itself.
+    fn loop_arm(&mut self, index: usize, arm: LoopArm) -> Result<Br, String> {
+        let active = &self.loops[index];
+        let target = match arm {
+            LoopArm::Test(next) => active.tests[next],
+            LoopArm::Step(next) => active.steps[next],
+            LoopArm::Exit(next) => active.exits[next],
+        };
+        Ok(Br {
+            target,
+            args: active.block_slots.clone(),
+        })
+    }
+
+    /// The class a value this walk has already emitted was declared in.
     /// **Read from what was emitted, not from the node.** An operator's operands
     /// are emitted before the operator, so by the time the operator asks what
     /// class its operands are, this walk knows — and that is the *whole* reason
