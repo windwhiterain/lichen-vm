@@ -72,13 +72,15 @@ pub type NativeOps<P> = &'static [(&'static str, &'static dyn NativeOp<P>)];
 pub trait NativeOp<P> {
     fn build(&self, ctx: &mut dyn Ctx<P>, e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply;
 }
-pub struct NativeArg  { pub expr: ExprId, pub value: NodeId, pub ty: NodeId }
-pub struct NativeApply { pub node: NodeId, pub val: Option<NodeId>, pub ty: NodeId }
+pub struct NativeArg  { pub expr: ExprId, pub value: NodeId }
+pub struct NativeApply { pub value: NodeId, pub decided: bool }
 ```
 
-- The args are **already compiled** (value/type wired), so `build` only checks the
+- The args are **already compiled** (each carries its value node and never a type — an
+  operator sees raw values), so `build` only checks the
   operator's types and emits the op node — through the curated `Ctx`, never raw lowlevel
-  nodes.
+  nodes. Its `NativeApply` answers with the expression's value node and whether that is a
+  decided value or a computation the runtime reads.
 - `Ctx` is the checker's encoding surface: `fresh` (a new undecided cell), `array_node`,
   `op_node`, `pair`, `kind_expr`, `universe`, the marker nodes, and `check_unify(_relaxed)`.
 - **Privacy**: the registry is per-module and only the plugin's own file is compiled against
