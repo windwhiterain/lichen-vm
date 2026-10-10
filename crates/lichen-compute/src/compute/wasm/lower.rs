@@ -4,8 +4,7 @@
 //! The body is SSA, so the walk is a map from value to what waffle made of it: no operand
 //! stack, and a shared subexpression emitted once. Three passes: create the blocks and their
 //! blockparams, type the non-entry blockparams to a fixed point, then emit. A value carries a
-//! wasm `Type` too, because [`KernelInstr::Conv`] names the class the language asked for while
-//! the value was built by whatever produced it.
+//! wasm `Type` too, because [`KernelInstr::Conv`] names the class the language asked for.
 
 use std::collections::HashMap;
 
