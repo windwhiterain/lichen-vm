@@ -40,8 +40,8 @@ use lichen_kernel_ir::{
     Br, KernelBin, KernelBody, KernelInstr, KernelShape, ScalarClass, Terminator, ValueId,
 };
 use lichen_lowlevel::{
-    AnyNodeId, Define, FunctionId, LoopArm, LoopConversion, LowOperator, LowValue, Module, NodeId,
-    Program,
+    AnyFunctionId, AnyNodeId, Define, FunctionId, LoopArm, LoopConversion, LowOperator, LowValue,
+    Module, NodeId, Program,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -668,86 +668,173 @@ where
             && let Some(bin) = kernel_bin(ty_op)
         {
             let arguments = self.arguments(node)?;
-            let Some(rhs) = arguments.get(1) else {
+            let (Some(lhs), Some(rhs)) = (arguments.first().copied(), arguments.get(1).copied())
+            else {
                 return Err(format!("{ty_op:?} is missing an operand"));
             };
-            let Some(lhs) = arguments.first() else {
-                return Err(format!("{ty_op:?} is missing an operand"));
-            };
-            // **The operator's class is its operands' class**, read off them and
-            // falling back to the node's. The node's own class is a hint, not the
-            // answer: a float body's index and count are `Int` positions, so an
-            // operator that adds two floats computes in `Float` whatever the node
-            // the checker hung them on says. Trusting the node here made a float
-            // kernel declare `Bin(Int, Add)` over two float values, and the class
-            // check refused it — correctly, and for the wrong reason.
-            // **The operands first**: the class below is read off what they
-            // emitted, and asking before they exist reads nothing and falls back
-            // to the node's own.
-            let left = self.value_item(*lhs)?;
-            let right = self.value_item(*rhs)?;
-            let operand_class = self
-                .emitted_class(*lhs)
-                .or_else(|| self.emitted_class(*rhs))
-                .unwrap_or(class);
-            let class = operand_class;
-            // **A float has no `%` or bitwise form**, and the refusal is here at
-            // the operand because the class is still visible.
-            if class == ScalarClass::Float
-                && matches!(
-                    bin,
-                    KernelBin::Rem | KernelBin::BitAnd | KernelBin::BitOr | KernelBin::BitXor
-                )
-            {
-                return Err(format!(
-                    "`{ty_op:?}` has no float form: a kernel's float operators are `+ - * /` and \
-                     the four order comparisons, not `%` or the bitwise operators"
-                ));
-            }
-            return Ok(self.emit(KernelInstr::Bin(class, bin), vec![left, right], class));
+            return self.arithmetic(ty_op, bin, lhs, rhs, class);
         }
 
         // The compute plugin's own operators.
         if let Some(compute_op) = AsEnum::<ComputeOperator>::as_enum(op) {
-            return match compute_op {
-                ComputeOperator::Launch | ComputeOperator::Call => {
-                    // **A program's own operator reads its operand array's
-                    // elements**, not the array: `operands_of` answers "which
-                    // nodes does this definition depend on", and for a program
-                    // operator that is the array itself — one node, built before
-                    // the operator that indexes it.
-                    let operands = self.arguments(node)?;
-                    let Some(kernel) = operands.first() else {
-                        return Err(format!(
-                            "cross-kernel call's operand array is empty, and a call reads [callee, \
-                             argument]"
-                        ));
-                    };
-                    let Some(arg) = operands.get(1) else {
-                        return Err(format!(
-                            "cross-kernel call's operand array holds {} element(s), and a call \
-                             reads [callee, argument]",
-                            operands.len()
-                        ));
-                    };
-                    self.cross_kernel_call(*kernel, *arg)
-                }
-                // The loop index of the current parallel invocation: the
-                // parameter immediately after the cfg scalar params.
-                ComputeOperator::Range => {
-                    let index: usize = self.params.iter().map(|p| flat_arity(&p.shape)).sum();
-                    self.parameter(index)
-                }
-                ComputeOperator::Read => self.buffer_read(operand),
-                ComputeOperator::Write => self.buffer_write(operand),
-                other => Err(format!(
-                    "unsupported compute operator in kernel body: {other:?}"
-                )),
-            };
+            return self.compute_operator(node, compute_op, operand);
         }
         Err(format!(
             "unsupported operation in kernel body: {op:?} (kernel-safe subset is scalar arith)"
         ))
+    }
+
+    /// One compute operator over its own operand array: what a `read`, `write`,
+    /// `range`, `launch` or `call` **is**, wherever the walk meets it.
+    ///
+    /// Shared by an operator node and by a routed apply whose frozen callee's
+    /// body names one, so the two routes cannot drift.
+    fn compute_operator(
+        &mut self,
+        node: NodeId,
+        compute_op: ComputeOperator,
+        operand: NodeId,
+    ) -> Result<ValueId, String> {
+        match compute_op {
+            ComputeOperator::Launch | ComputeOperator::Call => {
+                // **A program's own operator reads its operand array's
+                // elements**, not the array: `operands_of` answers "which
+                // nodes does this definition depend on", and for a program
+                // operator that is the array itself — one node, built before
+                // the operator that indexes it.
+                let operands = self.arguments(node)?;
+                let Some(kernel) = operands.first() else {
+                    return Err(format!(
+                        "cross-kernel call's operand array is empty, and a call reads [callee, \
+                         argument]"
+                    ));
+                };
+                let Some(arg) = operands.get(1) else {
+                    return Err(format!(
+                        "cross-kernel call's operand array holds {} element(s), and a call \
+                         reads [callee, argument]",
+                        operands.len()
+                    ));
+                };
+                self.cross_kernel_call(*kernel, *arg)
+            }
+            // The loop index of the current parallel invocation: the
+            // parameter immediately after the cfg scalar params.
+            ComputeOperator::Range => {
+                let index: usize = self.params.iter().map(|p| flat_arity(&p.shape)).sum();
+                self.parameter(index)
+            }
+            ComputeOperator::Read => self.buffer_read(operand),
+            ComputeOperator::Write => self.buffer_write(operand),
+            other => Err(format!(
+                "unsupported compute operator in kernel body: {other:?}"
+            )),
+        }
+    }
+
+    /// One arithmetic or comparison operator over two operands, at
+    /// `fallback_class` when their classes say nothing.
+    ///
+    /// **The operator's class is its operands' class.** The node's own class is a
+    /// hint, not the answer: a float body's index and count are `Int` positions,
+    /// so an operator adding two floats computes in `Float` whatever the node the
+    /// checker hung them on says.
+    fn arithmetic(
+        &mut self,
+        ty_op: TypeOperator,
+        bin: KernelBin,
+        left_operand: AnyNodeId,
+        right_operand: AnyNodeId,
+        fallback_class: ScalarClass,
+    ) -> Result<ValueId, String> {
+        // **The operands first**: the class below is read off what they emitted,
+        // and asking before they exist reads nothing and falls back to the
+        // node's own.
+        let left = self.value_item(left_operand)?;
+        let right = self.value_item(right_operand)?;
+        let class = self
+            .emitted_class(left_operand)
+            .or_else(|| self.emitted_class(right_operand))
+            .unwrap_or(fallback_class);
+        // **A float has no `%` or bitwise form**, and the refusal is here at the
+        // operand because the class is still visible.
+        if class == ScalarClass::Float
+            && matches!(
+                bin,
+                KernelBin::Rem | KernelBin::BitAnd | KernelBin::BitOr | KernelBin::BitXor
+            )
+        {
+            return Err(format!(
+                "`{ty_op:?}` has no float form: a kernel's float operators are `+ - * /` and the \
+                 four order comparisons, not `%` or the bitwise operators"
+            ));
+        }
+        Ok(self.emit(KernelInstr::Bin(class, bin), vec![left, right], class))
+    }
+
+    /// Emit the operator a routed apply names, read from its **frozen callee
+    /// body**, or `None` when the callee carries no compute operator.
+    ///
+    /// # Invariant
+    /// The operator is read from the artifact's structure, never from a value:
+    /// the callee is reachable by `FunctionId` whether or not anything evaluated,
+    /// which is why this answers where the class channel cannot — the argument is
+    /// a read the kernel emits and the host never decides.
+    fn routed_operator(
+        &mut self,
+        node: NodeId,
+        callee: NodeId,
+        operand: NodeId,
+    ) -> Result<Option<ValueId>, String> {
+        let Some(LowValue::Function(AnyFunctionId::Static(function))) = self
+            .module
+            .node_value(AnyNodeId::Dynamic(callee))
+            .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+        else {
+            return Ok(None);
+        };
+        let Some((operator, _)) = self.module.static_function_compute_operator(function) else {
+            return Ok(None);
+        };
+        if let Some(compute_op) = AsEnum::<ComputeOperator>::as_enum(&operator) {
+            return self.compute_operator(node, compute_op, operand).map(Some);
+        }
+        if let Some(ty_op) = AsEnum::<TypeOperator>::as_enum(&operator)
+            && let Some(bin) = kernel_bin(ty_op)
+        {
+            // **The operator's operands are the apply's argument elements**, not
+            // the apply's own `[callee, argument]` array: `+` is applied to
+            // `[x, y]`, and the pair wrapping that argument is the encoding.
+            let Some(argument) = self
+                .module
+                .operand_items(operand)
+                .ok()
+                .and_then(|items| items.get(1))
+                .map(|item| item.node)
+                .and_then(|item| item.dynamic())
+            else {
+                return Ok(None);
+            };
+            let value = self.module.pair_value_half(argument).unwrap_or(argument);
+            let elements = self
+                .module
+                .value_leaves(value)
+                .map_err(|reason| format!("{ty_op:?}'s argument is not readable: {reason}"))?;
+            let (Some(lhs), Some(rhs)) = (elements.first().copied(), elements.get(1).copied())
+            else {
+                return Err(format!("{ty_op:?} is missing an operand"));
+            };
+            return self
+                .arithmetic(
+                    ty_op,
+                    bin,
+                    AnyNodeId::Dynamic(lhs),
+                    AnyNodeId::Dynamic(rhs),
+                    ScalarClass::Int,
+                )
+                .map(Some);
+        }
+        Ok(None)
     }
 
     /// An `Apply`: a `@loop` recursion, a call of a routed operator, or a
@@ -782,15 +869,21 @@ where
                     AnyNodeId::Static(_) => None,
                 });
             let Some(residual) = residual else {
+                // **The callee's own body still names the operator.** A routed
+                // apply's residual is written only when its argument is decidable,
+                // and a loop's step argument never is — but the callee is a frozen
+                // function whose body is reachable by `FunctionId` whether or not
+                // anything evaluated, so the operator inside a recursive call's
+                // argument is read from there.
+                if let Some(value) = self.routed_operator(node, callee, operand)? {
+                    return Ok(value);
+                }
                 return Err(
                     "this kernel body applies a prelude operator where the kernel cannot reach the \
-                     body it lowered to: the operator is a call of the prelude's binding, the call \
-                     sits in the function's own template (which the compiler never evaluates), and \
-                     an operator applied *inside a call's argument* is not materialised the way one \
-                     that is the body's own result is. A kernel body can cross-call a kernel with \
-                     an argument it reads directly (`k0 x`), and it can apply an operator to a \
-                     call's result (`k0 x + 1`); this shape (`k0 (x + 1)`) is the one the emitter \
-                     has no node for yet"
+                     body it lowered to, and its callee names no compute operator: the operator is \
+                     a call of the prelude's binding, the call sits in the function's own template \
+                     (which the compiler never evaluates), and an operator applied *inside a call's \
+                     argument* has no residual to read (`docs/notes/loop-conversion.md` §8.5)"
                         .into(),
                 );
             };

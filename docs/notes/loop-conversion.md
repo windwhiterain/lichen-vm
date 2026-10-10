@@ -855,17 +855,24 @@ cleared the CPU side but nothing turns on it yet, because 1c is not:**
    convert is refused with the conversion's own rule (`LoopRefusal::name`), as
    before. A **step whose next state applies a routed operator to a carried
    read** — `sum_to (s(0) - 1, …)`, the acceptance reduction's step — is refused
-   today, and the reason is measured in §8.6 item 6: those applies live inside a
-   recursive call's argument and are never expanded, so `Lower::definition` finds
-   no operator node in their class and `Lower::apply`'s routing path needs a
-   residual that was never written. A nest whose step is a plain state read, or
-   whose condition/exit is a state read, is emitted and runs (measured on both
-   backends: `a_kernel_loop_nest_carries_a_runtime_state`). The refusal is a
-   `String` from the lowering, recorded as a `compute.parallel` diagnostic — it
-   is **not** the old checker-side `LoopNotEmitted`, which is gone (§8.6).
+   today. The **operator** half is solved: a routed apply whose residual is
+   missing is now read from its **frozen callee's body**, which
+   `static_function_compute_operator` walks by `FunctionId` whether or not
+   anything evaluated. Measured, that closes a general gap — `k0 (x + 1)`, an
+   operator applied inside a cross-kernel argument, was refused by name and is
+   emitted now (`jit_an_operator_inside_a_cross_kernel_argument_is_emitted`).
+   What blocks the acceptance program is **downstream of the operator**: its
+   entering call's argument contains an apply whose callee cell carries no value
+   at all (a dynamic closure, not a frozen binding), so the reader reaches Style
+   1 — an ordinary lichen-function call, refused by name — before the nest is
+   built. A nest whose step is a plain state read, or whose condition/exit is a
+   state read, is emitted and runs (measured on both backends:
+   `a_kernel_loop_nest_carries_a_runtime_state`). Both refusals are a `String`
+   from the lowering, recorded as a `compute.parallel` diagnostic — **not** the
+   old checker-side `LoopNotEmitted`, which is gone (§8.6).
 
-   **The residual is the class value, and the class is the reader's only
-   channel.** `wire_apply_result` writes the operator's body as the apply's
+   **The class channel is the reader's only channel, and the subtree is not an
+   alternative.** `wire_apply_result` writes the operator's body as the apply's
    *class* value, and `defining_member` is what finds it; walking the apply's
    clone subtree instead is not an alternative, because the deep pass collapses a
    value to a bare cell unified into its defining computation, so a chain walk
@@ -875,9 +882,10 @@ cleared the CPU side but nothing turns on it yet, because 1c is not:**
    with a run-time count nothing evaluates and the class holds only the apply
    itself. **Materialising the operator against placeholder operand cells does
    put the body in the class** — the step's first slot then carries a
-   `TypeOperator(Sub)` member — but the acceptance program's second slot is a
-   `read` whose own routed apply still does not materialise, so the shape is
-   still refused.
+   `TypeOperator(Sub)` member — but a placeholder can stand in for a *state*
+   value and not for an operand the kernel emits, which is what makes that route
+   fail in the same place the next time. The one that works reads the
+   **identity**, not the value, and an identity is a static fact of the artifact.
 
    **Blocker 1 is general, not loop-specific.** The argument walk recurses only
    where the *pattern* position is an `Array`; when a template's parameter value
@@ -1075,15 +1083,14 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
      **That caller is gone** — the checker no longer asks whether a loop is
      emitted at all (§8.6's relocation below) — and the callers are now the two
      readers: `loop_run.rs` (host) and `Lower::lower_loop` (`lichen-compute`).
-   - **A nested routed operator does not materialise with the one it sits inside.**
-     §8.5's item 4 records the mechanism: the reader resolves an operator through
-     the apply's *class*, and `wire_apply_result` writes there only when the
-     operator's own argument is decidable. Materialising a step against
-     placeholder operand cells therefore settles `s(0) - 1` (the class gains a
-     `TypeOperator(Sub)` member) but not the `read` in the next slot, whose buffer
-     operand is a parameter read the kernel never has a value for. The host loop
-     does not hit this because it **evaluates**: a concrete argument forces every
-     operand, which is a channel the reader does not have.
+   - **A routed operator's identity comes from its frozen callee, not from a
+     value.** §8.5's item 4 records the mechanism and the measurement:
+     `wire_apply_result` writes an operator's body as the apply's class value and
+     only when the argument is decidable, which a loop's step never is — so
+     `Lower::apply` reads the **frozen callee's own body**
+     (`static_function_compute_operator`) when the residual is missing. That is
+     what closed `k0 (x + 1)`; the acceptance reduction is blocked past it, at an
+     apply whose callee cell holds no value at all.
 
    - **The wasm side could *not* lower the body this item builds, and the claim
      that it could was wrong.** `lower.rs` created a waffle block per kernel-IR
