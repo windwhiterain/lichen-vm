@@ -409,11 +409,9 @@ fn jit_cross_kernel_call() {
     // wasm module, so the cross-kernel call is an in-module `call`:
     //   launch k1 6 = k0(6) = 7.
     // The argument is the parameter read directly.  An operator *inside* the
-    // argument (`k0 (x + 1)`, what this test used to write) is refused by name:
-    // a routed operator is an apply of the core prelude's binding, and the
-    // emitter has no node for a binding in an argument position —
-    // `jit_an_operator_inside_a_cross_kernel_argument_is_refused` below pins it
-    // (`docs/notes/operator-polymorphism.md` §7.1, cost 1).
+    // argument (`k0 (x + 1)`, what this test used to write) is emitted now
+    // rather than refused — `jit_an_operator_inside_a_cross_kernel_argument_is_emitted`
+    // below pins it (`docs/notes/operator-polymorphism.md` §7.1, cost 1).
     // The bare `k x` apply leaves a direct kernel apply's codomain `?a` (the
     // checker only resolves it via `$launch`), so the value is asserted.  The
     // wrapper form `compute.launch k0 x` *does* give `Int` — covered by

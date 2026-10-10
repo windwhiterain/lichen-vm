@@ -640,12 +640,17 @@ was always about.
 
 1. **A kernel body cannot call the binding.**  `y + y` lowers to
    `Apply(Static(<the prelude's add>), [y, y])`, which has no machine node behind
-   it, so the shapes that need one *in an argument position* are refused by name
-   and stay refused: an operator inside a cross-kernel call's argument
-   (`k0 (x + 1)`) and one inside `compute.launch`'s argument.  Both refusals are
-   pinned (`jit_an_operator_inside_a_cross_kernel_argument_is_refused`,
-   `jit_an_operator_inside_a_launch_argument_is_refused`,
-   `crates/lichen-language/tests/compute.rs`).  Everything else a kernel body
+   it, so the shapes that need one *in an argument position* used to be refused by
+   name.  **`k0 (x + 1)` is emitted now**: the identity of the operator is a
+   *static* fact of the frozen callee, so `Lower::apply` reads it out of that
+   callee's body (`Module::static_function_compute_operator`) when the residual is
+   missing — pinned green by
+   `jit_an_operator_inside_a_cross_kernel_argument_is_emitted`
+   (`crates/lichen-language/tests/compute.rs`), and see
+   [loop-conversion §8.5](loop-conversion.md) item 4 for the measurement and for
+   what it did not fix.  One inside `compute.launch`'s argument is still refused,
+   and this note does not claim a test for it — no such test exists on `dev`.
+   Everything else a kernel body
    needs works and is pinned green: the operator as the body's own result, one
    applied to a call's *result* (`k0 x + 1`), a helper's inlined body, and
    cross-kernel calls whose argument is read directly (`k0 x`, `k0 (x, 1)`,
