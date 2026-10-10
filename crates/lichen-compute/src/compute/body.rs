@@ -142,9 +142,8 @@ struct ActiveLoop {
     merge: usize,
 }
 
-/// A `write` in a conditional's arm: the conditional is a `Select`, so both arms
-/// are emitted on every lane, and the arm's write runs `count` times rather than
-/// on the lanes that took it (`docs/notes/loop-conversion.md` §6).
+/// A `write` in a conditional's arm: a `Select` emits both arms on every lane
+/// (`docs/notes/loop-conversion.md` §6).
 const CONDITIONAL_WRITE: &str = "a `compute.write` inside a conditional's arm is refused: a kernel body's conditional is a `Select`, which emits both arms on every lane, so the arm's write would run on every lane and overwrite the selected arm's own. A real branch is what makes it legal (`docs/notes/loop-conversion.md` §6)";
 
 /// A cross-kernel callee must return exactly one value, and it must be the
@@ -882,8 +881,8 @@ where
                 return self.value(residual);
             }
         }
-        // **The operator's identity is a static fact of its callee**, residual
-        // or not (`docs/notes/loop-conversion.md` §8.5).
+        // The operator's identity is a static fact of its callee
+        // (`docs/notes/loop-conversion.md` §8.5).
         if let Some(value) = self.routed_operator(node, callee, operand)? {
             return Ok(value);
         }
@@ -1403,8 +1402,8 @@ where
                 arms.len()
             ));
         }
-        // **`[else, then]`**, so element 0 is the arm that runs when the condition
-        // is false. An arm that emits a `write` is refused: see [`CONDITIONAL_WRITE`].
+        // **`[else, then]`**: element 0 runs when the condition is false, and an
+        // arm that emits a `write` is refused — see [`CONDITIONAL_WRITE`].
         let (otherwise, then) = (arms[0].node, arms[1].node);
         let emitted = self.tally.writes;
         let otherwise = self.value_item(otherwise)?;
