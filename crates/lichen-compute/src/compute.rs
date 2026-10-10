@@ -2408,13 +2408,11 @@ const UNDECIDED_DOMAIN: &str = "the kernel parameter's class is not decided when
 compiled: a kernel is lowered for one class, so the function must state it — annotate the \
 parameter (for example `p : <Int, Int>` for a tuple domain, or `y : Int` for a scalar one)";
 
-/// The **other** facts [`UNDECIDED_DOMAIN`] used to cover: the parameter states
-/// its domain and the lowering can read no class out of it.  The measured
-/// instance is a nominal struct domain (`p : In`, `In = struct<.a Int>`): a
-/// struct's low shape is `Unknown` **by design** ([`lichen_highlevel::shape`]),
-/// so the old single refusal told an author to annotate a parameter that is
-/// annotated, and the shape refusal below — the one that is actually true there —
-/// was unreachable because `Unknown` is not "known".
+/// The other facts [`UNDECIDED_DOMAIN`] used to cover.
+///
+/// # Invariant
+/// A struct's low shape is `Unknown` by design, so the old single refusal told an
+/// author to annotate a parameter that already is annotated.
 const DOMAIN_IS_A_STRUCT: &str = "the kernel parameter's domain is a struct type, and a kernel \
 domain must be a scalar or a tuple of scalars (a nominal struct type has no low shape at all)";
 
@@ -2423,13 +2421,11 @@ domain must be a scalar or a tuple of scalars (a nominal struct type has no low 
 const DOMAIN_STATED: &str = "the kernel parameter's domain has no class this lowering can read, \
 and a kernel domain must be a scalar or a tuple of scalars";
 
-/// What a parameter's own type **states** — the fact [`kernel_domain`] needs and
-/// the decoded shape cannot supply, because "no class" is what an annotated
-/// struct and an unannotated template *both* decode to.  Measured on three
-/// programs: `p : In` (a struct) decodes to `Array(Unknown, 2)`, an unannotated
-/// `y => y + y` to `Array(Array(Unknown, 2), 2)`, and `p : <Int, _>` to
-/// `Tuple([USize, Unknown])` — three shapes, and only the third says a position
-/// is missing while only the first says the domain is a struct.
+/// What a parameter's own type states, which the decoded shape cannot supply.
+///
+/// # Invariant
+/// "No class" is what an annotated struct and an unannotated template both decode
+/// to, so the statement is read from the type cell rather than the shape.
 enum DomainStatement {
     /// The parameter's type is a **nominal struct**, which has no low shape by
     /// design, so no class can be read out of it.
@@ -2443,15 +2439,11 @@ enum DomainStatement {
 }
 
 /// All of [`UNDECIDED_DOMAIN`]'s facts, told apart by the caller's `statement`.
-/// A kernel domain must be a decided scalar or a tuple of decided positions —
-/// everything else is a refusal, and each refusal names its own cause rather
-/// than falling back to a shape that would compile into a wrong signature.
 ///
-/// **A float is a decided position and is accepted**, at every position the
-/// walk reaches, including the two compound ones (an `Array(Float, _)` nested
-/// in a tuple, and a function's codomain) that phase 0 closed deliberately
-/// (`docs/notes/floating-point.md` §4.4).  The class a position's local takes
-/// is [`kernel_shape`]'s answer, and the ABI is what lowers it.
+/// # Invariant
+/// A kernel domain must be a decided scalar or a tuple of decided positions —
+/// every other shape is a refusal that names its own cause. A float is a decided
+/// position and is accepted at every position the walk reaches.
 fn kernel_domain(domain: LowShape, statement: DomainStatement) -> Result<LowShape, String> {
     if !domain_is_known(&domain) {
         return Err(match statement {
@@ -2478,11 +2470,11 @@ fn kernel_domain(domain: LowShape, statement: DomainStatement) -> Result<LowShap
     }
 }
 
-/// The first position of a **tuple** domain the lowering cannot read, as a path
-/// of indices — `None` when there is no position to name, which is a domain that
-/// is `Unknown` outright (the struct case) or a non-tuple structure.  Nested only
-/// where the domain nests, so the path names the position in the same notation
-/// the domain's own arity uses.
+/// The first position of a tuple domain the lowering cannot read, as a path.
+///
+/// # Invariant
+/// `None` when there is no position to name (a domain that is `Unknown`, or a
+/// non-tuple structure); nested only where the domain nests.
 fn first_unreadable_position(domain: &LowShape) -> Option<Vec<usize>> {
     let LowShape::Tuple(items) = domain else {
         return None;
@@ -2498,44 +2490,30 @@ fn first_unreadable_position(domain: &LowShape) -> Option<Vec<usize>> {
     })
 }
 
-/// The IR's own expression of a kernel domain — the same structure, in the two
-/// variants the lowered-kernel IR has, so that a backend reading a fragment
-/// needs no dependency on the host shape lattice.
+/// The IR's own expression of a kernel domain, in the two variants the
+/// lowered-kernel IR has.
 ///
-/// **Total, on purpose, and it preserves the arity convention.** A domain
-/// `kernel_domain` accepted is a scalar or a tuple, but a tuple's *element* is
-/// not itself re-checked, so a shape with no IR counterpart can still arrive
-/// here; those fold to [`KernelShape::Scalar`] with the element's class ([`scalar_class_of`]),
-/// which flattens to one leaf exactly as the `flat_arity` filler arms do for the
-/// same shapes.  A separate refusal arm would be a second failure mode for a
-/// case the parameter-count path already tolerates, and would change behaviour
-/// rather than preserve it.
-///
-/// **The class is read off the leaf, and a compound leaf takes its element's.**
-/// This is the *shape* question ("one value, or a tuple of them, of what
-/// class"), and `docs/notes/floating-point.md` §4.4 answers the compound half:
-/// an `array<Float, 3>` parameter is **one `f32` local**, not three and not one
-/// integer — the element's class, which is what keeps this fold and
-/// [`flat_arity`] agreeing about how many locals a position occupies.
+/// # Invariant
+/// Total on purpose: a shape with no IR counterpart folds to [`KernelShape::Scalar`]
+/// with its element's class, flattening to one leaf exactly as [`flat_arity`]
+/// does — a refusal arm would change behaviour for a shape that path tolerates.
+/// A compound leaf takes its element's class, so an `array<Float, 3>` is one
+/// `f32` local.
 fn kernel_shape(domain: &LowShape) -> KernelShape {
     match domain {
         LowShape::USize => KernelShape::Scalar(ScalarClass::Int),
         LowShape::Float => KernelShape::Scalar(ScalarClass::Float),
         LowShape::Tuple(items) => KernelShape::Tuple(items.iter().map(kernel_shape).collect()),
         LowShape::Array(element, _) => KernelShape::Scalar(scalar_class_of(element)),
-        // A function, a table and an unknown leaf have no scalar element to take
-        // a class from, so the filler's integer local is the whole answer; a
-        // function's codomain may be a float and is *permitted* by the walk, but
-        // a function value has no scalar encoding to be typed by.
+        // A function, a table or an unknown leaf has no scalar element: the
+        // filler's integer local is the answer.
         LowShape::Function(..) | LowShape::Table(..) | LowShape::Unknown => {
             KernelShape::Scalar(ScalarClass::Int)
         }
     }
 }
 
-/// The class a single local takes for a position of `shape` — a scalar's own,
-/// an array's element's (recursively), and `Int` for a compound position with no
-/// scalar element (`docs/notes/floating-point.md` §4.4).
+/// The class a single local takes for a position of `shape`.
 fn scalar_class_of(shape: &LowShape) -> ScalarClass {
     match shape {
         LowShape::Float => ScalarClass::Float,
@@ -2548,8 +2526,7 @@ fn scalar_class_of(shape: &LowShape) -> ScalarClass {
     }
 }
 
-/// The low shape a **scalar leaf** seeds its parameter slot with — the inverse
-/// of [`scalar_class_of`] at the one position that function reads.
+/// The low shape a scalar leaf seeds its parameter slot with.
 fn low_shape_of(class: ScalarClass) -> LowShape {
     match class {
         ScalarClass::Int => LowShape::USize,
@@ -2557,21 +2534,13 @@ fn low_shape_of(class: ScalarClass) -> LowShape {
     }
 }
 
-/// Whether a shape has no position anywhere in it that the kernel ABI cannot
-/// lower to a decided local — the gate [`kernel_domain`] reads before its own
-/// shape match.
+/// Whether every position in a shape is one the kernel ABI can lower to a local.
 ///
-/// It **recurses through every position**, and that is the load-bearing part: a
-/// compound shape reached through an accepted `Tuple` is walked too, because
-/// asking a compound shape's own `is_known` answers `true` for `Array(Float, _)`
-/// — a float is a decided shape — and `kernel_domain` accepts `Tuple(_)`
-/// without re-checking elements.  A function's codomain and a table's value
-/// position are walked as well, because they are decided independently of their
-/// sibling: a declared `Int -> Float` puts a float in exactly that position.
-///
-/// **`Float` is decided, so it is not an obstacle.**  Phase 0 reported it as one
-/// because the ABI had no local for it; the phase-2 permission is that the ABI
-/// does (`docs/notes/floating-point.md` §4.4).
+/// # Invariant
+/// It recurses through every position, because asking a compound shape's own
+/// `is_known` answers `true` for `Array(Float, _)`. A function's codomain and a
+/// table's value are walked too, since a declared `Int -> Float` puts a float in
+/// exactly that position.
 fn domain_is_known(shape: &LowShape) -> bool {
     match shape {
         LowShape::Unknown => false,
@@ -2586,26 +2555,16 @@ fn domain_is_known(shape: &LowShape) -> bool {
 }
 
 /// The number of scalar locals a domain shape flattens to — the wasm parameter
-/// count.  A scalar is one local; a tuple is the sum of its elements' arities
-/// (so `((Int,Int), Int)` is `1 + 1 + 1 = 3`).
+/// count.
 ///
-/// An undecided domain is refused before arity is ever computed — the domain
-/// check in `compile_fragment` rejects anything that is not a decided scalar
-/// or tuple of decided scalars — so the `Unknown` arm is the total-function
-/// filler for a shape that cannot reach a wasm signature, and counts one
-/// undecided leaf rather than inventing a parameter count.
+/// # Invariant
+/// A scalar is one local and a tuple the sum of its elements'; an undecided shape
+/// cannot reach a wasm signature, so its arm counts one leaf rather than inventing
+/// a count.
 fn flat_arity(shape: &LowShape) -> usize {
     match shape {
         LowShape::USize => 1,
-        // One leaf, and deliberately the *layout* answer rather than a class
-        // one: a float is one value and [`KernelShape::Scalar`] is also one, so
-        // this stays consistent with `kernel_shape`, which is what keeps a
-        // domain's locals contiguous.  A compound position is one leaf here for
-        // the same reason and takes the same class there
-        // (`docs/notes/floating-point.md` §4.4).  Zero would be a different
-        // claim (that a float occupies no local of the signature
-        // `KernelShape` sizes as one) and would put the two arities in
-        // disagreement.
+        // One leaf — the layout answer, consistent with `kernel_shape`.
         LowShape::Float => 1,
         LowShape::Tuple(items) => items.iter().map(flat_arity).sum(),
         LowShape::Array(_, _) | LowShape::Function(..) | LowShape::Table(..) => 1,
@@ -2613,10 +2572,7 @@ fn flat_arity(shape: &LowShape) -> usize {
     }
 }
 
-/// The disjoint-set representative of `node`, walked without path compression
-/// (a `&self` read) — used to compare whether two nodes were unified.  The
-/// lowlevel's `equality_representative` needs `&mut`; this is the read-only
-/// form for the emitter's `&Module`.
+/// The disjoint-set representative of `node`, walked without path compression.
 fn equality_rep<P>(module: &Module<P>, node: NodeId) -> NodeId
 where
     P: Program,
@@ -2632,73 +2588,19 @@ where
 
 /// How many levels deep [`emit_node`]'s walk may go before it refuses.
 ///
-/// **The budget is on the walk, and the walk's depth is the trip count.** An
-/// unmarked recursion is **expanded** while the body is evaluated
-/// (`docs/notes/loop-conversion.md` §1.1), and each expanded copy nests inside
-/// the previous one's else arm — so the graph this emitter walks is a chain, not
-/// a tree, and its depth is *linear in the trip count*. Measured first-hand on
-/// `crates/lichen-language/examples/recursion.rs`: about **3.1 levels per
-/// expanded step**, so `depth ≈ 18 + 3.1 × trip` — trip 1 reaches 21, trip 10
-/// reaches 49, trip 400 would reach ~1260.
-///
-/// This is the one walk on the lowering path that nothing else grows the stack
-/// for. [`compile`](crates/lichen-language/src/compile.rs) is `#[stacksafe]`,
-/// but `stacksafe` only tests for room at an **annotated** frame, so everything
-/// below it shares the segment that frame grew and never asks for another:
-/// measured on a 1 MiB main thread of a debug build, the walk died at **level
-/// ~175** — a hard stack overflow with no diagnostic at all. [`emit_node`] is
-/// therefore `#[stacksafe]` as well, and the two are not alternatives: without
-/// the annotation a trip of 100 still crashes below this limit, and without the
-/// limit a trip of 400 still compiles (measured: answers 403 in 66 ms on `cpu`,
-/// 220 ms on `gpu`) at about 1260 levels and 7 MiB of stack.
-///
-/// **The other recursion on this path is not budgeted, on purpose.** `lower_flow`
-/// walks the [`Flow`] tree, and its depth is the nesting a program *writes* — a
-/// branch or a loop nest, not an expansion — which the parser, the checker and
-/// the lowlevel all walk first and all of them `#[stacksafe]`. The walk that an
-/// unmarked recursion drives is the one with no other growth in front of it.
-///
-/// # Why 512
-///
-/// - **Three times the depth that crashed here.** A limit below the measured
-///   overflow point would be a statement about *this machine's main thread*
-///   rather than about the program, and would refuse a body a release build or a
-///   worker thread compiles without trouble. The annotation is what makes the
-///   number reachable everywhere, so the thread's stack stops being an input.
-/// - **Deep enough that nothing hand-written is near it.** Fifty nested
-///   expressions is already unreadable in a kernel body, and every kernel anyone
-///   writes by hand (`dot4`, a 2×2 matmul, `K ≤ 16`) is a body of tens of
-///   levels. 512 is an order of magnitude above that, so the budget is reachable
-///   by expansion and by nothing else.
-/// - **Shallow enough to be the right advice.** 512 levels is about **160
-///   expanded copies** of a step this size, at the ~29 µs of compile time per
-///   iteration `docs/notes/gpu-algorithm-roadmap.md` §4.1 measures — so what is
-///   refused here is a body that was going to cost milliseconds to compile and
-///   would still be `O(n)` code. The trip counts a GPU inner loop wants (1024,
-///   2²⁰) are an order of magnitude past this, which is the point: they need
-///   `@loop`, not a larger constant.
-/// - **Bounded in stack.** The worst case under the limit is ~512 × 6 KB of
-///   measured debug frames ≈ 3 MiB, two `stacksafe` segments — a cost an author
-///   can predict. Unbounded, the walk would allocate a segment per level and
-///   never stop.
-///
-/// # Why a constant
-///
-/// **Not derived from the thread's stack**: a threshold that changes between a
-/// debug and a release build of the same program is not a number a program can be
-/// written against, which is the bar `docs/notes/code-audit.md` `P1-40` sets. The
-/// stack is handled on the other side of the same change, so the constant can
-/// carry the *policy* while the stack stays a fact of the caller. **Not
-/// configurable**: the emitter has no other knob, and the tree's other budgets
-/// ([`Module::MAX_APPLY_DEPTH`], [`Module::MAX_APPLY_TOTAL`]) are constants too.
+/// # Invariant
+/// The budget is on the walk, and the walk's depth is the trip count: an unmarked
+/// recursion is expanded into a nested chain, so depth is linear in the trips.
+/// `emit_node` is `#[stacksafe]` and this limit is the policy — a constant, never
+/// derived from the thread's stack, and unreachable except by expansion.
 const MAX_KERNEL_BODY_DEPTH: usize = 512;
 
 /// How deep a parameter's field nesting a named read's resolution follows.
 ///
-/// A parameter's nesting is the type's own, and the bound is what keeps a type
-/// whose encoding re-enters (the universe's cycle is one) from spinning: a chain
-/// deeper than this is not a struct read the resolution understands, and it
-/// stops and lets its caller name the cause.
+/// # Invariant
+/// A chain deeper than this is not a struct read the resolution understands: it
+/// stops and lets its caller name the cause, which is what keeps a type whose
+/// encoding re-enters from spinning.
 const MAX_PARAMETER_DEPTH: usize = 32;
 
 /// The refusal [`emit_node`] gives past [`MAX_KERNEL_BODY_DEPTH`], naming the
