@@ -356,7 +356,8 @@ pub enum ExprKind<L> {
     ///
     /// # Invariant
     /// Unlike [`Self::NamedField`], this reads the name table straight from the
-    /// container's **type**, which must be a TypeStruct (`container_ty[0][1]`) —
+    /// container's **type**, which must be a TypeStruct (the walk is
+    /// `shape::STRUCT_TYPE_NAMES_PATH`) —
     /// a check-time unify, so it is not raw in the sense of [`Self::RawIndex`].
     RawNamedField {
         container: ExprId,
