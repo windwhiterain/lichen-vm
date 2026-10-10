@@ -6707,7 +6707,7 @@ fn run_parallel_kernel(
     // kernel id is content-addressed, so the fragment it names cannot be a
     // different one.  The lock is released before any emission or assembly,
     // which locks the same registry again.
-    let (outputs, class, input_classes, leaf_classes) = {
+    let (outputs, class, input_classes, leaf_classes, output_classes) = {
         let fragments = kernels().lock().unwrap();
         let fragment = fragments
             .get(&id)
@@ -6721,6 +6721,7 @@ fn run_parallel_kernel(
             // index; the index is the worker's loop variable, so only the
             // scalars are handed in.
             classes[..classes.len().saturating_sub(1)].to_vec(),
+            fragment.output_classes.clone(),
         )
     };
     if leaf_classes.len() != leaves.len() {
@@ -6840,7 +6841,16 @@ fn run_parallel_kernel(
     Ok(RunOutcome::Host(
         outputs
             .into_iter()
-            .map(|words| BufferWords { class, words })
+            .enumerate()
+            // **Each output is tagged with its own declared class**, at its write
+            // ordinal. One class for all of them was a one-fragment-one-class
+            // assumption, and a fragment whose outputs are of different classes
+            // hands an `f32` back labelled `Int` — the same bits, the wrong type,
+            // which the next launch refuses as a class conflict.
+            .map(|(ordinal, words)| BufferWords {
+                class: output_classes.get(ordinal).copied().unwrap_or(class),
+                words,
+            })
             .collect(),
     ))
 }

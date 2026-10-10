@@ -5,7 +5,7 @@
 
 use lichen_language::package::PackageStore;
 use lichen_language::program::{LangProgram, LangValue};
-use lichen_lowlevel::{LowValue, Module, NodeId};
+use lichen_lowlevel::{Module, NodeId};
 
 mod common;
 
@@ -2105,18 +2105,6 @@ out = (compute.plrun k ((compute.A In)(.n {ELEMENT_COUNT}, .I In(.a 0))) : Out)
     );
 }
 
-/// The `f32` elements of a collected `Float` buffer, however the backend tagged its words.
-fn float_elements(module: &Module<LangProgram>, value: &LangValue) -> Vec<f32> {
-    common::array_values(module, value)
-        .iter()
-        .map(|element| match element {
-            LangValue::LowValue(LowValue::Float(number)) => *number,
-            LangValue::LowValue(LowValue::USize(word)) => f32::from_bits(*word as u32),
-            other => panic!("a collected `Float` element is not a scalar: {other:?}"),
-        })
-        .collect()
-}
-
 /// A mixed-class fragment through both backends; see `docs/notes/floating-point.md` §5.1.
 #[test]
 fn a_fragment_whose_buffers_are_of_two_classes_agrees_across_the_two_backends() {
@@ -2167,9 +2155,10 @@ out = (compute.plrun k2 ((compute.A In2)(.n {ELEMENT_COUNT}, .I In2(.b inbuf.z))
         "the two backends answered the integer output differently"
     );
 
-    // The same input crossed to `Float` and offset by a half.
-    // The CPU tags every output by the first class, so this one arrives as its elements' bits.
-    let floats = float_elements(&cpu_module, &cpu_buffers[1]);
+    // The same input crossed to `Float` and offset by a half. **Read as the typed
+    // value, not as element bits**: the CPU backend tags each output with the
+    // class its write ordinal declares, so a `Float` output arrives a `Float`.
+    let floats = common::float_array(&cpu_module, &cpu_buffers[1]);
     assert_eq!(floats.len(), ELEMENT_COUNT, "the float output's length");
     assert_eq!(floats[0], 10.5, "the first float element");
     assert_eq!(

@@ -700,17 +700,24 @@ feeds link `n`'s output buffer into link `n + 1`'s **input slot**, and a module
 types each slot by its own class, so a fragment whose two ends differ is refused
 as `RunError::ChainCrossesClasses` rather than read at the other width.
 
-**The mixed fragment is now a test, and the one thing it cannot compare
-directly.** `a_fragment_whose_buffers_are_of_two_classes_agrees_across_the_two_backends`
+**The mixed fragment is now a test, and what it measures.** `a_fragment_whose_buffers_are_of_two_classes_agrees_across_the_two_backends`
 runs an `Int` input and an `Int`+`Float` codomain through both backends at
 `LOCAL_SIZE_X + 5`. Its codomain needs the second output because the language
 types every **input** position by the fragment's *first* output class
 (`Positions::element_class`), so a lone `Float` output would make a host `Int`
-buffer be read as `Float` and refused by that name. The CPU backend types every
-**output** by that same first class as well, so the `Float` output arrives there
-as its elements' bit patterns; the test compares those patterns against the
-device's floats, which is the same element-for-element claim. Per-output classes
-on the CPU side are the other half of this and are not done here.
+buffer be read as `Float` and refused by that name.
+
+**Both backends tag an output with the class its own write ordinal declares.**
+The device side did this with the per-output `DeviceBuffer`; the **CPU side did
+not** — `run_parallel_kernel` tagged every output with `fragment_class`, the
+*first* output's class, so a `Float` output came home labelled `Int`. The bits
+were right and the type was wrong, which the next launch then refused as a class
+conflict. That is the same one-fragment-one-class assumption, one layer down, and
+it is fixed: `output_classes` is read per ordinal alongside `input_classes`, and
+each `BufferWords` takes its own. **The test reads the `Float` output as a typed
+float**, which is the point — an earlier version compared the CPU's bit patterns
+against the device's floats, which bridged the divergence rather than closing it,
+and would have kept passing after the tagging regressed.
 
 Straight-line output is no longer byte-identical: the id numbering moved
 (`fn_ty` and `ptr_in` follow the per-class chains), which is arbitrary but real.
