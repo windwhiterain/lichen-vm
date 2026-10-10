@@ -32,7 +32,7 @@
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use lichen_kernel_ir::{
-    BufferSlot, KernelFragment, LaunchSet, ParallelBackend, Pending, ResidentId, ScalarData,
+    BufferSlot, LaunchSet, ParallelBackend, Pending, ResidentId, ScalarData,
     install_parallel_backend,
 };
 use lichen_language::package::PackageStore;

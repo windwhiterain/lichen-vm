@@ -2119,6 +2119,60 @@ out = (compute.plrun k2 ((compute.A In2)(.n {ELEMENT_COUNT}, .I In2(.b inbuf.z))
     );
 }
 
+/// A **cross-kernel call inside a parallel body**, through both backends.
+///
+/// # Invariant
+/// The callee is a separate compiled kernel rather than an inlined body, so
+/// neither backend can resolve the call from the calling fragment: both need the
+/// set the callee sits in, and the position it sits at. The wasm side reaches it
+/// through `assemble_launch_set` and the SPIR-V side through the same
+/// `LaunchSet` — one derivation — which is what this asserts by comparing the two
+/// answers rather than either one alone.
+///
+/// `k0` is a **scalar** kernel called with the parallel body's index, which is the
+/// shape the language can actually produce: a parallel kernel's parameter is its
+/// `config` and its index, and only the index is a value a body can name.
+#[test]
+fn a_cross_kernel_call_agrees_across_the_two_backends() {
+    let source = format!(
+        r#"
+--- compute = import "compute.lichen" ---
+k0 = compute.jit ((y : Int) => y + 1)
+In  = struct<.a Int>
+Out = struct<.z (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {{
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value (compute.launch k0 i)))
+}}
+k = compute.parallel f "{BACKEND}"
+out = (compute.plrun k ((compute.A In)(.n {ELEMENT_COUNT}, .I In(.a 0))) : Out)
+(compute.read ((compute.Read _)(.from out.z, .at 0)), compute.read ((compute.Read _)(.from out.z, .at 1)), compute.read ((compute.Read _)(.from out.z, .at {last})), compute.collect out.z)
+"#,
+        last = ELEMENT_COUNT - 1,
+    );
+    let Some(((cpu_module, cpu), (gpu_module, gpu))) = answer_from_each_backend(&source) else {
+        return;
+    };
+    let elements = common::array_values(&cpu_module, &cpu);
+    assert_eq!(common::usize_of(&elements[0]), 1, "k0(0)");
+    assert_eq!(common::usize_of(&elements[1]), 2, "k0(1)");
+    assert_eq!(
+        common::usize_of(&elements[2]),
+        ELEMENT_COUNT,
+        "k0 of the last index, past the workgroup multiple"
+    );
+    assert_eq!(
+        common::usize_array(&cpu_module, &elements[3]),
+        (1..=ELEMENT_COUNT).collect::<Vec<usize>>(),
+        "every element is its own index plus one"
+    );
+    assert!(
+        common::values_eq((&cpu_module, &cpu), (&gpu_module, &gpu)),
+        "the two backends answered a cross-kernel call differently"
+    );
+}
+
 /// A `@loop` inside a kernel, lowered as a **nest**, on both backends.
 ///
 /// # Invariant
