@@ -2217,3 +2217,67 @@ compute.read ((compute.Read _)(.from out.z, .at 0))
         "the two backends answered one loop nest differently"
     );
 }
+
+/// A dynamic reduction on both backends at two lengths: the triangle numbers.
+///
+/// # Invariant
+/// Lane `i` reads its trip count from `data[i]`, so the last lane's count is the
+/// buffer's length; the seed fills `data[i] = i + 1`, and the answer is the
+/// hand-derived `length(length + 1)/2` (`10` at four elements, `28` at seven).
+/// The continue arm is first because `spirv.rs` branches on `if_true` whichever
+/// arm leaves the loop (`docs/notes/loop-conversion.md` §8.6 item 6).
+#[test]
+fn a_kernel_loop_reduces_a_runtime_buffer_length() {
+    for length in [4_usize, 7] {
+        let source = format!(
+            r#"
+---
+  compute = import "compute.lichen"
+---
+In0  = struct<.a Int>
+Out0 = struct<.z (compute.Buf _)>
+Par0 = compute.P (compute.KT _)(.I In0, .O Out0)
+seed = (k : Par0) => {{
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 1))
+}}
+kseed = compute.parallel seed "{BACKEND}"
+data = (compute.plrun kseed ((compute.A In0)(.n {length}, .I In0(.a 0))) : Out0)
+In  = struct<.b (compute.Buf _)>
+Out = struct<.z (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {{
+  @loop sum_to = s => if s(0) != 0 then sum_to (s(0) - 1, s(1) + compute.read ((compute.Read _)(.from k.in.b, .at s(0) - 1))) else s(1)
+  i = compute.range k.n
+  count = compute.read ((compute.Read _)(.from k.in.b, .at i))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value sum_to (count, 0)))
+}}
+p = compute.parallel f "{BACKEND}"
+out = (compute.plrun p ((compute.A In)(.n {length}, .I In(.b data.z))) : Out)
+compute.read ((compute.Read _)(.from out.z, .at {last}))
+"#,
+            last = length - 1
+        );
+        let Some(((cpu_module, cpu), (gpu_module, gpu))) = answer_from_each_backend(&source) else {
+            return;
+        };
+        let expected = length * (length + 1) / 2;
+        assert_eq!(
+            common::usize_of(&cpu),
+            expected,
+            "the cpu backend's reduction over {} element(s)",
+            length
+        );
+        assert_eq!(
+            common::usize_of(&gpu),
+            expected,
+            "the gpu backend's reduction over {} element(s)",
+            length
+        );
+        assert!(
+            common::values_eq((&cpu_module, &cpu), (&gpu_module, &gpu)),
+            "the two backends answered one reduction over {} element(s) differently",
+            length
+        );
+    }
+}

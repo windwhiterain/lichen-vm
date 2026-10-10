@@ -786,36 +786,40 @@ where
         callee: NodeId,
         operand: NodeId,
     ) -> Result<Option<ValueId>, String> {
-        let Some(LowValue::Function(AnyFunctionId::Static(function))) = self
+        let function = match self
             .module
             .node_value(AnyNodeId::Dynamic(callee))
             .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
-        else {
-            return Ok(None);
+        {
+            Some(LowValue::Function(AnyFunctionId::Static(function))) => function,
+            // The cell's value, or the projection into the frozen module's own
+            // export array.
+            _ => match self.module.static_function_of_callee(callee) {
+                Some(function) => function,
+                None => return Ok(None),
+            },
         };
         let Some((operator, _)) = self.module.static_function_compute_operator(function) else {
             return Ok(None);
         };
+        // The operator's operands are the call site's argument's value half.
+        let Some(argument) = self
+            .module
+            .operand_items(operand)
+            .ok()
+            .and_then(|items| items.get(1))
+            .map(|item| item.node)
+            .and_then(|item| item.dynamic())
+        else {
+            return Ok(None);
+        };
+        let value = self.module.pair_value_half(argument).unwrap_or(argument);
         if let Some(compute_op) = AsEnum::<ComputeOperator>::as_enum(&operator) {
-            return self.compute_operator(node, compute_op, operand).map(Some);
+            return self.compute_operator(node, compute_op, value).map(Some);
         }
         if let Some(ty_op) = AsEnum::<TypeOperator>::as_enum(&operator)
             && let Some(bin) = kernel_bin(ty_op)
         {
-            // **The operator's operands are the apply's argument elements**, not
-            // the apply's own `[callee, argument]` array: `+` is applied to
-            // `[x, y]`, and the pair wrapping that argument is the encoding.
-            let Some(argument) = self
-                .module
-                .operand_items(operand)
-                .ok()
-                .and_then(|items| items.get(1))
-                .map(|item| item.node)
-                .and_then(|item| item.dynamic())
-            else {
-                return Ok(None);
-            };
-            let value = self.module.pair_value_half(argument).unwrap_or(argument);
             let elements = self
                 .module
                 .value_leaves(value)
@@ -860,7 +864,8 @@ where
                 .unwrap_or(operands[0].node),
         )?;
         // The routing case: emit the residual the clone wrote.
-        if is_static_function(self.module, callee) {
+        let frozen = is_static_function(self.module, callee);
+        if frozen {
             let residual = (unsafe { self.module.array_items(node) })
                 .and_then(|items| items.first())
                 .map(|item| item.node)
@@ -868,26 +873,24 @@ where
                     AnyNodeId::Dynamic(node) => Some(node),
                     AnyNodeId::Static(_) => None,
                 });
-            let Some(residual) = residual else {
-                // **The callee's own body still names the operator.** A routed
-                // apply's residual is written only when its argument is decidable,
-                // and a loop's step argument never is — but the callee is a frozen
-                // function whose body is reachable by `FunctionId` whether or not
-                // anything evaluated, so the operator inside a recursive call's
-                // argument is read from there.
-                if let Some(value) = self.routed_operator(node, callee, operand)? {
-                    return Ok(value);
-                }
-                return Err(
-                    "this kernel body applies a prelude operator where the kernel cannot reach the \
-                     body it lowered to, and its callee names no compute operator: the operator is \
-                     a call of the prelude's binding, the call sits in the function's own template \
-                     (which the compiler never evaluates), and an operator applied *inside a call's \
-                     argument* has no residual to read (`docs/notes/loop-conversion.md` §8.5)"
-                        .into(),
-                );
-            };
-            return self.value(residual);
+            if let Some(residual) = residual {
+                return self.value(residual);
+            }
+        }
+        // **The operator's identity is a static fact of its callee**, residual
+        // or not (`docs/notes/loop-conversion.md` §8.5).
+        if let Some(value) = self.routed_operator(node, callee, operand)? {
+            return Ok(value);
+        }
+        if frozen {
+            return Err(
+                "this kernel body applies a prelude operator where the kernel cannot reach the \
+                 body it lowered to, and its callee names no compute operator: the operator is \
+                 a call of the prelude's binding, the call sits in the function's own template \
+                 (which the compiler never evaluates), and an operator applied *inside a call's \
+                 argument* has no residual to read (`docs/notes/loop-conversion.md` §8.5)"
+                    .into(),
+            );
         }
         // **A marked recursion**: what a self-apply converts to is a loop, and
         // the shape that decides it is the callee's own template.
