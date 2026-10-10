@@ -151,8 +151,7 @@ impl<'backend> Runner<'backend> {
                         }
                     };
 
-                    // A node's kernel is its own launch set: a cross-call brings its
-                    // callees with it.
+                    // A node's kernel is its own launch set, callees included.
                     let launch = lichen_kernel_ir::LaunchSet::single(&kernel.fragment);
                     let produced = match self.policy {
                         Policy::Serial => self

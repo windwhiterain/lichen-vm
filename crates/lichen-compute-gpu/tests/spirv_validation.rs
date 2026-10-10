@@ -805,6 +805,117 @@ fn the_two_conversions_validate_in_a_float_module() {
     }
 }
 
+/// `out[i] = in[i] + a`, over `(n, a, index)` — the launch's runtime scalar.
+///
+/// # Invariant
+/// The block member is **eight bytes** here because the module is an integer one: a leaf's
+/// width is the type the entry point loads it as, not the class's buffer width.
+fn adds_a_runtime_scalar() -> KernelFragment {
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body: KernelBody::from_flat(
+            3,
+            &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
+                FlatOp::Read(2),                                        // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos
+                FlatOp::Read(2),
+                FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)), // in[i]
+                FlatOp::Read(1), // the pushed runtime scalar
+                FlatOp::Instr(KernelInstr::Bin(ScalarClass::Int, KernelBin::Add)),
+                FlatOp::Instr(KernelInstr::BufferWriteCall(ScalarClass::Int)),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            ],
+        ),
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Int],
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int; 1],
+        int_width: IntWidth::I64,
+    }
+}
+
+/// `out[i] = in[i] * alpha`, over `(n, alpha, index)` — a `Float` leaf beside an `Int` one.
+///
+/// # Invariant
+/// **Both leaves are four bytes here**, because the module is a float one: an integer leaf of
+/// a float module is a 32-bit index, the same rule the invocation id follows. A block laid out
+/// at the buffer widths would put `alpha` eight bytes in and the shader would read padding.
+fn scales_by_a_runtime_float() -> KernelFragment {
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Float),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body: KernelBody::from_flat(
+            3,
+            &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
+                FlatOp::Read(2),                                        // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos
+                FlatOp::Read(2),
+                FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Float)), // in[i]
+                FlatOp::Read(1), // the pushed runtime scalar
+                FlatOp::Instr(KernelInstr::Bin(ScalarClass::Float, KernelBin::Mul)),
+                FlatOp::Instr(KernelInstr::BufferWriteCall(ScalarClass::Float)),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            ],
+        ),
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Float],
+        output_classes: vec![ScalarClass::Float],
+        result_classes: vec![ScalarClass::Float; 1],
+        int_width: IntWidth::I64,
+    }
+}
+
+/// A module that reads a launch scalar is a valid module.
+///
+/// # Invariant
+/// Both classes, because the block's **member widths** are where they differ: an integer leaf
+/// is eight bytes in one module and four in the other, and a member at an offset its type does
+/// not divide is what `spirv-val` answers.
+#[test]
+fn a_module_pushing_a_runtime_scalar_validates() {
+    let one_in_one_out = Binding {
+        inputs: 1,
+        outputs: 1,
+    };
+    let mut covered = 0;
+    for (what, fragment) in [
+        (
+            "an integer module pushing a scalar",
+            adds_a_runtime_scalar(),
+        ),
+        (
+            "a float module pushing a float scalar",
+            scales_by_a_runtime_float(),
+        ),
+    ] {
+        fragment
+            .body
+            .validate()
+            .unwrap_or_else(|broken| panic!("{what} is well formed: {broken}"));
+        let words = spirv::compile(&LaunchSet::single(&fragment), one_in_one_out)
+            .unwrap_or_else(|refusal| panic!("{what} is emitted: {refusal}"));
+        if validate(what, &words) {
+            covered += 1;
+        }
+    }
+    if covered < 2 {
+        eprintln!("only {covered} of 2 push-constant module(s) were validated");
+    }
+}
+
 /// The merge block, continue target and true label of the module's loop header.
 fn loop_header_facts(words: &[u32]) -> (u32, u32, u32) {
     let mut at = 5;

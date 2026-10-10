@@ -8,11 +8,11 @@
 
 mod common;
 
-use lichen_compute_gpu::{GpuContext, RunError};
+use lichen_compute_gpu::GpuContext;
 use lichen_graph_ir::{Count, Graph, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, LaunchSet, ResidentId, ScalarClass,
+    KernelShape, ResidentId, ScalarClass,
 };
 
 /// `out[i] = in[i] + in[i] + 1`.
@@ -279,29 +279,39 @@ fn an_extent_that_is_one_of_the_graphs_own_values_runs_at_that_extent() {
     }
 }
 
-/// A parameter that declares a runtime scalar is refused by name on this path.
+/// A graph node's fragment may not declare a runtime scalar beside the extent.
 ///
 /// # Invariant
-/// A `KernelNode` carries the extent and its inputs and the push constant carries the extent alone, so a
-/// third leaf has nowhere to arrive — the CPU path passes the whole leaf list and this one cannot. The
-/// alternative is every lane computing from the wrong value.
+/// A `KernelNode` carries the extent and its inputs, so the launch fixes one scalar leaf; a
+/// fragment declaring a second would have every lane read a value nobody supplied. The
+/// alternative is a number that is wrong rather than an answer that is missing.
 #[test]
-fn a_parameter_with_a_runtime_scalar_is_refused_by_name() {
-    let Some(context) = common::context("a_parameter_with_a_runtime_scalar_is_refused_by_name")
+fn a_graph_node_carrying_a_runtime_scalar_is_refused_by_name() {
+    let Some(context) =
+        common::context("a_graph_node_carrying_a_runtime_scalar_is_refused_by_name")
     else {
         return;
     };
-    let data = vec![0u8; 8 * 8];
-    let refusal = context
-        .run(
-            &LaunchSet::single(&with_a_runtime_scalar()),
-            &[BufferSlot::Host(&data)],
-            8,
+    let mut graph = Graph::with_inputs(1);
+    let node = graph
+        .push(
+            Node::Kernel(KernelNode {
+                fragment: with_a_runtime_scalar(),
+                inputs: vec![0],
+                count: Count::Constant(8),
+            }),
+            1,
         )
-        .expect_err("a runtime scalar has no push constant to arrive in");
-    assert_eq!(refusal, RunError::ScalarsNotPushed { leaves: 3 });
+        .expect("one output, one declared");
+    graph
+        .returning(vec![node])
+        .expect("a value the graph defines");
+    let data: Vec<i64> = vec![0; 8];
+    let refusal = Runner::new(&context, Policy::Serial)
+        .run(&graph, vec![Value::host(data)])
+        .expect_err("the node's second leaf has no value in a graph");
     assert!(
-        refusal.to_string().contains("3 leaf/leaves"),
-        "the message names how many leaves it saw: {refusal}"
+        refusal.to_string().contains("runtime scalar"),
+        "the message names what the launch did not supply: {refusal}"
     );
 }
