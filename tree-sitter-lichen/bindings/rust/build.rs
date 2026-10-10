@@ -5,9 +5,7 @@ fn main() {
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
 
-    // The generated parser is deliberately not committed. Regenerate it from
-    // `grammar.js` (the source of truth) whenever it is missing or older than the
-    // grammar, so the Rust build never depends on a stale committed parser.
+    // The generated parser is a build output of `grammar.js`, not committed.
     regenerate_if_stale(&manifest_dir);
 
     let src_dir = manifest_dir.join("src");
@@ -21,13 +19,10 @@ fn main() {
     config.compile("tree-sitter-lichen");
 }
 
-/// (Re)generate `src/parser.c` (and `grammar.json`, `node-types.json`, the runtime
-/// headers) from `grammar.js` when it is missing or stale.
+/// (Re)generate the parser from `grammar.js` when it is missing or stale.
 fn regenerate_if_stale(manifest_dir: &Path) {
-    // Re-run this build script whenever the grammar source changes, or when
-    // `src/parser.c` is added/removed (cargo treats a missing `rerun-if-changed`
-    // path as changed), so staleness is re-evaluated on build without watching
-    // the whole generated `src/` dir (avoiding a rebuild loop after regeneration).
+    // Watch the grammar and `parser.c`; watching all of `src/` would
+    // rebuild after every regeneration.
     println!("cargo:rerun-if-changed=grammar.js");
     println!("cargo:rerun-if-changed=src/parser.c");
 
@@ -88,9 +83,8 @@ fn run_generate(cli: &Path, manifest_dir: &Path) -> std::io::Result<Output> {
         .output()
 }
 
-/// Locate a runnable `tree-sitter` CLI: a `tree-sitter` on PATH (preferred — e.g. an
-/// `cargo install tree-sitter-cli` binary), falling back to one installed under
-/// `node_modules/.bin` (if the grammar was set up via npm).
+/// Locate a runnable `tree-sitter` CLI: on `$PATH`, else under
+/// `node_modules/.bin` (an npm-installed grammar).
 fn find_tree_sitter_cli(manifest_dir: &Path) -> Option<PathBuf> {
     // Prefer a `tree-sitter` on PATH (cargo-installed or otherwise).
     if Command::new("tree-sitter")

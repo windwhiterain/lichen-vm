@@ -1,7 +1,5 @@
-//! Tree-sitter Rust binding for the Lichen grammar.
-//!
-//! In-tree tests exercise the parser against the sample programs under
-//! `examples/`.
+//! Tree-sitter Rust binding for the Lichen grammar; tested against the
+//! samples under `examples/`.
 
 use tree_sitter_language::LanguageFn;
 
@@ -12,8 +10,8 @@ extern "C" {
 
 /// The raw tree-sitter [`LanguageFn`] for Lichen.
 pub fn language() -> LanguageFn {
-    // SAFETY: `tree_sitter_lichen` is a valid C symbol produced by
-    // `tree-sitter generate` and returns a stable `ts::Language` pointer.
+    // SAFETY: `tree_sitter_lichen` is the C symbol `tree-sitter generate`
+    // emits; it returns a stable `TSLanguage` pointer.
     unsafe { LanguageFn::from_raw(tree_sitter_lichen) }
 }
 

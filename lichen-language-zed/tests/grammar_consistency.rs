@@ -1,19 +1,5 @@
-//! Keeps the grammar `rev` in `extension.toml` honest, so it can't silently go stale.
-//!
-//! Zed builds the Lichen grammar from the `[grammars.lichen] rev` commit. If that commit's
-//! grammar doesn't contain a node that a `.scm` query references, loading the language fails
-//! with `Invalid node type "…"` (e.g. after `return` was added to the grammar but `rev` was
-//! not bumped — the `0773b18` commit). This guard fails the suite instead of letting Zed break:
-//!
-//! 1. every `.scm` query in `languages/lichen/` and `tree-sitter-lichen/queries/` compiles
-//!    against the current grammar (so the grammar has every node the queries reference), and
-//! 2. the pinned `rev` is not behind the grammar/query source — a `git diff` between `rev`
-//!    and `HEAD` over the grammar-defining + query paths is empty. When it is not, the
-//!    message prints the `rev` to set.
-//!
-//! Compiled only when the crate's `grammar-consistency` feature is enabled (opt-in, because it
-//! builds the tree-sitter grammar and needs the tree-sitter CLI). Enable it with
-//! `cargo test -p lichen-language-zed --features grammar-consistency`.
+//! Guards the grammar `rev` pinned in `extension.toml`; see
+//! docs/notes/zed-extension-testing.md.
 #![cfg(feature = "grammar-consistency")]
 
 use std::fs;
@@ -22,10 +8,7 @@ use std::process::{Command, Output};
 
 use tree_sitter::{Language, Query};
 
-/// Files that define the grammar surface / queries, so a change to any of them needs a
-/// `rev` bump. Deliberately excludes the grammar's `tests/` (test-only churn, e.g. formatting)
-/// and `src/` (the generated `src/parser.c` etc., which are regenerated from `grammar.js` at
-/// build time and are no longer committed).
+/// Files that define the grammar surface: a change to any needs a `rev` bump.
 const GRAMMAR_PATHS: &[&str] = &[
     "tree-sitter-lichen/grammar.js",
     "tree-sitter-lichen/queries",

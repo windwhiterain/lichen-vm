@@ -1,24 +1,5 @@
-//! The `lichen-std-native` native plugin: a standard library of array sorts.
-//!
-//! This is a **native plugin** (see [`lichen_highlevel::plugin`]): it extends the
-//! core lowlevel/highlevel through the program-generic extension points and
-//! never names a host `Program` marker, its IR, its grammar, or its on-disk
-//! format.  It contributes exactly one operator leaf — [`SortOp`], which sorts
-//! a lichen `[usize]` array — backed by Rust's `sort_unstable`, and its
-//! program-generic [`OperatorExt`] `run` so a host can execute it.
-//!
-//! A host composes it with
-//! `lichen_language::lang_compose_vocabulary! { … plugins = [ lichen_std_native as lichen_std_native_leaves; ]; }`
-//! (the plugin's `lichen_std_native_leaves!` macro contributes the `SortOp` leaf),
-//! then drives the produced compiler.  The plugin also wires the **native-call
-//! extension point** ([`NativeOp`]) over [`SortOp`] and carries an embedded
-//! [`WRAPPER_SOURCE`] — a `std.lichen` lichen source that wraps the raw
-//! `$sort` native call into a real, user-facing typed `sort` function — the
-//! same shape as the reference `lichen-compute` native plugin.  A host serves
-//! that source (see the package store's native-package registration) and
-//! builds the plugin's private per-module registry with
-//! [`lichen_std_native_ops!`], so `$sort` resolves privately against the
-//! plugin's own source.
+//! The `lichen-std-native` native plugin (`SortOp` + `std.lichen`); see
+//! docs/notes/plugin-taxonomy.md.
 
 use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg};
@@ -27,9 +8,8 @@ use lichen_lowlevel::codec::{OperatorCodec, Reader, Writer};
 use lichen_lowlevel::{AnyNodeId, ArrayItem, BlockId, LowValue, Module, OperatorExt, Program};
 use lichen_utils::extend::AsEnum;
 
-// The native-op extension point, re-exported so a host builds the plugin's
-// private registry with `lichen_std_native_ops!` without depending on
-// `lichen_highlevel`.
+// Re-exported so a host builds the plugin's private op registry without
+// depending on `lichen_highlevel`.
 pub use lichen_highlevel::native::{NativeOp, NativeOps};
 
 /// The nominal native-plugin marker for this crate (see
@@ -45,12 +25,8 @@ pub enum SortOp {
     Sort,
 }
 
-/// The plugin leaf's per-leaf artifact codec: the single `Sort` operator.
-///
-/// A native plugin that wants its built compiler to keep a persistent
-/// `~/.lichen` cache implements [`OperatorCodec`] (and [`ValueCodec`] for any
-/// value leaf) for its leaves; this one is a scalar operator, so the codec is
-/// a one-tag identical round-trip.
+/// The plugin leaf's artifact codec: a one-tag round-trip for `Sort`, so a
+/// built compiler keeps its `~/.lichen` cache.
 impl OperatorCodec for SortOp {
     fn write_operator(w: &mut Writer, op: Self) -> Result<(), String> {
         match op {
@@ -67,28 +43,24 @@ impl OperatorCodec for SortOp {
     }
 }
 
-/// The program-generic VM dispatch for [`SortOp`]: read the operand array's
-/// `USize` values, sort them with Rust, and return a new array of the sorted
-/// values.
+/// The program-generic VM dispatch for [`SortOp`]: sort the operand array's
+/// `USize` values into a new array.
 impl<P> OperatorExt<P> for SortOp
 where
     P: Program,
     P::Value: From<LowValue> + AsEnum<LowValue>,
 {
     fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> Option<P::Value> {
-        // An operator that cannot decide yet answers `None`, which is the
-        // trait's own spelling of "undecided"; the closure gives the early
-        // return and the answer one type.
+        // `None` is the trait's spelling of "undecided"; the closure gives the
+        // early return and the answer one type.
         (|| {
             let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(&operand) else {
-                // A non-array sort target is a *reported* type error (the checker's
-                // array gate), not an invariant violation — stay lazy rather than
-                // panicking.
+                // A non-array target is the checker's reported type error, not an
+                // invariant violation: stay lazy, do not panic.
                 return None;
             };
-            // SAFETY: `array` is the payload of the operand value the VM just
-            // evaluated for this operation; its home block is alive for the
-            // duration of the run.
+            // SAFETY: `array` is the operand value's payload; its home block is
+            // alive for all of `run`, so the slice stays valid.
             let mut values: Vec<usize> = unsafe { array.items() }
                 .iter()
                 .filter_map(|item| {
@@ -118,11 +90,8 @@ where
     }
 }
 
-/// The compile-time lowering of [`SortOp`] as a native operator: the checker's
-/// `$sort(a)` route.  It emits the [`SortOp::Sort`] operator node over the
-/// argument's value and returns it; the lichen wrapper's `a : array<Int, _>`
-/// annotation gates the argument and its result annotation states that the sort
-/// is a `[Int, len]` array rather than an opaque native application.
+/// The compile-time lowering of [`SortOp`] for `$sort(a)`: emit `Sort`; the
+/// wrapper source's annotations carry the types.
 impl<P> NativeOp<P> for SortOp
 where
     P: HighProgram,
@@ -137,9 +106,8 @@ where
         _loc: Loc,
     ) -> NativeApply {
         let a = &args[0];
-        // The bare sort operator over the array value; the wrapper states that
-        // the result is a `[Int, len]` array — a sort preserves the length, and
-        // the checker need not observe it until the array's length is read.
+        // The bare operator over the array value; the wrapper states the
+        // `[Int, len]` result.  A sort preserves the length.
         let op = ctx.op_node(P::Operator::from(SortOp::Sort), Some(a.value));
         NativeApply {
             value: op,
@@ -148,23 +116,12 @@ where
     }
 }
 
-/// The `lichen-std-native` plugin's embedded lichen source — the actual `std`
-/// plugin file, kept as a `.lichen` source file and embedded with
-/// [`include_str!`].  It defines the user-facing `sort` function as ordinary
-/// typed lichen (whose body calls the native `$sort`), and exports it as a
-/// **named struct** (`std.sort`).  A host compiles this against the plugin's
-/// private native registry (`lichen_std_native_ops!`) and serves it as a
-/// virtual package (`std.lichen`), the package-manager plug shape.
+/// The plugin's embedded `std.lichen`: the user-facing `sort` over native
+/// `$sort`, served as a virtual package.
 pub const WRAPPER_SOURCE: &str = include_str!("std.lichen");
 
-/// Assemble `lichen-std-native`'s private native-operator registry for a host
-/// program `$program`, expanding to a `&'static` [`NativeOps`].
-///
-/// Invoked by a host that composes the plugin (see the package store's native
-/// package registration), so the `$sort` name stays private to the plugin's
-/// own embedded source.  The host names only the plugin crate and its program
-/// marker — never the plugin's op structs — so this is the composition point a
-/// package manager would generate.
+/// Assemble the plugin's private op registry for a host `$program`, expanding
+/// to a `&'static` [`NativeOps`].
 #[macro_export]
 macro_rules! lichen_std_native_ops {
     ($program:ty) => {{
@@ -175,15 +132,8 @@ macro_rules! lichen_std_native_ops {
     }};
 }
 
-/// Contribute this plugin's vocabulary leaves into a
-/// [`lichen_language::lang_compose_vocabulary!`] composition (see the
-/// `lichen-compute` [`liche_leaves!`] protocol): it hands back the `SortOp`
-/// operator leaf, threading the composition's accumulator.
-///
-/// The macro name is `<crate_ident>_leaves` (`lichen_std_native_leaves`), not
-/// a fixed `liche_leaves`: two `#[macro_export]` macros named identically in
-/// the dependency graph collide in the extern prelude, so each plugin's leaf
-/// macro has a distinct, crate-derivable name.
+/// Contribute the `SortOp` leaf into a
+/// [`lichen_language::lang_compose_vocabulary!`] composition.
 #[macro_export]
 macro_rules! lichen_std_native_leaves {
     ($next:path, [ $($oa:tt)* ][ $($va:tt)* ][ $($aa:tt)* ][ $($b:tt)* ] ; [ $($rest:tt)* ] ;) => {

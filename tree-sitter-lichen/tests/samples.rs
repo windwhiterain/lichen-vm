@@ -1,10 +1,5 @@
-//! Parse every sample `.lichen` program and assert the grammar produces no
-//! ERROR nodes.  This exercises `src/parser.c` through the `tree-sitter`
-//! runtime and the `tree-sitter-lichen` Rust binding.
-//!
-//! This crate is not a workspace member, so `cargo test --workspace` never builds it;
-//! run its tests explicitly (via its own manifest) and this runs by default:
-//!   cargo test --manifest-path tree-sitter-lichen/Cargo.toml
+//! Every `.lichen` sample must parse without ERROR nodes; run this crate by
+//! its own manifest (not a workspace member).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -72,17 +67,17 @@ fn edge_cases_parse_without_error_nodes() {
         .expect("set lichen grammar");
 
     let cases = [
-        "",                                           // empty file
-        "5",                                          // bare expression
-        "a = 1\nb = a + 2\nb",                        // no preprocess block, bindings + expr
-        "f = x => x\nf 1",                            // lambda + application
-        "if x then a else b",                         // conditional
-        "let a = 1\na",                               // restrictive binding
-        "T = struct<.x Int, .y Type>\nT",             // named struct fields
-        "t = table{}\nt",                             // empty constant table
+        "",                    // empty file
+        "5",                   // bare expression
+        "a = 1\nb = a + 2\nb", // no preprocess block, bindings + expr
+        "f = x => x\nf 1",     // lambda + application
+        "if x then a else b",  // conditional
+        "let a = 1\na",        // restrictive binding
+        "T = struct<.x Int, .y Type>\nT", // named struct fields
+        "t = table{}\nt",      // empty constant table
         "type_of = x => {t = _; x: t; t}\ntype_of 1", // standard library's type read
-        "v = 5 # 8 ? doc\n{ return v }\nv",           // `?` doc annotation + `return` block tail
-        "b = { pub a = 1; a }\nb",                    // `pub`-marked block statement
+        "v = 5 # 8 ? doc\n{ return v }\nv", // `?` doc annotation + `return` block tail
+        "b = { pub a = 1; a }\nb", // `pub`-marked block statement
     ];
 
     for (idx, src) in cases.iter().enumerate() {
