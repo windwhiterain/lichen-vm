@@ -3401,14 +3401,13 @@ where
     Ok(module.pair_value_half(pair).unwrap_or(pair))
 }
 
-/// The **name** a struct field read selects: the compile-time constant a named
-/// read's selector carries.
+/// The name a struct field read selects: the compile-time constant a named read
+/// carries.
 ///
-/// A named read `a.name` is `TableGet(name-table, "name")`
-/// (`Checker::check_named_field`) — the name is a string constant even though
-/// its *index* is left to the type, so the name is what a resolution walks the
-/// type with.  `Ok(None)` for a selector that is not a named read at all (a
-/// constant position, a computed index).
+/// # Invariant
+/// A named read `a.name` is `TableGet(name-table, "name")`, so the name is what a
+/// resolution walks the type with; `Ok(None)` for a selector that is not a named
+/// read at all.
 fn field_name<P>(
     module: &Module<P>,
     selector: impl Into<AnyNodeId>,
@@ -3445,25 +3444,23 @@ where
         }))
 }
 
-/// One level of a parameter read's index: the **position** it selects at that
-/// level, or the **name** it selects when the level was written with one.
+/// One level of a parameter read's index: the position, or the name, it selects.
 ///
-/// The two forms are kept apart because they are resolved against different
-/// things: a position is already its own answer, while a name has to be looked
-/// up in the field list of the type that names the level — and *which* type that
-/// is, only the whole chain says.
+/// # Invariant
+/// The two forms are resolved against different things: a position is its own
+/// answer, while a name is looked up in the field list of the type that names the
+/// level — and only the whole chain says which type that is.
 enum IndexStep {
     Position(usize),
     Named(&'static str),
 }
 
-/// The positional index **path** from the parameter to the value `node` reads,
-/// if `node` is a parameter read.
+/// The positional index path from the parameter to the value `node` reads.
 ///
-/// `Ok(None)` is "not a parameter read" (a structured-array conditional, an
-/// out-of-domain index, a value of the body's own).  `Err` is a read that *is*
-/// one but whose index is not a compile-time constant — the undetermined type a
-/// kernel compile refuses, since it runs on a concrete instantiation.
+/// # Invariant
+/// `Ok(None)` is "not a parameter read"; `Err` is a read whose index is not a
+/// compile-time constant — the undetermined type a kernel compile refuses, since it
+/// runs on a concrete instantiation.
 pub(crate) fn param_path<P>(
     module: &Module<P>,
     param_pair: NodeId,
@@ -3474,14 +3471,11 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    // **Two passes, and the first is why the second can be right.**  A named
-    // read's index belongs to the field list of a type the *whole* chain names —
-    // `k.in.a`'s `a` is a position in `In`, which only the parameter's type says
-    // is what `.in` holds — so the steps are collected along the value chain
-    // first (innermost last), and only then walked against the parameter's type
-    // from the outside in.  Resolving each level as it is met would have to
-    // guess the type its neighbour was read from, and `Index(target, selector)`
-    // does not state it.
+    // Two passes: collect the steps along the chain, then resolve them against
+    // the parameter's type, outside in.
+
+    // A named read's index belongs to a type only the whole chain names, so a
+    // level resolved as met would have to guess it.
     let mut steps: Vec<IndexStep> = Vec::new();
     let mut current = node;
     // **This walk cannot answer a struct field read**: the parameter is joined to the read
@@ -3507,10 +3501,8 @@ where
             return Ok(None);
         };
         if target == AnyNodeId::Dynamic(param_pair) {
-            // **The pair's value half is the parameter itself, not one of its
-            // fields**, so the peel contributes no step: a path is counted from
-            // the parameter's own first field, which is what the role table and
-            // the slot's scalar shape are both written against.
+            // The pair's value half is the parameter itself, not a field, so the
+            // peel contributes no step.
             match pair_value_half(module, param_pair) {
                 Some(value) => {
                     current = value;
@@ -3546,8 +3538,7 @@ where
     resolve_steps(module, param_pair, &steps)
 }
 
-/// Resolve a read's collected index **steps** against the parameter's type,
-/// outermost first, producing the positional path.
+/// Resolve a read's collected steps against the parameter's type, outermost first.
 fn resolve_steps<P>(
     module: &Module<P>,
     param_pair: NodeId,
@@ -3561,18 +3552,14 @@ where
     let Some(type_slot) = (unsafe { module.array_items(param_pair) })
         .and_then(|items| items.get(PAIR_TYPE_SLOT).map(|item| item.node))
     else {
-        // A scalar parameter has no field list, and a read of it is the value
-        // itself: the empty path.  It only needs the constant selectors it was
-        // handed, never a name lookup.
+        // A scalar parameter has no field list and a read of it is the value: the
+        // empty path.
         return resolve_without_type(steps);
     };
-    // The walk descends one level per step, and every level carries **two**
-    // parallel lists: the value's field *types* (what the next step indexes
-    // into) and the same value's field *names* (what a named step is looked up
-    // in).  Keeping them together here is what stops a name being looked for in
-    // the wrong list, and reading the outer level through the one decode that
-    // states which node is the type is what keeps it the same struct the roles
-    // were read from.
+    // One level per step, each carrying two parallel lists: the field types and
+    // the field names.
+
+    // Keeping them together stops a name being looked for in the wrong list.
     let (mut names, mut types) = struct_fields_of_slot(module, type_slot)
         .map(|(names, shape)| (Some(names), Some(shape)))
         .unwrap_or_default();
@@ -3596,9 +3583,7 @@ where
             }
         };
         path.push(at);
-        // The level below: the entry this step selected, described the same way.
-        // An entry of a shape **is** the field's own field list, so it is taken
-        // as it stands rather than unwrapped again.
+        // The level below: the entry this step selected, taken as it stands.
         let entry = types
             .and_then(|types| unsafe { array_items_any(module, types) })
             .and_then(|entries| entries.get(at))
@@ -3613,8 +3598,9 @@ where
 
 /// Resolve a read whose parameter type states no field list — a scalar domain.
 ///
-/// Only the constant form can be placed here, since a name has nothing to be
-/// looked up in; the resulting path is the positions themselves.
+/// # Invariant
+/// Only the constant form can be placed here, since a name has nothing to be looked
+/// up in; the resulting path is the positions themselves.
 fn resolve_without_type(steps: &[IndexStep]) -> Result<Option<Vec<usize>>, String> {
     let mut path = Vec::with_capacity(steps.len());
     for step in steps {
@@ -3631,11 +3617,12 @@ fn resolve_without_type(steps: &[IndexStep]) -> Result<Option<Vec<usize>>, Strin
     Ok(Some(path))
 }
 
-/// Follow a `value_of` extraction — `Index(pair, 0)`, where `pair` is a
-/// `[value, type]` pair and the index is the constant `0` — to the pair's
-/// value slot.  The checker accesses most values through such an extraction,
-/// so the JIT must look through it to reach the actual value (a constant, a
-/// parameter read, or a computation).
+/// Follow a `value_of` extraction — `Index(pair, 0)` — to the pair's value slot.
+///
+/// # Invariant
+/// The checker accesses most values through such an extraction, so the JIT must look
+/// through it to reach the actual value: a constant, a parameter read or a
+/// computation.
 fn value_of_node<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
 where
     P: Program,
@@ -3653,29 +3640,21 @@ where
     if usize_value(module, index)? != 0 {
         return None;
     }
-    // A frozen target is where this peel stops: the pair it names lives in the
-    // module that wrote it, and only a *value* crosses ([`emit_operand`]).
+    // A frozen target is where this peel stops: only a value crosses.
     let target = target.dynamic()?;
     // A concrete `[value, type]` pair value → its value slot (element 0).
     // SAFETY: `target` is a live node of `module`.
     if let Some(items) = unsafe { module.array_items(target) } {
         return dyn_node(items.first()?.node).ok();
     }
-    // An *operator* node as the target — e.g. `Index(apply_op, 0)` where the
-    // checker peels a call result (`value_of` over an `Apply` expression).  The
-    // operator's result is the pair's value, so emit the operator directly; its
-    // codegen produces the scalar (a cross-kernel call, an arithmetic op, ...).
+    // An operator node as the target (a peeled call result): emit the operator.
     if module.node_operation(target).is_some() {
         return Some(target);
     }
     None
 }
 
-/// The [`KernelId`] of a kernel-value node (`ComputeValue::Kernel`), looking
-/// through any `value_of` extractions and a kernel struct's `.native` field read
-/// (`Index(struct, 0)`).  Returns `None` for a node that is not (or does not
-/// reach) a kernel value — e.g. a lichen function, used by the style-1 inline
-/// path instead.
+/// The [`KernelId`] of a kernel-value node, through `value_of` and `.native` reads.
 fn kernel_id_of<P>(module: &Module<P>, node: NodeId) -> Option<KernelId>
 where
     P: Program,
