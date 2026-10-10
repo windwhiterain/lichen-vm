@@ -1237,11 +1237,50 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
      accepts it in both spellings — so what covers the arm order without a device is
      `a_loop_header_leaves_on_its_own_exit_arm`
      (`crates/lichen-compute-gpu/tests/spirv_validation.rs`), which reads the
-     header's `OpLoopMerge` and the labels of the branch after it, and the base-first
-     loop module is one of the modules that test hands to `spirv-val`. The labels now
+     header's `OpLoopMerge` and the labels of the branch after it. The labels now
      follow the arms — an exit arm spelled first swaps them, so the condition's
      polarity stays the spelling's own — and the acceptance case runs **both
      spellings** as two legs.
+
+     **`spirv-val` cannot see this defect**, which is why the test reads the emitted
+     branch rather than validating: a header branching to its body on its exit
+     condition is a legal module. The base-first module *is* validated, by
+     `a_body_with_control_flow_validates` in
+     `crates/lichen-compute-gpu/tests/spirv_validation.rs` — not by this test, which
+     hands nothing to the validator.
+
+     **What the test covers, and what it does not.** It reads the **first**
+     `OpLoopMerge` in a module, and its fixture is hand-built: a header with **one**
+     parameter, entered through a conditional that can skip the loop. The shape the
+     reader actually produces is a **nest** — the outer `compute.range k.n` loop plus
+     the converted loop inside — with a header carrying **two** parameters that is
+     entered directly. A swap confined to an inner header would pass this test, and
+     no device-free test runs the nested shape through the emitter. The exit edge's
+     *values* are the reduction test's job, and that one needs a device.
+
+   - **A loop whose trip count the compiler cannot see is unbounded, and that is
+     decided, not deferred.** Neither the emitter nor the host loop bounds one: the
+     emitter's only loop refusal is `WriteInsideLoop`, and `plan_body`'s checks are
+     structural (both arms lead back, no path back, the entry is a header). The
+     measured consequence is that a loop which never finishes takes the **device**
+     with it — `GpuContext::wait_on` waits 30 s and the driver's watchdog fires at
+     15–19 s, so lichen's own timeout never reports and the run ends in
+     `ERROR_DEVICE_LOST`. The **CPU backend hangs too** (killed at 90 s), because
+     `ApplyTotal`'s bound needs a *decided* count and this one's is a buffer read.
+
+     **This is left alone deliberately.** A prover for arbitrary loops is not a thing
+     the target does or wants: CUDA answers the same way, with a watchdog rather
+     than a termination check, and a language that refuses what the target accepts
+     is no longer faithful to it. Refusing loops without a statically decided count
+     would also refuse the reduction this feature exists to run.
+
+     The sharper reason is that the outcome is **not lichen's to decide**: `spirv-opt
+     -O` deletes a loop whose back-edge phis are literal copies of the header's
+     values, collapsing the module to a single store, so a no-op non-terminating
+     loop answers correctly and the same loop with an arithmetic step takes the
+     device down. Whether a runaway loop hangs or is silently erased is a property
+     of the **driver's optimiser**. A user cannot predict it, and neither can a
+     check written here.
    - **The launch extent cannot carry a count into a device body.** `sum_to
      (k.n, 0)` is refused on the device by `RunError::ScalarsNotPushed` — a
      dispatch pushes the extent alone — and one layer earlier by `a kernel body's
