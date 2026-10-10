@@ -409,11 +409,9 @@ fn jit_cross_kernel_call() {
     // wasm module, so the cross-kernel call is an in-module `call`:
     //   launch k1 6 = k0(6) = 7.
     // The argument is the parameter read directly.  An operator *inside* the
-    // argument (`k0 (x + 1)`, what this test used to write) is refused by name:
-    // a routed operator is an apply of the core prelude's binding, and the
-    // emitter has no node for a binding in an argument position —
-    // `jit_an_operator_inside_a_cross_kernel_argument_is_refused` below pins it
-    // (`docs/notes/operator-polymorphism.md` §7.1, cost 1).
+    // argument (`k0 (x + 1)`, what this test used to write) is emitted now
+    // rather than refused — `jit_an_operator_inside_a_cross_kernel_argument_is_emitted`
+    // below pins it (`docs/notes/operator-polymorphism.md` §7.1, cost 1).
     // The bare `k x` apply leaves a direct kernel apply's codomain `?a` (the
     // checker only resolves it via `$launch`), so the value is asserted.  The
     // wrapper form `compute.launch k0 x` *does* give `Int` — covered by
@@ -429,37 +427,27 @@ compute.launch k1 6
     assert_eq!(common::usize_of(&value), 7, "cross-kernel call produced 7");
 }
 
-/// The third shape a cross-kernel argument can take, and the one refused: an
-/// operator applied **inside** the argument.
+/// The third shape a cross-kernel argument can take: an operator applied
+/// **inside** the argument.
 ///
 /// A kernel body may cross-call a kernel with an argument it reads directly
-/// (`k0 x`, the test above) and may apply an operator to a call's *result*
-/// (`k0 x + 1`, `jit_cross_kernel_subexpr`).  Inside the argument the operator
-/// is an apply of the core prelude's binding with no machine node behind it, so
-/// it is refused by name rather than emitted as something else
-/// (`docs/notes/operator-polymorphism.md` §7.1, cost 1).
+/// (`k0 x`, the test above), may apply an operator to a call's *result*
+/// (`k0 x + 1`, `jit_cross_kernel_subexpr`), and — since a routed operator's
+/// identity is now read out of its **frozen callee's body** rather than out of
+/// the apply's class value — may apply one *inside* the argument. `k0 (x + 1)`
+/// was refused by name while the class channel was the only route
+/// (`docs/notes/operator-polymorphism.md` §7.1, cost 1); it is emitted now.
 #[test]
-fn jit_an_operator_inside_a_cross_kernel_argument_is_refused() {
-    let messages = fail(
-        r#"
+fn jit_an_operator_inside_a_cross_kernel_argument_is_emitted() {
+    let (_module, value, _root_ty) = run(r#"
 ---
   compute = import "compute.lichen"
 ---
 k0 = compute.jit ((y : Int) => y + 1)
 k1 = compute.jit ((x : Int) => k0 (x + 1))
 compute.launch k1 5
-"#,
-    );
-    assert_eq!(messages.len(), 1, "one refusal: {messages:?}");
-    let message = &messages[0];
-    assert!(
-        message.contains("applies a prelude operator"),
-        "the refusal must name its own cause: {message:?}"
-    );
-    assert!(
-        message.contains("no node for"),
-        "the refusal must say what the emitter is missing: {message:?}"
-    );
+"#);
+    assert_eq!(common::usize_of(&value), 7, "k0 (x + 1) with x = 5");
 }
 
 #[test]

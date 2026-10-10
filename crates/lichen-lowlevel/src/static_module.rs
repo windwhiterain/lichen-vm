@@ -104,6 +104,68 @@ impl<P: Program> Module<P> {
         self.static_module(sref.module).read(sref.index)
     }
 
+    /// The **compute operator a frozen function's body computes**, when that is
+    /// what the body is: `read`, `write`, `range`, `launch` and `call` are
+    /// prelude bindings, so applying one is applying a frozen function whose body
+    /// carries the operator. The operand is the node the operator reads.
+    ///
+    /// # Invariant
+    /// Answered from the artifact's **structure**, never from a value: the body
+    /// is reachable by [`StaticFunctionRef`] whether or not anything evaluated,
+    /// which is what a routed apply needs when its argument is a read the kernel
+    /// emits. `None` for a body that computes no compute operator, and for one
+    /// that computes more than one — a shape this cannot name.
+    pub fn static_function_compute_operator(
+        &self,
+        function: StaticFunctionRef,
+    ) -> Option<(P::Operator, StaticNodeId)> {
+        let key = function.module;
+        let module = self.static_module(key);
+        let function = module.functions.get(function.index.0)?;
+        let mut found: Option<(P::Operator, LocalNodeId)> = None;
+        let mut pending = vec![function.r#return];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(local) = pending.pop() {
+            if !seen.insert(local) {
+                continue;
+            }
+            let node = module.nodes.get(local.index)?;
+            if let Some(operation) = &node.operation {
+                if crate::AsEnum::<crate::LowOperator>::as_enum(&operation.operator).is_none() {
+                    // Two compute operators in one body have no single answer.
+                    if found.is_some() {
+                        return None;
+                    }
+                    found = Some((operation.operator, operation.operand?));
+                }
+                if let Some(operand) = operation.operand {
+                    pending.push(operand);
+                }
+            } else if let Some(crate::LowValue::Array(array)) = node
+                .value
+                .and_then(|value| crate::AsEnum::<crate::LowValue>::as_enum(&value))
+            {
+                // SAFETY: `array` is a payload of a value read out of a live
+                // frozen module; nothing here releases an arena.
+                for item in unsafe { array.items() } {
+                    if let crate::AnyNodeId::Static(inner) = item.node
+                        && inner.module == key
+                    {
+                        pending.push(inner.index);
+                    }
+                }
+            }
+        }
+        let (operator, operand) = found?;
+        Some((
+            operator,
+            StaticNodeId {
+                module: key,
+                index: operand,
+            },
+        ))
+    }
+
     /// The representative of a **static** node's equality class — the frozen
     /// mirror of [`Module::equality_representative`], walking `parent` over the
     /// artifact's own local ids (no path compression, so a read never mutates
