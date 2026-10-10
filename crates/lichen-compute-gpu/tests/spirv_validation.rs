@@ -19,7 +19,7 @@ use std::process::{Command, Stdio};
 use lichen_compute_gpu::spirv::{self, Binding};
 use lichen_kernel_ir::{
     Br, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, ScalarClass, Terminator,
+    KernelShape, LaunchSet, ScalarClass, Terminator,
 };
 
 /// The validator, spelled the way it is installed on `PATH`.
@@ -485,7 +485,7 @@ fn the_emitted_module_validates() {
     // list are all a function of it, and only the validator rules on whether the
     // result is a legal module.
     let integer = spirv::compile(
-        &adds_one(),
+        &LaunchSet::single(&adds_one()),
         Binding {
             inputs: 1,
             outputs: 1,
@@ -493,7 +493,7 @@ fn the_emitted_module_validates() {
     )
     .expect("the emitter handles an integer fragment");
     let float = spirv::compile(
-        &scales_a_float(),
+        &LaunchSet::single(&scales_a_float()),
         Binding {
             inputs: 1,
             outputs: 1,
@@ -507,11 +507,13 @@ fn the_emitted_module_validates() {
     // integer fragment on a device without the feature and lets a float one
     // through on exactly this answer.
     assert!(
-        spirv::needs_int64(&adds_one()).expect("an integer fragment has a class"),
+        spirv::needs_int64(&LaunchSet::single(&adds_one()))
+            .expect("an integer fragment has a class"),
         "an integer module declares a 64-bit integer"
     );
     assert!(
-        !spirv::needs_int64(&scales_a_float()).expect("a float fragment has a class"),
+        !spirv::needs_int64(&LaunchSet::single(&scales_a_float()))
+            .expect("a float fragment has a class"),
         "a float module declares no 64-bit integer"
     );
 
@@ -637,7 +639,7 @@ fn a_body_with_control_flow_validates() {
             .body
             .validate()
             .unwrap_or_else(|broken| panic!("{what} is well formed: {broken}"));
-        let words = spirv::compile(&fragment, one_in_zero_out)
+        let words = spirv::compile(&LaunchSet::single(&fragment), one_in_zero_out)
             .unwrap_or_else(|refusal| panic!("{what} is emitted: {refusal}"));
         if validate(what, &words) {
             covered += 1;
@@ -675,7 +677,7 @@ fn the_two_conversions_validate_in_a_float_module() {
         ("both directions at once", crosses_both_ways(), 109),
     ] {
         let words = spirv::compile(
-            &fragment,
+            &LaunchSet::single(&fragment),
             Binding {
                 inputs: 1,
                 outputs: 1,

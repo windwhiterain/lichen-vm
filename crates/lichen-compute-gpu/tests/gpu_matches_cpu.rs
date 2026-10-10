@@ -19,8 +19,14 @@ use std::collections::HashMap;
 
 use lichen_kernel_ir::{
     BufferSlot, FlatOp, IntWidth, KernelBin, KernelBody, KernelFragment, KernelInstr, KernelRoles,
-    KernelShape, Pending, ScalarClass, ScalarData,
+    KernelShape, LaunchSet, Pending, ScalarClass, ScalarData,
 };
+
+/// A one-fragment launch set: every kernel here stands alone, and a set's
+/// degenerate form is the shape that says so.
+fn only(fragment: &KernelFragment) -> LaunchSet<'_> {
+    LaunchSet::single(fragment)
+}
 
 /// The **packed** bytes of `words`, one `i64` each — what the ABI carries, and
 /// what a host slot for an integer fragment is.
@@ -573,7 +579,7 @@ fn check(
     let count = input.len();
     let packed = pack(input);
     let resident = context
-        .run(fragment, &[BufferSlot::Host(&packed)], count)
+        .run(&only(fragment), &[BufferSlot::Host(&packed)], count)
         .expect("the dispatch completes");
     assert_eq!(
         resident.len(),
@@ -660,10 +666,10 @@ fn a_second_run_consumes_the_first_runs_id_without_a_round_trip() {
     // out = in + in + 1, then out = in + in + 1 again: composed, the answer is
     // known without consulting the device, so a wrong chain cannot pass.
     let first = context
-        .run(&adds(), &[BufferSlot::Host(&pack(&input))], count)
+        .run(&only(&adds()), &[BufferSlot::Host(&pack(&input))], count)
         .expect("the first run completes");
     let second = context
-        .run(&adds(), &[BufferSlot::Resident(first[0])], count)
+        .run(&only(&adds()), &[BufferSlot::Resident(first[0])], count)
         .expect("the second run consumes the first run's id");
     let result = words(
         context
@@ -715,7 +721,7 @@ fn a_recycled_buffer_never_shows_the_previous_run_its_contents() {
 
     for round in 0..8 {
         let adds_run = context
-            .run(&adds(), &[BufferSlot::Host(&pack(&input))], count)
+            .run(&only(&adds()), &[BufferSlot::Host(&pack(&input))], count)
             .expect("the adds run completes");
         assert_eq!(
             words(context.fetch(adds_run[0], count).expect("adds comes back")),
@@ -725,7 +731,7 @@ fn a_recycled_buffer_never_shows_the_previous_run_its_contents() {
         context.release(adds_run[0]);
 
         let select_run = context
-            .run(&conditional(), &[BufferSlot::Host(&pack(&input))], count)
+            .run(&only(&conditional()), &[BufferSlot::Host(&pack(&input))], count)
             .expect("the conditional run completes");
         assert_eq!(
             words(
@@ -836,14 +842,14 @@ fn a_submission_can_be_fed_to_one_that_is_still_in_flight() {
     let input: Vec<i64> = (0..count as i64).collect();
 
     let first = context
-        .submit(&adds(), &[BufferSlot::Host(&pack(&input))], count)
+        .submit(&only(&adds()), &[BufferSlot::Host(&pack(&input))], count)
         .expect("the first submission is recorded");
     // Deliberately not waited, and deliberately feeding the second from the
     // first: `first.outputs()[0]` names a buffer the device has not promised to
     // have written.
     let first_output = first.outputs()[0];
     let second = context
-        .submit(&adds(), &[BufferSlot::Resident(first_output)], count)
+        .submit(&only(&adds()), &[BufferSlot::Resident(first_output)], count)
         .expect("the second submission is recorded into a different slot");
 
     let first_ids = Box::new(first)
@@ -902,13 +908,13 @@ fn dropping_a_submission_nobody_waited_for_still_frees_it() {
     for round in 0..4 {
         drop(
             context
-                .submit(&adds(), &[BufferSlot::Host(&pack(&input))], count)
+                .submit(&only(&adds()), &[BufferSlot::Host(&pack(&input))], count)
                 .expect("the abandoned submission is recorded"),
         );
         // An id from an abandoned submission is still a live buffer, and it is
         // still readable — the drop waited, so the data is there.
         let pending = context
-            .submit(&adds(), &[BufferSlot::Host(&pack(&input))], count)
+            .submit(&only(&adds()), &[BufferSlot::Host(&pack(&input))], count)
             .expect("the next submission is recorded");
         let ids = Box::new(pending)
             .wait()

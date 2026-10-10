@@ -36,7 +36,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use ash::vk;
 use lichen_kernel_ir::{
-    BufferSlot, KernelFragment, ResidentId, ScalarClass, ScalarData, fragment_digest,
+    BufferSlot, LaunchSet, ResidentId, ScalarClass, ScalarData, fragment_digest,
 };
 
 use crate::spirv::{self, Binding, LOCAL_SIZE_X, SpirvRefusal};
@@ -233,7 +233,11 @@ pub struct GpuContext {
     /// to reject the device at selection time — which would leave a float kernel
     /// unable to run on a device for a reason that no longer applies.
     shader_int64: bool,
-    pipelines: Mutex<HashMap<(u64, usize, usize), vk::Pipeline>>,
+    /// **The key is the whole launch set's digests**, one per fragment in the
+    /// order the module lays them out, and not the root's alone: a pipeline is a
+    /// compiled *module*, and two sets that share a root and differ in a callee
+    /// are two modules.
+    pipelines: Mutex<HashMap<(Vec<u64>, usize, usize), vk::Pipeline>>,
     /// Buffers handed out as [`ResidentId`]s and not yet released. The value is
     /// the device-local allocation behind the id, so the id is the only handle
     /// the host ever holds to device memory.
@@ -629,7 +633,7 @@ impl GpuContext {
         Ok(())
     }
 
-    /// Run one fragment over the index range `[0, count)`.
+    /// Run a launch set's root over the index range `[0, count)`.
     ///
     /// Returns one [`ResidentId`] per declared output, owned by the caller until
     /// it releases them.  **Nothing is copied back here:** the results are where
@@ -641,11 +645,11 @@ impl GpuContext {
     /// [`Self::stage_run`] so the two cannot drift apart.
     pub fn run(
         &self,
-        fragment: &KernelFragment,
+        launch: &LaunchSet<'_>,
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<Vec<ResidentId>, RunError> {
-        let staged = self.stage_run(fragment, inputs, count)?;
+        let staged = self.stage_run(launch, inputs, count)?;
         // The upload targets are recycled after the wait rather than in a
         // `finally`, so a wait that fails does not leave them unreachable — and
         // a fence that has not signalled in thirty seconds is a device that has
@@ -672,11 +676,11 @@ impl GpuContext {
     /// see [`GpuPending`].
     pub fn submit(
         &self,
-        fragment: &KernelFragment,
+        launch: &LaunchSet<'_>,
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<GpuPending<'_>, RunError> {
-        let staged = self.stage_run(fragment, inputs, count)?;
+        let staged = self.stage_run(launch, inputs, count)?;
         Ok(GpuPending {
             context: self,
             token: staged.token,
@@ -699,10 +703,11 @@ impl GpuContext {
     /// then, so they travel in the return value.
     fn stage_run(
         &self,
-        fragment: &KernelFragment,
+        launch: &LaunchSet<'_>,
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<Staged, RunError> {
+        let fragment = launch.root();
         // **The device path pushes no leaf at all**, so a parameter the body *reads* is
         // refused by name.
         let leaves = fragment.param_shape.flat_arity();
@@ -740,7 +745,7 @@ impl GpuContext {
                 });
             }
         }
-        let pipeline = self.pipeline(fragment, binding)?;
+        let pipeline = self.pipeline(launch, binding)?;
 
         // Round up so the last workgroup's surplus lanes address padding rather
         // than memory past the end; see the module docs.
@@ -886,11 +891,12 @@ impl GpuContext {
     /// [lichen-compute-gpu.md](../../docs/notes/lichen-compute-gpu.md).
     pub fn run_chain(
         &self,
-        fragment: &KernelFragment,
+        launch: &LaunchSet<'_>,
         input: &[u8],
         count: usize,
         links: usize,
     ) -> Result<ResidentId, RunError> {
+        let fragment = launch.root();
         if links == 0 || links > MAX_DISPATCHES_PER_SUBMISSION {
             return Err(RunError::ChainLength {
                 wanted: links,
@@ -926,7 +932,7 @@ impl GpuContext {
         }
 
         let pipeline = self.pipeline(
-            fragment,
+            launch,
             Binding {
                 inputs: 1,
                 outputs: 1,
@@ -1479,7 +1485,7 @@ impl GpuContext {
         Ok(layouts)
     }
 
-    /// The pipeline for a fragment, built once per content digest.
+    /// The pipeline for a launch set, built once per content digest.
     ///
     /// The SPIR-V is emitted **only on a cache miss**.  It used to be emitted on
     /// every run, which put a whole-module emission on the critical path of a
@@ -1487,24 +1493,31 @@ impl GpuContext {
     /// that a cache hit was supposed to have removed.
     fn pipeline(
         &self,
-        fragment: &KernelFragment,
+        launch: &LaunchSet<'_>,
         binding: Binding,
     ) -> Result<vk::Pipeline, RunError> {
-        // The device gate is derived from the *fragment*, not applied when the
-        // device was chosen: an integer fragment's module declares a 64-bit
-        // integer and needs `shaderInt64`, and a float one's does not. Checked
-        // before the cache so a cached integer pipeline is not served on a device
-        // that could never have built it.
-        if spirv::needs_int64(fragment).map_err(RunError::Emit)? && !self.shader_int64 {
+        // **The cache key is the whole set**, not the root: two launch sets that
+        // share a root and differ in a callee are two different modules, and a key
+        // that could not tell them apart would serve one callee's compiled form for
+        // another's.
+        if spirv::needs_int64(launch).map_err(RunError::Emit)? && !self.shader_int64 {
             return Err(RunError::MissingInt64 {
                 device: self.name.clone(),
             });
         }
-        let key = (fragment_digest(fragment), binding.inputs, binding.outputs);
+        let key = (
+            launch
+                .ordered()
+                .iter()
+                .map(|fragment| fragment_digest(fragment))
+                .collect::<Vec<u64>>(),
+            binding.inputs,
+            binding.outputs,
+        );
         if let Some(pipeline) = self.pipelines.lock().unwrap().get(&key) {
             return Ok(*pipeline);
         }
-        let words = spirv::compile(fragment, binding).map_err(RunError::Emit)?;
+        let words = spirv::compile(launch, binding).map_err(RunError::Emit)?;
         let module = check("shader module", unsafe {
             // `code` takes the words, not bytes: no repacking needed.
             self.device
@@ -1609,11 +1622,11 @@ impl lichen_kernel_ir::ParallelBackend for GpuContext {
     /// second path can run a kernel.
     fn run(
         &self,
-        fragment: &KernelFragment,
+        launch: &LaunchSet<'_>,
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<Vec<ResidentId>, String> {
-        GpuContext::run(self, fragment, inputs, count).map_err(|error| error.to_string())
+        GpuContext::run(self, launch, inputs, count).map_err(|error| error.to_string())
     }
 
     /// The only backend here that overrides the default, and the reason it can:
@@ -1622,14 +1635,14 @@ impl lichen_kernel_ir::ParallelBackend for GpuContext {
     /// the device's work overlapping rather than waiting.
     fn submit<'backend>(
         &'backend self,
-        fragment: &KernelFragment,
+        launch: &LaunchSet<'_>,
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<Box<dyn lichen_kernel_ir::Pending + 'backend>, String> {
         // The inherent form, named explicitly: `self.submit` would be the trait
         // method recursively.
         Ok(Box::new(
-            GpuContext::submit(self, fragment, inputs, count).map_err(|error| error.to_string())?,
+            GpuContext::submit(self, launch, inputs, count).map_err(|error| error.to_string())?,
         ))
     }
 
