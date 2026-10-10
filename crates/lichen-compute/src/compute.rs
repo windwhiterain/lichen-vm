@@ -2770,19 +2770,18 @@ where
         .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
     {
         Some(ComputeValue::Buffer(payload, class)) => {
-            // SAFETY: the buffer value is read out of `module` on this borrow, so
-            // the payload's home block is alive for the walk below.
+            // SAFETY: the buffer value is read on this borrow, so its payload's
+            // block is alive below.
             let data = buffer_items(&payload)?;
-            // The buffer's class travels with the words: a run reads a float input
-            // as `f32`s and an integer one as `Int`s, and the payload it came from
-            // is packed at that class's width.
+            // The class travels with the words: a float input is read as `f32`s,
+            // an integer one as `Int`s.
             Some(RunInput::Host(BufferWords {
                 class,
                 words: unpack_elements(class, data),
             }))
         }
-        // Handed to the run as the id it already is: an intermediate result of a
-        // "gpu" chain never comes home in order to be sent straight back out.
+        // Handed to the run as the id it is: a "gpu" intermediate never comes home
+        // to be sent out again.
         Some(ComputeValue::DeviceBuffer(resident)) => Some(RunInput::Resident(resident)),
         _ => {
             not_a_buffer::<P>(module, node, where_, position);
@@ -2793,9 +2792,10 @@ where
 
 /// The payload a `Buf` value carries — its `.native` slot.
 ///
-/// A role path names the wrapper, because that is the path the checker resolves
-/// for the source's own read; the operator wants the payload, and the wrapper's
-/// field order is fixed by [`is_buf_shape`], so this is its first item.
+/// # Invariant
+/// A role path names the wrapper, because that is what the checker resolves for the
+/// source's read; the wrapper's field order is fixed by [`is_buf_shape`], so the
+/// payload is its first item.
 fn buf_payload<P>(module: &mut Module<P>, node: AnyNodeId) -> Option<AnyNodeId>
 where
     P: Program,
@@ -2808,8 +2808,7 @@ where
         .map(|item| item.node)
 }
 
-/// The node a role path names in a cfg value: each step is an array index, the
-/// way the checker resolves the same read against the parameter's type.
+/// The node a role path names in a cfg value: each step is an array index.
 fn value_at_path<P>(module: &mut Module<P>, root: NodeId, path: &[usize]) -> Option<AnyNodeId>
 where
     P: Program,
@@ -2818,8 +2817,8 @@ where
     let mut node = AnyNodeId::Dynamic(root);
     for &at in path {
         let dynamic = node.dynamic()?;
-        // SAFETY: every node on the way is a live node of `module` on this
-        // borrow — the root is the cfg the VM just evaluated for this operation.
+        // SAFETY: every node on the way is live on this borrow — the root is the
+        // cfg the VM just evaluated.
         let items = unsafe { module.array_items(dynamic) }?;
         node = items.get(at)?.node;
     }
@@ -2834,8 +2833,7 @@ fn element_type(class: ScalarClass) -> TypeValue {
     }
 }
 
-/// One `Buf` value: the payload an operator produced, then the element type —
-/// the wrapper's own field order, which is what the type level reads back.
+/// One `Buf` value: the payload, then the element type, in the wrapper's order.
 fn buf_value<P>(
     module: &mut Module<P>,
     block: BlockId,
@@ -2863,12 +2861,11 @@ where
     ))
 }
 
-/// Assemble one level of a result structure: the fields at `depth` of the
-/// outputs whose result paths start with `prefix`.
+/// Assemble one level of a result structure, driven by the result paths.
 ///
-/// A group's arity is one past the highest field any path names, and a position
-/// no path names is not built — the structure is exactly what the walk found,
-/// which is why the codomain's field list and the result's agree.
+/// # Invariant
+/// A group's arity is one past the highest field any path names, and a position no
+/// path names is not built — the structure is exactly what the walk found.
 fn assemble_result<P>(
     module: &mut Module<P>,
     block: BlockId,
@@ -2910,27 +2907,14 @@ where
     ))
 }
 
-/// The placeholder tuple a recorded body is applied to, built from the
-/// parameter **type** and the slot each role path was numbered with.
+/// The placeholder tuple a recorded body is applied to, built from the parameter
+/// type and the role paths.
 ///
-/// [`assemble_result`] cannot build this one.  It derives a group's arity from
-/// the paths that exist under it, so a prefix no path reaches answers `None` —
-/// and a parameter that declares a group with **no members** (`struct<.n Int,
-/// .in In1, .out Out1>` with `In1 = struct<>`) has exactly that prefix: the whole
-/// placeholder, and with it the recording, came back as no value at all, on cpu
-/// and on the device alike.  The declaration is what says a group is there, and
-/// here the declaration is readable — the same type slot [`parallel_roles`]
-/// walked — so the descent is driven by the field list and a position the role
-/// paths do not reach is an **empty group**, not a hole.  A group with a filler
-/// member is reached by its path and filled as before, so the empty group and
-/// the filler agree rather than each taking a branch.
-///
-/// `cells` is one node per role path, sorted by path; `item` is the type term
-/// being descended into and `path` is the path that names it.  A path with a
-/// cell is a leaf the body reads and gets that cell; a field that is a readable
-/// struct is a group and is descended into, **empty or not**; and a leaf the
-/// role walk did not number is a hole with no placeholder to fill it, which the
-/// caller turns into a refusal rather than a recording that answers nothing.
+/// # Invariant
+/// A parameter that declares a group with no members still builds a placeholder
+/// for it: the descent is driven by the declaration's field list, so a position no
+/// role path reaches is an empty group rather than a hole, while a leaf the walk
+/// did not number is a hole the caller refuses.
 fn assemble_parameter<P>(
     module: &mut Module<P>,
     block: BlockId,
@@ -2966,14 +2950,11 @@ where
     Some(array_node::<P>(module, block, &items))
 }
 
-/// The `O` structure a run hands back: every output buffer placed where the role
-/// walk found it, wrapped as the `Buf` the type level reads.
+/// The `O` structure a run hands back, with every output in its role's place.
 ///
-/// A role path starts at the parameter's `.out` field and ends at the buffer's
-/// own `.native` slot, and the result *is* the codomain, so the builder drops
-/// both ends and reconstructs the nesting between them.  `outputs` is one
-/// payload node and element class per declared output, in ordinal order — the
-/// order the emitter numbered the writes in.
+/// # Invariant
+/// A role path starts at `.out` and ends at the buffer's `.native` slot; the result
+/// *is* the codomain, so the builder drops both ends.
 fn build_outputs<P>(
     module: &mut Module<P>,
     block: BlockId,
@@ -2987,9 +2968,7 @@ where
     let mut placed: Vec<(Vec<usize>, NodeId)> = Vec::with_capacity(outputs.len());
     for (position, &(payload, class)) in outputs.iter().enumerate() {
         let path = roles.outputs.get(position)?;
-        // Drop the `.out` step at the front: the result is the codomain itself,
-        // and a role path names the `Buf` field, which is exactly the field the
-        // result holds.
+        // Drop the `.out` step at the front: the result is the codomain itself.
         let inner = path.get(1..)?;
         let value = buf_value::<P>(module, block, AnyNodeId::Dynamic(payload), class)?;
         placed.push((inner.to_vec(), value));
@@ -2998,27 +2977,13 @@ where
     module.node_value(AnyNodeId::Dynamic(root))
 }
 
-/// The class a node's value is, read **with the kernel's parameter slots in
-/// hand** — the reading the emission makes, named once.
+/// The class a node's value is, read with the kernel's parameter slots in hand.
 ///
-/// [`node_class`] is the value channel's own answer, and for a node whose value
-/// the graph decided it is the whole answer.  Two nodes it cannot answer are
-/// exactly the ones a body lowered from a template is made of, and both are
-/// answered here from the same facts the emission uses:
-///
-/// - **a parameter read.**  The template's parameter cell is an undecided `_`,
-///   so nothing about the node states a class — the class the read *is* is the
-///   ABI's, stated by the slot's own [`ParamSlot::shape`], which is what
-///   [`emit_node`] reads when it turns the read into a `local.get`.
-/// - **an arithmetic operator over such reads.**  The low-type pass cannot
-///   transfer through a read it has no shape for, so it declines and the answer
-///   falls back to the integer default; the class the emission gives the `Bin`
-///   is its operands' (see `emit_node`'s own rule), and that is the answer here.
-///   A comparison is the one exception and it is the emission's too: its result
-///   is the language's `Int` `0`/`1` whatever its operands are.
-///
-/// Everything else — a literal, a conversion — is [`node_class`]'s own answer,
-/// so this is a widening and not a second rule.
+/// # Invariant
+/// [`node_class`] answers for a decided value; the two nodes it cannot answer are
+/// what a template-lowered body is made of — a parameter read, whose class is the
+/// slot's own [`ParamSlot::shape`], and an arithmetic operator over such reads,
+/// whose class is its operands' (the emission's own rule, a comparison excepted).
 fn node_class_in<P>(
     module: &Module<P>,
     params: &[ParamSlot],
@@ -3038,17 +3003,14 @@ where
     {
         return class;
     }
-    // **The peel the emission makes, in the emission's own order.**  A `value_of`
-    // extraction and a constant selection are answered *before* the operation
-    // behind them, so a class read that stopped at the extraction would be
-    // answering about a node the body never emits.
+    // The peel the emission makes: an extraction or a constant selection comes
+    // before the operation behind it.
     let peeled = resolve_literal_node(module, node);
     if peeled != node {
         return node_class_in(module, params, peeled);
     }
-    // The emission's third answer for a read: a bare cell in one of the
-    // enclosing parameters' equality classes *is* a whole-parameter read
-    // (`emit_node`), and the class it is, is the slot's.
+    // The emission's third answer: a bare cell in an enclosing parameter's
+    // equality class is a whole-parameter read.
     if module.node_operation(dynamic).is_none() {
         for slot in params {
             if equality_rep(module, dynamic) == equality_rep(module, slot.value) {
