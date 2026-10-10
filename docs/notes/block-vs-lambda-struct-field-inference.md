@@ -265,3 +265,14 @@ is bound, the deep pass proves the instantiate's value concrete, and the clone i
 baked rather than recomputed. And a genuinely unconstrained hole
 (`h = X => struct<.x _>; h Int`) must stay raw: nothing decides it, and the
 printer's mark is the honest answer.
+
+## Recovered measurements
+
+- A block's record is its **bindings**, and the frontend's alignment contract
+  follows from that: an expression statement is not a field. A bare expression is an
+  ordinary statement, checked like any other (so its diagnostics fire) but
+  discarded — which is why the frontend hands the statements' value tuple and their
+  name list index-aligned, and the checker keeps the named positions alone. Nothing
+  references a discarded statement's value node, so it is not evaluated either: the
+  same laziness a statement nothing reads has anywhere else. A block's fields are
+  therefore always named, like a `struct<…>` declaration's.

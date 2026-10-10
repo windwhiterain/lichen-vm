@@ -255,6 +255,19 @@ Three facts make that work:
   dispatch's input is a `GraphValue(v)`, and `v` is the edge. A `produced_by`
   map would be a second copy of the same fact that could disagree with the first.
 
+**Where the walk finds the callee.** An `Apply` names its callee as the **first**
+item of a `[callee, argument, _]` operand array, and the callee slot holds a
+`value_of`-style `Index(pair, 0)` whose **own cached value is already the
+function** — following that `Index` one step further lands on the pair rather than
+on the function, so reading the node's own value is the whole of it. Nothing needs
+evaluating: the compute operator node's own operand array is `[kernel, cfg]` and is
+readable as it stands, which is what keeps a *build* from running a dispatch.
+
+**Applying is sound, and the language gives the reason for free.** Every lichen
+function has exactly one parameter and a graph function's body reads it, so what is
+applied is exactly the structure the recording builds; the unrecordable case is a
+body that dispatches a captured buffer.
+
 **A graph holds no references at all.** The design once said the graph holds its
 input buffers as *nodes*, and that this would be `traced`'s first real user.
 Check what `traced` buys: `drop_block` removes **by block membership, not
@@ -310,6 +323,13 @@ than succeeding with an extra node. Both forcing knobs have since been deleted �
 operand forcing was pure cost with no reader — so the lazy walk is the only deep
 walk. A future change that repaired the return slot without noticing this would
 reintroduce the bug the old count was protecting against.
+
+**A statement nobody reads is not demanded, and so cannot be refused.** A block's
+value is the tuple of its statements' values, and a statement whose value nobody
+reads is never forced: an unused `collect` is not reached at all, so no refusal
+speaks for it. The recording sees what the walk forces, and what the walk does not
+force is not in the graph — which is why each operator a recorded body may not
+reach for has to be nested *inside* the statement that is the body's value.
 
 ## The two seams
 
@@ -534,6 +554,20 @@ reads; the divergence is a stub-side fact, pinned in `refusals.rs` and
 `graph_runs.rs`. A device is not where it can be observed, and a green device run
 is not evidence about it.
 
+**The backend slot is process-wide, so the stub-backed tests own their binary.** A
+test that installs a `ParallelBackend` changes what every other test in the same
+binary sees; a second test needing *no* backend, or a real device, would race it,
+and the failure would be a **number** rather than an error — the worst shape a test
+failure can have. Tests that share one stub take a lock for their whole length,
+which is what makes the dispatch log a fact about one test rather than about which
+tests the scheduler ran first.
+
+**A body-ignoring stub is the right oracle, because the plumbing is the subject.**
+The stub computes `sum(inputs) + 1` whatever a fragment's body says: a fragment's
+arithmetic belongs to [lichen-compute-gpu](lichen-compute-gpu.md) on real hardware,
+while what these tests ask is which values reached which node — so a graph wired
+wrongly answers with *different* numbers rather than the same ones by luck.
+
 ## Not yet
 
 - **`Batch`.** Needs a fused-submission capability the contract does not have, and
@@ -595,3 +629,44 @@ is not evidence about it.
   payload contract, which is a different thing.
 - [lichen-compute.md](lichen-compute.md) — the operator vocabulary and the
   `plrun` path a graph sits beside.
+
+## Recovered measurements
+
+**The named-parameter spelling is part of the refusal, not a transcription of it.**
+Under `struct<.n Int, .in In1>` a dispatch returns the parameter's `.out` group, so
+the offending operator has to name the **buffer inside** it (`first.z`); handing it
+the dispatch's result says "this is an array", which is the `compute.parallel`
+refusal rather than the graph-recording one. Reaching the rule also needed the
+placeholder scan to see through the `Buf` wrapper the recorder builds around an
+output path — the operator names the wrapper, so asking only whether an operand
+*is* a placeholder answered `false` for exactly the case the rule exists to catch
+([compute-buffer-wrapper](compute-buffer-wrapper.md)).
+
+**A graph is content-addressed on its shape, not on its backend.** The backend is
+deliberately **not** hashed into `fragment_digest`, so a `"cpu"` and a `"gpu"`
+recording of one body intern to a single registry id — and the registry entry must
+therefore not carry the first recording's backend, or a `"gpu"` program is refused
+with a message naming `"cpu"` for a program that never says it. The registries are
+process-global, so before the fix a process that had ever built a `"cpu"` graph of a
+shape could never run a `"gpu"` graph of it. The refusal arrives *before* any
+dispatch, so a run that reaches the stub at all is the proof.
+
+**Three operators, three refusals, one per repair.** A `collect` of a dispatch's
+result, a host `read` of one, and a scalar kernel are three separate refusals with
+three separate messages, because the repair differs for each. All three once fell
+through to a bare hole with no diagnostic at all, and a body that collected a
+dispatch's result mid-chain recorded a graph quietly missing the collect, with the
+chain's own numbers looking right anyway — a hole is the worst of the three
+outcomes rather than the smallest.
+
+**Why the recording is a deep walk.** A *shallow* evaluation of a recorded body
+produces the block's value tuple and stops: the statements inside it have not run,
+and the recording taken there is an empty graph that still looks like one. The deep
+pass is what demands the tuple, and demanding it is what performs the dispatches.
+Forcing was tried anyway (`Module::evaluate_node_forced`): it performed every
+statement *and* left the function's return slot empty, so every recording refused,
+including bodies with no unread statement at all. The empty slot isolated to the
+operand forcing rather than to the shallow descent — a walk descending every
+position in order (`skip_shallow` off, `force_operand` off) recorded the same two
+dispatches, while `force_operand` on alone emptied the return slot with the shallow
+mask untouched.

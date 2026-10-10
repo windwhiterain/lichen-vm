@@ -51,7 +51,13 @@ so an adapter answers *class* questions on top of it. Built and consumed:
 A `TypeRef` is the distinction the encoding has and the type system does not: a
 type **term** is the `[shape, kind]` pair itself, a type **slot** is a node
 holding one. Resolving one into the other is the authority's decision, so no
-caller unwraps a slot by hand. `field_index` (its recorded consumer is the kernel
+caller unwraps a slot by hand. The two are both two-slot arrays, so no
+structural test separates them; the side that holds one always knows which it
+has, and a caller that genuinely does not ask twice — once per variant — and
+lets the decode answer (`struct_fields_of_slot`). The hand-written unwrap the
+variant exists to stop is `Index(ty, 0)`: that is a holder's value slot *or* a
+term's shape, and only the caller's own knowledge says which it just read.
+`field_index` (its recorded consumer is the kernel
 specialize pass) and the compute-side `class_of` adapter are **not built**: a fold
 with no caller is surface this tree does not keep, and the field read below
 removed the case that needed `class_of`.
@@ -171,3 +177,189 @@ would remove the last of it: the abstract-interpretation pass computes and store
 every body node's low type, and [lowlevel-low-types](lowlevel-low-types.md) gave
 the lowlevel the layer. That is recorded as the open item in
 [compute-jit-low-types](compute-jit-low-types.md), not as work in flight.
+
+## Recovered measurements
+
+### The canonical universe is a fixed point, not a value
+
+The self-referential universe `[Type, ↺]` is a value whose type is itself, so
+it cannot be rebuilt by an apply clone: a clone allocates a *fresh* self-loop and
+unification cannot equate that loop with the canonical one — the path guard
+reports a conflict instead. Proving the universe concrete before the definition
+pass is what makes the apply clone walk reference it in place. The three type
+constants are proved concrete for the same reason, and the two shared index
+constants and the kind markers rely on the same untagged-node property.
+
+`is_universe_any` answers a dynamic node by equality-class comparison against the
+module's canonical universe node, and a static ref by content (a two-item
+self-referential array). The shared node exists at all because cloning the
+universe breaks unification, so the composite must be shared rather than rebuilt
+— the same reason `Ctx::universe` is a reference and not a constructor. The
+matching renderer facts are in
+[universe-containment](universe-containment.md) §2.
+
+### The IR is a DAG, so an expression is compiled once
+
+Statement bindings pre-resolve every use of a name to the value's own
+`ExprId`, so one expression can be referenced from several parents. Compiling
+it once and reusing the pair matters because a recompile allocates fresh state
+again — a struct type's nominal id comes from a per-compilation `Fresh` call —
+and that silently breaks the sharing the frontend relies on.
+
+### Why the skeleton gate is a membership test
+
+A cycle can only form through a block-wide binding placeholder; an inline
+compound term's subtree can never reference its own root. Pre-registering a
+skeleton for such a term would add spurious cells that poison the apply-time
+unify — a placeholder reached through an index-typed apply would stay an
+undecided `?a` instead of binding to the actual type. The gate must therefore
+test `block_roots` membership alone: the frontend transplants the binding value's
+kind into the placeholder, so a block root may be *any* kind, and a
+hand-maintained kind list silently misses a variant — a self-reference through
+an unlisted kind then re-enters the check forever. For a childless kind the
+skeleton is inert and the epilogue binds it away; a `Function` block root
+pre-registers its own pair in `check_lam` before its body compiles, overwriting
+the skeleton.
+
+### An inference hole in either position
+
+`_` is an inference hole in either the value or the type position, so both slots
+are fresh undecided cells and whatever the context unifies them with binds them.
+The kind slot must be a cell and not the universe, because a compound type's
+kind slot holds a kind expression (`[FunctionType, Type]`), which would clash
+with `Type` itself.
+
+### A masked error region is an opaque leaf
+
+A recovered-error region compiles to a pair of fresh, never-unified cells:
+nothing inside it is checked, so it cannot introduce a spurious type-level
+"expected X, found Y" from inside itself — the parser's own syntactic diagnostic
+still fires at the parse layer — and the undecided cells never cause a cascade.
+The region stays a distinct kind from a real `_`, so the frontend can mask it
+for a content signature or diff.
+
+### A constant offset is a lazy `Index` chain
+
+`lazy_index_path` is the runtime form of a constant encoding offset: the nested
+`Index` chain resolves when the base binds. It is how the checker walks the
+struct name paths `STRUCT_TYPE_NAMES_PATH`, `STRUCT_KIND_NAMES_PATH` and
+`STRUCT_KIND_NAMES_ORDER_PATH` (spelled in `crate::shape`). Each step's
+subscript is a constant node, shared for `0` and `1`.
+
+### What `LiteralExt::build` may return
+
+A literal builds its `[value, type]` pair itself through `LiteralExt::build`:
+the built-in int literal and the type-constant literal each build their own
+value and type nodes, referencing the prebuilt singleton expressions the context
+exposes, and a custom literal may build any value/type pair that references
+other expressions. A type-constant literal is the exception — `Type : Type` is
+built as the self-referential universe node, so it is not a `[value, type]`
+pair at all.
+
+### The `slot0_is_shape` heuristic, and what it is not
+
+`slot0_is_shape` decides "element 0 is an array ⇒ this is a shape" rather than
+an expression's `[value, type]` pair. It misfires on a pair whose **value** is
+an array — a tuple value is an array, and so is a struct marker's payload
+(`[payload, TypeStruct]`) — so a diagnostic path through such a pair may tag a
+`Value` descent as `Shape`. It is a diagnostic rendering hint only: the unify
+itself is unaffected.
+
+### Naming the layout: role, not structure
+
+An expression pair and a kinded type expression are distinguished by **role**,
+never by structure: `[value, type, attrs…]` and `[shape, kind]` have
+positionally identical slots (`0`/`1`) but mean different things, so each gets
+its own constant names. The same reasoning repeats one level down, in the shape
+half: an array's element position and a function's domain position are both
+`"0"`, and a reader reusing one spelling for both would be reading a convention
+rather than the layout.
+
+The struct marker is where the naming pays off: it is an ordinary
+`[value, type]` pair whose **type** read is the `TypeStruct` atom, so "is this a
+struct marker?" is a check of a type constant rather than a guess about the arity
+of an open encoding. Its payload is `[TypeId, names, names_in_order]`, and the
+last field exists for the one reader a name→index table cannot serve: a named
+instantiation through an **unresolved** callee reorders its arguments when the
+struct type resolves, and that reorder needs the field's *name* at each
+definition position — the table's inverse, which a lazy `Index` cannot derive.
+
+### The definition-order names path is a deliberate follow-up
+
+The deferred named instantiation reads a TypeStruct kind's definition-order
+names through `STRUCT_KIND_NAMES_ORDER_PATH` (`kind[0][0][2]`) rather than
+through the `STRUCT_TYPE_NAMES_PATH` spelling, because reading *the term's*
+slot 1 would pull the shape half into the read's operand chain. That hazard
+belonged to the old forced pass, which walked every element of an operation's
+operand array rather than only the selected one — the shape half, which holds
+the deferred reorder's own field-type probe, would then have been forced
+mid-read and the read would have met itself. **The operand forcing is gone**, so
+whether the `STRUCT_TYPE_NAMES_PATH` spelling is safe again is an open
+follow-up rather than a re-derived fact; the path is kept as the direct read of
+the kind node.
+
+### Arrow terms, and the guard that skips them
+
+`is_arrow_type_any` recognises a concrete **arrow-term** function type —
+`[shape, [FunctionType, K]]`, the spelling a written `A -> B` lowers to —
+because the checker's function-ness guard skips these: only concretely
+*non*-function types are caught statically. A function's **own** type
+(`f : f`) needs no recognition here, because the unifier already descends into
+the two functions' cells when it reaches one.
+
+### The set instance's exact encoding
+
+A set instance is typed `[members, [[element type], [TypeSet, Type]]]`, whose
+shape is the element type *alone* — a set has no length, so `set{a}` and
+`set{a, b}` share one type, and that is what separates the set kind from
+`array<T, n>`. The value is an ordinary array node, exactly the node an array
+literal's elements make, and nothing tags it.
+
+### The kind-marker registry
+
+`ValueType::is_kind_marker` is the **honest tag test** behind "is this atom a
+type-level marker", as opposed to a structural guess (an array of the right
+arity). `TypeId` is not a kind marker and is tested through
+`ValueType::type_id` instead.
+
+### Two child lists, and which one is the authority
+
+`IR::range_children` is the variadic arena only, so a descent built on it would
+skip every named operand (`Apply`, `BinOp`, `Index`, …) and miss most of the
+graph; `ExprKind::children` is the complete list, which is what a walk over the
+IR needs. `range_children` is the **open** end of the encoding — a new kind that
+stores its children as a `ChildRange` must be added to the range arm, and a
+wildcard would let it compile and then panic at run time — and `children` names
+its non-variadic kinds rather than catching them by a wildcard, because a new
+kind that forgets to list its children is a walk that silently skips it. The
+checker's own `range_children` is the authority, not `IR::range_children`: it
+already spelled the list out, *including* `Set`, which the first draft of the
+`IR` method left out. The `IR` method is kept as the *closure* end, so a
+caller's mistake reads as a `debug_assert` naming itself rather than a wrong
+child list.
+
+### The read forms and the tables they walk
+
+`NamedField` (`a.name`) reads the name table out of the container type's
+**kind** (`container_ty[1][0][1]`); `RawNamedField` (`X::a`) reads it directly
+from the container's **type**, which must be a TypeStruct (`container_ty[0][1]`),
+and yields the field's *type* as a value — `S::a` on
+`struct<.a Int, .b string>` is `Int : Type`. The raw form's requirement is a
+check-time unify (a concretely non-TypeStruct container is a diagnostic), so it
+is *not* raw in the no-validation sense of `RawIndex`. `RawIndex` (`X<e>`) is
+the genuinely unvalidated read — no array-type pinning, no guard, no bounds
+assert — reading a component of a type-as-value or of any expression's value,
+both lazily, so an undecided container resolves at the apply; this is the form
+the `T<e>` array-type postfix used to be, and the array type is now `TypeArray`,
+spelled `array<T, n>`. `Field` (`a(k)`) works over a tuple element or a struct
+field because both shapes are positional type lists and the nominal struct id
+lives in the kind. The read *forms* are distinguished syntactically and the
+source spelling is the whole rule: the adjacent single-expression paren
+(`a(1)`) is a slot read, the glued comma-disciplined paren (`a(1,)`, `a(1,1)`,
+`a()`, `a(,)`) is an instantiation, a spaced paren is an application, and the
+adjacent brace (`t{k}`) is a table lookup whose entry has a key deep-content-equal
+to the given one. `Instantiate` checks the value's element types against the
+struct's field list and the expression's type is the struct type itself; a
+non-struct callee is an `InstantiateCallee` diagnostic. `Record` is its
+anonymous sibling — the checker builds the struct type from the value's element
+types — and a `let` field never reaches it, being a block-local.

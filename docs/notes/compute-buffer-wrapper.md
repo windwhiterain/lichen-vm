@@ -150,6 +150,13 @@ into an output `Buf`.
   contention has to be *declared* — the algorithmic consequence, and the
   measurement it rests on, are
   [gpu-algorithm-roadmap](gpu-algorithm-roadmap.md#44-axis-d-slot-access-and-the-invariant-it-breaks).
+- **A `compute.write` inside an `if` branch is caught by an earlier limit than its
+  own guard.** The every-ordinal-written invariant — output ordinal `k` written on
+  *every* index — has its own emitter guard, but a same-module write inside a
+  branch is not reduced by the deep pass, so the branch still holds an `Apply` and
+  the emitter's **existing inline-call limit** fires first; the refusal names that
+  cause. It is still a refusal, and what the test pins is the consequence: the
+  program does not run, and does not silently produce one output buffer.
 
 ## How to use it
 
@@ -503,3 +510,28 @@ Two things the author still writes, and one defect the empty group exposed:
 | Role paths in the fragment | `KernelRoles`, `crates/lichen-kernel-ir/src/lib.rs` |
 | The recording and its placeholders | `record_dispatch`, `record_return`, `assemble_parameter`, `build_graph`, `compute/graph.rs` |
 | Struct type reading | `struct_term_parts`, `struct_names_any`, `field_names`/`field_list`/`field_type`/`TypeRef` (`crates/lichen-highlevel/src/shape.rs`), `struct_fields_of_slot` (`compute.rs`) |
+
+## Recovered measurements
+
+**Which parallel regime a count gets is not observable.** A parallel run partitions
+the index range over workers, each owning a **disjoint span of every output
+buffer**, and which regime a given count lands in is `lichen-compute`'s
+`parallel_worker_count`, unit-tested there. Below `SEQUENTIAL_PARALLEL_ELEMENTS`
+one worker (the calling thread) runs the whole range and above it every worker
+does, and the two agree element for element — no lichen-level value can distinguish
+the regimes, which is the point.
+
+**There is no way to make a buffer out of a program value.** A plain array in a
+buffer position used to be accepted and to produce nothing: the read stayed a lazy
+cell nothing forced, the launch answered `parameterized`, and the program still
+printed a type (`array<?a, ?b>`), so it read like a program that computed
+something. The `Parameterized` fallback is not wrong in general — it is what makes
+a kernel's own read deferrable — but a program array is **decided**, so it is not
+the case the fallback exists for, and a diagnostic is the honest answer.
+
+**A wrapper's parameter cell is filled by normalizing the wrapper, never by an
+apply.** `f`'s parameter type states the argument's type, so a wrapper
+`g = (a => f a)` must have its parameter type cell filled by *normalizing* `g` — no
+apply and no run-time inference. The compute wrapper is the same cell: the source
+`k1 = jit (x => launch k0 (x,1))` fails with "the kernel parameter's class is not
+decided".

@@ -27,6 +27,18 @@ never see it; the code to compile is everything after the block.
   imports resolve first (transitive dependencies load and freeze first); a cycle is a
   `cannot load package '…':` diagnostic anchored on the import that closes it.
 - Diagnostics are re-anchored to the importing file's `---…---` line.
+- The block's interior is a **Separator-separated** statement set: newline, comma and
+  semicolon all lex as the same `Separator` token, space/tab/carriage return are trivia, and
+  blank lines and a stray trailing separator are tolerated.
+- A string is `"…"` with no escape characters, may span newlines, and its content is any
+  character except `"` — including `@`, which is the keyword prefix rather than a delimiter.
+- The block is located by its **first** `---` wherever that is (so a prose prefix may precede
+  it) and closed by the **second**; `---` is therefore reserved and cannot appear in the code
+  or in a string before the block's own opening.
+- An unexpected character makes the whole block unusable — the first is reported and lexing
+  stops — and an interior that fails to lex or parse yields no directives at all.
+- Diagnostics from inside the block report a byte offset into the interior, which the caller
+  turns into a `(line, col)` against the original file.
 
 ## The store
 
@@ -37,6 +49,9 @@ never see it; the code to compile is everything after the block.
 - `load_package(path)` / `resolve_import(base, import_path)` — load (or fetch) a package.
 - `gc()` / `remove(path)` — explicitly reclaim / remove from the device cache.
 - `packages` is public so a host or test can observe "the same package is frozen once".
+- A native plugin's wrapper is registered **after** the file's own dependencies are staged,
+  so the block's `import "<alias>"` resolves it as a native virtual package on that same
+  store.
 
 A load compiles the package against the **shared registry**, then freezes the built
 module. Dependency refs are key-carrying and verbatim, so every importer reads the
@@ -55,6 +70,10 @@ changed chain recompiles, and each compiled package is serialized back.
 - `lichen-compiler build <file>` — load/freeze a package and print its exported type.
 - `lichen clean` (the package manager) — reclaim unreachable artifacts from the device cache.
 - `-h/--help`, `-V/--version`.
+
+The `build` command is a prototyping command: it renders the exported type through a tiny
+self-import of the same file, whose `import` names that file itself and resolves against its
+directory.
 
 The compiler binary is `lichen-compiler` (it was `lichen` before the package
 manager took the name).  The git-dependency workflow that drives this CLI is

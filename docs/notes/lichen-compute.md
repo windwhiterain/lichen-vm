@@ -133,6 +133,13 @@ emits the operator via `ctx.op_node(...)`, and returns the `[value, type]` pair.
   and then reads the fields by name — see
   [compute-buffer-wrapper](compute-buffer-wrapper.md) and
   [multi-output](#multi-output).
+  **What `LaunchOp::build` leaves to the wrapper is an open item.** The operator
+  states **no type at all**: the kernel's `.I`/`.O` constraints in the lichen
+  wrapper are the whole of the result's type, and that wrapper is still being
+  annotated. While the launch result's type is left an open cell, the renderer's
+  `leaf_class` finds no class in the type's first slot and falls back to the raw
+  layout, so a program prints `6: raw[Int, raw[?a, ?b]]` against its declared
+  `6: Int` — the value (`6`) is already right, and only the rendering is wrong.
 - **`CallOp::build`** (`$call(k.native, a)`) — only gates the argument against a fresh
   domain cell and types the result as a fresh codomain cell (the callee signature is read at
   launch-time assembly by `kernel_id_of`).

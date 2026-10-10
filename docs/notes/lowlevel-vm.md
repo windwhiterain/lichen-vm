@@ -119,6 +119,13 @@ table or the unit value, and for a callee whose undecided type the checker's
 function-ness guard cannot see. An out-of-bounds index is refused the same way rather
 than panicking in raw slice indexing. A late binding still reaches the position
 through the `Error`/undecided arms, so nothing that could later resolve is lost.
+A **struct instance** is the hard case among them: its value is structurally a
+`LowValue::Array` — the same shape a compute kernel's `[native, sig]` pair takes,
+which the lowlevel cannot tell apart — so only the program knows which of its
+values are callable (`Program::is_callable`), and its answer has to refuse the
+instance for the failure to be recorded at all. A callee that *is* a parameter
+keeps its type cell undecided, the checker's function-ness guard is skipped, and
+the failure reaches the diagnostics as `RuntimeApplyTarget`.
 
 An apply frame that exceeds its work budget returns `None` — the undecided answer —
 and not `LowValue::Error`: the body never ran, so the answer is *unknown* rather than

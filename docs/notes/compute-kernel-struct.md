@@ -104,6 +104,19 @@ resolve correctly:
 `Index(struct,0)` field read) to its `KernelId`, so a kernel body that refers to another
 kernel by value lowers its call to a `CallKernel`, assembled at launch time.
 
+**A kernel `@loop` nest carries a run-time state, so the kernel reader has to build
+the nest.** Its header's `params` are the state, the base test branches out of it,
+and the exit hands the carried value on — and because that state is a **run-time
+value**, the checker cannot expand the recursion. The state is a buffer read, so it
+is an instruction the entry block computes; until the wasm lowering decided value
+types over the whole body rather than block to block, such a body was refused with
+"block 1 has parameters but no branch reaches it with a value".
+
+**A `plrun` result's element class stays undecided in the result type — a
+documented limit, not a defect** (pinned end to end by `tests/compute.rs`); what the
+undecided cell costs a host read is
+[compute-runtime-scalars](compute-runtime-scalars.md)'s.
+
 ## Encoding summary
 
 - `ComputeValue` = `Kernel(KernelId)` | `ParKernel(KernelId, backend)` | `Buffer(payload, class)` |

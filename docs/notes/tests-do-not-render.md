@@ -43,3 +43,15 @@ example — an imported-field hover now asserts that the type's two sides are th
 *same* open cell and both are named, and the wrapper hover reads the type
 variables' names out and asserts their relation, instead of pinning the
 printer's spelling of either.
+
+## Recovered measurements
+
+**A member with no value is a refusal, not a `false`.** A value that was never
+evaluated — a lazy read nothing forced — has no answer to compare, so the shared
+comparison helper **panics** on it rather than returning `false`: silently calling
+two of them equal is what would make a comparison of two backends vacuous.
+
+**A run-time refusal means the value never arrived.** `common::finish` mirrors
+`run::render_build`'s refusal gate: a program that produced nothing while a refusal
+was recorded is a failure, not an empty answer. A refusal explains a value that
+never arrived; a program that produced one has nothing to explain.

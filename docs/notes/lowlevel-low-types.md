@@ -182,7 +182,34 @@ answered `Unknown`):
   parameter's type cell holds the annotation expression's own `[value, type]`
   term pair, while an *inferred* one is bound straight to a type value.
   `low_type_of_slot` peels that one indirection, in the authority, so the caller
-  reads no layout — which is the coupling this design exists to remove.
+  reads no layout — which is the coupling this design exists to remove. The two
+  are told apart by **whether the decode succeeds**, not by a structural guess,
+  which would not be sound: a term pair and a type value have the same two-slot
+  silhouette. What separates them is the terminal marker — the type slot of a
+  term names the *type of an expression*, which for a type expression is the
+  `Type` marker, and `Type` is the one kind marker the decode refuses — so a
+  pair never decodes directly and a bare type value always decodes on the first
+  try. An undecided answer is `LowShape::Unknown` and never a fallback: a
+  polymorphic parameter has no domain at this boundary, and a backend that
+  invented one would compile a kernel for a type nobody wrote.
+
+**The decode refuses three things, for three different reasons.** A **struct**'s
+fields are positional, so its shape reads like a tuple, but a nominal struct is
+not a tuple value and the low type vocabulary has no nominal shape: answering
+`Tuple(..)` would drop exactly the identity that makes it a struct. A `string` is
+refused because it is not a machine scalar. A **type** is not a value at all.
+Whether a *kernel* can lower a shape the decode does accept is a separate
+question (`lichen_compute::kernel_domain`,
+[floating-point](floating-point.md) §3.8).
+
+**The seed is not an optimisation — without it nothing in a body has a shape.** A
+template is never evaluated and an apply binds the clones, so nothing in a body is
+ever *observed*; the checker, though, wrote its decision into every term's type
+cell. The transfers cannot see those cells (the pass never learns the
+`[value, type]` layout) and observation is silent on a template, so an unseeded
+body reads `Unknown` throughout and every class falls back to `Int`. A cell
+nothing decides stays undecided, and a disagreement between a seed and a transfer
+degrades to `Unknown`.
 
 ## 7. The other axis on the same slot
 

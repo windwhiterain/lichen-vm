@@ -150,6 +150,12 @@ lichen path language-server       # prints the binary path (installing if absent
 lichen update                     # move the package manager to the latest release
 ```
 
+The `release-lichen` workflow publishes the toolchain as a **full/latest** release by
+default; its `prerelease` input (or `scripts/release.sh --prerelease`) opts in to a
+pre-release. The extension's bootstrap therefore queries `latest_github_release` with
+`require_assets: true, pre_release: false`: requiring a pre-release finds nothing once the
+newest release is a real one.
+
 Check the server resolves:
 
 ```powershell
@@ -253,7 +259,10 @@ does two things:
    current grammar via `Query::new` — a query referencing a node the grammar lacks fails here;
 2. `git diff --quiet <rev> HEAD` over the grammar-defining + query paths must be empty — if the
    grammar or its queries changed after the pinned `rev`, the test fails and prints the `rev`
-   to set.
+   to set. `GRAMMAR_PATHS` is deliberately `grammar.js` + `queries/` + `languages/lichen/` only:
+   the grammar's own `tests/` is excluded because it churns for test-only reasons, and `src/`
+   because it holds generated files that are not committed, so only a change to one of the three
+   listed paths forces a `rev` bump.
 
 So the loop is: edit `tree-sitter-lichen/grammar.js` → regenerate (`tree-sitter generate`, or let
 `build.rs` do it on build) → test locally (`cargo test --manifest-path

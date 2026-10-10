@@ -151,6 +151,15 @@ round trip would not merely lose a digit, it would change what the program means
 Rust's own shortest-round-trip formatting is kept, and nothing else may re-spell a
 float.
 
+The spelling is **positional**: `{:?}` switches to an exponent (`1e38`), which the
+lexer's `[0-9]+\.[0-9]+` literal has no syntax for, so the digits are always written
+with a `.` — the `1.0`-versus-`1` case above is why the dot cannot be dropped. An
+infinity is spelled as a magnitude past the round-to-infinity threshold
+`(2 - 2^-24) * 2^127` — the only form the lexer reads back as an infinity, since
+`inf` is a name rather than a literal — and `NaN` has no spelling in the literal
+syntax at all, so it keeps Rust's own and a reader refuses it rather than acquiring
+a different float.
+
 ### 3.6 The artifact codec — three tag spaces
 
 All three are append-only and no tag in any of them may ever move. They are
@@ -340,6 +349,12 @@ written because three of them decide what every implementation agent builds:
   is the price of admitting floats at all. §3.7's *interpreter* answer is
   unchanged, because the interpreter is not a kernel.
 
+**What the compound position costs at the call site: the `jit` succeeds, the
+argument is refused.** A *scalar* domain position is handed a value, so those
+kernels run; a *compound* position is one local of the element's class, so an
+aggregate has nothing to be lowered into, and a function position has no scalar
+encoding at all. Both cases are refused at the **argument**, by name.
+
 ## 5. What landed
 
 ### 5.1 The permission, and what it still refuses
@@ -350,6 +365,15 @@ module `spirv-val` accepts (`OpTypeFloat 32`, no `Int64` unless needed, `OpFAdd`
 `OpFDiv`, and `Eq`/`Neq` as bitcasts and `IEqual`/`INotEqual` rather than
 `OpFOrdEqual`). **The same float program through `"cpu"` and through `"gpu"`
 produces the same numbers**, on a real device.
+
+**The two real backends are the only oracle for each other.** The wasm backend in
+`lichen-compute` and the SPIR-V emitter implement the same IR and were written
+apart, so nothing else in the tree can say whether they agree. The comparison is
+therefore over **values**, never over `installed_backend_name()` — the weaker claim
+a silently-fallen-back run would also satisfy — and the CPU run goes first and
+always happens, before the install, so a `"cpu"` run cannot be a `"gpu"` run's
+leftovers (`crates/lichen-language/examples/crossbackend.rs` is the probe for
+that).
 
 - **The layout**, which is what the two halves once disagreed about:
   `ScalarClass` states `byte_width()` (`Int` 8, `Float` 4) and everything derives
@@ -364,7 +388,11 @@ produces the same numbers**, on a real device.
   `a_float_fragment_agrees_across_the_two_backends` and its integer twin run one
   source through both backends at `LOCAL_SIZE_X + 5` elements, so surplus lanes
   run past the bound into the padded tail where a wrong stride corrupts the
-  neighbour rather than failing loudly.
+  neighbour rather than failing loudly. The arithmetic behind that count: a
+  dispatch is `ceil(count / LOCAL_SIZE_X)` workgroups, so a count that **divides**
+  the workgroup sends no surplus lane at all — and a wrong element width is a wrong
+  answer only once a lane reads or writes past the end of what was bound, which is
+  also why every element must differ from its neighbour.
 - **A float GPU kernel dispatches now.** The run path is class-aware, and
   `GpuContext::fetch` returns `ScalarData` because a packed float payload cannot
   honestly be handed back as words.
@@ -374,6 +402,11 @@ produces the same numbers**, on a real device.
   output vary by lane, and `int2float (x + 1)` over an `Int` parameter runs. Both
   element types are declared in every SPIR-V module, so a module can hold both
   classes and only the 64-bit integer (with its `Int64` capability) is conditional.
+  **A parallel fragment's class is decided from the value a write fills, before the
+  body is emitted**, so a body with no concrete `Float` operand is lowered in `Int`:
+  `a + a` alone declares an `Int` fragment and the run refuses the `Float` input
+  buffer by name, while `0.0 + a + a` anchors the class and computes the same
+  number. The `0.0` is load-bearing, not decoration.
 - **One class per buffer, and a chain is the one place a mixture is refused.** A
   module declares one buffer-type chain per class it actually uses, and each
   buffer variable is typed with **its own** buffer's class; the host staging is
@@ -389,6 +422,12 @@ produces the same numbers**, on a real device.
   integer is conditional. A float fragment's *integer* data is `i64` on the CPU
   and `u32` on the GPU, so it diverges past 2³² — exactly as `int2float`'s
   `i64 → f32` rounding does past 2²⁴ (§4.3). A recorded price, paid knowingly.
+- **One crossing is answered differently by the two backends, from the same IR.** A
+  `Float` fragment carries the `Int` index in an `f32` holding the exact integer:
+  the wasm backend emits **nothing** where the value it holds is already a float,
+  while SPIR-V emits `OpConvertUToF` because its index is a 32-bit integer. That
+  pair of answers is precisely what only a comparison of the two real backends
+  keeps.
 
 **Still refused, and each is the right answer:**
 

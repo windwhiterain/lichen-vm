@@ -182,3 +182,20 @@ build's `node_edges` and the frontend's `span_index`). Two things follow:
   name**, which `crates/lichen-language/tests/compute.rs` pins. Widening the
   boundary is the kernel workstream's specialize-before-JIT pass, which folds the
   apply back to a machine leaf.
+
+## Recovered measurements
+
+- **Presenting a built-in's own diagnostics.** A failure inside a built-in is a
+  property of **that file**, so `Diag::file` names it: `render_diagnostics`
+  filters those out of the document's set (`d.file.is_none()`) and
+  `file_diagnostics` renders each group against the built-in's own text and line
+  starts. The server publishes every such set against
+  `Url::from_file_path(path)` **and remembers the URIs it published**, because a
+  client keeps a file's diagnostics until an *empty* list replaces them — without
+  that memory a fixed error would sit on the built-in's line for the rest of the
+  session. A diagnostic with a `file` but no `span` is dropped rather than given
+  the document's coordinates: the document must never be blamed for a position it
+  does not contain. The same rule runs through go-to-definition
+  (`Definition::file` decides which file's `line_starts` render the range) and
+  through completion, where a **built-in** name has no document span at all, so
+  its `detail` names the built-in's file rather than a checked type.

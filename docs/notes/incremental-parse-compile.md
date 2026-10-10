@@ -399,3 +399,12 @@ The named tiers and their state; T3 and T4 are **proposed**, not built.
 Steps 1–4 together implement the rule: when the user writes new unfinished code,
 the error block is contained at the parser layer and the established AST/IR/check
 is reused because a quick beyond-error diff says nothing else changed.
+
+## Recovered measurements
+
+- **`lex_resume` is `O(edit)` in the regex work only.** It re-lexes the changed
+  region and re-synchronizes against the old stream, but the value it returns is
+  a fresh `Vec`, so materializing the result copies the reused prefix and suffix
+  — linear in the file's **token count**, not in the edit. A caller that must be
+  `O(edit)` end to end has to splice the returned token slice into its own
+  structure rather than treat the returned `Vec` as free.

@@ -12,15 +12,17 @@
 > (`operator-polymorphism.md` §8.8) are its acceptance.  §4 then lands on top of
 > it.  §1 is the incoherence as first read; §2 and §3 record what measurement says
 > that first reading got wrong.
-> Worktree `.worktrees/kernel-param-struct`, branch `feature/kernel-param-struct`.
+> The remaining halves are carried by the branches the body names:
+> `feature/unconditional-class-writes` (the §1.1 write rule, merged as `09b4640`) and
+> `feature/class-value-on-representative`.
 > §5.1 (the class a lowering runs in) and §5.3 (the wrapper's `.I`/`.O` cells
 > carrying its signature) are landed.  The remaining half — §5.2's statement and
 > §5.4's carrier —
 > is the **open class** itself, which is the operator-polymorphism workstream's to
 > decide ([operator-polymorphism](operator-polymorphism.md) §8.4 and §5: the class
 > domain is that workstream's value, and its reader is what commits to a member).
-> This worktree therefore proceeds with §4, the struct-argument migration, whose
-> 57-of-58 acceptance leaves exactly the element cell the two red targets want.
+> §4, the struct-argument migration, is the carrier for the element cell the two red
+> targets want.
 > **Then the operator routing landed** (§5.1.1): the operator *is* the prelude's
 > binding, so a kernel body's `+` is an apply of a frozen function.  The kernel
 > side of that — the static operands and the one class reader — is landed and

@@ -84,3 +84,20 @@ source, never as a compile dependency.
   out.
 - The vendored Zed grammar workspace (`lichen-language-zed/grammars/lichen/`) is
   a separate snapshot built on its own; it is not part of this crate's build.
+
+## Recovered measurements
+
+- **What the language crate seeds into every source.** Every file the
+  preprocessor sees is seeded with the built-in `core` module, so the operator
+  contract (`Num`, `in_num`, `add`, …) is in scope with **no import** — the
+  contract a program meets is the module's, not a built-in's
+  ([operator-polymorphism](operator-polymorphism.md) §9 Phase 3,
+  [core-prelude](core-prelude.md)). It is seeded **first**, so a program's own
+  `import` or binding of one of those names resolves later and wins: the prelude
+  is *shadowable*, not reserved. The built-in modules are exempt — `core` cannot
+  be its own prelude (the load would re-enter itself) and `compute.lichen` is a
+  plugin's private source compiled against that plugin's own registry. This is
+  the one thing the language crate adds on top of the pure preprocessor, and it
+  stays on the `ImportResolver` seam: `PackageStore` implements the trait, and
+  `lichen-language`'s two orchestrators keep their generic-over-`P` signatures
+  while delegating to `lichen_preprocess`, which knows only the trait.

@@ -138,3 +138,34 @@ It is also what makes the two defect notes above legible: in the
 [eval-before-unify](eval-before-unify.md) §2 matrix every
 `[?a, ?b]` is a raw reading, and a diagnostic whose whole expected side is raw
 means no form was recognised at all.
+
+## Recovered measurements
+
+- **The reading table the mark separates from the fallback.** `print_value`:
+  a value whose type is the universe is an atomic type constant (`Int` / `Type`);
+  a value whose type is a kind is a compound type (`struct<.f Int, .g Type>`,
+  `Int -> Int`, `<Int, Type>`, `array<Int, 3>`); a tuple type reads `(1, Int)`,
+  an array type `[1, 2, 3]`, a struct type its field tuple. All of those are
+  **reads**, so all of them carry no mark — that is what makes the mark say
+  something.
+- **A plugin's own leaves are spelled through a hook, not by the core.** The
+  shared printer is generic over the value vocabulary, so it cannot know a
+  compute plugin's own value variants: the base renderer spells an unknown
+  extension value `?` (the §3 reading, and never `raw ?`), and the language
+  layer's render hooks spell the compute leaves by name — `Kernel`,
+  `ParKernel`, `Buffer`. A kernel value is an opaque compiled artifact whose
+  *signature* rides in the struct's `.I`/`.O` fields rather than in a marker, so
+  one name suffices and its type renders as `struct<.native _, .I in, .O out>`.
+  The backend is deliberately not rendered: a value's name is its kind, and which
+  backend a run dispatches to is a property of the program, not of one value.
+- **Raw layout behind the reads.** A struct type value's raw shape is
+  `[Int, Type]` — the positional field-type list, the lowlevel data layout — and
+  read against its kind it prints as the code that produced it. `X<e>` reads a
+  component of a tuple type value's component list (the container's kind must be
+  `TypeTuple`, refused otherwise); `X::a` reads a named field's *type* from a
+  `TypeStruct` value (the name table lies at `container_ty[0][1]`); `.a` reads a
+  field *value* from a struct instance. A **released** node
+  (`Module::node_value` on a dropped dynamic ref) is a documented state rather
+  than an error: the printer answers `?` rather than indexing a node table that no
+  longer holds it. A single-field struct instance's value renders the one-element
+  tuple's comma `(1,)` even though the source `B(1)` needs none.

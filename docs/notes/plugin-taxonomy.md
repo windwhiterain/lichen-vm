@@ -75,6 +75,15 @@ operator union's `run` dispatching every leaf).  So a composed program marker is
 a live, executable `Program` — its operators actually run, and a plugin compiler
 can be driven over it.
 
+The composed marker it emits is a fresh **nominal type** around
+`ProgramImpl<LangValue, LangOperator, LangAttr>`, deliberately not a type alias. A
+composition site inside the language crate may implement a trait for an alias of its own
+types, but an external one (a plugin-built compiler crate, a test host program) cannot:
+`impl ProgramCodecOf for <alias-of-ProgramImpl>` is E0117, because the alias unwraps to a
+foreign `ProgramImpl` and the trait is foreign. The newtype is what makes the generated
+`Program` / `HighProgram` / `ProgramCodecOf` / `OperatorExt` impls orphan-legal from any
+crate that composes the vocabulary.
+
 A native plugin contributes its leaves through a `#[macro_export]` leaf macro
 named `<crate_ident>_leaves` (e.g. `lichen_compute_leaves`,
 `lichen_std_native_leaves`), and the manifest lists it as
@@ -172,6 +181,10 @@ plugin — it invents syntax/IR/persist, so no fixed host can pull it unchanged.
   compiler passes its own plugin-set slot (`<lichendir>/compilers/<key>`), so
   its compile artifacts never collide with (or reuse) another plugin set's —
   each vocabulary reads/writes its own `artifacts/` store.
+- The per-leaf artifact codecs — `OperatorCodec`, and `ValueCodec` for a value leaf — are
+  what a native plugin implements when it wants its *built* compiler to keep a persistent
+  `~/.lichen` cache. A scalar operator's codec is a one-tag identical round-trip: `SortOp`'s
+  is `Sort` ↔ `0`.
 - `Perspective` and `Doc`'s codesign sites (grammar `# p` / `? expr`, AST
   fields, `IR<…>` schema tails, the `GcdOp` persist discriminator) stay in
   `lichen-language`.

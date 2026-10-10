@@ -723,3 +723,12 @@ Stated here because they are silent-wrong-answer rules rather than slow ones:
 - **A `DeviceBuffer` value dropped by `drop_block` never calls `release`.** Its
   memory lives until `GpuContext::drop`, the same rule as the deliberate
   no-per-value-release decision above.
+
+## Recovered measurements
+
+**`examples/bench.rs` measures the whole program, and that is a different question
+from this note's tables.** The number it reports is everything a lichen program
+pays — building the input, the kernels and the read-back — while the tables above
+measure a dispatch and a fetch separately. The two do not contradict each other: a
+single dispatch never repays itself (the first upload costs about what the scalar
+loop costs outright), and a chain does.

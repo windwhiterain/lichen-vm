@@ -57,3 +57,27 @@ which `import "math.lichen"` resolves to the same anonymous struct as an explici
   the end of the program") is reported one column earlier by a bracket window
   than by the whole-program parser. The spliced *program* is identical; only that
   error column differs.
+
+## Recovered measurements
+
+- **The top level is a list of `stmt_roots`, not a tuple cascade.** The program
+  does *not* wrap its statements in `Index(Tuple([stmt₁, …, stmtₙ, final]), n)`;
+  the statement ids are recorded as `stmt_roots`, which the checker type-checks
+  and evaluates one by one, and the build root is the final expression directly.
+  The consequence is that a non-terminating statement is reported as a
+  diagnostic instead of being silently deferred by the cascade. Nested blocks
+  still use the tuple wrap (`Compiler::wrap`), so that wire form survives for
+  blocks only.
+- **A block root may be any expression kind.** The frontend transplants the
+  value's kind into the binding's reserved placeholder, so the checker's cycle
+  cut gates on **block-root membership alone** rather than on a hand-maintained
+  list of kinds. A block-wide binding referencing itself through `a(0)`, `a.x` or
+  `a::x` therefore checks like the `a = a + 1` control — no diagnostics, and the
+  root deep-evaluates to *undecided* rather than hanging. The record block
+  (`a = {x = a}`) is a fourth shape: its value is concrete, so the deep pass
+  terminates on the runtime cycle guard instead.
+- **A membership test over type values compares structurally.**
+  `ValueExt::value_eq` compares array *handles*, so it cannot answer a test whose
+  members are type values — a class node out of another module would never match.
+  A class domain is therefore compared by structure, which is what keeps a
+  class's nominal identity meaningful across modules.

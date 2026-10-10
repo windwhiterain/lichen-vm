@@ -646,3 +646,91 @@ the prelude reads the generic wording, and the diagnostic names the built-in's
 line rather than the application — [core-prelude](core-prelude.md) §5); and the
 editor grammar, which still spells the assert as the prefix `!`, has no `set{…}`
 and has no `@in`.
+
+## Recovered measurements
+
+- `%` and the bitwise trio are `Int`-only because the language has no float bit
+  pattern (a float has no remainder either), so a float operand is a check error for
+  those four operators and for them alone.  Their domain is a single class, so there
+  is no polymorphism to keep open — unlike the arithmetic and comparison operators,
+  which share the `{Int, Float}` domain refinement.
+- When neither operand of a scalar operation has stated a class, the two type cells
+  are unified into one open class and a refinement `left ∈ {Int, Float}` is
+  registered as an assert on it.  That domain is a *set's value* — the members
+  themselves — which is exactly what `Num = set{Int, Float}` lowers to, so the check
+  reads the same graph a library-written contract will.
+- A class conversion is the one operator kind typed as the other class: the operand
+  is checked against the direction's **source** class (`Int` for `int2float`,
+  `Float` for `float2int`) and the result's type is its **target**, so this is the
+  only expression form whose type is not its operand's.  A wrong-class operand is
+  the same refusal every other operator issues — the diagnostic names the class it
+  expected, and nothing here converts silently.  Only a class the operand already
+  *states* is unified, because a unify binds every cell the operand's class shares
+  and that class may be one a kernel body's other cells read: pinning the index a
+  float is written beside to `Int` would refuse the very program these two words
+  exist to write.  An undecided operand therefore stays undecided, and the value
+  that arrives at the other class answers the lazy marker in `TypeOperator::run`
+  rather than a guess here — a weaker message than a parameter pinned at its apply,
+  paid for by the conversion being usable where the classes are not yet decided.
+- `float2int`'s partiality is not a check-time fact: in range is a fact about the
+  *value*, not about its type, so the interpreter records `OUT_OF_RANGE` and answers
+  the lazy marker while `check_convert` does not check it.
+- Operator routing is syntactic, never a runtime kind dispatch: the frontend picks
+  the operator from the spelling.
+  - `a(k)` (adjacent single-expression paren) is the positional slot read; `a(1,)`,
+    `a(1,1)` and the two zero-field spellings `a()` / `a(,)` are struct
+    instantiation, mirroring the tuple grammar's `()` unit vs `(,)` empty tuple; a
+    spaced paren is function application.  (The two zero-field spellings are the
+    one part no note recorded.)
+  - `a.name` is the named field read, `a[i]` the array read, `t{k}` the table lookup
+    (the *adjacent* brace is the distinction), `X<e>` the raw positional component
+    read and `X::a` the raw named one.
+  - A struct *instance* reads a field **value** with `.a`; a positional component of
+    a type-as-value reads with `X<e>`; a named one with `X::a`.
+  - The refusals follow from the same principle: a struct type reaching `a(k)` is
+    refused like any other non-tuple, and a set reaching `s[i]` is refused because
+    the read pins its container to an array type.
+- `attr::pair_label` exists because no schema tail is needed and none is readable: a
+  pair's **arity** is in the graph, but *which* attribute each of its tail slots
+  belongs to is not — a one-entry tail is `[Doc]` or `[Perspective]`, and both are
+  three elements long.  So the search asks **every** attribute of the composed set
+  whether it names that slot, in canonical order, first answer wins — the same rule
+  and the same order `lichen_render::render_attributes` uses — and it is sound
+  because an attribute answers only about content it recognises as its own (a string
+  doc, `AttrExt::label`).  The answer is `None` when the pair is not an array,
+  carries no attribute, or carries none that names it, and a *static* (frozen) slot
+  is skipped: an attribute reads a dynamic node, and inventing a name for a frozen
+  one is worse than silence.
+- `Refinement::constraint` reads the slot's element 0 — the predicate expression's
+  own value node — with no re-wrapping, so the node identity is preserved and the
+  apply's subject is the very function the user wrote.  An apply node **is** its
+  return `[value, type]` pair, so the condition's own value is that pair's element 0,
+  the same read the checker's `value_of` builds.  Registering the pair itself would
+  hand the assert channel an array, which is neither `1` nor *lazy*, and it would
+  report a failure even while the applied value is still open.
+- The refinement's absent form is an undecided cell by intent rather than a
+  convenience: the fresh cell `combine` returns is the per-site no-refinement
+  marker, per-site precisely because a unify may bind it.  A *static* predicate is a
+  frozen node of another module, but the annotation's own slot is always built in
+  this module, so that case cannot arise and staying silent is the conservative
+  answer rather than inventing a node.
+- `set::contains` is both the class-domain read and the source form's meaning
+  (`value @in set`).  A set of ordinary values (`set{1, 2}`) is compared with
+  `ValueExt::value_eq`, which for a machine scalar *is* the value itself, so
+  `2 @in set{1, 2}` holds and `3 @in set{1, 2}` does not; a member the low type
+  vocabulary cannot classify stays on this side too, which is what keeps a `string`
+  type a non-member of a class domain (`add "a" "b"`).  `members` returns `None` when
+  the value is not an array, so it is not a set's value at all — a set's membership
+  is decided by its type, and the reader is for a caller that already knows it holds
+  one (a class domain).  A member and the tested value are the same member when
+  **both** denote a class, and value-equal otherwise; a node with no value at all
+  (an undecided cell, or a node that is not a value) is never a member.
+- Cost 1's kernel behaviour in detail: the checker peels a call result via
+  `Index(apply, 0)`, which the JIT looks through to emit the kernel call directly,
+  and a bare `k x` apply leaves a direct kernel apply's codomain `?a` — the checker
+  only resolves it via `$launch` — while the wrapper form `compute.launch k0 x`
+  *does* give `Int`.
+- Cost 3 is pinned by `tests/statement_values.rs`:
+  `statement_values_report_type_and_concrete_value` and
+  `statement_at_finds_the_containing_statement`; the same read-only rule reports a
+  lazy binding such as `paradox` as `None` rather than forcing it.

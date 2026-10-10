@@ -360,3 +360,109 @@ the crate was split out of `lichen-language` along with the rest of the frontend
   gains one `(marker, expression)` push. That push needs no slot number and no
   order knowledge — it is sorted into the canonical order — so the **order**
   itself stays a one-list edit (the manifest).
+
+## Recovered measurements
+
+- The shared missing-slot node is built on **first use**, not in the install pass:
+  the site is cold — a program that never has an absent perspective never reaches
+  it — so an eager install would spend two nodes on *every* build to save them only
+  on the few that ask.  The cost of laziness is that a slot first needed *inside* a
+  lambda is tagged into that function's template and so is cloned per apply, which
+  is exactly what the per-occurrence form did; it is never worse, only sometimes no
+  better.
+- The missing-slot cache is keyed by the marker's **position in the set's own order
+  list**, not by `AttrSet::order_index`: the list is what sizes
+  `Checker::missing_slots`, so the position is in range by construction, while an
+  index a plugin returns is only checked in debug builds by `order_is_canonical` —
+  a hand-written set that disagrees with its own list would index out of bounds, or
+  alias another attribute's cached slot, in a release build.  For a set whose order
+  *is* canonical the two are the same number.  `order_is_canonical` itself has two
+  enforcement points: a generated set asserts well-formedness at build time as a
+  `const`-evaluated check in the composition macro, and a hand-written set is
+  checked in debug builds when a checker is built over it.
+- `AttrExt::share_missing_slot`'s contract: an attribute decides, about its own
+  value, whether every occurrence of an absent attribute may read **one** shared
+  missing-slot node installed once per build instead of a fresh node per site, and
+  the checker only asks and caches the answer.  What a shareable missing value must
+  satisfy is that it is **concrete**: reconciling two slots is a real unification,
+  and a unify *writes* whichever side is undecided — a concrete node is only ever
+  read, so one node can serve every occurrence, while an undecided one would be
+  written by whichever occurrence unified first and every later occurrence would
+  read the bound value.  That is the whole difference between the two attributes
+  highlevel ships against: a perspective's absent form is the constant `0` (the
+  lattice's meet identity), so it shares; a doc's absent form is an **undecided
+  cell**, which a unify binds on purpose so a doc passes from one side to the
+  other, so it must be fresh per site — sharing it would let the first bind poison
+  every later read.  The default is `false`, so an attribute opts in by stating
+  that its missing value is concrete.
+- `AttrExt::unify_slots` receives the *found/value* side as `a` and the
+  *expected/declared* side as `b`; a perspective's default impl is an equality
+  unify, while an attribute that defines `is_subtype` may call
+  `Ctx::check_unify_relaxed` instead so a subtype — not just an exact match —
+  passes.  `is_subtype` is the optional subtype relation on the attribute's slot
+  values, consulted **after** a failed equality unify: if it holds, the failure's
+  error is suppressed and the check passes.  Its default is `false`, so exact
+  equality is required; implementations read the two slot values with
+  `Ctx::class_value`, and an undecided value (a runtime-dependent perspective)
+  should return `false` so the check stays conservative.
+- `combine` merges the direct sub-expressions' attribute slots into one node — a
+  perspective runs the language's meet operator over the operand array, a lazy
+  operand gets a fresh empty cell — over `children` that are already compiled and
+  pre-padded with `missing_value`, built through the curated `Ctx` and never raw
+  lowlevel nodes.
+- `is_label` selects only the *semantic* difference between the two kinds of
+  attribute, because the checker's slot handling is uniform: a label contributes no
+  apply-time constraint slot and is never validated against the provider, while a
+  constraint is, and whether a label *conflicts* is decided solely by `is_subtype`
+  (a metadata attribute overrides it to `true`, so the checker never has to
+  special-case a label's unification, while a constraint attribute returns
+  `false`).  The checker consults it in `Checker::check_ann` to choose the
+  metadata-slot path (label) over the provider/unify path (constraint).
+- `render` is what the output printers use: they iterate the expression's schema
+  tail and render every *present* attribute, so an un-annotated expression spells
+  nothing; `AttrExtRegistry`'s `P` is the host program and `Attr` its marker type —
+  `P::Attr` for a composed program (the checker's `build_in_attr` and siblings), or
+  a concrete marker when a language layer returns its own registry (e.g.
+  `lichen-perspective`'s `persp_attr_ext`).
+- `unify_slots` implementations that compare the attribute's *value* map through
+  `slot_value_node` first: a perspective compares lattice numbers and a refinement
+  compares predicates.  A slot whose value is not a pair (`None`, or a bare value)
+  is returned as it stands, so a caller needs no case analysis.
+- `Checker::build` is the path a host reaches when it composes an attribute set but
+  does not pass the matching extension.  The schema's attribute cannot be lowered
+  there, so it is a reported diagnostic plus a well-formed hole — never a panic
+  inside the checker.  The build is missing **one** thing, so it reports **one**
+  diagnostic however many sites read an attribute: the apply's own slot check is
+  skipped rather than reported again.  A refused annotation still compiles to the
+  schema's full width, and its attribute slot is a fresh undecided pair of the same
+  hole shape the other check-time guards leave.
+- `:` and `#` are the **loosest** operators — they wrap the whole expression to
+  their right — so a compound whose operands are individually perspective-annotated
+  is written with explicit parens, `((1 # 4) + (2 # 6)) # 2`, to express the
+  grouped operands with `# 2` over the `+`; the bare `1 # 4 + 2 # 6` spelling is
+  the same semantics under that reading.
+- `lichen-doc` is a **compiler plugin**, not a native plugin (see
+  [plugin-taxonomy](plugin-taxonomy.md)), and the host language layer must
+  **codesign** with it: the grammar production and AST node for `? expr`
+  (`AnnPiece::Doc`), the `Schema` tail form the checker reads, and the lowering of
+  a `?` annotation into the label slot (`check_ann`) live in the host layer, tied
+  to one language's surface and on-disk contract.  What is shared, and is in the
+  crate, is the **meaning**: the `Doc` marker and its `AttrExt` lowering, with a
+  host composing the marker into its own vocabulary and calling
+  `doc_attr_ext::<P>()`.
+- `Doc`'s `combine` returns *no doc*: a compound's doc is its own annotation, never
+  a meet of its children's docs.  Its `unify_slots` attempts a real unify — an
+  undecided doc cell binds to the concrete doc, which is how a doc *passes from one
+  side to another* — and when two already-concrete docs differ, `is_subtype` is
+  `true` so the mismatch is suppressed and the existing doc is kept (the override
+  case).  `is_subtype` is the attribute's only lever for "never conflicts"; the
+  checker never special-cases a label's unification.
+- The struct names table, whose source entry recorded no home: letting the vacuous
+  `all` decide put the `Error` marker in a checked struct type's names slot, which
+  made an empty struct read as an *anonymous* one
+  (`DiagKind::StructAnonymousField` reachable from source) and falsified a claim
+  then in `code-audit.md` that only hand-built IR reaches it (the claim no longer
+  exists, so the citation was dropped rather than repointed).  The surviving rule
+  is `build_struct_names`'s `# Invariant`: a non-empty list of wholly unnamed
+  fields builds the `LowLevel::Error` marker, while an empty list builds a present,
+  empty table.

@@ -46,6 +46,12 @@ classifier reads the parameter's **own type cell**: a struct type term
 its parameter *is* the declared named struct — a leaf with no class there is a
 declared field whose class the lowering could not read.
 
+**Nothing in a *body* can decide the caller's parameter.** A kernel is lowered for
+one class and compiled before any apply, so a bare kernel apply states no signature
+and nothing a body does decides the caller's parameter class — the wrapper's
+`launch` does, through the kernel struct's `.I`. An unannotated parameter therefore
+refuses by name at the `jit`, and annotating it is the whole of the un-park.
+
 ## Defect I — a frozen module's applied struct loses its field-type cells
 
 A struct built by a **frozen** (imported) module, whose field argument is the
@@ -157,6 +163,12 @@ mutable borrow. Measured, the refusal moves to where it can name a position:
 | `jit (p : Int -> Float => p)` | `UNDECIDED_DOMAIN` | `kernel domain must be a scalar or a tuple of scalars` |
 | a float-domain kernel, an unannotated parameter, the scalar control, the function-codomain program, the frozen two-file probe | — | **unchanged** |
 
+**The frozen half of the same decode.** A frozen module's function type is the same
+self-referential `[Function(fid), ↺]` cycle inside the artifact, so the recogniser
+must be asked with the node the decode was handed rather than gated on `Dynamic`.
+Gating it was what left a frozen function type decoding as
+`Function(Unknown, Unknown)` while the same node decoded fully when local.
+
 ## What is still open
 
 1. **The empty `.in` group's coverage.** The capability is measured end to end on
@@ -177,3 +189,11 @@ mutable borrow. Measured, the refusal moves to where it can name a position:
    ([compute-runtime-scalars](compute-runtime-scalars.md)), and the `graph`
    chain's `flat_arity` guard was read but never measured
    ([compute-graph-jit](compute-graph-jit.md)).
+
+## Recovered measurements
+
+**Three measured `DomainStatement` shapes, and why the refusal reads the type cell
+rather than the decoded shape.** `p : In` (a struct) decodes to
+`Array(Unknown, 2)`; an unannotated `y => y + y` to `Array(Array(Unknown, 2), 2)`;
+`p : <Int, _>` to `Tuple([USize, Unknown])`. Only the third says a position is
+missing, and only the first says the domain is a struct.

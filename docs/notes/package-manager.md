@@ -90,10 +90,37 @@ its `PackageHandle`/`Diag`), and the package manager drives the scanner through
 
 ## Toolchain binaries
 
-`lichen install compiler|language-server|all` drives `cargo install` against
-the repository (or a local checkout), fetching and building the
-`lichen-compiler` and `lichen-language-server` binaries.  Distribution is via
-Cargo; "download" is fetch-and-build.
+Every binary is a **prebuilt release asset**, fetched with `curl` and never built on the
+user's machine. The two classes live in different places:
+**plugin-sensitive** tools (compiler, language server) are composed per plugin set and resolve
+under `<lichendir>/compilers/<plugin-set-key>/`, with the shipping (no-extra-plugin) binaries
+in the base plugin-set slot, while **non-plugin-sensitive** ones (formatter, the package
+manager itself) are one fixed binary at `<lichendir>/tools/<name>`.
+
+`lichen install` addresses the release tagged with the binary's own commit. `build.rs` runs
+`git rev-parse HEAD` from the package directory and emits the result as
+`LICHEN_BUILD_COMMIT`; the release tag is that commit's first 12 hex characters, never the
+raw 40-hex SHA, which GitHub rejects as a tag. Built outside a git checkout — the ordinary
+case for a published package, whose `.git` cargo strips — the value is empty, and `lichen
+install` **refuses** rather than chasing the repository tip, telling the caller to run
+`lichen update`.
+
+`lichen update` instead takes the newest **published** release from GitHub's newest-first
+release list (pre-releases included), deliberately decoupled from the repository tip: the
+maintainer publishes manually, so the tip may have no release at all. It writes
+`$LICHEN_HOME/tools/lichen`, the copy the editor extension and the CLI resolve, and leaves a
+copy on `$PATH` for the user to refresh; it reports "already current" when the tag derived
+from its own commit is the newest.
+
+A download lands through a unique temp sibling (pid plus a per-process counter, so nothing
+can pre-create or replace the slot) and is `fsync`ed before the rename, so a crash cannot
+install a truncated binary. The tag pins *which* revision was asked for, never *what*
+arrived — audit item `D4` in [code-audit](code-audit.md).
+
+The compiler is also installable from source for a developer with no published asset —
+`cargo install --git <repo-url> lichen-compiler`, or `--path crates/lichen-compiler` — and
+the package manager (`crates/lichen-package`, binary `lichen`) is the tool that fetches and
+drives the binary.
 
 ## Native plugins: the compiler cache
 
@@ -115,6 +142,9 @@ compiler: the language layer's tooling is generic over the program shape
 over the shipped `LangProgram`, so the tracked follow-up — driving an
 additional-plugin compiler through the language layer's store/run path end to
 end — is in [plugin-taxonomy](plugin-taxonomy.md).
+
+The generated binary reports its own name: the compiler CLI's command name is overridden at
+runtime from `argv[0]`, so a `lichen-compiler-<name>` prints itself in usage and help.
 
 ## CLI
 

@@ -234,3 +234,19 @@ needs no `!Send`-diagnostic workaround: the parser returns `ParseDiag` directly.
 `lichen_language::lex::Token`, `lichen_language::ast::Expr`, the
 `frontend*`/`compile*`/`BufferSession` pipelines, and `lichen_language::diag::{Diag, Stage}`
 resolve as the split's callers expect.
+
+## Recovered measurements
+
+- **`line_col`'s contract is three named properties.** *Total* — nothing panics,
+  for any line-start table; **end of file is a valid position**; and **no
+  character clamping** — the byte model is given no source, so LSP's `character`
+  cannot name a byte inside a multi-byte character and the language server clamps
+  to that character's start at its own boundary. The cases are the test names in
+  `crates/lichen-span/tests/line_model.rs`.
+- **`let` is desugared by the frontend.** `let id = \x. x in b` becomes
+  `(\id. b) (\x. x)`, and a nested `let a = (id 5 : int) in …` becomes
+  `(\a. (id Type : Type)) (id 5 : int)`. In both forms the bound name is used as
+  the **parameter's own id**, so the two uses at different types work only
+  because the apply clones the parameter fresh: `let`-polymorphism is
+  apply-clone polymorphism, and this crate is where the desugaring that produces
+  it lives.

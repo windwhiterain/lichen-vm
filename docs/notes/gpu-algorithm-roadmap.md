@@ -692,3 +692,29 @@ closed it was not the message: the fragment alone cannot name a callee, so the
 
 **What is left is not the message, it is the two remaining cases.** Both are the
 same missing *apply* §4.1 is about, and neither is fixed by naming them.
+
+## Recovered measurements
+
+**Recursion in a kernel: the three questions the probe answers.** (a) *Is it
+expressible at all?* Inline applies are refused by name, and a cross-kernel call
+needs a `KernelId` that must exist before the body that names it is compiled — so a
+cycle may not be writable. (b) *What does a cross-kernel call cost?* If `CallKernel`
+is a runtime call in the assembled module rather than an inline, expansion is not
+only about expressibility: a hand-written chain is the *non-expanded* version of
+what expansion would do automatically, so timing it measures what expansion saves.
+(c) *Does the GPU refuse it?* `SpirvRefusal::CrossKernelCall` says so on paper; the
+probe confirms it from the program side (`examples/recursion.rs`).
+
+**A `loop` combinator as one line of lichen.**
+
+```lichen
+loop = f => n => x => if n == 0 then x else loop f (n - 1) (f x)
+```
+
+If that works in a kernel body the whole feature is free for a decided trip count,
+and the roadmap item is a library function rather than a codegen task. The trip count
+that expansion handles is the **literal** form; the runtime-count form
+(`loop inc k.n i`) is refused because `n` is not decided when the body is lowered,
+and the `@loop` mark is what makes the refusal name itself. Two-stage **curried**
+recursion (`sum_to (n - 1) (x + 1)`) is two applications where the tuple form is one
+— if the type error is the currying, the fix is a one-argument shape.

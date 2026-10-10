@@ -339,3 +339,185 @@ not pull the tokio/tower async stack.
 The rule of thumb: **the frontend is one crate; the tools are many entry points;
 only the things that are a different *package kind* (a Zed plugin, a VS Code
 extension, an npm package) get their own crate.**
+
+## Recovered measurements
+
+### Diagnostic rendering
+
+A rendered diagnostic is exactly:
+
+```text
+error: unresolved name 'y'
+  --> 1:6
+   |
+ 1 | x => y
+   |      ^
+```
+
+**One caret block per diagnostic, no separator between them.** A diagnostic with
+no span (an I/O or package-resolution failure) prints its message alone, with no
+position and no caret. A diagnostic whose span is in another file (a built-in
+package's own source) uses that file's path for the arrow and that file's text
+for the line and caret; the source line comes from the shared line model rather
+than a second scan, so the text and the `(line, col)` name the same line.
+
+- **One scan per report, not per diagnostic.** `render_with_line_starts` exists so
+  a whole report costs one scan of the source. `checker_message` re-renders the
+  highlevel's structured facts in the CLI's vocabulary through one shared
+  `TypePrinter` that must carry the checker's arrow registry, so a class keeps a
+  single `?a` name across every diagnostic in the report. The `?a` journey line
+  is deliberately gone: every expression's type is queryable, so the user inspects
+  an expression's type directly instead of reading a source trace.
+- **Two sources, one list.** The frontend's diagnostics (lex, parse, resolve) are
+  merged with the checker's into one list by `compile`. The checker's messages
+  are re-rendered pretty through the same printer as the CLI output, while the
+  boxed highlevel `Diag` in `check` stays raw for tests and tooling.
+  `Diag::file` names the file a diagnostic is displayed and opened under and the
+  text its caret comes from; `related` is the failing *use*'s position and is
+  meaningful only alongside `file`; `None` means the source the diagnostic was
+  produced for, which is what every frontend and checker diagnostic means.
+- **Facts in, a `Loc` out.** The lowlevel records failures as *facts* —
+  `Module::unify_errors`, `Module::eval_errors`, `Module::assert_errors` — and the
+  highlevel turns each into a structured `Diag`, attributed to a `Loc` through
+  the records the checker kept while building: `Build::diary`,
+  `Build::apply_edges` and `Build::node_edges`. All three are keyed **by** node
+  and never stored **on** one, so the lowlevel graph stays freely shareable.
+- **`DiagKind` names its own expected/found category.** Every variant is a
+  *type-mismatch* construct, so there is no separate coarse value/type
+  discrimination. The three shape guards are: a callee that must be a function
+  (`check_lam`/`check_app`); a container that must be an array or a table (the
+  index and table-lookup pins); and a membership test's right operand, which
+  must be a set.
+- **A read-kind assert's subject comes from the failing condition.** `container`
+  is filled from the failing condition's operand 0, not from the registered node:
+  a per-call clone's subject is the actual argument's type, while the template's
+  own cell is still open and would render as a bare `?a`.
+- **Span attribution when no `Loc` exists.** A unify error recorded *outside* the
+  checker's own checks carries no `Loc` — the lowlevel records it — and the node
+  it names may be a per-apply clone the checker never saw. The tables that hold
+  such a node are the build's own: `node_edges` (the runtime-attribution edges)
+  and, more completely, `state`, which maps every IR expression to the nodes it
+  compiled to. Resolve the clone through the node it was instantiated from
+  (`Module::node_origin`), then take the position of the expression that owns
+  either side. An origin node is not kept alive by the clone, so a released one
+  is absent rather than a panic — and `node_origin`'s contract is that the caller
+  checks liveness first, because the origin is not a keep-alive edge. When the
+  origin is the apply that materialized a frozen template, the fallback `Loc` is
+  **pathless**: the argument expression itself is the caret target the apply's
+  edge was recorded for.
+- **The three runtime kinds spell themselves.** `RuntimeIndexTarget`,
+  `RuntimeIndexSubscript`, `RuntimeApplyTarget` and `RuntimeRawElement` all
+  arrive as the same lowlevel `EvalError` family — a fact about a *value*, with
+  no type to print — so their wording is self-contained, and each stays distinct
+  from its static counterpart (`IndexTarget`, `Guard`), which reports a *type*
+  the checker refused and therefore names that type. `RuntimeRawElement` is
+  separate again because the non-container is the element the read produced rather
+  than the container the user wrote: `[1, 2]` was fine and the element `1` is a
+  scalar, so the generic "this value is not a container" blames the wrong side.
+- **A failed build always carries a diagnostic.** Every consumer of a `Report`
+  relies on it. `Build::diagnostics` skips a recorded failure it cannot attribute
+  to an expression — an assert cloned out of an imported module has no entry in
+  this build's node tables — so `build_report` synthesises exactly **one**
+  unattributed failure and `run`, the package store and the editor all inherit
+  it instead of each inventing their own. A built-in package's contract is cloned
+  out of a **static** module, so this build's tables hold no entry for the
+  template and the diagnostic carries the static ref instead: a host that kept that
+  module's source resolves it to a position in *that* file, and a host that kept
+  none drops it, because the package's own build reported the failure when it
+  compiled. The `user_asserts` filter cannot apply there — the flag lives in the
+  other build — so "was this the user's assert" is left to the host that knows
+  which modules it kept sources for.
+
+### Running a program
+
+- **The output line** is `value<attributes>: type` — `5: Int`,
+  `[1, 2, 3]: array<Int, 3>` — formed in exactly one place so `evaluate` and
+  `evaluate_raw` cannot drift. The value renders *against its type chain*: a
+  struct type value prints `struct<.f Int, .g Type>`, a tuple `(1, Int)`. A value
+  one of whose attributes *names* it reads as that name, and that override is the
+  general mechanism ([operator-polymorphism](operator-polymorphism.md) §8.1), not
+  a rule about a particular attribute — it is what lets a value with no spelling
+  of its own (a refinement's predicate, a function) be shown at all. An undecided
+  root (an empty slot) renders as the printer's no-value reading.
+- **The deep evaluation is where an operator actually executes**, so a plugin's
+  *runtime* refusal lands there (a `plrun` whose element count is past the limit,
+  say) with the lazy marker as the value; returning that would print
+  `parameterized: Int` and say nothing about why. The same channel also carries a
+  **provisional** refusal — the checker evaluates speculatively, so a `$jit` whose
+  parameter domain is not decided yet records one, and a later attempt with the
+  domain known compiles the very same kernel — and that program works and has a
+  value. The line between them is the outcome, not the channel: a refusal
+  explains a value that never arrived, and a program that produced one has nothing
+  to explain.
+
+### The tooling crate
+
+- **The index holds two definition coordinate systems**, and the split is
+  load-bearing rather than cosmetic. `DocIndex::defs` and `def_index` are keyed by
+  a **document** span; `builtin_names` entries carry a position in **another
+  file**. Both start at line 1, so a built-in's definition would collide with a
+  document binding's — a built-in therefore never enters `def_index`: only a
+  *use* resolves to one, through the scope frame. Everything downstream reads one
+  of the two through `ScopeValue::document()` / `ScopeValue::builtin()`, which
+  return an index into the corresponding list and never the other. The same split
+  governs shadows (`core` is the base frame below the document's, so the prelude
+  is **shadowable, not reserved**), field tables (`module_field_types` is keyed by
+  module *and* field, because a field access is not a definition site), and
+  completion (`completion_item` takes a `ScopedName { document: Option<Span> }`,
+  `None` marking the built-in).
+- **`lsp` owns exactly one thing: the protocol dialect** LSP forces on the shared
+  span — a 0-based line (not `lichen_span`'s 1-based one) and a `character`
+  counted in **UTF-16 code units** (not bytes). Two clamps come with the dialect
+  and only with it: the offset is clamped to `source.len()`, and a byte inside a
+  multi-byte character clamps **down** to that character's start, because
+  `character` cannot name a mid-character position. The byte model performs
+  neither — it is given no source — so the two agree about every byte on a
+  character boundary inside the source, which is every byte the frontend reports.
+  This is why the dialect lives once in the library: the language server and the
+  Zed extension must agree on it byte-for-byte.
+
+### The lowering
+
+- **A lambda has exactly one binder, so "free variable" is a positional fact.**
+  `x => body` is the only lambda form, and the resolver pushes exactly one binder
+  per lambda (`ExprKind::Parameter` per `Expr::Lambda` in `compile.rs`). A "free
+  variable" is therefore not a closure-capture fact but simply a name the body
+  reads that is not the parameter — which is what makes `s` in `(s : ParS) => { … }`
+  a *parameter* and `doubler`/`data` free ones.
+- **A deferred named instantiation's supplying key is all-or-nothing (a known
+  limit).** It carries a type only when **every** argument's type is decided. One
+  undecided argument (say `.y _`) drops the type from every key in the call, so a
+  *sibling* field's `string`-against-`Int` mismatch is not checked and the program
+  is accepted. A per-argument key form would check `.x` and refuse it; that
+  mechanism is not in place. This is a limit pinned deliberately, not the intended
+  behaviour.
+
+### The analyzer and the compiler CLI
+
+- **`lichen-analyze` is the debugger of last resort** for a graph question that
+  neither a rendered value nor a diagnostic answers: which node holds what, and
+  through which class. It asks the same questions the printers and the backends
+  ask — a node's own value, the class's committed value, the width of its item
+  list, the class it shares — and every read goes through the lowlevel's public
+  API, so a conclusion drawn from it is a conclusion about the compiled program
+  and not about a second implementation of it. `Analysis::evaluate` exists because
+  an apply's behaviour is a fact about its clones, so a reader that asks about an
+  applied program asks after evaluation.
+- **`lichen-compiler <program.lichen>` compiles and runs one program**, printing
+  its output; a directory path runs every `.lichen` file in it, printing
+  `file: output` per program. `run` and `build` are accepted as subcommands too,
+  and the command name is overridden at runtime from `argv[0]`, so a
+  plugin-built `lichen-compiler-<name>` reports its own name in usage/help. The
+  binary is **depend-aware**: a file's `depend "url"` directives resolve against
+  the lichen-home source cache the package manager populated (`lichen fetch`), so
+  running a file with dependencies needs no git access here — the compiler only
+  *reads* what the package manager put in the cache, and it is the package
+  manager that invokes this binary for its `run`/`build` commands, which is how a
+  plugin-built compiler's vocabulary takes effect.
+
+### A known frontend limit
+
+- **A comma *and* a newline between two tuple elements is two separators**, which
+  the tuple grammar does not tolerate; the same program fails on `dev`. The
+  operator tests write their tuples on one line so they do not depend on the
+  wart.

@@ -860,3 +860,43 @@ A session probe reads the value by **consuming** the session: a `Build`'s module
 evaluated through a `&mut`, and the report's `Arc` is only unique once the session's own
 clone is gone. On the key-reused path it is still shared, and the probe prints
 `<still shared>` — that is the probe's limit, not a bug.
+
+## Recovered measurements
+
+- **The window is the two statements around the edit, and that is measured.**
+  When a separator-only edit — or an append at the end of a line, the shape an
+  agent produces most often — widened the re-parse window to the end of the
+  buffer, it re-parsed and re-dirtied the whole tail: **82–90 %** of a rebuild,
+  and most retained cells dropped. So the boundary fallback windows
+  `[prev, prev + 2)` and not the rest of the program; §8's rule
+  ("a boundary edit must not widen the window", also in
+  [incremental-parse-compile](incremental-parse-compile.md) §8) is what that
+  measurement buys.
+- **What the content key is made of, and why its version is a blunt
+  instrument.** The key is an exact, injective, digest-free serialization of the
+  structure the lowering consumes: names by `BinderId` (never their spelling),
+  error blocks opaque, spans dropped, literals and field/operator names kept,
+  `pub`/field identity kept for record programs, and the `cache` mark kept (the
+  lowering consumes it: a marked binding is the one the cell store may lower to
+  a static read instead of its body). Adding an `Expr` variant or changing any
+  tag **bumps** `KEY_FORMAT_VERSION`, and there is no compatibility path — the
+  bump invalidates every cached key, so every session rebuilds on its next
+  compile. That is the intended answer, since a stale key must never be silently
+  reusable. `5` → `6` was the built-in **prelude** being seeded into every
+  source: a program's resolved binders are now numbered after the prelude's, so
+  the same source no longer resolves to the same ids.
+- **Debounce and generation gate are two mechanisms for two jobs.** The
+  **debounce** collapses a burst of keystrokes into its last text, so `N`
+  keystrokes cost one frontend run (`P1-17`, still open as `blocked:D6`). The
+  **generation gate** is what makes a *superseded* analysis stop instead of
+  completing: generations are minted strictly increasing and never reused, so a
+  closed-then-reopened document can never match an older analysis's generation.
+  Neither can abort a compile that has already started — `tower-lsp` answers
+  `$/cancelRequest` by dropping the request future, so the worker finishes the
+  job and the answer is discarded.
+- **The cache and the session are separate invalidations.** `Inner::indexes` is
+  keyed by the document text **and** the sha256 of every imported file's bytes at
+  analysis time, so a hit requires the whole dependency set unchanged; the
+  compile worker keeps `WorkerState::dependencies` for the same set per document
+  (§6.4's coarse cut). The two are deliberately different cuts: the fine one
+  would name the cells that actually read the changed file.

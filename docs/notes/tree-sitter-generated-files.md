@@ -39,6 +39,10 @@ in-tree only when the grammar is actually built:
 - `bindings/rust/build.rs` regenerates the parser **when `src/parser.c` is missing or older
   than `grammar.js`**, by running `tree-sitter generate`.  It fails with a clear message to
   install a `tree-sitter` CLI on PATH if it is missing.
+- It watches exactly two paths, `grammar.js` and `src/parser.c`.  Cargo treats a
+  `rerun-if-changed` path that does not exist as changed, so naming `src/parser.c` is what
+  re-runs the build script when the generated parser appears or disappears; naming the whole
+  generated `src/` directory instead would re-run the script after every regeneration.
 
 ## Decoupled from the workspace
 

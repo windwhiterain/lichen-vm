@@ -183,3 +183,21 @@ independent, not because `_` is impossible.
    **values** rather than the element type. The honest fix is
    [class-channel](class-channel.md) §2/§3 — one authority for a class's value,
    read by the result's own cell.
+
+## Recovered measurements
+
+**A refused argument element has to be pointed at by path.** `compute.call` gates
+its argument against a *fresh* domain cell, so a tuple whose element is a string
+passes the checker and is refused at run time; a bare string type-checks the same
+way and reaches the run as `undecided`. The element in the pinned case is a
+**nested** one on purpose: a tuple-of-tuples argument has no other way to be
+pointed at than a path into it, which is what the message must name. `CallOp` lets
+the *count* through on purpose (it gates the argument against a fresh cell), so an
+arity mistake has no other account than the run's refusal — which is why compute
+holds both numbers and states them.
+
+**A buffer payload is packed bytes, not a word-per-element array.** A handle's
+payload is the scalar class's **packed** elements — eight bytes each for an `Int`
+buffer (`lichen_kernel_ir::ScalarClass::byte_width`) — so the words are *decoded*
+rather than viewed. A `&[i64]` view of the payload would be the retired
+word-per-element layout the ABI no longer has.

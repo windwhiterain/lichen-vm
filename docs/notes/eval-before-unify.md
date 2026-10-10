@@ -507,3 +507,151 @@ and is corrected to describe the Guard-style refusal.
 - Should a woken re-check be able to **retract** a diagnostic, if some future
   wakeup needs it? Answered *no* for now (§6.1), on the order-independence
   argument alone.
+
+## Recovered measurements
+
+- Every lambda's value node is deep-evaluated before any application, in the build
+  itself. Without that pass the first application deep-evaluates the *parameter
+  clone* of the template; a second application then finds that clone already bound
+  and reuses it instead of cloning the parameter fresh, so the argument unify
+  conflicts and the recursion cannot descend. With the pass the function value
+  itself is concrete before any application, every recursion level re-applies the
+  template, and each level clones its parameter fresh.
+- The single-node run is the right strength for both one-shot reads
+  (`Checker::compute_operands`, and `element_read`'s inline force): the operand is
+  *one* node whose own operator reads what it needs, and the chain it needs is
+  followed through the operand edges `evaluate_node` walks anyway — for a raw
+  element read, the element, the name table's `TableGet` and the container's own
+  value. A deep pass would also descend the operand's whole reachable subtree and
+  publish a concreteness verdict over it — for a type operand, the *entire type
+  value*, every field pair and every field's type expression, for every raw read —
+  which is both stronger than the claim needs and wrong in kind, since it decides
+  concreteness for nodes the check never asked about.
+- `check_field`'s decided tier is refused outright: its kind is readable, so the
+  term is judged where it stands (`kind_marker_is_any`) and the refusal is recorded
+  as a fact through `record_guard`, not as a failed unify — which keeps the *found*
+  side the container's own type instead of a shape a failed unify would have bound.
+  An out-of-range slot is not a check at all: the runtime `Index` read records
+  `IndexOutOfBounds`, reporting the container's actual arity.
+- A known field position is what makes a field read's type decided rather than
+  lazy: a concrete container type states it (the named form resolves the name
+  through the type's own name table for its guard; the positional form's key is a
+  literal), so the type is read straight out of the field list
+  (`shape::field_type`) — the same node an `Index(Index(container_ty, 0), key)`
+  would evaluate to, *one unify earlier*. That earliness is observable because a
+  class question is asked of a **cell** (`shape::low_type_of_slot`), which cannot
+  see through an unevaluated `Index`: `(x : struct<.a Float>) => x.a + x.a` used to
+  find neither operand concretely `Float`, pin the operation to the `Int` default
+  in `check_binop`, and then refuse both operands against it.
+- A constant subscript is not an optimisation but the whole difference for the
+  lowering: a kernel body is walked by its operands, and a name table's `TableGet`
+  is not a value anything can resolve without re-deriving the struct's field order,
+  so a concrete read's field position is written where it is decided (`slot_read`'s
+  type read is the other half of the same decision). The lazy form stays for the
+  one case that needs it: a container whose type is not known yet.
+- The deferred named instantiation's instance definition position `i` is the
+  argument that supplies the field whose name sits at `names_in_order[i]` — the
+  marker's definition-order names (`shape::STRUCT_KIND_NAMES_ORDER_PATH`), the
+  inverse of the name→index table a lazy read cannot derive:
+  `value[i] = Index(call_values, TableGet(supply, key(i)))`. `supply` is a constant
+  table the checker builds from the source. An argument's key is its **name**, or —
+  for a positional argument — its **rank** among the positional ones; a definition
+  position whose name no argument supplies is the positional `rank`-th unclaimed
+  position (`rank` counts the earlier definition positions whose names are
+  unsupplied, the running sum of `InDomain(names_in_order[i], supplied_names)`),
+  and with no positional argument there is no fallback to select and the key is the
+  name itself. The key also carries the **type** whenever every argument's type is
+  decided (`[tag, argument type]` against `[tag, field type]`), so the lookup's own
+  content comparison *is* the per-field type check: a field whose declared type no
+  supplying argument matches is a miss. That is the only form the check can take
+  here — a `unify` between the gathered type and the field list is deferred and
+  pinned before the marker binds (the callee's shape half unifies before its kind
+  half, so no name-dependent read can resolve yet), and a pinned read is masked
+  from then on; the lookup, by contrast, is *evaluated* when the instance is, and
+  the lowlevel's table read deep-evaluates its key. Two facts stay check-time,
+  because neither depends on the struct type: a **duplicate** name is refused
+  whatever the field list is (one name supplying two positions is a structural
+  mismatch, and a name-keyed table would silently keep only one), while a
+  **missing** argument is not — the returned field-type list is a probe with one
+  cell per argument, so the caller's field-list unify is an arity check that fires
+  when the type resolves.
+- Two measured regressions sit behind the message and name-table rules. The kind
+  read has to run before the unify states the requirement: `container_kind` is an
+  `Index` operation, and an operation that has not run holds no value, so unifying
+  it against the requirement takes the "one side knows a value" arm, which writes
+  the requirement into the read's class and asks nothing — the guard passes over an
+  array or a tuple instead of refusing it. Measured: `l.a` on `[10, 20]` reported
+  the generic "not a container" plus a name-table miss, where the raw sibling
+  `l::a` on the same container states `expected TypeStruct, found array<Int, 2>`.
+  The shared "tuple, array, or struct" wording is likewise what this read does not
+  accept, and is why the *kind* is the requirement rather than the shape. A
+  container whose type is stated through a class is readable: `inbuf`
+  (`inbuf = compute.plrun …`), whose type is the callee's returned `k.O`, has names
+  the structural reader can resolve — but a lazy `TableGet` built for it resolves
+  the name against a name table the statement pass has not materialized, which
+  leaves the read and everything downstream undecided; `type_is_concrete` answers a
+  narrower question ("the cell holds an array right now"), which is why the lookup
+  is asked whether or not the cell is decided, and a container whose names are
+  genuinely unreadable still gets `None` and keeps the lazy form. "The name table
+  is readable" is itself a separate condition: a readable table that lacks the name
+  is a genuine miss, while one that is still undecided is only undecided and the
+  read stays lazy — without the distinction a *second* `k.name` on the same
+  undecided container is refused falsely, because the first read's pin is an array
+  value, so the container now looks decided while the pin's name table is a fresh
+  cell.
+- An unevaluated callee (a call result, `(mk (Int))(1, 2)`) has no statically
+  readable pair — it is an apply node, not an array — so its evaluation is forced
+  for the nominality check and the field-list read. A callee that depends on an
+  undecided parameter stays lazy (the checks defer to the apply), and a
+  non-terminating one trips the VM's guard: it is left lazy, because the build's
+  statement pass evaluates the statement again and reports the `NonTerminating`
+  diagnostic. A refused callee leaves a partly walked graph, so the checker must
+  never force twice — `force_failed` records the first refusal.
+- The apply's result type cell is undecided unless the apply's evaluation syncs it:
+  the cell rides in the apply's operand, and the runtime apply unifies the return
+  pair with the apply node — the apply node *is* the return pair — and binds the
+  cell to the return type, so a concrete result syncs its type while a polymorphic
+  template's lazy result leaves it undecided.
+- `ExprKind::Function::parameter_type` is compiled *in body scope*, so in-body
+  readers of the parameter see the annotated kind — an array annotation's length, a
+  function annotation's arrow — while the parameter's type slot still performs the
+  argument check at each apply: compiling in body scope changes what the body sees,
+  not what is checked. `parameter_attribute` (`x # n => e`) is compiled in body
+  scope for the same reason and is the optimization for the `x # n => e` →
+  `x => { x # n; e }` desugar (an unannotated body statement would otherwise
+  materialize a block); the field rides the `Function` node.
+- The `Loc` descent exists so the language layer need not re-derive the type
+  grammar: the highlevel is deliberately source-blind — it never sees a source span
+  — so a location must be expressible purely in terms of the expression's
+  structure. The highlevel *does* parse each level of that structure, tagging it as
+  either an expression's `[value, type]` pair (a `LocStep::Value` /
+  `LocStep::Type` / `LocStep::Attr` slot) or a tuple/array/struct shape (a
+  `LocStep::Elem`). There is no distinct "kind" in lichen: `kind` is just the
+  type's type, one more `[value, type]` pairing, and that chain is unbounded
+  (`Type : Type`), so a `LocStep::Type` may repeat arbitrarily.
+- A call's result type cell is a lazy record, so an annotation on a call result
+  *binds* the cell at check time and nothing more. The check happens later and
+  elsewhere: the apply's evaluation syncs that cell with the callee's return pair,
+  and a disagreement between the annotation and the real return type is what gets
+  reported.
+- `if x > 0 then int else float` is a dependent type: an unevaluated `Index` over
+  the branch types with the parameter as its condition. It stays lazy until forced,
+  so the branch selection only resolves once the argument binds, and the *same*
+  template yields a different type per argument. The checker's expression IR cannot
+  express conditionals yet, which is why those tests build lowlevel graphs
+  directly.
+- A concrete expectation meeting an `Index` read over an undecided element with a
+  concrete index resolves the read to a pure reference — the operator node is
+  aliased to the element — and the concrete value is written onto it: the
+  "monomorphized" trade. The read keeps its operation: the operand edge stays live
+  so an apply's clone can reach the element and *enforce* the pin, and a
+  conflicting expectation later fails against the pinned value. The read's
+  subscript is only known by evaluating the read, so the alias is established by
+  the evaluation (`alias_read`), not at unify time.
+- The raw reads state their container kind: `X<e>` reads a component of a **tuple
+  type value** (the container's kind is unified against `TypeTuple`), `X::a` a
+  struct type value's named field, and `.a` / `::a` over an array are the two named
+  sides of one refusal — `.a` states the container's *kind*, `::a` its whole type.
+  A tuple *value* is not a tuple *type* value: `(1, 2)`'s type is the shape
+  `<Int, Int>`, not `TypeTuple`. A deferred container is refused at the argument,
+  where this used to be an internal panic at the apply.

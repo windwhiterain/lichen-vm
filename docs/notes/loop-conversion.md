@@ -23,8 +23,8 @@
 > Three of
 > [§8.3](#83-known-broken-and-by-whom)'s items are now
 > **closed** — the `passed_out` contract, a loop body that can compute its state and
-> reach the backedge (`Terminator::Jump`, and a validator that lets a body name the
-> loop's landmarks), and the graph-dispatch item — and the wasm `While` fix is
+> reach the backedge (a `Br { target, args }` onto the header's parameters, which
+> `validate` admits), and the graph-dispatch item — and the wasm `While` fix is
 > **withdrawn**: serving a loop in wasm goes through **`waffle`**, which owns the
 > slot-first pipeline ([wasm-control-flow](wasm-control-flow.md) §5), and until its
 > control-flow step lands the backend refuses a loop **by name** rather than
@@ -104,6 +104,29 @@ loop as non-terminating ([`P1-40`](code-audit.md)), and the emitter's own
 levels — a trip count in the low hundreds, since expansion nests every copy
 inside the last one's else arm — while an unrolled loop costs about 29 µs of
 compile time per iteration.
+
+**The walk's depth is the trip count, and the constant is measured rather than
+guessed.** Each copy nests in the previous one's else arm, so the graph is a
+chain whose depth is linear in the trips: on
+`crates/lichen-language/examples/recursion.rs`, ~3.1 levels per expanded step, so
+`depth ≈ 18 + 3.1 × trip` (trip 1 → 21, trip 10 → 49, trip 400 → ~1260).
+`compile.rs` is `#[stacksafe]`, but `stacksafe` only tests for room at an
+annotated frame, so everything below shares that frame's segment — on a 1 MiB
+debug main thread the walk died at level ~175 with no diagnostic — and
+`emit_node`'s own `#[stacksafe]` is not an alternative to the limit: without the
+annotation a trip of 100 crashes below it, and without the limit a trip of 400
+still compiles (403 in 66 ms on `cpu`, 220 ms on `gpu`) at ~1260 levels and 7 MiB
+of stack. 512 is three times the measured crash depth (a lower number would be a
+statement about this machine's thread, not about the program), an order of
+magnitude above any hand-written body (fifty nested expressions is already
+unreadable), ~160 expanded copies at the ~29 µs per iteration above — so what is
+refused was going to cost milliseconds anyway — and bounded in stack (~512 ×
+6 KB of measured debug frames ≈ 3 MiB, two `stacksafe` segments). It is a
+constant because a threshold that changes between debug and release is not a
+number a program can be written against, which is the bar `code-audit.md`'s
+`P1-40` sets; it is not configurable because the emitter has no other knob and
+the tree's other budgets (`Module::MAX_APPLY_DEPTH`, `Module::MAX_APPLY_TOTAL`)
+are constants too.
 
 **The missing half is a dynamic loop.** A loop reads its trip count from a
 register, so it removes both ceilings by construction, and it is the only form
@@ -575,10 +598,13 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
 4. **A loop body could not compute its state and reach the backedge — CLOSED.**
    `Flow::Seq`'s terminator is a `Box<Terminator>`, and a plain transfer *was* only
    `Flow::Jump` — a variant of `Flow` — so the shape `Seq`'s own doc names could not
-   be built, and with it **no terminating loop was representable at all**. Fixed by
-   two changes: **`Terminator::Jump` now exists**, and **`validate_flow` lets a loop
-   body name the loop's landmarks** — its header (the backedge) or its exit (leaving)
-   — where the old rule required everything to reach the header.
+   be built, and with it **no terminating loop was representable at all**. The
+   capability landed with the transfer a body can build, and the SSA rewrite kept it
+   while changing its spelling: the transfer is `Br { target, args }` onto the
+   target's parameters, and `validate` admits a body naming the loop's landmarks —
+   its header (the backedge) or its exit (leaving) — where the old rule required
+   everything to reach the header. `Flow` and `validate_flow` no longer exist; §9's
+   "what changed since" says what replaced them.
    [compute-kernel-struct](compute-kernel-struct.md) records the body model as it
    stands.
 
@@ -813,9 +839,10 @@ done** — the acceptance case at item 5 runs on both backends:
    count, in the type.~~ **Done** — the exit reads the header's own top `passed_out`
    values, it is stated in `body.rs`'s `Terminator::While`, and `validate()` refuses
    `passed_out > carried` by name.
-1b. **Make a loop body expressible** (§8.3 item 4) — **done**. The *transfer*
-   is: `Terminator::Jump` exists and `validate_flow` lets a body name the
-   loop's header or its exit. The *carried read* is `BasicBlock::params`: a body
+1b. **Make a loop body expressible** (§8.3 item 4) — **done**. The *transfer* is a
+   `Br { target, args }` the body builds onto the header's parameters, and `validate`
+   lets a body name the loop's header or its exit. The *carried read* is
+   `BasicBlock::params`: a body
    computes the next state and hands it to the backedge's `Br { args }`, which is
    the target's parameters. [compute-kernel-struct](compute-kernel-struct.md)
    records the body model as it stands.
