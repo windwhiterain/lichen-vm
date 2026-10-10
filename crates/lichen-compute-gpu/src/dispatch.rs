@@ -102,13 +102,7 @@ pub enum RunError {
     /// buffers. A wider shape is a real requirement and a real graph node, but
     /// it is not a linear chain.
     ChainNotLinear { inputs: usize, outputs: usize },
-    /// A chain whose fragment reads one class and writes the other.
-    ///
-    /// A chain feeds link `n`'s output buffer into link `n + 1`'s **input** slot,
-    /// and a module types those two slots by their own classes — so a crossed
-    /// fragment's second link would read a `Float` buffer through the `Int`
-    /// element type.  Refused by name: that is a wrong number rather than a
-    /// failed run, and a chain cannot carry the value across.
+    /// A chain whose fragment reads one class and writes the other, which a chain cannot carry.
     ChainCrossesClasses {
         input: ScalarClass,
         output: ScalarClass,
@@ -737,10 +731,7 @@ impl GpuContext {
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<Staged, RunError> {
-        // **A buffer's width is that buffer's own class**, read by
-        // [`spirv::buffer_class_of`]: a fragment that reads an `Int` buffer and
-        // writes a `Float` one stages, allocates and reads back each at that
-        // buffer's `byte_width()` rather than at one module-wide answer.
+        // A buffer's width is that buffer's own class, read by [`spirv::buffer_class_of`].
         //
         // **The device path pushes no leaf at all**, so a parameter a body
         // *reads* has nowhere for its value to arrive: refused by name rather
@@ -813,9 +804,7 @@ impl GpuContext {
         // "this run's upload is somewhere the device is not reading" true by
         // construction rather than by the caller remembering it.
         let mut segment = self.acquire()?;
-        // **The staging a host input needs is its own `count × byte_width()`**, so
-        // the reservation is the sum over the host inputs rather than one width
-        // times their number.
+        // The reservation is the sum of each host input's own `count × byte_width()`.
         let staging_bytes: vk::DeviceSize = inputs
             .iter()
             .enumerate()
@@ -836,9 +825,7 @@ impl GpuContext {
         };
         let mut descriptors: Vec<vk::DescriptorBufferInfo> = Vec::with_capacity(binding.total());
         let mut uploads: Vec<Transfer> = Vec::with_capacity(inputs.len());
-        // **Each upload block begins where the previous one ended**, and a block is
-        // its own buffer's `count × byte_width()` — the per-buffer arithmetic
-        // `reserve` above summed.
+        // A block begins where the previous one ended: `offset` is the sum of the blocks before it.
         let mut offset: vk::DeviceSize = 0;
         for (index, slot) in inputs.iter().enumerate() {
             let buffer = match slot {
@@ -851,11 +838,7 @@ impl GpuContext {
                     let data_bytes = count as vk::DeviceSize * element;
                     let padded_bytes = padded as vk::DeviceSize * element;
                     let buffer = self.allocate(padded, buffer_class)?;
-                    // SAFETY: `reserve` covered the sum of every host input's own
-                    // block, and `offset` is the sum of the blocks before this one,
-                    // so this block lies inside the mapping. The device is not
-                    // reading this mapping: the slot was claimed above and nothing
-                    // has been submitted on it since.
+                    // SAFETY: `offset` plus this block is inside the staging `reserve` sized per buffer, and the claimed slot is idle.
                     unsafe {
                         std::ptr::copy_nonoverlapping(
                             data.as_ptr(),
@@ -890,10 +873,7 @@ impl GpuContext {
         // the dispatch covers `[0, padded)`.  A zero-fill would be a second pass
         // over memory the shader is about to overwrite in full; `spirv`'s module
         // docs carry this invariant.
-        //
-        // **Each output is sized by its own class**, and the same class is what
-        // its resident record carries, so a fetch reads it back at the width the
-        // module wrote it.
+        // Each output is allocated and recorded at its own class, the width a fetch reads it back at.
         let output_classes: Vec<ScalarClass> = (0..binding.outputs)
             .map(|ordinal| spirv::buffer_class_of(fragment, binding.inputs + ordinal, class))
             .collect();
@@ -974,28 +954,19 @@ impl GpuContext {
                 max: MAX_DISPATCHES_PER_SUBMISSION,
             });
         }
-        // A parallel fragment's parameters are its input slots followed by the
-        // index, so one buffer input is an arity of two — but the **buffer
-        // counts**, not the arity, are what a chain needs: a chain hands link
-        // `n`'s output to link `n + 1`'s input slot and can name no second buffer.
-        // See `spirv::index_local`.
+        // A chain hands one link's output to the next link's input slot, so it needs one buffer in
+        // and one out.
         if fragment.param_shape.flat_arity() != 2 || fragment.inputs != 1 || fragment.outputs != 1 {
             return Err(RunError::ChainNotLinear {
                 inputs: fragment.inputs,
                 outputs: fragment.outputs,
             });
         }
-        // **Each end of the chain is the class of its own slot**, read the way
-        // `stage_run` reads them: slot 0 is the uploaded input, slot 1 the resident
-        // answer.
+        // Slot 0 is the uploaded input and slot 1 the resident answer; each is its own class.
         let class = spirv::module_class(fragment).map_err(RunError::Emit)?;
         let input_class = spirv::buffer_class_of(fragment, 0, class);
         let output_class = spirv::buffer_class_of(fragment, 1, class);
-        // A chain feeds link `n`'s output buffer into link `n + 1`'s **input**
-        // slot, and a module types each slot by its own class, so the two ends must
-        // be one class. A crossed fragment would make every later link read the
-        // previous link's output at the other width — a wrong number rather than a
-        // failed run — so it is refused by name.
+        // A link reads the previous link's output through its input slot, so both ends must be one class.
         if input_class != output_class {
             return Err(RunError::ChainCrossesClasses {
                 input: input_class,
