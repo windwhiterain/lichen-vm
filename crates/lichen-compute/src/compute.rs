@@ -1729,6 +1729,7 @@ where
     };
     // Undecided is not a mistake: a kernel compiled before its annotation
     // resolved waits for a later pass.
+
     // The type slot holds either the type term or a node that holds one; the
     // decode decides which ([`shape::TypeRef`]).
     let Some((names, shape)) = struct_fields_of_slot(module, type_slot) else {
@@ -1931,46 +1932,14 @@ where
     Ok(None)
 }
 
-/// Lower `[param_pair] → function.return` for the kernel-safe subset (scalar
-/// arith over a scalar or a tuple of scalars) into a [`KernelFragment`] — the
-/// function's **body**, not a module.  `jit` emits a fragment per function;
-/// module assembly is a separate step ([`assemble_module`]), so a later JIT
-/// can emit fragments lazily and a `launch` assembles a reachable set of them
-/// into one module.
+/// Lower `[param_pair] → function.return` for the kernel-safe subset into a
+/// [`KernelFragment`].
 ///
-/// The domain is **seeded, passed, then read back** — never computed and held
-/// in a local:
-///
-/// 1. **Seed.** The parameter's type slot is the one thing the value graph can
-///    never decide here: a template is never evaluated, and an apply binds the
-///    clones, so the template's own cell stays empty.  The encoding authority
-///    decodes it ([`lichen_highlevel::shape::low_type_of`]) and the lowlevel
-///    takes it as a lower bound on the parameter's class.
-/// 2. **Pass.** The body's own low types are computed to a fixed point, before
-///    any apply — what makes a pre-apply `jit` work at all.
-/// 3. **Read.** The domain is then the class's lower bound, exactly as a
-///    backend reads any other node's.
-///
-/// A parameter whose type is undecided at that point is the hard boundary the
-/// design names (a polymorphic template's domain is not a fact any mechanism
-/// can recover before an apply), so this refuses with an actionable reason
-/// rather than compiling a domain it invented.
-///
-/// **A kernel must be explicitly specialized, and that is the whole rule.**  A
-/// wasm or SPIR-V value is an `i64` or an `f32` and never either, and this
-/// lowering runs *before* any apply, so there is nothing to read a class off:
-/// the **parameter's type** is where the language states the class this artifact
-/// is for.  A body that left its class open — `y => y + y`, where `+` keeps its
-/// operands on one undecided cell — is therefore refused by name
-/// ([`UNDECIDED_DOMAIN`]) rather than lowered in a class the compiler picked.
-/// The operator's own contract is what confines such a body to a class domain
-/// (`docs/notes/operator-polymorphism.md` §3), and committing to one of that
-/// domain's members is the *author's* statement (`docs/notes/class-channel.md`
-/// §5.1.1).
-///
-/// The seed below is how the stated class reaches the body: it is a *low-type*
-/// write on the parameter's class, never a write into a type cell, so the
-/// function stays whatever it was for its other uses.
+/// # Invariant
+/// A kernel must be explicitly specialized: this runs before any apply, so the
+/// parameter's type is where the language states the class — a body whose class
+/// is left open is refused by name ([`UNDECIDED_DOMAIN`]). The domain is seeded,
+/// passed, then read back, and the seed is a low-type write, never a type cell.
 fn compile_fragment<P>(
     module: &mut Module<P>,
     function: AnyFunctionId,
@@ -1985,22 +1954,16 @@ where
     };
     let param_pair = module.functions[fid].parameter;
     let ret = module.functions[fid].r#return;
-    // The function's `return` is the `[value, type]` pair node; the kernel's
-    // result is the pair's *value* (element 0).  A body whose return is a bare
-    // value node (the checker leaves a direct kernel-apply's codomain undecided,
-    // so it stores the body's value node directly instead of a pair) is used
-    // as the value itself.
-    // SAFETY: `ret` is a live node of `module`; nothing in this crate calls
-    // `Module::drop_block`.
+    // A body's return is its `[value, type]` pair; the result is the pair's value.
+
+    // SAFETY: `ret` is a live node of `module`; nothing here drops a block.
     let ret_value = match unsafe { module.array_items(ret) } {
         Some(items) if !items.is_empty() => dyn_node(items[0].node)?,
         _ => ret,
     };
-    // The parameter's two cells, read once and released before the pass needs
-    // the module mutably.  `None` for the type cell is not a failure here — it
-    // is an undecided domain, and the refusal below says so.
-    // SAFETY: `param_pair` is a live node of `module`; nothing in this crate
-    // calls `Module::drop_block`.
+    // The parameter's two cells, read once before the pass needs the module.
+
+    // SAFETY: `param_pair` is a live node of `module`; nothing here drops a block.
     let (param_value, param_type) = match unsafe { module.array_items(param_pair) } {
         Some(items) if !items.is_empty() => (
             dyn_node(items[PAIR_VALUE_SLOT].node)?,
@@ -2009,18 +1972,14 @@ where
         _ => return Err("parameter is not a [value, type] pair".into()),
     };
 
-    // 1. Seed.  The class comes from the parameter's own type and from nowhere
-    //    else: a parameter with no type cell seeds `Unknown`, which is the
-    //    honest statement — nothing decided this class — and the read below
-    //    refuses it by name.  A kernel is lowered for one class, so a body whose
-    //    class is open has to be annotated.
+    // The class comes from the parameter's type alone; without one, `Unknown`,
+    // which the read refuses by name.
     let seed = match param_type.map(|slot| low_type_of_slot(module, slot)) {
         Some(shape) if shape.is_known() => shape,
         _ => LowShape::Unknown,
     };
-    // **Whether the parameter states its domain at all** — read here, before the
-    // seed and the pass write anything, because it is a fact about the
-    // parameter's own type cell rather than about what the body later decides.
+    // Whether the parameter states its domain, read before the seed and pass
+    // write anything.
     module.seed_class_low_type(param_value, seed);
     // 2. Pass.
     module.infer_template_low_types(fid);
@@ -2028,9 +1987,8 @@ where
     let Some(domain) = module.low_type_of_node(param_value) else {
         return Err(UNDECIDED_DOMAIN.into());
     };
-    // **What the parameter's type states** — the fact the domain check needs and
-    // the decoded shape cannot supply: an annotated struct and an unannotated
-    // template both decode to "no class" (measured; see [`DomainStatement`]).
+    // What the parameter's type states — the fact the domain check needs and the
+    // decoded shape cannot supply.
     let statement = match param_type {
         Some(slot) if struct_fields_of_slot(module, slot).is_some() => DomainStatement::Struct,
         Some(slot) if matches!(low_type_of_slot(module, slot), LowShape::Tuple(_)) => {
@@ -2044,36 +2002,23 @@ where
         value: param_value,
         shape: param_shape.clone(),
         base: 0,
-        // A scalar kernel's parameter is its domain, not a struct of named
-        // roles: there are no buffers to be an input or an output.
+        // A scalar kernel's parameter is its domain, not a struct of roles.
         roles: None,
     }];
 
-    // A scalar kernel has no buffers in either space: `compute.write` and a
-    // buffer `compute.read` are both parallel-only operators, so both counters
-    // below stay at 0 and the fragment declares `inputs: 0, outputs: 0`. They
-    // are read off the tally rather than written as literals so that a body
-    // which ever did reach one of them would be counted instead of mis-declared.
+    // A scalar kernel has no buffers: the fragment declares no inputs or outputs.
     let mut tally = Positions::default();
-    // The body is emitted **leaf by leaf**: a scalar codomain is the one leaf,
-    // a tuple codomain one leaf per element, each becoming its own stack slot.
-    // The count of what the walk returns is the fragment's result arity, so the
-    // wasm signature and the value the launcher reads back are both a function
-    // of the body's own value rather than of a hardcoded one.
+    // The body is emitted leaf by leaf: a scalar codomain is one leaf, a tuple
+    // one per element, each its own stack slot.
     let leaves = codomain_leaves(module, ret_value)?;
-    // **A codomain may mix the two.**  Every leaf is lowered in its own class
-    // (`docs/notes/floating-point.md` §4.2 gives the two classes their own
-    // values and makes every crossing between them explicit), so there is no
-    // single class for the body to have: the emitted function's result list is
-    // typed per position (`result_classes`), and the class read here is only the
-    // **filler** for what no leaf states.
+    // A codomain may mix classes: each leaf is lowered in its own, so results
+    // are typed per position (`result_classes`).
     let result_classes: Vec<ScalarClass> = leaves
         .iter()
         .map(|leaf| node_class_in(module, &params, *leaf))
         .collect();
-    // The filler for the **positions** a body never read, which is the ABI's
-    // integer default: a scalar fragment reads no buffer at all, so this only
-    // decides the class of an empty list.
+    // The filler for positions a body never read: the ABI's integer default,
+    // which only decides an empty list's class.
     let class = result_classes.first().copied().unwrap_or(ScalarClass::Int);
     // The class a buffer read is declared in; see [`Positions::element_class`].
     tally.element_class = Some(class);
@@ -2090,39 +2035,28 @@ where
         inputs: tally.reads,
         outputs: tally.writes,
         input_classes: tally.input_classes(tally.reads),
-        // A scalar fragment has no output buffers, so this is empty: the values
-        // it produces are its **wasm results**, which is `result_classes` below.
-        // The two were one field while a fragment had one class, and they
-        // separate because a write ordinal and a wasm result are positions in
-        // different spaces.
+        // A scalar fragment has no output buffers, so this is empty: its values
+        // are the wasm results below.
         output_classes: Vec::new(),
         result_classes,
         int_width: IntWidth::I64,
     })
 }
 
-/// The body's value resolved into the **leaves** a wasm body must leave on the
-/// stack — one stack slot each, in source order.
+/// The body's value resolved into the leaves a wasm body must leave on the stack.
 ///
-/// This is the codomain counterpart of [`parallel_output_nodes`], and it is the
-/// same walk: a bare value node is the single-leaf form (a scalar codomain),
-/// and a **materialized tuple value** is the multi-leaf one (a tuple codomain,
-/// `p => (p(0), p(1))`), reached through a `value_of` extraction or a
-/// undecided cell exactly as an argument tuple is.
-///
-/// A *nested* tuple is not flattened into extra leaves here: each leaf is emitted
-/// by [`emit_node`], which produces exactly one value, so a nested tuple would
-/// leave its elements interleaved on the stack in the wrong order.  It is
-/// refused by name instead, with the path to the offending position.
+/// # Invariant
+/// A bare value node is the single-leaf form and a materialized tuple value the
+/// multi-leaf one; a *nested* tuple is not flattened, because each leaf is one
+/// value on the stack — it is refused by name with the path instead.
 fn codomain_leaves<P>(module: &Module<P>, ret_value: NodeId) -> Result<Vec<NodeId>, String>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    // Peel the `value_of` extraction first: the checker reaches most values
-    // through one, so asking the extraction whether it is a tuple would answer
-    // for the *pair* it wraps.
+    // Peel the `value_of` extraction first: asking it whether it is a tuple
+    // would answer for the pair it wraps.
     let value = value_of_node(module, ret_value).unwrap_or(ret_value);
     // SAFETY: `value` is a live node of `module`; nothing in this crate calls
     // `Module::drop_block`.
@@ -2144,10 +2078,8 @@ where
     Ok(leaves)
 }
 
-/// Whether `node` is (or peels to) a materialized tuple value — the
-/// multi-element array value a tuple literal is stored as.  Shared by the
-/// codomain walk and the cross-kernel argument walk, which must agree on what
-/// counts as a tuple.
+/// Whether `node` is (or peels to) a materialized tuple value, for the codomain
+/// and argument walks alike.
 fn is_tuple_value<P>(module: &Module<P>, node: NodeId) -> bool
 where
     P: Program,
@@ -2159,31 +2091,13 @@ where
     matches!(unsafe { module.array_items(value) }, Some(items) if !items.is_empty())
 }
 
-/// Lower a single-arg index function into a **parallel kernel** — a
-/// [`KernelFragment`] whose wasm signature is `(n, index)` (the parameter's
-/// scalar leaves, the launch extent first, then the loop index) and whose body
-/// is the index function's body traced with `range`/`read`/`write` host calls.
+/// Lower a single-arg index function into a parallel kernel ([`KernelFragment`]).
 ///
-/// The codomain is a `Write` or a **tuple of `Write`s** — one element per
-/// output buffer — and the fragment records the arity as its
-/// [`KernelFragment::outputs`], so a `plrun` allocates exactly that many
-/// buffers.
-///
-/// `parallel` is the data-parallel lift: running it over the index range
-/// `[0, n)` computes the index function once per index.  The parameter is the
-/// **named** struct `struct<.n Int, .in …, .out …>` — `.n` is the count (a wasm
-/// scalar param), the buffers under `.in` are host-side (each read via a `read`
-/// import by its position in the walk's list), and `.out` declares the outputs.
-/// The loop index comes from `compute.range n` (a kernel-only op yielding the
-/// index param).
-///
-/// **The every-ordinal-written invariant holds by construction.**  The lowered
-/// body is straight-line: the only conditional the kernel-safe subset has is
-/// the emitter's 2-element scalar `select`, which is a *value* select and can
-/// only skip a *value*, and a `compute.write` has none.  A write reached inside
-/// a `select` branch is therefore refused by name rather than emitted (see the
-/// `Select` arm of [`emit_node`]), so write `k` runs on every index and each
-/// ordinal `0 .. outputs` is always written.
+/// # Invariant
+/// The every-ordinal-written rule holds by construction: the lowered body is
+/// straight-line, the only conditional in the subset is the emitter's 2-element
+/// scalar `select`, and a `select` can skip only a *value* — a write reached
+/// inside one is refused by name, so write `k` runs on every index.
 fn compile_parallel_fragment<P>(
     module: &mut Module<P>,
     function: AnyFunctionId,
@@ -2198,30 +2112,19 @@ where
     };
     let cfg_pair = module.functions[fid].parameter;
     let body = module.functions[fid].r#return;
-    // The kernel's result is the index function's body value — a `Write`, or a
-    // **tuple of `Write`s** (one per output buffer) — through a `[value, type]`
-    // pair or a bare value node.
+    // The kernel's result is the body value — a `Write`, or a tuple of them.
+
     // SAFETY: `body` is a live node of `module`.
     let ret_value = match unsafe { module.array_items(body) } {
         Some(items) if !items.is_empty() => dyn_node(items[0].node)?,
         _ => body,
     };
-    // **Which shape the parameter is, and where its facts live.**  A kernel
-    // written against `compute.K (compute.P _)(…)` has a named struct parameter
-    // whose fields carry the roles; the older `cfg = (n, (buffers…))` has a
-    // tuple.
-    //
-    // The role table is decoded from the parameter's *type*, because
-    // `low_type_of` answers `Unknown` for every struct **by design** — a nominal
-    // struct has no low shape (`lichen_highlevel::shape`) — so the struct half
-    // cannot go through the seed → pass → read chain below.
+    // A named struct parameter carries the roles; the older tuple `cfg` does not.
+
+    // The role table is decoded from the parameter's type: `low_type_of`
+    // answers `Unknown` for every struct by design.
     let roles = parallel_roles(module, cfg_pair)?;
-    // The output count is the **codomain's arity** for both parameter shapes — a
-    // bare value is one output, a materialized tuple value one per element —
-    // because that is where the writes are: a `compute.write` is a value, so a
-    // body that writes several outputs returns a tuple of them.  The count is a
-    // fact of the *function*, fixed before any index runs rather than discovered
-    // from which slots happened to be written.
+    // The output count is the codomain's arity, fixed before any index runs.
     let outputs = parallel_output_nodes(module, ret_value);
     // The slot is seeded with the ABI's own signature — the parameter's scalar
     // leaves followed by the index — and each leaf's class is the parameter
