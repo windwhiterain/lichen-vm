@@ -10,14 +10,7 @@ use crate::{
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
 
-/// One step of a failed unification's descent: the array element the
-/// traversal moved into, and the two child operands it compared there.  The
-/// flat sequence of steps (in order) is the structural *path* from the
-/// unified root operands down to the failing pair — the "step by step" the
-/// highlevel needs to pinpoint which component of a compound type is the
-/// actual conflict.  A static child resolves to [`NodeId::default()`] (it
-/// materializes into a fresh leaf), so only `index` is authoritative; the
-/// highlevel re-reads the path through the graph when it needs positions.
+/// One failed-unification step; `index` is authoritative, a static child names the default.
 #[derive(Debug, Clone, Copy)]
 pub struct UnifyStep {
     /// The array element index the traversal descended into.
@@ -29,15 +22,11 @@ pub struct UnifyStep {
 
 #[derive(Debug, Clone)]
 pub struct UnifyError<P: Program> {
-    /// The two top-level operands the trigger framed — the checker's
-    /// source-meaningful sides for a checker-issued unify, the cloned
-    /// parameter and argument for an apply-time parameter check.  These are
-    /// what the highlevel attributes the diagnostic to; the raw `a`/`b`
-    /// leaves below are the deep conflict.
+    /// The two top-level operands the trigger framed: a diagnostic is attributed
+    /// here, not to `a`/`b`.
     pub root_a: NodeId,
     pub root_b: NodeId,
-    /// The descent path (element by element) from `root_a`/`root_b` to the
-    /// conflict, per [`UnifyStep`].  Empty for a top-level (non-array) clash.
+    /// The element-by-element descent to the conflict; empty for a top-level clash.
     pub steps: Vec<UnifyStep>,
     /// The conflicting classes, as the lowlevel recorded them.
     pub a: NodeId,
@@ -46,24 +35,14 @@ pub struct UnifyError<P: Program> {
     pub value_b: Option<P::Value>,
 }
 
-/// A side of a unification: a node's class, a bare value, or both.
-///
-/// A side **without** a node is a value that has no class to merge — the result
-/// an operation just produced, or a value a write is distributing.  Asking
-/// `unify` of such a side is asking whether the two can be one value, which is
-/// the same question [`Module::unify_inner`]'s arms answer for two classes: the
-/// absence of a class is not a variant of the recursion, it is a side with
-/// nothing to merge.
+/// A side of a unification: a node's class, a bare value, or both. See docs/notes/lowlevel-vm.md.
 #[derive(Clone, Copy)]
 struct Side<P: Program> {
     node: Option<NodeId>,
     value: Option<P::Value>,
 }
 
-/// The depth bound for a comparison reached without classes: such a pair cannot
-/// name itself, so its descent is bounded instead of cycle-guarded.  Past the
-/// bound a pair is given the benefit of the doubt, as the unifier's cycle guard
-/// does.
+/// The depth bound for a comparison without classes, which cannot name itself to the guard.
 const MAX_VALUE_DEPTH: usize = 64;
 
 impl<P: Program> Side<P> {
@@ -80,9 +59,7 @@ impl<P: Program> Side<P> {
         Self { node: None, value }
     }
 
-    /// The side an array item names: its node when it has one, else its value —
-    /// a static ref has no dynamic node to merge, so it takes part as the value
-    /// it is.
+    /// The side an array item names: its node, or its value when it is a static ref.
     fn of(id: AnyNodeId, value: Option<P::Value>) -> Self {
         match id {
             Dyn(node) => Self::node(node),
@@ -102,45 +79,16 @@ impl<P: Program> disjoint::Node for Node<P> {
 }
 
 impl<P: Program> Module<P> {
-    /// Merge the classes of `a` and `b`, carrying the merged class's decided
-    /// value to the members that **hold nothing**.
+    /// Merge the classes of `a` and `b`, then fill the members that hold nothing.
     ///
-    /// The two low-type reads at the top are the shape half; the value half is
-    /// the class-channel invariant ([`Self::write_node_value`]) applied to the
-    /// merge that **grows** a class rather than to the write that fills one.
-    /// Both sides are read **before** the union, which re-elects a
-    /// representative: what either side already knew has to be read off the
-    /// class it was on, not off a node that may stop being the one a class read
-    /// reaches.  A merge that read only the two representatives' slots would
-    /// see no value and carry nothing, leaving the cell that just joined the
-    /// class undecided while the class has been decided all along — a read that
-    /// happened before the unification which decided the class, with nothing to
-    /// wake it afterwards (`docs/notes/eval-before-unify.md` §2.1).
-    ///
-    /// **The distribution reaches the members that hold nothing, and only
-    /// those.**  A merge is the one place two decided sides meet without their
-    /// values being compared for equality: the positional descent agrees they
-    /// *unify*, which is not the same as their being one value — two type terms
-    /// that unify still name different nodes — so a class may hold two values,
-    /// on two members, and each member's slot keeps the one it holds.  A merge
-    /// that overwrote them would move a node out of a slot the structure still
-    /// names, and a later walk descending through that structure would silently
-    /// take the other branch; that is how a parameter's pinned dependent length
-    /// became an undecided cell, and why this is a rule and not a tolerance
-    /// (`docs/notes/class-channel.md` §1.1.3).
+    /// # Invariant
+    /// Both sides' low types and decided values are read before the union, which
+    /// re-elects a representative; the merge joins the low types and fills only the
+    /// members that hold nothing, overwriting nobody — each member keeps the value it
+    /// holds. See docs/notes/lowlevel-vm.md.
     pub fn add_equality(&mut self, a: NodeId, b: NodeId) -> NodeId {
-        // Both sides' low types are read *before* the union (which leaves the
-        // authoritative copy on whichever node becomes the representative) and
-        // joined onto it after, so a merge never drops a decided shape.
         let left = self.class_low_type(a).cloned();
         let right = self.class_low_type(b).cloned();
-        // The same argument for the value, and for the same reason: the union
-        // re-elects the representative, so what either side already knew has to
-        // be read **before** it and committed to the winner afterwards.  An
-        // **undecided** class (an empty slot) is not a fact to carry, exactly as
-        // [`Self::write_node_value`] treats it.  Both sides decided is not a
-        // conflict here — `unify_inner`'s arms decide that, and only agree to
-        // merge two decided sides.
         let left_value = self.class_committed_value(a);
         let right_value = self.class_committed_value(b);
         let representative = disjoint::union(&mut self.nodes, a, b);
@@ -157,10 +105,7 @@ impl<P: Program> Module<P> {
         disjoint::find(&mut self.nodes, node)
     }
 
-    /// The class's value, read through its representative — the value the
-    /// unification machinery sees (`bind`/`unify` read the representative's
-    /// slot).  `&self`, no path compression, so a read never mutates the
-    /// union-find tree.
+    /// The class's value through its representative; a read, so no path compression.
     pub fn class_value(&self, node: NodeId) -> Option<P::Value> {
         let mut root = node;
         while let Some(parent) = self.nodes[root].equality.parent() {
@@ -169,49 +114,24 @@ impl<P: Program> Module<P> {
         self.nodes[root].value
     }
 
-    /// The class's **low type**, read through its representative — the lower
-    /// bound a backend compiles against.  `&self`, walked the same way
-    /// [`Self::class_value`] is, so a read never mutates the tree and never
-    /// depends on which member of the class resolved first.
-    ///
-    /// `None` is an untraced class (scaffolding a backend never reaches);
-    /// `Some(LowShape::Unknown)` is a traced but undecided one.
+    /// The class's **low type** through its representative. See docs/notes/lowlevel-low-types.md.
     pub fn class_low_type(&self, node: NodeId) -> Option<&LowShape> {
         self.nodes.get(self.class_root(node))?.low_shape.as_ref()
     }
 
-    /// The class's recursive low type: [`Self::class_low_type`] with every
-    /// still-undecided position refined from the element classes the value
-    /// structurally covers.  Deep shapes are never unfolded at write time — a
-    /// read recurses, because the element classes refine independently, as
-    /// they bind, of the array that holds them.
-    ///
-    /// A value with no decided shape reads back unchanged (`None` or
-    /// `Some(Unknown)`), and a self-referential structure is cut by the path
-    /// guard, so a cyclic value cannot recurse forever.
+    /// The class's recursive low type, cut by a path guard. See docs/notes/lowlevel-low-types.md.
     pub fn low_type_of_node(&self, node: NodeId) -> Option<LowShape> {
         let shape = self.class_low_type(node)?.clone();
         let mut seen = HashSet::new();
         Some(self.deepen_low_type(node, shape, &mut seen))
     }
 
-    /// Record `shape` as a lower bound on `node`'s class — the **seed** of the
-    /// computation route, the one thing the value graph can never decide for a
-    /// template (the parameter positions: a template is never evaluated, and an
-    /// apply binds the *clones*, not it).  A layer above the lowlevel that has
-    /// the type calls this before running the fixed-point pass; a seed is an
-    /// ordinary refinement, never a widening.
-    ///
-    /// Returns whether the class's low type changed.
+    /// Seed `shape` as a lower bound on `node`'s class. See docs/notes/lowlevel-low-types.md.
     pub fn seed_class_low_type(&mut self, node: NodeId, shape: LowShape) -> bool {
         self.refine_class_low_type(node, shape)
     }
 
-    /// The union-find representative of `node` — the `&self`, no-compression
-    /// form of [`Self::equality_representative`], so the class-routed reads
-    /// stay read-only.  **Public** because the control-flow graph resolves a
-    /// value's definition through the class too, and two walks of one union-find
-    /// is one walk too many.
+    /// The union-find representative of `node`, without path compression; a read.
     pub fn class_root(&self, node: NodeId) -> NodeId {
         let mut root = node;
         while let Some(parent) = self.nodes[root].equality.parent() {
@@ -220,22 +140,16 @@ impl<P: Program> Module<P> {
         root
     }
 
-    /// The array items of `node`'s class value, read through the
-    /// representative — the structural descent every deep low-type read walks.
+    /// The array items of `node`'s class value, read through the representative.
     fn class_array_items(&self, node: NodeId) -> Option<&'static [ArrayItem]> {
         let LowValue::Array(array) = self.class_value(node)?.as_enum()? else {
             return None;
         };
-        // SAFETY: the slice points into the array payload's home arena, and the
-        // node is read out of `self.nodes` here, so its home block is alive for
-        // as long as this borrow of the module can reach it.
+        // SAFETY: the slice points into the value's home arena, alive for this borrow.
         Some(unsafe { array.items() })
     }
 
-    /// Refine `node`'s class low type with `shape` (the lattice join) and
-    /// report whether the class moved.  The single write side of the low-type
-    /// channel: observation, the merge join, a seed, and the fixed-point pass
-    /// all route through it, so refinement is monotone by construction.
+    /// Join `shape` into `node`'s class low type: the single monotone write side.
     pub fn refine_class_low_type(&mut self, node: NodeId, shape: LowShape) -> bool {
         let Some(entry) = self.nodes.get_mut(self.class_root(node)) else {
             return false;
@@ -254,14 +168,7 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Refine `node`'s class low type from a concrete value's variant tag.
-    ///
-    /// O(1) and monotone by construction: only the top-level tag is read, never
-    /// the payload.  A value the vocabulary has no shape for (`Str`, the unit
-    /// `None`, an empty `Error`) states nothing, so it never widens
-    /// and never narrows; a value that refines nothing leaves the class
-    /// untouched.  Called from both value-write sites — [`Self::write_node_value`]
-    /// and [`Module::add_node`].
+    /// Refine `node`'s class low type from a concrete value's top-level tag, O(1) and monotone.
     pub(crate) fn observe_class_low_type(&mut self, node: NodeId, value: P::Value) {
         let Some(shape) = observed_low_shape(value) else {
             return;
@@ -269,10 +176,7 @@ impl<P: Program> Module<P> {
         self.refine_class_low_type(node, shape);
     }
 
-    /// [`Self::deepen_low_type`] for one structural element: an undecided
-    /// position takes the element's own (deep) low type, and a decided one
-    /// keeps it — the two descriptions of a decided position cannot disagree,
-    /// and the position was decided first.
+    /// One structural element: an undecided position takes the element's low type, a decided one keeps it.
     fn deepen_position(
         &self,
         position: LowShape,
@@ -291,8 +195,7 @@ impl<P: Program> Module<P> {
         self.deepen_low_type(element, shape, seen)
     }
 
-    /// [`Module::low_type_of_node`] at one level, with `seen` cutting the
-    /// cycle of a self-referential structure.
+    /// [`Module::low_type_of_node`] at one level; `seen` cuts a self-referential cycle.
     fn deepen_low_type(
         &self,
         node: NodeId,
@@ -336,37 +239,17 @@ impl<P: Program> Module<P> {
         deepened
     }
 
-    /// The controlled value-write API: write `value` onto `node` — its own
-    /// answer — then, if the value is concrete, propagate it to the rest of
-    /// `node`'s class, so a read of any member (or a later `bind`/`unify`,
-    /// which reads through the class) sees it regardless of which member
-    /// resolved it.
+    /// Write `value` onto `node`, then propagate a concrete value to its whole class.
     ///
-    /// This is the single choke-point for value writes: every place a value
-    /// lands on a node that might be a member of a unified class goes through
-    /// here, so the class-consistency invariant is maintained at exactly one
-    /// site.  A `None` value only clears the node's own slot — undecided is not
-    /// a fact to propagate.
-    ///
-    /// **The write is unconditional, and it lands on every member**
-    /// ([`docs/notes/class-channel.md`] §1.1).  It is not gated on the slot
-    /// being undecided, and it skips nobody — so **one class has one value**: a
-    /// concrete write reaches every member *and* the class's representative,
-    /// which is where [`Self::class_value`] and [`Self::class_committed_value`]
-    /// read it from.  The representative is the class's single value slot, so
-    /// no reader has to know which member a write happened to start from.
-    ///
-    /// It is also one of the two **observation** sites of the low-type layer:
-    /// a concrete value refines its class's low type from the value's variant
-    /// tag ([`Self::observe_class_low_type`]).  The other is
-    /// [`Module::add_node`], where a value arrives already concrete.
+    /// # Invariant
+    /// The write is unconditional and reaches every member, so one class has one
+    /// value; a `None` clears only the node's own slot — undecided is not a fact to
+    /// propagate. This is the single value-write choke-point and one of the class's
+    /// two low-type observation sites. See docs/notes/lowlevel-vm.md.
     pub fn write_node_value(&mut self, node: NodeId, value: Option<P::Value>) {
         self.nodes[node].value = value;
         if let Some(value) = value {
-            // A class whose sole member is the node — `parent` and `next` both
-            // `None` is `disjoint::Meta`'s contract for a lone representative —
-            // holds nobody to distribute to, so the slot write above is the
-            // whole effect.
+            // A lone representative has nobody to distribute to; the slot write is all.
             if self.nodes[node].equality.parent().is_none()
                 && self.nodes[node].equality.next().is_none()
             {
@@ -378,28 +261,17 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Commit an **operation's answer** — the evaluator's write.
+    /// Commit an operation's answer, then restore the node's own slot so its run state survives.
     ///
-    /// The answer is a **value**: it has no class of its own, so it meets the
-    /// node through the one unification as a node-less side ([`Side::value`]) —
-    /// which is exactly the question "can this answer be the value my class
-    /// holds", asked *of* the recursion rather than beside it.  The conflict is
-    /// the ordinary unification conflict, recorded at this node's roots, so
-    /// nothing needs a comparison path of its own.
-    ///
-    /// **The operator always runs, and this is where its own answer is kept.**
-    /// The class's value is distributed to the members, but *not* over the
-    /// producing operation's own slot: that slot is the node-local run state —
-    /// "this operator produced this" — which is what
-    /// [`Module::has_no_result_yet`] reads and what stops a second run.  A
-    /// propagated class value must never masquerade as a produced answer, or the
-    /// operator that owed one would never run again.
+    /// # Invariant
+    /// The class's value is distributed, but the node's own slot keeps the operator's
+    /// answer: a propagated class value must never masquerade as a produced answer, or
+    /// the operator that owed one would never run again ([`Module::has_no_result_yet`]).
+    /// The answer meets the class as a node-less side, so a conflict is the ordinary
+    /// unification conflict. See docs/notes/lowlevel-vm.md.
     pub(crate) fn write_node_answer(&mut self, node: NodeId, value: P::Value) {
         let mut path = AncestorPairs::new();
         let mut steps = Vec::new();
-        // The answer against what the node's class holds, as two values: the
-        // answer has no class of its own, and pulling the class's value out
-        // explicitly is what makes the two comparable.
         let held = self.class_committed_value(node);
         self.unify_inner(
             Side::value(Some(value)),
@@ -409,29 +281,19 @@ impl<P: Program> Module<P> {
             &mut steps,
             (node, node),
         );
-        // Distribute to the class, then restore this node's own answer: the walk
-        // visits every member, this one included, and a class value landing here
-        // would erase the run state the slot carries.
         self.write_node_value(node, Some(value));
         self.nodes[node].value = Some(value);
         self.nodes[node].runned = true;
     }
 
-    /// Distribute a concrete `value` over the class of `representative` — the
-    /// distribution half of [`Self::write_node_value`], and **only** that: a
-    /// write states the class's value, so it reaches every member.  A merge
-    /// does not distribute this way; it fills the members that hold nothing
-    /// ([`Self::add_equality`]), because a merge is where two decided sides
-    /// meet and neither may be overwritten.
+    /// Distribute a concrete `value` over the whole class of `representative`.
     ///
-    /// **Undecided is not a fact to propagate** — there is no such value to
-    /// pass here: a class states nothing about its members until it holds a
-    /// decided value, and no caller has an undecided `P::Value` to hand over.
-    ///
-    /// An operation-bearing member keeps its computation: its slot now holds the
-    /// class's value while `runned` stays `false`, which is what
-    /// [`Module::has_no_result_yet`] reads as "an assertion, so the operator
-    /// still owes its own answer".
+    /// # Invariant
+    /// Undecided is not a fact to propagate, so only a decided value reaches here. An
+    /// operation-bearing member keeps its computation: its slot holds the class's value
+    /// while `runned` stays false, which [`Module::has_no_result_yet`] reads as the
+    /// operator still owing its own answer. A merge does not use this path — it fills
+    /// only the holes. See docs/notes/lowlevel-vm.md.
     pub(crate) fn propagate_class_value(&mut self, representative: NodeId, value: P::Value) {
         let members: Vec<NodeId> = self.class_members(representative).collect();
         for member in members {
@@ -439,11 +301,7 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Fill the class's members that hold nothing with `value` — the merge's
-    /// half of the distribution, against [`Self::propagate_class_value`]'s
-    /// write.  A member that already holds something **keeps it**: a merge is
-    /// where two decided sides meet, and neither may be overwritten
-    /// ([`Self::add_equality`], `docs/notes/class-channel.md` §1.1.3).
+    /// Fill the class's members that hold nothing; a member that holds something keeps it.
     fn fill_class_holes(&mut self, representative: NodeId, value: P::Value) {
         let members: Vec<NodeId> = self.class_members(representative).collect();
         for member in members {
@@ -453,10 +311,7 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The write rule's own conflict record for a **value-only** pair: neither
-    /// side is a class, so there is no pair of roots to name, and the failure is
-    /// attributed to the enclosing unification's roots with the two values that
-    /// could not be one.
+    /// Record a value-only conflict at the enclosing unification's roots, with no steps.
     fn record_value_error(
         &mut self,
         root: (NodeId, NodeId),
@@ -474,9 +329,7 @@ impl<P: Program> Module<P> {
         });
     }
 
-    /// Resolve a side that names a node down to **what its class knows** — the
-    /// ordinary reading, because a side that names a node stands for that node's
-    /// whole class.  A node-less side already carries its own answer.
+    /// Resolve a node-naming side to what its class knows; a node-less side already carries it.
     fn answer_class_side(&mut self, side: Side<P>) -> Side<P> {
         let Some(node) = side.node else {
             return side;
@@ -487,46 +340,20 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// [`Self::unify`], reporting the range of [`Self::unify_errors`] this
-    /// call produced — **empty on success**.  The range is this call's own
-    /// failures, so a caller never has to infer ownership from a length
-    /// delta taken around the call.
+    /// [`Self::unify`], reporting the range of [`Self::unify_errors`] this call produced.
     ///
-    /// Invariant: `unify_errors` is append-only, so the range `before..len`
-    /// names exactly the entries this call appended and stays valid for as
-    /// long as nothing truncates the vec — which is what makes it safe for a
-    /// caller to suppress *its own* failures by [`Vec::truncate`].
+    /// # Invariant
+    /// `unify_errors` is append-only, so the returned range names exactly this call's
+    /// failures and a caller may truncate its own range to suppress them.
     pub fn try_unify(&mut self, a: NodeId, b: NodeId) -> (NodeId, std::ops::Range<usize>) {
         let before = self.unify_errors.len();
         let representative = self.unify(a, b);
         (representative, before..self.unify_errors.len())
     }
 
-    /// Structurally unify the classes of `a` and `b`.
-    ///
-    /// Unification is over values: a class holding no value and no pending
-    /// operation (a pure undecided cell) binds to the other side's value; an
-    /// unevaluated operation is a *pending computation*, and a concrete
-    /// value must never be bound over one — that would silently erase it
-    /// (e.g. a dependent type branch that selects a different type per
-    /// argument).  Such a computation is forced before comparing; if its
-    /// operands are still undecided and it cannot resolve, the unify fails —
-    /// except against an all-undecided skeleton (cells and arrays of cells),
-    /// which merges with the computation: nothing is erased, and the
-    /// computation's eventual value replicates onto the skeleton.  Two
-    /// concrete values merge iff they are fully equal
-    /// ([`ValueExt::value_eq`]), except arrays, which unify elementwise
-    /// (their structure is the value).  A
-    /// conflict records a [`UnifyError`] in [`Self::unify_errors`] and
-    /// leaves the two classes unmerged.
-    ///
-    /// Returns the representative of the merged class on success, or of
-    /// `a`'s class when unification fails.
+    /// Structurally unify the classes of `a` and `b`; returns `a`'s class representative.
     pub fn unify(&mut self, a: NodeId, b: NodeId) -> NodeId {
         let mut path = AncestorPairs::new();
-
-        // The descent path, seeded empty; the root operands are carried
-        // separately and recorded in each `UnifyError`'s `root_a`/`root_b`.
         let mut steps = Vec::new();
         self.unify_inner(
             Side::node(a),
@@ -539,20 +366,7 @@ impl<P: Program> Module<P> {
         disjoint::find(&mut self.nodes, a)
     }
 
-    /// Whether `id` names a **self-referential two-element array** — a
-    /// 2-element array one of whose elements points back at its own class
-    /// (dynamically through the class, or statically through the frozen
-    /// self-loop).  This is a generic graph shape: it says "this value is a
-    /// cycle of length one", not what the cycle *means*.  The highlevel's
-    /// universe `K = [Type, ↺]` is the canonical instance, but a program
-    /// that recognises its own cycles by meaning (comparing against its
-    /// canonical node) is free to, and does so in `lichen-highlevel`'s
-    /// `shape` module.  The lowlevel needs the shape alone to unify two such
-    /// cycles successfully instead of tripping its cycle guard.
-    ///
-    /// A **read**: the class is walked without path compression
-    /// ([`Self::class_root`]), so asking the question never mutates the
-    /// union-find tree and a caller holding a shared borrow can ask it.
+    /// Whether `id` names a self-referential two-element array; a read, no path compression.
     pub fn is_self_referential(&self, id: AnyNodeId) -> bool {
         match id {
             Dyn(node) => {
@@ -593,36 +407,18 @@ impl<P: Program> Module<P> {
         else {
             return false;
         };
-        // SAFETY: `array` is a static payload read through `sref`, whose home
-        // module is registered — the registration pins its arena.
+        // SAFETY: `array` is a static payload read through `sref`; the registered module pins it.
         let items = unsafe { array.items() };
         items.len() == 2
             && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
     }
 
-    /// Whether two function values name **one logical function**, after
-    /// resolving re-export/materialization origins — see
-    /// [`Module::function_identity`].
-    ///
-    /// The lowlevel's `Function` identity is by id, and a function can be named
-    /// through several refs (a dynamic closure and the frozen function it was
-    /// materialized from, or two modules' re-exports of one imported binding),
-    /// so unifying values that name it through different refs must merge, not
-    /// conflict.
+    /// Whether two function values name one logical function, after resolving origins.
     pub fn function_identity_equal(&self, a: AnyFunctionId, b: AnyFunctionId) -> bool {
         self.function_identity(a) == self.function_identity(b)
     }
 
-    /// The **ultimate identity** of `function`: follow its re-export /
-    /// materialization origins to the one real function it is.  A dynamic
-    /// closure points at the static function it was materialized from
-    /// ([`Function::static_origin`]); a re-exported static function points at
-    /// the module that first built it ([`StaticFunction::origin`]).  The chain
-    /// terminates at a source-built dynamic function or a module's own static
-    /// function, which is the identity.
-    ///
-    /// The bound stops a corrupt origin cycle from looping; a real chain is at
-    /// most one re-export deep per importing module.
+    /// The ultimate identity of `function` after following its origins. See docs/notes/function-type-merge.md.
     pub fn function_identity(&self, function: AnyFunctionId) -> FunctionIdentity {
         let mut current = function;
         for _ in 0..64 {
@@ -654,34 +450,13 @@ impl<P: Program> Module<P> {
             .and_then(|function| function.origin)
     }
 
-    /// Whether `node` names a **function type** — the self-referential
-    /// `[Function(fid), ↺]` that *is* a function's own type (`f : f`), or a
-    /// frozen module's copy of one.  Recognition only: it allocates nothing,
-    /// so a caller may ask "is this a function?" as often as it likes.
-    ///
-    /// Public because "is this a function type" is the one question a layer
-    /// above asks — the checker's apply function-ness guard must recognise
-    /// exactly what the unifier descends into, or the guard would refuse a
-    /// function the unifier is happy to take.
+    /// Whether `node` names a function type — the self-referential `[Function(fid), ↺]`.
     pub fn is_function_type(&self, node: NodeId) -> bool {
         self.function_type_function(node).is_some()
     }
 
-    /// The function a **function-type node** names: `node`'s class holding the
-    /// self-referential `[Function(fid), ↺]` that *is* a function's own type
-    /// (`f : f`).  `None` for anything else.
-    ///
-    /// Recognised by the same self-cycle the universe `[Type, ↺]` uses,
-    /// distinguished from it by slot 0 holding a [`LowValue::Function`] (the
-    /// universe holds the `Type` marker).  That distinction is what lets the
-    /// universe and a function's type stay tellable apart while both are
-    /// self-referential arrays — and it is why the universe is *not* the thing
-    /// a function's type is.
-    ///
-    /// Asked of the class's **representative**, which carries the class's value
-    /// ([`Self::propagate_class_value`]), and a **read** like
-    /// [`Self::is_self_referential`]: the class is walked without path
-    /// compression, so a caller holding a shared borrow can ask.
+    /// The function a function-type node names; `None` otherwise. A read. See
+    /// docs/notes/function-type-merge.md.
     fn function_type_function(&self, node: NodeId) -> Option<AnyFunctionId> {
         let carrier = self.class_root(node);
         if !self.is_self_referential(AnyNodeId::Dynamic(carrier)) {
@@ -700,18 +475,7 @@ impl<P: Program> Module<P> {
             })
     }
 
-    /// The two cells a function's type **is** — the function template's
-    /// parameter pair and its return type cell — read from the function-type
-    /// node `node` names, or `None` when `node` is not one.
-    ///
-    /// **The pair, not a copy of it and not two *type* cells.**  A
-    /// `Function::parameter` is the `[value, type, attrs…]` node its body
-    /// binds the variable to and the apply clone walk clones; unifying two of
-    /// those positionally is what lets a signature constrain a **value**, not
-    /// only a type (`?a: Int => ?a: Int` lands the same cell in both
-    /// positions).  The return side is [`Function::return_type`] rather than
-    /// `r#return`, which may be an unevaluated operation node whose own slots
-    /// do not name the type.
+    /// The parameter pair and return type cell a function's type is, or `None` when it is not one.
     fn function_signature(&mut self, node: NodeId) -> Option<(NodeId, NodeId)> {
         let (parameter, return_type) = match self.function_type_function(node)? {
             AnyFunctionId::Dynamic(function) => {
@@ -726,40 +490,17 @@ impl<P: Program> Module<P> {
                 }
                 (parameter, return_type)
             }
-            // A **frozen** function's template is immutable, so its signature
-            // is *copied* into fresh dynamic leaves rather than read in place
-            // and bound — the frozen original must never move.  This is not a
-            // corner case: the whole prelude is a frozen module, and its
-            // functions' type nodes carry a static self-cycle, so declining
-            // here would leave the unifier unable to see them.
+            // A frozen template is immutable, so its signature is copied into fresh leaves.
             AnyFunctionId::Static(sref) => return self.materialize_static_signature(sref),
         };
         Some((parameter, return_type))
     }
 
-    /// The **domain and codomain type cells** of the function type `node`
-    /// names, or `None` when `node` is not one — the same two positions
-    /// [`Self::function_signature`] names, resolved to the *type* cells a
-    /// reader decodes rather than to the pair a unify descends into.
-    ///
-    /// The domain is the parameter pair's **type slot**, not the pair: a
-    /// template's parameter *value* cell is empty until an apply binds it, so
-    /// the pair itself says nothing about the domain and its type slot is the
-    /// decided half.  The codomain is [`Function::return_type`], for the reason
-    /// [`Self::function_signature`] gives.  A frozen function's cells are read
-    /// from its immutable template ([`Self::static_function_signature`]),
-    /// never materialized, because a read must not allocate.
-    ///
-    /// **A read**, so `&self`: this is the shape half of "is this a function
-    /// type", asked by a decoder that holds only a shared borrow
-    /// (`lichen-highlevel`'s `shape` module) and must not be forced into a
-    /// mutable one for a question it never mutates anything to answer.
+    /// The domain and codomain type cells of the function type `node` names; a read, never cloned.
     pub fn function_type_signature(&self, node: AnyNodeId) -> Option<(AnyNodeId, AnyNodeId)> {
         let function = match node {
             Dyn(node) => self.function_type_function(node)?,
-            // A **frozen** function's own type is the same self-cycle in the
-            // artifact, so the recogniser is the static mirror of the dynamic
-            // one rather than a second rule.
+            // A frozen function's own type is the same self-cycle in the artifact.
             AnyNodeId::Static(sref) => self.static_function_type_function(sref)?,
         };
         match function {
@@ -779,31 +520,18 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The function a **frozen** function-type node names — the static mirror of
-    /// [`Self::function_type_function`], recognised the same two ways: the
-    /// self-cycle the universe `[Type, ↺]` shares, distinguished from it by slot
-    /// 0 holding a [`LowValue::Function`] where the universe holds the `Type`
-    /// marker.
-    ///
-    /// A static ref reaches no class-root walk of the importing module — the
-    /// frozen nodes carry their own union-find — but
-    /// [`Self::is_self_referential`]'s static arm *is* the same question ("is
-    /// this node its own tail"), so this asks it there.
+    /// The function a frozen function-type node names, the static mirror of the recogniser.
     fn static_function_type_function(&self, sref: StaticNodeId) -> Option<AnyFunctionId> {
         let value = self.static_read(sref)?;
         let LowValue::Array(array) = value.as_enum()? else {
             return None;
         };
-        // SAFETY: `array` is a static payload read through `sref`, whose home
-        // module is registered — the registration pins its arena.
+        // SAFETY: a static payload read through `sref`; the registered module pins it.
         let items = unsafe { array.items() };
         if items.len() != 2 {
             return None;
         }
-        // The self-cycle, asked **by class** exactly as the dynamic recogniser
-        // asks it (`class_root(item) == carrier`): a frozen class may keep the
-        // cycle on a member rather than on the node asked, and the identity test
-        // `is_static_universe_id` makes would miss it.
+        // Asked by class, as the dynamic recogniser does: a frozen class may keep the cycle on a member.
         let static_module = self.static_module(sref.module);
         let representative = crate::static_module::static_find(&static_module.nodes, sref.index);
         let own_class = |node: AnyNodeId| match node {
@@ -823,36 +551,7 @@ impl<P: Program> Module<P> {
             })
     }
 
-    /// Unify two function types by descending into the two functions' own
-    /// cells, the same treatment two arrays get: the parameter pairs unify
-    /// positionally (value against value, type against type, attribute against
-    /// attribute), the two return type cells unify, and the two classes merge
-    /// once the elements agree.  **The same rule, not a lookalike.**
-    ///
-    /// There is no hook here and no clone, because there is nothing left for a
-    /// host to decide.  The old policy had to ask its host *where* a function
-    /// type's signature lives and *whether it may be written*, and it answered
-    /// those two questions differently for a dynamic function and a frozen
-    /// module's — which is how a wrapper in an imported module ended up
-    /// reporting `struct<.I raw[?a, ?b], .O raw[?c, ?d]>` for a kernel whose
-    /// domain and codomain are plain types (`docs/notes/function-type-merge.md`).
-    ///
-    /// **What this arm does not compare, and what the merge therefore says.**
-    /// The descent names the signature's two positions and never reads slot 0,
-    /// because slot 0 is the function the type is attached to rather than a
-    /// component of the type.  A merged class keeps **one** carrier and a class
-    /// of two function types has two, so the merge takes the left's
-    /// ([`Self::add_equality`]) and the merged class answers with one of the two
-    /// functions' identities — which one depending on the order the traversal
-    /// reached them.  That is a real hole: a later unify through the merged
-    /// class descends into whichever signature the carrier names.
-    ///
-    /// It is left open on purpose.  The question it belongs to is sub-typing —
-    /// whether two signatures that agree are *the same type* or a subtype
-    /// relation, and a type class with two identities in it is a symptom of
-    /// answering that question positionally before it has been asked.  A special
-    /// case here would not fix it, only hide it behind an asymmetry with arrays
-    /// that the next change would have to unlearn.
+    /// Unify two function types by descending their signature cells. See docs/notes/function-type-merge.md.
     fn unify_function_types(
         &mut self,
         ra: NodeId,
@@ -869,22 +568,12 @@ impl<P: Program> Module<P> {
             self.record_error(ra, rb, steps, root);
             return false;
         }
-        // The elements agree, so the two function types are one type — the same
-        // merge the array arm makes, with no value written back, because both
-        // sides already carry one.
+        // The elements agree, so the types are one; no value is written back — both carry one.
         self.add_equality(ra, rb);
         true
     }
 
-    /// Recursive core of [`Self::unify`]; `path` holds the class pairs on
-    /// the current recursion, so a mutually recursive structure (an array
-    /// unified with itself) records an error instead of looping.
-    ///
-    /// `path` guards only pairs that have **nodes**.  A pair of bare values has
-    /// no class to name it — a self-referential structure reached through the
-    /// node-less arms (`[cell, self]`, the term pair a type is) would repeat
-    /// forever — so `depth` bounds that descent, and a pair past the bound is
-    /// given the benefit of the doubt exactly as the unifier's cycle guard does.
+    /// Recursive core of [`Self::unify`]; `path` guards class pairs, `depth` the node-less ones.
     #[stacksafe]
     fn unify_inner(
         &mut self,
@@ -898,33 +587,15 @@ impl<P: Program> Module<P> {
         if depth >= MAX_VALUE_DEPTH {
             return true;
         }
-        // A side with a node takes the question to its **class**; a side without
-        // one is a bare value with no class to merge, so it can only be answered
-        // by comparison.  Reading both before any write keeps the borrow of
-        // `nodes` short and the values stable across the merge below.
+        // A side with a node answers through its class; a node-less side by comparison.
         let a = self.answer_class_side(a);
         let b = self.answer_class_side(b);
         let va = a.value;
         let vb = b.value;
         let (Some(ra), Some(rb)) = (a.node, b.node) else {
-            // **At least one side has no class to merge** — a bare value (an
-            // operation's answer, a write being distributed) or a static ref,
-            // which is absolute and has no local cell to merge into.  What the
-            // other side carries still decides the question, and a **value
-            // against a valueless class is a write**: the class learns the
-            // value.  It used to pass here, which silently dropped every
-            // fact a static ref brought into a unification — an imported
-            // `struct<.x Int, .y Int>`'s field types reached the importer's
-            // cells as `Int` and were discarded, so a placeholder
-            // instantiation across the boundary never learned its field types
-            // (`crates/lichen-language/tests/registry.rs`).
+            // A node-less side carries the fact the other class is missing: a value against it is a write.
             match (a.node, b.node) {
-                // A class against a bare value (a static ref's, or an answer a
-                // write is distributing).  The **value is the fact the class is
-                // missing**, so the class learns it — but only when the class
-                // holds nothing.  A class that already holds a value is not a
-                // hole, and writing over it would mask the conflict the
-                // comparison below exists to find.
+                // Only when the class holds nothing; overwriting a decided class would hide a conflict.
                 (Some(node), None) => {
                     if va.is_none()
                         && let Some(value) = vb
@@ -944,15 +615,13 @@ impl<P: Program> Module<P> {
                 _ => {}
             }
             let (Some(x), Some(y)) = (va, vb) else {
-                // Two absences: a free cell is a wildcard, and a side with no
-                // value at all is an absence rather than a pattern.
+                // Two absences: a free cell is a wildcard, and a side with no value is an absence.
                 return true;
             };
             return match (x.as_enum(), y.as_enum()) {
                 (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
-                    // SAFETY: `pa`/`pb` are payloads of values read out of live
-                    // nodes of this module, so their home blocks have not been
-                    // dropped.
+                    // SAFETY: both are payloads of values read out of live nodes of this
+                    // module, so their home blocks have not been dropped.
                     let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
                     left.len() == right.len()
                         && left.iter().zip(right.iter()).all(|(ia, ib)| {
@@ -982,53 +651,22 @@ impl<P: Program> Module<P> {
             self.record_error(ra, rb, steps, root);
             return false;
         }
-        // What each class knows, asked once and of the **class** rather than of
-        // the representative's slot: a merge carries a decided value to the
-        // members it adds, so the representative may be the value-less operation
-        // node.
-        //
-        // **Unify does three things, and they are one recursion: it merges the
-        // classes, it settles the value the merged class holds, and it reports
-        // the conflict.**  There is no separate case for an undecided side —
-        // "this class knows nothing" is the `None` of the question every pair is
-        // asked, and the arm it lands in is its answer.  An undecided side is not
-        // a reason to refuse (unify is called unconditionally), a decided side is
-        // not a reason to write into anyone, and an operation on either side is
-        // not a reason to compute first: what a class's computation produces is
-        // reconciled when it runs, and a reader that needs a value finds it
-        // through the class.
+        // Ask each class's value once, of the class: the representative may be a valueless node.
         match (va, vb) {
             // Nothing known on either side: the merge is the whole answer.
             (None, None) => {
                 self.add_equality(ra, rb);
                 true
             }
-            // One side knows a value: the merged class holds it.  There is no
-            // structure on the other side to descend into — a cell that knows
-            // nothing is an absence, not a pattern — so the write is this arm's
-            // whole effect.
+            // One side knows a value: the merged class holds it; there is nothing to descend into.
             (Some(value), None) | (None, Some(value)) => {
                 let rep = self.add_equality(ra, rb);
                 self.write_node_value(rep, Some(value));
                 true
             }
-            // Both sides know a value: they must be the **same** value, and for
-            // an array "the same" is decided by unifying the elements — an
-            // array's elements are nodes that may still be cells, and a
-            // comparison reads a free cell as "matches anything" and drops the
-            // tie.
+            // Both sides know a value: they must be the same; for an array the elements decide it.
             (Some(x), Some(y)) => {
-                // **A function's type is the function.**  Two function-type
-                // nodes — the self-referential `[Function(fid), ↺]` that is
-                // `f : f` — unify by descending into the two functions' own
-                // cells, positionally, like two arrays.  The positional match
-                // below would instead read both their self-cycles as one
-                // structural value and merge two *different* functions' types
-                // without ever comparing a signature.
-                //
-                // The descent reaches the **parameter pair**, so a signature
-                // carries attributes and can constrain values rather than only
-                // types; that is the capability the merge is for.
+                // Two function types descend into their own cells, not into the self-cycle shape.
                 let function_a = self.function_type_function(ra);
                 let function_b = self.function_type_function(rb);
                 if function_a.is_some() || function_b.is_some() {
@@ -1044,17 +682,7 @@ impl<P: Program> Module<P> {
                             root,
                         );
                     }
-                    // **Exactly one side, and the other is a self-cycle that is
-                    // not a function type**: the universe `Type`, or a recursive
-                    // struct's type expression.  The positional match reads any
-                    // two self-cycles as one structural value, so it would merge
-                    // a function's type with `Type` — and `(\x. x) : Type` must
-                    // fail.  A *degenerate* function type (a `[Function(fid),
-                    // t]` pair whose type slot names another function rather
-                    // than itself, which is what the apply clone walk builds for
-                    // a closure a body returns) is **not** a self-cycle by this
-                    // test, so it still falls through — and the positional match
-                    // is the right answer for it.
+                    // Exactly one function type against a self-cycle: refuse, or the match merges them.
                     let other = if function_a.is_some() { rb } else { ra };
                     if self.is_self_referential(AnyNodeId::Dynamic(other)) {
                         self.record_error(ra, rb, steps, root);
@@ -1063,20 +691,14 @@ impl<P: Program> Module<P> {
                 }
                 match (x.as_enum(), y.as_enum()) {
                     (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
-                        // SAFETY: `pa`/`pb` are the payloads of the reachable
-                        // class representatives `ra`/`rb`, both live nodes of
-                        // this module, so their home blocks stay alive across the
-                        // recursion below — nothing in the descent releases a
-                        // block.
+                        // SAFETY: both payloads come from live nodes of this module, so their home
+                        // blocks survive the recursion.
                         let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
                         if left.len() != right.len() {
                             self.record_error(ra, rb, steps, root);
                             return false;
                         }
-                        // Two self-referential universes are the same structural
-                        // value even when one is materialized from a static
-                        // module; unifying their cycles should be a success, not
-                        // a conflict.
+                        // Two self-referential universes are one value, even from a static module.
                         if self.is_self_referential(Dyn(ra)) && self.is_self_referential(Dyn(rb)) {
                             self.add_equality(ra, rb);
                             return true;
@@ -1111,21 +733,14 @@ impl<P: Program> Module<P> {
                         }
                         ok
                     }
-                    // A materialized static closure and the frozen function it
-                    // came from name **one** logical function: their `Function`
-                    // values are equal by identity even though one is dynamic and
-                    // the other static.  Checked before the generic value
-                    // comparison, which compares `AnyFunctionId` by kind and
-                    // would call them different.
+                    // A materialized static closure and its frozen function name one logical function.
                     (Some(LowValue::Function(a)), Some(LowValue::Function(b)))
                         if self.function_identity_equal(a, b) =>
                     {
                         self.add_equality(ra, rb);
                         true
                     }
-                    // Two concrete values merge iff they are *fully* equal
-                    // ([`ValueExt::value_eq`] — handle payloads by content, which
-                    // the cheap [`PartialEq`] deliberately does not see).
+                    // Fully equal by content ([`ValueExt::value_eq`]), not the cheap [`PartialEq`].
                     _ if x.value_eq(&y) => {
                         self.add_equality(ra, rb);
                         true
@@ -1139,15 +754,10 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Whether two decided **leaf** values are one value: two functions by
-    /// resolved identity, everything else by full value equality
-    /// ([`ValueExt::value_eq`]).
+    /// Whether two decided leaf values are one: functions by identity, else full value equality.
     fn value_pair_equal(&self, a: P::Value, b: P::Value) -> bool {
         match (a.as_enum(), b.as_enum()) {
-            // A materialized static closure and the frozen function it came from
-            // name one logical function even though one is dynamic and the other
-            // static — checked before the generic comparison, which reads
-            // `AnyFunctionId` by kind and would call them different.
+            // Functions by resolved identity, before the generic comparison that reads them by kind.
             (Some(LowValue::Function(x)), Some(LowValue::Function(y))) => {
                 self.function_identity_equal(x, y)
             }
@@ -1155,9 +765,7 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// `rep`'s equality class's members, representative first — the union-find
-    /// member list's one walk.  A reader that scans a class for a node carrying
-    /// something reads it through here, so the walk lives once.
+    /// `rep`'s class members, representative first; the union-find walk lives here once.
     fn class_members(&self, rep: NodeId) -> impl Iterator<Item = NodeId> + '_ {
         let mut member = Some(rep);
         std::iter::from_fn(move || {
@@ -1167,39 +775,13 @@ impl<P: Program> Module<P> {
         })
     }
 
-    /// Join `reader` into `target`'s class — the evaluation-side half of a read's
-    /// own resolution — and then let the target's computation answer.
+    /// Join `reader` into `target`'s class and evaluate the target.
     ///
-    /// A read of a cell is a reference, not a snapshot: unifying the reader with
-    /// the target lets a later bind reach it through the class, independent of
-    /// evaluation order.  The unification is **unconditional** — the target's
-    /// class may hold a decided value, and it may hold a member whose own
-    /// computation has not produced an answer yet (that member is the one the
-    /// value veto skips, so joining asserts nothing about what it will produce).
-    ///
-    /// The join alone leaves a target whose operator has not run unanswered: the
-    /// reader is now in the target's class, so the read takes the class shortcut
-    /// and never re-enters the target's own evaluation, and the read would answer
-    /// with a value no operator produced.  Evaluating the target here is what
-    /// answers it, and the filter that decides whether there is anything to run
-    /// belongs to [`Self::evaluate_node`], not to this caller.
-    ///
-    /// The reader keeps its operation: the operand edge must stay live for the
-    /// apply's clone machinery, and for the read's own resolution path to find it.
-    ///
-    /// **The join does not report.**  It is the read's own bookkeeping, not a
-    /// unification the program states, and a disagreement it meets is the *same*
-    /// one the reader's answer is reconciled against when its operator finishes
-    /// ([`Self::write_node_answer`]): a failed join merges nothing, so the read
-    /// answers with the target's own value and that reconcile reports it against
-    /// the reader.  Recording here as well reports one conflict twice, mirrored —
-    /// measured on `lichen-highlevel`'s
-    /// `a_concrete_type_is_never_bound_over_a_dependent_codomain`, one
-    /// disagreement arriving as `expected 1, found 0` (the join, roots reader and
-    /// target) and `expected 0, found 1` (the reconcile, the reader twice;
-    /// `docs/notes/class-channel.md`).  The dropped range is this call's own, so
-    /// the merge's effect, every other failure and the evaluation below are
-    /// untouched.
+    /// # Invariant
+    /// The join is unconditional, and the reader keeps its operation so the operand
+    /// edge stays live for the apply clone walk. It does not report its failures:
+    /// the reader's own reconcile owns that conflict, so recording here would report
+    /// one disagreement twice. See docs/notes/lowlevel-vm.md.
     pub(crate) fn alias_read(&mut self, reader: NodeId, target: NodeId) {
         let (_, errors) = self.try_unify(reader, target);
         self.unify_errors.truncate(errors.start);
@@ -1207,27 +789,12 @@ impl<P: Program> Module<P> {
         self.evaluate_node(Dyn(target), Some(block));
     }
 
-    /// The concrete value `rep`'s class has committed, if any — the side of a
-    /// unification that is not the computation itself.
-    ///
-    /// It is the class's **one value slot**, read through the representative,
-    /// which [`Self::propagate_class_value`] writes on every concrete write and
-    /// on every merge.  One parent walk plus one field read, independent of how
-    /// many members the class has.
-    ///
-    /// `None` for a class that has committed nothing — an empty slot, which is
-    /// the only representation of undecided.
-    ///
-    /// No other condition: what the class holds is what a unification compares
-    /// against, runned or not — the comparison is unconditional, and whether
-    /// the value was produced or merely asserted is the reporting question
-    /// ([`Self::write_node_answer`]), not a reason to leave it out.
+    /// The concrete value `rep`'s class has committed, or `None`. See docs/notes/lowlevel-vm.md.
     pub(crate) fn class_committed_value(&self, rep: NodeId) -> Option<P::Value> {
         self.class_value(rep)
     }
 
-    /// Record a conflict between two **classes** — the pair a unification walked
-    /// to, with the descent that reached it.
+    /// Record a conflict between two classes, with the descent that reached them.
     fn record_error(
         &mut self,
         ra: NodeId,
@@ -1247,10 +814,7 @@ impl<P: Program> Module<P> {
     }
 }
 
-/// The dynamic node id behind an [`AnyNodeId`], or [`NodeId::default()`]
-/// for a static ref (which materializes into a fresh leaf before it is
-/// compared) — used only to name the operands in a [`UnifyStep`], where
-/// `index` is authoritative and the highlevel re-reads the graph.
+/// The dynamic node behind an [`AnyNodeId`], or [`NodeId::default()`] for a static ref.
 fn node_or_default(id: AnyNodeId) -> NodeId {
     match id {
         AnyNodeId::Dynamic(node) => node,
@@ -1258,26 +822,14 @@ fn node_or_default(id: AnyNodeId) -> NodeId {
     }
 }
 
-/// The low type a concrete value's variant tag states, read without touching
-/// the payload — the observation half of the low-type layer.
-///
-/// `None` for a value the vocabulary has no shape for: the `Str` literal, the
-/// unit `None`, and an empty `Error`.  Those state nothing at all, which is
-/// what keeps observation from
-/// ever widening a class it knows more about.
-///
-/// A payload-carrying shape is recorded with `Unknown` positions: the element,
-/// domain, codomain, key, and value classes refine independently as they bind,
-/// and [`Module::low_type_of_node`] recurses into them on a read.
+/// The low type a concrete value's tag states, never reading the payload; payload starts `Unknown`.
 fn observed_low_shape(value: impl AsEnum<LowValue>) -> Option<LowShape> {
     match value.as_enum()? {
         LowValue::USize(_) => Some(LowShape::USize),
         LowValue::Float(_) => Some(LowShape::Float),
         LowValue::Array(array) => Some(LowShape::Array(
             Box::new(LowShape::Unknown),
-            // SAFETY: only the length is read, and the caller passes a value
-            // it is holding on this borrow of the module, so the payload's home
-            // arena is alive for the read.
+            // SAFETY: only the length is read, and the caller holds the value on this borrow of the module.
             unsafe { array.items().len() },
         )),
         LowValue::Table(_) => Some(LowShape::Table(
