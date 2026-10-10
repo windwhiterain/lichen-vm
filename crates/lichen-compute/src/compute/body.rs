@@ -107,9 +107,7 @@ struct ActiveLoop {
     merge: usize,
 }
 
-/// A `write` in a conditional's arm: the conditional is a `Select`, so both arms
-/// are emitted on every lane, and the arm's write runs `count` times rather than
-/// on the lanes that took it (`docs/notes/loop-conversion.md` §6).
+/// A `write` in a conditional's arm is refused (see §6 of the loop-conversion note).
 const CONDITIONAL_WRITE: &str = "a `compute.write` inside a conditional's arm is refused: a kernel body's conditional is a `Select`, which emits both arms on every lane, so the arm's write would run on every lane and overwrite the selected arm's own. A real branch is what makes it legal (`docs/notes/loop-conversion.md` §6)";
 
 /// Refusal: a cross-kernel callee returns exactly one value, in the caller's class.
