@@ -57,13 +57,10 @@ mod asserts;
 mod diagnostics;
 mod indexing;
 mod lambda;
-mod loops;
 mod native_call;
 mod operators;
 mod structs;
 mod tuples;
-
-use loops::{LoopSite, MarkedRecursions, marked_recursions};
 
 // The registry-derived consumer macros below expand the one kind-marker
 // list ([`crate::shape::for_each_kind_marker`]) into the checker's marker
@@ -334,20 +331,6 @@ where
     /// occurrence of `.a` reads the same key node (see
     /// [`Self::name_node`]).
     name_nodes: HashMap<&'static str, NodeId>,
-    /// What the `@loop` markers say: the marked functions that lie on a cycle,
-    /// and the expressions those cycles' own bodies cover.
-    ///
-    /// **Read-only after the first pass** — see [`loops::marked_recursions`],
-    /// which computes both in two passes over the marked functions alone, so a
-    /// program without `@loop` costs one scan of the expression table.
-    loop_cycles: MarkedRecursions,
-    /// Every call that **enters** a marked cycle, in the source order
-    /// [`Self::check_app`] met them — the places a loop would be recorded.
-    ///
-    /// A site is recorded whether or not its state is decidable: the decision
-    /// belongs to [`Self::report_open_loop_sites`], not to the walk that
-    /// classified the call.
-    loop_sites: Vec<LoopSite>,
 }
 
 /// The highlevel structure of one application's argument edge, recorded by
@@ -669,19 +652,9 @@ where
             zero_value: NodeId::default(),
             one_value: NodeId::default(),
             name_nodes: HashMap::new(),
-            loop_cycles: MarkedRecursions {
-                cycles: HashMap::new(),
-                inside_cycle: HashSet::new(),
-            },
-            loop_sites: Vec::new(),
             missing_slots: vec![None; P::Attr::ORDER.len()],
         };
         checker.install_constants();
-        // Which `@loop` bindings are on a cycle, and which expressions those
-        // cycles' own bodies cover.  **Before anything compiles**, because the
-        // walk that classifies a call runs while its body is being checked, and
-        // a program without `@loop` pays one scan of the expression table.
-        checker.loop_cycles = marked_recursions(&checker.ir);
         // Prove the canonical structures concrete before the definition
         // pass, so the apply clone machinery references them in place
         // instead of cloning them: cloning the self-referential universe
@@ -770,12 +743,12 @@ where
                 }
             }
         }
-        // **Between the definition pass and the statement pass**, because the
-        // question it asks — is this site's state decided? — is answered by the
-        // deep pass the definition pass just ran.  A site it refuses is refused
-        // once for its whole cycle, so the message is a fact about the program
-        // rather than one per call.
-        checker.report_open_loop_sites();
+        // A marked site's "not emitted" verdict is **not this layer's**: whether
+        // a loop is emitted is a reader's fact, so the host loop and the kernel
+        // reader report the sites they decline
+        // (`docs/notes/loop-conversion.md` §8.6).  Asking here would mean
+        // answering "no reader handles this" from "the state is undecided",
+        // which stopped being true the moment a kernel reader existed.
         // Option B: evaluate every user-written top-level statement, so each
         // one's value is computed — and a non-terminating one, which the VM
         // refused instead of panicking (see `Module::budget_exhausted`), is

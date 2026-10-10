@@ -2172,3 +2172,60 @@ out = (compute.plrun k2 ((compute.A In2)(.n {ELEMENT_COUNT}, .I In2(.b inbuf.z))
         "the two backends answered the float output differently"
     );
 }
+
+/// A `@loop` inside a kernel, lowered as a **nest**, on both backends.
+///
+/// **The carried state is a run-time value**, so the checker cannot expand the
+/// recursion and the kernel reader must build the nest: the header's `params`
+/// are the state, the base test branches out of it, and the exit hands the
+/// carried value on. The seed fills the buffer with zero, so the base test holds
+/// on entry and the loop leaves by its first test with `7` — the number only a
+/// nest whose state arrived through the entering call can produce.
+///
+/// **This is the backend's carried-state typing, measured.** The state is a
+/// buffer read, so it is an *instruction the entry block computes*; until the
+/// wasm lowering decided value types over the whole body rather than from
+/// block to block, this body was refused with "block 1 has parameters but no
+/// branch reaches it with a value".
+#[test]
+fn a_kernel_loop_nest_carries_a_runtime_state() {
+    let source = format!(
+        r#"
+---
+  compute = import "compute.lichen"
+---
+In0  = struct<.a Int>
+Out0 = struct<.z (compute.Buf _)>
+Par0 = compute.P (compute.KT _)(.I In0, .O Out0)
+seed = (k : Par0) => {{
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value i - i))
+}}
+kseed = compute.parallel seed "{BACKEND}"
+buf = (compute.plrun kseed ((compute.A In0)(.n 1, .I In0(.a 0))) : Out0)
+In  = struct<.b (compute.Buf _)>
+Out = struct<.z (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {{
+  @loop pass = s => if s(0) == 0 then s(1) else pass (s(0), s(1))
+  i = compute.range 1
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value pass (compute.read ((compute.Read _)(.from k.in.b, .at 0)), 7)))
+}}
+p = compute.parallel f "{BACKEND}"
+out = (compute.plrun p ((compute.A In)(.n 1, .I In(.b buf.z))) : Out)
+compute.read ((compute.Read _)(.from out.z, .at 0))
+"#
+    );
+    let Some(((cpu_module, cpu), (gpu_module, gpu))) = answer_from_each_backend(&source) else {
+        return;
+    };
+    assert_eq!(
+        common::usize_of(&cpu),
+        7,
+        "the nest left by its base test with the carried value"
+    );
+    assert!(
+        common::values_eq((&cpu_module, &cpu), (&gpu_module, &gpu)),
+        "the two backends answered one loop nest differently"
+    );
+}

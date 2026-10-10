@@ -5,9 +5,12 @@
 > keyword, the conversion (`Module::loop_conversion`) with its host-loop consumer,
 > the wasm emitter, and the depth refusal. The IR is **SSA** since `af6f6f2`, which
 > deleted `Flow`, `BlockId`, `LocalGet` and the stack machine, so §8.2's IR bullet
-> is the pre-SSA shape and §8.4/§8.6 are current. **The missing link is the JIT's
-> kernel reader** ([§8.5](#85-the-critical-path-to-the-acceptance-case) item 4):
-> nothing in production builds a non-straight-line `KernelBody`. Three of
+> is the pre-SSA shape and §8.4/§8.6 are current. **The JIT's kernel reader has
+> landed** ([§8.5](#85-the-critical-path-to-the-acceptance-case) item 4):
+> `Lower::lower_loop` builds a nest for a marked recursion inside a kernel body,
+> and a non-straight-line `KernelBody` is now produced in production. Its step's
+> routed operators are the remaining gap, and §8.6 item 6 names it and its fix.
+> Three of
 > [§8.3](#83-known-broken-and-by-whom)'s items are now
 > **closed** — the `passed_out` contract, a loop body that can compute its state and
 > reach the backedge (`Terminator::Jump`, and a validator that lets a body name the
@@ -832,31 +835,44 @@ cleared the CPU side but nothing turns on it yet, because 1c is not:**
    `OpLoopMerge` and one `OpPhi` per block parameter, refuses a write in a loop
    body by name, and emits a one-block body byte for byte as before. §8.4 lists
    the shapes it still refuses and the three design claims the port corrected.
-4. **Make the JIT *emit* what the conversion returned.** The conversion half is
-   no longer missing — it is `Module::loop_conversion` (§8.2) — and neither is
-   its first consumer: the **host loop** (§8.2) runs a marked recursion in the
-   evaluator, which is what makes the conversion observable today. What remains
-   is the *kernel* reader: build the loop's `KernelBody` (SSA, `Flow::While`,
-   one block per arm), bind the entering call's arguments to the state slots,
-   and map each slot to a local — the same roles the host loop reads, emitted
-   instead of interpreted. `value_decided` still decides whether a marked
-   *kernel* site is refused: a host site the evaluator can run is answered, and
-   a site whose entering state is a run-time value is still refused (now by
-   name — the conversion's rule, or `LoopNotEmitted`), because no kernel loop
-   exists to run it. **Read
-   [§8.6](#86-where-the-conversion-lives-lowlevel-and-the-jit-reads-it) before
-   sizing this.**
+4. **Make the JIT *emit* what the conversion returned.** — **Landed, and it is
+   the kernel reader** (`crates/lichen-compute/src/compute/body.rs`,
+   `Lower::lower_loop`). A marked recursion inside a `compute.jit` /
+   `compute.parallel` body now lowers to a **nest**: one block per level, the
+   header's `params` carrying the state, a `CondBr` at each test, a step that
+   computes the next state and branches back, and an exit that hands its result
+   to the merge block the caller continues in. Every block of the nest receives
+   the whole state, and a read of the marked function's parameter resolves to
+   the block's own parameters through the conversion's `state` paths — the same
+   addressing the host loop substitutes through an instantiation. The outermost
+   test **is** the header, because a merge block is joined from the header and a
+   structured backend needs the header to be the block that branches.
+
+   The entering call's argument elements bind the state slots directly, which is
+   what `Lower::loop_state` does with `LoopConversion::state`'s paths.
+
+   **What is still refused, by name.** A marked recursion whose shape does not
+   convert is refused with the conversion's own rule (`LoopRefusal::name`), as
+   before. A **step whose next state applies a routed operator to a carried
+   read** — `sum_to (s(0) - 1, …)`, the acceptance reduction's step — is refused
+   today, and the reason is measured in §8.6 item 6: those applies live inside a
+   recursive call's argument and are never expanded, so `Lower::definition` finds
+   no operator node in their class and `Lower::apply`'s routing path needs a
+   residual that was never written. A nest whose step is a plain state read, or
+   whose condition/exit is a state read, is emitted and runs (measured on both
+   backends: `a_kernel_loop_nest_carries_a_runtime_state`). The refusal is a
+   `String` from the lowering, recorded as a `compute.parallel` diagnostic — it
+   is **not** the old checker-side `LoopNotEmitted`, which is gone (§8.6).
 5. **Run the reduction on both backends**, past the 2000-apply budget and the 512
    level ceiling, at more than one length so the count is demonstrably not a
-   compile-time constant.
+   compile-time constant. **Blocked on item 4's step**, above.
 
 **Do not start 3 before 1** — **and this is now satisfied, and 3 has landed.**
 Doing SPIR-V first against a contract that is already known to be wrong is how the
 `br_if` bug above came about, and it is the one mistake this section exists to
 prevent. Item 1c answered at `af6f6f2`: the carried tuple needed no new
 instruction, because a header's `params` *are* the state. Item 3 followed, and
-what is left on this list is item 4 — the JIT building the body the SPIR-V
-emitter can now write.
+what is left on this list is item 4's step and item 5.
 
 ### 8.6 Where the conversion lives: lowlevel, and the JIT reads it
 
@@ -867,17 +883,17 @@ graph → the JIT reads it → a backend emits it* — has **no first link**, an
 is not in `feature/eval-loop-recording`. Four facts, each one a read of the code
 rather than an inference:
 
-1. **Nothing in production builds a non-straight-line `KernelBody`.**
-   `KernelFragment::body` is reached through a **single block** whose terminator is
-   a `Return` — `KernelBody::straight_line` was the constructor, and it is now
-   `KernelBody::new` plus one `Return` set by the caller, because `Flow` and its
-   `entry: Option` are gone. The only `Terminator::While` constructions anywhere in
-   the tree were in `lichen-compute`'s `kernel_intern_tests`: hand-built bodies
-   that proved the IR could *express* a loop, not that anything **produced** one.
-   `emit_node` refused the recursion before it got that far: its `Apply` arm's
-   "Style 1 — a full lichen-function call (inline its body)" is *deferred*, and is
-   still deferred. **That is still the state of the world** — and it is the first
-   link in this chain, not the last, which is what the rest of this list says.
+1. **Nothing in production builds a non-straight-line `KernelBody`.** —
+   **No longer true: `Lower::lower_loop` does**, for a marked recursion inside a
+   kernel body. When this list was written, `KernelFragment::body` was reached
+   through a **single block** whose terminator is a `Return`, and the only
+   `Terminator::While` constructions in the tree were in `lichen-compute`'s
+   `kernel_intern_tests`: hand-built bodies that proved the IR could *express* a
+   loop, not that anything **produced** one. `emit_node` refused the recursion
+   before it got that far: its `Apply` arm's "Style 1 — a full lichen-function
+   call (inline its body)" is *deferred*, and is still deferred for an unmarked
+   call. What closed the first link is the kernel reader (§8.6 item 6), not the
+   evaluator.
 2. **The graph cannot express control flow.** `LowOperator` is exactly
    `Index | Apply | TableGet`; a `Node`'s `operation` is **one** operator and **one**
    operand array, defined once by `add_node` or `close_operation_cycle` and never
@@ -915,16 +931,24 @@ That gives three things, and they are the whole design:
 |---|---|---|
 | the **mark** | [`Function::looping`](../../crates/lichen-lowlevel/src/lib.rs) | rides on the template, because the templates are the only place the recursion is still a cycle — every apply clones them away |
 | the **analysis** | the strongly connected components of the marked call graph | same window, over the same templates the deep pass is about to walk |
-| the **output** | **which node plays which role** — the carried state's paths, each base test, each step's next state, each exit's values — as [`LoopConversion`](../../crates/lichen-lowlevel/src/loop_conversion.rs) | read by the **host loop** (`loop_run.rs`, §8.2) and, when it lands, by the JIT |
+| the **output** | **which node plays which role** — the carried state's paths, each base test, each step's next state, each exit's values — as [`LoopConversion`](../../crates/lichen-lowlevel/src/loop_conversion.rs) | read by the **host loop** (`loop_run.rs`, §8.2) and by the **kernel reader** (`Lower::lower_loop`, §8.6 item 6) |
 
-**It has one reader today, and that is what makes the contract testable.** The
-host loop walks the roles and *runs* them — one instantiation per iteration,
-the same clone-and-unify the unroll uses — so "the loop and the unroll agree" is
-a property that can be checked now, on real programs, before any backend emits a
-loop (`tests/basic/host_loop.rs`, `lichen-language/tests/loop_run.rs`). The JIT
-reader will walk the same roles and emit them; if the two disagree, the
-conversion or the reader is wrong, and the host loop is the side that is already
-running.
+**It has two readers now, and that is what makes the contract testable.** The host
+loop walks the roles and *runs* them — one instantiation per iteration, the same
+clone-and-unify the unroll uses — so "the loop and the unroll agree" is a property
+checked on real programs (`tests/basic/host_loop.rs`,
+`lichen-language/tests/loop_run.rs`). The kernel reader walks the same roles and
+*emits* them; if the two disagree, the conversion or a reader is wrong, and the
+host loop is the side that has been running longest.
+
+**The "not emitted" refusal moved to the readers, and that is a correction.**
+`report_open_loop_sites` used to refuse every `@loop` site whose entering state was
+undecided, as `LoopNotEmitted`, on the reasoning that nothing could run it. The
+question is not "is this state decided" but "will any reader emit this site", and
+the checker has never known anything about readers — so the machinery for it is
+gone (`report_open_loop_sites`, `value_decided`, `LoopSite`, `checker/loops.rs`)
+and each reader declines the sites it meets. `LoopRefusal`'s shape rules are
+untouched; they are the conversion's own answer and both readers surface them.
 
 **The output is the recursion's own facts, not a control-flow graph, and that is a
 correction this section needed.** The table used to say "a control-flow skeleton
@@ -1012,32 +1036,69 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
    on**: the IR can express a loop and a backend can lower one, and nothing yet
    connects the two.
 
-   **Measured on the merged tree, so the next step does not re-derive it:**
+   **Measured on `dev` before this work, kept because the next reader needs it
+   and corrected where it was wrong:**
 
-   - **There is no kernel-level `@loop` program anywhere.** Every marked recursion
-     in the tree runs through the **host** loop — `lichen-language`'s
-     `loop_run.rs` says so in its first line, and no `compute.jit` /
-     `compute.parallel` program in any test is marked. The conversion is covered
-     where it lives (`lichen-lowlevel`'s `loop_conversion` tests answer "does it
-     convert"), and the host loop covers "does a marked recursion run as one" —
-     **nothing covers "does a kernel body become a nest", because no such program
-     exists yet.** So item 6 is the walk *and* its acceptance case, and the
-     acceptance case is a program to write, not a test to point at.
-   - **Nothing outside `lichen-lowlevel` reads `LoopConversion`.** Its only
-     caller today is `lichen-highlevel`'s `checker/loops.rs`, asking per component
-     entry. There is no `LoopConversion` anywhere in `lichen-compute`.
-   - **The wasm side can already lower the body this item builds.** `lower.rs`
-     creates a waffle block per kernel-IR block, binds their blockparams in order,
-     and types the non-entry ones by a fixed point over the incoming edges — which
-     is the whole of what a header's carried state needs. So the walk itself is
-     **one new pass in `lichen-compute`, not a backend change**, which is not
-     obvious from reading either side alone.
-   - **The SPIR-V side can now lower it too.** `spirv.rs` refused a body that is
-     not straight-line until item 5 landed; it now writes a label, its phis, its
-     instructions and its terminator per block, so the body this item builds is a
-     module it can already emit.
+   - **There was no kernel-level `@loop` program anywhere, and there is one now.**
+     Every marked recursion used to run through the **host** loop —
+     `lichen-language`'s `loop_run.rs` said so in its first line, and no
+     `compute.jit` / `compute.parallel` program in any test was marked. The walk
+     and its case landed together: `a_kernel_loop_nest_carries_a_runtime_state`
+     (`crates/lichen-language/tests/compute.rs`) is a `@loop` inside a
+     `compute.parallel` body whose carried state is a **run-time buffer read**, so
+     the checker cannot expand it and the kernel reader must; it runs on both
+     backends.
+   - **Nothing outside `lichen-lowlevel` read `LoopConversion`**; its only caller
+     was `lichen-highlevel`'s `checker/loops.rs`, asking per component entry.
+     **That caller is gone** — the checker no longer asks whether a loop is
+     emitted at all (§8.6's relocation below) — and the callers are now the two
+     readers: `loop_run.rs` (host) and `Lower::lower_loop` (`lichen-compute`).
+   - **The wasm side could *not* lower the body this item builds, and the claim
+     that it could was wrong.** `lower.rs` created a waffle block per kernel-IR
+     block and typed a non-entry block's parameters from the values bound when
+     typing ran — which held only the entry block's parameters, so an incoming
+     branch argument that is an **instruction the entry block computes** (every
+     carried state: a buffer read, the call's constants) was invisible:
+
+         compute.wasm: block 1 has parameters but no branch reaches it with a
+         value, so its types cannot be decided
+
+     Fixed by `type_values`, a fixed point over **values** rather than over
+     blocks: an instruction's type follows from its operator and its operands (the
+     typing half of `lower_instr`, kept beside it), and a block parameter takes the
+     first incoming edge that can name its argument's type — which is what lets a
+     loop header, whose second edge is its own body's backedge, be typed from the
+     entry edge instead of waiting for a cycle to close. So the walk was **one new
+     pass in `lichen-compute` plus one backend fix**, not one alone.
+   - **The SPIR-V side can now lower it too**, with one structural condition the
+     port's refusal named: the emitter refused a nest whose header only branched to
+     a test ("block 1 is a loop header and tests nothing"), so the **outermost test
+     is the header** in the shape the reader emits.
 
    See [wasm-backend-handoff](wasm-backend-handoff.md) §3.2.
+
+   **What the reader still refuses, measured, and where the fix goes.** A step
+   whose next state applies a **routed prelude operator to a carried read** —
+   `sum_to (s(0) - 1, s(1) + read …)`, the acceptance reduction's step — is
+   refused with "a prelude operator where the kernel cannot reach the body it
+   lowered to". `Lower::definition` emits a kernel-safe operator directly when
+   `define_in` finds the operator node in the apply's class, and that member exists
+   only if the static apply was **expanded**; a step's applies are not, because
+   `Module::apply_parameter_check` → `evaluate_pattern_argument_inner` stops
+   descending the moment a *pattern* position is not an `Array`, and for a tuple
+   state the pattern's value cell is bare — so the argument's elements, where the
+   step's `s(0) - 1` lives, are never evaluated. The condition and the exit are,
+   because the return spine evaluates its selector.
+
+   **The fix, decided and not yet written:** instantiate the marked template
+   **once against placeholder per-slot cells** and read the roles through that
+   instantiation — the host loop's own mechanism, once instead of per iteration.
+   It must not rely on `belongs_to` (a materialized clone is re-tagged to the
+   caller, `static_module/apply.rs` `ctx.tag`), so the slot map is **by class root
+   against the placeholders**, and its invariant is that the slots stay in
+   **distinct classes**: two slots that unify make that map ambiguous, which is a
+   wrong number rather than a refusal, so a program that unifies two slots must be
+   refused by name.
 
 **Stage 0 — the `loop` keyword and the evaluator's choice.** The surface lands
 first, and it is the smallest thing that can be observed working: a `loop` keyword

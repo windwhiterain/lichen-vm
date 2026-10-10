@@ -243,7 +243,12 @@ impl<P: Program> Module<P> {
     /// value is a function of this module. The callee sits in the operand
     /// array's first slot; its value may ride the node or its equality class
     /// (the checker substitutes through unification).
-    fn applied_function(&self, node: NodeId) -> Option<FunctionId> {
+    ///
+    /// **Public because "which function does this apply call" is the graph's own
+    /// question**, and every reader of a recursion asks it: the conversion asks
+    /// it per node, and a JIT reader asks it to tell a marked recursion from an
+    /// ordinary call before it decides what to emit.
+    pub fn callee_function(&self, node: NodeId) -> Option<FunctionId> {
         let operation = self.node_operation(node)?;
         if !matches!(
             AsEnum::<LowOperator>::as_enum(&operation.operator),
@@ -310,7 +315,7 @@ impl<P: Program> Module<P> {
                 continue;
             }
             for &node in &self.functions[h].nodes {
-                if let Some(callee) = self.applied_function(node)
+                if let Some(callee) = self.callee_function(node)
                     && self.functions[callee].looping
                     && !out.contains(&callee)
                 {
@@ -442,7 +447,7 @@ impl<P: Program> Spine<'_, P> {
                 None => break,
             }
         }
-        if self.module.applied_function(resolved) == Some(self.function) {
+        if self.module.callee_function(resolved) == Some(self.function) {
             return Ok(Classified::Step(resolved));
         }
         if self.module.subtree_applies(resolved, self.function) {
@@ -550,7 +555,7 @@ impl<P: Program> Spine<'_, P> {
                 continue;
             }
             for &node in &self.module.functions[h].nodes {
-                if self.module.applied_function(node) == Some(self.function)
+                if self.module.callee_function(node) == Some(self.function)
                     && !steps.contains(&node)
                 {
                     return Err(LoopRefusal::NonTailCall);
@@ -584,7 +589,7 @@ impl<P: Program> Module<P> {
             if !seen.insert(current) {
                 continue;
             }
-            if self.applied_function(current) == Some(function) {
+            if self.callee_function(current) == Some(function) {
                 return true;
             }
             if let Ok(operands) = self.operands_of(current) {

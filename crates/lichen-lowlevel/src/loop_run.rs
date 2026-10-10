@@ -31,10 +31,11 @@
 //! # What decides, and what is refused
 //!
 //! An iteration whose test does not decide ends the loop **undecided**: the
-//! apply answers with `None`, exactly as a body the evaluator could
-//! not decide. That is the kernel-runtime state — a count the host cannot see —
-//! and the checker's refusal (`DiagKind::LoopNotRecorded` /
-//! `LoopNotEmitted`) is still what a program meets for it.
+//! apply answers with `None`, exactly as a body the evaluator could not
+//! decide. That is the kernel-runtime state — a count the host cannot see — and
+//! it is answered by the **kernel reader** (`Lower::lower_loop`), which emits
+//! the same roles as a nest rather than running them
+//! (`docs/notes/loop-conversion.md` §8.6).
 //!
 //! Everything the loop does force is what the next test or the exit reads, so
 //! a state component nothing reads stays lazy, which is what keeps a converted
