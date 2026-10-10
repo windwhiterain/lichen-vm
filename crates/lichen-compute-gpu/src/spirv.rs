@@ -2232,6 +2232,8 @@ impl Emitter<'_> {
             } => {
                 let condition = self.condition(cond, code, at)?;
                 let targets = self.plan.targets[node].clone();
+                let exit_first = self.plan.loop_bodies[node]
+                    .is_some_and(|body_entry| if_true.target != body_entry);
                 if let Some(body_entry) = self.plan.loop_bodies[node] {
                     let (body, exit) = if if_true.target == body_entry {
                         (if_true, if_false)
@@ -2279,12 +2281,18 @@ impl Emitter<'_> {
                         vec![self.plan.labels[merge], CONTROL_NONE],
                     ));
                 }
+                // A loop header's `targets` are `[body, exit]`, and the arms name the labels.
+                let (on_true, on_false) = if exit_first {
+                    (targets[1], targets[0])
+                } else {
+                    (targets[0], targets[1])
+                };
                 code.push(Inst::new(
                     op::BRANCH_CONDITIONAL,
                     vec![
                         condition.id,
-                        self.plan.labels[targets[0]],
-                        self.plan.labels[targets[1]],
+                        self.plan.labels[on_true],
+                        self.plan.labels[on_false],
                     ],
                 ));
             }

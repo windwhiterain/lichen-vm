@@ -234,8 +234,9 @@ fn branches_to_a_merge() -> KernelFragment {
     one_integer_output(body)
 }
 
-/// A loop with a carried value: `n = 0; while (i < 10) { n = n + 1 }`.
-fn counts_to_ten() -> KernelFragment {
+/// A loop with a carried value: `n = 0; while (i < 10) { n = n + 1 }`; its exit arm is
+/// `if_true` when `exit_first`.
+fn counts_to_ten(exit_first: bool) -> KernelFragment {
     let mut body = KernelBody::new();
     let entry = body.add_block();
     let _config = body.add_param(entry);
@@ -265,9 +266,15 @@ fn counts_to_ten() -> KernelFragment {
     );
 
     let ten = body.add_const(header, ScalarClass::Int, 10);
+    // **The exit test is the condition in both spellings**: `i < 10` continues.
+    let test_op = if exit_first {
+        KernelBin::Geq
+    } else {
+        KernelBin::Lt
+    };
     let below = body.add_op(
         header,
-        KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt),
+        KernelInstr::Bin(ScalarClass::Int, test_op),
         vec![index, ten],
         vec![ScalarClass::Int],
     );
@@ -277,18 +284,25 @@ fn counts_to_ten() -> KernelFragment {
         vec![below],
         vec![ScalarClass::Int],
     );
+    let to_latch = Br {
+        target: latch,
+        args: vec![carried],
+    };
+    let to_exit = Br {
+        target: exit,
+        args: vec![carried],
+    };
+    let (if_true, if_false) = if exit_first {
+        (to_exit, to_latch)
+    } else {
+        (to_latch, to_exit)
+    };
     body.set_terminator(
         header,
         Terminator::CondBr {
             cond: test,
-            if_true: Br {
-                target: latch,
-                args: vec![carried],
-            },
-            if_false: Br {
-                target: exit,
-                args: vec![carried],
-            },
+            if_true,
+            if_false,
         },
     );
 
@@ -629,7 +643,11 @@ fn a_body_with_control_flow_validates() {
     let mut covered = 0;
     for (what, fragment) in [
         ("a module with an `if`", branches_to_a_merge()),
-        ("a module with a `while`", counts_to_ten()),
+        ("a module with a `while`", counts_to_ten(false)),
+        (
+            "a module with a `while` whose base arm is first",
+            counts_to_ten(true),
+        ),
         (
             "a module with a conditional backedge",
             conditional_backedge(),
@@ -645,8 +663,8 @@ fn a_body_with_control_flow_validates() {
             covered += 1;
         }
     }
-    if covered < 3 {
-        eprintln!("only {covered} of 3 control-flow module(s) were validated");
+    if covered < 4 {
+        eprintln!("only {covered} of 4 control-flow module(s) were validated");
     }
 }
 
@@ -828,5 +846,62 @@ fn the_two_conversions_validate_in_a_float_module() {
             "{what} emits opcode {expected}: {seen:?}"
         );
         validate(what, &words);
+    }
+}
+
+/// The merge block, continue target and true label of the module's loop header.
+fn loop_header_facts(words: &[u32]) -> (u32, u32, u32) {
+    let mut at = 5;
+    while at < words.len() {
+        let word = words[at];
+        let (count, opcode) = ((word >> 16) as usize, (word & 0xffff) as u16);
+        let operands = &words[at + 1..at + count];
+        if opcode == LOOP_MERGE {
+            return (operands[0], operands[1], words[at + count + 2]);
+        }
+        at += count;
+    }
+    panic!("this module emits no loop header");
+}
+
+/// `OpLoopMerge` (246) and `OpBranchConditional` (250), the specification's own numbers.
+const LOOP_MERGE: u16 = 246;
+const BRANCH_CONDITIONAL: u16 = 250;
+
+/// A loop header leaves on its own exit arm, wherever the spelling put it.
+///
+/// # Invariant
+/// The condition's polarity and the label its true arm names are one fact, so a
+/// header whose `if_true` arm is the base leaves when the condition holds. A module
+/// that breaks this is **legal** — the device answered `0` where the cpu answered the
+/// reduction — so the arm order needs a reader
+/// (`docs/notes/loop-conversion.md` §8.6 item 6), not a validator.
+#[test]
+fn a_loop_header_leaves_on_its_own_exit_arm() {
+    for (what, exit_first) in [("continue arm first", false), ("base arm first", true)] {
+        let module = counts_to_ten(exit_first);
+        module
+            .body
+            .validate()
+            .unwrap_or_else(|broken| panic!("{what} is well formed: {broken}"));
+        let words = spirv::compile(
+            &LaunchSet::single(&module),
+            Binding {
+                inputs: 0,
+                outputs: 1,
+            },
+        )
+        .unwrap_or_else(|refusal| panic!("{what} is emitted: {refusal}"));
+        let seen = opcodes(&words);
+        assert!(
+            seen.contains(&BRANCH_CONDITIONAL),
+            "{what} emits a conditional branch: {seen:?}"
+        );
+        let (merge, continue_target, on_true) = loop_header_facts(&words);
+        let leaves = if exit_first { merge } else { continue_target };
+        assert_eq!(
+            on_true, leaves,
+            "{what}: the condition's true arm is where the loop leaves"
+        );
     }
 }
