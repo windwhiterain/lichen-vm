@@ -3047,8 +3047,7 @@ where
     node_class(module, node)
 }
 
-/// The class of the `offset`-th wasm local of the kernel's parameter slots —
-/// the slot the read landed in, and the flattened leaf within its domain.
+/// The class of the `offset`-th wasm local of the kernel's parameter slots.
 fn slot_class(params: &[ParamSlot], offset: u32) -> Option<ScalarClass> {
     for slot in params {
         let arity = flat_arity(&slot.shape) as u32;
@@ -3075,27 +3074,13 @@ fn class_at(shape: &LowShape, index: usize) -> ScalarClass {
     ScalarClass::Int
 }
 
-/// The class a node's value is.
-///
-/// The node may be the `[value, type]` pair a term is, or an extraction over
-/// one; the class is stated by the *value*, so both are looked through exactly
-/// as the emitter looks through them at every emit site.
-///
-/// **A leaf's own value answers first, and that is not a shortcut around the
-/// low-type pass — it is the same observation the pass makes.**  A constant the
-/// checker built holds its value, and the pass's transfer declines for a leaf
-/// ("a leaf has no computation"), so the value is the only thing that can state
-/// its class; a *computed* node is the one the transfer answers for.  A node
-/// neither states — a bare cell, an undecided operand — is `Int`, the same
-/// default the language's own class-free transfer states.
 /// The class a node's value is, read off the node's own value or low type.
 ///
-/// **A parameter leaf is the one node this cannot answer.**  A kernel is lowered
-/// from a template, so the parameter's type cell is an undecided `_` and the
-/// low-type channel below states nothing for it — while the class the value *is*
-/// is the one the ABI typed the slot with (`param_shape`, read by
-/// [`param_classes`]).  A caller holding the slots must resolve a leaf
-/// through them first; this is the value-channel reading for every other node.
+/// # Invariant
+/// A leaf's own value answers first — the low-type pass declines for a leaf, so its
+/// value is the only thing that states its class — while a computed node is the one
+/// the transfer answers for. A parameter leaf cannot be answered here: a kernel is
+/// lowered from a template, so a caller holding the slots resolves it through them.
 fn node_class<P>(module: &Module<P>, node: impl Into<AnyNodeId>) -> ScalarClass
 where
     P: Program,
@@ -3103,9 +3088,8 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let node = node.into();
-    // A **frozen** node's structure belongs to its own module, so its *value* is
-    // the only thing that can state its class here — and a frozen module states
-    // one for every node it holds (a static module is fully solved).
+    // A frozen node's structure lives in its own module, so its value alone
+    // states a class here.
     let value = match node {
         AnyNodeId::Dynamic(node) => resolve_literal_node(module, node),
         AnyNodeId::Static(_) => node,
@@ -3129,15 +3113,13 @@ where
         .map_or(ScalarClass::Int, |shape| scalar_class_of(&shape))
 }
 
-/// The node whose **value or low type** states a term's class — the `[value,
-/// type]` pair an expression is, the extraction over one, and the element a
-/// constant selection picks out of a materialized array, walked to the term
-/// that states the answer.
+/// The node whose value or low type states a term's class.
 ///
-/// This is the unwrap [`node_class`] makes at every emit site, named once: a
-/// caller that wants the *node* rather than its class (the conversion fold, which
-/// reads the literal's own value) needs the same node, and two spellings of the
-/// walk would be two answers to one question.
+/// # Invariant
+/// The `[value, type]` pair an expression is, the extraction over one, and the
+/// element a constant selection picks — walked to the term that states the answer.
+/// It is the unwrap [`node_class`] makes at every emit site, named once so there
+/// are not two spellings of one walk.
 fn resolve_literal_node<P>(module: &Module<P>, node: impl Into<AnyNodeId>) -> AnyNodeId
 where
     P: Program,
@@ -3167,15 +3149,12 @@ where
     value
 }
 
-/// The scalar **literal** a term holds, if it is one: the `USize` or `Float`
-/// value the checker already decided.
+/// The scalar literal a term holds, if it is one.
 ///
-/// **The value slot answers first**, exactly as [`emit_node`] reads it.  A node
-/// the checker concretised carries an operation *and* a value, and the emission
-/// uses the value — so a fold that asked about the operation first would leave
-/// that value to be emitted as a constant of whichever class the body has, which
-/// for a float under an integer body is a bit pattern no backend was promised an
-/// answer for.
+/// # Invariant
+/// The value slot answers first, exactly as [`emit_node`] reads it: a node the
+/// checker concretised carries an operation *and* a value, and asking about the
+/// operation first would emit a float value as an integer bit pattern.
 fn scalar_literal<P>(module: &Module<P>, node: impl Into<AnyNodeId>) -> Option<LowValue>
 where
     P: Program,
@@ -3192,16 +3171,12 @@ where
     }
 }
 
-/// The kernel-safe reading of a highlevel binary operator — the one conversion
-/// between the language's operator vocabulary and the lowered-kernel IR's.
-/// `None` for an operator no kernel body can contain (`Fresh` mints a nominal
-/// struct id), which the caller reports by name rather than approximating.
+/// The kernel-safe reading of a highlevel binary operator, if there is one.
 ///
-/// **The arithmetic is unsigned, and that is a fact of the language rather than
-/// of this backend:** an `Int` is a machine-sized unsigned integer, so `Div`
-/// and `Rem` are the unsigned operations and the order comparisons are the
-/// unsigned ones.  See [`lichen_kernel_ir::KernelBin`], which states the choice
-/// once for every backend.
+/// # Invariant
+/// The arithmetic is unsigned because the language's `Int` is: `Div` and `Rem` are
+/// the unsigned operations and so are the order comparisons.
+/// [`lichen_kernel_ir::KernelBin`] states the choice once for every backend.
 fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
     Some(match operator {
         TypeOperator::Add => KernelBin::Add,
@@ -3218,15 +3193,11 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
         TypeOperator::BitAnd => KernelBin::BitAnd,
         TypeOperator::BitOr => KernelBin::BitOr,
         TypeOperator::BitXor => KernelBin::BitXor,
-        // The two class conversions are **unary**, so they are not this
-        // mapping's question at all: they lower to [`KernelInstr::Conv`], which
-        // names both classes, and `emit_node` answers them before it reaches
-        // here.
+        // The class conversions are unary: they lower to [`KernelInstr::Conv`],
+        // answered before this mapping is reached.
         TypeOperator::Int2Float | TypeOperator::Float2Int => return None,
-        // A membership test is a *refinement's* check, not a computation a
-        // kernel body contains: the checker registers it as an assert beside
-        // the body, and a kernel lowers the operand's own arithmetic.  Nothing
-        // in a kernel reads a class, so it has no machine op.
+        // A membership test is a refinement's check, not a computation: the
+        // checker registers it as an assert beside the body.
         TypeOperator::InDomain => return None,
         // The same reading of a named read's container kind: a check-time/
         // per-apply *assert*, never a value a kernel computes.
@@ -3235,15 +3206,12 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
     })
 }
 
-/// The two classes a conversion operator crosses, and the word the language
-/// spells it with — its source, its destination, and the name a refusal is
-/// written in.
+/// The two classes a conversion operator crosses, and the word it is spelled with.
 ///
-/// **The direction is the operator's, and nothing else's.**  A body's own class
-/// cannot answer it: `int2float` in a `Float` fragment and `float2int` in an
-/// `Int` one have that class as their *destination* in one case and as their
-/// *source* in the other, so a lowering that inferred the direction would
-/// silently swap the two programs.
+/// # Invariant
+/// The direction is the operator's and nothing else's: `int2float` in a `Float`
+/// fragment and `float2int` in an `Int` one have that class as destination in one
+/// case and source in the other, so inferring it would swap the two programs.
 fn conv_of(operator: TypeOperator) -> Option<(ScalarClass, ScalarClass, &'static str)> {
     match operator {
         TypeOperator::Int2Float => Some((ScalarClass::Int, ScalarClass::Float, "int2float")),
@@ -3252,21 +3220,13 @@ fn conv_of(operator: TypeOperator) -> Option<(ScalarClass, ScalarClass, &'static
     }
 }
 
-/// The buffer position `node` names in a parallel kernel — the `cfg_pos` the
-/// host `read` import reads.
+/// The buffer position `node` names in a parallel kernel.
 ///
-/// **Two shapes, one question.**  A struct parameter *declares* its inputs, so
-/// the node's own [`param_path`] is the answer: `.in`'s fields are the input
-/// positions in declaration order, and nothing about how the body spelled the
-/// read enters into it.  A `(n, (buffers…))` parameter declares nothing, so the
-/// position is the constant the body wrote — the retired tuple form's
-/// `cfg(1)(k)` — and it is read off the node.
-///
-/// `Ok(None)` is "this node does not name a buffer this walk can place" — the
-/// refusal the read arm words as "not an input buffer of the parallel
-/// parameter".  `Err` is [`param_path`]'s, and it is *not* that refusal: it says
-/// the node is a parameter read whose index is not a constant, which is a
-/// different fact about the program and would be misreported as "not an input".
+/// # Invariant
+/// A struct parameter declares its inputs, so the node's own [`param_path`] is the
+/// answer; a `(n, (buffers…))` parameter declares nothing, so the position is the
+/// constant the body wrote. `Err` is [`param_path`]'s — a read whose index is not
+/// constant — and is not the "not an input" refusal.
 fn parallel_buffer_pos<P>(
     module: &Module<P>,
     params: &[ParamSlot],
@@ -3281,8 +3241,8 @@ where
     let Some(slot) = params.first() else {
         return Ok(None);
     };
-    // A position is a *read* of the parameter, and the parameter is the
-    // caller's own node: a frozen node states no path, so it names no position.
+    // A position is a read of the parameter, the caller's own node: a frozen node
+    // names no position.
     let Some(node) = node.into().dynamic() else {
         return Ok(None);
     };
@@ -3349,10 +3309,8 @@ where
     let Some((tt, ti)) = operand_pair(module, target_op.operand).ok() else {
         return Ok(None);
     };
-    // The body's cfg reads reference the cfg value through `Index(cfg_pair, 0)`
-    // (a read node) rather than the value node itself, so compare the two cfg
-    // value slots by *equality class* (as the `emit_node` parameter-read path
-    // does) instead of node identity.
+    // The body's cfg reads go through `Index(cfg_pair, 0)`: compare the two
+    // slots by equality class, not node identity.
     let Some(tt) = tt.dynamic() else {
         return Ok(None);
     };
@@ -3366,17 +3324,11 @@ where
 
 /// The node a wrapped slot-read argument reaches.
 ///
-/// A buffer operand arrives through the wrapper's slot-read destructuring:
-/// `read = x => $read(x(0), x(1))` applied to `[k.in.x, i]` leaves
-/// `Index(arg_array, 0)`, where `arg_array` is the materialized argument array.
-/// This peels constant `Index` layers down to the element the author actually
-/// named — exactly as the `Index` emitter peels a constant array element — so
-/// that both [`parallel_buffer_pos`] and the write arm see the buffer node and
-/// not the wrapper around it.
-///
-/// Bounded rather than recursive: the wrapper nests one level per argument, and
-/// a chain deeper than the bound is not a wrapper this walk understands, so it
-/// stops and lets its caller name the cause.
+/// # Invariant
+/// A buffer operand arrives through the wrapper's slot-read destructuring
+/// (`read = x => $read(x(0), x(1))` over `[k.in.x, i]` leaves `Index(arg, 0)`), so
+/// constant `Index` layers are peeled to the element the author named. Bounded,
+/// not recursive: a deeper chain is not a wrapper this walk understands.
 fn peeled_argument<P>(module: &Module<P>, node: impl Into<AnyNodeId>) -> Result<AnyNodeId, String>
 where
     P: Program,
@@ -3421,12 +3373,11 @@ where
     Ok(value)
 }
 
-/// The constant `USize` value behind `node`, if it is one (an `Index`'s
-/// selector must be a compile-time constant in a kernel body).
+/// The constant `USize` value behind `node`, if it is one.
 ///
-/// A **frozen** node answers too: a selector the callee's body wrote is a
-/// reference into the frozen module, and its value is the constant it is
-/// ([`operand_pair`]).
+/// # Invariant
+/// A frozen node answers too: a selector the callee's body wrote is a reference
+/// into the frozen module, and its value is the constant it is.
 fn usize_value<P>(module: &Module<P>, node: impl Into<AnyNodeId>) -> Option<usize>
 where
     P: Program,
