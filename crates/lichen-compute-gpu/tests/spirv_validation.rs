@@ -1,17 +1,10 @@
 //! The emitter's module contract, checked without a device.
 //!
-//! `src/spirv.rs` says the risk in a hand-written emitter is a module's *shape*
-//! rather than its opcodes, and that what removes that risk is running the words
-//! through `spirv-val` before they reach a driver. Until this test nothing in the
-//! repository did: the command was written down in `examples/emit-spv.rs` and
-//! left for a developer to remember, so a module that stopped validating could
-//! only be found by someone choosing to look for it.
-//!
-//! `spirv-val` is not a dependency of this crate, so the check runs only where
-//! the tool is on `PATH`, and where it is not, the test **says the module was not
-//! covered** rather than passing as if it had been — a machine without the Vulkan
-//! SDK must not fail here, and a machine with no validator must not look like one
-//! that validated.
+//! # Invariant
+//! The risk in a hand-written emitter is a module's shape rather than its opcodes, and running the
+//! words through `spirv-val` is what removes it. `spirv-val` is not a dependency, so the check runs
+//! only where the tool is on `PATH`, and where it is not the test says the module was not covered
+//! rather than passing as if it had been.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -27,18 +20,15 @@ const VALIDATOR: &str = "spirv-val";
 
 /// What locomotion a float body computes with, as the bits of `2.5f32`.
 ///
-/// A float body's `Const` payload **is the float's bit pattern** in the low 32
-/// bits: the IR's constant is an `i64` and carries no class, so the class comes
-/// from the fragment and the bits from the payload (`spirv::Literals`).
+/// # Invariant
+/// A float body's `Const` payload is the float's bit pattern in the low 32 bits: the IR's constant is
+/// an `i64` carrying no class, so the class comes from the fragment and the bits from the payload.
 const TWO_POINT_FIVE: i64 = 0x4020_0000;
 
-/// `out[i] = in[i] + 1` — the fragment `examples/emit-spv.rs` dumps, written out
-/// here so the automated check and the documented manual step validate the same
-/// module rather than two that happen to look alike.
+/// `out[i] = in[i] + 1` — the fragment `examples/emit-spv.rs` dumps.
 ///
-/// The read is three instructions, not two: a `BufferReadCall` takes
-/// `[cfg_pos, idx]` off the stack, so the position and the index both have to be
-/// pushed before it.
+/// # Invariant
+/// The read is three instructions, not two: a `BufferReadCall` takes `[cfg_pos, idx]` off the stack.
 fn adds_one() -> KernelFragment {
     KernelFragment {
         roles: KernelRoles::default(),
@@ -71,21 +61,11 @@ fn adds_one() -> KernelFragment {
 
 /// `out[i] = if in[0] then in[i] * 2.5 + (in[i] == 0.0) + in[i] / 2.5 else 0.0`
 ///
-/// The float module's shape, in one body, because that shape is the whole point
-/// of this test: `OpTypeFloat 32` as the scalar and as the storage buffer's
-/// element, a 32-bit **index** (so no `Int64` capability is declared and none is
-/// needed), the `f32` constant pool, `OpFMul`/`OpFDiv`/`OpFAdd`, and — the two
-/// the emitter is careful about — the bit-pattern equality (`OpBitcast`,
-/// `OpIEqual`, because the language's `==` is `to_bits` and not IEEE) and the
-/// bit-pattern condition (`OpBitcast`, `OpINotEqual`, because a `NaN`'s bits are
-/// non-zero even though the value is equal to nothing).
-///
-/// The selector is written as the float `in[i]` rather than as the comparison,
-/// which is what reaches the condition path; the comparison is an operand of the
-/// `+` instead, which is what reaches the `1.0`/`0.0` materialisation. Its read
-/// takes a **constant** element index, which is the one position where a body's
-/// literal has to be read as an integer in a module whose values are floats — and
-/// a 32-bit one, since a float module's integers are indices.
+/// # Invariant
+/// The float module's shape in one body: `OpTypeFloat 32` as scalar and element, a 32-bit index so no
+/// `Int64` capability is declared, the `f32` constant pool, `OpFMul`/`OpFDiv`/`OpFAdd`, and the two
+/// the emitter is careful about — bit-pattern equality and a bit-pattern condition, because a
+/// `NaN`'s bits are non-zero. The read takes a constant element index.
 fn scales_a_float() -> KernelFragment {
     let read = |body: &mut Vec<FlatOp>| {
         body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)));
@@ -150,8 +130,7 @@ fn scales_a_float() -> KernelFragment {
     body.push(FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)));
     KernelFragment {
         roles: KernelRoles::default(),
-        // `(config, index)`, integers, however the buffers are classed: this
-        // target's index is the invocation id, not a value of that domain.
+        // `(config, index)`, integers however the buffers are classed.
         param_shape: KernelShape::Tuple(vec![
             KernelShape::Scalar(ScalarClass::Int),
             KernelShape::Scalar(ScalarClass::Int),
@@ -185,8 +164,6 @@ fn one_integer_output(body: KernelBody) -> KernelFragment {
 }
 
 /// A one-armed selection: an arm, and the join both edges arrive at.
-///
-/// The shapes are `docs/notes/loop-conversion.md` §8.4's table.
 fn branches_to_a_merge() -> KernelFragment {
     let mut body = KernelBody::new();
     let entry = body.add_block();
@@ -338,8 +315,7 @@ fn counts_to_ten(exit_first: bool) -> KernelFragment {
     one_integer_output(body)
 }
 
-/// A loop whose body leaves on a **conditional** backedge: the header is both
-/// the join of that selection and the block the selection is inside.
+/// A loop whose body leaves on a conditional backedge.
 fn conditional_backedge() -> KernelFragment {
     let mut body = KernelBody::new();
     let entry = body.add_block();
@@ -448,14 +424,13 @@ fn conditional_backedge() -> KernelFragment {
 
 /// Hand one emitted module to `spirv-val`, or say it was not covered.
 ///
-/// Returns whether the module was actually checked: a machine without the
-/// validator must not look like one that validated, and the name of the module
-/// is in every message so a reader knows which one was covered.
+/// # Invariant
+/// The return says whether the module was actually checked: a machine without the validator must not
+/// look like one that validated.
 fn validate(what: &str, words: &[u32]) -> bool {
     let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
 
-    // `vulkan1.1` is the target environment the manual step names in
-    // `examples/emit-spv.rs`: the same module, checked against the same rules.
+    // `vulkan1.1` is the target environment the manual step names.
     let mut child = match Command::new(VALIDATOR)
         .args(["--target-env", "vulkan1.1", "-"])
         .stdin(Stdio::piped())
@@ -474,8 +449,7 @@ fn validate(what: &str, words: &[u32]) -> bool {
         Err(error) => panic!("`{VALIDATOR}` is on PATH but could not be started: {error}"),
     };
 
-    // The module goes in over standard input: the validator takes a filename, and
-    // a file here would be a temporary the test has to place, name and remove.
+    // The module goes in over standard input: the validator takes a filename.
     child
         .stdin
         .take()
@@ -494,10 +468,7 @@ fn validate(what: &str, words: &[u32]) -> bool {
 
 #[test]
 fn the_emitted_module_validates() {
-    // Both classes, because the module's shape is where they differ: the
-    // element type, the pointer into it, the array stride and the capability
-    // list are all a function of it, and only the validator rules on whether the
-    // result is a legal module.
+    // Both classes, because the module's shape is where they differ.
     let integer = spirv::compile(
         &LaunchSet::single(&adds_one()),
         Binding {
@@ -515,11 +486,8 @@ fn the_emitted_module_validates() {
     )
     .expect("the emitter handles a float fragment");
 
-    // What the module declares and what the device gate asks about are one
-    // derivation: an integer module needs `shaderInt64` for its 64-bit type, and
-    // a float module has no 64-bit integer to need it for. `dispatch` refuses an
-    // integer fragment on a device without the feature and lets a float one
-    // through on exactly this answer.
+    // The declaration and the device gate are one derivation: an integer module
+    // needs `shaderInt64`.
     assert!(
         spirv::needs_int64(&LaunchSet::single(&adds_one()))
             .expect("an integer fragment has a class"),
@@ -540,8 +508,7 @@ fn the_emitted_module_validates() {
             covered += 1;
         }
     }
-    // A skip is not a pass: if the validator answered for neither module, the
-    // two SKIPPED lines above are the record, and this says nothing more.
+    // A skip is not a pass: both SKIPPED lines above are the record.
     if covered < 2 {
         eprintln!("only {covered} of 2 emitted module(s) were validated");
     }
@@ -549,10 +516,9 @@ fn the_emitted_module_validates() {
 
 /// `out[i] = int2float i + in[i]` — the §5.1 crossing, hand-built.
 ///
-/// The index is the invocation id, a 32-bit unsigned integer in this target even
-/// in a float module, so `int2float` of it is `OpConvertUToF` and not the no-op
-/// the wasm backend answers with (where the same number already rides in an
-/// `f32`).  One body, one crossing, one float buffer in and out.
+/// # Invariant
+/// The index is a 32-bit unsigned integer in this target even in a float module, so `int2float` of it
+/// is `OpConvertUToF` and not the no-op wasm answers with.
 fn index_to_float() -> KernelFragment {
     KernelFragment {
         roles: KernelRoles::default(),
@@ -589,12 +555,10 @@ fn index_to_float() -> KernelFragment {
 
 /// `out[i] = int2float (float2int in[i])` — both directions in one float module.
 ///
-/// The pair is what the IR's `Conv { from, to }` is for: read off the module the
-/// two directions look the same on a stack, and a backend that guessed them from
-/// the fragment's class would swap the two programs.  Here the float element
-/// truncates toward zero (`OpConvertFToU`) and the integer that leaves widens
-/// back (`OpConvertUToF`), so a body whose answer is the number it started with
-/// says so with both opcodes.
+/// # Invariant
+/// The pair is what the IR's `Conv { from, to }` is for: read off the module the two directions look
+/// the same, and a backend that guessed them from the fragment's class would swap the programs. Here
+/// the float truncates toward zero (`OpConvertFToU`) and the integer widens back (`OpConvertUToF`).
 fn crosses_both_ways() -> KernelFragment {
     KernelFragment {
         roles: KernelRoles::default(),
@@ -633,9 +597,8 @@ fn crosses_both_ways() -> KernelFragment {
 
 #[test]
 fn a_body_with_control_flow_validates() {
-    // The two shapes a structured body has, and the instruction families only a
-    // body with transfers needs: an `OpSelectionMerge` with a merge block, and an
-    // `OpLoopMerge` with a backedge and an `OpPhi` per incoming edge.
+    // The two shapes a structured body has, and the families only a body with
+    // transfers needs.
     let one_in_zero_out = Binding {
         inputs: 0,
         outputs: 1,
@@ -711,9 +674,7 @@ fn two_buffer_classes() -> KernelFragment {
     }
 }
 
-/// A callee whose domain is **empty**, so a caller built by [`KernelBody::from_flat`]
-/// can name it: the flat builder gives a `CallKernel` no arguments, because the
-/// arity is the callee's own and it has no callee to read it from.
+/// A callee whose domain is empty, so a flat-built caller can name it.
 fn nullary_callee() -> KernelFragment {
     KernelFragment {
         roles: KernelRoles::default(),
@@ -755,8 +716,7 @@ fn calls_a_nullary_kernel() -> KernelFragment {
     }
 }
 
-/// A module that declares two buffer classes is a legal module, which is what a
-/// fixed id range could not promise: see [`two_buffer_classes`].
+/// A module that declares two buffer classes is a legal module.
 #[test]
 fn a_module_holding_two_buffer_classes_validates() {
     let words = spirv::compile(
@@ -772,9 +732,7 @@ fn a_module_holding_two_buffer_classes_validates() {
     }
 }
 
-/// A launch set of two fragments is **one module with two `OpFunction`s**, and the
-/// call is the `OpFunctionCall` that names the callee's — the shape `spirv-val`
-/// rules on and the reason a cross-kernel call is emittable at all.
+/// A launch set of two fragments is one module with two `OpFunction`s.
 #[test]
 fn a_module_holding_a_cross_kernel_call_validates() {
     let ordered = [calls_a_nullary_kernel(), nullary_callee()];
@@ -789,8 +747,7 @@ fn a_module_holding_a_cross_kernel_call_validates() {
     .expect("a call whose callee is in the set is emitted");
 
     let seen = opcodes(&words);
-    // 54 is `OpFunction` and 57 `OpFunctionCall`; `spirv::op` is private to the
-    // crate, so the numbers are the specification's own.
+    // 54 is `OpFunction` and 57 `OpFunctionCall`, the specification's own numbers.
     assert_eq!(
         seen.iter().filter(|opcode| **opcode == 54).count(),
         ordered.len(),
@@ -808,8 +765,9 @@ fn a_module_holding_a_cross_kernel_call_validates() {
 
 /// The opcode of every instruction of a module, walked by word count.
 ///
-/// A search for the word `112` would find an operand that happens to hold it, so
-/// this reads the header's five words and then steps instruction by instruction.
+/// # Invariant
+/// A search for the word `112` would find an operand that happens to hold it, so this reads the
+/// header's five words and then steps instruction by instruction.
 fn opcodes(words: &[u32]) -> Vec<u16> {
     let mut out = Vec::new();
     let mut at = 5;
@@ -825,9 +783,7 @@ fn opcodes(words: &[u32]) -> Vec<u16> {
 
 #[test]
 fn the_two_conversions_validate_in_a_float_module() {
-    // `spirv::op` is private to the crate, so the two opcode numbers this test
-    // names are the SPIR-V specification's own: 112 `OpConvertUToF`, 109
-    // `OpConvertFToU`.
+    // The two opcode numbers this test names are the specification's own.
     for (what, fragment, expected) in [
         ("int2float of the index", index_to_float(), 112),
         ("both directions at once", crosses_both_ways(), 109),
