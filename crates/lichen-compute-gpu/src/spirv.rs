@@ -1732,8 +1732,8 @@ fn plan_body(
         if join == count {
             return Err(SpirvRefusal::ControlFlow {
                 detail: format!(
-                    "block {header} is a selection whose two arms both leave the function, so it has \
-                     no merge block"
+                    "block {header} is a selection whose arms meet only by leaving the function — a \
+                     `return` or an exit from an enclosing loop — so it has no merge block"
                 ),
             });
         }

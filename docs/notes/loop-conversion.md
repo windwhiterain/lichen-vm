@@ -675,7 +675,7 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   | a loop header whose two branches both reach it | its loop has no exit, so `OpLoopMerge` has no merge block |
   | a loop header that tests nothing (its terminator is a `Br`) | an unconditional header has no exit block either |
   | a loop body entered without passing its header | `OpLoopMerge`'s continue target must be dominated by its header |
-  | a selection whose arms never meet again, or both leave the function | its merge block would be the function's exit, which no header may name |
+  | a selection whose arms meet only by leaving the function or the loop — a `return`, a `break` | it has no join inside itself, so no merge block: the merge would be the block the arms meet at *outside* it |
   | a `CondBr` to one block with two different value lists | an unconditional branch cannot say which arrived |
   | an unreachable block | it has no arrival, so its `OpPhi` would have no pair |
   | the entry block as a loop header | its parameters are the function's own, not a phi |
