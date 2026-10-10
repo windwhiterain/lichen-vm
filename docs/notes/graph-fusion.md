@@ -219,7 +219,9 @@ The rules, each a decision:
   of the same code. At install and at run time the system checks hash and
   constraints only, the same way a cached artifact is trusted. A pack that
   cannot name its `reference` region is refused at install: an implementation
-  of nothing is nothing.
+  of nothing is nothing. A pack that hands the engine its *repair function*
+  (§6) has one more thing that harness has to cover: the per-element identity,
+  which the engine checks symbolically only for a function it derived itself.
 - **Pack beats engine.** When both cover a region, the pack applies and the
   report says so — a derived fusion is the floor, not the ceiling, and a
   human who wrote a pack knew something the engine did not.
@@ -270,6 +272,15 @@ producer, with no intermediate ever stored.
    Inversion is symbolic rewriting on the fragment's expression tree: each
    operator either names its inverse (`exp`/`ln`, `+c`/`−c`, `*c`/`÷c` for
    `c ≠ 0`) or the rewrite fails.
+
+   The candidate is taken **whole and unconditionally**: nothing inside `c` is
+   ever inverted, and nothing inside it has to be. The per-element identity is
+   `g'(r_{N+1})(g'(r_N)⁻¹(g'(r_N)(c))) = g'(r_{N+1})(c)`, a composition that
+   holds for any `c` whatsoever, and the rolling update recomputes
+   `g(d, r_{N+1})` from the datum rather than from `c`. So `relu²`, a `max`, an
+   `exp` or a slope term inside `c` is custom logic the engine carries and never
+   reads; a refusal can only come from the chain *above* `c` — `g = relu(d − r_N)`
+   abstracts `c = d` and then names `relu` as the operator it could not undo.
 3. **Check `h` distributes over `f`**, structurally — the two sides of the
    distributivity equation are small expression trees, and the check is a
    normalisation and comparison, not a search.
@@ -290,12 +301,32 @@ check that either holds symbolically or stops the fusion with a named cause:
 | `NotAReductionChain` | the region's instances and fragments are not producer→code→consumer |
 | `UnverifiableInstance { interface }` | a declared `combine`/`identity` the body cannot be checked against (§3) |
 | `UnanalyzableBetween` | the code between instances does not lower to a readable fragment |
-| `ElementFunctionNotInvertible { at }` | no `c`-abstraction of `g` inverts (the reference's `relu²` case) |
+| `ElementFunctionNotInvertible { at }` | the chain above `c` does not invert (`g = relu(d − r_N)` names `relu`) |
 | `NoRepairFunction { g }` | inversion succeeded but the composite is not closed over the known operators |
 | `NotDistributive { h, f }` | `h` does not distribute over the consumer's declared combine |
 
 Refusal is the correct outcome often enough that it must be cheap and named;
 a region the engine refuses is precisely a region where a pack is the answer.
+
+**Where steps 2–4 stand.** `crates/lichen-fusion` implements them symbolically
+over expression trees of its own, with `FusionRefusal` naming the causes the
+table lists — `NotInvertible { at, cause }` and `NotDistributive { repair,
+combine }`, plus the budget that canonicalization is held to — and
+`examples/softmax.rs` deriving §7's online softmax through a per-element bias,
+through a rectified square, and from a hand-written `h`, checking each against
+the two-pass form over random inputs. It does not read `KernelFragment` yet: the
+bridge from the fragment IR is a later step, and split-K (step 5) is untouched.
+
+**A pack may hand the engine its `h`.** Derivation is the floor, not the only
+door: an optimization file can supply the repair function directly
+(`derive_with_repair`), and the engine then skips the abstraction and the
+inversion entirely and keeps the two obligations that do not depend on where `h`
+came from — it must read nothing but the value being repaired and the producer's
+two values, and it must distribute over `f`. The per-element identity
+`h(g(d, r_N), r_N, r_{N+1}) = g(d, r_{N+1})` is then the **pack's** differential
+obligation rather than a symbolic check: the engine has none it can discharge on
+an expression it did not derive, and `x · exp(r' − r_N)` — a rescale with its sign
+flipped — passes every check the engine does run.
 
 ## 7. Flash Attention v1, with custom logic, is the acceptance case
 
@@ -395,6 +426,7 @@ about shrinks exactly where fusion fires.
 | attributes with a checked payload | **in** ([attributes](attributes.md)) | the interface claim's carrier — and fusion becomes the first real *consumer* of the schema tail |
 | dynamic loop in a kernel body | **in** ([loop-conversion](loop-conversion.md)) | the fused reduction's inner loop |
 | fragment IR with expression trees | **in** ([lichen-compute](lichen-compute.md)) | what `g`, `combine`, `h` are made of |
+| symbolic repair-function derivation | **in flight** (`crates/lichen-fusion`) | §6 steps 2–4 over expression trees of its own; the `KernelFragment` bridge is what it is missing |
 | content-addressed artifact store | **in** ([artifact-cache](artifact-cache.md)) | schema artifacts and pack bindings |
 | float | **in flight** (ten worktrees, [floating-point](floating-point.md)) | softmax/attention are float algorithms; the engine is class-agnostic but its acceptance case is not |
 | interface verification (symbolic combine check) | **missing** | §3's teeth; without it claims are trusted, which this design refuses to do |
