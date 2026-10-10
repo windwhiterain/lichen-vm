@@ -619,7 +619,10 @@ loop-invariant environment, no write in the body, component cap, cycle-only.
   - **Three `lichen-compute-gpu` refusal expectations went stale**, because
     the SSA `validate()` now catches them before the emitter does. They fail
     identically on the branch itself. `CrossKernelCall`'s `at` is an
-    instruction index rather than an operand-stack slot (5 → 3);
+    instruction index rather than an operand-stack slot (5 → 3) — that variant
+    has since been deleted altogether, because a cross-kernel call is now
+    emitted rather than refused
+    ([lichen-compute-gpu § Several functions in one module](lichen-compute-gpu.md#several-functions-in-one-module));
     `BufferPositionOutOfRange`'s `at` is the position's `ValueId` (3 → 2),
     and its fixture declared a one-leaf domain while reading parameter 1, so
     validate refused it structurally before a position was ever read. The

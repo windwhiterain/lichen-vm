@@ -233,10 +233,8 @@ pub struct GpuContext {
     /// to reject the device at selection time — which would leave a float kernel
     /// unable to run on a device for a reason that no longer applies.
     shader_int64: bool,
-    /// **The key is the whole launch set's digests**, one per fragment in the
-    /// order the module lays them out, and not the root's alone: a pipeline is a
-    /// compiled *module*, and two sets that share a root and differ in a callee
-    /// are two modules.
+    /// The pipeline cache, keyed on the **whole set's** digests, not the root's:
+    /// two sets sharing a root are two modules.
     pipelines: Mutex<HashMap<(Vec<u64>, usize, usize), vk::Pipeline>>,
     /// Buffers handed out as [`ResidentId`]s and not yet released. The value is
     /// the device-local allocation behind the id, so the id is the only handle
@@ -1491,15 +1489,9 @@ impl GpuContext {
     /// every run, which put a whole-module emission on the critical path of a
     /// dispatch whose pipeline was already built and waiting — pure repeated work
     /// that a cache hit was supposed to have removed.
-    fn pipeline(
-        &self,
-        launch: &LaunchSet<'_>,
-        binding: Binding,
-    ) -> Result<vk::Pipeline, RunError> {
-        // **The cache key is the whole set**, not the root: two launch sets that
-        // share a root and differ in a callee are two different modules, and a key
-        // that could not tell them apart would serve one callee's compiled form for
-        // another's.
+    fn pipeline(&self, launch: &LaunchSet<'_>, binding: Binding) -> Result<vk::Pipeline, RunError> {
+        // **The cache key is the whole set**, not the root: two sets sharing a
+        // root and differing in a callee are two modules.
         if spirv::needs_int64(launch).map_err(RunError::Emit)? && !self.shader_int64 {
             return Err(RunError::MissingInt64 {
                 device: self.name.clone(),

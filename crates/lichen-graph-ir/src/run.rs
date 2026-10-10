@@ -206,13 +206,13 @@ impl<'backend> Runner<'backend> {
                                 reason,
                             })?,
                         _ => {
-                            let submission = self
-                                .backend
-                                .submit(&launch, &slots, count)
-                                .map_err(|reason| GraphRefusal::Backend {
-                                what: "submitting a kernel node",
-                                reason,
-                            })?;
+                            let submission =
+                                self.backend
+                                    .submit(&launch, &slots, count)
+                                    .map_err(|reason| GraphRefusal::Backend {
+                                        what: "submitting a kernel node",
+                                        reason,
+                                    })?;
                             let ids = submission.outputs().to_vec();
                             Value::pending_all(
                                 submission,

@@ -187,7 +187,8 @@ fn reading_a_non_index_parameter_is_refused_by_name() {
             FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
         ],
     );
-    let refusal = spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
+    let refusal =
+        spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
     // `at` is the instruction's position in the entry block, as it is for every
     // other refusal, and not the operand's position in its argument list.
     assert_eq!(refusal, SpirvRefusal::NonIndexParameter { local: 0, at: 1 });
@@ -301,7 +302,8 @@ fn an_unbalanced_body_is_refused() {
         result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
     };
-    let refusal = spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
+    let refusal =
+        spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
     // **There is no such thing as an unbalanced body any more.** An instruction
     // names its operands by `ValueId`, so an operator cannot "pop from an empty
     // stack" — the shape that made `UnbalancedStack` mean something is gone, and

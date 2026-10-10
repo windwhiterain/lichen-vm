@@ -175,7 +175,11 @@ fn time_chain(context: &GpuContext, input: &[u8], count: usize, links: usize) ->
     for _ in 1..links {
         // Each link is handed the previous one's id and never sees its data.
         let next = context
-            .run(&only(&fragment()), &[BufferSlot::Resident(current[0])], count)
+            .run(
+                &only(&fragment()),
+                &[BufferSlot::Resident(current[0])],
+                count,
+            )
             .expect("a link consumes the previous link's id");
         context.release(current[0]);
         current = next;
@@ -486,7 +490,11 @@ fn main() {
             for _ in 1..links {
                 // Each link is handed the previous one's id and never sees its data.
                 let next = context
-                    .run(&only(&fragment()), &[BufferSlot::Resident(current[0])], count)
+                    .run(
+                        &only(&fragment()),
+                        &[BufferSlot::Resident(current[0])],
+                        count,
+                    )
                     .expect("a link consumes the previous link's id");
                 context.release(current[0]);
                 current = next;

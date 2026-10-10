@@ -69,10 +69,7 @@ fn unary_callee(tail: Vec<FlatOp>) -> KernelFragment {
 fn nullary_callee() -> KernelFragment {
     KernelFragment {
         param_shape: KernelShape::Tuple(Vec::new()),
-        body: KernelBody::from_flat(
-            0,
-            &[FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1))],
-        ),
+        body: KernelBody::from_flat(0, &[FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1))]),
         ..unary_callee(Vec::new())
     }
 }
@@ -230,7 +227,8 @@ fn reading_a_non_index_parameter_is_refused_by_name() {
             FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
         ],
     );
-    let refusal = spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
+    let refusal =
+        spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
     // `at` is the instruction's position in the entry block — not the operand's
     // position in its argument list, which is what the refusal used to name.
     assert_eq!(refusal, SpirvRefusal::NonIndexParameter { local: 0, at: 1 });
@@ -347,7 +345,8 @@ fn an_operator_with_too_few_operands_is_refused_by_arity() {
         result_classes: vec![ScalarClass::Int; 1],
         int_width: IntWidth::I64,
     };
-    let refusal = spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
+    let refusal =
+        spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
     match refusal {
         SpirvRefusal::ControlFlow { ref detail } => {
             assert!(
@@ -449,7 +448,8 @@ fn a_write_inside_a_loop_is_refused_by_name() {
         .body
         .validate()
         .expect("the body is well formed; it is the *write* that is refused");
-    let refusal = spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
+    let refusal =
+        spirv::compile(&LaunchSet::single(&fragment), ONE_IN_ONE_OUT).expect_err("refused");
     // `at` is the write's position in the loop body block.
     assert_eq!(refusal, SpirvRefusal::WriteInsideLoop { at: 2 });
     let message = refusal.to_string();

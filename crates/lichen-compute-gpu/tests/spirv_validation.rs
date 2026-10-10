@@ -700,10 +700,7 @@ fn nullary_callee() -> KernelFragment {
     KernelFragment {
         roles: KernelRoles::default(),
         param_shape: KernelShape::Tuple(Vec::new()),
-        body: KernelBody::from_flat(
-            0,
-            &[FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1))],
-        ),
+        body: KernelBody::from_flat(0, &[FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1))]),
         inputs: 0,
         outputs: 0,
         input_classes: Vec::new(),

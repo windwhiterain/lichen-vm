@@ -731,7 +731,11 @@ fn a_recycled_buffer_never_shows_the_previous_run_its_contents() {
         context.release(adds_run[0]);
 
         let select_run = context
-            .run(&only(&conditional()), &[BufferSlot::Host(&pack(&input))], count)
+            .run(
+                &only(&conditional()),
+                &[BufferSlot::Host(&pack(&input))],
+                count,
+            )
             .expect("the conditional run completes");
         assert_eq!(
             words(

@@ -167,24 +167,17 @@ pub const LOCAL_SIZE_X: u32 = 64;
 /// runs but computes the wrong thing is worse than one that does not run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpirvRefusal {
-    /// A cross-kernel call naming a kernel the supplied launch set does not hold.
-    /// The set is the caller's to assemble, so a call to a kernel it left out is
-    /// a set this emitter cannot resolve — and the message names which kernel,
-    /// because the fix is on the caller's side.
+    /// A call to a kernel the supplied launch set does not hold; the message
+    /// names which callee is missing.
     CalleeNotInLaunchSet { kernel: KernelId, at: usize },
-    /// A call given the wrong number of arguments. The arity is the **callee's
-    /// own domain**, which `KernelInstr::arity` deliberately answers `None`
-    /// because the IR does not carry it — so this is read off the callee's
-    /// `param_shape`, and a body that does not fit it has no call to emit.
+    /// A call whose argument count is not the callee's own domain.
     CrossKernelArity {
         kernel: KernelId,
         expected: usize,
         given: usize,
         at: usize,
     },
-    /// A call to a callee that does not leave exactly one value. A
-    /// `OpFunctionCall` is typed by the callee's return list, so a callee
-    /// leaving none or several has no signature for this emitter to call.
+    /// A call to a callee that does not leave exactly one value.
     CrossKernelResults {
         kernel: KernelId,
         results: usize,
@@ -253,7 +246,11 @@ impl fmt::Display for SpirvRefusal {
                  argument(s), with {given}. The arity is the callee's, not this body's: \
                  `KernelInstr::arity` answers `None` for a call because the IR does not carry it."
             ),
-            SpirvRefusal::CrossKernelResults { kernel, results, at } => write!(
+            SpirvRefusal::CrossKernelResults {
+                kernel,
+                results,
+                at,
+            } => write!(
                 f,
                 "instruction {at} calls kernel {kernel}, which leaves {results} value(s). A call \
                  here is typed by the callee's one return value, so a callee that leaves none or \
@@ -516,8 +513,8 @@ struct BufferTypes {
 /// class pushes its type chains into the range the constants were written at, and
 /// `spirv-val` answers `Id 16 is defined more than once`.
 struct Ids {
-    /// The class the module's *arithmetic* is built for, [`module_class`]'s answer
-    /// for the **root**; not a buffer's element type.
+    /// The class the module's *arithmetic* is built for — [`module_class`] of the
+    /// root; not a buffer's element type.
     class: ScalarClass,
     void: u32,
     boolean: u32,
@@ -553,15 +550,14 @@ struct Ids {
     /// An id nothing defines is legal — the id bound is an upper limit, not a count.
     buffer_types: [BufferTypes; ScalarClass::ALL.len()],
     ptr_in: u32,
-    /// One `OpTypeFunction` per fragment in the launch set, in the set's order:
-    /// the entry point's is `void ()` and a callee's is its own domain and its
-    /// one result, which is what an `OpFunctionCall` is typed by.
+    /// One `OpTypeFunction` per fragment, because an `OpFunctionCall` is typed
+    /// by the callee's signature.
     function_types: Vec<u32>,
-    /// One `OpFunction` per fragment in the launch set, in the set's order.
-    /// Position `0` is the entry point the pipeline names `main`.
+    /// One `OpFunction` per fragment, in the launch set's order.
     ///
-    /// **These are module-scope**, so every function is named before any body is
-    /// walked: a call may name a function that has not been emitted yet.
+    /// # Invariant
+    /// Position `0` is the entry point, and every function is named before any
+    /// body is walked, so a call may name a function emitted later.
     functions: Vec<u32>,
     /// The 32-bit `0` an access chain's member indices are built from, and the
     /// zero a float's *bit pattern* is compared against ([`as_condition`]) — 32
@@ -766,12 +762,9 @@ pub fn needs_int64(launch: &LaunchSet<'_>) -> Result<bool, SpirvRefusal> {
     Ok(false)
 }
 
-/// Compile a launch set to SPIR-V words: one `OpFunction` per fragment, in the
-/// set's order, with position `0` as the entry point.
-pub fn compile(
-    launch: &LaunchSet<'_>,
-    binding: Binding,
-) -> Result<Vec<u32>, SpirvRefusal> {
+/// Compile a launch set to SPIR-V words: one `OpFunction` per fragment, position
+/// `0` being the entry point.
+pub fn compile(launch: &LaunchSet<'_>, binding: Binding) -> Result<Vec<u32>, SpirvRefusal> {
     let ordered = launch.ordered();
     let root = launch.root();
     // The module's one numeric class, read off the root before anything is
@@ -783,10 +776,8 @@ pub fn compile(
         results: root.result_classes.len(),
         left: 0,
     })?;
-    // **One cursor, and no id written twice.** Every module-scope id is taken from
-    // it before any body is walked; the bodies then continue from where it
-    // stopped, so a function's own ids sit above every type, constant, function
-    // and variable the module declares.
+    // **One cursor hands out every module-scope id**, so no range can collide
+    // with a chain.
     let mut taken = 1u32;
     let mut take = |count: u32| {
         let first = taken;
@@ -825,9 +816,8 @@ pub fn compile(
             ptr_elem: base + 4,
         };
     }
-    // **Functions are named before any body is walked**, because a call may name
-    // one that has not been emitted yet: position `i` is the `i`th id here and the
-    // `i`th `OpFunction` in the module.
+    // Every function is named before any body is walked: a call may name one
+    // that is emitted later.
     let function_types = take(ordered.len() as u32);
     let functions = take(ordered.len() as u32);
     let buffers = take(binding.total() as u32);
@@ -859,8 +849,7 @@ pub fn compile(
     // `OpConstant` is a *module-scope* instruction, so the bodies' literals are
     // collected here and emitted with the types rather than inside a function.
     let mut literals = Literals::default();
-    // The first function-local id: everything above is declared by the module, and
-    // nothing below is visible to another function.
+    // The first function-local id: everything above is module-scope.
     let mut next = taken;
     let mut bodies = Vec::with_capacity(ordered.len());
     for (position, fragment) in ordered.iter().copied().enumerate() {
@@ -891,27 +880,20 @@ pub fn compile(
     ))
 }
 
-/// One function's facts, read once so [`emit_function`] is not a list of
-/// parameters it has to be reminded of.
+/// One function's facts.
 struct Function<'a> {
-    /// The fragment the dispatch is for: the one whose buffers are bound and
-    /// whose class the module's arithmetic is built in. Every function reads a
-    /// buffer slot through it, because a slot is one module-scope variable and a
-    /// variable has one class.
+    /// The fragment whose buffers are bound, and the slots' classes read from.
     root: &'a KernelFragment,
     fragment: &'a KernelFragment,
-    /// Whether this is position `0`: the entry point takes its index from the
-    /// invocation id and communicates through the bound buffers, where a callee
-    /// takes its domain as function parameters and leaves a value behind.
+    /// Whether this is position `0`: the entry point.
     entry: bool,
     /// The root's index parameter, from `index_local`.
     index: u32,
     binding: Binding,
 }
 
-/// The instructions one function is made of: its `OpFunctionParameter`s, then
-/// every block the plan lays out, in an order where a block's definitions
-/// precede its uses.
+/// One function's instructions: its parameters, then its blocks in an order
+/// where a definition precedes its uses.
 ///
 /// # Invariant
 /// Its ids are this function's own. They start above every module-scope id and
@@ -925,9 +907,8 @@ fn emit_function(
     mut literals: &mut Literals,
     cursor: &mut u32,
 ) -> Result<Vec<Inst>, SpirvRefusal> {
-    // This function's own cursor: every id it hands out is above every id the
-    // module declares and above every id the functions before it handed out, so
-    // two functions can never be looking at the same value.
+    // This function's own cursor, above every module-scope id and above every
+    // earlier function's.
     let mut next = *cursor;
     let Function {
         root,
@@ -978,7 +959,10 @@ fn emit_function(
             ScalarClass::Int => {
                 let widened = next;
                 next += 1;
-                prologue.push(Inst::new(op::U_CONVERT, vec![ids.ulong, widened, component]));
+                prologue.push(Inst::new(
+                    op::U_CONVERT,
+                    vec![ids.ulong, widened, component],
+                ));
                 widened
             }
             ScalarClass::Float => component,
@@ -989,10 +973,8 @@ fn emit_function(
             slots.insert(index_parameter, scalar(index_value, ScalarClass::Int));
         }
     } else {
-        // **A callee takes its whole domain as function parameters.** The entry
-        // point is the one function whose parameters the target cannot place — the
-        // buffers are bound, not passed — so every parameter here is a leaf, and its
-        // class is that leaf's own rather than the module's.
+        // **A callee's domain arrives as function parameters**; the entry
+        // point's cannot.
         let leaves = leaf_classes(&fragment.param_shape);
         for (offset, &value) in fragment.body.parameters().iter().enumerate() {
             let Some(class) = leaves.get(offset).copied() else {
@@ -1007,7 +989,10 @@ fn emit_function(
             };
             let id = next;
             next += 1;
-            parameters.push(Inst::new(op::FUNCTION_PARAMETER, vec![ids.type_of(class), id]));
+            parameters.push(Inst::new(
+                op::FUNCTION_PARAMETER,
+                vec![ids.type_of(class), id],
+            ));
             slots.insert(value, scalar(id, class));
         }
     }
@@ -1316,10 +1301,8 @@ fn emit_function(
                                 at,
                             )?;
                             let slot = buffer_slot(position, at, 0, binding.inputs, "input")?;
-                            // **A read yields that buffer's element class**, so one module can
-                            // read `Int` and `Float` buffers — and it is the *root's* list that
-                            // says so, because a slot is one module-scope variable and a
-                            // variable has the one class it was declared with.
+                            // **A read yields that buffer's element class**, read
+                            // off the root: a slot is one module-scope variable.
                             let element_class = buffer_class_of(root, slot, ids.class);
                             let chain = ids.chain_of(element_class);
                             let pointer = next;
@@ -1361,8 +1344,8 @@ fn emit_function(
                                 binding.outputs,
                                 "output",
                             )?;
-                            // **A write stores that buffer's element class**, whichever class the
-                            // body computed in — read off the root, for the reason above.
+                            // **A write stores that buffer's element class**, read
+                            // off the root as above.
                             let element_class = buffer_class_of(root, slot, ids.class);
                             let chain = ids.chain_of(element_class);
                             let value = as_class(
@@ -1398,11 +1381,8 @@ fn emit_function(
                             ));
                             code.push(Inst::new(op::STORE, vec![pointer, value.id]));
                         }
-                        // **The callee's own facts, read off its fragment.** Its arity is
-                        // its domain's flattening, because `KernelInstr::arity` answers
-                        // `None` for a call: the IR does not carry the callee's arity, so
-                        // the launch set is the only place it can be read from — the same
-                        // read the wasm backend makes.
+                        // **The callee's own facts**: the set carries its arity,
+                        // which is its domain's flattening.
                         KernelInstr::CallKernel(callee) => {
                             let Some((position, target)) = launch.callee(callee) else {
                                 return Err(SpirvRefusal::CalleeNotInLaunchSet {
@@ -1428,9 +1408,8 @@ fn emit_function(
                             };
                             let mut operands = Vec::with_capacity(leaves.len());
                             for (offset, class) in leaves.iter().enumerate() {
-                                // **A leaf's class is its own**, as on the wasm side, so a
-                                // call whose argument is another class is coerced by the
-                                // position rather than refused as a mixed operation.
+                                // **A leaf's class is its own**: the position
+                                // coerces the argument.
                                 let argument = operand(offset)?;
                                 operands.push(
                                     as_class(
@@ -1450,7 +1429,11 @@ fn emit_function(
                             code.push(Inst::new(
                                 op::FUNCTION_CALL,
                                 [
-                                    vec![ids.type_of(result_class), result, ids.functions[position]],
+                                    vec![
+                                        ids.type_of(result_class),
+                                        result,
+                                        ids.functions[position],
+                                    ],
                                     operands,
                                 ]
                                 .concat(),
@@ -2102,8 +2085,7 @@ fn received(fragment: &KernelFragment, node: usize) -> &[ValueId] {
 /// The block-level emission: recording edges, and each block's terminator.
 struct Emitter<'a> {
     fragment: &'a KernelFragment,
-    /// Whether this function is the entry point, which ends with a bare
-    /// `OpReturn` where every other ends with the value it leaves.
+    /// Whether this function is the entry point, which returns nothing.
     entry: bool,
     ids: &'a Ids,
     plan: &'a Plan,
@@ -2223,10 +2205,8 @@ impl Emitter<'_> {
                     });
                 }
                 *self.returns += 1;
-                // **The entry point returns nothing**: a compute shader communicates
-                // through its bound buffers, so the value the body computed is not the
-                // result. Every other function leaves it, because that is what the call
-                // that named it reads.
+                // **The entry point returns nothing**; every other function
+                // leaves the value its caller reads.
                 if self.entry {
                     code.push(Inst::new(op::RETURN, vec![]));
                     return Ok(());
@@ -2237,8 +2217,7 @@ impl Emitter<'_> {
                         left: 1,
                     });
                 };
-                // The value is placed in the class the function's return type names,
-                // so the two cannot disagree however the body arrived at it.
+                // Placed in the class the function's return type names.
                 let value = as_class(
                     self.slots[&values[0]],
                     result_class,
@@ -2483,15 +2462,12 @@ fn assemble(
             ),
         ]);
     }
-    types.extend([
-        Inst::new(
-            op::TYPE_POINTER,
-            vec![ids.ptr_in, storage_class::INPUT, ids.v3uint],
-        ),
-    ]);
-    // **One function type per fragment.** The entry point's takes nothing and
-    // returns nothing; a callee's is its own domain's leaves and the one value it
-    // leaves, which is exactly what an `OpFunctionCall` is typed by.
+    types.extend([Inst::new(
+        op::TYPE_POINTER,
+        vec![ids.ptr_in, storage_class::INPUT, ids.v3uint],
+    )]);
+    // **One function type per fragment**: `OpFunctionCall` is typed by the
+    // callee's.
     for (position, fragment) in launch.ordered().iter().copied().enumerate() {
         let ty = ids.function_types[position];
         if position == 0 {
@@ -2499,14 +2475,17 @@ fn assemble(
             continue;
         }
         let mut operands = vec![ty];
-        operands.extend(leaf_classes(&fragment.param_shape).iter().map(|class| ids.type_of(*class)));
+        operands.extend(
+            leaf_classes(&fragment.param_shape)
+                .iter()
+                .map(|class| ids.type_of(*class)),
+        );
         operands.push(
             fragment
                 .result_classes
                 .first()
                 .map(|class| ids.type_of(*class))
-                // The emitter refuses a callee that leaves other than one value, so a
-                // set that reaches here always has a result type.
+                // A callee that leaves other than one value is refused above.
                 .unwrap_or(ids.void),
         );
         types.push(Inst::new(op::TYPE_FUNCTION, operands));
@@ -2567,9 +2546,7 @@ fn assemble(
     )];
     for slot in 0..binding.total() {
         // **A buffer's variable is typed with its own class's block struct**, which is
-        // what makes a mixed module bindable — and it is declared once for the whole
-        // module, because a called function reaches the same bound buffers through the
-        // same descriptor set rather than through parameters of its own.
+        // what makes a mixed module bindable.
         let chain = ids.chain_of(buffer_class_of(root, slot, ids.class));
         globals.push(Inst::new(
             op::VARIABLE,
@@ -2582,9 +2559,7 @@ fn assemble(
     }
     emit_all(&mut out, &globals);
 
-    // 6. Every function, its body and its end, in the launch set's order. The
-    // entry point comes first, so a callee's call always names a function the
-    // module has already declared.
+    // 6. Every function, its body and its end, in the launch set's order.
     for (position, body) in bodies.iter().enumerate() {
         let result = if position == 0 {
             ids.void
@@ -2600,7 +2575,12 @@ fn assemble(
             &mut out,
             &[Inst::new(
                 op::FUNCTION,
-                vec![result, ids.functions[position], CONTROL_NONE, ids.function_types[position]],
+                vec![
+                    result,
+                    ids.functions[position],
+                    CONTROL_NONE,
+                    ids.function_types[position],
+                ],
             )],
         );
         emit_all(&mut out, body);

@@ -1,9 +1,11 @@
 # The GPU backend for the lowered-kernel IR
 
 > Status: current — the arithmetic/select subset of a kernel runs on a real
-> device, and a `jit`/`plrun` chain can be **recorded and submitted once**
-> (`run_chain`, and the `compute.graph`/`compute.graphrun` surface). What is
-> *not* here is listed under [Not yet](#not-yet) rather than left implied.
+> device, a `jit`/`plrun` chain can be **recorded and submitted once**
+> (`run_chain`, and the `compute.graph`/`compute.graphrun` surface), and a
+> fragment may **cross-call another kernel** — the module holds one function per
+> fragment in the caller's launch set. What is *not* here is listed under
+> [Not yet](#not-yet) rather than left implied.
 >
 > What this note is: the second consumer of the lowered-kernel IR. It exists
 > because that IR is target-neutral, so a backend other than the wasm one can
@@ -13,7 +15,7 @@
 > Points at: `crates/lichen-compute-gpu/src/spirv.rs` (the emitter and its
 > refusals), `crates/lichen-compute-gpu/src/dispatch.rs` (the context, the pool
 > of submission slots, staging), `crates/lichen-kernel-ir/src/lib.rs`
-> (`ParallelBackend`, `Pending`, `KernelFragment`), and
+> (`ParallelBackend`, `LaunchSet`, `Pending`, `KernelFragment`), and
 > `crates/lichen-graph-ir/` (the executor).
 >
 > Companions: [compute-graph-jit](compute-graph-jit.md) (the recorded path and
@@ -66,7 +68,7 @@ therefore live in the emitter rather than in the IR, and both are the *same*
 fact — that the language says a comparison is the `0`/`1` scalar, which is not
 what this target's comparisons produce:
 
-- **A `bool` reaching a scalar position is materialised** (`as_scalar`:
+- **A `bool` reaching a scalar position is materialised** (`as_class`:
   `OpSelect` over the class's `1` and `0`), and a **scalar condition is
   converted** (`as_condition`: `OpINotEqual` against zero — non-zero is true,
   which is what wasm's `select` means by its `i32`). Each slot on the emitter's
@@ -172,6 +174,11 @@ when the tool is not on `PATH` — with the caveat that the fragment in the test
 a copy of the one in `examples/emit-spv.rs`, so a change to the example must be
 mirrored there.
 
+Three module shapes are validated beside it, each because it is a shape the module
+*contract* rather than an opcode list decides: a fragment whose buffers are of two
+classes (the id-range collision above), a body with structured control flow, and a
+launch set holding a cross-kernel call (two functions, one `OpFunctionCall`).
+
 The errors that shape actually produced, each named by the validator or the
 device, are the module contract in list form:
 
@@ -195,10 +202,24 @@ which buffers it touches, and only then is the module written in section order.
 Emitting in one pass would mean either forward-referencing the entry point or
 emitting it twice. `assemble`'s numbered sections are that order made explicit:
 capabilities, memory model and entry point, annotations, types and constants,
-variables, then the function.
+variables, then the functions.
 
 The emitter keeps **one id per `ValueId`** — SPIR-V is SSA and this emitter does
 not pretend otherwise.
+
+**Every module-scope id comes from one cursor, and that is not a style choice.**
+The constants used to sit at a hand-written range `16..21`, which stayed correct
+only while a module declared one buffer class: a second chain reached into that
+range, and `spirv-val` answered `Id 16 is defined more than once` for a module
+whose two buffers were of two classes. The device accepted it, which is the
+worse half — the emitter's output is checked offline precisely because a driver
+is not the authority on the specification.
+
+**Function-local ids come from the same cursor and are never reused.** SPIR-V
+scopes an id to the function that defines it, so reuse is legal; what it is not
+is *free*, because a module-scope constant and a local would then be one id
+inside the function that reused it. Handing out from one cursor that only moves
+forward makes that inexpressible rather than merely avoided.
 
 ## The SSA emitter: how a body becomes structured SPIR-V
 
@@ -275,7 +296,65 @@ A position is a `Const` computed immediately before the call — a value that wa
 *computed* is not an ordinal however constant its value happens to be, and
 reading one as a position would address a buffer the caller never named.
 
-## Per-buffer element classes
+## Several functions in one module
+
+A `KernelInstr::CallKernel` names **another compiled kernel** rather than an
+inlined body, so no backend can resolve one from the calling fragment: the
+callee's *position* and the callee's *own domain* are facts the caller holds and
+the fragment does not. Both backends therefore take the same thing —
+`LaunchSet`, the fragments in the order the module lays them out plus each kernel
+id's position in them (`crates/lichen-kernel-ir/src/lib.rs`) — and
+`lichen-compute` discovers it in one place (`ordered_launch_set`) for the wasm
+link and for `ParallelBackend::run` alike. **That is what a caller owes the
+emitter**: assemble the callees into the set, or the call is refused by name.
+
+The emitter takes `&LaunchSet` and a `Binding` — this is the one signature the
+single-fragment form could not keep — and `dispatch`'s pipeline cache is keyed on
+the **whole set's** digests rather than the root's, because two sets that share a
+root and differ in a callee are two modules.
+
+What the module then holds:
+
+- **One `OpFunction` per fragment**, in the set's order, position `0` being the
+  entry point the pipeline names `main`. Every function id is allocated before any
+  body is walked, so a call may name a function the module declares later.
+- **`OpFunctionCall` names the callee's function id**, and is typed by that
+  callee's own `result_classes` — which is the other half of why the callee's
+  fragment, not merely its position, has to reach the emitter.
+- **A callee's arity is its own domain**, read off `param_shape.flat_arity()`.
+  `KernelInstr::arity` answers `None` for a call because the IR does not carry it,
+  so a call whose argument count disagrees with the callee is refused by name
+  (`CrossKernelArity`, naming both counts) rather than emitted.
+- **A callee takes its whole domain as `OpFunctionParameter`s and ends with
+  `OpReturnValue`**, in the class its `result_classes` names. Only the entry point
+  reads the invocation id and ends with a bare `OpReturn`, because a compute
+  shader communicates through its bound buffers. So `NonIndexParameter` is about
+  the *entry point* alone: a callee's parameters are ordinary parameters, which is
+  the one place the two kinds of function genuinely differ.
+- **A call to a kernel the set does not hold is refused by name**
+  (`CalleeNotInLaunchSet`), naming which kernel: the set is the caller's to
+  assemble, so that is where the fix is.
+- **The buffer variables are the module's, not a function's.** A called function
+  reaches the same bound buffers through the same descriptor set, so a slot's
+  element class is read through the **root** fragment — a slot is one variable and
+  a variable has the one class the host binds, which is what `dispatch` stages it
+  at. A callee that wants the other class crosses inside its own body, the same
+  `Conv` path any mixed body uses.
+- **`needs_int64` asks the whole set**, because a callee is a function in this
+  module: an integer buffer it reads is an integer chain this module declares.
+
+Transitivity is the set's, not the emitter's: `k1` calling `k2` calling `k3` is
+one module with three functions as soon as the caller assembles the closure, and
+the closure is breadth-first over `CallKernel` so a callee is always at a position
+above its caller.
+
+What this does **not** admit is a *parallel* callee. A parallel fragment's
+parameter is `(config, index)`, and only the index is a value a body can name — the
+`config` group is not reachable from inside a kernel — so a call to one has no
+argument list to write and is refused as a non-index parameter read. A parallel
+body may call a `jit` kernel, which is the shape the language produces and the one
+the cross-backend test runs.
+
 
 A module's *arithmetic* class and a buffer's *element* class are two different
 facts, and a mixed fragment is the case that separates them.
@@ -299,17 +378,21 @@ facts, and a mixed fragment is the case that separates them.
   takes two struct levels. `ptr_elem` points at one element *in the
   storage-buffer storage class*, and its pointee is the class's own scalar.
 - **One chain per class in use**, keyed by `ScalarClass::index`, five ids each in
-  `ScalarClass::ALL` order, allocated in pass 1; `chain_of` is only ever read for a
-  class `buffer_classes` reported. An id nothing defines is legal — the id bound is
-  an upper limit, not a count — so a float module reserves `ulong` and leaves it
-  undefined. The function-local ids come from `next`, which starts after the last
-  module-scope id and ends as the module's id bound.
-- **`buffer_class_of(slot)`** reads slots inputs-first-then-outputs, the order a
-  `Binding` and every `Buffer{Read,Write}Call` position use. It falls back to
-  `module_class` for a slot the fragment's lists do not reach, and it is
+  `ScalarClass::ALL` order, allocated with every other module-scope id before the
+  bodies are walked; `chain_of` is only ever read for a class `buffer_classes`
+  reported. An id nothing defines is legal — the id bound is an upper limit, not a
+  count — so a float module reserves `ulong` and leaves it undefined. The
+  function-local ids come from the same cursor, continuing above the last
+  module-scope id, and the module's id bound is where it stopped.
+- **`buffer_class_of(slot, fallback)`** reads slots inputs-first-then-outputs, the
+  order a `Binding` and every `Buffer{Read,Write}Call` position use. It falls back
+  to `module_class` for a slot the fragment's lists do not reach, and it is
   `pub(crate)` because the **dispatch path asks the same question**: the bytes
   staged for a buffer are that buffer's class's `byte_width()`, so a caller and the
-  module it binds cannot disagree about how wide a buffer is.
+  module it binds cannot disagree about how wide a buffer is. **In a module with
+  several functions it is read through the launch set's root**, because the slots
+  are the root's: a callee reaches the same bound buffers and does not bind any of
+  its own.
 - **A buffer's variable is typed with its own class's block struct**, which is what
   makes a mixed module bindable: a dispatch binds a descriptor against the type the
   shader declares for that binding, so the `Int` variable must be the `Int` chain
@@ -521,12 +604,9 @@ the data width does.
 
 Named rather than implied, because each is a decision rather than a gap:
 
-- **Cross-kernel calls.** `SpirvRefusal::CrossKernelCall`. Needs several
-  functions in one module and a call graph; the refusal names the callee and the
-  instruction position.
 - **More than one result.** A compute shader communicates through its storage
   buffers, so a fragment whose body leaves one value is required here
-  (`ResultArity`).
+  (`ResultArity`). A callee is held to the same rule, by name.
 - **A non-index parameter read.** A buffer is *bound*, not passed, so there is no
   value for it to hold (`NonIndexParameter`).
 - **A runtime scalar.** A dispatch pushes the extent alone, so a fragment with a
