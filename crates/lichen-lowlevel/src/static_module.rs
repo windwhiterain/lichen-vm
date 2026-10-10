@@ -71,7 +71,7 @@ impl<P: Program> StaticModuleCache<P> {
     /// Whether the node behind `sref` is marked undecided: the module's
     /// solved flag, read without a registry lookup per ref.
     pub(crate) fn node_undecided(&mut self, host: &Module<P>, sref: StaticNodeId) -> bool {
-        self.module(host, sref.module).nodes[sref.index.index].undecided
+        self.module(host, sref.module).nodes[sref.index.index].undecided()
     }
 
     /// [`StaticModule::read`] through the cache.
@@ -462,7 +462,7 @@ fn static_closure_has_open_captures<P: Program>(
             continue;
         }
         let sn = &nodes[node.index];
-        if sn.undecided && !scope.contains(&node) {
+        if sn.undecided() && !scope.contains(&node) {
             return true;
         }
         if let Some(operation) = sn.operation

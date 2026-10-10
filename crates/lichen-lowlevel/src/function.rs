@@ -804,15 +804,16 @@ impl<P: Program> Module<P> {
     /// final.  One level deep by design: a structure whose *elements* are
     /// decided is a fact a clone may answer with, however open its interior is
     /// (a struct type's field cells are bound by the enclosing call's checks).
+    ///
+    /// The dynamic read of the question; the shared policy is stated once in
+    /// [`crate::apply::answer_elements_are_undecided`], and the static
+    /// materialize walk asks it through
+    /// [`Self::static_answer_elements_are_undecided`].  A dynamic node's slot
+    /// is [`Self::node_value`], a frozen one's is [`Self::static_read`] — both
+    /// arms of that read are already `node_value`'s.
     fn answer_elements_are_undecided(&self, value: P::Value) -> bool {
-        let Some(LowValue::Array(array)) = value.as_enum() else {
-            return false;
-        };
-        // SAFETY: `array` is the payload of `value`, a value the caller holds
-        // reachable; this method only reads, so its home block is not released.
-        unsafe { array.items() }.iter().any(|item| match item.node {
-            AnyNodeId::Dynamic(node) => self.node_value(Dyn(node)).is_none(),
-            AnyNodeId::Static(sref) => self.static_read(sref).is_none(),
+        crate::apply::answer_elements_are_undecided::<P>(value, |node| {
+            self.node_value(node).is_none()
         })
     }
 

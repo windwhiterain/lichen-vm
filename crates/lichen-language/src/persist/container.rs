@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use lichen_lowlevel::{
-    LocalNodeId, LowShape, Program, StaticFunction, StaticFunctionId, StaticFunctionRef,
-    StaticModule, StaticNode, StaticOperation,
+    EvaluatedDeep, LocalNodeId, LowShape, Program, StaticFunction, StaticFunctionId,
+    StaticFunctionRef, StaticModule, StaticNode, StaticOperation,
 };
 
 use crate::program::{LangProgram, ProgramCodec};
@@ -93,7 +93,19 @@ where
             }
         }
         w.u32(node.equality.size());
-        w.u8(node.undecided as u8);
+        // The two axes of a frozen node's slot, stored as themselves rather
+        // than as the collapsed [`StaticNode::undecided`] read of them: the
+        // materialize pass's carry rule needs `runned` and the deep verdict
+        // apart.  `undecided` is a pure function of the latter, so storing it
+        // beside them would be a second representation of one fact.
+        w.u8(node.runned as u8);
+        match node.evaluated_deep {
+            None => w.u8(0),
+            Some(deep) => {
+                w.u8(1);
+                w.u8(deep.undecided as u8);
+            }
+        }
         write_low_shape_opt(&mut w, &node.low_shape);
     }
     w.u64(module.functions.len() as u64);
@@ -372,14 +384,22 @@ where
             None
         };
         let size = r.u32()?;
-        let undecided = r.u8()? != 0;
+        let runned = r.u8()? != 0;
+        let evaluated_deep = match r.u8()? {
+            0 => None,
+            1 => Some(EvaluatedDeep {
+                undecided: r.u8()? != 0,
+            }),
+            _ => return Err("bad evaluated_deep option tag".into()),
+        };
         let low_shape = read_low_shape_opt(&mut r)?;
         nodes.push(StaticNode {
             value,
             operation,
             low_shape,
             equality: lichen_utils::disjoint::Meta::new(parent, next, tail, size),
-            undecided,
+            runned,
+            evaluated_deep,
         });
     }
 

@@ -232,7 +232,7 @@ impl<P: Program> Module<P> {
                 }
             }
             AnyNodeId::Static(sref) => {
-                if self.static_module(sref.module).nodes[sref.index.index].undecided {
+                if self.static_module(sref.module).nodes[sref.index.index].undecided() {
                     return KeyState::Undecided;
                 }
             }

@@ -9,7 +9,8 @@
 //! apart.
 
 use crate::{
-    AnyFunctionId, ApplyError, BlockId, BudgetExhausted, LowValue, Module, NodeId, Program,
+    AnyFunctionId, AnyNodeId, ApplyError, BlockId, BudgetExhausted, LowValue, Module, NodeId,
+    Program,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -178,6 +179,36 @@ impl<P: Program> Module<P> {
             _ => result,
         }
     }
+}
+
+/// Whether a value's **own** item slots are still open — the policy behind the
+/// clone rule's `runned` claim, shared by the dynamic clone walk
+/// ([`Module::answer_elements_are_undecided`]) and the static materialize walk
+/// ([`Module::static_answer_elements_are_undecided`]).
+///
+/// Such an answer is the operator's own result structure — the pair a call
+/// answers with — and the only thing that settles it is that operator's own
+/// re-run and wiring, so a clone that claimed the operator's answer would read
+/// open slots as final.  **One level deep by design**: a structure whose
+/// *elements* are decided is a fact a clone may answer with, however open its
+/// interior is (a struct type's field cells are bound by the enclosing call's
+/// checks).
+///
+/// `slot_is_empty` is the only thing the two walks answer differently — the
+/// dynamic template's node slots against the static template's — so the policy
+/// itself is stated here, once.
+pub(super) fn answer_elements_are_undecided<P: Program>(
+    value: P::Value,
+    mut slot_is_empty: impl FnMut(AnyNodeId) -> bool,
+) -> bool {
+    let Some(LowValue::Array(array)) = value.as_enum() else {
+        return false;
+    };
+    // SAFETY: `array` is the payload of `value`, a value the caller holds
+    // reachable; this function only reads, so its home block is not released.
+    unsafe { array.items() }
+        .iter()
+        .any(|item| slot_is_empty(item.node))
 }
 
 /// Group the clones of one apply pass by their template representative, so a

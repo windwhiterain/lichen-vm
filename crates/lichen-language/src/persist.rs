@@ -92,7 +92,10 @@ pub use lichen_preprocess::{SOURCES_DIR, lichendir, sources_root};
 //
 // A node:  value_flag u8, [value], op_flag u8, [op_tag u8, operand_flag u8,
 // operand u64], equality (parent/next/tail: flag+u64, size u32),
-// undecided u8, low_shape u8 [shape].
+// runned u8, evaluated_deep (flag u8, [undecided u8]), low_shape u8 [shape].
+// The deep verdict is a flag of its own because `None` ("the pass never ran")
+// and `Some(undecided)` ("the pass ran and could not decide") are different
+// facts, and the materialize pass's carry rule tests them apart.
 //
 // Refs (node items, function values, array handles) are written as their
 // module's device key plus the local index (or the arena-relative offset
@@ -133,4 +136,14 @@ pub use lichen_preprocess::{SOURCES_DIR, lichendir, sources_root};
 /// types and every named read over them would be silently wrong.  Version-`8`
 /// artifacts exist outside the source tree (the device cache), so the bump is
 /// warranted rather than skipped.
-const ARTIFACT_FORMAT_VERSION: u32 = 9;
+///
+/// `10` split a frozen node's collapsed `undecided` byte into the two facts it
+/// was derived from, `runned` and `evaluated_deep` (see
+/// [`StaticNode`](lichen_lowlevel::StaticNode)).  The read is *almost* a pure
+/// function of the deep verdict, so a version-`9` artifact could be read as if
+/// its `undecided` byte were that verdict — but not quite: the byte collapses
+/// "the pass never ran" with "the pass ran and could not decide", and the
+/// materialize pass's carry rule tests them apart, so a version-`9` artifact
+/// would materialize differently from the source it was frozen from.  The
+/// bump turns that into the recompile the check above intends.
+const ARTIFACT_FORMAT_VERSION: u32 = 10;

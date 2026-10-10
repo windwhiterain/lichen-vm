@@ -1301,13 +1301,32 @@ pub struct StaticNode<P: Program> {
     pub low_shape: Option<LowShape>,
     pub operation: Option<StaticOperation<P>>,
     pub equality: disjoint::Meta<LocalNodeId>,
-    /// The solved concreteness flag, copied from the source's
-    /// `evaluated_deep` by `StaticModule::from_module` (`true` when never
-    /// deep-passed — conservative).  Not derivable from the root value: an
-    /// array whose cached value is the array while an element is unresolved
-    /// is undecided.  The importer's deep pass reads this instead of
+    /// Whether the source node's operator had **run** — the second axis of
+    /// [`Node::value`], copied from the source's `runned` by
+    /// `StaticModule::from_module`.  The static mirror of that field, and what
+    /// the materialize pass's carry rule reads: an operation-bearing node whose
+    /// operator produced its answer is a template fact a clone may carry,
+    /// while one that never ran owes an answer of its own.
+    pub runned: bool,
+    /// The source node's deep-pass verdict, copied from the source's
+    /// `evaluated_deep`.  [`None`] means the deep pass never ran on the source
+    /// node, so its concreteness is unknown; a [`Some`] verdict whose
+    /// [`EvaluatedDeep::undecided`] is set means the pass ran and could not
+    /// decide.  Those are different facts — "the pass ran and this answer is a
+    /// template fact" is not "the pass never ran" — and [`Self::undecided`] is
+    /// the collapsed read of the two.
+    pub evaluated_deep: Option<EvaluatedDeep>,
+}
+
+impl<P: Program> StaticNode<P> {
+    /// The solved concreteness flag, derived from [`Self::evaluated_deep`]
+    /// (`true` when never deep-passed — conservative).  Not derivable from the
+    /// root value: an array whose cached value is the array while an element is
+    /// unresolved is undecided.  The importer's deep pass reads this instead of
     /// descending — a static ref is a decided leaf.
-    pub undecided: bool,
+    pub fn undecided(&self) -> bool {
+        self.evaluated_deep.is_none_or(|e| e.undecided)
+    }
 }
 
 /// Which evaluation budget a [`Module`] exhausted, and what its limit was.

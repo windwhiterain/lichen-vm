@@ -165,9 +165,14 @@ impl<P: Program> StaticModule<P> {
                     equality.tail().map(|t| node_map[&t]),
                     equality.size(),
                 ),
-                // A node the deep pass never ran on is undecided — treated as
-                // undecided (conservative: it materializes as a clone).
-                undecided: node.evaluated_deep.is_none_or(|e| e.undecided),
+                // The two axes of [`Node::value`] travel **uncollapsed**: the
+                // materialize pass's carry rule asks the same questions the
+                // dynamic clone rule asks (`runned` and `evaluated_deep`), and
+                // collapsing them into one flag here is exactly what left it
+                // unable to ask.  [`StaticNode::undecided`] derives the
+                // collapsed read for the readers that want it.
+                runned: node.runned,
+                evaluated_deep: node.evaluated_deep,
             });
         }
         let mut function_map: HashMap<FunctionId, StaticFunctionId> = HashMap::new();

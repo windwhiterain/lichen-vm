@@ -58,7 +58,7 @@ impl<P: Program> Module<P> {
             // `&mut module` while the list lives on the ctx's module.
             for index in 0..assert_count {
                 let condition = ctx.module.functions[function.index.0].asserts[index];
-                let baked = !ctx.module.nodes[condition.index].undecided;
+                let baked = !ctx.module.nodes[condition.index].undecided();
                 let instantiated = module.static_node_apply(condition, &mut ctx);
                 if !baked {
                     module.asserts.push(PendingAssert {
@@ -110,7 +110,15 @@ impl<P: Program> Module<P> {
             return clone;
         }
         let node = &ctx.module.nodes[local.index];
-        let (undecided, template_operation) = (node.undecided, node.operation);
+        // The three facts the clone rule needs off the template node, and its
+        // operation — read together so the borrow ends before the walk mutates
+        // the module and the ctx.
+        let (undecided, runned, evaluated_deep, template_operation) = (
+            node.undecided(),
+            node.runned,
+            node.evaluated_deep,
+            node.operation,
+        );
         // Reserve the clone id before recursing so diamonds resolve to one
         // clone and value cycles to the clone's own (still evaluating) id.
         let clone = self.add_node(ctx.target, None, None);
@@ -133,39 +141,88 @@ impl<P: Program> Module<P> {
             // unowned, so a genuinely concrete leaf keeps its fast path.
             self.nodes[clone].function = ctx.tag;
             // Residual: the operation (if any) is kept with its operand
-            // walked — the computation re-runs against the argument — and a
-            // stale cached value on an operation node is dropped (it was
-            // computed against the undecided template parameter).  A
-            // undecided *value* node (no operation — a structural array
-            // containing the parameter, or the marker itself) keeps its
-            // value, with items re-pointed at the walk's clones, mirroring
-            // the dynamic clone rule.
+            // walked — the computation re-runs against the argument.
             let operation = template_operation.map(|operation| Operation {
                 operator: operation.operator,
                 operand: operation
                     .operand
                     .map(|operand| self.static_node_apply(operand, ctx)),
             });
-            if operation.is_none() {
-                // A node the walk leaves empty stays undecided: the slot is
-                // not written at all, which is undecided's only representation.
-                if let Some(value) = ctx.module.read(local) {
-                    let value = self.static_remap_value(value, ctx);
-                    self.write_node_value(clone, Some(value));
-                }
-            }
+            // The carry rule — the dynamic clone rule's own
+            // ([`Module::node_apply`]).  A node with no operation always
+            // carries its (remapped) answer: there is no operator to owe one.
+            // An operation-bearing node carries only an answer the template's
+            // **operator produced as a template fact** — `runned` *and* a deep
+            // verdict — because a value left in the slot by a runtime
+            // application is that call's business, not the template's.  The
+            // dynamic rule's foreign-function conjunct drops here: a static
+            // function value is frozen, with no dynamic captures, and is never
+            // foreign (`Module::value_holds_foreign_function`).
+            let template_answer = runned && evaluated_deep.is_some();
+            let carried = operation.is_none() || template_answer;
+            // The mapping runs only for a value that is kept: a dropped answer
+            // must not clone a closure into the target block.
+            let value = ctx.module.read(local);
+            let mapped = if carried {
+                value.map(|value| self.static_remap_value(value, ctx))
+            } else {
+                None
+            };
+            self.write_node_value(clone, mapped);
+            // The claim follows `mapped`, not `carried`: `runned` says this
+            // clone's own answer is in the slot, and an answer whose own
+            // element slots are still open must not claim it — a read runs the
+            // operator and reconciles its answer with the carried one instead
+            // of reading open slots as final.  A node the walk leaves empty
+            // stays undecided: the slot is not written at all, which is
+            // undecided's only representation.
+            self.nodes[clone].runned = mapped.is_some_and(|value| {
+                !self.static_answer_elements_are_undecided(value, &ctx.module)
+            });
             self.nodes[clone].operation = operation;
         } else {
             // Baked: the solved value in place (shared payload — no copy),
             // with item refs re-pointed at per-call clones where the walk
             // made one; untouched items stay inline absolute static refs.
-            // The residual operation (if any) is dead — the value is final.
-            if let Some(value) = ctx.module.read(local) {
-                let value = self.static_remap_value(value, ctx);
-                self.write_node_value(clone, Some(value));
-            }
+            // The residual operation (if any) is dead — the value is final —
+            // and the clone claims the answer by the same rule as the residual
+            // arm: `runned` records that this node's answer is in its slot.
+            let mapped = ctx
+                .module
+                .read(local)
+                .map(|value| self.static_remap_value(value, ctx));
+            self.write_node_value(clone, mapped);
+            self.nodes[clone].runned = mapped.is_some_and(|value| {
+                !self.static_answer_elements_are_undecided(value, &ctx.module)
+            });
         }
         clone
+    }
+
+    /// The **static** read of the clone rule's question (the shared policy is
+    /// [`crate::apply::answer_elements_are_undecided`], and the dynamic walk's
+    /// read of it is [`Module::answer_elements_are_undecided`]): are the items
+    /// of the answer a frozen template just handed this call still open?
+    ///
+    /// An item is one of two things here, and each is read where its own slot
+    /// lives.  The walk's fresh clones are this module's nodes, so the question
+    /// is [`Module::node_value`] — the same read the dynamic walk makes.  A
+    /// frozen ref is the artifact's [`StaticNode`], whose own solved value slot
+    /// **is** the answer (`StaticNode::value`); a ref into a frozen
+    /// *dependency* resolves through the registry, exactly as
+    /// [`Module::node_value`]'s static arm does.
+    fn static_answer_elements_are_undecided(
+        &self,
+        value: P::Value,
+        module: &StaticModule<P>,
+    ) -> bool {
+        crate::apply::answer_elements_are_undecided::<P>(value, |node| match node {
+            node @ Dyn(_) => self.node_value(node).is_none(),
+            AnyNodeId::Static(sref) if sref.module == module.key => {
+                module.nodes[sref.index.index].value.is_none()
+            }
+            node @ AnyNodeId::Static(_) => self.node_value(node).is_none(),
+        })
     }
 
     /// Re-point the items of a value at per-call clones: an item is
@@ -214,7 +271,7 @@ impl<P: Program> Module<P> {
                 AnyNodeId::Static(sref)
                     if sref.module == ctx.module.key
                         && (ctx.remap.contains_key(&sref.index)
-                            || ctx.module.nodes[sref.index.index].undecided) =>
+                            || ctx.module.nodes[sref.index.index].undecided()) =>
                 {
                     changed = true;
                     Dyn(self.static_node_apply(sref.index, ctx))
@@ -295,7 +352,7 @@ impl<P: Program> Module<P> {
         let return_type_clone = self.static_node_apply(return_type, ctx);
         let mut assert_clones = Vec::with_capacity(asserts.len());
         for &condition in &asserts {
-            let baked = !ctx.module.nodes[condition.index].undecided;
+            let baked = !ctx.module.nodes[condition.index].undecided();
             let instantiated = self.static_node_apply(condition, ctx);
             if !baked {
                 self.asserts.push(PendingAssert {
