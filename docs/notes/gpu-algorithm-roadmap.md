@@ -345,6 +345,18 @@ reduction all need **shared memory and a barrier** — lanes seeing each other's
 intermediate results. That is a *third* thing, distinct from both the width and
 the unroll, and it is the largest single item in this roadmap:
 
+> **This item now has its own design, and it is larger than one bullet.**
+> [shared-memory-and-barriers](shared-memory-and-barriers.md) works it out: the
+> write must return something a read consumes before a body's DAG carries the
+> edge a barrier needs; a barrier is needed iff the two lanes' addresses may
+> overlap and the lanes differ; and the *overlap* half is `DP`, the second half
+> of a typed perspective, which is why the memory hierarchy belongs in the type
+> (`shared(T, N)` with `DP = block[1]`) rather than in a new buffer *kind* — a
+> buffer is already a struct wrapper. The one bullet below that the note
+> **corrects** is "a new buffer kind": it is a second wrapper, and it needs the
+> `UP` lattice to grow a **level** component first, because `thread(n)`,
+> `block(n)` and `grid(n)` currently collapse into one number.
+
 - **The surface is a native plugin** (a new operator, a new buffer kind bound at
   a group scope, a barrier op) — but the *IR* must grow, because a fragment has
   no notion of local memory or of a synchronisation point. So it is the first

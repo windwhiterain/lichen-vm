@@ -98,6 +98,7 @@ authority, and this table only names the state.
 | [The GPU algorithm roadmap](notes/gpu-algorithm-roadmap.md) | `lichen-compute`, `lichen-kernel-ir`, `lichen-compute-gpu` | proposed |
 | [The GPU algorithm ladder](notes/gpu-algorithms-ladder.md) | `lichen-compute`, `lichen-compute-gpu` | historical — the exploration record the roadmap argues from |
 | [Graph fusion: logic, interfaces, runner-installed packs](notes/graph-fusion.md) | `lichen-graph-ir`, `lichen-compute`, `lichen-kernel-ir`, `lichen-highlevel` (`attr`) | proposed — interface-derived fusion and runner-installed packs |
+| [Shared memory, and where a barrier comes from](notes/shared-memory-and-barriers.md) | `lichen-compute`, `lichen-kernel-ir`, `lichen-compute-gpu`, `lichen-perspective` | proposed — the write as a value, the DAG, and the `DP` judgement |
 | [Zed extension: build & test workflow](notes/zed-extension-testing.md) | `lichen-language-zed`, `lichen-language-server`, `tree-sitter-lichen` | current |
 | [Tree-sitter generated-files testing](notes/tree-sitter-generated-files.md) | `tree-sitter-lichen`, `lichen-language-zed` | current |
 | [A lichen program as a whiting scene](notes/whiting-scene-document.md) | `lichen-language`, `lichen-lowlevel`, external `whiting-definition` | proposed |
