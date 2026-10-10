@@ -1497,11 +1497,8 @@ where
                     // SAFETY: `operands` is the array the VM just evaluated for
                     // this operation; its home block is alive for the run.
                     let operands = unsafe { operands.items() };
-                    // A resident buffer is fetched here, in full: `collect` is the
-                    // operation that says "give me these as host values", so this is
-                    // the one point at which a `"gpu"` chain's results cross the bus.
-                    // The operand is a `Buf` value, as it is for a read: the
-                    // buffer it names is the wrapper's payload.
+                    // `collect` says "give me these as host values" — where a `"gpu"`
+                    // chain's results cross the bus.
                     let buffer =
                         buf_payload::<P>(module, operands[0].node).unwrap_or(operands[0].node);
                     let results: ScalarData = match module
@@ -1509,15 +1506,13 @@ where
                         .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
                     {
                         Some(ComputeValue::Buffer(payload, class)) => {
-                            // SAFETY: the buffer value was just read out of `module`, so its
-                            // payload's home block is alive while the elements are
-                            // materialized below.
+                            // SAFETY: the buffer value was just read out of `module`,
+                            // so its payload's block is alive below.
                             let Some(items) = buffer_items(&payload) else {
                                 return None;
                             };
                             // The buffer's own class says how each element is read:
-                            // an integer value, or an `f32`'s bits — and, through
-                            // its width, how many bytes each element occupies.
+                            // an integer value, or an `f32`'s bits.
                             match class {
                                 ScalarClass::Int => ScalarData::Int(unpack_elements(class, items)),
                                 ScalarClass::Float => ScalarData::Float(
@@ -1550,12 +1545,8 @@ where
                             );
                         }
                     };
-                    // Materialize each element as a fresh scalar node and build a
-                    // real lichen array value over them, so `collect` yields an
-                    // ordinary array the user can index/treat as `array<Int, n>` —
-                    // or, for a float buffer, as the array of `Float` it is. The
-                    // element's class is the buffer's, so an array collected from a
-                    // float buffer holds floats rather than their bit patterns.
+                    // Each element becomes a fresh scalar node in a real array value,
+                    // of the buffer's own class.
                     let items: Vec<ArrayItem> = match results {
                         ScalarData::Int(values) => values
                             .into_iter()
@@ -1572,18 +1563,11 @@ where
                     Some(<P::Value as From<LowValue>>::from(LowValue::Array(handle)))
                 }
                 ComputeOperator::Graph => {
-                    // The operand has already been evaluated by the time `run` sees
-                    // it, so the only way to reach the function is the deep value.
-                    // That is enough here: a graph is a bare function, and the shape
-                    // that `run_deferred` needed to preserve is the shape of the
-                    // *body*, which the apply below walks itself.
-                    //
-                    // **A missing operand stays lazy rather than panicking**, and the
-                    // other arms' `unreachable!` does not apply: a deep pass over an
-                    // operand array holding a deferred function can come back holding
-                    // something other than an array, and a panic in a recording would
-                    // take down a program that has a perfectly good answer — that its
-                    // function is not decided yet.
+                    // The operand is already evaluated here, so the function is reached
+                    // through the deep value.
+
+                    // A missing operand stays lazy: a deep pass can come back holding
+                    // something else, and that is an answer.
                     let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand)
                     else {
                         return None;
@@ -1613,29 +1597,14 @@ where
         })()
     }
 
-    /// The compute operators' low-type transfer: what a kernel's own operators
-    /// state they produce.
+    /// The compute operators' low-type transfer: what a kernel's operators produce.
     ///
-    /// The launch operators are the load-bearing ones — a cross-kernel call in
-    /// a pre-apply template is exactly the position where no argument exists
-    /// yet, so a `Launch`/`Call` that declines leaves the whole surrounding
-    /// expression undecided.  They are honest scalars: `run` yields a `USize`
-    /// or stays lazy, and the arithmetic they wrap is Int-only.
-    ///
-    /// `Jit`/`Parallel` produce a host-owned artifact (a kernel id), and
-    /// `Write` is a side effect with no value at all, so all three decline.
-    /// So does `BufferCollect`: it does produce an array of scalars, but of a
-    /// length no low type can name — and a length nobody has decided is
-    /// `Unknown`, not a guess.
-    ///
-    /// **The pass does not consult this table.**  The hook the fixed-point pass
-    /// calls is [`OperatorExt::low_type`], and this operator's impl of that trait
-    /// does not forward to this inherent method, so every compute operator
-    /// declines through the trait's default and a read's class is *undecided*,
-    /// not `USize`.  The `Read` arm is also the one claim here that a
-    /// measurement refutes: a read's class is the buffer's element class, which
-    /// a template does not carry, and which the decided cell beside the read
-    /// states instead ([`seed_template_term_low_types`]).
+    /// # Invariant
+    /// Launch and Call are load-bearing: a cross-kernel call sits where no
+    /// argument exists yet, so they state honest scalars. `Jit`, `Parallel`,
+    /// `Write` and `BufferCollect` decline. The pass does not consult this table
+    /// — [`OperatorExt::low_type`]'s default answers — and a read's class comes
+    /// from the decided cell beside it ([`seed_template_term_low_types`]).
     fn low_type(&self, _arguments: &[Option<LowShape>]) -> Option<LowShape> {
         match self {
             ComputeOperator::Launch
@@ -1646,10 +1615,8 @@ where
             | ComputeOperator::Parallel
             | ComputeOperator::ParLaunch
             | ComputeOperator::Write
-            // `Graph` is a host-owned artifact (a registry slot) and `GraphRun`'s
-            // result is a value of a length the graph's own return decides, so
-            // both decline — the same two reasons `Jit` and `BufferCollect` do,
-            // and for the same reason they do rather than by symmetry.
+            // `Graph` is host-owned and `GraphRun`'s length is the graph's own
+            // return: both decline like `Jit`/`BufferCollect`.
             | ComputeOperator::Graph
             | ComputeOperator::GraphRun
             | ComputeOperator::BufferCollect => None,
@@ -1661,21 +1628,11 @@ where
 
 /// One parameter group of a kernel being emitted.
 ///
-/// The way a **type slot** holds its type: the `[shape, kind]` term itself, or a
-/// node that holds one — an annotated parameter's type cell is the annotation's
-/// own `[value, type]` pair ([`low_type_of_slot`] resolves the same indirection
-/// for a low type).  Which of the two it is is the encoding's question, not this
-/// walk's, so both are asked and the **decode** decides ([`shape::TypeRef`]);
-/// a node that is neither answers `None` either way.
-///
-/// This is the lowering's reader rather than [`shape::struct_names_any`]'s
-/// caller because the lowering has no universe handle: the universe is a `Ctx`
-/// fact and a kernel is lowered below the checker, so the gate here is the
-/// `[Type, ↺]` cycle.
-///
-/// The decode is the **strong** one — [`field_names`], whose name-table walk a
-/// node that is not a named struct type term fails — so every reader of the
-/// parameter's field list makes the same choice about which node it is reading.
+/// # Invariant
+/// A type slot's type may be the `[shape, kind]` term itself or a node that holds
+/// one; which is the encoding's question, so both are asked and the decode
+/// decides ([`shape::TypeRef`]). The decode is the strong one — [`field_names`] —
+/// so every reader of the parameter's field list reads the same node.
 fn parameter_type_ref<P>(module: &Module<P>, slot: AnyNodeId) -> Option<TypeRef>
 where
     P: Program,
@@ -1705,23 +1662,11 @@ where
 
 /// The class of every scalar leaf of a parallel parameter, in signature order.
 ///
-/// **The first leaf is the launch extent**, and an extent is not data: the host
-/// reads it as an `Int` ordinal, and a `Float` count is refused by name where a
-/// dispatch is decoded (`ComputeOperator::ParLaunch`).  So the first leaf is
-/// `Int` whatever the parameter declares, and a declared class that is not is
-/// refused **here**, where the message can name the field — rather than left to
-/// surface later as an apply-time class conflict with no span.
-///
-/// **Every other leaf is a runtime scalar, and its class is the parameter
-/// field's own**, which is the point of the type being annotated at all.  Seeding
-/// every leaf `USize` is what made `k.alpha` read `Int` under a `Float`
-/// annotation, and the conflict that produced against the body's own decided cell
-/// was a *hard* unify error rather than a fallback
-/// (`docs/notes/type-query-api-proposal.md` §7).  A field whose type is undecided
-/// (a `_`) keeps the integer default: the ABI's answer for an absent annotation.
-///
-/// The older `(n, (buffers…))` parameter shape states no types and has exactly
-/// one leaf, the count.
+/// # Invariant
+/// The first leaf is the launch extent, read as an `Int` ordinal whatever the
+/// parameter declares; a declared class that is not is refused here, where the
+/// message can name the field. Every other leaf takes the parameter field's own
+/// class — a field whose type is undecided keeps the integer default.
 fn scalar_leaf_classes<P>(
     module: &mut Module<P>,
     cfg_pair: NodeId,
@@ -1765,16 +1710,10 @@ where
 /// The role table of a parallel kernel's parameter struct, decoded from the
 /// parameter's **type slot**.
 ///
-/// `Ok(None)` when the parameter is not a named struct term — the older
-/// `cfg = (n, (buffers…))` shape, whose reads name their position directly.
-/// `Err` when it *is* one but does not carry both reserved fields, because that
-/// is a kernel the author meant to be a parallel parameter and a fallback would
-/// silently read it as the old shape.
-///
-/// The type slot is read the way [`low_type_of_slot`] reads it: the slot itself
-/// may be the type value, or the pair's value slot may be.  `low_type_of` is
-/// *not* used to decide — it answers `Unknown` for every struct by design
-/// (`lichen_highlevel::shape`), because a nominal struct has no low shape.
+/// # Invariant
+/// `Ok(None)` when the parameter is not a named struct term (the older
+/// `cfg = (n, (buffers…))` shape); `Err` when it is one but lacks both reserved
+/// fields, because a fallback would silently read it as the old shape.
 fn parallel_roles<P>(module: &mut Module<P>, cfg_pair: NodeId) -> Result<KernelRoles, String>
 where
     P: Program,
@@ -1788,32 +1727,16 @@ where
     let Some(type_slot) = items.get(PAIR_TYPE_SLOT).map(|item| item.node) else {
         return Err(PARALLEL_PARAMETER_UNDECIDED.into());
     };
-    // **Undecided is not a mistake.**  A parameter whose type this walk cannot
-    // decode as the named struct is a kernel compiled before its annotation
-    // resolved — the cell may hold nothing, or a pin whose name table is not
-    // written yet — so the answer is "not yet": the operator leaves the node
-    // undecided, with no diagnostic, and a later pass compiles it with its roles.
-    // The refusal that *is* a mistake is a readable struct missing a reserved
-    // field, which the check below names.
-    // The parameter's type slot holds either the type **term** (`[shape, kind]`)
-    // or a node that holds one — which of the two is the annotation's business,
-    // not this walk's, so both are asked and the decode decides
-    // ([`shape::TypeRef`]).
+    // Undecided is not a mistake: a kernel compiled before its annotation
+    // resolved waits for a later pass.
+    // The type slot holds either the type term or a node that holds one; the
+    // decode decides which ([`shape::TypeRef`]).
     let Some((names, shape)) = struct_fields_of_slot(module, type_slot) else {
         return Err(PARALLEL_PARAMETER_UNDECIDED.into());
     };
     let named = |wanted: &str| names.iter().position(|name| *name == Some(wanted));
-    // **Either reserved group may be absent, and an empty one may be written.**
-    // A kernel that reads nothing has no `.in`, one that writes nothing has no
-    // `.out`, and a *recorded* body that produces a value rather than dispatching
-    // its own writes has no `.out` either.  The alternative was a dummy field per
-    // missing group, which the caller then had to fill with a `Buf` it does not
-    // have yet; and with `struct<>` spellable, a group with no members can also be
-    // *written* empty.  The walk below treats absence and emptiness the same way —
-    // no leaves of that role — so neither spelling needs a filler.  Whether a body
-    // actually reads an input or writes an output is the emitter's and the run's
-    // question, and both refuse it there, by name
-    // (`docs/notes/compute-buffer-wrapper.md`).
+    // A reserved group may be absent or written empty: the walk treats both
+    // alike, so neither needs a filler field.
     let inputs_at = named("in");
     let outputs_at = named("out");
     // SAFETY: `shape` is a live node of `module`.
@@ -1844,8 +1767,7 @@ enum LeafRole {
     Output,
 }
 
-/// The `.native` field of the `Buf` wrapper (`compute.lichen`) — the payload a
-/// body's `$read`/`$write` names and the only part of a buffer an operator sees.
+/// The `.native` field of the `Buf` wrapper — the payload a body's `$read`/`$write` names.
 const BUF_NATIVE_FIELD: &str = "native";
 
 /// Whether a struct's field names are the `Buf` wrapper's.
@@ -1858,15 +1780,11 @@ fn is_buf_shape(names: &[Option<&'static str>]) -> bool {
 
 /// Record the role of one field of a parameter type, descending into groups.
 ///
-/// **A buffer is a `Buf`-shaped struct** — `struct<.native _, .element _>`, the
-/// wrapper the prelude builds — and the path recorded for it ends at its
-/// **`.native` slot**: that is the payload the prelude's `$read`/`$write` names,
-/// so the checker's own path for the same read resolves to the same place.  A
-/// struct of any other shape is a **group**, and the walk descends in field
-/// order, which is what lets a buffer sit at any depth under `I`/`O`.  Everything
-/// else is a **runtime scalar**, and a leaf the ABI has no local for is
-/// **refused by name with its path** rather than ignored
-/// (`docs/notes/compute-buffer-wrapper.md`).
+/// # Invariant
+/// A buffer is a `Buf`-shaped struct and its recorded path ends at the `.native`
+/// slot, which is the payload the prelude's `$read`/`$write` names; any other
+/// struct is a group, walked in field order. An unresolvable leaf is refused by
+/// name with its path.
 fn walk_role<P>(
     module: &mut Module<P>,
     field: AnyNodeId,
@@ -1881,11 +1799,8 @@ where
 {
     if let Some((names, shape)) = struct_fields_of_slot(module, field) {
         if is_buf_shape(&names) {
-            // The path is the **`Buf` field itself** — the same path the
-            // checker resolves for the source's own read (`read`'s `.from`,
-            // `write`'s `.to`), which is what lets the two sides compare them.
-            // The payload is one constant step in, and the engine takes it when
-            // it reads or writes the buffer.
+            // The path is the `Buf` field, as the checker resolves it for the
+            // source's read; the payload is one step in.
             return match role {
                 LeafRole::Input => {
                     roles.inputs.push(path.to_vec());
@@ -1915,9 +1830,8 @@ where
     }
     let shape = low_type_of_slot(module, field);
     match (role, &shape) {
-        // An output is produced by a write, and a write produces a buffer: an
-        // output of any other type has no mechanism, and naming it is what keeps
-        // the walk from reading it as a scalar the run never fills.
+        // An output is produced by a write, and a write produces a buffer: any
+        // other output type has no mechanism.
         (LeafRole::Output, _) => Err(role_refusal(
             path,
             &format!("an output that is a {}", shape_name(&shape)),
@@ -1953,22 +1867,21 @@ fn role_refusal(path: &[usize], what: &str) -> String {
     )
 }
 
-/// A parallel kernel whose parameter's type **has not resolved yet**: the
-/// annotation is still a cell with no value, so there is nothing to read and
-/// nothing to report.  The operator answers undecided and a later pass compiles
-/// the kernel once the annotation states the struct
-/// (`docs/notes/compute-buffer-wrapper.md`, "the kernel compiles before its
-/// parameter's annotation resolves").
+/// A parallel kernel whose parameter's type has not resolved yet.
+///
+/// # Invariant
+/// The annotation is still a cell with no value, so there is nothing to read and
+/// nothing to report: the operator answers undecided, and a later pass compiles
+/// the kernel once the annotation states the struct.
 const PARALLEL_PARAMETER_UNDECIDED: &str =
     "a parallel kernel's parameter type has not resolved yet";
 
 /// A parameter slot in a kernel's wasm signature.
 ///
-/// A scalar `jit` kernel has one slot (its single parameter).  A **parallel**
-/// kernel has the config slot followed by the index slot.  Each slot carries the
-/// `[value, type]` parameter pair, the parameter's value node (where the shape
-/// marker is stored), its flattened domain shape, and the wasm local base
-/// offset it starts at (the sum of the earlier slots' arities).
+/// # Invariant
+/// A scalar `jit` kernel has one slot; a parallel kernel has the config slot then
+/// the index slot. Each slot carries the `[value, type]` pair, the value node, its
+/// flattened domain shape, and the wasm local base offset.
 #[derive(Clone)]
 struct ParamSlot {
     /// The `[value, type]` parameter pair node.
@@ -1977,25 +1890,18 @@ struct ParamSlot {
     value: NodeId,
     /// The flattened domain shape this slot reads as.
     shape: LowShape,
-    /// The wasm local base offset — `0` for the first slot, the running sum of
-    /// the earlier slots' [`flat_arity`] for a later one.
+    /// The wasm local base offset: `0` for the first slot, the running sum after.
     base: usize,
-    /// The parameter struct's role table, when the parameter is a named struct
-    /// term (`struct<.n Int, .in …, .out …>`).  `None` for a scalar `jit` kernel
-    /// and for a parallel kernel in the older `(n, (buffers…))` shape, whose
-    /// reads name their position directly.
+    /// The parameter struct's role table, for a named struct term; `None` otherwise.
     roles: Option<KernelRoles>,
 }
 
-/// The wasm local offset of `node`, if it is a parameter read of one of
-/// `params` — the slot's base plus the flattened index path within the slot's
-/// domain.  `Ok(None)` when `node` is not a parameter read of any slot.
+/// The wasm local offset of `node`, if it is a parameter read of one of `params`.
 ///
-/// `Err` is [`param_path`]'s: a read that *is* a parameter read but whose index
-/// is not a constant.  It is propagated rather than swallowed — a parameter read
-/// nothing can resolve is the compile refusing to lower a read it cannot place,
-/// and the alternative (treating it as "not a read at all") is what would let it
-/// reach the emitter's catch-all and be reported as an *unsupported* index.
+/// # Invariant
+/// `Err` is [`param_path`]'s: a parameter read whose index is not constant is
+/// propagated rather than swallowed — treating it as "not a read" would let it
+/// reach the emitter's catch-all and be reported as an unsupported index.
 fn param_read_offset<P>(
     module: &Module<P>,
     params: &[ParamSlot],
@@ -2011,9 +1917,7 @@ where
             continue;
         };
         // A struct parameter's scalars are addressed by the role table: the
-        // struct's *own* field order is what names their locals, and the
-        // slot's `shape` is the flat list of exactly those scalars, so the
-        // table's index is the offset within the slot.
+        // slot's `shape` lists exactly those scalars.
         if let Some(roles) = &slot.roles {
             if let Some(offset) = roles.scalar_offset(&path) {
                 return Ok(Some((slot.base + offset) as u32));
