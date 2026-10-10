@@ -763,6 +763,156 @@ fn a_module_holding_a_cross_kernel_call_validates() {
     }
 }
 
+/// `out[i] = k7(a)` — a callee handed the pushed leaf.
+///
+/// # Invariant
+/// The callee's own domain arrives as `OpFunctionParameter`s, so a leaf the entry point read
+/// out of the block reaches the call as an ordinary argument.
+fn calls_a_unary_kernel_with_a_pushed_leaf() -> KernelFragment {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let _extent = body.add_param(entry);
+    let leaf = body.add_param(entry);
+    let index = body.add_param(entry);
+    let position = body.add_const(entry, ScalarClass::Int, 0);
+    let doubled = body.add_op(
+        entry,
+        KernelInstr::CallKernel(7),
+        vec![leaf],
+        vec![ScalarClass::Int],
+    );
+    body.add_op(
+        entry,
+        KernelInstr::BufferWriteCall(ScalarClass::Int),
+        vec![position, index, doubled],
+        Vec::new(),
+    );
+    let left = body.add_const(entry, ScalarClass::Int, 0);
+    body.set_terminator(entry, Terminator::Return { values: vec![left] });
+    KernelFragment {
+        // Three leaves, not two: the extent, the pushed leaf, and the index.
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        ..one_integer_output(body)
+    }
+}
+
+/// A callee over one `Int` leaf, doubling it.
+fn unary_callee() -> KernelFragment {
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Scalar(ScalarClass::Int),
+        body: KernelBody::from_flat(
+            1,
+            &[
+                FlatOp::Read(0),
+                FlatOp::Read(0),
+                FlatOp::Instr(KernelInstr::Bin(ScalarClass::Int, KernelBin::Add)),
+            ],
+        ),
+        inputs: 0,
+        outputs: 0,
+        input_classes: Vec::new(),
+        output_classes: Vec::new(),
+        result_classes: vec![ScalarClass::Int; 1],
+        int_width: IntWidth::I64,
+    }
+}
+
+/// A loop whose body adds a pushed leaf on every iteration.
+///
+/// # Invariant
+/// The leaf is loaded in the entry block, so it **dominates** the loop header and its latch: a
+/// value defined inside the nest would not, and a body reading it there would have to be a phi.
+fn loops_over_a_pushed_leaf() -> KernelFragment {
+    let mut body = KernelBody::new();
+    let entry = body.add_block();
+    let _extent = body.add_param(entry);
+    let leaf = body.add_param(entry);
+    let index = body.add_param(entry);
+    let header = body.add_block();
+    let carried = body.add_param(header);
+    let latch = body.add_block();
+    let _next = body.add_param(latch);
+    let exit = body.add_block();
+    let result = body.add_param(exit);
+
+    let seed = body.add_const(entry, ScalarClass::Int, 0);
+    body.set_terminator(
+        entry,
+        Terminator::Br(Br {
+            target: header,
+            args: vec![seed],
+        }),
+    );
+    let three = body.add_const(header, ScalarClass::Int, 3);
+    let below = body.add_op(
+        header,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt),
+        vec![index, three],
+        vec![ScalarClass::Int],
+    );
+    let test = body.add_op(
+        header,
+        KernelInstr::I32WrapI64,
+        vec![below],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        header,
+        Terminator::CondBr {
+            cond: test,
+            if_true: Br {
+                target: latch,
+                args: vec![carried],
+            },
+            if_false: Br {
+                target: exit,
+                args: vec![carried],
+            },
+        },
+    );
+    // The leaf is the entry block's parameter, read inside the loop's latch.
+    let step = body.add_op(
+        latch,
+        KernelInstr::Bin(ScalarClass::Int, KernelBin::Add),
+        vec![carried, leaf],
+        vec![ScalarClass::Int],
+    );
+    body.set_terminator(
+        latch,
+        Terminator::Br(Br {
+            target: header,
+            args: vec![step],
+        }),
+    );
+    let position = body.add_const(exit, ScalarClass::Int, 0);
+    body.add_op(
+        exit,
+        KernelInstr::BufferWriteCall(ScalarClass::Int),
+        vec![position, index, result],
+        Vec::new(),
+    );
+    body.set_terminator(
+        exit,
+        Terminator::Return {
+            values: vec![result],
+        },
+    );
+    KernelFragment {
+        // Three leaves, not two: the extent, the pushed leaf, and the index.
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        ..one_integer_output(body)
+    }
+}
+
 /// The opcode of every instruction of a module, walked by word count.
 ///
 /// # Invariant
@@ -914,6 +1064,37 @@ fn a_module_pushing_a_runtime_scalar_validates() {
     if covered < 2 {
         eprintln!("only {covered} of 2 push-constant module(s) were validated");
     }
+}
+
+/// A pushed leaf is usable inside a loop body and as a callee's argument.
+///
+/// # Invariant
+/// Both are the same fact — the leaf is an entry-block value that dominates everything — and both
+/// are shapes the recent loop and cross-kernel work introduced, so this is where a regression in
+/// either would show rather than at the dispatch.
+#[test]
+fn a_pushed_leaf_reaches_a_loop_body_and_a_callee() {
+    let looped = spirv::compile(
+        &LaunchSet::single(&loops_over_a_pushed_leaf()),
+        Binding {
+            inputs: 0,
+            outputs: 1,
+        },
+    )
+    .expect("a loop reading a pushed leaf is emitted");
+    validate("a loop reading a pushed leaf", &looped);
+
+    let ordered = [calls_a_unary_kernel_with_a_pushed_leaf(), unary_callee()];
+    let index: std::collections::HashMap<usize, u32> = [(7, 1)].into();
+    let called = spirv::compile(
+        &LaunchSet::new(&ordered, &index),
+        Binding {
+            inputs: 0,
+            outputs: 1,
+        },
+    )
+    .expect("a call handed a pushed leaf is emitted");
+    validate("a call handed a pushed leaf", &called);
 }
 
 /// The merge block, continue target and true label of the module's loop header.
