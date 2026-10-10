@@ -6258,10 +6258,7 @@ where
         _loc: Loc,
     ) -> NativeApply {
         let f = &args[0];
-        // The bare native kernel artifact — the lichen wrapper wraps this value
-        // into a `kernel` struct (`.native`).  It is opaque: its type is the
-        // call's fresh cell, and the signature rides in the struct's `.I`/`.O`
-        // fields, which the wrapper binds from its own annotation `f: I -> O`.
+        // The bare native artifact, opaque: its type is the call's fresh cell.
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Jit), Some(f.value));
         NativeApply {
             value: op,
@@ -6276,9 +6273,11 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator> + From<LowOperator>,
 {
-    /// `$launch(native, a)` — run kernel `native` on `a`.  The wrapper states
-    /// both constraints (`a: k.I`, `r: k.O`) and hands over raw values; the op
-    /// emits the `Launch` node over `[native, a]` and states no type at all.
+    /// `$launch(native, a)` — run kernel `native` on `a`.
+    ///
+    /// # Invariant
+    /// The wrapper states both constraints and hands over raw values; the op emits the
+    /// `Launch` node over `[native, a]` and states no type at all.
     fn build(
         &self,
         ctx: &mut dyn Ctx<P>,
@@ -6288,9 +6287,8 @@ where
     ) -> NativeApply {
         let native = &args[0];
         let a = &args[1];
-        // The `Launch` operator reads exactly these two elements.  The kernel's
-        // declared domain is not an operand: the wrapper's own `a: k.I` is where
-        // it is read, so it is already in the application's graph.
+        // The `Launch` operator reads exactly these two elements: the kernel's
+        // domain is not an operand.
         let operands = ctx.array_node(&[native.value, a.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Launch), Some(operands));
         NativeApply {
@@ -6300,11 +6298,12 @@ where
     }
 }
 
-/// `$call(k, a)` — a **cross-kernel call** on native kernel `k`.  The lichen
-/// wrapper extracts `.native` out of the kernel struct (`call = k => a =>
-/// $call(k.native, a)`); the native op emits the `Call` node over two raw
-/// values.  The callee signature is read at launch-time assembly; nothing about
-/// the argument or the result is stated here.
+/// `$call(k, a)` — a cross-kernel call on native kernel `k`.
+///
+/// # Invariant
+/// The wrapper extracts `.native` out of the kernel struct; the op emits the `Call` node
+/// over two raw values. The callee signature is read at launch-time assembly, so nothing
+/// about the argument or the result is stated here.
 pub struct CallOp;
 
 impl<P> NativeOp<P> for CallOp
@@ -6331,33 +6330,29 @@ where
     }
 }
 
-/// `$parallel(f, backend)` — compile a single-arg `compute.P` index function
-/// into a parallel kernel, and record the backend its runs are dispatched to.
-/// The function-ness gate verifies `f` is a function; the body is lowered over the
-/// loop index (from `compute.range n`) and the parameter's `.in` buffers (read via
-/// `compute.read`).  A **tuple** codomain of `Write`s is the multi-output form;
-/// which position a write is becomes its output ordinal at emission time, and the
-/// codomain's arity becomes the launch's output count.
+/// `$parallel(f, backend)` — compile an index function into a parallel kernel.
+///
+/// # Invariant
+/// The function-ness gate verifies `f`; the body is lowered over the loop index and the
+/// parameter's `.in` buffers. A tuple codomain of `Write`s is the multi-output form:
+/// a write's position becomes its output ordinal at emission, and the codomain's arity
+/// the launch's output count.
 pub struct ParallelOp;
 
-/// `$plrun(pk, cfg)` — run a parallel kernel over the index range `[0, cfg.n)`
-/// with the parameter's `.in` buffers fixed, collecting the writes into the
-/// parameter's `.out` structure, one `Buf` field per output.  The count is
-/// `cfg.n`.
+/// `$plrun(pk, cfg)` — run a parallel kernel over `[0, cfg.n)` and collect the writes
+/// into `.out`.
 pub struct ParLaunchOp;
 
-/// `$range(n)` — the loop index `i ∈ [0, n)` of the current parallel
-/// invocation.  Kernel-only (lowers to the index parameter).
+/// `$range(n)` — the loop index `i ∈ [0, n)` of the current invocation.
 pub struct RangeOp;
 
-/// `$read(buf, i)` — read one buffer element → `?b`.  In-kernel this lowers to
-/// the host `read` import; at the VM it reads a `Buffer` value's element.
+/// `$read(buf, i)` — read one buffer element → `?b`.
 pub struct ReadOp;
 
-/// `$write(n, i, val)` — a pending parallel write into the output buffer at `i`
-/// (length `n`).  Which output buffer is decided by the write's position in the
-/// index function's codomain, not here.  Kernel-only (lowers to the host
-/// `write` import).
+/// `$write(n, i, val)` — a pending parallel write into the output buffer at `i`.
+///
+/// # Invariant
+/// Which buffer is decided by the write's position in the codomain, not here.
 pub struct WriteOp;
 
 /// `$collect(buf)` — collect a whole buffer into a lichen array `[?b]`.
@@ -6365,20 +6360,19 @@ pub struct BufferCollectOp;
 
 /// `$graph(f)` — record `f`'s dispatches into a graph instead of running them.
 ///
-/// The function-ness gate is the same arrow the apply will check, so a
-/// non-function is a check error here rather than a refusal at run time.
+/// # Invariant
+/// The function-ness gate is the same arrow the apply will check, so a non-function is
+/// a check error here rather than a refusal at run time.
 pub struct GraphOp;
 
 /// `$graphrun(g, a)` — run a graph over the values its source function took.
 ///
-/// **Both types are fresh cells, and both are deliberate.** A graph's type is
-/// host-owned and opaque — typed `_`, like a kernel's `.native` — because what a
-/// graph may be applied to is a question about the function it was recorded from,
-/// and the recording is not available to the checker. The arguments therefore
-/// unify against a fresh cell too, which is what lets a graph take values whose
-/// types only the run knows. The cost is static precision, not safety: a
-/// `graphrun` result is a fresh cell and an out-of-range ordinal on it is still
-/// refused at check time with a span, exactly as it is for a `plrun` result.
+/// # Invariant
+/// Both types are fresh cells, deliberately: a graph's type is host-owned and opaque
+/// — what it may be applied to is a question about the function it was recorded from,
+/// and the recording is not available to the checker — so the arguments unify against
+/// a fresh cell too. The cost is static precision, not safety: an out-of-range ordinal
+/// is still refused at check time with a span.
 pub struct GraphRunOp;
 
 impl<P> NativeOp<P> for ParallelOp
@@ -6396,10 +6390,7 @@ where
     ) -> NativeApply {
         let f = &args[0];
         let backend = &args[1];
-        // The bare native parallel kernel artifact — the lichen wrapper wraps
-        // this value into a `kernel` struct (`.native`).  Opaque: the call's own
-        // fresh cell.  `f`'s function-ness and the backend's `string`-ness are
-        // stated by the wrapper's annotations, not here.
+        // The bare parallel kernel artifact, opaque: its type is the call's fresh cell.
         let operands = ctx.array_node(&[f.value, backend.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Parallel), Some(operands));
         NativeApply {
@@ -6416,27 +6407,13 @@ where
     P::Operator: From<ComputeOperator>,
 {
     /// `$plrun(native, a)` — run parallel kernel `native` over `a` (the `cfg`).
-    /// The lichen wrapper extracts `.native` out of the kernel struct; this op
-    /// emits the `ParLaunch` node over the two raw values.
     ///
-    /// **The result type is the call's own fresh cell**, and that is a
-    /// deliberate limit, not an oversight.  The parameter's `.out` group is what
-    /// decides the result's shape — one `Buf` field per declared output — and it
-    /// cannot be read here: `build` runs once, on the frozen `plrun` template,
-    /// where the kernel's `.I`/`.O` are undecided cells that only resolve at run
-    /// time.  A struct type is a value node with one cell per field, so no
-    /// check-time node can name a structure whose fields are not known until the
-    /// run.
-    ///
-    /// What the fresh cell costs is **static precision, not safety**: the
-    /// element type is no longer named by the signature, so `read` on a `plrun`
-    /// result binds its own element cell and resolves it from the value the
-    /// run produces — the buffer's own class, `Int` or `Float`, which is what
-    /// makes a float `plrun` readable as an array of `Float`.  An ordinal that
-    /// does not exist is still **refused, at check time, with a span** — the
-    /// checker's evaluation pass reconciles the constant index against the
-    /// container the launch produced and records an out-of-bounds `Index` — so
-    /// the two shapes stay distinguishable exactly where it matters.
+    /// # Invariant
+    /// The result type is the call's own fresh cell, deliberately: the parameter's
+    /// `.out` group decides the result's shape and cannot be read here, because `build`
+    /// runs on the frozen template where the kernel's `.I`/`.O` are undecided. What
+    /// that costs is static precision, not safety: an ordinal that does not exist is
+    /// still refused at check time with a span.
     fn build(
         &self,
         ctx: &mut dyn Ctx<P>,
@@ -6466,15 +6443,11 @@ where
 {
     /// `$range(n)` — the loop index of the current parallel invocation.
     ///
-    /// **The index's class is the class the body computes in.**  A parallel
-    /// fragment's two scalar parameters are both that class —
-    /// `compile_parallel_fragment` writes its `param_shape` as
-    /// `[Scalar(class), Scalar(class)]` — the emitter pushes the index local
-    /// unchanged, and the host converts both roles back to ordinals
-    /// (`const_bits(class, …)`, `run_parallel_range`).  Nothing is stated here:
-    /// the call's fresh cell is resolved from the value the fragment produces,
-    /// and the fragment's own ABI is what carries the class
-    /// (`docs/notes/floating-point.md` §4.2, §4.4).
+    /// # Invariant
+    /// The index's class is the class the body computes in: a parallel fragment's two
+    /// scalar parameters are both that class, and the host converts both roles back to
+    /// ordinals. Nothing is stated here — the call's fresh cell is resolved from the
+    /// value the fragment produces.
     fn build(
         &self,
         ctx: &mut dyn Ctx<P>,
@@ -6498,28 +6471,14 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
-    /// `$read(buf, i)` — read one buffer element.  The wrapper gates its
-    /// argument as the `Read` struct (`read = (x : Read _) => $read(x.from,
-    /// x.at)`) and leaves the result to the call's fresh cell; this op emits
-    /// the `Read` node over the two raw values.  In a kernel body it lowers to
-    /// the host `read` import; at the VM it reads a buffer value's element.
+    /// `$read(buf, i)` — read one buffer element.
     ///
-    /// **The element class is a fact of the *value*, and it resolves there.**
-    /// The producing fragment's declared class, or the class a backend issued a
-    /// resident buffer with, is what the result cell turns out to be — the cell
-    /// stays open until something decides it, which is why a program that only
-    /// forwards a buffer prints its element as `?a` rather than as the class the
-    /// value turns out to be, and why a `buffer<Float>` is readable at all
-    /// (`docs/notes/floating-point.md` §3.7, §4.2, §4.4).
-    ///
-    /// **The index is an ordinal in every class.**  The `read` import's
-    /// signature is `(i64, i64) -> element`, with the buffer ordinal and the
-    /// index `i64` regardless of class and only the element's type following it
-    /// (`assemble_module`; `run_parallel_range` declares the same closures).  A
-    /// position and a lane number are ordinals, not data, so pinning them to the
-    /// element's cell — which is what this used to do — made an index "the class
-    /// the buffer is", exactly what a `Float` buffer beside a decided `Int`
-    /// count could not express.
+    /// # Invariant
+    /// The element class is a fact of the value and resolves there: the producing
+    /// fragment's declared class, or the one a backend issued, decides the result cell —
+    /// which is why a forwarded buffer prints `?a` and a `buffer<Float>` is readable.
+    /// The index is an ordinal in every class: the `read` import is `(i64, i64) ->
+    /// element`.
     fn build(
         &self,
         ctx: &mut dyn Ctx<P>,
@@ -6544,29 +6503,13 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
-    /// `$write(n, i, val)` — a pending parallel write into the output buffer at
-    /// index `i` (length `n`).  The wrapper gates its argument as the `Write`
-    /// struct (`write = (x : Write _) => $write(x.to, x.at, x.value)`); this op
-    /// emits the `Write` node over the three raw values.  Which output buffer a
-    /// write belongs to is decided by its position in the index function's
-    /// codomain, not here.  Kernel-only (lowers to the host `write` import).
+    /// `$write(n, i, val)` — a pending parallel write into the output buffer at `i`.
     ///
-    /// **The written value's class is the buffer's element class**, so a
-    /// `buffer<Float>` is expressible and a `buffer<Int>` is unchanged: the
-    /// call's fresh cell resolves from the value the run produces, the same
-    /// mechanism `plrun`'s result type relies on.  An index function that only
-    /// forwards a buffer read keeps working: its element class is read off the
-    /// buffer at run time, and its emission defaults to `Int` exactly as it
-    /// always did (`docs/notes/floating-point.md` §3.7, §4.2).
-    ///
-    /// **The length and the index are ordinals in every class.**  The `write`
-    /// import is `(i64, i64, element)`: the count and the loop index are `i64`
-    /// regardless of class and only the written value follows the element's
-    /// class (`assemble_module`; `run_parallel_range` declares the same
-    /// closures).  A length and a lane number are ordinals rather than data, so
-    /// tying them to the *value's* cell — which is what this used to do — made an
-    /// ordinal "the class the data is", and that is what refused a float write
-    /// beside a decided `Int` count.
+    /// # Invariant
+    /// The written value's class is the buffer's element class, so a `buffer<Float>` is
+    /// expressible: the call's fresh cell resolves from the value the run produces. The
+    /// length and the index are ordinals in every class — the `write` import is
+    /// `(i64, i64, element)` — not data.
     fn build(
         &self,
         ctx: &mut dyn Ctx<P>,
@@ -6600,11 +6543,7 @@ where
         _loc: Loc,
     ) -> NativeApply {
         let b = &args[0];
-        // The result is an array of the buffer's element, and **the element
-        // class stays open**: it is a fact of the value the collection reads, so
-        // naming `Int` here is exactly what would make `collect` on a float
-        // buffer inexpressible.  The call's fresh cell is what the run resolves
-        // to `[[?b, len], [TypeArray, Type]]`, with the length a runtime count.
+        // The result is an array of the buffer's element, class left open.
         let operands = ctx.array_node(&[b.value]);
         let op = ctx.op_node(
             P::Operator::from(ComputeOperator::BufferCollect),
@@ -6625,12 +6564,10 @@ where
 {
     /// `$graph(f)` — record `f`, don't run it.
     ///
-    /// The wrapper's `f : _ -> _` is the function-ness gate — the same arrow the
-    /// apply will check, so a non-function is a check error rather than a refusal
-    /// at run time. **The arity is deliberately not checked**: it is the length
-    /// of `f`'s parameter tuple, which is a *runtime* fact of a value the checker
-    /// has not cloned yet, and a gate that named an arity it cannot read would
-    /// refuse programs the recording accepts.
+    /// # Invariant
+    /// The wrapper's `f : _ -> _` is the function-ness gate. The arity is deliberately
+    /// not checked: it is a runtime fact of a value the checker has not cloned, and a
+    /// gate naming an arity it cannot read would refuse programs the recording accepts.
     fn build(
         &self,
         ctx: &mut dyn Ctx<P>,
@@ -6639,9 +6576,8 @@ where
         _loc: Loc,
     ) -> NativeApply {
         let f = &args[0];
-        // The graph itself is host-owned and opaque: what a graph may be run over
-        // is a question about the function it was recorded from, and that
-        // function is not available to the checker — a run is what finds out.
+        // The graph is host-owned and opaque: what it may be run over is what the
+        // recording found.
         let operands = ctx.array_node(&[f.value]);
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Graph), Some(operands));
         NativeApply {
@@ -6659,14 +6595,11 @@ where
 {
     /// `$graphrun(g, a)` — run a graph over the values its source function took.
     ///
-    /// **The arguments and the result are the call's own fresh cell, and that is
-    /// what makes a graph reusable across runs.** A graph's parameter tuple is a
-    /// *runtime* shape — how many arguments it takes is the length of the tuple
-    /// the recording read off a function value — so a fixed domain type would
-    /// name an arity the checker cannot know, and would refuse exactly the
-    /// programs a recording accepts. The cost is static precision, not safety: an
-    /// out-of-range ordinal on the result is still refused at check time with a
-    /// span, exactly as it is for a `plrun` result.
+    /// # Invariant
+    /// The arguments and the result are the call's own fresh cell, which is what makes a
+    /// graph reusable across runs: a graph's parameter tuple is a runtime shape, so a
+    /// fixed domain type would name an arity the checker cannot know. The cost is static
+    /// precision, not safety — an out-of-range ordinal is still refused with a span.
     fn build(
         &self,
         ctx: &mut dyn Ctx<P>,
@@ -6685,16 +6618,12 @@ where
     }
 }
 
-/// The `lichen-compute` plugin's embedded lichen source — the real `compute`
-/// plugin file, kept as a `.lichen` source file and embedded with
-/// [`include_str!`].  It defines the user-facing `jit`/`launch` functions as
-/// ordinary typed lichen (whose bodies call the native `$jit`/`$launch`), and
-/// exports them as a **named struct** (`compute.jit`, `compute.launch`).
+/// The `lichen-compute` plugin's embedded lichen source, kept as a `.lichen` file and
+/// included with [`include_str!`].
 ///
-/// Its `type_of` helper is a private `let` binding — not a field of the
-/// exported struct — and repeats [`lichen-std`]'s definition, because an
-/// embedded native source is compiled against this plugin's private native
-/// registry and cannot depend on a package.
-///
-/// [`lichen-std`]: https://github.com/windwhiterain/lichen-vm/tree/dev/lichen-std
+/// # Invariant
+/// It defines the user-facing `jit`/`launch` functions as ordinary typed lichen and
+/// exports them as a named struct. Its `type_of` helper is a private `let` binding that
+/// repeats `lichen-std`'s definition, because an embedded native source is compiled
+/// against this plugin's private registry and cannot depend on a package.
 pub const WRAPPER_SOURCE: &str = include_str!("compute.lichen");
