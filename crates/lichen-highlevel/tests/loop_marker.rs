@@ -1,14 +1,20 @@
-//! The `@loop` marker's whole effect on a build: a marked recursion whose
-//! state the evaluator cannot decide is refused **by name**, with the
-//! conversion's verdict deciding which name — a shape rule, or a convertible
-//! loop no backend emits yet — and a marked one the unroll already handles is
-//! not refused at all.
+//! The `@loop` marker's whole effect on a build: the frontend stamping it, the
+//! conversion answering about the shape it marks, and the marked recursion the
+//! unroll already handles staying untouched.
+//!
+//! **The build no longer refuses an undecided marked site**, and that is a
+//! property of the feature rather than a gap: whether a loop is *emitted* is a
+//! reader's fact, so the host loop and the kernel reader report the sites they
+//! decline (`docs/notes/loop-conversion.md` §8.6). What the checker owns is the
+//! shape answer, which is [`Module::loop_conversion`](lichen_lowlevel::Module::loop_conversion)
+//! and is pinned below and in `crates/lichen-lowlevel/tests/basic/loop_conversion.rs`.
 //!
 //! The end-to-end evidence is the probe
 //! (`crates/lichen-language/examples/recursion.rs`); this pins the decision
 //! itself, with no compute dependency — the facts that must not drift are that
-//! the refusal names its cause, that a convertible shape yields the conversion
-//! the JIT will read, and that the unmarked program is untouched.
+//! a convertible shape yields the conversion the JIT will read, that an
+//! unconvertible one names its rule, and that the unmarked program is
+//! untouched.
 
 use lichen_highlevel::checker::{Build, Checker, WorkBudget};
 use lichen_highlevel::diagnostic::{Diag, DiagKind};
@@ -215,31 +221,32 @@ fn marked_function(build: &Build<ProgramImpl>) -> lichen_lowlevel::FunctionId {
 }
 
 #[test]
-fn a_convertible_marked_recursion_is_refused_as_not_emitted() {
+fn a_convertible_marked_recursion_is_not_refused_by_the_build() {
     // The shape converts (it is a tail recursion with a base and a scalar
-    // state), so the missing piece is the backend — not the program.
+    // state) and nothing in the build refuses it: the decision about whether a
+    // loop is *emitted* belongs to the reader that meets the site, not to the
+    // checker.
     let found = kinds(countdown(true, None));
     assert!(
-        found.contains(&DiagKind::LoopNotEmitted),
-        "a convertible `@loop` recursion must be refused as not emitted, got {found:?}"
-    );
-    assert!(
-        !found.contains(&DiagKind::LoopNotRecorded),
-        "a convertible shape must not be refused as unconvertible, got {found:?}"
+        !found.contains(&DiagKind::LoopNotEmitted) && !found.contains(&DiagKind::LoopNotRecorded),
+        "a convertible `@loop` recursion must reach a reader, got {found:?}"
     );
 }
 
 #[test]
 fn an_unconvertible_marked_recursion_names_its_rule() {
-    let found = diagnostics(non_tail(true));
-    let refusal = found
-        .iter()
-        .find(|d| d.kind == DiagKind::LoopNotRecorded)
-        .expect("a call outside tail position is not convertible");
+    // The refusal is the conversion's own answer, and this is where the rule it
+    // names is pinned — `report_open_loop_sites` used to carry it into a
+    // diagnostic, and the conversion is the single source either way.
+    let build = build(non_tail(true));
+    let refusal = build
+        .module
+        .loop_conversion(marked_function(&build))
+        .expect_err("a call outside tail position is not convertible");
     assert_eq!(
-        refusal.field.as_deref(),
-        Some("a recursive call not in tail position"),
-        "the refusal must name the shape rule, got {found:?}"
+        refusal.name(),
+        "a recursive call not in tail position",
+        "the refusal must name the shape rule"
     );
 }
 
@@ -303,16 +310,18 @@ fn an_unmarked_recursion_is_never_refused() {
     }
 }
 
-/// The named refusal is what a reader gets instead of a `NodeId`, so it is
-/// worth pinning that it is a **guard**: it records a diagnostic without
-/// fabricating a unification error, which is the shape the build's own
-/// `check_failed` reads.
+/// **A marked site the checker does not refuse is a build that succeeds**, and
+/// that is the whole of what moved: the reader that meets the site is the layer
+/// that decides whether a loop is emitted (`docs/notes/loop-conversion.md` §8.6).
+/// An undecided state is not a program error — it is a trip count the host
+/// cannot see, which is exactly what a converted loop is for.
 #[test]
-fn the_refusal_makes_the_build_not_ok() {
+fn an_undecided_marked_site_leaves_the_build_ok() {
     let build = build(countdown(true, None));
     assert!(
-        !build.ok,
-        "a refused `@loop` recursion must reject the build"
+        build.ok,
+        "an undecided marked site is the reader's question, not the build's: {:?}",
+        build.diagnostics()
     );
 }
 
