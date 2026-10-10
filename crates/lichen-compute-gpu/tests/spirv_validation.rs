@@ -650,6 +650,147 @@ fn a_body_with_control_flow_validates() {
     }
 }
 
+/// `out[i] = int2float in[i] * 2.5` — **one module holding two buffer classes**.
+///
+/// # Invariant
+/// A module declares one type chain per class its buffers hold, and the chains are
+/// what a hand-written id range collided with: the constants sat at fixed ids
+/// `16..21`, so a second chain reaching that far made `spirv-val` answer `Id 16 is
+/// defined more than once`. The ids are computed now, and this is the module that
+/// says so.
+fn two_buffer_classes() -> KernelFragment {
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body: KernelBody::from_flat(
+            2,
+            &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
+                FlatOp::Read(1),                                        // the index
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // cfg_pos
+                FlatOp::Read(1),                                        // the index
+                FlatOp::Instr(KernelInstr::BufferReadCall(ScalarClass::Int)), // in[i], an Int buffer
+                FlatOp::Instr(KernelInstr::Conv {
+                    from: ScalarClass::Int,
+                    to: ScalarClass::Float,
+                }),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Float, TWO_POINT_FIVE)),
+                FlatOp::Instr(KernelInstr::Bin(ScalarClass::Float, KernelBin::Mul)),
+                // …written to a Float one.
+                FlatOp::Instr(KernelInstr::BufferWriteCall(ScalarClass::Float)),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            ],
+        ),
+        inputs: 1,
+        outputs: 1,
+        input_classes: vec![ScalarClass::Int],
+        output_classes: vec![ScalarClass::Float],
+        result_classes: vec![ScalarClass::Int; 1],
+        int_width: IntWidth::I64,
+    }
+}
+
+/// A callee whose domain is **empty**, so a caller built by [`KernelBody::from_flat`]
+/// can name it: the flat builder gives a `CallKernel` no arguments, because the
+/// arity is the callee's own and it has no callee to read it from.
+fn nullary_callee() -> KernelFragment {
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(Vec::new()),
+        body: KernelBody::from_flat(
+            0,
+            &[FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 1))],
+        ),
+        inputs: 0,
+        outputs: 0,
+        input_classes: Vec::new(),
+        output_classes: Vec::new(),
+        result_classes: vec![ScalarClass::Int; 1],
+        int_width: IntWidth::I64,
+    }
+}
+
+/// `out[i] = k0()` — the smallest cross-kernel module: two fragments, one call.
+fn calls_a_nullary_kernel() -> KernelFragment {
+    KernelFragment {
+        roles: KernelRoles::default(),
+        param_shape: KernelShape::Tuple(vec![
+            KernelShape::Scalar(ScalarClass::Int),
+            KernelShape::Scalar(ScalarClass::Int),
+        ]),
+        body: KernelBody::from_flat(
+            2,
+            &[
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)), // out_pos
+                FlatOp::Read(1),                                        // the index
+                FlatOp::Instr(KernelInstr::CallKernel(7)),
+                FlatOp::Instr(KernelInstr::BufferWriteCall(ScalarClass::Int)),
+                FlatOp::Instr(KernelInstr::Const(ScalarClass::Int, 0)),
+            ],
+        ),
+        inputs: 0,
+        outputs: 1,
+        input_classes: Vec::new(),
+        output_classes: vec![ScalarClass::Int],
+        result_classes: vec![ScalarClass::Int; 1],
+        int_width: IntWidth::I64,
+    }
+}
+
+/// A module that declares two buffer classes is a legal module, which is what a
+/// fixed id range could not promise: see [`two_buffer_classes`].
+#[test]
+fn a_module_holding_two_buffer_classes_validates() {
+    let words = spirv::compile(
+        &LaunchSet::single(&two_buffer_classes()),
+        Binding {
+            inputs: 1,
+            outputs: 1,
+        },
+    )
+    .expect("the emitter handles a fragment whose buffers are of two classes");
+    if !validate("the two-class module", &words) {
+        eprintln!("the two-class module was not validated");
+    }
+}
+
+/// A launch set of two fragments is **one module with two `OpFunction`s**, and the
+/// call is the `OpFunctionCall` that names the callee's — the shape `spirv-val`
+/// rules on and the reason a cross-kernel call is emittable at all.
+#[test]
+fn a_module_holding_a_cross_kernel_call_validates() {
+    let ordered = [calls_a_nullary_kernel(), nullary_callee()];
+    let index: std::collections::HashMap<usize, u32> = [(7, 1)].into();
+    let words = spirv::compile(
+        &LaunchSet::new(&ordered, &index),
+        Binding {
+            inputs: 0,
+            outputs: 1,
+        },
+    )
+    .expect("a call whose callee is in the set is emitted");
+
+    let seen = opcodes(&words);
+    // 54 is `OpFunction` and 57 `OpFunctionCall`; `spirv::op` is private to the
+    // crate, so the numbers are the specification's own.
+    assert_eq!(
+        seen.iter().filter(|opcode| **opcode == 54).count(),
+        ordered.len(),
+        "one OpFunction per fragment in the set"
+    );
+    assert_eq!(
+        seen.iter().filter(|opcode| **opcode == 57).count(),
+        1,
+        "the call is one OpFunctionCall"
+    );
+    if !validate("the cross-kernel module", &words) {
+        eprintln!("the cross-kernel module was not validated");
+    }
+}
+
 /// The opcode of every instruction of a module, walked by word count.
 ///
 /// A search for the word `112` would find an operand that happens to hold it, so
