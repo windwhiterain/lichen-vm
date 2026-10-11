@@ -31,12 +31,14 @@ use lichen_utils::extend::AsEnum;
 
 mod body;
 use body::Lower;
+pub mod fused;
 pub mod graph;
 pub(crate) mod wasm;
 
 use graph::{Extent, Placed, RunArgument, RunResult};
 use wasm::assemble_module;
 
+pub use fused::{FusedKernel, FusedRefusal, read_fused_kernel, write_fused_kernel};
 pub use graph::GraphId;
 
 /// The diagnostic a graph's own refusals are recorded under.
