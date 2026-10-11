@@ -1428,12 +1428,12 @@ where
         Ok(self.emit(KernelInstr::Conv { from, to }, vec![operand], to))
     }
 
-    /// A prefix unary operator over its own operand array: `exp x` today.
+    /// A prefix unary operator over its own operand array: `exp`, `sqrt` or `floor`.
     ///
     /// # Invariant
-    /// **One instruction, not an inline expansion**: the IR names the transcendental and
-    /// defines it, so both backends lower the same sequence
-    /// (`crates/lichen-kernel-ir/src/unary.rs`).
+    /// **One instruction, not an inline expansion**: the IR names the operator and, for the
+    /// transcentals it defines, both backends lower the same sequence
+    /// (`crates/lichen-kernel-ir/src/unary.rs`); `floor` is the instruction itself.
     fn transcendental(
         &mut self,
         ty_op: TypeOperator,
@@ -1449,7 +1449,17 @@ where
         }
         let operand = dynamic(items[0].node)?;
         let operand = self.value(operand)?;
-        Ok(self.emit(KernelInstr::Exp, vec![operand], class))
+        let instruction = match ty_op {
+            TypeOperator::Exp => KernelInstr::Exp,
+            TypeOperator::Sqrt => KernelInstr::Sqrt,
+            TypeOperator::Floor => KernelInstr::Floor,
+            other => {
+                return Err(format!(
+                    "`{other:?}` is not a prefix unary operator a kernel emits"
+                ));
+            }
+        };
+        Ok(self.emit(instruction, vec![operand], class))
     }
 
     /// A cross-kernel call: `compute.launch k x` / `compute.call k x`.

@@ -154,6 +154,11 @@ impl Walk<'_> {
                 let operand = self.argument(args, 0)?;
                 Ok(UnaryOp::Exp.apply(operand))
             }
+            KernelInstr::Sqrt => {
+                let operand = self.argument(args, 0)?;
+                Ok(UnaryOp::Sqrt.apply(operand))
+            }
+            KernelInstr::Floor => Err(BridgeRefusal::Floor),
             KernelInstr::Conv { from, to } => Err(BridgeRefusal::Conversion { from, to }),
             KernelInstr::Select => Err(BridgeRefusal::Select),
             KernelInstr::CallKernel(kernel) => Err(BridgeRefusal::Call { kernel }),

@@ -304,7 +304,7 @@ fn instruction_type(context: &ModuleCtx<'_>, op: KernelInstr, operands: &[Type])
         // The arms are the value, so either one's type is the result's.
         KernelInstr::Select => operands.first().copied(),
         KernelInstr::Conv { to, .. } => Some(super::assemble::value_type(to)),
-        KernelInstr::Exp => Some(Type::F32),
+        KernelInstr::Exp | KernelInstr::Sqrt | KernelInstr::Floor => Some(Type::F32),
         KernelInstr::CallKernel(callee) => {
             let at = *context.index.get(&callee)?;
             let target = context.callees.get(at as usize)?;
@@ -420,14 +420,12 @@ fn lower_instr(walk: &mut Walk<'_, '_>, instr: ValueId) -> Result<(), String> {
                 }
             }
         }
-        KernelInstr::Exp => {
-            return Err(
-                "compute.wasm: the exponential has no wasm instruction and is defined by its \
-                 expansion into the primitive operators, which `Lower` applies before a fragment \
-                 is registered — a body that still holds one was not built by it \
-                 (`docs/notes/floating-point.md` §6)"
-                    .into(),
-            );
+        KernelInstr::Exp | KernelInstr::Sqrt | KernelInstr::Floor => {
+            return Err(format!(
+                "compute.wasm: {op:?} is defined by its expansion into the primitive operators, \
+                 which `Lower` applies before a fragment is registered — a body that still holds \
+                 one was not built by it (`docs/notes/floating-point.md` §6, §7)"
+            ));
         }
         KernelInstr::CallKernel(callee) => {
             let arity = callee_arity(walk.context, callee)?;

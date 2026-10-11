@@ -231,45 +231,45 @@ impl KernelBody {
         &self.blocks[self.entry].params
     }
 
-    /// Replace every [`KernelInstr::Exp`] this body computes with the primitive sequence
-    /// that defines it.
+    /// Replace every transcendental instruction this body computes with the primitive
+    /// sequence that defines it.
     ///
     /// # Invariant
-    /// **The gate between the language's instructions and a target's.** No target has a
-    /// native exponential the two read alike, so the IR defines one ([`crate::exp_body`])
-    /// and this rewrite inlines that definition; a backend that runs afterwards meets only
-    /// instructions it emits. An `Exp` of anything but one operand is refused by name
-    /// rather than inlined as a different function.
+    /// **The gate between the language's instructions and a target's.** A transcendental
+    /// whose two targets agree on a native instruction is not in
+    /// [`crate::TRANSCENDENTALS`] and is emitted as itself; one that is there is defined by
+    /// the IR and this rewrite inlines that definition, so a backend that runs afterwards
+    /// meets only instructions it emits. A transcendental of anything but one operand is
+    /// refused by name rather than inlined as a different function.
     pub fn expand_transcendentals(&mut self) -> Result<(), String> {
-        let definition = crate::exp_body();
-        let mut work: Vec<(usize, usize, ValueId)> = Vec::new();
-        for (block, basic) in self.blocks.iter().enumerate() {
-            for (position, &value) in basic.instrs.iter().enumerate() {
-                if matches!(
-                    self.values.get(value.0 as usize),
-                    Some(ValueDef::Instr {
-                        op: KernelInstr::Exp,
-                        ..
-                    })
-                ) {
-                    work.push((block, position, value));
+        for (instruction, definition_of) in crate::TRANSCENDENTALS {
+            let definition = definition_of();
+            let mut work: Vec<(usize, usize, ValueId)> = Vec::new();
+            for (block, basic) in self.blocks.iter().enumerate() {
+                for (position, &value) in basic.instrs.iter().enumerate() {
+                    if matches!(
+                        self.values.get(value.0 as usize),
+                        Some(ValueDef::Instr { op, .. }) if *op == instruction
+                    ) {
+                        work.push((block, position, value));
+                    }
                 }
             }
-        }
-        // **Latest first**: an inlining adds values to the block it rewrites, so an earlier
-        // position stays the position it was read at.
-        for (block, position, value) in work.into_iter().rev() {
-            let Some(ValueDef::Instr { args, .. }) = self.values.get(value.0 as usize) else {
-                continue;
-            };
-            let arguments = args.clone();
-            let [operand] = arguments[..] else {
-                return Err(format!(
-                    "`Exp` reads {} operand(s) and is defined over exactly one",
-                    arguments.len()
-                ));
-            };
-            self.inline_definition(&definition, block, position, value, operand)?;
+            // **Latest first**: an inlining adds values to the block it rewrites, so an earlier
+            // position stays the position it was read at.
+            for (block, position, value) in work.into_iter().rev() {
+                let Some(ValueDef::Instr { args, .. }) = self.values.get(value.0 as usize) else {
+                    continue;
+                };
+                let arguments = args.clone();
+                let [operand] = arguments[..] else {
+                    return Err(format!(
+                        "`{instruction:?}` reads {} operand(s) and is defined over exactly one",
+                        arguments.len()
+                    ));
+                };
+                self.inline_definition(&definition, block, position, value, operand)?;
+            }
         }
         Ok(())
     }

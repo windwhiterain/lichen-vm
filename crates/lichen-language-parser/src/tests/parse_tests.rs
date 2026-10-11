@@ -166,7 +166,7 @@ fn statement_errors_carry_spans() {
     let err = parse_err("a = ; 5");
     assert_eq!(
         err.message,
-        "expected '@assert', 'int2float', 'float2int', 'exp', 'max', 'min', or an expression, found a separator"
+        "expected '@assert', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'max', 'min', or an expression, found a separator"
     );
     assert_eq!(err.span, Some((1, 5)));
 }
@@ -693,7 +693,7 @@ fn index_errors_carry_spans() {
     let err = parse_err("a[]");
     assert_eq!(
         err.message,
-        "expected '@shallow', '@assert', 'int2float', 'float2int', 'exp', 'max', 'min', or an expression, found ']'"
+        "expected '@shallow', '@assert', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'max', 'min', or an expression, found ']'"
     );
     let err = parse_err("a[0");
     assert_eq!(err.span, Some((1, 4)));
@@ -710,7 +710,7 @@ fn parse_errors_carry_spans() {
     let err = parse_err("x =>");
     assert_eq!(
         err.message,
-        "expected '@assert', 'int2float', 'float2int', 'exp', 'max', 'min', or an expression, found the end of the program"
+        "expected '@assert', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'max', 'min', or an expression, found the end of the program"
     );
     assert_eq!(err.span, Some((1, 5)));
     let err = parse_err("(x");
@@ -945,7 +945,7 @@ fn broken_statements_are_recovered() {
     assert_eq!(errors.len(), 1, "the broken binding's error");
     assert_eq!(
         errors[0].message,
-        "expected '@assert', 'int2float', 'float2int', 'exp', 'max', 'min', or an expression, found a separator"
+        "expected '@assert', 'int2float', 'float2int', 'exp', 'sqrt', 'floor', 'max', 'min', or an expression, found a separator"
     );
     assert_eq!(program.statements.len(), 2);
     assert!(matches!(program.expr, Some(Expr::Int(5, _))));

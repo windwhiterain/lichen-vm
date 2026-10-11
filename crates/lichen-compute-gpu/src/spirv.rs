@@ -192,10 +192,12 @@ pub enum SpirvRefusal {
     /// The body computes a transcendental, which this target has no instruction for.
     ///
     /// # Invariant
-    /// The exponential is defined by its expansion into the primitive instructions, which
+    /// A transcendental the IR defines is expanded into the primitive instructions, which
     /// `Lower` applies before a fragment is registered, so a body that still holds one was
-    /// not built by it (`docs/notes/floating-point.md` §6). This target's GLSL `Exp` is
-    /// implementation-defined per vendor and could not answer the CPU path's numbers.
+    /// not built by it (`docs/notes/floating-point.md` §6, §7). For the exponential the
+    /// reason is this target's GLSL `Exp`, which is implementation-defined per vendor and
+    /// could not answer the CPU path's numbers; the square root is defined for the same
+    /// reason and not because `OpSqrt` would disagree.
     UnexpandedTranscendental { at: usize },
     /// The body does not leave exactly the one value a compute shader needs.
     ResultArity { results: usize, left: usize },
@@ -276,10 +278,10 @@ impl fmt::Display for SpirvRefusal {
             ),
             SpirvRefusal::UnexpandedTranscendental { at } => write!(
                 f,
-                "instruction {at} computes a transcendental, which this target has no instruction \
-                 for: the exponential is defined by its expansion into the primitive operators, and \
-                 the lowering applies it before a fragment is registered, so this body was not built \
-                 by it (`docs/notes/floating-point.md` §6)."
+                "instruction {at} computes a transcendental, which this target emits only through \
+                 its definition in the primitive operators: the lowering applies that definition \
+                 before a fragment is registered, so this body was not built by it \
+                 (`docs/notes/floating-point.md` §6, §7)."
             ),
             SpirvRefusal::ResultArity { results, left } => write!(
                 f,
@@ -1272,7 +1274,7 @@ fn emit_function(
                                 as_condition(popped, &ids, &mut literals, &mut code, &mut next),
                             );
                         }
-                        KernelInstr::Exp => {
+                        KernelInstr::Exp | KernelInstr::Sqrt | KernelInstr::Floor => {
                             return Err(SpirvRefusal::UnexpandedTranscendental { at });
                         }
                         KernelInstr::Select => {

@@ -16,7 +16,10 @@ mod unary;
 
 pub use body::{BasicBlock, Br, FlatOp, KernelBody, Terminator, ValueDef, ValueId, from_flat};
 pub use marks::{CLAIM_PREFIX, ClaimRefusal, KernelClaim, KernelMark, MarkField};
-pub use unary::{exp_body, exp_value, inlined_exp_operand};
+pub use unary::{
+    TRANSCENDENTALS, exp_body, exp_value, floor_body, floor_value, inlined_exp_operand, sqrt_body,
+    sqrt_value,
+};
 
 /// What an element is: an `Int` (a machine-sized unsigned integer, `i64`) or a `Float`
 /// (`f32`).
@@ -528,6 +531,24 @@ pub enum KernelInstr {
     /// so the two compute the identical numbers. `Float` is the class, and the only one.
     /// See `docs/notes/floating-point.md` §6.
     Exp,
+    /// The square root of one `Float`.
+    ///
+    /// # Invariant
+    /// Defined by the IR rather than emitted by a target, like [`Self::Exp`]: wasm's
+    /// `f32.sqrt` and SPIR-V's `OpSqrt` are both correctly rounded, but a definition in the
+    /// primitives is what makes the two answer the same bits *and* what the interpreter can
+    /// read. See `docs/notes/floating-point.md` §7.
+    Sqrt,
+    /// The largest integral `Float` not above one `Float`.
+    ///
+    /// # Invariant
+    /// Defined by the IR, like [`Self::Exp`] and [`Self::Sqrt`]: SPIR-V has **no core
+    /// `OpFloor`** — GLSL's `floor` is an `OpExtInst` call into `GLSL.std.450`, a second
+    /// extension import and capability — so a native emission would be a different
+    /// instruction set on each target rather than one operation they agree on. The
+    /// definition is exact for every operand in the class, because the conversion and the
+    /// subtraction it is written with are. See `docs/notes/floating-point.md` §7.
+    Floor,
     /// A cross-kernel call: its `args` are the argument, and a backend resolves this to
     /// a call to the callee.
     CallKernel(KernelId),
@@ -636,7 +657,11 @@ impl KernelInstr {
         Some(match self {
             KernelInstr::Const(..) => 0,
             KernelInstr::Bin(_, _) | KernelInstr::BufferReadCall(_) => 2,
-            KernelInstr::I32WrapI64 | KernelInstr::Conv { .. } | KernelInstr::Exp => 1,
+            KernelInstr::I32WrapI64
+            | KernelInstr::Conv { .. }
+            | KernelInstr::Exp
+            | KernelInstr::Sqrt
+            | KernelInstr::Floor => 1,
             KernelInstr::Select => 3,
             KernelInstr::BufferWriteCall(_) => 3,
             KernelInstr::CallKernel(_) => return None,
@@ -654,7 +679,7 @@ impl KernelInstr {
             KernelInstr::Const(class, _) => Some(*class),
             KernelInstr::Bin(class, _) => Some(*class),
             KernelInstr::Conv { to, .. } => Some(*to),
-            KernelInstr::Exp => Some(ScalarClass::Float),
+            KernelInstr::Exp | KernelInstr::Sqrt | KernelInstr::Floor => Some(ScalarClass::Float),
             KernelInstr::BufferReadCall(class) | KernelInstr::BufferWriteCall(class) => {
                 Some(*class)
             }

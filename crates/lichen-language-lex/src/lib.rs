@@ -85,6 +85,12 @@ pub enum TokenKind {
     /// The `exp` keyword — the exponential of one `Float`, at the prefix level
     /// (`docs/notes/floating-point.md` §6).
     KwExp,
+    /// The `sqrt` keyword — the square root of one `Float`, at the prefix level
+    /// (`docs/notes/floating-point.md` §7).
+    KwSqrt,
+    /// The `floor` keyword — the largest integral `Float` not above one `Float`, at the
+    /// prefix level (`docs/notes/floating-point.md` §7).
+    KwFloor,
     /// '->' -- a function type.
     Arrow,
     /// '=>' -- a lambda.
@@ -192,6 +198,8 @@ impl TokenKind {
             TokenKind::KwMax => "'max'".to_string(),
             TokenKind::KwMin => "'min'".to_string(),
             TokenKind::KwExp => "'exp'".to_string(),
+            TokenKind::KwSqrt => "'sqrt'".to_string(),
+            TokenKind::KwFloor => "'floor'".to_string(),
             TokenKind::Arrow => "'->'".to_string(),
             TokenKind::FatArrow => "'=>'".to_string(),
             TokenKind::Colon => "':'".to_string(),
@@ -313,6 +321,10 @@ enum RawToken {
     KwMin,
     #[token("exp")]
     KwExp,
+    #[token("sqrt")]
+    KwSqrt,
+    #[token("floor")]
+    KwFloor,
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     NameLit,
     #[token("->")]
@@ -730,6 +742,8 @@ fn raw_to_kind(
             "max" => TokenKind::KwMax,
             "min" => TokenKind::KwMin,
             "exp" => TokenKind::KwExp,
+            "sqrt" => TokenKind::KwSqrt,
+            "floor" => TokenKind::KwFloor,
             "_" => TokenKind::Placeholder,
             _ => TokenKind::Name(slice.to_string()),
         }),
@@ -753,6 +767,8 @@ fn raw_to_kind(
         RawToken::KwMax => Some(TokenKind::KwMax),
         RawToken::KwMin => Some(TokenKind::KwMin),
         RawToken::KwExp => Some(TokenKind::KwExp),
+        RawToken::KwSqrt => Some(TokenKind::KwSqrt),
+        RawToken::KwFloor => Some(TokenKind::KwFloor),
         RawToken::Arrow => Some(TokenKind::Arrow),
         RawToken::FatArrow => Some(TokenKind::FatArrow),
         RawToken::DoubleColon => Some(TokenKind::DoubleColon),

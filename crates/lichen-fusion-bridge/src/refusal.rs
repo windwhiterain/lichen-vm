@@ -66,6 +66,9 @@ pub enum BridgeRefusal {
     },
     /// The marked value narrows a value to the condition width a select reads.
     BooleanNarrowing,
+    /// The marked value floors a number, and the symbolic language has no counterpart:
+    /// a floor is not invertible and names no algebraic law the engine reads.
+    Floor,
     /// The body does not pass its own well-formedness gate.
     MalformedBody {
         /// What [`lichen_kernel_ir::KernelBody::validate`] reported.
@@ -148,6 +151,11 @@ impl fmt::Display for BridgeRefusal {
                 formatter,
                 "the projection narrows a value to a condition, and a symbolic expression has \
                  no condition to narrow"
+            ),
+            BridgeRefusal::Floor => write!(
+                formatter,
+                "the projection computes a floor, and the symbolic language has no counterpart \
+                 for it: a floor is not invertible and names no law"
             ),
             BridgeRefusal::MalformedBody { reason } => write!(
                 formatter,

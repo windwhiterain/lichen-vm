@@ -52,6 +52,10 @@ pub enum PrefixOp {
     Min,
     /// `exp x` — the exponential of one `Float` (`docs/notes/floating-point.md` §6).
     Exp,
+    /// `sqrt x` — the square root of one `Float` (`docs/notes/floating-point.md` §7).
+    Sqrt,
+    /// `floor x` — the largest integral `Float` not above one `Float`.
+    Floor,
 }
 
 impl PrefixOp {
@@ -62,7 +66,11 @@ impl PrefixOp {
     /// one spelling cannot come to mean two arities.
     pub fn arity(self) -> usize {
         match self {
-            PrefixOp::Int2Float | PrefixOp::Float2Int | PrefixOp::Exp => 1,
+            PrefixOp::Int2Float
+            | PrefixOp::Float2Int
+            | PrefixOp::Exp
+            | PrefixOp::Sqrt
+            | PrefixOp::Floor => 1,
             PrefixOp::Max | PrefixOp::Min => 2,
         }
     }
