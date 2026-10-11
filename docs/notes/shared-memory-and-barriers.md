@@ -687,7 +687,7 @@ A `DP` is a **scope** and not a storage space, and the plan picks the space insi
 | layer | what it states | names a `DP` | names a space |
 |---|---|---|---|
 | the logic DSL | dataflow, and each buffer's type, which carries its `DP` | in the type | **no** |
-| a pack's kernel body | dataflow, and **where values are staged** — an element class, a length | in the types it declares | **no** |
+| a body — the engine's, or one built by hand (`from_flat`) | dataflow, and **where values are staged** — an element class, a length | in the types it declares | **no** |
 | the plan (the shadow file) | the **space** of each staged value, and the synchronisation | no | **only here** |
 | the IR | the decided space, on the slice | *post*-decision | *post*-decision |
 | a backend | what that space means here, or a named refusal | yes | yes |

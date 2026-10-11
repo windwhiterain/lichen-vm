@@ -55,8 +55,8 @@ The property this buys, stated once because everything below is a
 consequence: **the logical code is the reference implementation, and it is
 always runnable.** Interfaces are additive metadata; a program with none runs
 exactly as written, unfused, correctly. Every optimisation is a substitution
-justified against the schema, so the worst case of any implementation —
-engine-derived or hand-written — is that the logic itself runs.
+justified against the schema, so the worst case of any steering —
+engine-derived or runner-installed — is that the logic itself runs.
 
 ## 2. The three artifacts, and who writes each
 
@@ -64,7 +64,7 @@ engine-derived or hand-written — is that the logic itself runs.
 |---|---|---|---|
 | logical code + interface claims | the logic author, once | yes — it *is* the package | yes — the author's bug, reported as such |
 | schema | the compiler, from the logic alone | derived on demand, content-addressed | no — a derivation, not a decision |
-| implementation | the engine (built in), or an **optimization pack** (runner-installed) | **no — never ships with logic** | engine: no (by construction); pack: caught by the differential obligation |
+| implementation | **the engine, and only the engine**; a **pack** steers it (runner-installed) | **no — never ships with logic** | no, by construction — a steering artifact is *refused*, never wrong |
 
 The third row is a distribution rule, not a packaging detail: **a logic
 package's artifact contains logic and nothing else; optimisation is a
@@ -414,21 +414,28 @@ same definition's other half. What is *not* claimed: the expansion rewrites the
 marked value in place, so a mark on a transcendental is the one body mark whose
 instruction lowering does not preserve.
 
-## 5. Optimization packs: implementations the runner installs
+## 5. Optimization packs: guidance the runner installs
 
-A pack is the hand-written half of the system — the place for register-level
-tiling, shared-memory choreography, instruction scheduling, everything the
-engine provably derives *correctly* and therefore conservatively. A pack is
-an ordinary artifact installed on the runner's machine (via the package
+A pack is the **guidance** half of the system, and it is guidance rather than an
+implementation because the computation has exactly one source. What a pack supplies is what
+the engine cannot derive and what only *this* machine knows: the **algebra** a region's
+fusion needs, the **placement** of the values the fusion stages, and the **directives** that
+decide which of the region's operations run in one kernel. It never supplies the arithmetic
+— an artifact that carried a body would be a second source of truth for what the program
+computes, and *faster, never wrong* would then rest on a differential harness instead of on
+construction.
+
+A pack is an ordinary artifact installed on the runner's machine (via the package
 manager into Lichen Home, beside the toolchain), and it binds by schema, not
 by name and not by the logic author's say-so:
 
 ```lichen
 --- inside a pack, schematically ---
-implements = schema "sha256:9f2c…"          -- the region schema's skeleton hash
+implements = schema "sha256:9f2c…"           -- the region schema's skeleton hash
 requires   = { class = f32, axis = "last" }  -- explicit constraints on fragments/ports
-reference  = <the region's derivation>       -- what this claims to equal
-kernel     = cfg => { …the hand-written fused body… } "gpu"
+reference  = <the algebra this claims>       -- what the region's derivation must equal
+fuse       = { region = …, as = one_kernel }  -- a directive: which operations share a kernel
+plan       = { staging = …, sync = … }       -- where the values the fusion stages live
 ```
 
 The rules, each a decision:
@@ -455,19 +462,38 @@ The rules, each a decision:
   matches (schema 9f2c… → 41b0…)`. So an installed pack can make a program
   **faster, never wrong**: the fallback is the reference implementation
   itself.
-- **Equivalence is an obligation with teeth.** A pack ships a differential
-  harness — its output against the reference region's output over generated
-  inputs — run where the pack is authored and published, the way the graph
-  suite compares against hand-derived closed forms rather than a second run
-  of the same code. At install and at run time the system checks hash and
-  constraints only, the same way a cached artifact is trusted. A pack that
-  cannot name its `reference` region is refused at install: an implementation
-  of nothing is nothing. A pack that hands the engine its *repair function*
-  (§6) has one more thing that harness has to cover: the per-element identity,
-  which the engine checks symbolically only for a function it derived itself.
+- **Equivalence is an obligation with teeth, and it lands on the algebra rather than on a
+  body.** Because a pack hands over no arithmetic, the placement half cannot be *wrong*: the
+  worst a placement directive can do is be **refused** — by the three facts (§5's second
+  half), by a target that cannot honour a space, or by an interface that never declared the
+  name the directive used. What remains is the algebra, and that is where the harness
+  belongs: a differential run of the region's derivation against the reference region's over
+  generated inputs, the way the graph suite compares against hand-derived closed forms rather
+  than a second run of the same code. Part of it the engine checks symbolically and refuses
+  **by name**, which is stronger than a harness: a `combine` that is not associative is
+  refused rather than tiled (`BinaryOp::associative`), and the per-element identity of a
+  repair function the engine derived itself it checks for free. A pack that cannot name its
+  `reference` is refused at install: a claim about nothing is nothing.
 - **Pack beats engine.** When both cover a region, the pack applies and the
   report says so — a derived fusion is the floor, not the ceiling, and a
   human who wrote a pack knew something the engine did not.
+
+**The one directive that is neither algebra nor placement, and the two gaps under it.** A
+pack also needs to say *which of the region's operations are one kernel*, and that is a
+directive rather than an implementation, because computing a region in one kernel is an
+inlining the engine can perform — it needs no arithmetic from anyone. Two gaps stand between
+that sentence and the tree, and both are `missing` rather than merely unimplemented:
+
+- **the engine cannot fuse on request.** It derives fusion for a
+  producer→code→consumer chain and refuses a region that is not one (below), so for a
+  fan-out body there is nothing for a directive to drive — and a fan-out body is the shape
+  this subsection's staging is about.
+- **the domain correspondence has no surface.** Inlining one operation into another is legal
+  only where the two domains line up: which element of `B` a given element of `A` feeds.
+  Where both run over one `compute.range k.n` the engine reads it off, but a non-trivial
+  mapping has nowhere to be stated. The paper's `partition`/`claim` are that surface and
+  lichen does not have it, which is the same absence
+  [shared-memory-and-barriers](shared-memory-and-barriers.md) §5 records.
 
 ### The memory plan: the second thing a pack hands over
 
@@ -505,8 +531,10 @@ plan, and what the engine does with it.
   authority. A pack that declares a barrier where none is needed wastes a
   synchronisation; a pack that **omits** one the facts require is
   `PlanContradicted` and refused by name. A plan is a proposal the engine
-  validates, which is what keeps §5's *faster, never wrong* true of a
-  hand-written body too. **And the check is a comparison rather than a second
+  validates, and that is *all* a plan can be: a placement directive the facts refuse is
+  **refused**, which is what makes §5's *faster, never wrong* true of a runner-installed
+  pack by construction rather than by a harness. **And the check is a comparison rather
+  than a second
   derivation**, because the automatic scan and a declared `sync` produce the *same
   artifact*: both are a set of `(write, read)` pairs, named by mark in a plan and by
   `ValueId` in a fragment, and the fragment resolves one to the other (below).
@@ -574,7 +602,10 @@ plan       = {
   -- `group_width` is a **constraint on this placement** — the group width the facts
   -- are checked against — and not the origin of a length: a slice's element count is
   -- the body's, and a plan's width is the plan's own group width.
-  staging = [ { value = "tile", space = Shared, group_width = 64 } ]
+  -- `mark` names the value by the **path** the body published — §3's channel, and now a
+  -- path rather than a text. It is resolved against the region's interface and is
+  -- **relative**, so one plan serves every region whose structure matches.
+  staging = [ { mark = "tile", space = Shared, group_width = 64 } ]
   -- `auto` is the scan. An explicit sync names the two marks it separates, never a
   -- position: a position drifts under re-spelling.
   sync    = auto        -- or { between = { write = "tile", read = "tile_read" } }
@@ -851,6 +882,8 @@ about shrinks exactly where fusion fires.
 | shared memory + workgroup | **missing** (roadmap axis C) | one-dispatch split-K; until then split-K runs as two dispatches, correct and merely slower |
 | the **memory plan** interface | **interface and selection rule stated, implementation staged** | the four seams a pack hands a plan over through — pack-side data, checked against the three facts, an automatic fallback, and `# p` as the certificate — plus the width the check needs and the three-step walk that chooses a space, both [shared-memory-and-barriers](shared-memory-and-barriers.md) §4/§5. The mechanism is that note's §9, staged: the width as a fragment fact, the vocabulary, the walk, the surface, the plan's carriage, and a tiled reduction as the first automatic consumer |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
+| the engine's **fusion on request** — a directive that says *these operations are one kernel* | **missing** | §5: it derives fusion for a producer→code→consumer chain and refuses any other region, so the shape a directive most needs — a fan-out body — cannot fuse today |
+| a **domain correspondence** surface (`partition`/`claim`) | **missing** | §5: inlining one operation into another is legal only where the two domains line up, and a non-trivial mapping has nowhere to be stated |
 
 Staging, each stage independently useful:
 
@@ -887,7 +920,7 @@ Settled by the superior's review of the first draft:
 - **The memory plan is a pack's, and the engine validates it** (§5). A body that is
   not a chain needs staging — registers, shared, or global — and while the
   conservative plan is derivable, the last factor of performance in a real operator
-  is hand-orchestrated, so the plan rides the pack. It is checked against
+  is a **placement decision only the machine knows**, so the plan rides the pack. It is checked against
   [shared-memory-and-barriers](shared-memory-and-barriers.md) §4's three facts, never
   believed, and it does not enter the schema hash. **The mechanism is another
   session's to implement**; this design fixes only the interface it implements
