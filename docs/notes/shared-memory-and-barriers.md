@@ -38,8 +38,8 @@
 > read in Chinese in
 > [the walkthrough](../reference/类型系统验证底层%20GPU%20语言：Perspective.md)).
 > [§6.1](#61-dp-is-the-types-and-up-is-the-annotation) records where the `DP`
-> lives — on the buffer's type — and why the level component a written `DP`
-> needs is due rather than deferred.
+> lives — on the buffer's type — and why the lattice needs no level to write one:
+> a finite perspective is inside a block, and `0` is the `∞` that crosses blocks.
 >
 > Points at: `crates/lichen-compute/src/compute.lichen` (the algebra),
 > `crates/lichen-compute/src/compute.rs` (`ComputeValue`, `ComputeOperator`,
@@ -52,8 +52,8 @@
 > refusals it owes),
 > `crates/lichen-compute-gpu/src/spirv.rs` (`LOCAL_SIZE_X`),
 > `crates/lichen-compute-gpu/src/dispatch.rs` (the padding that makes a barrier
-> safe), `crates/lichen-perspective/src/perspective.rs` (the `UP` lattice that
-> gains the level component §6.1 makes due).
+> safe), `crates/lichen-perspective/src/perspective.rs` (the perspective lattice:
+> `0` is the top and the `∞` fold, `1` the bottom).
 >
 > Companions: [compute-buffer-wrapper](compute-buffer-wrapper.md) (the ABI this
 > extends, and the determinism theorem §3 scopes to `Buf`),
@@ -768,28 +768,35 @@ Buf    = T => struct<.native _, .element T>            -- Buf at grid[1]
 being a *second nominal* is exactly what made a placement look like an identity — the level
 was a function of *which* wrapper, so nothing could move a slice without changing its type.
 
-**And the level component becomes due rather than deferred, because a `DP` written in a type
-has to name a level.** `# p` is a bare non-negative integer whose order is divisibility
-(`crates/lichen-perspective/src/perspective.rs`), so `thread(n)`, `block(n)` and `grid(n)`
-collapse into one number — the mismatch the roadmap records as "divisibility admits a width no
-device has — `6` is a legal perspective, and no lane group is six wide"
-([roadmap §4.2](gpu-algorithm-roadmap.md#42-axis-c-lane-width-and-the-consumer-perspective-has-been-waiting-for)).
-While the hierarchy was carried by two nominals, no attribute had to say the level. A `DP` in
-a type does, so folding it into `Perspective` is now a prerequisite for writing a `DP` at
-all, and its price is the one this subsection measured while the fold was still an option:
+**And the level component is not owed at all, which corrects what this subsection first said.**
+A `DP` written in a type does have to say *how far* a value reaches, and the lattice already
+answers it. `# p` is a non-negative integer whose order is divisibility, whose bottom is `1` —
+one thread per group — and whose **top is `0`**, which `perspective.rs` states as "uniform over
+all threads, the `∞` fold", with `gcd(n, 0) = n` and `divides(0, sup) ⟺ sup = 0`. So the two
+cases a kernel needs are already distinct, and neither needs a tag:
 
-- folding a level in touches `AttrExt::combine`, which hard-codes
-  `ctx.pair(gcd, ctx.int_type())` (`perspective.rs:156`), the `GcdOp` codec *and*
-  its `run`, `is_subtype`, `render`, `missing_value`, the persist codec, and
-  every row of [attributes.md](attributes.md)'s acceptance table;
-- a second attribute beside `#` touches none of those, but then a buffer's `DP`
-  refers to a level the `UP` attribute does not have, and lichen reconciles **one
-  constraint slot per expression at apply time** — `Checker::check_ann` records a
-  single `state[e].attr` and `check_app`/`check_lam` re-check exactly one marker,
-  so a second side-carrying attribute is against that grain
-  ([operator-polymorphism](operator-polymorphism.md) §6);
-- and the third option — leaving the level implied by the wrapper — is what the merge
-  removes, which is why this deferral cannot be kept.
+- **a finite `p` is inside a block.** It is a group of `p` threads the block contains, and the
+  unit of the finite part is a **warp, 32 threads**.
+- **`0` is `∞` and it is the top**: it crosses blocks, and no finite `p` names it.
+
+Three scopes collapsing into one number is the mismatch the roadmap records as "divisibility
+admits a width no device has — `6` is a legal perspective, and no lane group is six wide"
+([roadmap §4.2](gpu-algorithm-roadmap.md#42-axis-c-lane-width-and-the-consumer-perspective-has-been-waiting-for)),
+and **with cross-block synchronisation out of scope it stops mattering**: there is no third
+scope to tell apart, so nothing needs a level and `Perspective` does not change. What separates
+block from grid is finiteness, not a tag.
+
+**That is also `Space` having no `Global` member, stated in the lattice rather than as a
+convention.** A slice is what a *block* can stage, so its `DP` is finite; the `∞` case is a
+value that crosses blocks, and with no cross-block synchronisation primitive there is nothing
+to stage it with — the region does not fuse and the graph keeps two nodes (§5).
+
+**If a third scope ever arrives** — a cluster, or a subgroup below the warp — folding a level
+into `Perspective` is the option to prefer, and the price is then the one this subsection
+measured while it was still an option: `AttrExt::combine`, which hard-codes `ctx.pair(gcd,
+ctx.int_type())` (`perspective.rs:156`), the `GcdOp` codec *and* its `run`, `is_subtype`,
+`render`, `missing_value`, the persist codec, and every row of
+[attributes.md](attributes.md)'s acceptance table.
 
 **What is deliberately not considered is `UP` against `DP`.** The design owes no comparison
 between the two annotations: `UP` lowers implicitly to the perspective it aligns to (the
@@ -1100,7 +1107,7 @@ mergeable and leaves the tree green.
 | **6** | the host backend: the named refusal | `lichen-compute` | §7. A barrier makes the body a function of a workgroup rather than of an index, so the CPU path refuses a **staged** body — either space, and every barrier — and loses `gpu_matches_cpu` coverage for this class of algorithm. Segmentation is a later, separate step |
 | **7** | **the plan interface**: a pack's plan matched by schema, **checked against the three facts rather than believed**, carried from match to emit, with the refusals the interface owes | `lichen-language` (match), `lichen-kernel-ir` (check) | [graph-fusion](graph-fusion.md#the-memory-plan-the-second-thing-a-pack-hands-over) §5 is the interface; this step is where it becomes checkable. The plan never enters the *schema* hash and its **effect** enters `fragment_digest` through the fragment — which is why step 3's slice field and step 2's width are the same kind of fact and land in the same place. **§5's three-step walk belongs to this step**: a declared plan is a proposal about which values cross lanes and where they are staged, and the walk is what decides whether the facts allow the proposal |
 | **8** | **the automatic plan's first consumer**: a `Reduction` tiled across the workgroup rather than folded per lane, licensed by the declared associativity | `lichen-compute`, `lichen-compute-gpu` | **This step is where a value comes to cross lanes at all**, and therefore where §5's walk is *run rather than obeyed*: the walk is not applied to a body that has the crossing, it decides to create one by tiling. That is why step 4 can be a scan over stated accesses while the selection lives here. Today **no lichen body can carry a value across lanes at all**: a reduction is a per-lane loop ([loop-conversion](loop-conversion.md)), and `roles.inputs` and `roles.outputs` are disjoint, so there is nothing to select. [graph-fusion](graph-fusion.md) §7's register-resident rolling state is the floor this replaces where a device can do better. What shows it works is the acceptance case below: the same triangle-number reduction, judged against its closed form **and** against the per-lane implementation this row replaces |
-| **9** | the level component on `Perspective`, which a `DP` in a type needs | `lichen-perspective`, `lichen-highlevel` (`AttrExt`) | **due, not deferred**: §6.1 held it as an option while the hierarchy was carried by two nominals, and §5's merge removes that carrier. Its price is itemised in §6.1 |
+| **9** | nothing, and this row used to owe the level component on `Perspective` | — | **not owed**: a finite `# p` is inside a block and `0` is the `∞` that crosses blocks, so the divisibility lattice already separates the two scopes a kernel has. §6.1 keeps the fold as the option to prefer if a third scope ever arrives |
 
 **What step 5's GPU half settled, and it landed on its own.** The row above names three arrivals;
 the emission is separable from the surface, and it is the one that landed first, because a
@@ -1234,9 +1241,10 @@ before it can be differenced against, and that is why the reduction goes first.
 Settled by the audit and the staging above, and recorded so they are not
 re-litigated:
 
-- **Where the level lives** — **in `Perspective`, and due rather than deferred.** §6.1: a
-  `DP` written in a type has to name a level, so the fold is a prerequisite for writing one
-  at all, and §9 step 9 is where it lands.
+- **Where the level lives** — **nowhere, because no level is needed.** §6.1: a finite `# p` is
+  inside a block and `0` is the `∞` that crosses blocks, so the divisibility lattice already
+  separates the two scopes a kernel has; §9 step 9 owes nothing, and the fold stays the option
+  to prefer if a third scope arrives.
 - **Automatic insertion, or an explicit barrier with a checked placement** —
   **automatic**. The original note preferred an explicit `compute.barrier` first,
   on the grounds that the paper's automatic insertion needs a **scope** perspective
@@ -1271,8 +1279,8 @@ re-litigated:
 - **`DP` on the buffer's type** — **decided, and the other way.** There is one nominal and
   the `DP` is one of its arguments: `Buf` is that type at `grid[1]`, and what was called
   `Shared` was never a second nominal but the same type at `block[1]` (§6.1). What remains
-  is the *spelling* — a `DP` written in a type needs the level component (§9 step 9) — and
-  not the decision.
+  is the *spelling* — writing a `DP` in a buffer type is surface the lowering does not have
+  yet — and not the decision.
 
 Still open:
 
@@ -1280,9 +1288,8 @@ Still open:
    way a slice becomes private to a lane group — is a second piece of surface
    (`partition(data, P, offset)` in, `claim(data, thread[1])` for the degenerate
    case), and `offset`'s disjointness is the user's to prove in the paper as well.
-   Whether lichen needs both, or only the degenerate one, is not settled. **This is
-   also where §6.1's level component binds**: narrowing a `DP` is the first thing that
-   needs a level the `Perspective` lattice has to name.
+   Whether lichen needs both, or only the degenerate one, is not settled. It is also the
+   first thing that would want a third scope, which is what §6.1's fold would be for.
 2. **Whether a closure must name the version it captures.** §3's one surviving
    objection to a buffer-valued write, and versioning makes it concrete rather than
    hypothetical: threading *is* the surface now (`read (.from w1, …)`), so a closure

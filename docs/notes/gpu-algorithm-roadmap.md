@@ -375,10 +375,11 @@ the unroll, and it is the largest single item in this roadmap:
 > a second consumer, the one this axis is *not* about: it decides whether
 > `i % 64` is one slot per lane or one slot for every lane, which is what
 > chooses **where a cross-lane value lives**. `UP` is a precision upgrade on a
-> refusal that already works, while `DP` is the type's kind; growing the `UP`
-> lattice with a **level** component — which is what this callout used to say
-> the item needs *first* — is now due rather than deferred, because a `DP`
-> written in a type has to name a level. Second, the expensive half is not the
+> refusal that already works, while `DP` is the type's kind; the **level**
+> component this callout used to say the item needs *first* is not owed at all,
+> because the lattice already separates the two scopes a kernel has — a finite
+> `# p` is inside a block, and `0` is the `∞` that crosses blocks. Second, the
+> expensive half is not the
 > analysis but the **host backend**: a barrier makes the body a function of a
 > workgroup rather than of an index, so the first landing refuses a **staged**
 > body on the CPU path and loses `gpu_matches_cpu` coverage for this class of
