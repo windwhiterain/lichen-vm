@@ -50,8 +50,8 @@ fn declared() -> String {
 ---
   compute = import "compute.lichen"
 ---
-In  = struct<.b (compute.Buf Float)>
-Out = struct<.z (compute.Buf Float)>
+In  = struct{{.b (compute.Buf Float)}}
+Out = struct{{.z (compute.Buf Float)}}
 Par = compute.P (compute.KT Float)(.I In, .O Out)
 reduction = (k : Par) => {{
   i = compute.range k.n
@@ -63,14 +63,14 @@ step = (s : Par) => {{
   compute.plrun kernel ((compute.A In)(.n s.n, .I In(.b s.in.b)))
 }}
 built = compute.graph step
-data = (compute.buffer ([{elements}] : array<Float, LENGTH>) : (compute.Buf _))
+data = (compute.buffer ([{elements}] : array{{Float, LENGTH}}) : (compute.Buf _))
 out = compute.collect (compute.graphrun built ({count}, data))
 out
 "#,
         elements = data(),
         count = COUNT,
     )
-    .replace("array<Float, LENGTH>", &format!("array<Float, {COUNT}>"))
+    .replace("array{Float, LENGTH}", &format!("array{{Float, {COUNT}}}"))
 }
 
 /// The elements a launch folds: `1 ..= count`, which is what makes the closed form the answer.
