@@ -200,15 +200,63 @@ five findings, and what this one did with each:
   projection by name (see [floating-point](floating-point.md) §5.1). An element
   function that must be `Float` has to carry a float operand of its own.
 
-**One measurement is still open.** A mark reaches the fragment only where the emitter
-*lowers* its anchor: on the dispatched path the kernel compiler walks the clone the
-checker's definition pass already evaluated, so an expression whose value that pass
-decided is never lowered and its mark never publishes. In the spike's program that is
-the reduction's `identity` (`fold (6, 0.0 ~ "identity")`), because the entering call's
-state is read as a domain parameter rather than lowered — the `@loop` nest is not
-lowered on the dispatched path at all. The refusal is named
-(`RoleNotMarked { interface, role }`), and the fix is in the loop conversion rather
-than in the mark channel.
+**One measurement is still open, and the blocker is now named exactly.** A mark reaches
+the fragment only where the emitter *lowers* its anchor: on the dispatched path the
+kernel compiler walks the value the checker's definition pass already decided, so an
+expression whose value that pass decided is never lowered and its mark never publishes.
+In the spike's program that is the reduction's `identity`
+(`fold (6, 0.0 ~ "identity")`). The refusal is named
+(`RoleNotMarked { interface, role }`).
+
+The ordering constraint the measurement establishes, with the code path:
+
+1. **The definition pass runs a convertible `@loop` to decide it.** `Checker::check_term`
+   does not evaluate an `Apply` (`state[e].val` stays `None`,
+   `crates/lichen-highlevel/src/checker/lambda.rs` `check_app`), so at check time the
+   apply node is live and the nest would be reachable. The decision happens in the deep
+   pass: `Module::function_apply` sees `function_is_looping(function)` and a successful
+   `Module::loop_conversion`, and calls `apply_loop`
+   (`crates/lichen-lowlevel/src/function.rs`, `loop_run.rs`), which **writes the value
+   the host loop answered onto the apply node** (`write_node_value`). The apply therefore
+   carries both its `Apply` operation and a concrete `[value, type]` pair.
+2. **The emitter's value resolution prefers the pair.** Walking the write's `.value`
+   reaches the recorder through the peel `Index(pair, 0)`; `value_of_node` and
+   `pair_value_half` (`crates/lichen-compute/src/compute.rs`) resolve that to the pair's
+   element 0 — the exit value the host loop accumulated — instead of the `Apply`
+   operation. The walk therefore descends the *unrolled* chain of state and arithmetic
+   nodes. `Lower::apply` is never entered, so `Lower::lower_loop`
+   (`crates/lichen-compute/src/compute/body.rs`) never runs, the entering call's state
+   is never read, and the seed literal is never lowered.
+3. **Therefore the anchor is never visited.** `Lower::publish_mark` only ever sees nodes
+   the walk lowers, and the marked seed is not one of them. The same expression's
+   `combine` mark survives by luck alone: its anchor sits on the add the unrolled chain
+   still lowers.
+
+**The `lower_loop` path is reachable, and the discriminator is measured.** It fires when
+the checker leaves the loop *undecided* — when the entering state is a run-time value, so
+`loop_iteration` reports `Undecided` and `apply_loop` writes no value, leaving
+`value_of_node` nothing to peel. Instrumenting `Lower::apply` and `Lower::lower_loop` and
+running both programs: `a_kernel_loop_nest_carries_a_runtime_state`
+(`crates/lichen-language/tests/compute.rs`, whose seed is a buffer read) reaches each
+**twice**, while `reduction_interface` (whose seed is the literal `0.0`) reaches each
+**zero times**. So the constraint is exactly: *the emitter converts a kernel body's
+`@loop` only if the definition pass has not already run it.*
+
+**Why the obvious patch is the wrong one.** Preferring the operation over the pair in
+`value_of_node` does not reach the emitter's `apply`: the write's `.value` is not the
+apply node, it is a node the unrolled chain derived, whose class already holds the
+decided scalar. Publishing the mark from the deciding pass instead — reaching back from
+the loop's result to the marked anchor — would make the mark a property of a *search*
+rather than of the node the reader walks, which is the model §3 rejected when it deleted
+the first spike's side table. The honest fix is to reorder *when the definition pass
+evaluates a recurrence inside a kernel body*: the kernel must be compiled while the nest
+is still unconverted, so the emitter reaches `Lower::apply` and the marked argument
+lowers. That is a change to the evaluator's scheduling — a kernel closure's body would
+have to be compiled before the deep pass runs its applies, which needs a check-time
+compilation hook the `Ctx` boundary does not expose today (the plugin's
+`NativeOp::build` has the argument's *value node*, not `&mut Module`) — so it is recorded
+here rather than attempted. Until it lands, the fix is in the loop conversion and
+*not* in the mark channel, exactly as this subsection first said.
 
 The chain the spike *does* demonstrate end to end: a kernel's claim is read from the
 registry the compile filled and its roles from the fragment beside it
@@ -522,7 +570,7 @@ about shrinks exactly where fusion fires.
 | content-addressed artifact store | **in** ([artifact-cache](artifact-cache.md)) | schema artifacts and pack bindings |
 | float | **in flight** (ten worktrees, [floating-point](floating-point.md)) | softmax/attention are float algorithms; the engine is class-agnostic but its acceptance case is not |
 | interface verification (symbolic combine check) | **missing** | §3's teeth; without it claims are trusted, which this design refuses to do |
-| a mark whose anchor the dispatcher never lowers | **missing** | §3's open measurement: the dispatched compile walks a clone the definition pass already evaluated, so an expression whose value that pass decided is not lowered and its mark does not publish (today the reduction's `identity`) |
+| a mark whose anchor the dispatcher never lowers | **missing** | §3's open measurement: the definition pass runs a convertible `@loop` before the kernel emitter walks the body, so the emitter peels the decided pair instead of entering `Lower::apply` and the marked seed is never lowered |
 | shared memory + workgroup | **missing** (roadmap axis C) | one-dispatch split-K; until then split-K runs as two dispatches, correct and merely slower |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
 

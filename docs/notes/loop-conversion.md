@@ -1335,6 +1335,35 @@ split is what makes this cheap: class tracking, `Positions`, the depth budget an
    its captured environment. A count that is a **buffer read** avoids it, which
    is what the acceptance case passes.
 
+   **A second constraint on the reader, measured: the nest must still be a nest when
+   the emitter walks it, and the definition pass does not guarantee that.** The
+   reader is reached only if the checker's definition pass has **not** already run
+   the recursion. `Module::function_apply` calls `apply_loop` for a marked,
+   convertible recursion, and `loop_run.rs`'s `Exit` arm **writes the answered pair
+   onto the apply node** (`write_node_value`). The apply then carries both its
+   `Apply` operation and a concrete `[value, type]`, and `lichen-compute`'s
+   `value_of_node`/`pair_value_half` resolve the recorder's `Index(pair, 0)` to that
+   pair — so the walk descends the **unrolled** chain of state and arithmetic nodes
+   and `Lower::apply` is never entered. Instrumenting both entry points and running
+   both programs: in `a_kernel_loop_nest_carries_a_runtime_state` (whose seed is a
+   buffer read, so the checker's `loop_iteration` reports `Undecided` and writes no
+   value) `Lower::apply` and `Lower::lower_loop` are each reached **twice**, while in
+   `reduction_interface` (whose seed is the literal `0.0`, so the test decides and
+   the host loop runs to its base) each is reached **zero times**.
+
+   **So a kernel body's `@loop` is converted by the emitter only if the checker has
+   not already run it**, and the two cases of §8.1's table are not symmetric in the
+   reader: "the count is decidable" makes the *host* loop cheap and the *kernel*
+   reader unreachable. What depends on the reader being reached besides the loop is
+   every mark anchored below the fold — an interface projection on a subexpression
+   the definition pass decided never publishes, because the mark channel publishes
+   where the emitter lowers the anchor (`docs/notes/graph-fusion.md` §3). The honest
+   fix is a reordering: compile the kernel while the nest is unconverted, which needs
+   a check-time compilation hook the `Ctx` boundary does not expose (the plugin's
+   `NativeOp::build` holds the argument's **value node**, not `&mut Module`). Until
+   that lands this is a **known unreached reader**, not a defect in the conversion or
+   in the mark channel.
+
    **The fix decided here and still not written** — for the other reader, the host
    loop — is to instantiate the marked template **once against placeholder
    per-slot cells** and read the roles through that instantiation. It must not
