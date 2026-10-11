@@ -2,10 +2,11 @@
 //! See docs/notes/graph-fusion.md §5.
 //!
 //! # Invariant
-//! A declared reduction is what licenses a tiled fold, so the program that wrote the algebra
-//! decides the schedule: no count and no operator is an input here. An installed pack that
-//! matches a node's schema **steers** the placement, and the engine's own choice is the floor
-//! beneath it. A node the pass cannot read stays per-lane rather than being tiled on a guess.
+//! A declared reduction licenses a tiled fold, so the program's own algebra decides the schedule,
+//! and an installed pack matching a node's schema **steers** the placement over the engine's own
+//! choice. A node the pass cannot read stays per-lane rather than tiled on a guess.
+//!
+//! A node reading another node's output is unreadable: [`NODE_LOCAL_ROLES`] is all its marks say.
 
 use std::collections::HashMap;
 
@@ -27,6 +28,14 @@ use crate::fusion_claim::{
 };
 use crate::placement_pack::{ConstraintRefusal, PlacementPack};
 use crate::program::LangProgram;
+
+/// The roles a node whose algebra this pass can derive for itself declares.
+///
+/// # Invariant
+/// The algebra is `combine` and `identity` and nothing else: a claim that declares a further role
+/// describes code between two nodes — the `element` role — which this pass has no graph to name a
+/// producer with, so the node is refused rather than tiled on the algebra of its own datum reads.
+const NODE_LOCAL_ROLES: [&str; 2] = ["combine", "identity"];
 
 /// The row a fragment digest joins to: the program's own instance, or why it has no algebra.
 ///
@@ -106,6 +115,10 @@ impl GraphPass for AutomaticTiling {
     /// its own digest, so a run of the same program is tiled and reported again.
     ///
     /// An **empty** join is re-read from the registry on each run.
+    ///
+    /// # Safety
+    /// A row is not enough to tile: a node whose input is a value another node produced reads that
+    /// output as a datum, so the edge refuses it and its body is left alone.
     fn apply(
         &self,
         graph: &Graph,
@@ -121,6 +134,7 @@ impl GraphPass for AutomaticTiling {
             &self.instances
         };
         // The rows are read out first, so the graph is free to be rewritten.
+        let inputs = graph.input_count();
         let mut tiled: Vec<(usize, Instance)> = Vec::new();
         for (position, node) in graph.nodes().iter().enumerate() {
             let Node::Kernel(kernel) = node;
@@ -129,7 +143,17 @@ impl GraphPass for AutomaticTiling {
                 continue;
             };
             match row {
-                Ok(instance) => tiled.push((position, instance.clone())),
+                Ok(instance) => match beyond_a_node(kernel.inputs.iter().copied(), inputs) {
+                    Some(value) => lines.push(format!(
+                        "node {position}: refused: {}",
+                        SchemaRefusal::ReadsAnotherNode {
+                            node: position,
+                            value,
+                        }
+                        .message()
+                    )),
+                    None => tiled.push((position, instance.clone())),
+                },
                 Err(refusal) => {
                     lines.push(format!("node {position}: refused: {}", refusal.message()));
                 }
@@ -146,6 +170,16 @@ impl GraphPass for AutomaticTiling {
         }
         Some(rewritten)
     }
+}
+
+/// The first input of a node that no graph input carries, when it reads one.
+///
+/// # Invariant
+/// A graph numbers the values it takes as arguments from zero and everything its nodes produce
+/// after them, so an input at or above the count is another node's output — the value the
+/// node-local derivation reads as a datum.
+fn beyond_a_node(inputs: impl Iterator<Item = usize>, graph_inputs: usize) -> Option<usize> {
+    inputs.into_iter().find(|value| *value >= graph_inputs)
 }
 
 /// What the installed packs have to say about one node.
@@ -379,18 +413,18 @@ fn insert(
     );
 }
 
-/// The algebra a fragment's own marks declare, or the refusal that names the half missing.
+/// The algebra a fragment's own marks declare, or why the node-local reading is not its algebra.
 ///
 /// # Invariant
-/// The projections are the fragment's own, read the way §6's engine reads them: a role the body
-/// does not mark is refused by name, and a marked subexpression the bridge cannot read carries
-/// the bridge's own cause.
+/// The projections are the fragment's own, as §6's engine reads them: a role the body does not
+/// mark is refused by name, and a marked subexpression the bridge cannot read carries its cause.
 ///
-/// The refusal's own `node` is the kernel **id**, because that is what a schema names an
-/// instance by; the run report prepends the graph node the row was reached from.
+/// The refusal's `node` is the kernel **id**, which is what a schema names an instance by; the
+/// run report prepends the graph node. A role outside [`NODE_LOCAL_ROLES`] is beyond a node.
 fn derive(kernel: &Kernel) -> Row {
-    let mut projections = Vec::with_capacity(kernel.claim.roles.len());
-    for role in roles(&kernel.claim) {
+    let roles = roles(&kernel.claim);
+    let mut projections = Vec::with_capacity(roles.len());
+    for role in roles.iter().cloned() {
         let marked = match marked_value(&kernel.fragment, &kernel.claim.interface, &role) {
             Ok(marked) => marked,
             Err(_) => {
@@ -424,6 +458,18 @@ fn derive(kernel: &Kernel) -> Row {
             role,
             expression,
             canonical,
+        });
+    }
+    // A consumer's read is another node's output, which no node-local derivation can name.
+    let beyond: Vec<String> = roles
+        .iter()
+        .filter(|role| !NODE_LOCAL_ROLES.contains(&role.as_str()))
+        .cloned()
+        .collect();
+    if !beyond.is_empty() {
+        return Err(SchemaRefusal::BeyondANode {
+            node: kernel.id,
+            roles: beyond,
         });
     }
     let schema = SchemaNode {

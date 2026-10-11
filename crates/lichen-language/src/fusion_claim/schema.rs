@@ -322,6 +322,29 @@ pub enum SchemaRefusal {
         /// The budget it exceeded, in nodes.
         budget: usize,
     },
+    /// A node's role reaches another node's output, and this reader names no producer.
+    ///
+    /// # Invariant
+    /// One variant per party, not one shared sentence: a reader that knows the producer reports
+    /// the edge at [`crate::automatic_tiling`], and this arm is what a reader that does not says.
+    BeyondANode {
+        /// The position the refusal is read at, region-local or a kernel id.
+        node: usize,
+        /// The roles whose code reaches a producer the reader cannot name.
+        roles: Vec<String>,
+    },
+    /// A graph node reads a value another node produced, and the reader has no producer for it.
+    ///
+    /// # Invariant
+    /// A distinct arm from [`Self::BeyondANode`] because it is a distinct question and it carries a
+    /// distinct fact: that one is the claim's shape and its roles, this one the graph's own edge
+    /// and the value it names. A reader with a graph says this; one with only a fragment cannot.
+    ReadsAnotherNode {
+        /// The graph node whose input is another node's output.
+        node: usize,
+        /// The value in the graph's table it reads.
+        value: usize,
+    },
     /// The region's instances are not one producer-to-consumer chain.
     NotAReductionChain {
         /// The graph node whose edges are not a chain's.
@@ -412,6 +435,17 @@ impl fmt::Display for SchemaRefusal {
                 formatter,
                 "the instance at {node}'s `{role}` projection has no canonical form within \
                  {budget} nodes"
+            ),
+            SchemaRefusal::BeyondANode { node, roles } => write!(
+                formatter,
+                "the instance at {node} claims the role(s) {} beyond `combine` and `identity`, \
+                 whose code reads the value another node produced, and this reader names no producer",
+                roles.join(", ")
+            ),
+            SchemaRefusal::ReadsAnotherNode { node, value } => write!(
+                formatter,
+                "the instance at {node} reads value {value}, which another node of the graph \
+                 produced, so the value it reads as its own datum is not its own"
             ),
             SchemaRefusal::NotAReductionChain { node } => write!(
                 formatter,
