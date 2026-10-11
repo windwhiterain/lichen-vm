@@ -425,6 +425,46 @@ impl KernelBody {
         )
     }
 
+    /// The slice `value` was staged into, when its producer is the write that stages it.
+    ///
+    /// # Invariant
+    /// The answer is the slice ordinal the write's first operand is, and only a slice write
+    /// stages: a value with any other producer stages nothing, which a reader must not read as
+    /// "the slice at ordinal zero" (`docs/notes/graph-fusion.md` §5).
+    pub fn staged_slice(&self, value: ValueId) -> Option<usize> {
+        match self.values.get(value.0 as usize) {
+            Some(ValueDef::Instr {
+                op: KernelInstr::SliceWriteCall(_),
+                ..
+            }) => self.slice_ordinal(value).map(|ordinal| ordinal as usize),
+            _ => None,
+        }
+    }
+
+    /// The slice ordinal a slice access addresses, when its operand is the constant it must be.
+    ///
+    /// # Invariant
+    /// A slice is a compile-time ordinal, so an operand that is not an integer constant states
+    /// no slice — and a caller that cannot resolve one must not read the `None` as "another
+    /// slice", because that is the answer that drops a barrier.
+    pub(crate) fn slice_ordinal(&self, value: ValueId) -> Option<u64> {
+        match self.values.get(value.0 as usize) {
+            Some(ValueDef::Instr { args, .. }) => self.constant(args.first().copied()),
+            _ => None,
+        }
+    }
+
+    /// The integer constant `value` is, when it is one.
+    pub(crate) fn constant(&self, value: Option<ValueId>) -> Option<u64> {
+        match self.values.get(value?.0 as usize) {
+            Some(ValueDef::Instr {
+                op: KernelInstr::Const(ScalarClass::Int, bits),
+                ..
+            }) => Some(*bits as u64),
+            _ => None,
+        }
+    }
+
     /// The gate a consumer calls **before it reads a body**: a failure is refused by
     /// name, never partially emitted.
     ///

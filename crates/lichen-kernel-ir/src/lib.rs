@@ -13,12 +13,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 mod barrier;
 mod body;
 mod marks;
+mod plan;
 mod unary;
 
 pub use body::{
     Barrier, BasicBlock, Br, FlatOp, KernelBody, Terminator, ValueDef, ValueId, from_flat,
 };
 pub use marks::{CLAIM_PREFIX, ClaimRefusal, KernelClaim, KernelMark, MarkField};
+pub use plan::{Plan, PlanRefusal, Staging};
 pub use unary::{
     TRANSCENDENTALS, exp_body, exp_value, floor_body, floor_value, inlined_exp_operand, sqrt_body,
     sqrt_value,
