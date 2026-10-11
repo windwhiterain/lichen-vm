@@ -332,6 +332,27 @@ parameter's value, and the test is the **equality class** (`class_root`), which 
 the same thing `define_in` matches a parameter against — two tests that could
 disagree would be two answers to "is this the parameter's own value".
 
+**The write side had the same defect in a worse form.** `buffer_read` resolved the
+buffer the author named; `buffer_write` read `items[1]` and `items[2]` and never read
+`items[0]` at all, so the ordinal a write filled was the emission counter and the `.to`
+was decoration nothing checked. It hid for the same reason the read's second route did —
+the gates forced the two orders to coincide: every codomain position had to *be* a
+`compute.write`, the walk visited them in codomain order, and the emission count had to
+equal the output count. Measured with the codomain ordered against the names: a body
+writing `.to k.out.y` at position 0 filled `x`; a write naming an **input** buffer
+compiled and wrote an output; and a chain `write (.to w1, …)` over
+`w1 = write (.to b, …)` dropped `w1` as unreachable — visible only once the two writes
+were given different indices, when `w1`'s slots came back **zero**.
+
+`parallel_output_pos` is now the write's counterpart, answering from the same fact (the
+peeled node's own `param_path`, against `roles.outputs`), and `write_chain_output_pos`
+walks a `.to` that is itself a write down to the buffer it names — which is what makes a
+chain *one output written twice* rather than two outputs written once. The
+emission-count gate is retired: the check that each codomain position holds a write
+naming **that** position implies it, and survives a chain, which the count does not. A
+disagreement is refused by name rather than reinterpreted, because the alternative is
+the third silent miscompilation in this family.
+
 ### A scalar leaf of `.in`, which the body could not read
 
 `k.in.a` — `a` an `Int` field of the input struct — was refused as
@@ -525,7 +546,8 @@ Two things the author still writes, and one defect the empty group exposed:
 |---|---|
 | The type lambdas and the wrappers | `crates/lichen-compute/src/compute.lichen` |
 | The named-parameter walk and the prelude algebra | `parallel_roles`, `param_path`, `buf_payload`, `is_buf_shape`, `compute.rs` |
-| Position resolution | `parallel_buffer_pos`, `peeled_argument`, `is_param_value`, `usize_value`, `field_name`, `param_read_offset`/`param_path`/`resolve_steps`, `compute.rs` |
+| Position resolution, reads | `parallel_buffer_pos`, `peeled_argument`, `is_param_value`, `usize_value`, `field_name`, `param_read_offset`/`param_path`/`resolve_steps`, `compute.rs` |
+| Position resolution, writes | `parallel_output_pos`, `write_chain_output_pos`, `write_node`/`write_item_node`/`write_target_node`, `compute.rs`; `buffer_write`, `compute/body.rs` |
 | Parallel lowering | `compile_parallel_fragment`, `compute.rs` |
 | Instruction emitter (read/write arms) | `emit_node`, `compute.rs` |
 | Launch walk (count and buffers) | `ComputeOperator::ParLaunch`, `compute.rs` |

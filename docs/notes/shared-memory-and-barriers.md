@@ -102,17 +102,24 @@ each is cited so the next reader does not repeat the mistake.
   (`lichen-kernel-ir/src/lib.rs:561`) and `validate` enforces the two agree
   (`body.rs:333`). So "it leaves no trace in the value graph" was too strong: the
   trace is a node with no result and no consumer.
-- **Every ordinal is a compile-time constant.** `write`'s first operand is the
-  `.to` **buffer**, not a length — `body.rs`'s `buffer_write` reads item 1 as the
-  index and item 2 as the value and ignores item 0 entirely, taking the ordinal
-  from `tally.writes` (`body.rs:1533`), which is what the emitter calls the write's
-  *emission ordinal* (`spirv.rs:2772`). So the write set is *already* available at
-  compile time; it is simply not exposed.
-- **The write set is a private tally.** `Positions { writes, reads,
-  write_classes, read_classes, element_class }` (`compute.rs:2624`) counts them
-  for the fragment's `outputs`/`output_classes`, and the return point recovers
-  which nodes they are by walking the codomain (`parallel_output_nodes`,
-  `compute.rs:2341`). Nothing outside the lowering can read it.
+- **Every ordinal is a compile-time constant, and it is the `.to` the author wrote.**
+  `write`'s first operand is the `.to` **buffer**, not a length, and `body.rs`'s
+  `buffer_write` resolves it to an output ordinal through any chain of writes
+  (`write_chain_output_pos`) — the write-side counterpart of the `parallel_buffer_pos`
+  a read resolves its `.from` with. **This was not true when this note was written:**
+  item 0 was ignored *entirely* and the ordinal was `tally.writes`, an emission counter
+  the emitter called the write's *emission ordinal* (`spirv.rs`). So a body naming its
+  targets in another order than the codomain lists them silently exchanged two outputs,
+  a write naming an *input* buffer compiled and wrote an output, and a chain of two
+  writes to one output dropped the inner one as unreachable. All three measured and
+  fixed; the rule they now obey is [code-audit D17](code-audit.md)'s.
+- **The write set is a private tally.** `Positions { emissions, reads,
+  write_classes, read_classes, element_class }` counts them
+  for the fragment's `outputs`/`output_classes` — `write_classes` is placed **at its
+  ordinal** rather than pushed, so a chain that writes one output twice leaves one
+  entry — and the return point recovers
+  which nodes they are by walking the codomain (`parallel_output_nodes`).
+  Nothing outside the lowering can read it.
 
 The body itself is SSA with one instruction per `ValueId`
 ([compute-kernel-struct](compute-kernel-struct.md), `lichen-kernel-ir/body.rs`),
@@ -290,15 +297,19 @@ Two measurements outlive that decision and are recorded here rather than lost:
 
 - **A write the codomain does not reach is not written, and that is correct.** The
   lowering is demand-driven from the codomain leaves, so a `write` bound to a
-  statement the return value never reads is never emitted, never counted by
-  `tally.writes` and never diagnosed: two writes to one output with only the second
+  statement the return value never reads is never emitted
+  and never diagnosed: two writes to one output with only the second
   reachable answer with the second's value and no complaint. That looks exactly like
   the ladder's histogram until it is checked against the **type**: an index function
   is `A T.I -> T.O` over a parameter whose `.out` group *is* the outputs, so walking
   the return necessarily covers every declared output, the per-output
-  `write_value_node` gate and the tally gate already say the two sets are the same,
+  `write_value_node` gate and the check that each position's write **names** that
+  position already say the two sets are the same,
   and an unreturned `write` is a dead expression — dropping it is what a
-  pure-function semantics does. [code-audit D17](code-audit.md) records the decision
+  pure-function semantics does. **One narrowing:** a write reached through another
+  write's `.to` is *not* dead and is now emitted, so "unreached" means reached neither
+  by the codomain nor by a `.to` chain. [code-audit D17](code-audit.md) records the
+  decision
   and its scope: **it holds for global buffers only**, because §9 step 4 makes a
   `Shared` slot readable by another lane, and then an unreturned `swrite` has a
   reader and reachability from the codomain stops being the test. The token would not
@@ -308,12 +319,21 @@ Two measurements outlive that decision and are recorded here rather than lost:
   value of an output position. So threading a state token through it was a category
   error and not merely an expensive choice, and returning a new version of the buffer
   is not a clever encoding but the honest type for it.
-- **A data-flow chain of two writes is refused today.** Making the second write's
-  `.at` close over the first's result trips the tally gate ("emitted 2 write(s) but
-  its codomain names 1 output(s)"), because the gate counts *emissions* and a chain
-  emits twice for one output. Under versioning that program is ordinary, so the gate
-  must learn that writes to one buffer are one output — new work the replacement
-  unlocks, not a reversion.
+- **A data-flow chain of two writes composes, and the gate said to refuse it is
+  gone.** This bullet originally recorded that a chain trips the tally gate ("emitted
+  2 write(s) but its codomain names 1 output(s)"), because the gate counted
+  *emissions* and a chain emits twice for one output. **Two corrections, both
+  measured.** The spelling that matters was never refused: a chain is `.to` closing
+  over the first write's result, and because `buffer_write` ignored `.to` the inner
+  write was simply *dropped* as unreachable — the program compiled and answered with
+  the outer write's value, which looked right only because both writes hit the same
+  slot. Given the inner one slots of its own, they come back **zero**. And the gate is
+  retired rather than taught: the ordinal a write fills now comes from its `.to`, and
+  `write_classes` is placed at that ordinal, so a chain leaves one entry per output and
+  the emission count no longer decides anything. What replaced the gate is the check
+  that each codomain position holds a write naming that position. Under versioning
+  that program is ordinary — which is what D17's sentence already said, and is now what
+  the lowering does.
 
 **The enforcement question is unanswered and is now the sharpest open one.** Nothing
 in the tree forbids reading the original `b` after writing it, which is a silently
@@ -354,16 +374,40 @@ possible. The value graph alone cannot answer fact 1 — it knows `k` is an `Int
 and not whether `swrite ws k v` writes one slot per lane or the same slot for
 every lane. But the fact that decides it is **which memory the slot is**, and
 that is a *nominal type* fact lichen already carries: `Buf` is grid-disjoint,
-`Shared` is block-shared. Given that, all three facts plus the refusal the
-"Recovered measurements" section wants are computable inside
-`lichen-kernel-ir` from the body alone:
+`Shared` is block-shared. Given that, the three facts **split** — and the split
+corrects what this subsection first claimed, which was that all of them are
+computable inside `lichen-kernel-ir` from the body alone. Fact 1's *precision* is
+not. It is stated below as "modulo `LOCAL_SIZE_X`", and `LOCAL_SIZE_X` is
+`crates/lichen-compute-gpu/src/spirv.rs`'s own constant — the
+`SpvExecutionModeLocalSize` that emitter declares — while `KernelFragment` carries no
+lane count at all (its fields are `param_shape`, `roles`, `body`, `inputs`, `outputs`,
+`input_classes`, `output_classes`, `result_classes`), and `lichen-kernel-ir`'s
+zero-dependency rule is a stated invariant rather than an accident of the tree: "this
+crate is the contract between a *compiler* stage … and one or more *backends* …
+Anything it named would be named by both sides." So the body alone cannot answer it
+and the crate is forbidden from learning it.
 
-| the question | the query | cost |
-|---|---|---|
-| fact 2, same lane | the two index operands are the same `ValueId`, or neither's def cone contains the lane parameter | one memoised cone walk over the body |
-| fact 1, may overlap | affine interval arithmetic over the two index expressions, modulo `LOCAL_SIZE_X` | O(1) integers |
-| fact 3, already separated | a latch over the scan | free |
-| the contended-write **refusal** | the write's index def cone excludes the lane parameter **and** the slot is `Shared` | the same cone walk |
+| the question | the query | cost | where it can live |
+|---|---|---|---|
+| fact 2, same lane | the two index operands are the same `ValueId`, or neither's def cone contains the lane parameter | one memoised cone walk over the body | the IR, from the body |
+| fact 1, **conservative** | the two index intervals intersect at all | O(1) integers | the IR, from the body |
+| fact 1, **exact** | the same modulo the lane count, which is what decides whether `i % 64` is one slot per lane or one slot for all of them | O(1) integers | **a backend**: it needs `LOCAL_SIZE_X` |
+| fact 3, already separated | a latch over the scan | free | the IR |
+| the contended-write **refusal** | the write's index def cone excludes the lane parameter **and** the slot is `Shared` | the same cone walk | the IR, and it must stay there |
+
+The refusal stays above the backends because it is a **program** property, not a target
+limitation: on a host that runs invocations in order a contended write has a defined
+meaning, so refusing it in one backend only would leave a differential test comparing a
+race against an order. It needs no barrier instruction to compute, which matters because
+making `Barrier` a `KernelInstr` variant was measured to force **11 edits across 7 files
+in 4 crates** — the IR's own `produces`/`arity`/`own_class`, a new `BridgeRefusal`
+variant plus its `Display` and match arms, the wasm emitter's `instruction_type` *and*
+`lower_instr` (which its own invariant requires to agree), the wasm mixed-class check,
+the differential test's second CPU interpreter, and `spirv.rs` — of which exactly one,
+`spirv.rs`, is a place a barrier means anything. The other six each had to invent an
+answer for an instruction undefined in their target. Insertion therefore belongs where
+`LOCAL_SIZE_X` and `OpControlBarrier` already are; §9's staging predates this
+measurement and is **not yet restaged for it**, shared memory being deferred.
 
 The refusal is the interesting row, because it is the one this note originally
 assigned to `DP`. "Excludes the lane parameter" is a **sound** test for
@@ -604,7 +648,10 @@ deferred with shared memory; until then `Lower` threads the token in emission
 order, which is the order the body already had, so **no false dependency was
 introduced** and no existing program changed meaning — `Positions`, the
 `tally.writes == outputs.len()` check, and `write_value_node`, which reads the
-*lichen-level* `operand_items[2]`, are all untouched.
+*lichen-level* `operand_items[2]`, are all untouched by it. *(Since reverted, and
+since then overtaken: that check is retired — a write's ordinal now comes from its
+`.to`, so an emission count decides nothing. See §2 and
+[code-audit D17](code-audit.md).)*
 
 Nothing about the buffer ABI changed either: the ordinal is still a compile-time
 constant, the fragment still declares `outputs`, and the run still binds

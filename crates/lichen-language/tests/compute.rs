@@ -2143,3 +2143,107 @@ compute.collect out.z
         "the two backends answered the second leaf value differently"
     );
 }
+
+/// A write that names another output than the codomain position it sits at is refused.
+///
+/// # Invariant
+/// The ordinal a write fills comes from its `.to` operand, so a body that names its
+/// targets in another order than the codomain lists them is a mistake to report, not
+/// a spelling to reinterpret. Position order used to win and the two outputs were
+/// silently exchanged.
+#[test]
+fn a_write_to_another_output_than_its_position_is_refused() {
+    let messages = fail(
+        r#"
+--- compute = import "compute.lichen" ---
+In  = struct<.a Int>
+Out = struct<.x (compute.Buf _), .y (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {
+  i = compute.range k.n
+  (compute.write ((compute.Write _)(.to k.out.y, .at i, .value i + 100)), compute.write ((compute.Write _)(.to k.out.x, .at i, .value i)))
+}
+k = compute.parallel f "cpu"
+outs = (compute.plrun k ((compute.A In)(.n 3, .I In(.a 0))) : Out)
+compute.read ((compute.Read _)(.from outs.x, .at 2))
+"#,
+    );
+    assert_eq!(
+        messages.len(),
+        1,
+        "one misplaced write is one diagnostic: {messages:?}"
+    );
+    let message = &messages[0];
+    assert!(
+        message.contains("compute.parallel") && message.contains("to output 1"),
+        "the refusal must name the output the write points at: {message:?}"
+    );
+}
+
+/// A write whose `.to` names an input buffer is refused, not silently turned into a
+/// write of an output.
+///
+/// # Invariant
+/// The write's counterpart to [`a_read_of_a_writes_result_is_refused_by_name`]: both
+/// sides resolve the buffer the author named against the role paths the parameter
+/// declares, and neither falls back to a position.
+#[test]
+fn a_write_naming_an_input_buffer_is_refused() {
+    let messages = fail(
+        r#"
+--- compute = import "compute.lichen" ---
+In  = struct<.b (compute.Buf _)>
+Out = struct<.z (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {
+  i = compute.range k.n
+  compute.write ((compute.Write _)(.to k.in.b, .at i, .value i))
+}
+data = compute.buffer [0, 0, 0, 0]
+k = compute.parallel f "cpu"
+out = (compute.plrun k ((compute.A In)(.n 4, .I In(.b data))) : Out)
+compute.collect out.z
+"#,
+    );
+    assert_eq!(
+        messages.len(),
+        1,
+        "one unreadable target is one diagnostic: {messages:?}"
+    );
+    let message = &messages[0];
+    assert!(
+        message.contains("compute.parallel") && message.contains("names no output buffer"),
+        "the refusal must name its own cause: {message:?}"
+    );
+}
+
+/// A chain of writes fills the one output it names, and every link is written.
+///
+/// # Invariant
+/// A `compute.write` is the value of an output position, so a `.to` that is itself a
+/// write names that same output and both links are emitted. The assertion reads only
+/// the slots the **inner** write owns: the outer writes `i / 2`, which two lanes
+/// share, so its slots are contended and say nothing about a schedule.
+#[test]
+fn a_chain_of_writes_fills_the_one_output_it_names() {
+    let (module, value, _root_ty) = run(r#"
+--- compute = import "compute.lichen" ---
+In  = struct<.a Int>
+Out = struct<.z (compute.Buf _)>
+Par = compute.P (compute.KT _)(.I In, .O Out)
+f = (k : Par) => {
+  i = compute.range k.n
+  w = compute.write ((compute.Write _)(.to k.out.z, .at i, .value i + 7))
+  compute.write ((compute.Write _)(.to w, .at i / 2, .value i + 100))
+}
+k = compute.parallel f "cpu"
+outs = (compute.plrun k ((compute.A In)(.n 4, .I In(.a 0))) : Out)
+compute.collect outs.z
+"#);
+    let elements = common::usize_array(&module, &value);
+    assert_eq!(
+        &elements[2..],
+        &[9, 10],
+        "slots 2 and 3 are the inner write's alone, so it was emitted"
+    );
+}

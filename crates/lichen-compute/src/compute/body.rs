@@ -24,7 +24,7 @@ use super::{
     ComputeOperator, ComputeValue, ParamSlot, Positions, TypeOperator, const_bits, conv_of,
     flat_arity, float_bits, is_static_function, kernel_bin, kernel_id_of, kernels, node_class,
     node_class_in, parallel_buffer_pos, param_classes, peeled_argument, scalar_literal,
-    unary_class,
+    unary_class, write_chain_output_pos, write_node,
 };
 
 /// The parameter slots' classes in flattening order — the ABI's own list, not the body's.
@@ -1353,14 +1353,14 @@ where
         }
         // **`[else, then]`**, so element 0 runs when the condition is false.
         let (otherwise, then) = (arms[0].node, arms[1].node);
-        let emitted = self.tally.writes;
+        let emitted = self.tally.emissions;
         let otherwise = self.value_item(otherwise)?;
-        if self.tally.writes != emitted {
+        if self.tally.emissions != emitted {
             return Err(CONDITIONAL_WRITE.into());
         }
-        let emitted = self.tally.writes;
+        let emitted = self.tally.emissions;
         let then = self.value_item(then)?;
-        if self.tally.writes != emitted {
+        if self.tally.emissions != emitted {
             return Err(CONDITIONAL_WRITE.into());
         }
         let selector = self.value_item(*selector)?;
@@ -1605,9 +1605,10 @@ where
     /// Write a buffer element: `write [buffer, idx, val]`.
     ///
     /// # Invariant
-    /// The ordinal is taken before the operands are emitted, so a write nested inside
-    /// another write's value still consumes an ordinal of its own — which the
-    /// codomain count check refuses.
+    /// The ordinal is the one the `.to` operand **names**, resolved through any chain
+    /// of writes, and never the order they were emitted in: a write is the value of an
+    /// output position. A target that is itself a write is emitted first — the previous
+    /// version of this same output, written in the order the chain spells.
     fn buffer_write(&mut self, operand: NodeId) -> Result<ValueId, String> {
         let items = self.module.operand_items(operand)?;
         if items.len() < 3 {
@@ -1616,13 +1617,30 @@ where
                 items.len()
             ));
         }
+        let target = dynamic(items[0].node)?;
         let index = dynamic(items[1].node)?;
         let value_node = dynamic(items[2].node)?;
-        let ordinal = self.tally.writes;
-        self.tally.writes += 1;
+        let peeled = peeled_argument(self.module, AnyNodeId::Dynamic(target))?;
+        if let Some(previous) = peeled
+            .dynamic()
+            .and_then(|node| write_node(self.module, node))
+        {
+            self.value(previous)?;
+        }
+        let ordinal =
+            write_chain_output_pos(self.module, self.params, target)?.ok_or_else(|| {
+                let seen = match self.params.first().and_then(|slot| slot.roles.as_ref()) {
+                    Some(roles) => format!("the parameter's outputs are {:?}", roles.outputs),
+                    None => "the parameter declares no outputs".to_string(),
+                };
+                format!(
+                    "write's buffer argument is not an output buffer of the parallel parameter \
+                 ({seen})"
+                )
+            })?;
         // The element a write fills is the parameter's own declaration where it states one.
         let element = self.declared_output_class(ordinal, value_node);
-        self.tally.write_classes.push(element);
+        self.tally.record_write(ordinal, element);
         let position = self.emit_const(ScalarClass::Int, ordinal as i64);
         let index = self.value(index)?;
         let value = self.value(value_node)?;

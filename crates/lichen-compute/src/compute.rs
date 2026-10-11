@@ -2153,7 +2153,8 @@ where
         roles: KernelRoles::default(),
         body,
         inputs: tally.reads,
-        outputs: tally.writes,
+        // The ordinal space, not the emission count: a chain writes one output twice.
+        outputs: tally.write_classes.len(),
         input_classes: tally.input_classes(tally.reads),
         // A scalar fragment has no output buffers, so this is empty: its values
         // are the wasm results below.
@@ -2330,8 +2331,8 @@ where
         })
         .next()
         .unwrap_or(ScalarClass::Int);
-    // **The outputs are the codomain's**, one `compute.write` per position in position
-    // order.
+    // **The outputs are the codomain's**, and each position must hold a
+    // `compute.write` naming that same position.
     let mut tally = Positions::default();
     // The class a buffer read is declared in; see [`Positions::element_class`].
     tally.element_class = Some(class);
@@ -2351,18 +2352,29 @@ where
                  (an index function must write every output it declares)"
             ));
         }
+        // **A write fills the output it names**, not the position it is walked at.
+        if !conditional {
+            let named = write_chain_output_pos(module, &params, AnyNodeId::Dynamic(*output))?;
+            if named != Some(position) {
+                return Err(match named {
+                    Some(other) => format!(
+                        "output {position} of the parallel index function is a `compute.write` \
+                         to output {other}: a write fills the output its `.to` names, and the \
+                         codomain's order is not that name"
+                    ),
+                    None => format!(
+                        "output {position} of the parallel index function is a `compute.write` \
+                         whose `.to` names no output buffer of the parameter (the parameter's \
+                         outputs are {:?})",
+                        roles.outputs
+                    ),
+                });
+            }
+        }
     }
     let mut body_instr =
         Lower::lower_index_function(module, &params, cfg_value, fid, &outputs, class, &mut tally)?;
     body_instr.expand_transcendentals()?;
-    if tally.writes != outputs.len() {
-        return Err(format!(
-            "a parallel index function emitted {} write(s) but its codomain names {} \
-             output(s): every output must be exactly one `compute.write`",
-            tally.writes,
-            outputs.len()
-        ));
-    }
     if outputs.len() != roles.outputs.len() {
         return Err(format!(
             "this index function's codomain names {} output(s) but its parameter declares {} \
@@ -2441,15 +2453,15 @@ where
     }
 }
 
-/// The value a `compute.write` position writes — the expression whose class the
-/// index function computes in.
+/// The `compute.write` node a position reaches, if it reaches one.
 ///
 /// # Invariant
 /// A position reaches the emitter wrapped: the slot-read destructuring leaves a
 /// constant `Index` over a materialized array, and that element is reached
 /// through the `[value, type]` pair or a `value_of` extraction. All three are
-/// walked here, before the instructions are emitted.
-fn write_value_node<P>(module: &Module<P>, node: NodeId) -> Option<AnyNodeId>
+/// walked here, before the instructions are emitted. Bounded, not recursive: a
+/// deeper chain is not a wrapper this walk understands.
+fn write_node<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
@@ -2468,12 +2480,53 @@ where
                 Some(ComputeOperator::Write)
             )
         {
-            let items = operand_items(module, operation.operand?).ok()?;
-            return Some(items.get(2)?.node);
+            return Some(current);
         }
         node = concrete_element(module, current)?;
     }
     None
+}
+
+/// The `at`-th operand of the `compute.write` a position reaches.
+///
+/// # Invariant
+/// The operand array is `[to, at, value]`, so `0` is the buffer written and `2` the
+/// value written.
+fn write_item_node<P>(module: &Module<P>, node: NodeId, at: usize) -> Option<AnyNodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let write = write_node(module, node)?;
+    let items = operand_items(module, module.node_operation(write)?.operand?).ok()?;
+    Some(items.get(at)?.node)
+}
+
+/// The value a `compute.write` position writes — the expression whose class the
+/// index function computes in.
+fn write_value_node<P>(module: &Module<P>, node: NodeId) -> Option<AnyNodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    write_item_node(module, node, 2)
+}
+
+/// The buffer a `compute.write` position names as its target.
+///
+/// # Invariant
+/// This is the authority over which output the write fills. A codomain position is
+/// not: it is the order the walk happens to reach the writes in, and a body that
+/// names its targets in another order means what it names.
+fn write_target_node<P>(module: &Module<P>, node: NodeId) -> Option<AnyNodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    write_item_node(module, node, 0)
 }
 
 /// The element a constant `Index` into a materialized array value selects.
@@ -2793,15 +2846,27 @@ fn kernel_body_too_deep() -> String {
 /// shader that reads a binding nobody bound.
 #[derive(Debug, Default, Clone)]
 struct Positions {
-    /// The `out_pos` the next write is given — its position in the codomain.
-    writes: usize,
+    /// How many `compute.write`s were emitted.
+    ///
+    /// # Invariant
+    /// A count of **emissions**, and no longer the ordinal the next write is given:
+    /// a chain writes one output more than once, so the two numbers differ and only
+    /// [`Self::record_write`] knows an ordinal. What still reads this is the refusal
+    /// of a write inside a conditional arm, which asks only whether one happened.
+    emissions: usize,
     /// One past the highest input position any `compute.read` named.
     ///
     /// # Invariant
     /// A max rather than a count, because read positions are a sparse space: a body
     /// that reads only the second input still needs two buffers.
     reads: usize,
-    /// The element class of each write ordinal, in ordinal order.
+    /// The element class of each output ordinal, **placed at its ordinal**.
+    ///
+    /// # Invariant
+    /// Placed and not pushed, because a chain emits two writes for one ordinal and
+    /// the emission order is then not the ordinal order. A hole cannot survive to
+    /// [`Self::output_classes`]: every codomain position is checked to resolve to its
+    /// own ordinal, so every ordinal below the declared count is written.
     write_classes: Vec<ScalarClass>,
     /// The element class of each input position read, in read order.
     ///
@@ -2836,8 +2901,20 @@ impl Positions {
         classes.resize(declared.max(classes.len()), class);
         classes
     }
-    /// The declared class of every write ordinal, one per ordinal — this is the
-    /// list the entries were pushed in.
+    /// Record one write of output `ordinal`, in the class its element is declared in.
+    ///
+    /// # Invariant
+    /// The class goes **at the ordinal**, so a chain that writes one output twice
+    /// leaves one entry and not two — the entry the fragment's `output_classes`
+    /// invariant names, "the class of the buffer write `k` filled".
+    fn record_write(&mut self, ordinal: usize, class: ScalarClass) {
+        self.emissions += 1;
+        let filler = self.element_class.unwrap_or(ScalarClass::Int);
+        self.write_classes.resize(ordinal + 1, filler);
+        self.write_classes[ordinal] = class;
+    }
+
+    /// The declared class of every output ordinal, one per ordinal.
     fn output_classes(&self) -> Vec<ScalarClass> {
         self.write_classes.clone()
     }
@@ -3475,6 +3552,73 @@ where
         return Ok(None);
     }
     Ok(Some(k))
+}
+
+/// The output position `node` names in a parallel kernel.
+///
+/// # Invariant
+/// The write's counterpart to [`parallel_buffer_pos`]: the peeled node's own
+/// [`param_path`], against the `.out` paths declared. No fallback route and no
+/// positional guess — a node naming an input, a scalar, or no field is `Ok(None)`
+/// and the caller's refusal says what *is* declared. `Err` is [`param_path`]'s.
+fn parallel_output_pos<P>(
+    module: &Module<P>,
+    params: &[ParamSlot],
+    node: impl Into<AnyNodeId>,
+) -> Result<Option<usize>, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let Some(slot) = params.first() else {
+        return Ok(None);
+    };
+    let Some(roles) = &slot.roles else {
+        return Ok(None);
+    };
+    // A position is a read of the parameter, the caller's own node: a frozen node
+    // names no position.
+    let Some(node) = node.into().dynamic() else {
+        return Ok(None);
+    };
+    // The peeled node names the buffer; the wrapper's own projection chain does not.
+    let Some(path) = param_path(module, slot.pair, node)? else {
+        return Ok(None);
+    };
+    Ok(roles.output_pos(&path))
+}
+
+/// The output position a write's target names, resolved through a chain of writes.
+///
+/// # Invariant
+/// A `compute.write` is the value of an output position, not an effect
+/// ([code-audit D17](../../../docs/notes/code-audit.md)), so a target that *is* a
+/// write names the position that write named, and a chain of them names one output
+/// written as many times as the chain is long. The walk is bounded like
+/// [`write_item_node`]'s: a deeper chain is not one this resolution understands.
+fn write_chain_output_pos<P>(
+    module: &Module<P>,
+    params: &[ParamSlot],
+    node: impl Into<AnyNodeId>,
+) -> Result<Option<usize>, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let mut current = node.into();
+    for _ in 0..8 {
+        let peeled = peeled_argument(module, current)?;
+        let Some(dynamic) = peeled.dynamic() else {
+            return Ok(None);
+        };
+        match write_target_node(module, dynamic) {
+            Some(target) => current = target,
+            None => return parallel_output_pos(module, params, peeled),
+        }
+    }
+    Ok(None)
 }
 
 /// The node a wrapped slot-read argument reaches.

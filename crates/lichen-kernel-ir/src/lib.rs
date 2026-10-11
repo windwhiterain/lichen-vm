@@ -594,6 +594,16 @@ impl KernelRoles {
         self.inputs.iter().position(|candidate| candidate == path)
     }
 
+    /// The ordinal of `path` among the output buffers — the position a write of it
+    /// fills.
+    ///
+    /// # Invariant
+    /// The write's counterpart to [`Self::input_pos`], and the reason a write's target
+    /// is a function of its operands rather than of the order it was emitted in.
+    pub fn output_pos(&self, path: &[usize]) -> Option<usize> {
+        self.outputs.iter().position(|candidate| candidate == path)
+    }
+
     /// The wasm local offset of a scalar parameter read, within its slot.
     pub fn scalar_offset(&self, path: &[usize]) -> Option<usize> {
         self.scalars.iter().position(|candidate| candidate == path)

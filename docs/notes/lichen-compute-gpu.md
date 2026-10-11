@@ -421,8 +421,12 @@ facts, and a mixed fragment is the case that separates them.
 ## Two position spaces, and the silent bug they caused
 
 A read's position (`cfg_pos`) counts over the **inputs**. A write's position
-(`out_pos`) counts over the **outputs** — the IR documents it as the write's
-*emission ordinal*, the index function's codomain position. They are two
+(`out_pos`) counts over the **outputs**, and it is the output the write's own `.to`
+names — resolved through any chain of writes, and checked against the codomain
+position holding it. *(It was documented here as the write's emission ordinal: the
+counter it was emitted at, with `.to` never read at all. That is what let a body
+naming its targets in another order than the codomain lists them silently exchange two
+outputs, and let a write naming an **input** compile and write an output.)* They are two
 distinct spaces, and collapsing them into one list of buffers is a bug that
 produces **no error at all**: a write at position `0` reaches **input 0**, every
 run writes its result into its own input, and the output comes back as

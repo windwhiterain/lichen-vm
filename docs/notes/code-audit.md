@@ -502,9 +502,17 @@ compute.write ((compute.Write _)(.to b, .at i, .value i + 100))   -- the codomai
 **The lowering is demand-driven from the codomain leaves.** `lower_index_function`
 (`crates/lichen-compute/src/compute/body.rs:230`) walks the codomain and nothing
 else, so a `write` bound to a statement the return value never reads is never
-emitted. `tally.writes` counts **emissions**, so the tally gate
-(`crates/lichen-compute/src/compute.rs:2335`) sees one write against one output and
-passes. Both the mechanism and the silence follow from that.
+emitted. The gate that used to sit beside this counted **emissions** against declared
+outputs, and so saw one write against one output; it is retired, and what replaced it
+checks that each codomain position holds a write naming *that* position — which this
+program satisfies, because the second write does name it. The silence follows either
+way.
+
+**One narrowing since.** A write reached through another write's `.to` *is* emitted:
+the ordinal a write fills is resolved along that chain, so `write (.to w1, …)` over
+`w1 = write (.to b, …)` writes `b` twice and both links are in the body. What stays
+dead is a write reached **neither** by the codomain nor by a `.to` chain — the shape
+measured above, whose second write names `b` directly rather than `w1`.
 
 The same mechanism was measured independently on a `@loop`: `seed = fill (…)` as a
 statement beside a top-level write compiled, ran, and answered with the top write's
@@ -534,7 +542,8 @@ rejected; closed `wontfix:D17`.** The short form of `D17` is that this is not a
 diagnostic gap at all: an index function's type is `A T.I -> T.O`, so it takes the
 inputs *and the outputs* and returns the outputs, and walking the returned value
 necessarily covers every declared output — the per-output `write_value_node` gate and
-the `tally.writes == outputs.len()` gate together already say so. A `write` the
+the check that each position's write **names** that position together already say so.
+A `write` the
 author did not connect to the return is a dead expression, and dropping a dead
 expression is what a pure-function semantics does. What made it look like a bug is
 that `compute.write` *reads* as an effect at the call site; under the buffer map's
@@ -1032,12 +1041,18 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   the extent, the inputs **and the outputs**, and returns the outputs. Walking the
   returned value therefore necessarily covers every declared output, and two gates
   already enforce that they are the same set: each codomain position must reduce to a
-  `compute.write` (`write_value_node`), and `tally.writes` must equal
-  `outputs.len()`. A `write` outside that walk is not an unwritten output — the
+  `compute.write` (`write_value_node`), and that write must **name** that position —
+  its `.to` resolves to the ordinal the position holds. A `write` outside that walk is
+  not an unwritten output — the
   output *is* written, by the write that is in the codomain — it is an expression
   whose value nobody reads, and dropping it is what a pure-function semantics does.
   What that commits to: **a `compute.write` is not an effect, it is the value of an
-  output position.** That is the buffer map's model stated as a rule, and it is why
+  output position.** The lowering now reads that position **off the value**: a write's
+  ordinal is resolved from its `.to` operand through any chain of writes, and never
+  from the order the writes were emitted in — before that, the ordinal was an emission
+  counter and the `.to` the author wrote was never read at all, so a body naming its
+  targets in another order than the codomain lists them silently exchanged two outputs.
+  That is the buffer map's model stated as a rule, and it is why
   the `State` token of `4a41a71` was a category error rather than merely an expensive
   choice — you do not thread a state through values, and a token that nothing reads
   cannot order anything. The replacement in
