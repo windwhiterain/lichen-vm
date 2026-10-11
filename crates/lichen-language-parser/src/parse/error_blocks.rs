@@ -57,7 +57,11 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 walk_expr(else_branch, out);
             }
             Expr::Assert { value, .. } => walk_expr(value, out),
-            Expr::Convert { value, .. } => walk_expr(value, out),
+            Expr::Prefix { operands, .. } => {
+                for operand in operands {
+                    walk_expr(operand, out);
+                }
+            }
             Expr::NativeCall { args, .. } => {
                 for a in args {
                     walk_expr(a, out);

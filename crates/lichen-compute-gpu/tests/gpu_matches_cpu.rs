@@ -389,6 +389,20 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                                 KernelBin::BitAnd => lhs & rhs,
                                 KernelBin::BitOr => lhs | rhs,
                                 KernelBin::BitXor => lhs ^ rhs,
+                                KernelBin::Max => {
+                                    if left > right {
+                                        lhs
+                                    } else {
+                                        rhs
+                                    }
+                                }
+                                KernelBin::Min => {
+                                    if left < right {
+                                        lhs
+                                    } else {
+                                        rhs
+                                    }
+                                }
                             })
                         }
                         // The language's relations, not IEEE's: `==`/`!=` compare
@@ -406,6 +420,10 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                             KernelBin::Gt => boolean(class, lhs > rhs),
                             KernelBin::Leq => boolean(class, lhs <= rhs),
                             KernelBin::Geq => boolean(class, lhs >= rhs),
+                            // The language's maximum: the larger arm, so a NaN operand
+                            // follows the comparison rather than a target's own reading.
+                            KernelBin::Max => Scalar::Float(if lhs > rhs { lhs } else { rhs }),
+                            KernelBin::Min => Scalar::Float(if lhs < rhs { lhs } else { rhs }),
                             KernelBin::Rem
                             | KernelBin::BitAnd
                             | KernelBin::BitOr
@@ -439,6 +457,13 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                     } else {
                         otherwise
                     };
+                }
+                // The transcendental, read in the one definition the IR gives it.
+                KernelInstr::Exp => {
+                    let Scalar::Float(x) = operand(0) else {
+                        panic!("the exponential is a float's own instruction")
+                    };
+                    produced = Scalar::Float(lichen_kernel_ir::exp_value(x));
                 }
                 KernelInstr::BufferReadCall(_) => {
                     let element_index = operand(1).as_index();

@@ -166,7 +166,11 @@ fn walk(expr: &Expr, deps: &mut Deps) {
             walk(else_branch, deps);
         }
         Expr::Assert { value, .. } => walk(value, deps),
-        Expr::Convert { value, .. } => walk(value, deps),
+        Expr::Prefix { operands, .. } => {
+            for operand in operands {
+                walk(operand, deps);
+            }
+        }
         Expr::NativeCall { args, .. } => {
             for arg in args {
                 walk(arg, deps);

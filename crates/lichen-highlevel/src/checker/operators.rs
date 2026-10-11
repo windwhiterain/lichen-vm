@@ -29,12 +29,7 @@ where
         self.check_expr(right);
         let left_ty = self.state[left].ty.unwrap();
         let right_ty = self.state[right].ty.unwrap();
-        // Whether this operation computes over floats: only a concrete `Float`
-        // operand says so; any other leaves `Int`.
-        let float = self.names_float_class(left_ty) || self.names_float_class(right_ty);
-        // Whether *either* operand has stated a class. When neither has, the two
-        // cells become one shared class.
-        let stated = self.class_is_stated(left_ty) || self.class_is_stated(right_ty);
+        let mut arithmetic = None;
         match operator {
             // Generalized equality: the operands must be the same type.
             BinOp::Eq | BinOp::Neq => {
@@ -65,48 +60,15 @@ where
             | BinOp::Gt
             | BinOp::Leq
             | BinOp::Geq => {
-                if stated {
-                    let scalar = if float {
-                        self.float_type
-                    } else {
-                        self.int_type
-                    };
-                    self.check_unify(left_ty, scalar, self.loc(left, 1), DiagKind::BinOp);
-                    self.check_unify(right_ty, scalar, self.loc(right, 1), DiagKind::BinOp);
-                } else {
-                    // The two operands are one class: a use at either class
-                    // commits the whole operation (`add 1 1.5` stays refused).
-                    self.check_unify(right_ty, left_ty, self.loc(right, 1), DiagKind::BinOp);
-                    // Invariant: the shared class must lie in the domain; a
-                    // refinement, so it stays pending while the class is open.
-
-                    // Without the assert a non-numeric use is not refused: `run` answers
-                    // the lazy marker for a class it cannot compute.
-
-                    // The domain is a set's value — the members themselves — so the check
-                    // reads the same graph a library contract will.
-                    let (int_type, float_type) = (self.int_type, self.float_type);
-                    let domain = self.array_node(self.current_block, &[int_type, float_type]);
-                    let operands = self.array_node(self.current_block, &[left_ty, domain]);
-                    let condition = self.op_node(
-                        self.current_block,
-                        P::Operator::from(TypeOperator::InDomain),
-                        Some(operands),
-                    );
-                    self.register_assert(
-                        condition,
-                        self.loc(e, 1),
-                        true,
-                        AssertSpelling::Refinement { domain },
-                    );
-                }
+                arithmetic = Some(self.arithmetic_class(e, left, left_ty, right, right_ty));
             }
         }
         // A comparison yields the `0`/`1` scalar; arithmetic the class it computed
         // over — the shared cell while it is open.
         let result = match operator {
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div if float => self.float_type,
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div if !stated => left_ty,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
+                arithmetic.expect("the arithmetic arm ran")
+            }
             _ => self.int_type,
         };
         let operator = P::Operator::from(TypeOperator::from(operator));
@@ -119,6 +81,69 @@ where
         self.state[e].val = Some(value);
         self.state[e].ty = Some(result);
         pair
+    }
+
+    /// The class two arithmetic operands share, and the assert that keeps it a numeric one.
+    ///
+    /// # Invariant
+    /// **One rule for `+ - * /` and for `max`/`min`**: a concrete `Float` operand selects
+    /// `Float` for the whole operation, two stated operands must agree, and two unstated ones
+    /// share one open class gated by a refinement — so `max 1 1.5` is refused by the same tie
+    /// that refuses `1 + 1.5`, and a `Float` maximum is a `Float` rather than a `select`.
+    fn arithmetic_class(
+        &mut self,
+        e: ExprId,
+        left: ExprId,
+        left_ty: NodeId,
+        right: ExprId,
+        right_ty: NodeId,
+    ) -> NodeId {
+        let float = self.names_float_class(left_ty) || self.names_float_class(right_ty);
+        // Whether *either* operand has stated a class. When neither has, the two
+        // cells become one shared class.
+        let stated = self.class_is_stated(left_ty) || self.class_is_stated(right_ty);
+        if stated {
+            let scalar = if float {
+                self.float_type
+            } else {
+                self.int_type
+            };
+            self.check_unify(left_ty, scalar, self.loc(left, 1), DiagKind::BinOp);
+            self.check_unify(right_ty, scalar, self.loc(right, 1), DiagKind::BinOp);
+        } else {
+            // The two operands are one class: a use at either class
+            // commits the whole operation (`add 1 1.5` stays refused).
+            self.check_unify(right_ty, left_ty, self.loc(right, 1), DiagKind::BinOp);
+            // Invariant: the shared class must lie in the domain; a
+            // refinement, so it stays pending while the class is open.
+
+            // Without the assert a non-numeric use is not refused: `run` answers
+            // the lazy marker for a class it cannot compute.
+
+            // The domain is a set's value — the members themselves — so the check
+            // reads the same graph a library contract will.
+            let (int_type, float_type) = (self.int_type, self.float_type);
+            let domain = self.array_node(self.current_block, &[int_type, float_type]);
+            let operands = self.array_node(self.current_block, &[left_ty, domain]);
+            let condition = self.op_node(
+                self.current_block,
+                P::Operator::from(TypeOperator::InDomain),
+                Some(operands),
+            );
+            self.register_assert(
+                condition,
+                self.loc(e, 1),
+                true,
+                AssertSpelling::Refinement { domain },
+            );
+        }
+        if float {
+            self.float_type
+        } else if !stated {
+            left_ty
+        } else {
+            self.int_type
+        }
     }
 
     /// Whether a type slot has stated a class rather than an unbound cell.
@@ -144,37 +169,73 @@ where
         crate::shape::low_type_of_slot(&self.module, AnyNodeId::Dynamic(ty)) == LowShape::Float
     }
 
-    /// A prefix class conversion `int2float e` / `float2int e` — the one place
-    /// the language's two scalar classes meet.
+    /// A prefix keyword operator — the two class conversions, `max`/`min` and `exp`.
     ///
     /// # Invariant
-    /// Only a class the operand already states is unified: a unify binds every
-    /// cell that class shares, and the operand's class may be one a kernel
-    /// body's other cells read.
-    ///
-    /// `float2int`'s partiality is not checked here — in-range is a fact about
-    /// the value, not its type — so the interpreter records [`OUT_OF_RANGE`]
-    /// and answers the lazy marker.
-    pub(super) fn check_convert(&mut self, e: ExprId, operator: ConvOp, value: ExprId) -> NodeId {
-        self.check_expr(value);
-        let (source, target) = match operator {
-            ConvOp::Int2Float => (self.int_type, self.float_type),
-            ConvOp::Float2Int => (self.float_type, self.int_type),
-        };
-        let operand_ty = self.state[value].ty.unwrap();
-        if crate::shape::low_type_of_slot(&self.module, AnyNodeId::Dynamic(operand_ty)).is_known() {
-            self.check_unify(operand_ty, source, self.loc(value, 1), DiagKind::Conv);
+    /// One entry point for the whole prefix family, so the operand array's shape and the
+    /// result class are stated once. A **conversion** unifies only a class the operand
+    /// already states, since a unify binds every cell that class shares; `max`/`min` tie
+    /// their operands by [`Self::arithmetic_class`]; `exp` is `Float`'s alone and pins its
+    /// operand, having no other class to be.
+    pub(super) fn check_prefix(
+        &mut self,
+        e: ExprId,
+        operator: PrefixOp,
+        operands: ChildRange,
+    ) -> NodeId {
+        let ids: Vec<ExprId> =
+            self.ir.children[operands.start as usize..operands.end as usize].to_vec();
+        for &operand in &ids {
+            self.check_expr(operand);
         }
-        // A unary operand array is the binary one without its second slot —
-        // the shape `run` reads `operands[0]` from.
-        let operand = self.value_of(value);
-        let operands = self.array_node(self.current_block, &[operand]);
-        let operator = P::Operator::from(TypeOperator::from(operator));
-        let node = self.op_node(self.current_block, operator, Some(operands));
-        let pair = self.pair_of(node, target);
+        let types: Vec<NodeId> = ids.iter().map(|&id| self.state[id].ty.unwrap()).collect();
+        let (result, operator) = match operator {
+            PrefixOp::Int2Float => {
+                self.unify_stated_class(ids[0], types[0], self.int_type);
+                (self.float_type, TypeOperator::Int2Float)
+            }
+            PrefixOp::Float2Int => {
+                self.unify_stated_class(ids[0], types[0], self.float_type);
+                (self.int_type, TypeOperator::Float2Int)
+            }
+            PrefixOp::Max | PrefixOp::Min => (
+                self.arithmetic_class(e, ids[0], types[0], ids[1], types[1]),
+                TypeOperator::from(operator),
+            ),
+            PrefixOp::Exp => {
+                self.check_unify(
+                    types[0],
+                    self.float_type,
+                    self.loc(ids[0], 1),
+                    DiagKind::BinOp,
+                );
+                (self.float_type, TypeOperator::Exp)
+            }
+        };
+        // The operand array is the source's own list, in the order it was written.
+        let values: Vec<NodeId> = ids.iter().map(|&id| self.value_of(id)).collect();
+        let operands = self.array_node(self.current_block, &values);
+        let node = self.op_node(
+            self.current_block,
+            P::Operator::from(operator),
+            Some(operands),
+        );
+        let pair = self.pair_of(node, result);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(node);
-        self.state[e].ty = Some(target);
+        self.state[e].ty = Some(result);
         pair
+    }
+
+    /// Unify a slot against `class` **only when the slot already states a class**.
+    ///
+    /// # Invariant
+    /// A conversion's own rule: a unify binds every cell the operand's class shares, and an
+    /// undecided operand's cell may be one a kernel body's other positions read, so pinning
+    /// it here would refuse the program those positions describe.
+    fn unify_stated_class(&mut self, operand: ExprId, ty: NodeId, class: NodeId) {
+        if crate::shape::low_type_of_slot(&self.module, AnyNodeId::Dynamic(ty)).is_known() {
+            self.check_unify(ty, class, self.loc(operand, 1), DiagKind::Conv);
+        }
     }
 }

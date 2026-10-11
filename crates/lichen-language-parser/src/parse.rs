@@ -21,7 +21,7 @@ use diagnostics::diag_from;
 pub use error_blocks::collect_error_blocks;
 
 use crate::ast::{
-    BinOp, Binding, BlockStmt, ConvOp, Expr, Program, RecordField, Stmt, StructField,
+    BinOp, Binding, BlockStmt, Expr, PrefixOp, Program, RecordField, Stmt, StructField,
     StructInstArg, TypeConst,
 };
 
@@ -416,18 +416,28 @@ fn operand<'a>(
     ))
 }
 
-/// One prefix conversion, `int2float e` / `float2int e`.
-fn prefix_conv<'a>(
+/// One prefix keyword operator, `int2float e` / `max a b` / `exp x`.
+///
+/// # Invariant
+/// The operand parser is the level the operator's operands are read at: a one-operand
+/// keyword takes an application (`int2float f x` converts `f x`), while a two-operand one
+/// takes atoms (`max a b` is the maximum of `a` and `b`, not of `a` and `b`'s application).
+fn prefix_op<'a>(
     tokens: &'a [Token],
     kind: TokenKind,
-    operator: ConvOp,
+    operator: PrefixOp,
     operand: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
 ) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
     token(kind)
-        .ignore_then(operand)
-        .map_with(move |e, me| Expr::Convert {
+        .ignore_then(
+            operand
+                .repeated()
+                .exactly(operator.arity())
+                .collect::<Vec<_>>(),
+        )
+        .map_with(move |operands, me| Expr::Prefix {
             operator,
-            value: Box::new(e),
+            operands,
             span: span_at(tokens, me.span().start),
         })
         .boxed()
@@ -442,7 +452,7 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
         // every operator.
         let application = atom
             .clone()
-            .then(atom.repeated().collect::<Vec<_>>())
+            .then(atom.clone().repeated().collect::<Vec<_>>())
             .map(|(f, args)| {
                 args.into_iter().fold(f, |acc, arg| {
                     let span = acc.span();
@@ -463,20 +473,38 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                 value: Box::new(e),
                 span: span_at(tokens, me.span().start),
             })
-            // The two prefix conversions, at the assert's level: one operand, no
-            // infix token, so no new rung.
+            // The prefix keyword operators, at the assert's level: operands by
+            // juxtaposition, no infix token, so no new rung.
             .or(choice((
-                prefix_conv(
+                prefix_op(
                     tokens,
                     TokenKind::KwInt2Float,
-                    ConvOp::Int2Float,
-                    application.clone(),
+                    PrefixOp::Int2Float,
+                    operand(tokens, application.clone()),
                 ),
-                prefix_conv(
+                prefix_op(
                     tokens,
                     TokenKind::KwFloat2Int,
-                    ConvOp::Float2Int,
-                    application.clone(),
+                    PrefixOp::Float2Int,
+                    operand(tokens, application.clone()),
+                ),
+                prefix_op(
+                    tokens,
+                    TokenKind::KwExp,
+                    PrefixOp::Exp,
+                    operand(tokens, application.clone()),
+                ),
+                prefix_op(
+                    tokens,
+                    TokenKind::KwMax,
+                    PrefixOp::Max,
+                    operand(tokens, atom.clone()),
+                ),
+                prefix_op(
+                    tokens,
+                    TokenKind::KwMin,
+                    PrefixOp::Min,
+                    operand(tokens, atom.clone()),
                 ),
             )))
             .or(application.clone())
@@ -819,10 +847,13 @@ fn starts_an_expression(kind: &TokenKind) -> bool {
             | TokenKind::KwIf
             | TokenKind::KwArray
             | TokenKind::KwAssert
-            // The `unary` level's prefix operators begin an expression without
-            // being atoms, so `a > int2float b` compares.
+            // The prefix keyword operators begin an expression without
+            // being atoms, so `a > max b c` compares.
             | TokenKind::KwInt2Float
             | TokenKind::KwFloat2Int
+            | TokenKind::KwMax
+            | TokenKind::KwMin
+            | TokenKind::KwExp
             | TokenKind::Dollar
             | TokenKind::LParen
             | TokenKind::LBracket

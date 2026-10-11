@@ -24,6 +24,7 @@ use super::{
     ComputeOperator, ComputeValue, ParamSlot, Positions, TypeOperator, const_bits, conv_of,
     flat_arity, float_bits, is_static_function, kernel_bin, kernel_id_of, kernels, node_class,
     node_class_in, parallel_buffer_pos, param_classes, peeled_argument, scalar_literal,
+    unary_class,
 };
 
 /// The parameter slots' classes in flattening order — the ABI's own list, not the body's.
@@ -66,8 +67,14 @@ pub struct Lower<'a, P: Program> {
     /// How many definitions deep the walk is — the guard that replaced a
     /// hand-rolled operand stack's failure mode.
     depth: usize,
-    /// The class each emitted value was declared in, keyed by the node it came from.
-    classes: HashMap<NodeId, ScalarClass>,
+    /// The class each emitted value was declared in, keyed by the value itself.
+    ///
+    /// # Invariant
+    /// Keyed by the **value**, not by the node it came from: the class is a fact of the
+    /// instruction that produced it, and an operand emitted while another node's definition
+    /// is in hand would otherwise file its own class under that node — a `read` before a `+`
+    /// filed the `+`'s class under the read's node, and the two met in one instruction.
+    value_classes: HashMap<ValueId, ScalarClass>,
     /// The nodes whose marks have already been published, keyed by the stamped node.
     ///
     /// # Invariant
@@ -77,9 +84,6 @@ pub struct Lower<'a, P: Program> {
     /// The entry block's parameters' classes in flattening order; [`param_classes_of`]
     /// states whose list that is.
     leaf_classes: Vec<ScalarClass>,
-    /// The node whose definition is being emitted, so [`Lower::emit`] can record
-    /// the class it declared against it.
-    defining: NodeId,
     /// The block instructions are emitted into.
     ///
     /// # Invariant
@@ -164,10 +168,9 @@ where
             body,
             values: HashMap::new(),
             depth: 0,
-            classes: HashMap::new(),
+            value_classes: HashMap::new(),
             published_marks: HashSet::new(),
             leaf_classes: param_classes_of(params),
-            defining: NodeId::default(),
             block: entry,
             loops: Vec::new(),
         };
@@ -214,10 +217,9 @@ where
             body,
             values: HashMap::new(),
             depth: 0,
-            classes: HashMap::new(),
+            value_classes: HashMap::new(),
             published_marks: HashSet::new(),
             leaf_classes: param_classes_of(params),
-            defining: NodeId::default(),
             block: entry,
             loops: Vec::new(),
         };
@@ -265,9 +267,6 @@ where
             self.block = target;
         }
         self.depth += 1;
-        // **Every emission records its class against this node**, so `defining` is set
-        // here and not in `definition`.
-        self.defining = node;
         // **A read of the domain at a path is matched structurally**, from the `Index`
         // chain: see [`Lower::parameter_path`].
         let value = match self.parameter_path(node)? {
@@ -279,8 +278,9 @@ where
                     .get(slot)
                     .copied()
                     .unwrap_or(ScalarClass::Int);
-                self.classes.insert(node, class);
-                self.parameter(slot)?
+                let value = self.parameter(slot)?;
+                self.value_classes.insert(value, class);
+                value
             }
             // **A literal is answered first**: a decided literal may have no operation
             // that computes it.
@@ -559,8 +559,7 @@ where
         };
         let value = self.body.add_op(self.block, instr, args, declared);
         if instr.produces() > 0 {
-            // **Recorded against the node being defined**, which an operator consults.
-            self.classes.insert(self.defining, class);
+            self.value_classes.insert(value, class);
         }
         value
     }
@@ -629,6 +628,13 @@ where
             && let Some((from, to, name)) = conv_of(ty_op)
         {
             return self.conversion(operand, from, to, name);
+        }
+
+        // The prefix unary operators, `exp` today.
+        if let Some(ty_op) = AsEnum::<TypeOperator>::as_enum(op)
+            && let Some(class) = unary_class(ty_op)
+        {
+            return self.transcendental(ty_op, operand, class);
         }
 
         // The language's arithmetic and comparison operators.
@@ -1155,12 +1161,14 @@ where
     /// Read from what was emitted, not from the node: an operator's operands are
     /// emitted before it, and a float body's index and count are `Int` positions —
     /// so an operator adding two floats computes in `Float` whatever class the
-    /// checker's node carries.
+    /// checker's node carries. The node's own value is the key, so the answer is the
+    /// class of the instruction that produced *that* value.
     fn emitted_class(&self, value: AnyNodeId) -> Option<ScalarClass> {
         let AnyNodeId::Dynamic(value) = value else {
             return None;
         };
-        self.classes.get(&value).copied()
+        let produced = self.values.get(&value)?;
+        self.value_classes.get(produced).copied()
     }
 
     /// The values a program's own operator reads — its operand array's elements.
@@ -1420,6 +1428,30 @@ where
         Ok(self.emit(KernelInstr::Conv { from, to }, vec![operand], to))
     }
 
+    /// A prefix unary operator over its own operand array: `exp x` today.
+    ///
+    /// # Invariant
+    /// **One instruction, not an inline expansion**: the IR names the transcendental and
+    /// defines it, so both backends lower the same sequence
+    /// (`crates/lichen-kernel-ir/src/unary.rs`).
+    fn transcendental(
+        &mut self,
+        ty_op: TypeOperator,
+        operand: NodeId,
+        class: ScalarClass,
+    ) -> Result<ValueId, String> {
+        let items = self.module.operand_items(operand)?;
+        if items.len() != 1 {
+            return Err(format!(
+                "`{ty_op:?}` takes one operand and its operand array has {}",
+                items.len()
+            ));
+        }
+        let operand = dynamic(items[0].node)?;
+        let operand = self.value(operand)?;
+        Ok(self.emit(KernelInstr::Exp, vec![operand], class))
+    }
+
     /// A cross-kernel call: `compute.launch k x` / `compute.call k x`.
     fn cross_kernel_call(&mut self, kernel: AnyNodeId, arg: AnyNodeId) -> Result<ValueId, String> {
         let kernel = dynamic(kernel)?;
@@ -1555,8 +1587,8 @@ where
             )
         })?;
         // **A read's element class is declared, not inferred**: the host binds the
-        // buffer.
-        let element = self.tally.element_class.unwrap_or(ScalarClass::Int);
+        // buffer, and the parameter's own `Buf T` states the class this position reads.
+        let element = self.declared_input_class(pos);
         self.tally.reads = self.tally.reads.max(pos + 1);
         self.tally.read_classes.push(element);
         // The position is an `Int`, always: a compile-time ordinal in the input
@@ -1588,8 +1620,8 @@ where
         let value_node = dynamic(items[2].node)?;
         let ordinal = self.tally.writes;
         self.tally.writes += 1;
-        // The element a write fills is the class of the value written.
-        let element = node_class_in(self.module, self.params, value_node);
+        // The element a write fills is the parameter's own declaration where it states one.
+        let element = self.declared_output_class(ordinal, value_node);
         self.tally.write_classes.push(element);
         let position = self.emit_const(ScalarClass::Int, ordinal as i64);
         let index = self.value(index)?;
@@ -1599,6 +1631,33 @@ where
             vec![position, index, value],
             element,
         ))
+    }
+
+    /// The element class the parameter declares for input `position`.
+    ///
+    /// # Invariant
+    /// A class the parameter's own `Buf T` states is the authority; a parameter that states
+    /// none — the older open element cell, or the tuple form — falls back to the fragment's
+    /// own declared element class.
+    fn declared_input_class(&self, position: usize) -> ScalarClass {
+        self.params
+            .first()
+            .and_then(|slot| slot.roles.as_ref())
+            .and_then(|roles| roles.input_classes.get(position).copied().flatten())
+            .unwrap_or_else(|| self.tally.element_class.unwrap_or(ScalarClass::Int))
+    }
+
+    /// The element class the parameter declares for write ordinal `ordinal`.
+    ///
+    /// # Invariant
+    /// A class the parameter's own `Buf T` states is the authority; a parameter that states
+    /// none falls back to the class of the value written.
+    fn declared_output_class(&self, ordinal: usize, value: NodeId) -> ScalarClass {
+        self.params
+            .first()
+            .and_then(|slot| slot.roles.as_ref())
+            .and_then(|roles| roles.output_classes.get(ordinal).copied().flatten())
+            .unwrap_or_else(|| node_class_in(self.module, self.params, value))
     }
 }
 

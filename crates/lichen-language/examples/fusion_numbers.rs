@@ -1,12 +1,14 @@
-//! The fusion chain, run numerically: the emitted rolling update against the two-pass form.
+//! The fusion chain, run numerically: the emitted rolling update against the two-pass form,
+//! and against the same chain as kernels.
 //!
 //! # Invariant
-//! Both columns are built from one element function and one pair of declared reductions, and
-//! every number is [`lichen_fusion::evaluate`] over an expression the engine or this file
+//! Every column is built from one element function and one pair of declared reductions, and
+//! every host number is [`lichen_fusion::evaluate`] over an expression the engine or this file
 //! built — never a second implementation of the algorithm. The two-pass column applies the
-//! element function at the producer's **final** value, which is the form that stores the
-//! intermediate the fusion removes; the fused column is the emitted rolling update. Agreement
-//! between them is the claim, and a refusal prints as the refusal it is.
+//! element function at the producer's **final** value; the fused column is the emitted rolling
+//! update; the kernel column is the same algorithm as `compute.parallel` kernels over
+//! `compute.buffer` inputs, run unfused on the cpu backend. Agreement between the host columns
+//! is the claim, and the kernel column is held to its class's own width.
 //! Run with `cargo run -p lichen-language --example fusion_numbers`.
 
 use lichen_fusion::{
@@ -16,14 +18,24 @@ use lichen_fusion::{
 use lichen_language::fusion_claim::{claim_of, fragment_of, kernel_id, marked_value};
 use lichen_language::package::PackageStore;
 use lichen_language::program::LangProgram;
-use lichen_lowlevel::{AnyNodeId, Module, NodeId};
+use lichen_lowlevel::{AnyNodeId, LowValue, Module, NodeId};
+use lichen_utils::extend::AsEnum;
 
 /// The seeds and lengths every case is run over, so no result is one point.
 const SEEDS: [u64; 3] = [1, 2, 3];
 const LENGTHS: [usize; 4] = [1, 4, 9, 64];
 
-/// The agreement the two forms are held to.
+/// The agreement the two host forms are held to.
 const TOLERANCE: f64 = 1e-12;
+
+/// The agreement the kernel column is held to.
+///
+/// # Invariant
+/// A kernel computes in `f32` (`ScalarClass::Float`) and the host forms in `f64`, so the
+/// kernel column can agree with them only to the class's own width: the sum accumulates one
+/// rounding per element and every consumer term shifts by that one error, which leaves the
+/// `max`'s argmax alone.
+const KERNEL_TOLERANCE: f64 = 1e-4;
 
 fn main() {
     println!("\n--- the chain");
@@ -63,32 +75,61 @@ fn main() {
         SEEDS.len() * 256
     );
 
-    println!("\n--- the two forms over the same data");
+    println!("\n--- the three forms over the same data");
     println!(
-        "{:>5} {:>6}  {:>14} {:>14} {:>10}",
-        "seed", "length", "two pass", "fused", "gap"
+        "{:>5} {:>6}  {:>14} {:>14} {:>14} {:>9} {:>9}",
+        "seed", "length", "two pass", "fused", "kernels", "host gap", "kernel gap"
     );
     let mut worst: f64 = 0.0;
+    let mut worst_kernel: f64 = 0.0;
     for seed in SEEDS {
         for length in LENGTHS {
             let data = pseudo_random(seed, length);
             let two_pass = two_pass(&fused, &element, &data);
             let fused_value = rolling(&fused, &data);
-            let gap = (two_pass - fused_value).abs() / two_pass.abs().max(1.0);
+            let gap = relative_gap(two_pass, fused_value);
             worst = worst.max(gap);
-            println!("{seed:>5} {length:>6}  {two_pass:>14.6} {fused_value:>14.6} {gap:>10.3e}");
+            match kernel_column(&data) {
+                Ok(kernels) => {
+                    let kernel_gap = relative_gap(two_pass, kernels);
+                    worst_kernel = worst_kernel.max(kernel_gap);
+                    println!(
+                        "{seed:>5} {length:>6}  {two_pass:>14.6} {fused_value:>14.6} \
+                         {kernels:>14.6} {gap:>9.2e} {kernel_gap:>9.2e}"
+                    );
+                }
+                Err(refusal) => {
+                    println!(
+                        "{seed:>5} {length:>6}  {two_pass:>14.6} {fused_value:>14.6} \
+                         {:>14} {gap:>9.2e} {refusal}",
+                        "refused"
+                    );
+                }
+            }
         }
     }
     println!(
-        "\nworst gap over {} cases: {worst:.3e}, against {TOLERANCE:.0e}",
+        "\nworst host gap over {} cases: {worst:.3e}, against {TOLERANCE:.0e}",
         SEEDS.len() * LENGTHS.len()
     );
     if worst > TOLERANCE {
-        println!("the two forms disagree above the tolerance");
+        println!("the two host forms disagree above the tolerance");
+    }
+    println!(
+        "worst kernel gap over {} cases: {worst_kernel:.3e}, against {KERNEL_TOLERANCE:.0e}",
+        SEEDS.len() * LENGTHS.len()
+    );
+    if worst_kernel > KERNEL_TOLERANCE {
+        println!("the kernels disagree with the host forms above the class's width");
     }
 
     println!("\n--- and the reduction the producer's own marks declare");
     report_marks();
+}
+
+/// The relative gap between one number and the reference, with the reference guarded at one.
+fn relative_gap(reference: f64, value: f64) -> f64 {
+    (reference - value).abs() / reference.abs().max(1.0)
 }
 
 /// The two-pass form: the producer's whole value first, then the element function at it.
@@ -146,6 +187,119 @@ fn rolling(fused: &FusedReduction, data: &[f64]) -> f64 {
     bindings[&Variable::CONSUMER_STATE]
 }
 
+/// The same two-pass algorithm as two parallel kernels, run unfused on the cpu backend.
+///
+/// # Invariant
+/// The producer is one `@loop` fold over the whole buffer and the consumer another over
+/// `max (d - r)`, with `r` read back from the producer's output buffer: the algorithm the
+/// two-pass column states, in the kernel IR, and no third implementation of it.
+fn kernel_column(data: &[f64]) -> Result<f64, String> {
+    let (module, root) = compile(&kernel_source(data))
+        .map_err(|messages| format!("the program was refused: {}", messages.join("; ")))?;
+    match module
+        .node_value(AnyNodeId::Dynamic(root))
+        .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+    {
+        Some(LowValue::Float(value)) => Ok(f64::from(value)),
+        other => Err(format!("the kernel column's root is {other:?}")),
+    }
+}
+
+/// The source of the two-kernel program over `data`.
+///
+/// # Invariant
+/// The data is spelled into the source because a buffer's ingress is an array literal
+/// (`compute.buffer`); the extent `.n` is that literal's length, so the producer's fold and
+/// the launch cannot disagree about how much data there is.
+fn kernel_source(data: &[f64]) -> String {
+    let length = data.len();
+    let elements = data
+        .iter()
+        .map(|value| spell(*value as f32))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        r#"
+---
+  compute = import "compute.lichen"
+---
+In   = struct<.d (compute.Buf Float)>
+OutR = struct<.r (compute.Buf Float)>
+Par  = compute.P (compute.KT _)(.I In, .O OutR)
+producer = (k : Par) => {{
+  i = compute.range k.n
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, (s(1) + compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1))))
+  compute.write ((compute.Write _)(.to k.out.r, .at i, .value fold (k.n, 0.0)))
+}}
+prod = compute.parallel producer "cpu"
+In2  = struct<.d (compute.Buf Float), .p (compute.Buf Float)>
+OutZ = struct<.z (compute.Buf Float)>
+Par2 = compute.P (compute.KT _)(.I In2, .O OutZ)
+consumer = (k : Par2) => {{
+  i = compute.range k.n
+  r = compute.read ((compute.Read _)(.from k.in.p, .at 0))
+  @loop fold = s => if s(0) == 0 then s(1) else fold (s(0) - 1, max (compute.read ((compute.Read _)(.from k.in.d, .at s(0) - 1)) - r) s(1))
+  compute.write ((compute.Write _)(.to k.out.z, .at i, .value fold (k.n, (0.0 - 1000000.0))))
+}}
+cons = compute.parallel consumer "cpu"
+data  = (compute.buffer ([{elements}] : array<Float, {length}>) : (compute.Buf _))
+total = (compute.plrun prod ((compute.A In)(.n {length}, .I In(.d data))) : OutR)
+worst = (compute.plrun cons ((compute.A In2)(.n {length}, .I In2(.d data, .p total.r))) : OutZ)
+compute.read ((compute.Read _)(.from worst.z, .at 0))
+"#
+    )
+}
+
+/// One `f32` as an expression the source lexer reads.
+///
+/// # Invariant
+/// The lexer's float literal is `[0-9]+\.[0-9]+` and there is no unary minus, so a whole value
+/// keeps its `.0` and a negative one is `0.0 - x`. The data is a multiple of `1/16`, so its
+/// shortest spelling has no exponent and is the value itself rather than a rounding of it.
+fn spell(value: f32) -> String {
+    let magnitude = value.abs();
+    let mut digits = format!("{magnitude}");
+    if !digits.contains('.') {
+        digits.push_str(".0");
+    }
+    if value < 0.0 {
+        format!("(0.0 - {digits})")
+    } else {
+        digits
+    }
+}
+
+/// One combine over two values, in the operator the reduction declares.
+fn combine(operator: BinaryOp, left: f64, right: f64) -> f64 {
+    match operator {
+        BinaryOp::Add => left + right,
+        BinaryOp::Sub => left - right,
+        BinaryOp::Mul => left * right,
+        BinaryOp::Div => left / right,
+        BinaryOp::Max => left.max(right),
+        BinaryOp::Min => left.min(right),
+        _ => f64::NAN,
+    }
+}
+
+/// A fixed pseudo-random data array, the same at every run.
+///
+/// # Invariant
+/// Every value is the `f32` the host holds and the shortest decimal string that rounds
+/// back to it, so the source spells the number the host computes over. Bounded magnitudes
+/// keep that spelling out of the exponent form the lexer has no literal for, and the values
+/// are deliberately **not** exact in `f32`, so the kernel column compares two arithmetic
+/// classes rather than two spellings.
+fn pseudo_random(seed: u64, length: usize) -> Vec<f64> {
+    let mut random = Random::from_seed(seed);
+    (0..length)
+        .map(|_| {
+            let step = (random.next_bounded(-4.0, 8.0) * 16.0).round();
+            f64::from(((step + 0.1) / 16.0) as f32)
+        })
+        .collect()
+}
+
 /// The worst relative disagreement between the repair applied to an element and the element
 /// at the producer's next value.
 fn repair_identity(fused: &FusedReduction, element: &Expr) -> f64 {
@@ -165,31 +319,6 @@ fn repair_identity(fused: &FusedReduction, element: &Expr) -> f64 {
                 .unwrap_or(f64::INFINITY)
         })
         .fold(0.0, f64::max)
-}
-
-/// One combine over two values, in the operator the reduction declares.
-fn combine(operator: BinaryOp, left: f64, right: f64) -> f64 {
-    match operator {
-        BinaryOp::Add => left + right,
-        BinaryOp::Sub => left - right,
-        BinaryOp::Mul => left * right,
-        BinaryOp::Div => left / right,
-        BinaryOp::Max => left.max(right),
-        BinaryOp::Min => left.min(right),
-        _ => f64::NAN,
-    }
-}
-
-/// A fixed pseudo-random data array, the same at every run.
-///
-/// # Invariant
-/// Every value is rounded through `f32`, the class a kernel computes in, so the two forms are
-/// compared on data both of them can hold exactly.
-fn pseudo_random(seed: u64, length: usize) -> Vec<f64> {
-    let mut random = Random::from_seed(seed);
-    (0..length)
-        .map(|_| f64::from(random.next_bounded(-4.0, 8.0) as f32))
-        .collect()
 }
 
 /// Compile and run the source, keeping the module and its root value.

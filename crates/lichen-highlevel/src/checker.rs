@@ -18,7 +18,7 @@ use stacksafe::stacksafe;
 
 use crate::attr::{AttrExtRegistry, AttrSet};
 use crate::diagnostic::{AssertSpelling, DiagKind, DiaryEntry};
-use crate::ir::{BinOp, ChildRange, ConvOp, ExprId, ExprKind, IR, Loc};
+use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc, PrefixOp};
 use crate::native::{NativeArg, NativeOps, no_native_ops};
 use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
 use crate::shape::for_each_kind_marker;
@@ -944,12 +944,12 @@ where
             | ExprKind::Table(range) => range,
             ExprKind::TypeStruct { fields, .. } => fields,
             ExprKind::NativeCall { args, .. } => args,
+            ExprKind::Prefix { operands, .. } => operands,
             ExprKind::Literal(_)
             | ExprKind::Parameter
             | ExprKind::Function { .. }
             | ExprKind::Apply { .. }
             | ExprKind::BinOp { .. }
-            | ExprKind::Convert { .. }
             | ExprKind::Instantiate { .. }
             | ExprKind::Record { .. }
             | ExprKind::Assert { .. }
@@ -1089,7 +1089,7 @@ where
                 left,
                 right,
             } => self.check_binop(e, operator, left, right),
-            ExprKind::Convert { operator, value } => self.check_convert(e, operator, value),
+            ExprKind::Prefix { operator, operands } => self.check_prefix(e, operator, operands),
             ExprKind::Instantiate {
                 type_expr,
                 value,

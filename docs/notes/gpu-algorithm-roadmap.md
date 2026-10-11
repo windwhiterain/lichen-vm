@@ -392,6 +392,12 @@ the unroll, and it is the largest single item in this roadmap:
 > are **refused by name** (`compute.buffer`) rather than truncated. The hazard the
 > ladder found is closed from the other side too: a program array handed where a
 > buffer belongs is refused, and that refusal now names `compute.buffer`.
+>
+> **A kernel that reads a `Float` buffer must state the class**: the parameter's
+> `Buf Float` is what tells the emitter, because the body alone does not carry it
+> ([compute-buffer-wrapper](compute-buffer-wrapper.md)). Before that read was wired
+> up, a `Float` buffer was built and collected but no parallel kernel could name
+> one, so the axis reached one half of the round trip.
 
 **The change**: a `compute.buffer` that turns an array into a `Buffer`, so a
 kernel has something to read.

@@ -1467,10 +1467,13 @@ fn classify_token_kind(
         | TokenKind::KwPub
         | TokenKind::KwCache
         | TokenKind::KwLoop
-        // The class conversions and the assert are prefix operators the lexer
-        // reserves words for.
+        // The prefix scalar operators and the assert are prefix operators the
+        // lexer reserves words for.
         | TokenKind::KwInt2Float
         | TokenKind::KwFloat2Int
+        | TokenKind::KwMax
+        | TokenKind::KwMin
+        | TokenKind::KwExp
         | TokenKind::KwAssert
         // `@in` is the one keyword that is an *infix* operator.
         | TokenKind::KwIn
@@ -1626,7 +1629,11 @@ impl<'a> NameClass<'a> {
                 self.expr(else_branch);
             }
             Expr::Assert { value, .. } => self.expr(value),
-            Expr::Convert { value, .. } => self.expr(value),
+            Expr::Prefix { operands, .. } => {
+                for operand in operands {
+                    self.expr(operand);
+                }
+            }
             Expr::NativeCall { args, .. } => {
                 for a in args {
                     self.expr(a);
@@ -1924,7 +1931,11 @@ impl Walk {
                 self.expr(else_branch);
             }
             Expr::Assert { value, .. } => self.expr(value),
-            Expr::Convert { value, .. } => self.expr(value),
+            Expr::Prefix { operands, .. } => {
+                for operand in operands {
+                    self.expr(operand);
+                }
+            }
             Expr::NativeCall { args, .. } => {
                 for a in args {
                     self.expr(a);
@@ -2251,7 +2262,11 @@ impl<'a> ScopeCapture<'a> {
                 self.expr(else_branch);
             }
             Expr::Assert { value, .. } => self.expr(value),
-            Expr::Convert { value, .. } => self.expr(value),
+            Expr::Prefix { operands, .. } => {
+                for operand in operands {
+                    self.expr(operand);
+                }
+            }
             Expr::NativeCall { args, .. } => {
                 for a in args {
                     self.expr(a);

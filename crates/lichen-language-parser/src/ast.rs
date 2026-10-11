@@ -38,14 +38,34 @@ pub enum BinOp {
     In,
 }
 
-/// The two class conversions, `int2float` and `float2int`
-/// (`docs/notes/floating-point.md` §4.2).
+/// A prefix keyword operator: its `arity` operands follow it by juxtaposition.
+/// See `docs/notes/operators.md` §2, §11.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConvOp {
+pub enum PrefixOp {
     /// `int2float e` — the `Int`'s value as the nearest `f32`.
     Int2Float,
     /// `float2int e` — the `Float` truncated toward zero.
     Float2Int,
+    /// `max a b` — the larger of two values, in the operands' class.
+    Max,
+    /// `min a b` — the smaller of two values, in the operands' class.
+    Min,
+    /// `exp x` — the exponential of one `Float` (`docs/notes/floating-point.md` §6).
+    Exp,
+}
+
+impl PrefixOp {
+    /// How many operands the operator takes by juxtaposition.
+    ///
+    /// # Invariant
+    /// The parser consumes exactly this many and the checker reads exactly this many, so
+    /// one spelling cannot come to mean two arities.
+    pub fn arity(self) -> usize {
+        match self {
+            PrefixOp::Int2Float | PrefixOp::Float2Int | PrefixOp::Exp => 1,
+            PrefixOp::Max | PrefixOp::Min => 2,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -99,11 +119,11 @@ pub enum Expr {
     /// `@assert e` — a prefix assert, the highlevel `assert(e)` form: a side
     /// constraint, not a unify.
     Assert { value: Box<Expr>, span: Span },
-    /// `int2float e` / `float2int e` — a prefix class conversion
-    /// (`docs/notes/floating-point.md` §4.2).
-    Convert {
-        operator: ConvOp,
-        value: Box<Expr>,
+    /// `max a b`, `int2float e` — a prefix keyword operator over its operands
+    /// (`docs/notes/operators.md` §2, §11).
+    Prefix {
+        operator: PrefixOp,
+        operands: Vec<Expr>,
         span: Span,
     },
     /// `$name(args…)` — a call to a native operator of the compiling module.
@@ -333,7 +353,7 @@ impl Expr {
             Expr::BinOp { span, .. } => *span,
             Expr::If { span, .. } => *span,
             Expr::Assert { span, .. } => *span,
-            Expr::Convert { span, .. } => *span,
+            Expr::Prefix { span, .. } => *span,
             Expr::NativeCall { span, .. } => *span,
             Expr::Index { span, .. } => *span,
             Expr::RawIndex { span, .. } => *span,

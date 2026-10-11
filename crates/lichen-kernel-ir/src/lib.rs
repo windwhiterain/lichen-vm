@@ -12,9 +12,11 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 mod body;
 mod marks;
+mod unary;
 
 pub use body::{BasicBlock, Br, FlatOp, KernelBody, Terminator, ValueDef, ValueId, from_flat};
 pub use marks::{CLAIM_PREFIX, ClaimRefusal, KernelClaim, KernelMark, MarkField};
+pub use unary::{exp_body, exp_value};
 
 /// What an element is: an `Int` (a machine-sized unsigned integer, `i64`) or a `Float`
 /// (`f32`).
@@ -443,9 +445,10 @@ pub struct ScalarLeaf {
 ///
 /// # Invariant
 /// The arithmetic is unsigned, because the language's `Int` is a machine-sized unsigned
-/// integer and `Sub` wraps: `/` and `%` are the unsigned operations and so are the order
-/// comparisons. A comparison yields a `0`/`1` scalar, not a boolean — the language has no
-/// `Bool` — so materialising it, and narrowing it for a `select`, are the backend's.
+/// integer and `Sub` wraps: `/`, `%` and the order comparisons are the unsigned ones. A
+/// comparison yields `0`/`1`, the language having no `Bool`. `Max`/`Min` leave the operand
+/// class, lowered by each backend to a comparison and a select so both answer a NaN alike.
+/// See `docs/notes/operators.md` §11.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KernelBin {
     /// The two arithmetic families, with `Div`/`Rem` undefined on a zero divisor.
@@ -454,6 +457,10 @@ pub enum KernelBin {
     Mul,
     Div,
     Rem,
+    /// The larger of two values, in the operand class.
+    Max,
+    /// The smaller of two values, in the operand class.
+    Min,
     /// The comparisons, each yielding `0`/`1`.
     Lt,
     Gt,
@@ -465,6 +472,27 @@ pub enum KernelBin {
     BitAnd,
     BitOr,
     BitXor,
+}
+
+impl KernelBin {
+    /// Whether this operator yields the language's `0`/`1` scalar rather than a value of
+    /// its operand class.
+    ///
+    /// # Invariant
+    /// Stated here because both emitters narrow a comparison to a condition and neither may
+    /// re-derive the list: a `Max` a backend read as a comparison would select on a value
+    /// the language never made a condition.
+    pub fn is_comparison(self) -> bool {
+        matches!(
+            self,
+            KernelBin::Lt
+                | KernelBin::Gt
+                | KernelBin::Leq
+                | KernelBin::Geq
+                | KernelBin::Eq
+                | KernelBin::Neq
+        )
+    }
 }
 
 /// One abstract instruction in a lowered kernel body.
@@ -491,6 +519,15 @@ pub enum KernelInstr {
     I32WrapI64,
     /// A `if c then a else b`, which is `Select`.
     Select,
+    /// The exponential of one `Float`.
+    ///
+    /// # Invariant
+    /// No target has a native form the two read alike — wasm has none, and SPIR-V's GLSL
+    /// `Exp` is implementation-defined per vendor — so the IR **defines** it and every
+    /// backend lowers it by [`KernelBody::expand_transcendentals`]: one primitive sequence,
+    /// so the two compute the identical numbers. `Float` is the class, and the only one.
+    /// See `docs/notes/floating-point.md` §6.
+    Exp,
     /// A cross-kernel call: its `args` are the argument, and a backend resolves this to
     /// a call to the callee.
     CallKernel(KernelId),
@@ -538,6 +575,16 @@ pub struct KernelRoles {
     pub inputs: Vec<Vec<usize>>,
     /// Output buffer payload paths, in declaration order.
     pub outputs: Vec<Vec<usize>>,
+    /// The class each input buffer's parameter states, per [`Self::inputs`], or none.
+    ///
+    /// # Invariant
+    /// A stated class is the `T` the parameter's own `Buf T` names, and it is the authority
+    /// over the body's classes: a `Float` buffer whose write was a `select` was read as `Int`
+    /// otherwise, and the run refused the buffer it was given. `None` is *not stated*, not
+    /// `Int`: the older open element cell leaves the write's own class the answer.
+    pub input_classes: Vec<Option<ScalarClass>>,
+    /// The class each output buffer's parameter states, per [`Self::outputs`], or none.
+    pub output_classes: Vec<Option<ScalarClass>>,
 }
 
 impl KernelRoles {
@@ -579,7 +626,7 @@ impl KernelInstr {
         Some(match self {
             KernelInstr::Const(..) => 0,
             KernelInstr::Bin(_, _) | KernelInstr::BufferReadCall(_) => 2,
-            KernelInstr::I32WrapI64 | KernelInstr::Conv { .. } => 1,
+            KernelInstr::I32WrapI64 | KernelInstr::Conv { .. } | KernelInstr::Exp => 1,
             KernelInstr::Select => 3,
             KernelInstr::BufferWriteCall(_) => 3,
             KernelInstr::CallKernel(_) => return None,
@@ -597,6 +644,7 @@ impl KernelInstr {
             KernelInstr::Const(class, _) => Some(*class),
             KernelInstr::Bin(class, _) => Some(*class),
             KernelInstr::Conv { to, .. } => Some(*to),
+            KernelInstr::Exp => Some(ScalarClass::Float),
             KernelInstr::BufferReadCall(class) | KernelInstr::BufferWriteCall(class) => {
                 Some(*class)
             }

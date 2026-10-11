@@ -77,6 +77,14 @@ pub enum TokenKind {
     /// The `float2int` keyword -- the prefix conversion from `Float` to `Int`,
     /// truncating toward zero.
     KwFloat2Int,
+    /// The `max` keyword — the larger of two values, at the prefix level
+    /// (`docs/notes/operators.md` §11).
+    KwMax,
+    /// The `min` keyword -- the smaller of two values, at the prefix level.
+    KwMin,
+    /// The `exp` keyword — the exponential of one `Float`, at the prefix level
+    /// (`docs/notes/floating-point.md` §6).
+    KwExp,
     /// '->' -- a function type.
     Arrow,
     /// '=>' -- a lambda.
@@ -181,6 +189,9 @@ impl TokenKind {
             TokenKind::KwArray => "'array'".to_string(),
             TokenKind::KwInt2Float => "'int2float'".to_string(),
             TokenKind::KwFloat2Int => "'float2int'".to_string(),
+            TokenKind::KwMax => "'max'".to_string(),
+            TokenKind::KwMin => "'min'".to_string(),
+            TokenKind::KwExp => "'exp'".to_string(),
             TokenKind::Arrow => "'->'".to_string(),
             TokenKind::FatArrow => "'=>'".to_string(),
             TokenKind::Colon => "':'".to_string(),
@@ -296,6 +307,12 @@ enum RawToken {
     KwInt2Float,
     #[token("float2int")]
     KwFloat2Int,
+    #[token("max")]
+    KwMax,
+    #[token("min")]
+    KwMin,
+    #[token("exp")]
+    KwExp,
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     NameLit,
     #[token("->")]
@@ -710,6 +727,9 @@ fn raw_to_kind(
             "array" => TokenKind::KwArray,
             "int2float" => TokenKind::KwInt2Float,
             "float2int" => TokenKind::KwFloat2Int,
+            "max" => TokenKind::KwMax,
+            "min" => TokenKind::KwMin,
+            "exp" => TokenKind::KwExp,
             "_" => TokenKind::Placeholder,
             _ => TokenKind::Name(slice.to_string()),
         }),
@@ -730,6 +750,9 @@ fn raw_to_kind(
         RawToken::KwArray => Some(TokenKind::KwArray),
         RawToken::KwInt2Float => Some(TokenKind::KwInt2Float),
         RawToken::KwFloat2Int => Some(TokenKind::KwFloat2Int),
+        RawToken::KwMax => Some(TokenKind::KwMax),
+        RawToken::KwMin => Some(TokenKind::KwMin),
+        RawToken::KwExp => Some(TokenKind::KwExp),
         RawToken::Arrow => Some(TokenKind::Arrow),
         RawToken::FatArrow => Some(TokenKind::FatArrow),
         RawToken::DoubleColon => Some(TokenKind::DoubleColon),

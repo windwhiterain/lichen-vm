@@ -5,6 +5,8 @@
 //! parameters and for a loop's carried state — and a `Br`'s `args` are exactly its
 //! target's `params`. What this replaced is `docs/notes/lichen-compute.md` §4.
 
+use std::collections::HashMap;
+
 use crate::{KernelInstr, ScalarClass};
 
 /// A named value in a [`KernelBody`].
@@ -227,6 +229,127 @@ impl KernelBody {
     /// have to agree.
     pub fn parameters(&self) -> &[ValueId] {
         &self.blocks[self.entry].params
+    }
+
+    /// Replace every [`KernelInstr::Exp`] this body computes with the primitive sequence
+    /// that defines it.
+    ///
+    /// # Invariant
+    /// **The gate between the language's instructions and a target's.** No target has a
+    /// native exponential the two read alike, so the IR defines one ([`crate::exp_body`])
+    /// and this rewrite inlines that definition; a backend that runs afterwards meets only
+    /// instructions it emits. An `Exp` of anything but one operand is refused by name
+    /// rather than inlined as a different function.
+    pub fn expand_transcendentals(&mut self) -> Result<(), String> {
+        let definition = crate::exp_body();
+        let mut work: Vec<(usize, usize, ValueId)> = Vec::new();
+        for (block, basic) in self.blocks.iter().enumerate() {
+            for (position, &value) in basic.instrs.iter().enumerate() {
+                if matches!(
+                    self.values.get(value.0 as usize),
+                    Some(ValueDef::Instr {
+                        op: KernelInstr::Exp,
+                        ..
+                    })
+                ) {
+                    work.push((block, position, value));
+                }
+            }
+        }
+        // **Latest first**: an inlining adds values to the block it rewrites, so an earlier
+        // position stays the position it was read at.
+        for (block, position, value) in work.into_iter().rev() {
+            let Some(ValueDef::Instr { args, .. }) = self.values.get(value.0 as usize) else {
+                continue;
+            };
+            let arguments = args.clone();
+            let [operand] = arguments[..] else {
+                return Err(format!(
+                    "`Exp` reads {} operand(s) and is defined over exactly one",
+                    arguments.len()
+                ));
+            };
+            self.inline_definition(&definition, block, position, value, operand)?;
+        }
+        Ok(())
+    }
+
+    /// [`Self::expand_transcendentals`]'s inlining: a one-parameter, one-result
+    /// straight-line `definition` at `target`'s site.
+    ///
+    /// # Invariant
+    /// `target` **becomes** the definition's result, so every reader of the original value
+    /// reads the definition's answer without a second rewrite; the values before it are
+    /// fresh and spliced into `block` in order, so the instruction list still respects its
+    /// operands.
+    fn inline_definition(
+        &mut self,
+        definition: &KernelBody,
+        block: usize,
+        position: usize,
+        target: ValueId,
+        operand: ValueId,
+    ) -> Result<(), String> {
+        let source = &definition.blocks[definition.entry];
+        let [parameter] = source.params[..] else {
+            return Err(format!(
+                "a transcendental's definition takes {} parameter(s) and is defined over one",
+                source.params.len()
+            ));
+        };
+        let Some(&result) = source.instrs.last() else {
+            return Err("a transcendental's definition computes nothing".into());
+        };
+        let Terminator::Return { values } = &source.terminator else {
+            return Err("a transcendental's definition must return".into());
+        };
+        if values.as_slice() != [result] {
+            return Err(
+                "a transcendental's definition must return the value it computes last".into(),
+            );
+        }
+        let mut renamed: HashMap<ValueId, ValueId> = HashMap::new();
+        renamed.insert(parameter, operand);
+        let mut sequence: Vec<ValueId> = Vec::with_capacity(source.instrs.len());
+        for &step in &source.instrs {
+            let Some(ValueDef::Instr { op, args, classes }) =
+                definition.values.get(step.0 as usize)
+            else {
+                return Err("a transcendental's definition lists a parameter as a step".into());
+            };
+            let mut named = Vec::with_capacity(args.len());
+            for arg in args {
+                let Some(value) = renamed.get(arg).copied() else {
+                    return Err(
+                        "a transcendental's definition reads a value its own sequence has not \
+                         defined yet"
+                            .into(),
+                    );
+                };
+                named.push(value);
+            }
+            let id = if step == result {
+                target
+            } else {
+                ValueId(self.values.len() as u32)
+            };
+            let definition_of_step = ValueDef::Instr {
+                op: *op,
+                args: named,
+                classes: classes.clone(),
+            };
+            if step == result {
+                self.values[target.0 as usize] = definition_of_step;
+            } else {
+                self.values.push(definition_of_step);
+            }
+            renamed.insert(step, id);
+            sequence.push(id);
+        }
+        self.blocks[block]
+            .instrs
+            .splice(position..=position, sequence);
+        Ok(())
     }
 
     /// Every instruction this body defines, in walk order.
