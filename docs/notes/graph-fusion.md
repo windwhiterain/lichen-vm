@@ -227,10 +227,19 @@ The ordering constraint the measurement establishes, with the code path:
    nodes. `Lower::apply` is never entered, so `Lower::lower_loop`
    (`crates/lichen-compute/src/compute/body.rs`) never runs, the entering call's state
    is never read, and the seed literal is never lowered.
-3. **Therefore the anchor is never visited.** `Lower::publish_mark` only ever sees nodes
-   the walk lowers, and the marked seed is not one of them. The same expression's
-   `combine` mark survives by luck alone: its anchor sits on the add the unrolled chain
-   still lowers.
+3. **Therefore the marked *seed* is never visited, and the marked *combine* is visited but
+   answered from the pair.** `Lower::publish_mark` only ever sees nodes the walk lowers, so the
+   `identity` mark on the seed (`fold (6, 0.0 ~ "identity")`) never publishes at all — that is
+   the role `RoleNotMarked { interface, role }` names. The `combine` mark fails differently: its
+   anchor **is** lowered and its **text does publish**, but the value it is published against is
+   the pair's element 0, so what a reader bridges back is the fold's base case rather than the
+   operator. Measured, in `crates/lichen-language/examples/reduction_algebra.rs` — the only
+   program that bridges a literal-count projection: with the seed `0.0` the published `combine`
+   bridges to the constant `0`, and with a distinctive seed `3.5` it bridges to **`3.5`**, the
+   seed, never `+`. A literal-count fold therefore loses **both halves of the algebra** for one
+   cause, and the two acceptance tests that hard-code `Reduction { combine: Add, identity: 0.0 }`
+   (`crates/lichen-language/tests/tiled_reduction.rs`, `plan_staging.rs`) record that accurately
+   rather than lazily.
 
 **The `lower_loop` path is reachable, and the discriminator is measured.** It fires when
 the checker leaves the loop *undecided* — when the entering state is a run-time value, so
@@ -258,6 +267,20 @@ compilation hook the `Ctx` boundary does not expose today (the plugin's
 `NativeOp::build` has the argument's *value node*, not `&mut Module`) — so it is recorded
 here rather than attempted. Until it lands, the fix is in the loop conversion and
 *not* in the mark channel, exactly as this subsection first said.
+
+**The cheapest fix is one predicate, and its price is a constant-folding optimization.** The
+nest is still live in the module — `write_node_value` sets only the apply node's `value`, never
+clears its `Apply` operation, and `Module::loop_conversion` re-derives the whole conversion
+read-only — so nothing would have to be recorded a second time. A peel that declined to resolve
+`Index(pair, 0)` (and `pair_value_half`) off a target that still carries an `Apply` whose callee
+is a `looping` function would let `Lower::apply`/`lower_loop`/`loop_state` build the nest, and
+the literal case would then read like the runtime one. The cost is not free and is recorded
+with it: every literal-bound `@loop` in a kernel would stop being constant-folded into
+straight-line code, so every such fragment's **body and digest change** (artifact caches
+invalidate, any test pinning an unrolled shape moves) and a kernel folding a literal count emits
+a real nest. The benefit is narrow too: a literal count is where tiling has least to offer,
+because the whole fold already fits one lane. That is why the reorder above is preferred to the
+predicate, and why the practical road to a declared algebra is a **runtime** extent.
 
 **And the discriminator is enough to get out of it from the program side, which is what
 `reduction_interface` now does.** A fold whose count is a **runtime** value — the buffer's
