@@ -2,8 +2,11 @@
 
 use std::collections::HashMap;
 
-use lichen_fusion::{Expr, Variable};
-use lichen_kernel_ir::{KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, ValueId};
+use lichen_fusion::{Expr, UnaryOp, Variable};
+use lichen_kernel_ir::{
+    KernelBin, KernelBody, KernelFragment, KernelInstr, ScalarClass, ValueDef, ValueId,
+    inlined_exp_operand,
+};
 
 use crate::operators::binary;
 use crate::refusal::BridgeRefusal;
@@ -116,14 +119,20 @@ impl Walk<'_> {
     /// # Invariant
     /// One arm per instruction, so an instruction a later compiler adds cannot be read as
     /// something else: the match is exhaustive, and every arm outside the arithmetic subset
-    /// names its own refusal. No arm builds `Expr::Unary`, which is why a transcendental is
-    /// [`BridgeRefusal::Transcendental`] rather than an expression.
+    /// names its own refusal. A transcendental is read through the definition's own reader
+    /// first, because the fragment a dispatcher registers holds the expansion rather than
+    /// [`KernelInstr::Exp`].
     fn instruction(
         &mut self,
         id: ValueId,
         op: KernelInstr,
         args: &[ValueId],
     ) -> Result<Expr, BridgeRefusal> {
+        if matches!(op, KernelInstr::Bin(ScalarClass::Float, KernelBin::Mul))
+            && let Some(operand) = inlined_exp_operand(self.body, id)
+        {
+            return Ok(UnaryOp::Exp.apply(self.value(operand)?));
+        }
         match op {
             KernelInstr::Const(ScalarClass::Float, bits) => Ok(Expr::Constant(float_of_bits(bits))),
             KernelInstr::Const(ScalarClass::Int, _) => {
@@ -141,7 +150,10 @@ impl Walk<'_> {
                 Err(BridgeRefusal::MachineInteger { value: id })
             }
             KernelInstr::I32WrapI64 => Err(BridgeRefusal::BooleanNarrowing),
-            KernelInstr::Exp => Err(BridgeRefusal::Transcendental),
+            KernelInstr::Exp => {
+                let operand = self.argument(args, 0)?;
+                Ok(UnaryOp::Exp.apply(operand))
+            }
             KernelInstr::Conv { from, to } => Err(BridgeRefusal::Conversion { from, to }),
             KernelInstr::Select => Err(BridgeRefusal::Select),
             KernelInstr::CallKernel(kernel) => Err(BridgeRefusal::Call { kernel }),

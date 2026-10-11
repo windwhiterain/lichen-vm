@@ -1,7 +1,9 @@
 //! The one definition of the transcendental instruction.
 //! See docs/notes/floating-point.md §6.
 
-use crate::{KernelBin, KernelBody, KernelInstr, ScalarClass, Terminator, ValueId};
+use std::collections::HashMap;
+
+use crate::{KernelBin, KernelBody, KernelInstr, ScalarClass, Terminator, ValueDef, ValueId};
 
 /// How many times the polynomial's argument is halved before it, and therefore how many
 /// times its value is squared after.
@@ -139,4 +141,55 @@ pub fn exp_body() -> KernelBody {
         },
     );
     body
+}
+
+/// The operand of the exponential a body value holds as an inlined definition, or `None`.
+///
+/// # Invariant
+/// **The reader's half of [`exp_body`]**, matched against that body's own instructions and
+/// constants: a subtree that is not an instance of the definition answers `None`, so a change
+/// to the definition moves this with it rather than leaving a second copy behind.
+pub fn inlined_exp_operand(body: &KernelBody, value: ValueId) -> Option<ValueId> {
+    let definition = exp_body();
+    let source = &definition.blocks[definition.entry];
+    let result = match &source.terminator {
+        Terminator::Return { values } => *values.first()?,
+        _ => return None,
+    };
+    let parameter = *source.params.first()?;
+    let mut mapped: HashMap<ValueId, ValueId> = HashMap::new();
+    mapped.insert(result, value);
+    let mut operand: Option<ValueId> = None;
+    // Reverse order, so a step is read from a body value whose readers are already mapped.
+    for step in source.instrs.iter().rev() {
+        let here = *mapped.get(step)?;
+        let ValueDef::Instr { op, args, .. } = definition.values.get(step.0 as usize)? else {
+            return None;
+        };
+        let ValueDef::Instr {
+            op: found,
+            args: found_args,
+            ..
+        } = body.values.get(here.0 as usize)?
+        else {
+            return None;
+        };
+        if found != op || found_args.len() != args.len() {
+            return None;
+        }
+        for (argument, found_argument) in args.iter().zip(found_args) {
+            if *argument == parameter {
+                match operand {
+                    Some(seen) if seen != *found_argument => return None,
+                    _ => operand = Some(*found_argument),
+                }
+                continue;
+            }
+            match mapped.insert(*argument, *found_argument) {
+                Some(seen) if seen != *found_argument => return None,
+                _ => {}
+            }
+        }
+    }
+    operand
 }
