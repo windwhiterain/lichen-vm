@@ -483,8 +483,11 @@ each rule is a fact about the structure rather than about a target:
 1. the entry block exists, and so does every block a transfer names;
 2. **every value a block reads is available there** — an operand is computed
    earlier in the same block, is one of that block's parameters, or was computed in
-   a block that dominates it. The last clause is checked by walk order, which is
-   the cheap and sufficient condition for a body built by `add_op` in order;
+   a block that dominates it. The clause is checked by a dominator map over the
+   reachable CFG, the same walk the barrier rule reads; a body built by `add_op` in
+   order satisfies it by construction, and one built otherwise is refused by name.
+   A block that **reaches** the use without dominating it is not enough — that is
+   what a branch's `args` and a target's `params` exist for;
 3. **a branch's `args` are exactly its target's `params`**, which is what makes a
    target's phi complete without it inventing a default;
 4. an instruction's `classes` matches what it produces — zero for a write, one for

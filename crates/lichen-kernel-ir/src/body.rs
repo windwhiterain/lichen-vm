@@ -430,9 +430,9 @@ impl KernelBody {
     ///
     /// # Invariant
     /// (1) The entry block exists, and every block a transfer names does; (2) every value
-    /// a block reads exists in this body — **existence, not order**; (3) a branch's `args`
-    /// are exactly its target's `params`; (4) each instruction's `classes` matches what it
-    /// produces — none for a write; (5) a barrier pairs a slice write with the read
+    /// a block reads exists, defined later in its own block or in one that dominates it;
+    /// (3) a branch's `args` are exactly its target's `params`; (4) `classes` matches what
+    /// it produces, none for a write; (5) a barrier pairs a slice write with the read
     /// observing it, in a block every lane reaches.
     pub fn validate(&self) -> Result<(), String> {
         if self.blocks.is_empty() {
@@ -509,8 +509,56 @@ impl KernelBody {
                 }
             }
         }
+        // A use must sit where its value is defined, and after it in the same block.
+        let dominance = self.dominance();
+        let sites = self.definition_sites();
+        for (index, block) in self.blocks.iter().enumerate() {
+            for (position, &instr) in block.instrs.iter().enumerate() {
+                let ValueDef::Instr { op, args, .. } = &self.values[instr.0 as usize] else {
+                    continue;
+                };
+                let site = format!("{op:?}");
+                for arg in args {
+                    if let Some(cause) =
+                        self.out_of_scope(&dominance, &sites, index, position, *arg, &site)
+                    {
+                        return Err(cause);
+                    }
+                }
+            }
+            let position = block.instrs.len();
+            if let Terminator::CondBr { cond, .. } = &block.terminator {
+                let site = format!("block {index}'s branch condition");
+                if let Some(cause) =
+                    self.out_of_scope(&dominance, &sites, index, position, *cond, &site)
+                {
+                    return Err(cause);
+                }
+            }
+            for br in block.branches() {
+                let site = format!("block {index}'s transfer to block {}", br.target);
+                for arg in &br.args {
+                    if let Some(cause) =
+                        self.out_of_scope(&dominance, &sites, index, position, *arg, &site)
+                    {
+                        return Err(cause);
+                    }
+                }
+            }
+            let Terminator::Return { values } = &block.terminator else {
+                continue;
+            };
+            let site = format!("block {index}'s return");
+            for value in values {
+                if let Some(cause) =
+                    self.out_of_scope(&dominance, &sites, index, position, *value, &site)
+                {
+                    return Err(cause);
+                }
+            }
+        }
         // A recorded barrier is a pair this body really holds, and one no lane can skip.
-        let unavoidable = self.unavoidable_blocks();
+        let unavoidable = self.unavoidable_blocks(&dominance);
         for pair in &self.barriers {
             if !matches!(
                 self.values.get(pair.write.0 as usize),
@@ -566,14 +614,12 @@ impl KernelBody {
             .position(|block| block.instrs.contains(&value))
     }
 
-    /// Which blocks every lane reaches, as a flag per block.
+    /// The dominator sets over the reachable CFG, computed once for both rules that read them.
     ///
     /// # Invariant
-    /// Dominance over the reachable CFG: a block qualifies when it dominates every reachable
-    /// `Return`, so every path that ends passes through it. A read in dead code is not here and is
-    /// refused; a path that never returns is not an exit, so a non-terminating branch past the
-    /// read is not caught.
-    fn unavoidable_blocks(&self) -> Vec<bool> {
+    /// `dominators[block][candidate]` states that every path from the entry to `block` passes
+    /// through `candidate`; `reachable` states that a path reaches a block at all.
+    fn dominance(&self) -> Dominance {
         let count = self.blocks.len();
         let mut successors: Vec<Vec<usize>> = vec![Vec::new(); count];
         for (index, block) in self.blocks.iter().enumerate() {
@@ -632,15 +678,121 @@ impl KernelBody {
                 break;
             }
         }
+        Dominance {
+            reachable,
+            dominators,
+        }
+    }
+
+    /// Which blocks every lane reaches, as a flag per block.
+    ///
+    /// # Invariant
+    /// A block qualifies when it dominates every reachable `Return`, so every path that ends
+    /// passes through it. A read in dead code is not here and is refused; a path that never
+    /// returns is not an exit, so a non-terminating branch past the read is not caught.
+    fn unavoidable_blocks(&self, dominance: &Dominance) -> Vec<bool> {
+        let count = self.blocks.len();
         (0..count)
             .map(|block| {
-                reachable[block]
+                dominance.reachable[block]
                     && self.blocks.iter().enumerate().all(|(exit, basic)| {
-                        !(reachable[exit] && matches!(&basic.terminator, Terminator::Return { .. }))
-                            || dominators[exit][block]
+                        !(dominance.reachable[exit]
+                            && matches!(&basic.terminator, Terminator::Return { .. }))
+                            || dominance.dominators[exit][block]
                     })
             })
             .collect()
+    }
+
+    /// Where each instruction of this body is defined: its block, and its position there.
+    ///
+    /// # Invariant
+    /// A value that no block lists has no site, and a use of one is refused rather than read:
+    /// an instruction no block lists is one the emitter never binds.
+    fn definition_sites(&self) -> Vec<Option<(usize, usize)>> {
+        let mut sites = vec![None; self.values.len()];
+        for (block, basic) in self.blocks.iter().enumerate() {
+            for (position, &value) in basic.instrs.iter().enumerate() {
+                if let Some(site) = sites.get_mut(value.0 as usize) {
+                    *site = Some((block, position));
+                }
+            }
+        }
+        sites
+    }
+
+    /// The refusal a use earns when it does not sit where its value is defined.
+    ///
+    /// # Invariant
+    /// In scope means the value is a parameter of `block`, or an instruction earlier in the same
+    /// block, or an instruction of a block that dominates it; `site` names the use in the refusal
+    /// (`docs/notes/shared-memory-and-barriers.md` §10 item 7).
+    fn out_of_scope(
+        &self,
+        dominance: &Dominance,
+        sites: &[Option<(usize, usize)>],
+        block: usize,
+        position: usize,
+        value: ValueId,
+        site: &str,
+    ) -> Option<String> {
+        match self.values.get(value.0 as usize) {
+            Some(ValueDef::BlockParam {
+                block: defined_in, ..
+            }) => {
+                if *defined_in == block || dominance.dominates(block, *defined_in) {
+                    return None;
+                }
+                Some(format!(
+                    "{site} reads {value:?}, which block {defined_in} receives as a parameter, and \
+                     block {defined_in} does not dominate block {block}"
+                ))
+            }
+            Some(ValueDef::Instr { .. }) => {
+                let Some((defined_in, defined_at)) = sites.get(value.0 as usize).copied().flatten()
+                else {
+                    return Some(format!(
+                        "{site} reads {value:?}, which no block of this body defines"
+                    ));
+                };
+                if defined_in == block {
+                    if defined_at < position {
+                        return None;
+                    }
+                    return Some(format!(
+                        "{site} reads {value:?}, which block {block} defines later in the same block"
+                    ));
+                }
+                if dominance.dominates(block, defined_in) {
+                    return None;
+                }
+                Some(format!(
+                    "{site} reads {value:?}, which block {defined_in} defines, and block \
+                     {defined_in} does not dominate block {block}"
+                ))
+            }
+            None => None,
+        }
+    }
+}
+
+/// What [`KernelBody::dominance`] computes, and the relation the scope rule reads.
+///
+/// # Invariant
+/// An unreachable block has no dominators, so only a same-block use is in scope inside one.
+struct Dominance {
+    reachable: Vec<bool>,
+    dominators: Vec<Vec<bool>>,
+}
+
+impl Dominance {
+    /// Whether every path from the entry to `block` passes through `candidate`.
+    fn dominates(&self, block: usize, candidate: usize) -> bool {
+        self.dominators
+            .get(block)
+            .and_then(|set| set.get(candidate))
+            .copied()
+            .unwrap_or(false)
     }
 }
 
