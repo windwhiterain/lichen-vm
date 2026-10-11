@@ -1,6 +1,5 @@
-//! The acceptance case: a reduction folded across the workgroup's lanes, judged against its
-//! hand-derived closed form and against the per-lane implementation it replaces.
-//! See `docs/notes/shared-memory-and-barriers.md` §9 step 8.
+//! The acceptance case: a reduction folded across lanes. See
+//! `docs/notes/shared-memory-and-barriers.md` §9 step 8.
 
 mod common;
 
@@ -21,21 +20,18 @@ const COMBINE: &str = "combine";
 /// The lane width one workgroup runs.
 const LANES: usize = LOCAL_SIZE_X as usize;
 
-/// The count every declared loop is bounded by.
+/// The length of every buffer the case drives.
 ///
 /// # Invariant
-/// A loop conversion cannot be bounded by an argument of the function that writes it, so the bound
-/// is a literal and the launch's own count selects its answer through the **data** instead: lane
-/// `i` folds `count - i` values, so the last lane's fold is `count(count + 1) / 2` and every leg
-/// runs at every test length without recompiling. The buffer is as long as the longest length the
-/// acceptance case drives, so a length past it is refused here rather than read as padding.
+/// The longest length the case drives, so a length past it is a bug here rather than padding the
+/// device reads. The declared loop's bound is a literal, so the launch's own count selects the
+/// answer through the **data**: lane `i` folds `count - i` values and the last lane's fold is
+/// `count(count + 1) / 2`.
 const BOUND: u64 = 256;
 
-/// The data one launch over `count` elements folds: `1 ..= count`, then identity padding.
+/// The data one launch over `count` elements folds: `1 ..= count`, then zeroes.
 ///
 /// # Invariant
-/// The tiled fold's iteration space is a whole workgroup tile, so the elements it covers are the
-/// first `count` of a tile-wide buffer and the rest contribute the declared combine's identity.
 /// The closed form of `1 ..= count` is `count(count + 1) / 2`.
 fn triangle_data(count: u64) -> Vec<i64> {
     let mut data: Vec<i64> = vec![0_i64; BOUND as usize];
@@ -105,12 +101,9 @@ fn words(data: ScalarData) -> Vec<i64> {
 /// The fragment a folded body is dispatched as.
 ///
 /// # Invariant
-/// A folded body's domain is `(extent, index)`: the extent the launch covers, and the lane. The
-/// fold's iteration space is the transform's own — it is a whole workgroup tile derived from the
-/// count the fold was given — so a launch fixes no runtime scalar. Every leaf is `Int`, the lane
-/// included: the fold's **elements** are `Int` while its addresses and bounds are too, and a leaf
-/// of another class is what a body's addresses would have to convert to. The slice is the staging
-/// a tiled fold writes, one element per lane, in `Workgroup` storage
+/// A folded body's domain is `(extent, index)` so a launch fixes no runtime scalar, every leaf is
+/// `Int` because that is what a body's addresses are, and the slice is the staging a tiled fold
+/// writes, one element per lane in `Workgroup` storage
 /// (`docs/notes/shared-memory-and-barriers.md` §5).
 fn body_fragment(body: KernelBody, tiled: bool) -> KernelFragment {
     KernelFragment {
@@ -145,10 +138,9 @@ fn body_fragment(body: KernelBody, tiled: bool) -> KernelFragment {
 /// One dispatch of a folded body, answering the elements it wrote.
 ///
 /// # Invariant
-/// A folded body's domain is `(extent, index)` and both the per-lane and the tiled body carry the
-/// count they fold as a **compile-time** fact, so the launch fixes no runtime scalar: what
-/// `extent` decides is how many indices are covered and, because a staged dispatch uploads
-/// `extent × width` bytes of the input, how much of `data` the device can read.
+/// Both bodies carry the count they fold as a **compile-time** fact, so `extent` is what decides
+/// how many indices are covered and — because a staged dispatch uploads `extent × width` bytes —
+/// how much of `data` the device can read.
 fn run_at(
     context: &GpuContext,
     fragment: &KernelFragment,
@@ -173,11 +165,8 @@ fn run_at(
 /// The source whose reduction the acceptance case folds: one kernel, one claim, one loop.
 ///
 /// # Invariant
-/// The `@loop` is the reduction's own: a counter, an accumulator, and a step that combines the
-/// accumulator with a term under the operator the `combine` mark names. Its bound is a literal
-/// because a loop conversion cannot be bounded by an argument of the function that writes it, so
-/// what this program declares is the **algebra** — the combine and the identity — and the
-/// iteration space is the launch's, which is what the transformation is applied to.
+/// The `@loop` is the reduction's own, and what it declares is the **algebra** — the combine and
+/// the identity — because its bound is a literal.
 fn source() -> &'static str {
     r#"
 ---
@@ -199,16 +188,10 @@ k
 /// The reduction the program's own kernel declares.
 ///
 /// # Invariant
-/// The program **is** a pack: it claims `claim:Reduction(combine,identity)` and its loop is the
-/// reduction the acceptance case folds. What the bridge cannot yet do is read the algebra back out
-/// of that body, and it is measured rather than assumed: the kernel's loop must have a literal
-/// bound — a loop conversion cannot be bounded by an argument of the function that writes it — so
-/// the loop is compile-time expanded and the marked accumulation folds into the constant its base
-/// case returns. `projection(…, ReadRoles::DATUM_ONLY)` therefore answers `0` where the marks name
-/// `+`. Reading the declaration's algebra out of a **lowered** body needs a reduction whose loop
-/// survives lowering, which is the automatic path §9 step 8 records as remaining; what this test
-/// checks is that the claim and both roles reach the fragment, and the algebra it tiles with is
-/// the one a pack declares.
+/// The program **is** a pack: it claims `claim:Reduction(combine,identity)`. Its loop's bound is a
+/// literal, so the loop is compile-time expanded and the marked accumulation folds into its base
+/// case's constant: `projection(…, ReadRoles::DATUM_ONLY)` answers `0` where the marks name `+`.
+/// Reading a lowered body's algebra needs a loop that survives lowering (§9 step 8).
 fn declared_reduction() -> Reduction {
     let (module, _value, _root) = common::run(source());
     let (interface, fragment) = dispatched(&module)
@@ -236,42 +219,25 @@ fn declared_reduction() -> Reduction {
 /// real device.
 ///
 /// # Invariant
-/// One declaration produces both the per-lane body and the tiled one, so the difference between
-/// them is the schedule and nothing else: the per-lane loop folds the space once per lane, the
-/// tiled body folds a strided subset per lane into a slice, separates the writes from the reads
-/// with a barrier, and folds the slice with the same declared combine. Three lengths are driven
-/// and only one of them is a single tile — one element per lane is the case a schedule that never
-/// advances its address still passes — so the lengths that matter are the ones a lane must take
-/// more than one step over. `out[0]` is where the tiled fold and the per-lane fold meet, and the
-/// host path refuses a staged body, so the closed form and the per-lane run are this class's
-/// evidence (`docs/notes/shared-memory-and-barriers.md` §7).
-///
-/// **The launch covers the elements the fold reads, not the lanes it runs**: `GpuContext::run`
-/// uploads `extent × width` bytes of each host input, so a staged body dispatched over one
-/// workgroup would leave every element past the first tile unuploaded and its strided read would
-/// answer the staging's padding. Every workgroup folds the whole tile and writes the same answer,
-/// so the surplus is redundant rather than wrong.
+/// One declaration produces both bodies, so the difference is the schedule and nothing else. Three
+/// lengths are driven at `out[0]`, only one of them a single tile: one element per lane is the case
+/// a schedule that never advances its address still passes. The host path refuses a staged body,
+/// so the closed form and the per-lane run are this class's evidence.
 #[test]
 fn a_tiled_reduction_answers_the_closed_form_and_the_per_lane_loop() {
     let Some(context) = device("a_tiled_reduction_answers_the_closed_form_and_the_per_lane_loop")
     else {
         return;
     };
-    // A whole workgroup at the declared count, so no surplus lane writes what a real lane reads.
     let reduction = declared_reduction();
     assert_eq!(
         reduction.combine,
         BinaryOp::Add,
         "the program's own marks declare the sum its body folds"
     );
-    // **Three lengths that are not all one tile**: a fold over one element per lane is the case a
-    // schedule that never advances its address still passes, so the lengths that matter are the
-    // ones a lane must take more than one step over. Every length is a whole workgroup multiple,
-    // because a staged launch is refused otherwise.
+    // **Three lengths, only one of them a single tile**, each a whole workgroup multiple.
     let lengths = [LANES as u64, (LANES * 3) as u64, (LANES * 4) as u64];
     for &count in &lengths {
-        // The tiled fold's iteration space is a whole workgroup tile, so the data is what those
-        // elements hold.
         let data = triangle_data(count);
         let folding = Folding::new(
             &reduction,
@@ -307,9 +273,7 @@ fn a_tiled_reduction_answers_the_closed_form_and_the_per_lane_loop() {
             "the tiled body's scan owes at most the one barrier it records"
         );
 
-        // The per-lane implementation is the same declaration folded in one lane, which is
-        // the floor the tiling replaces and the body this one is differenced against
-        // (`docs/notes/shared-memory-and-barriers.md` §9 step 8).
+        // The floor the tiling replaces, and the body it is differenced against.
         let per_lane_fragment = body_fragment(folding.per_lane(), false);
         per_lane_fragment
             .body
@@ -322,10 +286,7 @@ fn a_tiled_reduction_answers_the_closed_form_and_the_per_lane_loop() {
             count as usize,
             count as usize,
         );
-        // **The launch covers the elements the fold reads, not the lanes it runs**: the dispatch
-        // uploads `extent × width` bytes of the input, so a launch of one workgroup would leave
-        // every element past the first tile unuploaded and the strided read would answer the
-        // staging's padding. Every workgroup folds the whole tile and writes the same answer.
+        // **The launch covers the elements the fold reads**: `run` uploads `extent × width` bytes.
         let tiled_answer = run_at(
             &context,
             &tiled_fragment,
@@ -357,19 +318,15 @@ fn a_tiled_reduction_answers_the_closed_form_and_the_per_lane_loop() {
 ///
 /// # Invariant
 /// Nothing in the tiling reads the operator beyond applying it: one `Folding::tiled` call produced
-/// these bodies and the sum body above, and the declared `combine` names `max` and `*` here and `+`
-/// there. A transform that pattern-matched the arithmetic would have one answer, so each operator
-/// is driven by a declaration and checked against a hand-derived closed form. Both a **one-step**
-/// tile and a three-step one are driven, because one element per lane is the case a schedule that
-/// never advances its address still passes — the same seam the sum leg is judged at.
+/// these bodies and the sum body above, and each operator is checked against a hand-derived closed
+/// form. A **one-step tile and a three-step one are both driven**, because one element per lane is
+/// the case a schedule that never advances its address still passes.
 #[test]
 fn a_second_combine_tiles_through_the_same_path() {
     let Some(context) = device("a_second_combine_tiles_through_the_same_path") else {
         return;
     };
-    // **The data is small and bounded**: a position holds a power of two at an even index and one
-    // at an odd one, so a product over any slice is exact in an `i64` however many steps a lane
-    // takes and a maximum grows with the slice — both then have a hand-derived closed form.
+    // **The data is bounded**: a power of two at an even index, one at an odd one.
     let data: Vec<i64> = (0..BOUND)
         .map(|position| if position % 2 == 0 { 2 } else { 1 })
         .collect();
@@ -423,8 +380,7 @@ fn a_second_combine_tiles_through_the_same_path() {
                 declared_reduction.combine.name()
             );
             let tiled_fragment = body_fragment(tiled.into_body(), true);
-            // The launch covers the elements the fold reads, so every element is uploaded; every
-            // workgroup folds the whole tile and writes the same answer.
+            // **The launch covers the elements the fold reads**, not the lanes it runs.
             let tiled_answer = run_at(
                 &context,
                 &tiled_fragment,

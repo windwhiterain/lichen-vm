@@ -1333,8 +1333,7 @@ fn a_two_step_loop_carries_by_identity() {
     let merged = body.add_block();
     let result = body.add_param(merged);
 
-    // Hand-derived: `reached` is `counter < stop`, `combined` is `current + one`, `advanced` is
-    // `next + one`, and the exit's value is the header's `value`.
+    // Hand-derived: `reached` is `counter < stop`, `combined` is `current + one`.
     let reached = body.add_op(
         header,
         KernelInstr::Bin(ScalarClass::Int, KernelBin::Lt),
@@ -1479,9 +1478,7 @@ fn the_transforms_two_step_loop_carries_by_identity() {
         params.len(),
         "the backedge hands every param back"
     );
-    // **By role, not by position**: each backedge operand is the exact definition the step holds
-    // for that role — the advanced counter, the combine's result, the moved slot, the read — so an
-    // operand that is merely *some* step definition fails here.
+    // **By role, not by position**: each backedge operand is the exact definition the step holds.
     let step_instrs = &body.blocks[step].instrs;
     let advanced = step_instrs[step_instrs.len() - 2];
     let combined = step_instrs[0];

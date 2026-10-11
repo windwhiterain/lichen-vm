@@ -1,12 +1,11 @@
-//! A declared reduction as a folded body: per lane, or tiled across the workgroup.
+//! A reduction as a folded body, per lane or tiled.
 //! See `docs/notes/shared-memory-and-barriers.md` §5 and §9 step 8.
 //!
 //! # Invariant
-//! The fold is the declaration's and nothing else is: [`Folding`] carries the `combine` and the
-//! `identity` the reduction declared, and both bodies below apply exactly the operator the
-//! declaration named. What licences re-association is therefore the declared associativity and
-//! not a property this module proves, and a combine that is not associative is refused by name
-//! rather than tiled — splitting a fold's iteration space across lanes **is** re-association.
+//! Both bodies apply exactly the operator the declaration named, so what licences re-association
+//! is the declared associativity and not a property this module proves: splitting a fold's
+//! iteration space across lanes **is** re-association, and a combine that is not associative is
+//! refused by name rather than tiled.
 
 use std::collections::HashMap;
 
@@ -31,8 +30,7 @@ pub enum Element {
     Slice {
         /// The slice, as an ordinal into the fragment's slice table.
         ordinal: usize,
-        /// The slice write every read of this fold observes, so every read is ordered after it
-        /// without a chain of versions no one reads.
+        /// The slice write every read of this fold observes: every read is ordered after it.
         observed: ValueId,
     },
 }
@@ -205,11 +203,9 @@ impl Folding {
     /// How many elements past [`Self::count`] a caller pads a tiled fold's input with.
     ///
     /// # Invariant
-    /// The tail is the caller's, because the fold's own iteration space is a whole workgroup
-    /// tile — `lane_width × ceil(count / lane_width)` — and a lane that folds no element of its
-    /// own reaches the barrier with a slot no lane wrote. A caller pads the elements past
-    /// [`Self::count`] with the identity of the declared combine, which is the one value the
-    /// combine is indifferent to (`docs/notes/shared-memory-and-barriers.md` §9).
+    /// A caller pads the elements past [`Self::count`] with the identity of the declared combine,
+    /// which is the one value the combine is indifferent to
+    /// (`docs/notes/shared-memory-and-barriers.md` §9).
     pub fn tail(&self, lane_width: u32) -> Result<u64, TileRefusal> {
         Ok(self.tiled_count(lane_width)? - self.count)
     }
@@ -277,8 +273,7 @@ impl Folding {
             vec![lane, width],
         );
         let identity = builder.constant(entry, self.class, self.identity.bits());
-        // **The steps a lane takes are per lane**, not the elements the whole tile holds: the
-        // stride hands each lane the elements it owns, so the bound is the tile divided by it.
+        // **The steps a lane takes are per lane**, so the bound is the tile over the stride.
         let steps = count / u64::from(lane_width);
         let stop = builder.constant(entry, ScalarClass::Int, steps as i64);
         let lane_slot = builder.constant(entry, ScalarClass::Int, 0);
@@ -383,25 +378,17 @@ impl Fold {
     /// value it accumulated.
     ///
     /// # Invariant
-    /// The loop is the body's structured control flow: the header is the test, the step is the
-    /// fold, and both hand the whole carried state over — so a value the fold accumulates is a
-    /// block parameter and survives the backedge. It carries a **step count and a slot**: the count
-    /// is what the bound compares, and the slot is where the element is read, so a fold over a
-    /// strided buffer and a fold over a slice's slots are the same loop and a lane's slot advances
-    /// by its stride while the count advances by one. The answer is **returned, not left on the
-    /// builder**: the emitter binds a block's parameters per block, so a value read back out of the
-    /// builder after a later block is emitted is that later block's, and a body with two folds would
-    /// otherwise hand the first fold's answer to both of its readers.
+    /// The loop carries a **step count and a slot**: the count is what the bound compares and the
+    /// slot is where the element is read. The answer is **returned, not left on the builder**,
+    /// because the emitter binds a block's parameters per block, so a value read back after a
+    /// later block is that block's.
     fn run(&self, builder: &mut Builder) -> ValueId {
         let from = builder.current();
-        // **The blocks are allocated in the order a loop body is walked**: the header, its step,
-        // and the merge it exits to last, which is the order `Lower`'s own nests give the emitter.
+        // **The blocks are allocated in the order a loop body is walked**: header, step, merge.
         let header = builder.body.add_block();
         let counter = builder.body.add_param(header);
         let value = builder.body.add_param(header);
-        // **The slot is carried, never derived from the count**: a slot the count derived would have
-        // to be re-derived from the same count the step advances, and the backedge would then carry
-        // the read's *index* for the next iteration's *value*.
+        // **The slot is carried, never derived from the count**.
         let slot = builder.body.add_param(header);
         let step = builder.body.add_block();
         let next = builder.body.add_param(step);
@@ -409,22 +396,11 @@ impl Fold {
         let carried_slot = builder.body.add_param(step);
         let merged = builder.body.add_block();
         let result = builder.body.add_param(merged);
-        // **The count starts at zero and the slot at `start`**: the steps a lane takes are `stop`
-        // and the slot it reads is its own, so a count that began at `start` would take
-        // `stop - start` steps and a strided fold would read past its own space.
+        // **The count starts at zero and the slot at `start`**.
         let zero = builder.constant(builder.body.entry, ScalarClass::Int, 0);
-        // **The loop's own instructions land in its header**: the test reads the header's
-        // parameters, so the builder has to be emitting into it and not into the block the loop was
-        // entered from.
+        // **The loop's own instructions land in its header**, which `enter` below selects.
         builder.enter(header);
-        // **The element is read in the header**: a slice read carries the barrier that separates it
-        // from the write, and a read in the loop's **step** block is one no barrier can serve — the
-        // step is a block a lane skips when its own bound is reached, so a barrier under it is in
-        // divergent control flow, which is invalid rather than imprecise. The step folds this value
-        // directly: the header dominates it, and a value carried only to be folded again is a
-        // second name for the same read. A slice is addressed **through its own count**, because
-        // every lane must read every slot and `KernelFragment::barrier_scan` bounds an access by
-        // the length the emitter declares.
+        // **The element is read in the header**, where a slice read's barrier is uniform.
         let address = match self.modulo {
             Some(modulo) => {
                 let modulo = builder.constant(builder.body.entry, ScalarClass::Int, modulo as i64);
@@ -500,9 +476,7 @@ impl Fold {
             }),
         );
         builder.enter(merged);
-        // **The loop leaves into a block of its own**: the emitter plans a merge node whose exit is
-        // the block the header names, and an exit that is also the next loop's header is two
-        // structures meeting at one block.
+        // **The loop leaves into a block of its own**, so its exit is not the next loop's header.
         let after = builder.body.add_block();
         let left = builder.body.add_param(after);
         builder.body.set_terminator(
@@ -532,9 +506,8 @@ struct Builder {
 impl Builder {
     fn new(class: ScalarClass) -> Builder {
         let mut body = KernelBody::new();
-        // **A body starts with its entry block**: every parameter and constant below is added
-        // to the block `KernelBody::entry` names, and a body that has none has nowhere to put
-        // the domain's leaves.
+        // **A body starts with its entry block**: a body with none has nowhere to put the domain's
+        // leaves.
         let entry = body.add_block();
         debug_assert_eq!(entry, body.entry);
         Builder {
@@ -583,7 +556,7 @@ impl Builder {
     ///
     /// # Invariant
     /// The address is the **caller's**, which is the loop's own carried slot: an element that named
-    /// its own address would shadow it, and the read would then observe one slot for every step.
+    /// its own address would shadow it and every step would read one slot.
     fn element_at(&mut self, element: Element, address: ValueId) -> ValueId {
         let block = self.current();
         match element {

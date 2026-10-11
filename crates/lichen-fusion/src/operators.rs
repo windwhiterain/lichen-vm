@@ -72,12 +72,8 @@ impl BinaryOp {
     ///
     /// # Invariant
     /// This is the **only** licence a tiled fold rests on
-    /// (`docs/notes/shared-memory-and-barriers.md` §5): a fold is re-associated by
-    /// splitting its iteration space into per-lane subsets and combining the partials, and
-    /// that answers the fold's own value for `+`, `*`, `max` and `min` and for nothing else
-    /// in the language. It is a statement about the *operator*, so an operator added here
-    /// later is tiled only by someone deciding that, not by someone adding an arm to a match
-    /// over tiling.
+    /// (`docs/notes/shared-memory-and-barriers.md` §5): re-association answers the fold's own value
+    /// for `+`, `*`, `max` and `min` and for nothing else in the language.
     pub const fn associative(self) -> bool {
         matches!(
             self,

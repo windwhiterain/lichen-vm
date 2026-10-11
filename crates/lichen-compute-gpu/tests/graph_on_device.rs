@@ -510,9 +510,7 @@ fn a_two_step_tiled_loop_folds_the_tile_on_the_device() {
     };
     let data: Vec<i64> = (0..(tile as i64 * steps as i64)).collect();
     let packed: Vec<u8> = data.iter().flat_map(|word| word.to_le_bytes()).collect();
-    // **The launch's extent is the elements the fold reads**, not the lanes: the dispatch stages
-    // `extent × width` bytes of the input, so a launch of one workgroup would leave every element
-    // past the first tile unuploaded and the strided read would answer the padding.
+    // **The extent is the elements the fold reads**, because the dispatch stages `extent × width`.
     let resident = context
         .run(
             &LaunchSet::single(&fragment),
