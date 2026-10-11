@@ -225,15 +225,6 @@ pub enum ValueDef {
     },
 }
 
-/// One entry of the value table.
-#[derive(Debug, Clone, PartialEq, Eq, Facet)]
-#[repr(C)]
-#[facet(deny_unknown_fields)]
-pub struct TableValue {
-    /// What the value at this position is.
-    pub at: ValueDef,
-}
-
 /// One basic block.
 #[derive(Debug, Clone, PartialEq, Eq, Facet)]
 #[repr(C)]
@@ -263,8 +254,8 @@ pub struct Barrier {
 #[repr(C)]
 #[facet(deny_unknown_fields)]
 pub struct Body {
-    /// The value table, in `ValueId` order.
-    pub values: Vec<TableValue>,
+    /// The value table, in `ValueId` order: a value's position **is** its identity.
+    pub values: Vec<ValueDef>,
     /// The blocks.
     pub blocks: Vec<BasicBlock>,
     /// Which block control starts in.

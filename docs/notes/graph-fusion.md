@@ -600,11 +600,10 @@ plan, and what the engine does with it.
   emit at all**. The text is spelled for a person — `ValueId` is a bare number, every enum is a
   lower-case string, and a value-table entry's position *is* its identity — because a fused
   kernel is something a human tunes by hand, and a refusal names the field's path and the byte
-  range rather than only that the text failed. Three things are recorded rather than hidden: a
+  range rather than only that the text failed. Two things are recorded rather than hidden: a
   stray key inside an enum **variant** is ignored (`deny_unknown_fields` does not reach variant
-  structs in `facet` 0.45); each value-table entry is wrapped in `{"at": …}`, which restates the
-  position and is a cheap follow-up to flatten; and the dependency brings
-  `facet-reflect`'s `smallvec` **alpha** with it.
+  structs in `facet` 0.45), and the dependency brings `facet-reflect`'s `smallvec` **alpha** with
+  it.
 
 **What a pack author writes, schematically.** The spelling is the implementing
 session's to settle; these seams are the interface:

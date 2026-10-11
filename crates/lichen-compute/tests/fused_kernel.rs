@@ -141,11 +141,11 @@ fn a_hand_written_literal_reads_back_as_the_fragment_it_spells() {
         },
         "body": {
           "values": [
-            { "at": { "block_param": { "block": 0 } } },
-            { "at": { "block_param": { "block": 0 } } },
-            { "at": { "instr": { "op": { "const": { "class": "int", "bits": 0 } }, "args": [], "classes": ["int"] } } },
-            { "at": { "instr": { "op": { "const": { "class": "int", "bits": 7 } }, "args": [], "classes": ["int"] } } },
-            { "at": { "instr": { "op": { "slice_write_call": { "class": "int" } }, "args": [2, 1, 3], "classes": ["int"] } } }
+            { "block_param": { "block": 0 } },
+            { "block_param": { "block": 0 } },
+            { "instr": { "op": { "const": { "class": "int", "bits": 0 } }, "args": [], "classes": ["int"] } },
+            { "instr": { "op": { "const": { "class": "int", "bits": 7 } }, "args": [], "classes": ["int"] } },
+            { "instr": { "op": { "slice_write_call": { "class": "int" } }, "args": [2, 1, 3], "classes": ["int"] } }
           ],
           "blocks": [
             {
@@ -282,9 +282,9 @@ fn a_body_the_ir_refuses_is_refused_with_the_ir_message() {
         "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },
         "body": {
           "values": [
-            { "at": { "block_param": { "block": 0 } } },
-            { "at": { "instr": { "op": { "const": { "class": "int", "bits": 1 } }, "args": [], "classes": ["int"] } } },
-            { "at": { "instr": { "op": { "const": { "class": "int", "bits": 7 } }, "args": [], "classes": ["int"] } } }
+            { "block_param": { "block": 0 } },
+            { "instr": { "op": { "const": { "class": "int", "bits": 1 } }, "args": [], "classes": ["int"] } },
+            { "instr": { "op": { "const": { "class": "int", "bits": 7 } }, "args": [], "classes": ["int"] } }
           ],
           "blocks": [
             {
@@ -353,7 +353,7 @@ fn an_operand_past_the_value_table_is_refused_without_indexing_it() {
         "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },
         "body": {
           "values": [
-            { "at": { "instr": { "op": { "const": { "class": "int", "bits": 1 } }, "args": [], "classes": ["int"] } } }
+            { "instr": { "op": { "const": { "class": "int", "bits": 1 } }, "args": [], "classes": ["int"] } }
           ],
           "blocks": [
             { "params": [], "instrs": [0], "terminator": { "return": { "values": [7] } } }
@@ -424,24 +424,24 @@ fn every_instruction_the_ir_has_is_expressed_by_the_text() {
         "roles": { "scalars": [], "inputs": [], "outputs": [], "input_classes": [], "output_classes": [] },
         "body": {
           "values": [
-            { "at": { "block_param": { "block": 0 } } },
-            { "at": { "block_param": { "block": 0 } } },
-            { "at": { "block_param": { "block": 0 } } },
-            { "at": { "instr": { "op": { "const": { "class": "int", "bits": 3 } }, "args": [], "classes": ["int"] } } },
-            { "at": { "instr": { "op": { "const": { "class": "float", "bits": 0 } }, "args": [], "classes": ["float"] } } },
-            { "at": { "instr": { "op": { "bin": { "class": "int", "op": "add" } }, "args": [0, 3], "classes": ["int"] } } },
-            { "at": { "instr": { "op": "i32_wrap_i64", "args": [5], "classes": ["int"] } } },
-            { "at": { "instr": { "op": { "conv": { "from": "int", "to": "float" } }, "args": [6], "classes": ["float"] } } },
-            { "at": { "instr": { "op": { "buffer_read_call": { "class": "float" } }, "args": [3, 0], "classes": ["float"] } } },
-            { "at": { "instr": { "op": { "bin": { "class": "float", "op": "add" } }, "args": [8, 4], "classes": ["float"] } } },
-            { "at": { "instr": { "op": "select", "args": [7, 9, 0] , "classes": ["float"] } } },
-            { "at": { "instr": { "op": "exp", "args": [10], "classes": ["float"] } } },
-            { "at": { "instr": { "op": "sqrt", "args": [11], "classes": ["float"] } } },
-            { "at": { "instr": { "op": "floor", "args": [12], "classes": ["float"] } } },
-            { "at": { "instr": { "op": { "call_kernel": { "kernel": 3 } }, "args": [0], "classes": ["int"] } } },
-            { "at": { "instr": { "op": { "buffer_write_call": { "class": "int" } }, "args": [0, 1, 14], "classes": [] } } },
-            { "at": { "instr": { "op": { "slice_write_call": { "class": "int" } }, "args": [3, 1, 14], "classes": ["int"] } } },
-            { "at": { "instr": { "op": { "slice_read_call": { "class": "int" } }, "args": [3, 1, 16], "classes": ["int"] } } }
+            { "block_param": { "block": 0 } },
+            { "block_param": { "block": 0 } },
+            { "block_param": { "block": 0 } },
+            { "instr": { "op": { "const": { "class": "int", "bits": 3 } }, "args": [], "classes": ["int"] } },
+            { "instr": { "op": { "const": { "class": "float", "bits": 0 } }, "args": [], "classes": ["float"] } },
+            { "instr": { "op": { "bin": { "class": "int", "op": "add" } }, "args": [0, 3], "classes": ["int"] } },
+            { "instr": { "op": "i32_wrap_i64", "args": [5], "classes": ["int"] } },
+            { "instr": { "op": { "conv": { "from": "int", "to": "float" } }, "args": [6], "classes": ["float"] } },
+            { "instr": { "op": { "buffer_read_call": { "class": "float" } }, "args": [3, 0], "classes": ["float"] } },
+            { "instr": { "op": { "bin": { "class": "float", "op": "add" } }, "args": [8, 4], "classes": ["float"] } },
+            { "instr": { "op": "select", "args": [7, 9, 0] , "classes": ["float"] } },
+            { "instr": { "op": "exp", "args": [10], "classes": ["float"] } },
+            { "instr": { "op": "sqrt", "args": [11], "classes": ["float"] } },
+            { "instr": { "op": "floor", "args": [12], "classes": ["float"] } },
+            { "instr": { "op": { "call_kernel": { "kernel": 3 } }, "args": [0], "classes": ["int"] } },
+            { "instr": { "op": { "buffer_write_call": { "class": "int" } }, "args": [0, 1, 14], "classes": [] } },
+            { "instr": { "op": { "slice_write_call": { "class": "int" } }, "args": [3, 1, 14], "classes": ["int"] } },
+            { "instr": { "op": { "slice_read_call": { "class": "int" } }, "args": [3, 1, 16], "classes": ["int"] } }
           ],
           "blocks": [
             {

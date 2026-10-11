@@ -539,11 +539,7 @@ impl From<ir::ValueDef> for schema::ValueDef {
 impl From<ir::KernelBody> for schema::Body {
     fn from(body: ir::KernelBody) -> Self {
         schema::Body {
-            values: body
-                .values
-                .into_iter()
-                .map(|at| schema::TableValue { at: at.into() })
-                .collect(),
+            values: body.values.into_iter().map(Into::into).collect(),
             blocks: body.blocks.into_iter().map(Into::into).collect(),
             entry: body.entry as u64,
             barriers: body.barriers.into_iter().map(Into::into).collect(),
@@ -620,8 +616,8 @@ pub(crate) fn fragment(text: schema::Fragment) -> Result<ir::KernelFragment, Fus
         .iter()
         .enumerate()
         .map(|(ordinal, entry)| {
-            let at = format!("fragment.body.values[{ordinal}].at");
-            let definition = match &entry.at {
+            let at = format!("fragment.body.values[{ordinal}]");
+            let definition = match entry {
                 schema::ValueDef::BlockParam { block } => {
                     let block = wide(&format!("{at}.block_param.block"), *block)?;
                     let index = blocks
