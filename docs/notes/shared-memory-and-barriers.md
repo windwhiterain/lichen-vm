@@ -1388,6 +1388,18 @@ Still open:
    index expression, the slot and the reason, and the reason differs between "the
    def cone excludes the lane" and "`UP` proves it uniform" — two causes that should
    not read as one.
+7. **`KernelBody::validate` does not require a used `ValueId` to be defined where the use
+   sits.** Whether it should is open, and the acceptance case supplied the evidence that it
+   matters: the tiling transform handed **one** `ValueId` to two folds — a builder-state leak
+   in the transform and not an emitter fault — and the body passed `validate`, passed
+   `spirv-val`, and answered **silently wrong on the device**. The emitter's `record` binds a
+   block's declared parameters per incoming edge, so an id that belongs to one fold and is
+   used in another block is bound rather than refused, and the module is valid, so
+   `SpirvRefusal` had nothing to say either. The rule that would have caught it is a
+   **scope** rule — a use sits in the block that defines the id or in one that block
+   dominates — and it belongs in `validate`, where the CFG is. It is the same family as item
+   3's ordering question, and it is the failure this project treats as worst: not a refusal
+   that is missing, but an answer that is wrong with every gate green.
 
 ## Recovered measurements
 
