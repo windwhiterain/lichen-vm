@@ -408,7 +408,13 @@ fragments between instances**, and of nothing else:
 - **What the hash covers, and what it excludes.**
   `RegionSchema::canonical_form` is the text `sha256` is taken over, and it is
   also what a report prints, so a pack author recomputes the hash from what they
-  can see. In it: the instance count; each instance's position, interface and,
+  can see. **There are two granularities of that one text** (`e302ade`): the
+  region's, and — since a placement happens inside **one** kernel — a
+  **node**'s, which is the region's per-node lines without the position, so one
+  pack serves a node wherever a region puts it. The region's form writes the
+  position and then the node's own text, so the two cannot drift and no region
+  hash moved when the node form was factored out. In it: the instance count;
+  each instance's position, interface and,
   per role in name order, the **canonical** projection in a fully parenthesized
   prefix form (`(max t (+ d (- r)))`, which no precedence or rendering rule can
   make ambiguous); each `between`'s producer, consumer and input ordinal with its
@@ -472,16 +478,26 @@ construction.
 
 A pack is an ordinary artifact installed on the runner's machine (via the package
 manager into Lichen Home, beside the toolchain), and it binds by schema, not
-by name and not by the logic author's say-so:
+by name and not by the logic author's say-so. **What has landed is the binding
+and one field of it** — a **placement pack** matched to a node's schema, whose
+plan steers the tiling (`crates/lichen-language/src/placement_pack.rs`, at
+`e302ade`); nothing installs one yet, so a host hands its packs in as read data,
+and the installation path is still a `missing` row below. The rest of the block
+is the interface the other fields are owed in:
 
 ```lichen
 --- inside a pack, schematically ---
-implements = schema "sha256:9f2c…"           -- the region schema's skeleton hash
-requires   = { class = f32, axis = "last" }  -- explicit constraints on fragments/ports
-reference  = <the algebra this claims>       -- what the region's derivation must equal
-fuse       = { region = …, as = one_kernel }  -- a directive: which operations share a kernel
-plan       = { staging = …, sync = … }       -- where the values the fusion stages live
+schema     = "sha256:…"                      -- landed: the NODE schema's hash, not a region's
+name       = "sum-in-shared"                 -- landed: what the report calls it
+requires   = { class = f32 }                 -- landed for `class` only; `axis` has no surface yet
+reference  = <the algebra this claims>       -- owed: no interface verification exists
+fuse       = { region = …, as = one_kernel } -- owed: §5's two gaps are still missing
+plan       = { staging = …, sync = … }       -- landed for `staging`; `sync` is owed
 ```
+
+The landed pack's plan is **the fused artifact's own spelling** — one `Plan`
+type, not a second one — so a pack and an artifact cannot disagree about what a
+staging entry is.
 
 The rules, each a decision:
 
@@ -499,7 +515,12 @@ The rules, each a decision:
   cost is real — two genuinely different spellings of one attention are two
   hashes — and schema canonicalisation (§4) is what keeps the cost small
   without admitting semantic distance. Tooling owes the pack author one
-  command: *print the schema hash of this region* so a pack can target it.
+  command: *print the schema hash this pack must target* — and **which schema
+  depends on what the pack steers**: a placement pack names the **node**
+  schema, because an intra-kernel staging happens inside one kernel, while a
+  pack that steers a *fusion* names the region's. The two forms are one rule
+  (§4), and a run report's `no pack matched its schema sha256:…` line is that
+  command for the node case.
 - **Losing a pack is loud and safe.** A pack that does not match changes
   nothing the program computes — the logic runs, possibly engine-fused — and
   the run report says which packs were consulted and which fired. A logic
@@ -656,21 +677,23 @@ plan, and what the engine does with it.
 session's to settle; these seams are the interface:
 
 ```lichen
-implements = schema "sha256:9f2c…"
-requires   = { class = f32 }
-reference  = <the region's derivation>
+schema     = "sha256:…"     -- landed: the node schema's hash (see the block above)
+requires   = { class = f32 } -- landed for `class`; `axis` has no surface
+reference  = <the region's derivation>   -- owed
 plan       = {
-  -- `mark` is a mark the body published: the plan's only stable way to name one.
+  -- `name` is what the pack calls the value it stages, and what the landed
+  -- fragment publishes as its mark: the plan's only stable way to name one.
   -- `space` is a plan value — `Register | Shared` — and names no length.
   -- `group_width` is a **constraint on this placement** — the group width the facts
   -- are checked against — and not the origin of a length: a slice's element count is
   -- the body's, and a plan's width is the plan's own group width.
-  -- `mark` names the value by the **path** the body published — §3's channel, and now a
-  -- path rather than a text. It is resolved against the region's interface and is
-  -- **relative**, so one plan serves every region whose structure matches.
-  staging = [ { mark = "tile", space = Shared, group_width = 64 } ]
+  -- **A text, for now**: naming a value by the *path* the body published is the
+  -- deferred decision §3's open item records, so a name here is still a mark's
+  -- payload text rather than a path.
+  staging = [ { name = "tile", space = Shared, group_width = 64 } ]
   -- `auto` is the scan. An explicit sync names the two marks it separates, never a
-  -- position: a position drifts under re-spelling.
+  -- position: a position drifts under re-spelling. Owed: the IR's `Plan` has no
+  -- `sync` field yet.
   sync    = auto        -- or { between = { write = "tile", read = "tile_read" } }
 }
 ```
@@ -962,7 +985,7 @@ about shrinks exactly where fusion fires.
 | interface verification (symbolic combine check) | **missing** | §3's teeth; without it claims are trusted, which this design refuses to do |
 | a mark whose anchor the dispatcher never lowers | **missing** | §3's open measurement, and now the *literal*-count half of it only: the definition pass runs a convertible `@loop` to a decision before the kernel emitter walks the body, so the emitter peels the decided pair instead of entering `Lower::apply` and the marked seed is never lowered. A recurrence whose count is a runtime value stays undecided, so its seed is lowered and its mark publishes (row above) |
 | shared memory + workgroup | **missing** (roadmap axis C) | one-dispatch split-K; until then split-K runs as two dispatches, correct and merely slower |
-| the **memory plan** interface | **the carrier, the check and the landing landed; matching and the fact checks remain** | **Landed** at `77fafaf`: a plan is data (`lichen_kernel_ir::{Plan, Staging}`) and `KernelFragment::check_plan` refuses one the fragment refutes rather than believing it — a name no mark published (`UnknownStagedValue`), a name two values carry (`AmbiguousStagedValue`), a value that is not a staging (`NotAStagedValue`), a group width the target has not (`StagingWidthNotAWidth`), and a space the slice does not declare (`PlanContradicted`). A tiled fold publishes the value it staged under the **logic's own mark** (`Tiled::staged`, `Tiled::marks`), and `crates/lichen-language/tests/plan_staging.rs` drives a declared plan on a device. The **artifact that carries a fused kernel and its plan** landed at `fb0574c`, and the **landing** followed on this branch: `land_fused_kernel` reads the text (so every check runs before anything is replaced) and puts the fragment into the **recorded graph node the runner reads**, refusing by name a shape that would renumber the graph's values or mis-bind its edges. What remains: the plan **matched by schema**, checked against the three facts (`PlanContradicted` as the facts refute a plan, `UncertifiedCrossLaneRead`), and its `sync`. The interface is §5; [shared-memory-and-barriers](shared-memory-and-barriers.md) §9 step 7 records the rest |
+| the **memory plan** interface | **the carrier, the check, the landing and the match landed; the fact checks and `sync` remain** | **Landed** at `77fafaf`: a plan is data (`lichen_kernel_ir::{Plan, Staging}`) and `KernelFragment::check_plan` refuses one the fragment refutes rather than believing it — a name no mark published (`UnknownStagedValue`), a name two values carry (`AmbiguousStagedValue`), a value that is not a staging (`NotAStagedValue`), a group width the target has not (`StagingWidthNotAWidth`), and a space the slice does not declare (`PlanContradicted`). A tiled fold publishes the value it staged under the **logic's own mark** (`Tiled::staged`, `Tiled::marks`), and `crates/lichen-language/tests/plan_staging.rs` drives a declared plan on a device. The **artifact that carries a fused kernel and its plan** landed at `fb0574c`, and the **landing** followed: `land_fused_kernel` reads the text (so every check runs before anything is replaced) and puts the fragment into the **recorded graph node the runner reads**, refusing by name a shape that would renumber the graph's values or mis-bind its edges. **Matching landed** at `e302ade`: a **placement pack** (`crates/lichen-language/src/placement_pack.rs`, text through `facet`) is bound to a **node schema**'s hash with explicit constraints, its plan's space and group width steer the tiling, the plan rides the artifact so `check_plan` verifies the fragment honours it, and a miss is inert — the engine's own choice stays the floor. What remains: the plan checked against the **three facts** (`PlanContradicted` as the facts refute a plan, `UncertifiedCrossLaneRead`), its `sync`, and the pack **installation path** (a host hands packs in as data today). The interface is §5; [shared-memory-and-barriers](shared-memory-and-barriers.md) §9 step 7 records the rest |
 | pack install path in the package manager | **missing** | the runner-side channel of §5 |
 | **an integer** reduction, at any count | **missing** | §3's machine-integer wall: the symbolic language is over the reals, so the bridge refuses the `Int` class outright — a runtime-count integer fold publishes **both** marks and the class refuses both. The narrow repair (bridge `Max`/`Min`/exact constants) cannot reach a sum, which is the case one wants; the honest one is an integer class in `Expr` |
 | the engine's **fusion on request** — a directive that says *these operations are one kernel* | **missing** | §5: it derives fusion for a producer→code→consumer chain and refuses any other region, so the shape a directive most needs — a fan-out body — cannot fuse today |

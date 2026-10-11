@@ -150,6 +150,16 @@ real `KernelFragment` on the device against a hand-written expectation. The seam
 test lives in `lichen-language`, because it is the one crate that can compile a
 lichen program and install a backend: a first kernel writes `[10, 11, 12]`, a
 second reads that buffer and doubles it, and the whole thing is checked against
+
+**And `install_default` is process-wide, so one binary's device tests must not
+run in parallel.** It replaces the installed backend, and a device holds the
+buffers a dispatch left it; a second test that installs and dispatches while the
+first still holds a buffer has been measured to pull it — `the "gpu" backend
+declined to return input buffer 0 (buffer 6): buffer 6 is not one this device is
+holding`, once in `crates/lichen-language/tests/pack_placement.rs`, which now
+serialises its device tests behind a `static Mutex`. The other device test files
+share that latent hazard; a file that adds a second device test should take the
+lock rather than trusting the scheduler.
 the rendered output.
 
 **A green device run is evidence that nothing crashed, not that a device
