@@ -200,6 +200,39 @@ where
         None
     }
 
+    /// A table instance: the handle's entries, `table{k ==> v, …}`.
+    ///
+    /// # Invariant
+    /// The shape is `[key slot, value slot]`, so an entry's key and value read
+    /// against their slots' type positions; a table with no entry reads
+    /// `table{}`, and an undecided payload is not a table at all.
+    fn table_instance(&mut self, value: P::Value, shape: &[ArrayItem]) -> Option<String> {
+        let Some(LowValue::Table(table)) = value.as_enum() else {
+            return None;
+        };
+        if shape.len() != 2 {
+            return None;
+        }
+        let key_ty = self
+            .printer
+            .slot_type_any(shape[0].node)
+            .unwrap_or(shape[0].node);
+        let value_ty = self
+            .printer
+            .slot_type_any(shape[1].node)
+            .unwrap_or(shape[1].node);
+        // SAFETY: `table` is the payload of the value being printed, whose
+        // entries live in the module being rendered.
+        let items = unsafe { table.items() };
+        let mut entries = Vec::with_capacity(items.len());
+        for item in items {
+            let key = self.element_any(item.key, key_ty);
+            let entry = self.element_any(item.value, value_ty);
+            entries.push(format!("{key} ==> {entry}"));
+        }
+        Some(format!("table{{{}}}", entries.join(", ")))
+    }
+
     /// A term of a tuple, array, or struct type: the elements read against the
     /// shape.
     ///
@@ -214,17 +247,24 @@ where
         shape_node: AnyNodeId,
         marker: P::Value,
     ) -> Option<String> {
-        let Some(LowValue::Array(values)) = value.as_enum() else {
-            return None;
-        };
-        // SAFETY: `values`/`shape` are payloads of the value and shape node,
-        // both in the module being rendered.
-        let values = unsafe { values.items() };
         let shape = self.module.node_value(shape_node).and_then(|v| v.as_enum());
         let Some(LowValue::Array(shape)) = shape else {
             return None;
         };
+        // SAFETY: `shape` is the payload of the shape node, in the module being
+        // rendered.
         let shape = unsafe { shape.items() };
+        // A table's value is a **handle**, not an element list, so it renders
+        // from its entries before the list decoding below.
+        if marker == P::Value::table_type_marker() {
+            return self.table_instance(value, shape);
+        }
+        let Some(LowValue::Array(values)) = value.as_enum() else {
+            return None;
+        };
+        // SAFETY: `values` is the payload of the value being printed, which
+        // belongs to the module being rendered.
+        let values = unsafe { values.items() };
         if marker == P::Value::tuple_type_marker() {
             if shape.len() != values.len() {
                 return None;
