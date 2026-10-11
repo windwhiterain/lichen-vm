@@ -355,7 +355,7 @@ where
         let value = self.array_node_masked(self.current_block, &vals, &mask);
         let mut slots = Vec::new();
         for &ty in &tys {
-            slots.push(self.element_slot(Some(ty), None));
+            slots.push(self.element_slot(None, Some(ty), None));
         }
         let shape = self.array_node(self.current_block, &slots);
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);

@@ -1483,6 +1483,8 @@ fn classify_token_kind(
         | TokenKind::KwShallow
         // `_` — a placeholder is a reserved inference form, never a name.
         | TokenKind::Placeholder => Some((SemanticTokenType::KEYWORD, Vec::new())),
+        // `tuple` is a keyword-led type form, like `array`.
+        TokenKind::KwTuple
         // `@any` is the wildcard literal — a reserved form like `_`.
         | TokenKind::Any => Some((SemanticTokenType::KEYWORD, Vec::new())),
         // A `Name` is resolved by `classify_names` (or the `.` heuristic).

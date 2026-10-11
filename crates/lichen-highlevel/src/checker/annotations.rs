@@ -209,6 +209,7 @@ where
         if let Some(value) = value {
             self.unify_type_attributes(type_expr, value, self.loc(value, shape::PAIR_ATTR_BASE));
             self.unify_element_attributes(type_expr, value);
+            self.unify_element_values(type_expr, value);
         }
         let mut expr = type_expr;
         while let ExprKind::Annotation { value, .. } = self.ir[expr].kind {
@@ -281,6 +282,47 @@ where
             }
             // A nested compound carries its own elements' requirements.
             self.unify_element_attributes(type_el, value_el);
+        }
+    }
+
+    /// Unify a **compound type's element values** with the elements of the value
+    /// it types: a spelled value is a **pin**.
+    ///
+    /// # Invariant
+    /// A value's element slots hold the wildcard, so the lowlevel compare cannot
+    /// enforce a pin; the reconciliation is here, and a wildcard's own class makes
+    /// its arm vacuous — which is exactly why `@any : T` is no pin.
+    /// See docs/notes/compound-element-slots.md.
+    fn unify_element_values(&mut self, type_expr: ExprId, value: ExprId) {
+        let (Some(types), Some(values)) = (
+            self.compound_children(type_expr),
+            self.compound_children(value),
+        ) else {
+            return;
+        };
+        // An arity conflict is the structural unify's to report.
+        if types.len() != values.len() {
+            return;
+        }
+        for (type_el, value_el) in types.into_iter().zip(values) {
+            match self.ir[type_el].kind {
+                ExprKind::Annotation {
+                    value: pin,
+                    r#type: Some(inner),
+                    ..
+                } => {
+                    let pin = self.value_of(pin);
+                    let actual = self.value_of(value_el);
+                    self.check_unify(
+                        actual,
+                        pin,
+                        self.loc(value_el, shape::PAIR_VALUE_SLOT),
+                        DiagKind::Annotation,
+                    );
+                    self.unify_element_values(inner, value_el);
+                }
+                _ => self.unify_element_values(type_el, value_el),
+            }
         }
     }
 

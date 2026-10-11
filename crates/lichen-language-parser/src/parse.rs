@@ -858,6 +858,8 @@ fn starts_an_expression(kind: &TokenKind) -> bool {
             | TokenKind::KwSet
             | TokenKind::KwIf
             | TokenKind::KwArray
+            | TokenKind::KwTuple
+            | TokenKind::Any
             | TokenKind::KwAssert
             // The prefix keyword operators begin an expression without
             // being atoms, so `a > max b c` compares.
@@ -938,6 +940,7 @@ fn atom_parser<'a>(
             array_literal(tokens, expr.clone()),
             table_literal(tokens, expr.clone()),
             set_literal(tokens, expr.clone()),
+            tuple_slots(tokens, expr.clone()),
             block(tokens, expr.clone()),
             angle_tuple(tokens, expr.clone()),
             struct_type(tokens, expr.clone()),
@@ -1223,6 +1226,36 @@ fn set_literal<'a>(
         .ignore_then(comma_list(expr))
         .then_ignore(token(TokenKind::RBrace))
         .map_with(|(members, _), me| Expr::Set(members, span_at(tokens, me.span().start)))
+}
+
+/// A keyword-led tuple type, `tuple{slot, …}` — the spelled-out `<…>`.
+///
+/// # Invariant
+/// A slot is `value : type`, so a top-level `:` makes an element a value slot; an
+/// element without one is a bare type expression, its value the wildcard `@any`.
+/// See `docs/notes/compound-element-slots.md`.
+fn tuple_slots<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    token(TokenKind::KwTuple)
+        .ignore_then(token(TokenKind::Glue).ignored().or_not())
+        .ignore_then(token(TokenKind::LBrace))
+        .ignore_then(expr.clone())
+        .then(
+            separators_between()
+                .ignore_then(expr.clone())
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then(separator_run())
+        .then_ignore(token(TokenKind::RBrace))
+        .map_with(|((first, rest), _trailing), me| {
+            Expr::TypeTuple(
+                std::iter::once(first).chain(rest).collect(),
+                span_at(tokens, me.span().start),
+            )
+        })
 }
 
 /// An array element with an optional `@shallow` prefix; the marker wraps it

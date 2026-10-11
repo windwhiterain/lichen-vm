@@ -74,6 +74,8 @@ pub enum TokenKind {
     KwCache,
     /// The `array` keyword — a keyword-led array type, `array<T, n>`.
     KwArray,
+    /// The `tuple` keyword — the spelled-out tuple type, `tuple{slot, …}`.
+    KwTuple,
     /// The `int2float` keyword — the prefix `Int` to `Float` conversion, at the
     /// prefix level beside `!`.
     KwInt2Float,
@@ -197,6 +199,7 @@ impl TokenKind {
             TokenKind::KwPub => "'pub'".to_string(),
             TokenKind::KwCache => "'cache'".to_string(),
             TokenKind::KwArray => "'array'".to_string(),
+            TokenKind::KwTuple => "'tuple'".to_string(),
             TokenKind::KwInt2Float => "'int2float'".to_string(),
             TokenKind::KwFloat2Int => "'float2int'".to_string(),
             TokenKind::KwMax => "'max'".to_string(),
@@ -315,6 +318,8 @@ enum RawToken {
     AtNameLit,
     #[token("array")]
     KwArray,
+    #[token("tuple")]
+    KwTuple,
     #[token("int2float")]
     KwInt2Float,
     #[token("float2int")]
@@ -742,6 +747,7 @@ fn raw_to_kind(
             "pub" => TokenKind::KwPub,
             "cache" => TokenKind::KwCache,
             "array" => TokenKind::KwArray,
+            "tuple" => TokenKind::KwTuple,
             "int2float" => TokenKind::KwInt2Float,
             "float2int" => TokenKind::KwFloat2Int,
             "max" => TokenKind::KwMax,
@@ -767,6 +773,7 @@ fn raw_to_kind(
         RawToken::KwPub => Some(TokenKind::KwPub),
         RawToken::KwCache => Some(TokenKind::KwCache),
         RawToken::KwArray => Some(TokenKind::KwArray),
+        RawToken::KwTuple => Some(TokenKind::KwTuple),
         RawToken::KwInt2Float => Some(TokenKind::KwInt2Float),
         RawToken::KwFloat2Int => Some(TokenKind::KwFloat2Int),
         RawToken::KwMax => Some(TokenKind::KwMax),

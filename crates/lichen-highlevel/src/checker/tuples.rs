@@ -16,7 +16,7 @@ where
             self.check_expr(el);
             vals.push(self.value_of(el));
             let ty = self.state[el].ty;
-            slots.push(self.element_slot(ty, None));
+            slots.push(self.element_slot(None, ty, None));
         }
         // A tuple: `[values, [[slot…], [TupleType, Type]]]`.
         let value = self.array_node(self.current_block, &vals);
@@ -36,9 +36,20 @@ where
         let mut slots = Vec::new();
         for &el in &elements {
             self.check_expr(el);
-            let denotation = self.type_denotation(el, None);
-            let attrs = self.element_attr_slots(el);
-            slots.push(self.element_slot(Some(denotation), Some(attrs)));
+            // A slot is `value : type`; without a top-level `:` the element is a
+            // type expression, its value position the wildcard.
+            let (value, type_expr) = match self.ir[el].kind {
+                ExprKind::Annotation {
+                    value,
+                    r#type: Some(type_expr),
+                    ..
+                } => (Some(value), type_expr),
+                _ => (None, el),
+            };
+            let denotation = self.type_denotation(type_expr, None);
+            let attrs = self.element_attr_slots(type_expr);
+            let value = value.map(|value| self.value_of(value));
+            slots.push(self.element_slot(value, Some(denotation), Some(attrs)));
         }
         let shape = self.array_node(self.current_block, &slots);
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
@@ -59,12 +70,13 @@ where
     /// propagates.
     pub(super) fn element_slot(
         &mut self,
+        value: Option<NodeId>,
         ty: Option<NodeId>,
         attrs: Option<Vec<NodeId>>,
     ) -> NodeId {
         let any = self.any();
         let mut items: Vec<NodeId> = Vec::with_capacity(shape::slot_width::<P>());
-        items.push(any);
+        items.push(value.unwrap_or(any));
         items.push(ty.unwrap_or_else(|| self.fresh_cell()));
         match attrs {
             Some(attrs) => items.extend(attrs),
