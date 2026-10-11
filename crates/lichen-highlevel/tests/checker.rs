@@ -1350,12 +1350,19 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     let mut b = build(s, ir);
     assert!(b.ok, "struct<.f Int, .t Type> should kind");
     assert!(b.module.unify_errors.is_empty());
-    // the shape is just the positional field-type list [int, Type] — the
-    // nominal id does not ride in the shape
+    // the shape is the positional field-**slot** list [slot(Int), slot(Type)] —
+    // the nominal id does not ride in the shape
     let struct_shape = b.state[s].val.unwrap();
     let shape_ids = array_ids(&b, struct_shape);
     assert_eq!(shape_ids.len(), 2);
-    assert!(is_int_type(&b, shape_ids[0]));
+    // A field's type is its slot's type position.
+    let f_slot = array_ids(&b, shape_ids[0]);
+    assert!(is_int_type(&b, f_slot[1]), "the `.f` field's type is Int");
+    let t_slot = array_ids(&b, shape_ids[1]);
+    assert_eq!(
+        t_slot[1], b.type_expr,
+        "the `.t` field's type is the universe"
+    );
     // the kind slot is a standard [marker, K] pair; see `lichen_highlevel::shape`.
     let kind = b.state[s].ty.unwrap();
     let kind_ids = array_ids(&b, kind);
@@ -1564,21 +1571,22 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
     let mut module = b.module;
     module.unify(b.state[s].term.unwrap(), b.state[t].term.unwrap());
     assert_eq!(module.unify_errors.len(), 1);
-    // A bare field list against a slot list; the marker-level clash is
-    // `two_struct_type_occurrences_do_not_unify`'s.
+    // Both shapes are the same field-**slot** list, so the nominal distinction
+    // lives at the kind's marker slot.
     let err = module.unify_errors[0].clone();
     let (a, b) = (err.value_a, err.value_b);
-    let item_count = |value: &Option<HighProgramValue>| match value {
-        Some(HighProgramValue::LowValue(LowValue::Array(array))) => {
-            // SAFETY: the value was just read from a live node of `module`.
-            Some(unsafe { array.items() }.len())
-        }
-        _ => None,
-    };
-    assert_eq!(
-        (item_count(&a), item_count(&b)),
-        (Some(2), Some(3)),
-        "a bare field type against an element slot: got {a:?} vs {b:?}"
+    assert!(
+        matches!(
+            (&a, &b),
+            (
+                Some(HighProgramValue::LowValue(LowValue::Array(_))),
+                Some(HighProgramValue::TypeValue(TypeValue::TypeTuple))
+            ) | (
+                Some(HighProgramValue::TypeValue(TypeValue::TypeTuple)),
+                Some(HighProgramValue::LowValue(LowValue::Array(_)))
+            )
+        ),
+        "marker-level nominal clash: got {a:?} vs {b:?}"
     );
 }
 
@@ -1902,11 +1910,13 @@ fn an_instantiation_through_a_parameter_pins_the_callee_to_a_struct_kind() {
     assert!(!b.ok, "applying f to a non-struct type must fail");
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
-    assert_eq!(diags[0].kind, DiagKind::Runtime, "the apply-time check");
+    // Read per slot type, the requirement is stated here rather than through
+    // the apply's argument channel.
+    assert_eq!(diags[0].kind, DiagKind::Annotation);
     assert_eq!(
         diags[0].loc.as_ref().map(|loc| loc.expr),
-        Some(arg),
-        "the deferred failure is attributed to the apply's argument"
+        Some(inst),
+        "the refusal names the instantiation whose callee is not a struct"
     );
     // The pin rejects a tuple type too (nominality through the deferral).
     let mut ir = IR::new();

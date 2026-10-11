@@ -61,7 +61,7 @@ where
             // which belongs to the module being rendered.
             let fields: Vec<String> = unsafe { shape.items() }
                 .iter()
-                .map(|item| self.printer.any_node(item.node))
+                .map(|item| self.printer.slot_any(item.node))
                 .collect();
             let names = struct_field_names(self.module, tys, fields.len());
             let fields = struct_fields_with_names(&fields, &names);
@@ -258,14 +258,19 @@ where
         // `[payload, TypeStruct]`: checking the tag, not the shape, keeps
         // another kind's value from reading as a struct.
         if self.marker_is_struct(marker) {
-            // The shape is the positional field-type list.
+            // The shape is the positional field-**slot** list.
             let fields = shape;
             if fields.len() != values.len() {
                 return None;
             }
             let mut out = Vec::with_capacity(values.len());
             for (i, v) in values.iter().enumerate() {
-                out.push(self.element_any(v.node, fields[i].node));
+                // An element is a slot: the field's type is its type position.
+                let ty = self
+                    .printer
+                    .slot_type_any(fields[i].node)
+                    .unwrap_or(fields[i].node);
+                out.push(self.element_any(v.node, ty));
             }
             return Some(self.parens(&out));
         }

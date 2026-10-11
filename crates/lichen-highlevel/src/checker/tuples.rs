@@ -35,21 +35,7 @@ where
         let elements = self.range_children(e);
         let mut slots = Vec::new();
         for &el in &elements {
-            self.check_expr(el);
-            // A slot is `value : type`; without a top-level `:` the element is a
-            // type expression, its value position the wildcard.
-            let (value, type_expr) = match self.ir[el].kind {
-                ExprKind::Annotation {
-                    value,
-                    r#type: Some(type_expr),
-                    ..
-                } => (Some(value), type_expr),
-                _ => (None, el),
-            };
-            let denotation = self.type_denotation(type_expr, None);
-            let attrs = self.element_attr_slots(type_expr);
-            let value = value.map(|value| self.value_of(value));
-            slots.push(self.element_slot(value, Some(denotation), Some(attrs)));
+            slots.push(self.element_slot_of(el));
         }
         let shape = self.array_node(self.current_block, &slots);
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
@@ -58,6 +44,30 @@ where
         self.state[e].val = Some(shape);
         self.state[e].ty = Some(kind);
         pair
+    }
+
+    /// An element's slot, read from the expression that writes it.
+    ///
+    /// # Invariant
+    /// A top-level `:` spells the value position; an element without one is a type
+    /// expression whose value position is the wildcard. Every compound
+    /// construction site reads its shape elements through this one rule, so a
+    /// struct field and a tuple element state the same thing.
+    /// See docs/notes/compound-element-slots.md.
+    pub(super) fn element_slot_of(&mut self, el: ExprId) -> NodeId {
+        self.check_expr(el);
+        let (value, type_expr) = match self.ir[el].kind {
+            ExprKind::Annotation {
+                value,
+                r#type: Some(type_expr),
+                ..
+            } => (Some(value), type_expr),
+            _ => (None, el),
+        };
+        let denotation = self.type_denotation(type_expr, None);
+        let attrs = self.element_attr_slots(type_expr);
+        let value = value.map(|value| self.value_of(value));
+        self.element_slot(value, Some(denotation), Some(attrs))
     }
 
     /// A compound element's slot: `[value, type, attrs…]`, the same width for
@@ -119,21 +129,39 @@ where
         slots
     }
 
-    /// A tuple shape's **element types**, in order: each element slot's type
-    /// position, as a fresh shape array.
+    /// A compound shape's **element types**, in order: each slot's type position,
+    /// as a fresh array.
     ///
     /// # Invariant
-    /// The shape is a tuple type's own slot list, so every element is a slot; a
-    /// static ref is materialized into the current block, as the caller's own
-    /// shape handling does.
-    pub(super) fn tuple_element_types(&mut self, shape: NodeId) -> NodeId {
+    /// A shape element is a slot, so a positional field-type list is each slot's
+    /// type. An undecided shape has no items to read, so the list is built lazily
+    /// — one `Index(Index(shape, i), 1)` per position, `arity` of them — and a
+    /// static ref is materialized into the current block.
+    pub(super) fn slot_types_of(&mut self, shape: NodeId, arity: usize) -> NodeId {
         // SAFETY: `shape` is a live node of this module; nothing in this crate
         // calls `Module::drop_block`.
         let nodes: Vec<AnyNodeId> = unsafe { self.module.array_items(shape) }
             .map(|items| items.iter().map(|item| item.node).collect())
             .unwrap_or_default();
         if nodes.is_empty() {
-            return shape;
+            let mut tys = Vec::with_capacity(arity);
+            for i in 0..arity {
+                let index = self.usize_node(i);
+                let ops = self.array_node(self.current_block, &[shape, index]);
+                let element = self.op_node(
+                    self.current_block,
+                    P::Operator::from(LowOperator::Index),
+                    Some(ops),
+                );
+                let type_ops = self.array_node(self.current_block, &[element, self.one()]);
+                let ty = self.op_node(
+                    self.current_block,
+                    P::Operator::from(LowOperator::Index),
+                    Some(type_ops),
+                );
+                tys.push(ty);
+            }
+            return self.array_node(self.current_block, &tys);
         }
         let mut tys = Vec::with_capacity(nodes.len());
         for node in nodes {

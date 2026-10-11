@@ -637,30 +637,38 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
 
         // `:` `#` `!` `?` at the same precedence, right-associative; each right
         // side parses at the `->` level.
-        let term4 = term3
-            .clone()
-            .then(
-                choice((
-                    token(TokenKind::Colon)
-                        .ignore_then(operand(tokens, term3.clone()))
-                        .map(AnnPiece::Type),
-                    token(TokenKind::Hash)
-                        .ignore_then(operand(tokens, term3.clone()))
-                        .map(AnnPiece::Perspective),
-                    token(TokenKind::Bang)
-                        .ignore_then(operand(tokens, term3.clone()))
-                        .map(AnnPiece::Refinement),
-                    token(TokenKind::Question)
-                        .ignore_then(operand(tokens, term3.clone()))
-                        .map(AnnPiece::Doc),
-                    token(TokenKind::Tilde)
-                        .ignore_then(mark_payload())
-                        .map(AnnPiece::Mark),
-                ))
+        let piece = choice((
+            token(TokenKind::Colon)
+                .ignore_then(operand(tokens, term3.clone()))
+                .map(AnnPiece::Type),
+            token(TokenKind::Hash)
+                .ignore_then(operand(tokens, term3.clone()))
+                .map(AnnPiece::Perspective),
+            token(TokenKind::Bang)
+                .ignore_then(operand(tokens, term3.clone()))
+                .map(AnnPiece::Refinement),
+            token(TokenKind::Question)
+                .ignore_then(operand(tokens, term3.clone()))
+                .map(AnnPiece::Doc),
+            token(TokenKind::Tilde)
+                .ignore_then(mark_payload())
+                .map(AnnPiece::Mark),
+        ));
+        let term4 = choice((
+            term3
+                .clone()
+                .then(piece.clone().repeated().collect::<Vec<_>>())
+                .map(|(first, rest)| fold_annotations(first, rest)),
+            // A chain with no value: `: T # a` annotates the wildcard, which is
+            // how a compound slot leaves its value position open.
+            piece
                 .repeated()
-                .collect::<Vec<_>>(),
-            )
-            .map(|(first, rest)| fold_annotations(first, rest));
+                .at_least(1)
+                .collect::<Vec<_>>()
+                .map_with(|rest, me| {
+                    fold_annotations(Expr::Any(span_at(tokens, me.span().start)), rest)
+                }),
+        ));
 
         term4
             .then(

@@ -13,8 +13,8 @@ use lichen_highlevel::program::{
     Ctx, HighProgram, LeafKindMarkers, TypeOperator, TypeValue, ValueType,
 };
 use lichen_highlevel::shape::{
-    PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, ShapeElements, TypeRef,
-    array_items as array_items_any, field_list, field_names, field_type, low_type_of_slot,
+    PAIR_ATTR_BASE, PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, TypeRef, array_items as array_items_any,
+    field_list, field_names, field_type, low_type_of_slot, slot_type,
 };
 use lichen_kernel_ir::{
     BufferSlot, CLAIM_PREFIX, IntWidth, KernelBin, KernelClaim, KernelFragment, KernelInstr,
@@ -1769,6 +1769,28 @@ where
     Some((names, shape))
 }
 
+/// A field list's **entries**: a shape element is a slot, so a field's type is its
+/// type position.
+///
+/// # Invariant
+/// `None` is "the shape itself is undecided", never "no fields": a field list
+/// nobody can read is not a list of no fields. See
+/// `docs/notes/compound-element-slots.md`.
+fn field_types_of<P: Program>(module: &Module<P>, shape: AnyNodeId) -> Option<Vec<AnyNodeId>>
+where
+    P::Value: ValueType,
+{
+    // SAFETY: `shape` is a live node of `module`, resolved from the parameter's
+    // own type term; nothing released its block.
+    let items = unsafe { array_items_any(module, shape) }?;
+    Some(
+        items
+            .iter()
+            .map(|item| slot_type(module, item.node).unwrap_or(item.node))
+            .collect(),
+    )
+}
+
 /// The class of every scalar leaf of a parallel parameter, in signature order.
 ///
 /// # Invariant
@@ -1794,7 +1816,7 @@ where
     // field the class is read from.
     let class_of_role = |module: &Module<P>, path: &[usize]| -> ScalarClass {
         path.first()
-            .and_then(|&at| field_type(module, ty?, at, ShapeElements::Types))
+            .and_then(|&at| field_type(module, ty?, at))
             .map(|field| scalar_class_of(&low_type_of_slot(module, field)))
             .unwrap_or(ScalarClass::Int)
     };
@@ -1850,10 +1872,9 @@ where
     let inputs_at = named("in");
     let outputs_at = named("out");
     // SAFETY: `shape` is a live node of `module`.
-    let Some(fields) = (unsafe { array_items_any(module, shape) }) else {
+    let Some(fields) = field_types_of(module, shape) else {
         return Err(PARALLEL_PARAMETER_UNDECIDED.into());
     };
-    let fields: Vec<AnyNodeId> = fields.iter().map(|item| item.node).collect();
     let mut roles = KernelRoles::default();
     for (field, &field_type) in fields.iter().enumerate() {
         let role = match field {
@@ -1912,7 +1933,7 @@ where
             // **The parameter's `Buf T` states the element class**, not a body node; an
             // open cell states nothing.
             let element = parameter_type_ref(module, field)
-                .and_then(|ty| field_type(module, ty, 1, ShapeElements::Types))
+                .and_then(|ty| field_type(module, ty, 1))
                 .map(|element| low_type_of_slot(module, element))
                 .filter(|shape| shape.is_known())
                 .map(|shape| scalar_class_of(&shape));
@@ -1932,14 +1953,13 @@ where
                 LeafRole::Scalar => Err(role_refusal(path, "a buffer outside `.in`/`.out`")),
             };
         }
-        // SAFETY: `shape` is a live node of `module`.
-        let Some(fields) = (unsafe { array_items_any(module, shape) }) else {
+        // SAFETY: `shape` resolved from the field's own type term just above.
+        let Some(fields) = field_types_of(module, shape) else {
             return Err(role_refusal(
                 path,
                 "a struct whose field list cannot be read",
             ));
         };
-        let fields: Vec<AnyNodeId> = fields.iter().map(|item| item.node).collect();
         for (at, field) in fields.into_iter().enumerate() {
             let mut path = path.to_vec();
             path.push(at);
@@ -3184,11 +3204,8 @@ where
         Some(item) => struct_fields_of_slot(module, item)?,
         None => struct_fields_of_slot(module, type_slot)?,
     };
-    // SAFETY: `shape` is the field list of the live type term just read.
-    let fields: Vec<AnyNodeId> = unsafe { array_items_any(module, shape) }?
-        .iter()
-        .map(|entry| entry.node)
-        .collect();
+    // A shape element is a slot, so the field list is each slot's type position.
+    let fields = field_types_of(module, shape)?;
     let mut items: Vec<ArrayItem> = Vec::with_capacity(fields.len());
     for (at, field) in fields.into_iter().enumerate() {
         let mut nested = path.to_vec();
@@ -3894,11 +3911,13 @@ where
             }
         };
         path.push(at);
-        // The level below: the entry this step selected, taken as it stands.
+        // The level below: the entry this step selected — a slot, so its type
+        // position is the field's type.
         let entry = types
             .and_then(|types| unsafe { array_items_any(module, types) })
             .and_then(|entries| entries.get(at))
-            .map(|entry| entry.node);
+            .map(|entry| entry.node)
+            .map(|node| slot_type(module, node).unwrap_or(node));
         types = entry;
         names = entry
             .and_then(|entry| parameter_type_ref(module, entry))

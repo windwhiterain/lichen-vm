@@ -70,13 +70,7 @@ where
         // The field's position, when the key is a literal: `slot_read` reads
         // the field's type out of the field list.
         let position = self.constant_position(key);
-        let (value_node, ty_node) = self.slot_read(
-            read_ty,
-            container_value,
-            key_value,
-            position,
-            shape::ShapeElements::Slots,
-        );
+        let (value_node, ty_node) = self.slot_read(read_ty, container_value, key_value, position);
         let pair = self.pair_of(value_node, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
@@ -98,7 +92,6 @@ where
         container_value: NodeId,
         key: NodeId,
         position: Option<usize>,
-        elements: shape::ShapeElements,
     ) -> (NodeId, NodeId) {
         let value_ops = self.array_node(self.current_block, &[container_value, key]);
         let value_node = self.op_node(
@@ -114,7 +107,6 @@ where
                     &self.module,
                     shape::TypeRef::Term(AnyNodeId::Dynamic(container_ty)),
                     at,
-                    elements,
                 )
             })
             .and_then(|ty| match ty {
@@ -136,19 +128,14 @@ where
                     P::Operator::from(LowOperator::Index),
                     Some(ty_ops),
                 );
-                // A slot container's element is a slot, so the field's type is
-                // its type position — one level further in.
-                match elements {
-                    shape::ShapeElements::Types => element,
-                    shape::ShapeElements::Slots => {
-                        let slot_ops = self.array_node(self.current_block, &[element, self.one()]);
-                        self.op_node(
-                            self.current_block,
-                            P::Operator::from(LowOperator::Index),
-                            Some(slot_ops),
-                        )
-                    }
-                }
+                // An element is a slot, so the field's type is its type position,
+                // one level further in.
+                let slot_ops = self.array_node(self.current_block, &[element, self.one()]);
+                self.op_node(
+                    self.current_block,
+                    P::Operator::from(LowOperator::Index),
+                    Some(slot_ops),
+                )
             }
         };
         (value_node, ty_node)
@@ -189,7 +176,7 @@ where
         self.node_edges.insert(key, self.loc(e, 0));
         // The element's own pair, as the positional raw read builds it.
         let container_value = self.value_of(container);
-        let (pair, element, ty_node) = self.element_read(container_value, key, false);
+        let (pair, element, ty_node) = self.element_read(container_value, key);
         // As there: the element is the target of both slot reads.
         self.node_edges.insert(element, self.loc(e, 1));
         self.state[e].term = Some(pair);
@@ -308,13 +295,7 @@ where
         };
         self.node_edges.insert(key, self.loc(e, 0));
         let container_value = self.value_of(container);
-        let (value_node, ty_node) = self.slot_read(
-            container_ty,
-            container_value,
-            key,
-            position,
-            shape::ShapeElements::Types,
-        );
+        let (value_node, ty_node) = self.slot_read(container_ty, container_value, key, position);
         let pair = self.pair_of(value_node, ty_node);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(value_node);
@@ -388,7 +369,7 @@ where
                 continue;
             };
             vals.push(self.value_of(el));
-            tys.push(self.state[el].ty.unwrap());
+            tys.push(self.element_slot(None, Some(self.state[el].ty.unwrap()), None));
             names.push(Some(name));
         }
         let id = self.fresh_nominal_id();
@@ -530,7 +511,7 @@ where
                     ) {
                         // A tuple's shape element is a slot, so the positional
                         // field list is each slot's type position.
-                        self.tuple_element_types(shape)
+                        self.slot_types_of(shape, arg_names.len())
                     } else {
                         value_ty
                     }
@@ -540,6 +521,9 @@ where
             (self.value_of(value), value_shape, true)
         };
         if valid {
+            // The definition's field-type list: a shape element is a slot, so the
+            // list is each slot's type position.
+            let field_list = self.slot_types_of(field_list, arg_names.len());
             self.check_unify(
                 value_shape,
                 field_list,
@@ -825,7 +809,10 @@ where
             // The supplying argument's call slot. A tag no argument supplies is
             // a genuine miss, so the read is the refusal.
             let key = if typed {
-                let field_type = self.index_const(shape, i);
+                // The field's type is its slot's type position, the same shape
+                // the supply keys were built from.
+                let element = self.index_const(shape, i);
+                let field_type = self.index(element, self.one());
                 self.array_node(self.current_block, &[tag, field_type])
             } else {
                 tag
@@ -952,12 +939,12 @@ where
             self.ir.children[fields_range.start as usize..fields_range.end as usize].to_vec();
         let names: Vec<Option<&'static str>> =
             self.ir.struct_names[names_range.start as usize..names_range.end as usize].to_vec();
-        let mut tys = Vec::new();
+        let mut slots = Vec::new();
         for &el in &elements {
-            tys.push(self.check_type_element(el));
+            slots.push(self.element_slot_of(el));
         }
         let id = self.fresh_nominal_id();
-        let (shape, kind, pair) = self.struct_type_type(id, &tys, &names);
+        let (shape, kind, pair) = self.struct_type_type(id, &slots, &names);
         self.require_struct_field_names(&names, &elements, pair);
         self.state[e].term = Some(pair);
         self.state[e].val = Some(shape);
