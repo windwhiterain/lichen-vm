@@ -542,12 +542,11 @@ pub enum KernelInstr {
     /// The largest integral `Float` not above one `Float`.
     ///
     /// # Invariant
-    /// Defined by the IR, like [`Self::Exp`] and [`Self::Sqrt`]: SPIR-V has **no core
-    /// `OpFloor`** — GLSL's `floor` is an `OpExtInst` call into `GLSL.std.450`, a second
-    /// extension import and capability — so a native emission would be a different
-    /// instruction set on each target rather than one operation they agree on. The
-    /// definition is exact for every operand in the class, because the conversion and the
-    /// subtraction it is written with are. See `docs/notes/floating-point.md` §7.
+    /// Defined by the IR, like [`Self::Exp`] and [`Self::Sqrt`]: SPIR-V has no core
+    /// `OpFloor`, so a native emission would mean two instruction sets rather than one
+    /// operation both targets agree on. The definition is exact for every operand in the
+    /// class, because the conversion and the subtraction it is written with are.
+    /// `docs/notes/floating-point.md` §7.
     Floor,
     /// A cross-kernel call: its `args` are the argument, and a backend resolves this to
     /// a call to the callee.

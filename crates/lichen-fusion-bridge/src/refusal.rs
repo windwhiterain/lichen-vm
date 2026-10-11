@@ -66,8 +66,8 @@ pub enum BridgeRefusal {
     },
     /// The marked value narrows a value to the condition width a select reads.
     BooleanNarrowing,
-    /// The marked value floors a number, and the symbolic language has no counterpart:
-    /// a floor is not invertible and names no algebraic law the engine reads.
+    /// The marked value floors a number, which the symbolic language cannot name: no
+    /// inverse and no algebraic law.
     Floor,
     /// The body does not pass its own well-formedness gate.
     MalformedBody {

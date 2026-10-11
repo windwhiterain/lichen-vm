@@ -1644,7 +1644,7 @@ where
                         return not_an_array::<P>(module, entry);
                     };
                     // SAFETY: `elements` was read out of a live node of `module` on
-                    // this borrow, so its home block is alive for the copy below.
+                    // this borrow, so its block is alive for the copy below.
                     let elements = unsafe { elements.items() };
                     let Some((class, words)) = buffer_words::<P>(module, elements) else {
                         return None;
@@ -1657,9 +1657,8 @@ where
                             ComputeValue::Buffer(payload, class),
                         )),
                     ));
-                    // The wrapper is the value: its `.native` slot is the payload and
-                    // its `.element` slot the class's type, which is what makes a read
-                    // of it typed.
+                    // The wrapper is the value: `.native` holds the payload and
+                    // `.element` the class's type, which types a read of it.
                     let Some(wrapper) = buf_value::<P>(module, block, payload, class) else {
                         return None;
                     };
@@ -1906,10 +1905,8 @@ where
 {
     if let Some((names, shape)) = struct_fields_of_slot(module, field) {
         if is_buf_shape(&names) {
-            // **The element class the parameter states is the authority**, read from the
-            // `Buf`'s `.element` slot: the host binds the buffer, so no node of the body
-            // states it. An open element cell states nothing, and the write's own class is
-            // the answer then.
+            // **The parameter's `Buf T` states the element class**, not a body node; an
+            // open cell states nothing.
             let element = parameter_type_ref(module, field)
                 .and_then(|ty| field_type(module, ty, 1))
                 .map(|element| low_type_of_slot(module, element))
@@ -2142,8 +2139,8 @@ where
     // **One walk of the graph into one SSA body**, so a shared subexpression is emitted
     // once.
     let mut body = Lower::lower(module, &params, param_value, fid, ret_value, &mut tally)?;
-    // **The language's instructions become a target's before anything reads the body**: a
-    // transcendental is defined by its expansion, so no backend has to know one.
+    // **Instructions become a target's before anything reads the body**: a
+    // transcendental is defined by its expansion.
     body.expand_transcendentals()?;
 
     Ok(KernelFragment {
@@ -3431,9 +3428,8 @@ fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
         TypeOperator::BitXor => KernelBin::BitXor,
         TypeOperator::Max => KernelBin::Max,
         TypeOperator::Min => KernelBin::Min,
-        // The class conversions and the transcendental families are unary: they lower to
-        // [`KernelInstr::Conv`], [`KernelInstr::Exp`], [`KernelInstr::Sqrt`] and
-        // [`KernelInstr::Floor`], answered before this mapping is reached.
+        // Unary: the class conversions and the transcendentals are lowered before this
+        // mapping is reached.
         TypeOperator::Int2Float
         | TypeOperator::Float2Int
         | TypeOperator::Exp
@@ -4400,8 +4396,8 @@ where
         }
         words.push(word);
     }
-    // An empty array states no element at all, so it takes the ABI's integer default —
-    // the same answer `element_class` gives a fragment that declared none.
+    // An empty array states no element: the ABI's integer default, as `element_class`
+    // gives a fragment that declared none.
     Some((class.unwrap_or(ScalarClass::Int), words))
 }
 

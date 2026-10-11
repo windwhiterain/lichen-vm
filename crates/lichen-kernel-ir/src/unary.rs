@@ -17,15 +17,13 @@ pub const TRANSCENDENTALS: [(KernelInstr, fn() -> KernelBody); 3] = [
     (KernelInstr::Floor, floor_body),
 ];
 
-/// How many times the polynomial's argument is halved before it, and therefore how many
-/// times its value is squared after.
+/// How many times the polynomial's argument is halved, and therefore how many times its
+/// value is squared.
 ///
 /// # Invariant
 /// The two counts are one number: `exp(x) = P(x / 2^k)^(2^k)`, so a sequence that halved
-/// and squared a different number of times would be a different function. Seven is where
-/// the halving and the polynomial trade against each other: each squaring doubles the
-/// polynomial's relative error, so a smaller count needs a higher degree over a wider
-/// argument and loses more to the series' cancellation.
+/// and squared a different number of times would be a different function. Why seven is
+/// where they trade off is `docs/notes/floating-point.md` §6.
 const HALVINGS: u32 = 7;
 
 /// The Taylor coefficients `1/n!` of the polynomial, ascending.
@@ -154,9 +152,8 @@ fn condition(
     )
 }
 
-/// One step of the reduction: a value outside the work interval `[1, 16)` is scaled into it
-/// by a power of two, and the track — the square root of what scaled it — takes the matching
-/// power.
+/// One `rescale` step: a value outside `[1, 16)` is scaled in by a power of two, and the
+/// track takes its square root.
 ///
 /// # Invariant
 /// `step` and `track_step` are powers of two, and **the track is multiplied rather than the
@@ -200,17 +197,16 @@ fn rescale(
 /// # Invariant
 /// Straight line, one block, one parameter and one returned value — the shape
 /// [`KernelBody::expand_transcendentals`] inlines. The reduction leaves the argument in
-/// `[1, 16)`, so the seed is within a factor of two of the answer and the iteration's error
-/// squares from there; the track is the square root of what scaled the argument, so the
-/// answer is the estimate times the track and needs no separate unscaling.
-/// `docs/notes/floating-point.md` §7 has what the definition measures.
+/// `[1, 16)`, so the seed is within a factor of two and Newton's error squares from there,
+/// and the track is the square root of what scaled it, so answer = estimate × track.
+/// `docs/notes/floating-point.md` §7 measures it.
 pub fn sqrt_body() -> KernelBody {
     let mut body = KernelBody::new();
     let entry = body.add_block();
     let x = body.add_param(entry);
 
-    // A non-positive operand answers `0` whole rather than the iteration's own answer, which
-    // for such an operand would divide by a seed the reduction pinned to zero.
+    // A non-positive operand answers `0`: the iteration would divide by a seed the
+    // reduction pinned to zero.
     let zero = constant(&mut body, entry, 0.0);
     let positive = condition(&mut body, entry, KernelBin::Gt, x, zero);
     let mut reduced = body.add_op(
@@ -221,9 +217,8 @@ pub fn sqrt_body() -> KernelBody {
     );
     let mut track = constant(&mut body, entry, 1.0);
 
-    // The coarse steps run first and overshoot inwards: each raises a value below one by
-    // `2^32`, which leaves the fine steps a range to descend through rather than one to
-    // oscillate in.
+    // Coarse steps first, overshooting inwards: the fine steps then descend a range rather
+    // than oscillate in one.
     for _ in 0..COARSE_STEPS {
         (reduced, track) = rescale(
             &mut body,
@@ -293,30 +288,20 @@ fn rescale_value(value: f32, track: f32, below: bool, step: f32, track_step: f32
     }
 }
 
-/// The floor's definition: the truncation toward zero, corrected when there was a fraction
-/// to drop and the operand was negative.
+/// The floor's definition: truncation toward zero, corrected for a negative operand.
 ///
 /// # Invariant
-/// Straight line, one block, one parameter and one returned value. **Every operation is
-/// exact**: `float2int` truncates, `int2float` answers the same integer back for every value
-/// below `2^24` — above which the operand is an integer already and the comparison leaves it
-/// alone — and the one subtraction is of two adjacent integers. SPIR-V has no core `OpFloor`,
-/// so a native emission would mean this definition's work on one target and an extension
-/// import on the other; the definition is what both targets and the interpreter read.
-/// The conversion is total in the definition's shape: the guard pins the operand below the
-/// integer range, so the crossing never runs on a value it would refuse.
-/// `docs/notes/floating-point.md` §7.
+/// Straight line, one block, one parameter and one returned value — the shape
+/// [`KernelBody::expand_transcendentals`] inlines. Every operation is exact
+/// (`docs/notes/floating-point.md` §7), and the conversion is total: the guard pins the
+/// operand below the integer range, so it never runs on a value it would refuse.
 pub fn floor_body() -> KernelBody {
     let mut body = KernelBody::new();
     let entry = body.add_block();
     let x = body.add_param(entry);
 
-    // **The conversion runs on the magnitude**, because `select` evaluates both arms and
-    // `float2int` refuses a negative operand (its destination is the language's unsigned
-    // `Int`), so a definition that converted `x` under a guard would refuse every negative —
-    // which the wasm backend's trapping conversion does. Negating first is the one shape that
-    // is total: the sign is put back by the last `select`, and the truncation's correction is
-    // the `ceil` the other side of zero needs.
+    // The magnitude, not the operand: `select` evaluates both arms, so a guarded
+    // conversion would still meet a negative.
     let zero = constant(&mut body, entry, 0.0);
     let negative = condition(&mut body, entry, KernelBin::Lt, x, zero);
     let negated = float_bin(&mut body, entry, KernelBin::Sub, zero, x);
@@ -326,8 +311,7 @@ pub fn floor_body() -> KernelBody {
         vec![negated, x, negative],
         vec![ScalarClass::Float],
     );
-    // Above `2^24` the operand is an integer already, and an infinity has no integer to be:
-    // both are answered as they are, which is also what keeps the conversion off them.
+    // Above `2^24` an operand is an integer already and an infinity has no integer to be.
     let resolution = constant(&mut body, entry, 16_777_216.0);
     let small = condition(&mut body, entry, KernelBin::Lt, magnitude, resolution);
     let convertible = body.add_op(
@@ -354,9 +338,7 @@ pub fn floor_body() -> KernelBody {
         vec![truncated],
         vec![ScalarClass::Float],
     );
-    // `magnitude - integral` is the fractional part, and only a negative operand needs it
-    // taken off: **`floor(x) = -(|integral| + fraction)`** for a negative `x`, and
-    // `trunc(|x|)` — the conversion's own answer — for a non-negative one.
+    // **`floor(x) = -(|integral| + fraction)`** for a negative operand, `trunc(|x|)` otherwise.
     let kept = float_bin(&mut body, entry, KernelBin::Sub, magnitude, integral);
     let zero = constant(&mut body, entry, 0.0);
     let fraction = condition(&mut body, entry, KernelBin::Gt, kept, zero);
@@ -395,15 +377,13 @@ pub fn floor_body() -> KernelBody {
 pub fn floor_value(x: f32) -> f32 {
     let negative = x < 0.0;
     let magnitude = if negative { -x } else { x };
-    // Above `2^24` the operand is an integer already, and an infinity has no integer to be:
-    // both are answered as they are, which is also what keeps the conversion off them.
+    // Above `2^24` an operand is an integer already and an infinity has no integer to be.
     if !(magnitude < 16_777_216.0) {
         return x;
     }
     let integral = (magnitude as i64) as f32;
-    // `trunc(|x|)` **is** the floor for a non-negative operand; a negative one takes one more
-    // off, which is the `ceil` that side needs: `floor(x) = -(|integral| + 1)` when `|x|` had
-    // a fraction and `-|integral|` when it did not.
+    // A non-negative operand's floor is `trunc(|x|)`; a negative one takes one more off
+    // when `|x|` had a fraction.
     let fraction = magnitude - integral > 0.0;
     if negative {
         let widened = if fraction { integral + 1.0 } else { integral };
@@ -426,8 +406,8 @@ pub fn exp_body() -> KernelBody {
     let entry = body.add_block();
     let x = body.add_param(entry);
 
-    // The argument is clamped rather than guarded: `Select` evaluates both arms, and
-    // `exp(x) = 0` below the floor is what the class can hold.
+    // Clamped, not guarded: `Select` evaluates both arms, and `exp(x) = 0` below the floor
+    // is all the class holds.
     let floor = constant(&mut body, entry, FLOOR);
     let below = body.add_op(
         entry,

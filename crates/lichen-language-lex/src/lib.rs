@@ -88,8 +88,8 @@ pub enum TokenKind {
     /// The `sqrt` keyword — the square root of one `Float`, at the prefix level
     /// (`docs/notes/floating-point.md` §7).
     KwSqrt,
-    /// The `floor` keyword — the largest integral `Float` not above one `Float`, at the
-    /// prefix level (`docs/notes/floating-point.md` §7).
+    /// The `floor` keyword — the largest integral `Float` not above one `Float`
+    /// (`docs/notes/floating-point.md` §7).
     KwFloor,
     /// '->' -- a function type.
     Arrow,

@@ -1,21 +1,12 @@
-//! The kernel math operators, measured: their accuracy against the correctly rounded host
-//! answer, and whether the two backends agree bit for bit.
+//! The kernel math operators, measured.
+//! Run with `cargo run -p lichen-language --example math_operators`.
 //!
 //! # Invariant
 //! Every kernel column comes from the language's own `compute.parallel` over
-//! `compute.buffer` inputs, compiled once per backend name, so the two backend columns are
-//! the *same source* and any disagreement is the emitters'. The accuracy column is the
-//! definition in `lichen-kernel-ir` swept over its whole domain, and the host answer it is
-//! compared against is the platform's correctly rounded `f32` square root — never a second
-//! implementation of the operator.
-//! Run with `cargo run -p lichen-language --example math_operators`.
-//!
-//! # The measurement, as it lands
-//! `sqrt` is a range reduction over exact powers of two followed by six Newton steps, so its
-//! answer is within a couple of the class's own units in the last place rather than correctly
-//! rounded; `floor` is emitted as the target's own instruction and to the definition it is
-//! exact. Both backends run the identical sequence for `sqrt`, which is what makes their
-//! answers the same bits rather than merely the same function.
+//! `compute.buffer` inputs, so the two backends run one source and any disagreement is the
+//! emitters'. The accuracy column sweeps the `lichen-kernel-ir` definition against the
+//! platform's correctly rounded `f32` answer, never a second implementation.
+//! `docs/notes/floating-point.md` §7 measures both.
 
 use lichen_language::package::PackageStore;
 use lichen_language::program::LangProgram;
@@ -72,8 +63,8 @@ fn main() {
     }
 
     println!("\n--- the same operators as kernels, on both backends");
-    // The device column is only claimed where one is present: `install_default` is what a
-    // "gpu" run needs, and a machine without a device says so instead of failing.
+    // The device column is only claimed where a device is installed; a machine without
+    // one says so instead of failing.
     let device = lichen_compute_gpu::install_default();
     let has_device = device.is_ok();
     if let Err(reason) = &device {
@@ -105,8 +96,8 @@ fn main() {
             .iter()
             .zip(&definitions)
             .all(|(kernel, definition)| kernel.to_bits() == definition.to_bits());
-        // The device column is the count of elements whose bits differ, not a boolean: the
-        // measured answer for one operator is one element, and a reader needs to know which.
+        // The device column counts the elements whose bits differ, so a reader knows
+        // which one.
         let backend_column = if has_device {
             match kernel_column(operator, "gpu", &data) {
                 Ok(values) => {

@@ -862,8 +862,8 @@ where
                     _ => None,
                 }
             }
-            // The prefix scalar operators over one `Float`: each reads the one definition
-            // every execution model reads (`docs/notes/floating-point.md` §6, §7).
+            // The prefix scalar operators read the IR's one definition
+            // (`docs/notes/floating-point.md` §6, §7).
             TypeOperator::Exp | TypeOperator::Sqrt | TypeOperator::Floor => {
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("a prefix scalar operator expects a one-element operand array")

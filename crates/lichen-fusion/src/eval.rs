@@ -65,10 +65,10 @@ fn bool_value(holds: bool) -> f64 {
 ///
 /// # Invariant
 /// Every free variable of *either* expression is sampled in `[1, 4)`, where every operator
-/// here is defined on both sides: a point at which a logarithm is undefined is a sample
-/// outside the domain the check is about, not a disagreement between two forms. A variable
-/// only one side reads is sampled all the same: the two are compared at one point. A
-/// non-finite value is a disagreement without bound.
+/// here is defined on both sides: a point where a logarithm is undefined is outside the
+/// domain the check is about, not a disagreement between two forms. A variable only one
+/// side reads is sampled too, so the two are compared at one point. A non-finite value is
+/// a disagreement without bound.
 pub fn max_relative_disagreement(
     left: &Expr,
     right: &Expr,

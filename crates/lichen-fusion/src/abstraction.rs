@@ -2,10 +2,8 @@
 //!
 //! # Invariant
 //! The parameter is the outermost subexpression of the element function that does not
-//! mention the producer's value, read on the tree as the logic wrote it: flattening that
-//! tree first would hide `d + bias` inside a sorted sum and abstract one term of it
-//! instead. The tree is read before it is canonicalized, because the outermost is where an
-//! element function's custom logic is still one subexpression.
+//! mention the producer's value, read before canonicalization and as the logic wrote it:
+//! flattening first would hide `d + bias` inside a sorted sum and abstract one term of it.
 
 use crate::expr::{Expr, Variable};
 use crate::invert::InvertRefusal;
@@ -32,7 +30,7 @@ impl Abstraction {
 /// the per-element repair identity is `g'(r')(g'(r)⁻¹(g'(r)(c))) = g'(r')(c)`, a composition
 /// that holds for any `c`, and the consumer's rolling state is covered by the
 /// distributivity check rather than by anything `c` contains. A refusal therefore comes
-/// only from the chain above `c`, never from `c` itself.
+/// only from the chain above `c`.
 pub fn abstract_element_function(
     element_function: &Expr,
     producer: &Variable,
