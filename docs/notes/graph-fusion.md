@@ -594,13 +594,36 @@ union minus the absorbed buffer. The `fuse` directive comes **after** both, beca
 region engine that does not run, add a field to `Pack`, and force the node-schema/region-schema question
 into the matcher.
 
-One measurement can still invalidate that plan, and it is owed before any code: **compose the two
-recorded fragments of `examples/fusion_schema.rs`'s chain by hand into one `KernelFragment`** — splice
-the bodies, bind the producer's reduction result to the consumer's read of its input position — pass it
-through `KernelBody::validate` and `KernelFragment::validate`, and compare it numerically with the
-two-pass reference. If that composition is refused, "shape-changing fusion is an inlining the engine can
-perform" fails at the kernel IR, and the first thing to build is a body-composition pass rather than
-graph machinery.
+**That measurement has been taken, and the plan survives with two corrections.** The splice is
+expressible: a hand-composed fragment of `examples/fusion_schema.rs`'s chain passes
+`KernelBody::validate` and `KernelFragment::validate`, and once the value table is **compacted** and the
+consumer's **entry block** is inlined into the producer's return block, the merged body **runs on a
+device** and answers the two-pass reference element for element (8, 100 and 1024 elements, each against
+its closed form). So the missing piece is a **function** — a body-level splice plus a value-table
+compaction — and not an IR capability. The two corrections:
+
+- **The landing blocker is narrower than this section said.** A merged fragment's shape (inputs 1,
+  outputs 1, arity 2) *equals* the producer node's, so `replace_kernel` accepts it: the merge lands on
+  the producer's node today, and what remains is the **graph rebuild** — drop the consumer, repoint
+  `returns`, renumber. A merged fragment is refused only where its ports differ from the target node's,
+  and the union of ports is exactly what the two fragments *cannot* state: they carry ordinals, and
+  `derive_regions`' `Port`s are the only place the union is computed.
+- **A straight block splice is refused by the backend, and the reason is a class the IR does not
+  state.** The literal splice leaves the consumer's former entry parameter read in no block of its own,
+  so the SPIR-V emitter's class inference falls back to the module class and refuses the integer edge
+  (`MixedClasses`). Inlining the entry block removes the cause; a **carried value stating its own class**
+  in the kernel IR would remove the need for the workaround — the same repair §4 records as an option.
+  Compaction is not optional either, and one gate is why: the artifact reader re-derives a block
+  parameter's index, so an orphan parameter passes `KernelBody::validate` and is refused only when the
+  artifact is read.
+
+**Four decisions the splice cannot make for itself**, and they are the policy layer's rather than a
+body function's: **which input is absorbed** (a graph edge, in neither fragment), **whether the
+producer's value may be bound in-lane** (here every lane computes the same fold, so binding it locally
+is exact — but lane-invariance is stated nowhere in a fragment), **what a duplicated mark means** (a
+merge carries `combine` twice: the kernel IR's reader refuses it as `AmbiguousStagedValue` while the
+language's `marked_value` silently takes the first, so the two must be made to agree), and **whether
+two slices are one** (two bodies staging into ordinal `0` collide, and unifying them claims one value).
 
 ### The memory plan: the second thing a pack hands over
 
