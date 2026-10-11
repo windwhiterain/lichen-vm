@@ -757,16 +757,25 @@ merge, and the `DP` has to live where a *type* can hold it.
 
 What the merge changes is the carrier and not the choice: there is **one buffer type and the
 `DP` is one of its arguments** — `(element, length, DP)` — so the paper's two named cases are
-instances of it rather than a second and third nominal:
+instances of it rather than a second and third nominal. Written as the paper spells them, the
+one type looks like two nominals, and the difference between the two spellings is the length a
+*slice* states and a host-bound buffer does not:
 
 ```lichen
-Shared = T => struct<.native _, .element T, .n Int>   -- Buf at block[1]
-Buf    = T => struct<.native _, .element T>            -- Buf at grid[1]
+-- the paper's cases, not lichen surface: `compute.lichen` spells one `Buf`, `Shared` and
+-- `view` name no type there, and a written `DP` is surface the lowering does not have yet (§10)
+Shared = T => struct<.native _, .element T, .n Int>   -- the paper's shared(T, N): Buf at block[1]
+Buf    = T => struct<.native _, .element T>           -- the paper's ptr(T, N): Buf at grid[1]
 ```
 
 `view(T, N, DP)` is that type with the argument written rather than implied, and `Shared`
 being a *second nominal* is exactly what made a placement look like an identity — the level
 was a function of *which* wrapper, so nothing could move a slice without changing its type.
+**That is also why no layer but the plan names a space, and why the language spells no
+`Shared`.** The logic's whole memory vocabulary is one buffer type plus the read, the write
+and the ingress ([compute-buffer-wrapper](compute-buffer-wrapper.md#the-prelude-algebra)), so a
+storage noun in the language would be a placement spelled as an identity — the thing the
+paragraph above says cannot move.
 
 **And the level component is not owed at all, which corrects what this subsection first said.**
 A `DP` written in a type does have to say *how far* a value reaches, and the lattice already
