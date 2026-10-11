@@ -130,9 +130,11 @@ t = tuple{5 : Int, Int}       (6, 2) : t is still refused — the pin rides in t
 ```
 
 The angle spellings this note was written against (`<a, b>`, `struct<.f a>`,
-`array<T, n>`) were retired afterwards, and so was the raw index `X<e>` — the only
-remaining use of the angle token, which is now `<`/`>` as comparisons alone;
-measurements recorded before those retirements keep their spelling.
+`array<T, n>`) were retired afterwards. The raw index `X<e>` was removed with them
+and then brought back as the **type access** `X{n}` — the table read gave up
+`e{key}` for `e <== key`, so `{…}` reads a type component and `<`/`>` are
+comparisons alone ([type-access.md](type-access.md)). Measurements recorded before
+those changes keep their spelling.
 
 A pin cannot be enforced by the lowlevel compare — a value's element slots hold
 the wildcard — so it is reconciled checker-side (`checker::unify_element_values`)
